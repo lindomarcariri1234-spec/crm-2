@@ -120,6 +120,7 @@ vi.mock("../lib/passenger.js", () => ({
 }));
 
 import { requireAuth } from "../lib/tenant.js";
+import { broadcastSeatUpdate } from "../lib/realtime.js";
 import reservationsRouter from "../routes/reservations.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
@@ -275,5 +276,60 @@ describe("POST /api/reservations — commission sync resilience", () => {
 
     expect(res.status).toBe(201);
     expect(mockEnqueueCommissionSync).toHaveBeenCalledWith("gen-id", FAKE_USER.tenantId);
+  });
+});
+
+describe("PATCH /api/reservations/:reservationId/passengers/:id — seat update broadcast", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+  const broadcastSeatUpdateMock = vi.mocked(broadcastSeatUpdate);
+
+  const fakeReservation = makeFakeReservation();
+  const fakePassenger = {
+    id: "passenger-001",
+    reservationId: fakeReservation.id,
+    name: "João Silva",
+    cpf: null,
+    rg: null,
+    birthDate: null,
+    ageCategory: "adult",
+    seatNumber: "1A",
+    isChildUnder7: false,
+    checkedInAt: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requireAuthMock.mockResolvedValue(FAKE_USER as never);
+    mockLimit.mockResolvedValue([]);
+    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockSelect.mockReturnValue({ from: mockFrom });
+  });
+
+  it("broadcasts the trip seat update when seatNumber is included", async () => {
+    mockLimit
+      .mockResolvedValueOnce([fakeReservation])
+      .mockResolvedValueOnce([fakePassenger]);
+
+    const res = await request(buildApp())
+      .patch(`/api/reservations/${fakeReservation.id}/passengers/${fakePassenger.id}`)
+      .send({ seatNumber: "2B" });
+
+    expect(res.status).toBe(200);
+    expect(broadcastSeatUpdateMock).toHaveBeenCalledOnce();
+    expect(broadcastSeatUpdateMock).toHaveBeenCalledWith(fakeReservation.tripId, FAKE_USER.tenantId);
+  });
+
+  it("does not broadcast when only passenger profile fields are updated", async () => {
+    mockLimit
+      .mockResolvedValueOnce([fakeReservation])
+      .mockResolvedValueOnce([{ ...fakePassenger, name: "Maria Silva" }]);
+
+    const res = await request(buildApp())
+      .patch(`/api/reservations/${fakeReservation.id}/passengers/${fakePassenger.id}`)
+      .send({ name: "Maria Silva" });
+
+    expect(res.status).toBe(200);
+    expect(broadcastSeatUpdateMock).not.toHaveBeenCalled();
   });
 });

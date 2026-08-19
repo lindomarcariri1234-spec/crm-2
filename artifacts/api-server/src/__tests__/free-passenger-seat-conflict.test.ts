@@ -144,6 +144,7 @@ vi.mock("../routes/payments.js", () => ({
 
 import { requireAuth } from "../lib/tenant.js";
 import { addSeatClient, removeSeatClient } from "../lib/seat-sse.js";
+import { broadcastSeatUpdate } from "../lib/realtime.js";
 import { eq } from "drizzle-orm";
 import tripsRouter from "../routes/trips.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
@@ -261,6 +262,7 @@ const PLAN_ROW = { supportedFeatures: [] };
 
 describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
   const requireAuthMock = vi.mocked(requireAuth);
+  const broadcastSeatUpdateMock = vi.mocked(broadcastSeatUpdate);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -363,6 +365,25 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe("trip-001");
+    expect(broadcastSeatUpdateMock).toHaveBeenCalledOnce();
+    expect(broadcastSeatUpdateMock).toHaveBeenCalledWith("trip-001", FAKE_USER.tenantId);
+  });
+
+  it("does not broadcast when an unrelated trip field is updated", async () => {
+    const app = buildApp();
+
+    selectQueue.push(
+      [TENANT_ROW],
+      [PLAN_ROW],
+      [FAKE_TRIP],
+    );
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({ name: "Nova excursão" });
+
+    expect(res.status).toBe(200);
+    expect(broadcastSeatUpdateMock).not.toHaveBeenCalled();
   });
 
   it("returns 200 when freePassengers have no seatNumber set (null)", async () => {
