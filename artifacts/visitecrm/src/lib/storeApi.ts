@@ -384,6 +384,7 @@ export interface PublicStore {
   returnPolicy?: string | null;
   privacyPolicy?: string | null;
   termsOfService?: string | null;
+  isActive: boolean;
   maintenanceMode: boolean;
   maintenanceMessage?: string | null;
   couponsEnabled?: boolean;

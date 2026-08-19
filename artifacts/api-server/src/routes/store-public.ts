@@ -301,13 +301,26 @@ async function getActiveStore(slug: string)
 }
 
 
+async function getStoreForPublicPage(slug: string)
+{
+
+  const [store] = await db.select().from(storesTable)
+    .where(eq(storesTable.slug, slug)).limit(1)
+;
+
+  return store
+;
+
+}
+
+
 router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<void> => 
 {
 
   try 
 {
 
-    const store = await getActiveStore(req.params.slug)
+    const store = await getStoreForPublicPage(req.params.slug)
 ;
 
     if (!store) 
@@ -398,6 +411,7 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
       cancellationPolicy: store.cancellationPolicy,
       termsUrl: store.termsUrl,
       privacyUrl: store.privacyUrl,
+      isActive: store.isActive,
       maintenanceMode: store.maintenanceMode,
       maintenanceMessage: store.maintenanceMessage,
       couponsEnabled,

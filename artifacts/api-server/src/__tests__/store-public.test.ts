@@ -926,4 +926,15 @@ describe("GET /api/public/store/:slug — seatMapEnabled in response", () => {
     expect(res.body.couponsEnabled).toBe(false);
     expect(res.body.referralsEnabled).toBe(true);
   });
+
+  it("returns isActive so the storefront can block sign-up for paused agencies", async () => {
+    mockLimit
+      .mockResolvedValueOnce([{ ...FAKE_STORE, isActive: false }])
+      .mockResolvedValueOnce([{ settings: {} }]);
+
+    const res = await request(buildApp()).get("/api/public/store/minha-loja");
+
+    expect(res.status).toBe(200);
+    expect(res.body.isActive).toBe(false);
+  });
 });

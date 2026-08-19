@@ -138,7 +138,7 @@ function StoreRouter({ slug }: { slug: string }) {
     );
   }
 
-  if (store.maintenanceMode) {
+  if (store.maintenanceMode || !store.isActive) {
     return (
       <div
         className="min-h-screen flex flex-col items-center justify-center text-center px-4 text-white"
