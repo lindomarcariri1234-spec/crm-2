@@ -22,6 +22,12 @@ export function formatEta(seconds: number | null): string {
   return secs > 0 ? `~${mins}min ${secs}s` : `~${mins}min`;
 }
 
+/** Format a byte-per-second upload rate for the upload card. */
+export function formatUploadSpeed(bytesPerSecond: number | null): string {
+  if (bytesPerSecond === null || !isFinite(bytesPerSecond) || bytesPerSecond < 0) return "";
+  return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+}
+
 const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".ogg", ".avi", ".mkv"];
 
 function isVideoUrl(url: string): boolean {
@@ -56,7 +62,16 @@ export function VideoGalleryUpload({
 
   const canAdd = value.length < maxVideos;
 
-  const { startUpload, isUploading, isRetrying, uploadProgress, uploadEta, cancelUpload, guardDialog } = useUploadVideo(
+  const {
+    startUpload,
+    isUploading,
+    isRetrying,
+    uploadProgress,
+    uploadEta,
+    uploadSpeedBps,
+    cancelUpload,
+    guardDialog,
+  } = useUploadVideo(
     {
       onBegin: () => onUploadingChange?.(true),
       onComplete: (result) => {
@@ -146,6 +161,7 @@ export function VideoGalleryUpload({
                     ? [
                         `Enviando ${uploadProgress}%`,
                         formatEta(uploadEta),
+                          formatUploadSpeed(uploadSpeedBps),
                       ].filter(Boolean).join(" · ")
                     : "Enviando..."}
                 </>
@@ -306,6 +322,11 @@ export function VideoGalleryUpload({
                   {formatEta(uploadEta) && (
                     <span className="text-xs text-muted-foreground">
                       {formatEta(uploadEta)} restantes
+                    </span>
+                  )}
+                  {formatUploadSpeed(uploadSpeedBps) && (
+                    <span className="text-xs text-muted-foreground">
+                      {formatUploadSpeed(uploadSpeedBps)}
                     </span>
                   )}
                 </>
