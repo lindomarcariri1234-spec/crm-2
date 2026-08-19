@@ -69,7 +69,8 @@
       "@types/react-dom": "19.1.7"
     },
     "patchedDependencies": {
-      "metro@0.83.7": "patches/metro@0.83.7.patch"
+      "metro@0.83.7": "patches/metro@0.83.7.patch",
+      "image-size-next@2.1.0": "patches/image-size-next@2.1.0.patch"
     }
   }
 }

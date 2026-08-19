@@ -116,6 +116,9 @@ overrides:
   '@types/react-dom': 19.1.7
 
 patchedDependencies:
+  image-size-next@2.1.0:
+    hash: 9d9cd110f92829b744ed13bec50e7d18c22d0f40b6ab699993e7c7114eff22e5
+    path: patches/image-size-next@2.1.0.patch
   metro@0.83.7:
     hash: b7739773d03e837669474b24a72c6c2cb84e862d5992390e486c40223a9dd414
     path: patches/metro@0.83.7.patch
@@ -15518,7 +15521,7 @@ snapshots:
 
   ignore@7.0.5: {}
 
-  image-size-next@2.1.0: {}
+  image-size-next@2.1.0(patch_hash=9d9cd110f92829b744ed13bec50e7d18c22d0f40b6ab699993e7c7114eff22e5): {}
 
   immediate@3.0.6: {}
 
@@ -16209,7 +16212,7 @@ snapshots:
       flow-enums-runtime: 0.0.6
       graceful-fs: 4.2.11
       hermes-parser: 0.35.0
-      image-size: image-size-next@2.1.0
+      image-size: image-size-next@2.1.0(patch_hash=9d9cd110f92829b744ed13bec50e7d18c22d0f40b6ab699993e7c7114eff22e5)
       invariant: 2.2.4
       jest-worker: 29.7.0
       jsc-safe-url: 0.2.4
