@@ -1,11 +1,9 @@
 /**
- * PassengersListManifest — bebê de colo (isOnLap)
+ * PassengersListManifest — totais por categoria e gratuidade
  *
- * Verifica que passageiros com ageCategory="baby" e seatNumber=null:
- * 1. São contados na categoria "Gratuidades" do manifesto ANTT
- *    (anttBucket: baby → "gratuidade")
- * 2. Exibem "—" na coluna Poltrona (seatNumber null → "—")
- * 3. NÃO entram nas categorias Adultos ou Crianças
+ * Categorias etárias e gratuidade são dimensões independentes no resumo:
+ * bebês e adultos gratuitos permanecem em suas respectivas categorias,
+ * enquanto também compõem o total de gratuidades.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -13,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@workspace/api-client-react", () => ({}));
 
 import { printPassengersManifest } from "../pages/trips/PassengersListManifest.js";
-import type { BoardingPassenger } from "@workspace/api-client-react";
+import type { BoardingPassenger, FreePassenger } from "@workspace/api-client-react";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -77,6 +75,30 @@ function makeAdult(overrides: Partial<BoardingPassenger> = {}): BoardingPassenge
   } as BoardingPassenger;
 }
 
+function makeChild(overrides: Partial<BoardingPassenger> = {}): BoardingPassenger {
+  return {
+    ...makeAdult(),
+    id: "pax-child-001",
+    reservationId: "res-child-001",
+    voucherCode: "VCHR-CHILD-001",
+    clientName: "Criança Silva",
+    name: "Criança Silva",
+    ageCategory: "child",
+    ...overrides,
+  } as BoardingPassenger;
+}
+
+function makeFreePassenger(overrides: Partial<FreePassenger> = {}): FreePassenger {
+  return {
+    id: "free-001",
+    name: "Guia Cortesia",
+    cpf: null,
+    role: "guide",
+    seatNumber: null,
+    ...overrides,
+  } as FreePassenger;
+}
+
 // ---------------------------------------------------------------------------
 // Window mock
 // ---------------------------------------------------------------------------
@@ -101,12 +123,12 @@ function setupWindowOpenCapture(): { getHtml: () => string } {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("printPassengersManifest — anttBucket: baby → gratuidade", () => {
+describe("printPassengersManifest — totais por categoria e gratuidade", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("conta passageiro com ageCategory='baby' em Gratuidades no totalizador", () => {
+  it("conta bebê de colo em Bebê e Gratuidades", () => {
     const { getHtml } = setupWindowOpenCapture();
 
     printPassengersManifest(
@@ -119,58 +141,88 @@ describe("printPassengersManifest — anttBucket: baby → gratuidade", () => {
     );
 
     const html = getHtml();
-    // The totals row renders: <strong>Gratuidades:</strong> 1
+    expect(html).toContain("Bebê:</strong> 1</span>");
     expect(html).toContain("Gratuidades:</strong> 1</span>");
   });
 
-  it("não inclui bebê de colo nos totais de Adultos", () => {
+  it("não inclui bebê de colo nos totais de Adultos ou Crianças", () => {
     const { getHtml } = setupWindowOpenCapture();
 
     printPassengersManifest(
       undefined,
       undefined,
       [makeLapChild()],
-      noLabel,
-      noCpf,
-      AGE_CATEGORY_LABELS,
-    );
-
-    expect(getHtml()).not.toContain("Adultos:");
-  });
-
-  it("não inclui bebê de colo nos totais de Crianças", () => {
-    const { getHtml } = setupWindowOpenCapture();
-
-    printPassengersManifest(
-      undefined,
-      undefined,
-      [makeLapChild()],
-      noLabel,
-      noCpf,
-      AGE_CATEGORY_LABELS,
-    );
-
-    expect(getHtml()).not.toContain("Crianças:");
-  });
-
-  it("conta separadamente adulto e bebê de colo nos totais corretos", () => {
-    const { getHtml } = setupWindowOpenCapture();
-
-    printPassengersManifest(
-      undefined,
-      undefined,
-      [makeAdult(), makeLapChild()],
       noLabel,
       noCpf,
       AGE_CATEGORY_LABELS,
     );
 
     const html = getHtml();
-    expect(html).toContain("Adultos:");
-    expect(html).toContain("Gratuidades:");
-    // Each category must appear exactly once with count 1
-    expect(html).not.toContain("Adultos:</strong> 2");
-    expect(html).not.toContain("Gratuidades:</strong> 2");
+    expect(html).not.toContain("Adultos:");
+    expect(html).not.toContain("Crianças:");
+  });
+
+  it("mantém adultos gratuitos na categoria Adultos e soma gratuidades independentes", () => {
+    const { getHtml } = setupWindowOpenCapture();
+
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [makeAdult({ isGratuidade: true }), makeLapChild()],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+    );
+
+    const html = getHtml();
+    expect(html).toContain("Adultos:</strong> 1</span>");
+    expect(html).toContain("Bebê:</strong> 1</span>");
+    expect(html).toContain("Gratuidades:</strong> 2</span>");
+  });
+
+  it("mostra o resumo completo solicitado sem duplicar o total da lista", () => {
+    const { getHtml } = setupWindowOpenCapture();
+
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [
+        makeAdult({ id: "adult-1" }),
+        makeAdult({ id: "adult-2" }),
+        makeAdult({ id: "adult-3", isGratuidade: true }),
+        makeChild(),
+        makeLapChild(),
+      ],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+    );
+
+    const html = getHtml();
+    expect(html).toContain("Adultos:</strong> 3</span>");
+    expect(html).toContain("Crianças:</strong> 1</span>");
+    expect(html).toContain("Bebê:</strong> 1</span>");
+    expect(html).toContain("Gratuidades:</strong> 2</span>");
+    expect(html).toContain("Lista de Passageiros (5)");
+  });
+
+  it("inclui gratuidades cadastradas à parte sem alterar categorias etárias", () => {
+    const { getHtml } = setupWindowOpenCapture();
+
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [makeAdult()],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+      [makeFreePassenger()],
+    );
+
+    const html = getHtml();
+    expect(html).toContain("Adultos:</strong> 1</span>");
+    expect(html).toContain("Gratuidades:</strong> 1</span>");
+    expect(html).toContain("Lista de Passageiros (2)");
   });
 });
 
@@ -230,7 +282,7 @@ describe("printPassengersManifest — coluna Poltrona com seatNumber=null", () =
     vi.restoreAllMocks();
   });
 
-  it("exibe '—' na célula Poltrona quando seatNumber é null", () => {
+  it("exibe 'No colo' na célula Poltrona quando seatNumber é null", () => {
     const { getHtml } = setupWindowOpenCapture();
 
     printPassengersManifest(
@@ -242,8 +294,7 @@ describe("printPassengersManifest — coluna Poltrona com seatNumber=null", () =
       AGE_CATEGORY_LABELS,
     );
 
-    // The seat cell: <td class="seat">—</td>
-    expect(getHtml()).toContain('<td class="seat">—</td>');
+    expect(getHtml()).toContain('<td class="seat">No colo</td>');
   });
 
   it("exibe o número da poltrona quando seatNumber está preenchido", () => {
@@ -259,7 +310,7 @@ describe("printPassengersManifest — coluna Poltrona com seatNumber=null", () =
     );
 
     expect(getHtml()).toContain('<td class="seat">12A</td>');
-    expect(getHtml()).not.toContain('<td class="seat">—</td>');
+    expect(getHtml()).not.toContain('<td class="seat">No colo</td>');
   });
 
   it("exibe a categoria 'Bebê' na coluna Cat. para passageiros de colo", () => {

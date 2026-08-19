@@ -96,17 +96,19 @@ export function printPassengersManifest(
   const tourGuideCpf = escapeHtml(p?.tourGuideCpf ?? "");
   const tourGuideReg = escapeHtml(p?.tourGuideRegistration ?? "");
 
-  const anttBucket: Record<string, string> = { adult: "adulto", child: "crianca", senior: "idoso", baby: "gratuidade", pcd: "pcd" };
-  const catOrder = ["adulto", "crianca", "idoso", "pcd", "gratuidade"];
-  const catLabel: Record<string, string> = { adulto: "Adultos", crianca: "Crianças", idoso: "Idosos", pcd: "PCDs", gratuidade: "Gratuidades" };
+  const anttBucket: Record<string, string> = { adult: "adulto", child: "crianca", senior: "idoso", baby: "bebe", pcd: "pcd" };
+  const catOrder = ["adulto", "crianca", "bebe", "idoso", "pcd", "gratuidade"];
+  const catLabel: Record<string, string> = { adulto: "Adultos", crianca: "Crianças", bebe: "Bebê", idoso: "Idosos", pcd: "PCDs", gratuidade: "Gratuidades" };
   const freeRoleLabel: Record<string, string> = { organizer: "Organizador", guide: "Guia de Turismo" };
   const categoryCounts: Record<string, number> = {};
   for (const pass of allPassengers) {
-    if (pass.isGratuidade) {
+    const bucket = anttBucket[pass.ageCategory] ?? "adulto";
+    categoryCounts[bucket] = (categoryCounts[bucket] ?? 0) + 1;
+
+    // Gratuity is independent from age: lap babies and passengers marked as
+    // complimentary remain visible in their respective age categories.
+    if (pass.isGratuidade || pass.ageCategory === "baby") {
       categoryCounts["gratuidade"] = (categoryCounts["gratuidade"] ?? 0) + 1;
-    } else {
-      const bucket = anttBucket[pass.ageCategory] ?? "adulto";
-      categoryCounts[bucket] = (categoryCounts[bucket] ?? 0) + 1;
     }
   }
   if (freePassengers.length > 0) {
