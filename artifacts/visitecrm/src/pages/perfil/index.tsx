@@ -356,6 +356,8 @@ function ClienteCard({
   const { toast } = useToast();
   const [codeCopied, setCodeCopied] = useState(false);
   const [cardDownloading, setCardDownloading] = useState(false);
+  const [isCardFlipped, setIsCardFlipped] = useState(false);
+  const [storeQrCode, setStoreQrCode] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const displayName = profile.client?.name ?? profile.user?.name ?? "Viajante";
   const hasLoyalty = !!profile.loyalty;
@@ -374,6 +376,40 @@ function ClienteCard({
   const logoUrl = profile.tenant?.logoUrl ?? null;
   const tierIcon = effectiveTierLevel ? (CARD_TIER_ICONS[effectiveTierLevel] ?? null) : null;
   const cardBg = getCardBg(primaryColor, effectiveTierLevel);
+  const storePath = profile.tenant?.slug ? `/loja/${profile.tenant.slug}` : null;
+  const storeUrl = storePath ? `${window.location.origin}${storePath}` : null;
+  const securityCode = customerCode
+    ? customerCode.replace(/\D/g, "").slice(-3).padStart(3, "0")
+    : "•••";
+  const loyaltyBenefits = [
+    "Ofertas e condições exclusivas",
+    "Pontos em cada viagem",
+    "Prioridade em novidades",
+    "Benefícios do seu nível",
+  ];
+
+  useEffect(() => {
+    let active = true;
+    if (!storeUrl) {
+      setStoreQrCode(null);
+      return () => { active = false; };
+    }
+
+    QRCode.toDataURL(storeUrl, {
+      width: 192,
+      margin: 1,
+      errorCorrectionLevel: "M",
+      color: { dark: "#0f172a", light: "#ffffff" },
+    })
+      .then((dataUrl) => {
+        if (active) setStoreQrCode(dataUrl);
+      })
+      .catch(() => {
+        if (active) setStoreQrCode(null);
+      });
+
+    return () => { active = false; };
+  }, [storeUrl]);
 
   function copyCustomerCode() {
     if (!customerCode) return;
@@ -409,105 +445,159 @@ function ClienteCard({
 
   return (
     <div className="flex flex-col items-center gap-2">
-      {/* Card face */}
-      <div
-        ref={cardRef}
-        className="relative w-full max-w-[420px] rounded-2xl overflow-hidden shadow-2xl text-white select-none"
-        style={{ background: cardBg }}
-        aria-label="Cartão de viajante"
-      >
-        {/* Aurora shimmer lines */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          <div className="absolute top-1/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-          <div className="absolute top-2/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/6 to-transparent" />
-          <div className="absolute top-4 left-1/3 w-1 h-1 rounded-full bg-white/25" />
-          <div className="absolute top-10 right-1/4 w-0.5 h-0.5 rounded-full bg-white/20" />
-          <div className="absolute bottom-6 left-1/2 w-0.5 h-0.5 rounded-full bg-white/15" />
-        </div>
+      <div className="w-full max-w-[420px] [perspective:1200px]">
+        <div
+          className={`relative aspect-[1.586/1] w-full transition-transform duration-700 [transform-style:preserve-3d] ${isCardFlipped ? "[transform:rotateY(180deg)]" : ""}`}
+          aria-label={`Cartão de viajante — ${isCardFlipped ? "verso" : "frente"}`}
+        >
+          {/* Front face. Keep this ref on the front so downloads never include the back. */}
+          <div
+            ref={cardRef}
+            className="absolute inset-0 rounded-2xl overflow-hidden shadow-2xl text-white select-none [backface-visibility:hidden]"
+            style={{ background: cardBg }}
+            aria-hidden={isCardFlipped}
+          >
+            {/* Aurora shimmer lines */}
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              <div className="absolute top-1/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+              <div className="absolute top-2/3 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/6 to-transparent" />
+              <div className="absolute top-4 left-1/3 w-1 h-1 rounded-full bg-white/25" />
+              <div className="absolute top-10 right-1/4 w-0.5 h-0.5 rounded-full bg-white/20" />
+              <div className="absolute bottom-6 left-1/2 w-0.5 h-0.5 rounded-full bg-white/15" />
+            </div>
 
-        <div className="aspect-[1.586/1] relative p-5 flex flex-col justify-between">
-          {/* Top row: logo + agency name (left) · "CARTÃO DO VIAJANTE" + chip (right) */}
-          <div className="relative flex items-start justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              {logoUrl ? (
-                <img
-                  src={logoUrl}
-                  alt={agencyName}
-                  className="h-10 w-10 rounded-full object-contain bg-white/15 p-0.5 shrink-0 shadow-md"
-                  crossOrigin="anonymous"
-                />
-              ) : (
-                <div className="h-10 w-10 rounded-full bg-white/20 border border-white/30 flex items-center justify-center font-bold text-white text-base shrink-0 shadow-md">
-                  {agencyName.charAt(0).toUpperCase()}
+            <div className="relative h-full p-5 flex flex-col justify-between">
+              {/* Top row: logo + agency name (left) · "CARTÃO DO VIAJANTE" + chip (right) */}
+              <div className="relative flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                  {logoUrl ? (
+                    <img
+                      src={logoUrl}
+                      alt={agencyName}
+                      className="h-10 w-10 rounded-full object-contain bg-white/15 p-0.5 shrink-0 shadow-md"
+                      crossOrigin="anonymous"
+                    />
+                  ) : (
+                    <div className="h-10 w-10 rounded-full bg-white/20 border border-white/30 flex items-center justify-center font-bold text-white text-base shrink-0 shadow-md">
+                      {agencyName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[8px] text-white/50 uppercase tracking-widest leading-none mb-0.5">Agência</p>
+                    <p className="text-[11px] font-bold truncate text-white leading-tight drop-shadow-sm">{agencyName}</p>
+                  </div>
                 </div>
-              )}
-              <div className="min-w-0">
-                <p className="text-[8px] text-white/50 uppercase tracking-widest leading-none mb-0.5">Agência</p>
-                <p className="text-[11px] font-bold truncate text-white leading-tight drop-shadow-sm">{agencyName}</p>
-              </div>
-            </div>
 
-            <div className="flex flex-col items-end gap-1.5 shrink-0">
-              <div className="text-right leading-none">
-                <p className="text-[7px] text-white/50 uppercase tracking-widest">Cartão do</p>
-                <p className="text-[10px] font-extrabold text-white uppercase tracking-wide">Viajante ✈</p>
+                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                  <div className="text-right leading-none">
+                    <p className="text-[7px] text-white/50 uppercase tracking-widest">Cartão do</p>
+                    <p className="text-[10px] font-extrabold text-white uppercase tracking-wide">Viajante ✈</p>
+                  </div>
+                  {/* EMV chip */}
+                  <svg width="30" height="23" viewBox="0 0 36 28" className="opacity-90" aria-hidden="true">
+                    <rect x="1" y="1" width="34" height="26" rx="4" fill="#C9A227" stroke="#E8C14A" strokeWidth="0.8"/>
+                    <rect x="12" y="1" width="12" height="26" fill="#B8901E" opacity="0.55"/>
+                    <rect x="1" y="9.5" width="34" height="9" fill="#B8901E" opacity="0.55"/>
+                    <line x1="12" y1="1" x2="12" y2="27" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
+                    <line x1="24" y1="1" x2="24" y2="27" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
+                    <line x1="1" y1="9.5" x2="35" y2="9.5" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
+                    <line x1="1" y1="18.5" x2="35" y2="18.5" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
+                  </svg>
+                </div>
               </div>
-              {/* EMV chip */}
-              <svg width="30" height="23" viewBox="0 0 36 28" className="opacity-90" aria-hidden="true">
-                <rect x="1" y="1" width="34" height="26" rx="4" fill="#C9A227" stroke="#E8C14A" strokeWidth="0.8"/>
-                <rect x="12" y="1" width="12" height="26" fill="#B8901E" opacity="0.55"/>
-                <rect x="1" y="9.5" width="34" height="9" fill="#B8901E" opacity="0.55"/>
-                <line x1="12" y1="1" x2="12" y2="27" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
-                <line x1="24" y1="1" x2="24" y2="27" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
-                <line x1="1" y1="9.5" x2="35" y2="9.5" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
-                <line x1="1" y1="18.5" x2="35" y2="18.5" stroke="#E8C14A" strokeWidth="0.4" opacity="0.5"/>
-              </svg>
+
+              {/* Center: customer code (prominent) */}
+              <div className="relative">
+                <p className="text-[8px] text-white/45 uppercase tracking-[0.2em] mb-1">Código do Cliente</p>
+                {customerCode ? (
+                  <p className="text-[20px] font-mono font-bold text-white tracking-[0.05em] drop-shadow-md leading-tight">
+                    {customerCode}
+                  </p>
+                ) : (
+                  <p className="text-base font-mono font-semibold text-white/70 tracking-[0.22em] drop-shadow-sm">
+                    •••• •••• •••• ••••
+                  </p>
+                )}
+                {hasLoyalty && (
+                  <p className="text-[9px] text-white/55 mt-1 font-mono tracking-wide">
+                    {(loyaltyPoints ?? 0).toLocaleString("pt-BR")} pts disponíveis
+                  </p>
+                )}
+              </div>
+
+              {/* Bottom row: name · tier · referral code */}
+              <div className="relative flex items-end justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-[7px] text-white/45 uppercase tracking-wider mb-0.5">Viajante</p>
+                  <p className="text-[12px] font-bold uppercase truncate drop-shadow-sm leading-tight text-white">
+                    {displayName}
+                  </p>
+                </div>
+
+                <div className="text-center shrink-0">
+                  <p className="text-[7px] text-white/45 uppercase tracking-wider mb-0.5">Nível</p>
+                  <p className="text-[11px] font-bold text-white drop-shadow-sm leading-tight">
+                    {tierLabel ? (tierIcon ? `${tierIcon} ${tierLabel}` : tierLabel) : "Membro"}
+                  </p>
+                </div>
+
+                {referralCode && (
+                  <div className="text-right shrink-0">
+                    <p className="text-[7px] text-white/45 uppercase tracking-wider mb-0.5">Indicação</p>
+                    <p className="text-[11px] font-mono font-bold text-white drop-shadow-sm leading-tight">
+                      {referralCode}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Center: customer code (prominent) */}
-          <div className="relative">
-            <p className="text-[8px] text-white/45 uppercase tracking-[0.2em] mb-1">Código do Cliente</p>
-            {customerCode ? (
-              <p className="text-[20px] font-mono font-bold text-white tracking-[0.05em] drop-shadow-md leading-tight">
-                {customerCode}
-              </p>
-            ) : (
-              <p className="text-base font-mono font-semibold text-white/70 tracking-[0.22em] drop-shadow-sm">
-                •••• •••• •••• ••••
-              </p>
-            )}
-            {hasLoyalty && (
-              <p className="text-[9px] text-white/55 mt-1 font-mono tracking-wide">
-                {(loyaltyPoints ?? 0).toLocaleString("pt-BR")} pts disponíveis
-              </p>
-            )}
-          </div>
+          {/* Back face */}
+          <div
+            className="absolute inset-0 rounded-2xl overflow-hidden shadow-2xl text-white select-none [backface-visibility:hidden] [transform:rotateY(180deg)]"
+            style={{ background: cardBg }}
+            aria-hidden={!isCardFlipped}
+          >
+            <div className="absolute inset-0 bg-slate-950/25" />
+            <div className="relative h-full py-4 flex flex-col">
+              <div className="h-9 bg-black/90 shadow-inner" aria-label="Tarja magnética" />
+              <div className="flex-1 px-5 pt-3 pb-4 flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[8px] text-white/55 uppercase tracking-[0.2em] mb-1.5">Benefícios do programa</p>
+                  <ul className="space-y-1.5">
+                    {loyaltyBenefits.map((benefit) => (
+                      <li key={benefit} className="flex items-center gap-1.5 text-[10px] font-medium text-white/95">
+                        <Check className="w-3 h-3 shrink-0 text-white/80" />
+                        <span>{benefit}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-3 flex items-center gap-2">
+                    <div className="rounded bg-white/90 px-2 py-1 text-slate-900 min-w-[66px]">
+                      <p className="text-[6px] font-bold uppercase tracking-wider text-slate-500">CVV · Cód. segurança</p>
+                      <p className="font-mono text-base font-bold tracking-[0.25em] leading-none">{securityCode}</p>
+                    </div>
+                    <p className="text-[8px] leading-tight text-white/60">Uso exclusivo<br />do viajante</p>
+                  </div>
+                </div>
 
-          {/* Bottom row: name · tier · referral code */}
-          <div className="relative flex items-end justify-between gap-2">
-            <div className="flex-1 min-w-0">
-              <p className="text-[7px] text-white/45 uppercase tracking-wider mb-0.5">Viajante</p>
-              <p className="text-[12px] font-bold uppercase truncate drop-shadow-sm leading-tight text-white">
-                {displayName}
-              </p>
-            </div>
-
-            <div className="text-center shrink-0">
-              <p className="text-[7px] text-white/45 uppercase tracking-wider mb-0.5">Nível</p>
-              <p className="text-[11px] font-bold text-white drop-shadow-sm leading-tight">
-                {tierLabel ? (tierIcon ? `${tierIcon} ${tierLabel}` : tierLabel) : "Membro"}
-              </p>
-            </div>
-
-            {referralCode && (
-              <div className="text-right shrink-0">
-                <p className="text-[7px] text-white/45 uppercase tracking-wider mb-0.5">Indicação</p>
-                <p className="text-[11px] font-mono font-bold text-white drop-shadow-sm leading-tight">
-                  {referralCode}
-                </p>
+                {storeQrCode ? (
+                  <div className="shrink-0 rounded-lg bg-white p-1.5 shadow-lg">
+                    <img
+                      src={storeQrCode}
+                      alt={`QR code para a vitrine ${agencyName}`}
+                      className="w-[78px] h-[78px]"
+                    />
+                    <p className="mt-0.5 text-center text-[6px] font-bold uppercase tracking-wide text-slate-700">Acesse a vitrine</p>
+                  </div>
+                ) : (
+                  <div className="w-[90px] text-center text-[8px] leading-tight text-white/60">
+                    Vitrine indisponível
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </div>
       </div>
@@ -527,7 +617,17 @@ function ClienteCard({
         </button>
       )}
 
-      <div className="flex gap-2 mt-1">
+      <div className="flex flex-wrap justify-center gap-2 mt-1">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs gap-1.5"
+          onClick={() => setIsCardFlipped((flipped) => !flipped)}
+          aria-pressed={isCardFlipped}
+        >
+          <QrCode className="w-3.5 h-3.5" />
+          {isCardFlipped ? "Ver frente" : "Virar cartão"}
+        </Button>
         <Button
           variant="outline"
           size="sm"
