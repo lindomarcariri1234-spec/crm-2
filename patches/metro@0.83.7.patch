@@ -1,0 +1,109 @@
+diff --git a/src/DeltaBundler/DeltaCalculator.js b/src/DeltaBundler/DeltaCalculator.js
+index 0aa44c32f01d3ce371c751de0d28d309a3f7b8d7..9c59554a1a07589680c94fb41e747d25edb908f4 100644
+--- a/src/DeltaBundler/DeltaCalculator.js
++++ b/src/DeltaBundler/DeltaCalculator.js
+@@ -111,42 +111,44 @@ class DeltaCalculator extends _events.default {
+   }
+   _handleMultipleFileChanges = (changeEvent) => {
+     const { changes, logger, rootDir } = changeEvent;
+-    for (const [canonicalPath, metadata] of changes.addedFiles) {
+-      debug("Handling add: %s", canonicalPath);
+-      if (this.#shouldReset(canonicalPath, metadata)) {
+-        this._requiresReset = true;
++    if (changes != null) {
++      for (const [canonicalPath, metadata] of changes.addedFiles) {
++        debug("Handling add: %s", canonicalPath);
++        if (this.#shouldReset(canonicalPath, metadata)) {
++          this._requiresReset = true;
++        }
++        const absolutePath = _path.default.join(rootDir, canonicalPath);
++        if (this._deletedFiles.has(absolutePath)) {
++          this._deletedFiles.delete(absolutePath);
++          this._modifiedFiles.add(absolutePath);
++        } else {
++          this._addedFiles.add(absolutePath);
++          this._modifiedFiles.delete(absolutePath);
++        }
+       }
+-      const absolutePath = _path.default.join(rootDir, canonicalPath);
+-      if (this._deletedFiles.has(absolutePath)) {
++      for (const [canonicalPath, metadata] of changes.modifiedFiles) {
++        debug("Handling change: %s", canonicalPath);
++        if (this.#shouldReset(canonicalPath, metadata)) {
++          this._requiresReset = true;
++        }
++        const absolutePath = _path.default.join(rootDir, canonicalPath);
++        if (!this._addedFiles.has(absolutePath)) {
++          this._modifiedFiles.add(absolutePath);
++        }
+         this._deletedFiles.delete(absolutePath);
+-        this._modifiedFiles.add(absolutePath);
+-      } else {
+-        this._addedFiles.add(absolutePath);
+-        this._modifiedFiles.delete(absolutePath);
+-      }
+-    }
+-    for (const [canonicalPath, metadata] of changes.modifiedFiles) {
+-      debug("Handling change: %s", canonicalPath);
+-      if (this.#shouldReset(canonicalPath, metadata)) {
+-        this._requiresReset = true;
+       }
+-      const absolutePath = _path.default.join(rootDir, canonicalPath);
+-      if (!this._addedFiles.has(absolutePath)) {
+-        this._modifiedFiles.add(absolutePath);
+-      }
+-      this._deletedFiles.delete(absolutePath);
+-    }
+-    for (const [canonicalPath, metadata] of changes.removedFiles) {
+-      debug("Handling delete: %s", canonicalPath);
+-      if (this.#shouldReset(canonicalPath, metadata)) {
+-        this._requiresReset = true;
+-      }
+-      const absolutePath = _path.default.resolve(rootDir, canonicalPath);
+-      if (this._addedFiles.has(absolutePath)) {
+-        this._addedFiles.delete(absolutePath);
+-      } else {
+-        this._deletedFiles.add(absolutePath);
+-        this._modifiedFiles.delete(absolutePath);
++      for (const [canonicalPath, metadata] of changes.removedFiles) {
++        debug("Handling delete: %s", canonicalPath);
++        if (this.#shouldReset(canonicalPath, metadata)) {
++          this._requiresReset = true;
++        }
++        const absolutePath = _path.default.resolve(rootDir, canonicalPath);
++        if (this._addedFiles.has(absolutePath)) {
++          this._addedFiles.delete(absolutePath);
++        } else {
++          this._deletedFiles.add(absolutePath);
++          this._modifiedFiles.delete(absolutePath);
++        }
+       }
+     }
+     let changeId = changeEventIds.get(changeEvent);
+diff --git a/src/node-haste/DependencyGraph.js b/src/node-haste/DependencyGraph.js
+index 8222d8c69059bfb3fe444acba9f96ab2cc7bec0b..751cb47e179d5887062ce049cfd198503300f143 100644
+--- a/src/node-haste/DependencyGraph.js
++++ b/src/node-haste/DependencyGraph.js
+@@ -95,13 +95,15 @@ class DependencyGraph extends _events.default {
+   }
+   _onHasteChange({ changes, rootDir }) {
+     this._resolutionCache = new Map();
+-    [
+-      ...changes.addedFiles,
+-      ...changes.modifiedFiles,
+-      ...changes.removedFiles,
+-    ].forEach(([canonicalPath]) =>
+-      this.#packageCache.invalidate(_path.default.join(rootDir, canonicalPath)),
+-    );
++    if (changes != null) {
++      [
++        ...changes.addedFiles,
++        ...changes.modifiedFiles,
++        ...changes.removedFiles,
++      ].forEach(([canonicalPath]) =>
++        this.#packageCache.invalidate(_path.default.join(rootDir, canonicalPath)),
++      );
++    }
+     this._createModuleResolver();
+     this.emit("change");
+   }

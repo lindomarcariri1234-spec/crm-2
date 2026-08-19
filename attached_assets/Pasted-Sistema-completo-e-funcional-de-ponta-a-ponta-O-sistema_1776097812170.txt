@@ -1,0 +1,959 @@
+Sistema completo e funcional de ponta a ponta. O sistema de indicação: O indicado ganha, quem indicou ganha, e todo sistema de sincronização, captura de cookes e inserir informações referentes a ambas as partes, quem indica e quem é indicado.
+
+Implementar SISTEMA COMPLETO DE INDICAÇÕES (REFERRAL):
+
+┌─────────────────────────────────────────────────────────────┐
+│                  SISTEMA DE INDICAÇÕES                       │
+│                                                              │
+│  Cliente A (Indicador)  →  Indica  →  Cliente B (Indicado) │
+│         ↓                                          ↓         │
+│    Ganha Bônus                              Ganha Desconto  │
+│    (Crédito)                                    (5%)        │
+└─────────────────────────────────────────────────────────────┘
+ESTRUTURA DO BANCO DE DADOS
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE CLIENTES (Atualizada)
+// ═══════════════════════════════════════════════════════════════
+
+model Client {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ... campos existentes ...
+  
+  // SISTEMA DE INDICAÇÕES
+  referral_code   String?   @unique // Código único do cliente (Ex: MARIA2024)
+  referred_by_id  String?   // ID do cliente que indicou
+  referred_by     Client?   @relation("Referrals", fields: [referred_by_id], references: [id])
+  referred_clients Client[] @relation("Referrals") // Clientes que este indicou
+  
+  // Estatísticas de Indicação
+  total_referrals Int       @default(0) // Total de indicações feitas
+  successful_referrals Int  @default(0) // Indicações que resultaram em compra
+  referral_earnings Decimal @default(0) @db.Decimal(10, 2) // Total ganho em bônus
+  
+  // Relacionamentos
+  referrals_made  Referral[] @relation("Referrer") // Indicações que fez
+  referrals_received Referral[] @relation("Referred") // Indicações que recebeu
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id, referral_code])
+  @@index([referred_by_id])
+  @@map("clients")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE INDICAÇÕES
+// ═══════════════════════════════════════════════════════════════
+
+model Referral {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // INDICADOR (Quem indicou)
+  referrer_id     String
+  referrer        Client    @relation("Referrer", fields: [referrer_id], references: [id])
+  referrer_name   String
+  referrer_email  String
+  referrer_phone  String?
+  
+  // INDICADO (Quem foi indicado)
+  referred_id     String?   // Pode ser null até criar a conta
+  referred        Client?   @relation("Referred", fields: [referred_id], references: [id])
+  referred_name   String?
+  referred_email  String?
+  referred_phone  String?
+  
+  // CÓDIGO DE INDICAÇÃO
+  code            String    @unique // Código usado (Ex: MARIA2024)
+  
+  // RASTREAMENTO
+  utm_source      String?   // De onde veio (facebook, instagram, whatsapp)
+  utm_medium      String?   // Tipo de mídia (social, email, link)
+  utm_campaign    String?   // Campanha específica
+  ip_address      String?   // IP do indicado
+  user_agent      String?   // Navegador/dispositivo
+  landing_page    String?   // Página onde clicou no link
+  
+  // COOKIES E SESSÃO
+  cookie_id       String?   // ID único do cookie
+  session_id      String?   // ID da sessão
+  first_visit     DateTime? // Primeira visita via link
+  last_visit      DateTime? // Última visita
+  visits_count    Int       @default(0) // Quantas vezes visitou
+  
+  // STATUS DA INDICAÇÃO
+  status          String    @default("pending") // pending, active, completed, expired, cancelled
+  
+  // CONVERSÃO
+  converted_at    DateTime? // Quando completou a primeira compra
+  reservation_id  String?   // Reserva que converteu
+  reservation     Reservation? @relation(fields: [reservation_id], references: [id])
+  
+  // BÔNUS E DESCONTOS
+  discount_type   String    @default("percentage") // percentage, fixed
+  discount_value  Decimal   @default(5) @db.Decimal(5, 2) // 5% padrão
+  discount_applied Boolean  @default(false)
+  discount_amount Decimal?  @db.Decimal(10, 2) // Valor real do desconto
+  
+  bonus_type      String    @default("credit") // credit, cashback, points
+  bonus_value     Decimal   @default(0) @db.Decimal(10, 2) // Bônus para o indicador
+  bonus_paid      Boolean   @default(false)
+  bonus_paid_at   DateTime?
+  
+  // VALIDADE
+  expires_at      DateTime? // Data de expiração do código
+  is_active       Boolean   @default(true)
+  
+  // METADADOS
+  metadata        Json?     // Dados adicionais
+  notes           String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id, code])
+  @@index([referrer_id])
+  @@index([referred_id])
+  @@index([status])
+  @@index([cookie_id])
+  @@map("referrals")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE CONFIGURAÇÕES DE INDICAÇÃO
+// ═══════════════════════════════════════════════════════════════
+
+model ReferralSettings {
+  id              String    @id @default(cuid())
+  tenant_id       String    @unique
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // PROGRAMA ATIVO
+  is_enabled      Boolean   @default(true)
+  
+  // DESCONTO PARA O INDICADO
+  discount_type   String    @default("percentage") // percentage, fixed
+  discount_value  Decimal   @default(5) @db.Decimal(5, 2) // 5%
+  min_purchase    Decimal?  @db.Decimal(10, 2) // Compra mínima para usar
+  max_discount    Decimal?  @db.Decimal(10, 2) // Desconto máximo
+  
+  // BÔNUS PARA O INDICADOR
+  bonus_type      String    @default("credit") // credit, cashback, percentage
+  bonus_value     Decimal   @default(10) @db.Decimal(10, 2) // R$ 10 ou 10%
+  bonus_per_referral Boolean @default(true) // Bônus por indicação ou por valor
+  
+  // REGRAS
+  min_referrals   Int       @default(1) // Mínimo de indicações para receber bônus
+  max_referrals   Int?      // Máximo de indicações por cliente
+  expiration_days Int       @default(30) // Dias para o código expirar
+  
+  // RESTRIÇÕES
+  allow_self_referral Boolean @default(false) // Permitir auto-indicação
+  require_first_purchase Boolean @default(true) // Bônus só após primeira compra
+  allow_multiple_uses Boolean @default(false) // Código pode ser usado várias vezes
+  
+  // COMUNICAÇÃO
+  email_template  String?   @db.Text // Template de email
+  whatsapp_template String? @db.Text // Template de WhatsApp
+  share_message   String?   @db.Text // Mensagem para compartilhar
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@map("referral_settings")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE RASTREAMENTO DE COOKIES
+// ═══════════════════════════════════════════════════════════════
+
+model ReferralTracking {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // IDENTIFICAÇÃO
+  cookie_id       String    @unique // ID único do cookie
+  referral_code   String    // Código de indicação usado
+  
+  // DADOS DO VISITANTE
+  ip_address      String?
+  user_agent      String?   @db.Text
+  device_type     String?   // mobile, desktop, tablet
+  browser         String?
+  os              String?
+  country         String?
+  city            String?
+  
+  // RASTREAMENTO DE VISITAS
+  first_visit     DateTime  @default(now())
+  last_visit      DateTime  @default(now())
+  visits_count    Int       @default(1)
+  pages_visited   Json?     // Array de páginas visitadas
+  
+  // CONVERSÃO
+  converted       Boolean   @default(false)
+  converted_at    DateTime?
+  reservation_id  String?
+  
+  // UTM PARAMETERS
+  utm_source      String?
+  utm_medium      String?
+  utm_campaign    String?
+  utm_content     String?
+  utm_term        String?
+  
+  // METADADOS
+  metadata        Json?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id, cookie_id])
+  @@index([referral_code])
+  @@map("referral_tracking")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ATUALIZAÇÃO NA TABELA DE RESERVAS
+// ═══════════════════════════════════════════════════════════════
+
+model Reservation {
+  // ... campos existentes ...
+  
+  // INDICAÇÃO
+  referral_id     String?
+  referral        Referral? @relation(fields: [referral_id], references: [id])
+  referral_code   String?   // Código usado
+  referral_discount Decimal @default(0) @db.Decimal(10, 2) // Desconto aplicado
+  
+  // ... resto do modelo ...
+}
+
+GERAÇÃO AUTOMÁTICA DE CÓDIGO DE INDICAÇÃO
+
+// lib/referral/generate-code.ts
+
+import { prisma } from '@/lib/prisma'
+
+export async function generateReferralCode(
+  clientName: string,
+  tenantId: string
+): Promise<string> {
+  // Gerar código base a partir do nome
+  const nameParts = clientName.trim().split(' ')
+  const firstName = nameParts[0].toUpperCase()
+  const year = new Date().getFullYear()
+  
+  let baseCode = `${firstName}${year}`
+  let code = baseCode
+  let suffix = 1
+
+  // Verificar se o código já existe
+  while (true) {
+    const existing = await prisma.client.findFirst({
+      where: {
+        tenant_id: tenantId,
+        referral_code: code,
+      },
+    })
+
+    if (!existing) {
+      break
+    }
+
+    // Se existir, adicionar sufixo
+    code = `${baseCode}${suffix}`
+    suffix++
+  }
+
+  return code
+}
+
+// Exemplo de uso:
+// generateReferralCode("Maria Silva", "tenant123")
+// Resultado: MARIA2026 ou MARIA20261 se já existir
+
+SISTEMA DE RASTREAMENTO COM COOKIES
+
+// lib/referral/tracking.ts
+
+import { cookies } from 'next/headers'
+import { prisma } from '@/lib/prisma'
+import { v4 as uuidv4 } from 'uuid'
+
+interface TrackingData {
+  referralCode: string
+  utmSource?: string
+  utmMedium?: string
+  utmCampaign?: string
+  utmContent?: string
+  utmTerm?: string
+  ipAddress?: string
+  userAgent?: string
+  landingPage?: string
+}
+
+export async function trackReferralVisit(
+  tenantId: string,
+  data: TrackingData
+) {
+  const cookieStore = cookies()
+  
+  // Buscar ou criar cookie ID
+  let cookieId = cookieStore.get('referral_tracking_id')?.value
+  
+  if (!cookieId) {
+    cookieId = uuidv4()
+    cookieStore.set('referral_tracking_id', cookieId, {
+      maxAge: 60 * 60 * 24 * 30, // 30 dias
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    })
+  }
+
+  // Salvar código de indicação no cookie
+  cookieStore.set('referral_code', data.referralCode, {
+    maxAge: 60 * 60 * 24 * 30, // 30 dias
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  })
+
+  // Detectar dispositivo
+  const userAgent = data.userAgent || ''
+  const deviceType = detectDeviceType(userAgent)
+  const browser = detectBrowser(userAgent)
+  const os = detectOS(userAgent)
+
+  // Buscar tracking existente
+  const existingTracking = await prisma.referralTracking.findUnique({
+    where: { cookie_id: cookieId },
+  })
+
+  if (existingTracking) {
+    // Atualizar tracking existente
+    await prisma.referralTracking.update({
+      where: { cookie_id: cookieId },
+      data: {
+        last_visit: new Date(),
+        visits_count: { increment: 1 },
+        pages_visited: {
+          push: data.landingPage || '/',
+        },
+      },
+    })
+  } else {
+    // Criar novo tracking
+    await prisma.referralTracking.create({
+      data: {
+        tenant_id: tenantId,
+        cookie_id: cookieId,
+        referral_code: data.referralCode,
+        ip_address: data.ipAddress,
+        user_agent: userAgent,
+        device_type: deviceType,
+        browser,
+        os,
+        utm_source: data.utmSource,
+        utm_medium: data.utmMedium,
+        utm_campaign: data.utmCampaign,
+        utm_content: data.utmContent,
+        utm_term: data.utmTerm,
+        pages_visited: [data.landingPage || '/'],
+      },
+    })
+  }
+
+  // Atualizar referral
+  await prisma.referral.updateMany({
+    where: {
+      tenant_id: tenantId,
+      code: data.referralCode,
+      cookie_id: null,
+    },
+    data: {
+      cookie_id: cookieId,
+      first_visit: new Date(),
+      visits_count: { increment: 1 },
+      ip_address: data.ipAddress,
+      user_agent: userAgent,
+      landing_page: data.landingPage,
+      utm_source: data.utmSource,
+      utm_medium: data.utmMedium,
+      utm_campaign: data.utmCampaign,
+    },
+  })
+
+  return cookieId
+}
+
+// Utilitários de detecção
+function detectDeviceType(userAgent: string): string {
+  if (/mobile/i.test(userAgent)) return 'mobile'
+  if (/tablet/i.test(userAgent)) return 'tablet'
+  return 'desktop'
+}
+
+function detectBrowser(userAgent: string): string {
+  if (/chrome/i.test(userAgent)) return 'Chrome'
+  if (/firefox/i.test(userAgent)) return 'Firefox'
+  if (/safari/i.test(userAgent)) return 'Safari'
+  if (/edge/i.test(userAgent)) return 'Edge'
+  return 'Unknown'
+}
+
+function detectOS(userAgent: string): string {
+  if (/windows/i.test(userAgent)) return 'Windows'
+  if (/mac/i.test(userAgent)) return 'MacOS'
+  if (/linux/i.test(userAgent)) return 'Linux'
+  if (/android/i.test(userAgent)) return 'Android'
+  if (/ios/i.test(userAgent)) return 'iOS'
+  return 'Unknown'
+}
+
+PÁGINA DE INDICAÇÃO COM RASTREAMENTO
+
+// app/(public)/loja/ref/[code]/page.tsx
+
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { trackReferralVisit } from '@/lib/referral/tracking'
+import { headers } from 'next/headers'
+
+interface ReferralPageProps {
+  params: { code: string }
+  searchParams: {
+    utm_source?: string
+    utm_medium?: string
+    utm_campaign?: string
+    utm_content?: string
+    utm_term?: string
+  }
+}
+
+export default async function ReferralPage({
+  params,
+  searchParams,
+}: ReferralPageProps) {
+  const { code } = params
+  const headersList = headers()
+  
+  // Buscar indicação
+  const referral = await prisma.referral.findUnique({
+    where: { code: code.toUpperCase() },
+    include: { referrer: true },
+  })
+
+  if (!referral || !referral.is_active) {
+    redirect('/loja')
+  }
+
+  // Verificar expiração
+  if (referral.expires_at && new Date() > referral.expires_at) {
+    await prisma.referral.update({
+      where: { id: referral.id },
+      data: { status: 'expired', is_active: false },
+    })
+    redirect('/loja')
+  }
+
+  // Rastrear visita
+  await trackReferralVisit(referral.tenant_id, {
+    referralCode: code.toUpperCase(),
+    utmSource: searchParams.utm_source,
+    utmMedium: searchParams.utm_medium,
+    utmCampaign: searchParams.utm_campaign,
+    utmContent: searchParams.utm_content,
+    utmTerm: searchParams.utm_term,
+    ipAddress: headersList.get('x-forwarded-for') || undefined,
+    userAgent: headersList.get('user-agent') || undefined,
+    landingPage: `/loja/ref/${code}`,
+  })
+
+  // Redirecionar para loja com mensagem
+  redirect(`/loja?ref=${code.toUpperCase()}&welcome=true`)
+}
+
+BANNER DE BOAS-VINDAS NA LOJA
+// components/public/referral-welcome-banner.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Gift, X } from 'lucide-react'
+import { useSearchParams } from 'next/navigation'
+
+export function ReferralWelcomeBanner() {
+  const searchParams = useSearchParams()
+  const [show, setShow] = useState(false)
+  const [referrerName, setReferrerName] = useState('')
+  const [discount, setDiscount] = useState(5)
+
+  useEffect(() => {
+    const ref = searchParams.get('ref')
+    const welcome = searchParams.get('welcome')
+
+    if (ref && welcome === 'true') {
+      // Buscar informações do indicador
+      fetch(`/api/public/referral-info?code=${ref}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.referrer) {
+            setReferrerName(data.referrer.name)
+            setDiscount(data.discount)
+            setShow(true)
+          }
+        })
+    }
+  }, [searchParams])
+
+  if (!show) return null
+
+  return (
+    <Alert className="bg-gradient-to-r from-orange-50 to-yellow-50 border-orange-200 mb-6">
+      <Gift className="h-5 w-5 text-orange-600" />
+      <AlertDescription className="flex items-center justify-between">
+        <div>
+          <p className="font-semibold text-orange-900">
+            🎉 Você foi indicado por {referrerName}!
+          </p>
+          <p className="text-orange-800 mt-1">
+            Ganhe <strong>{discount}% de desconto</strong> na sua primeira
+            reserva usando o código na finalização da compra.
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setShow(false)}
+          className="ml-4"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+VALIDAÇÃO DE CÓDIGO NO WIZARD
+
+// app/api/public/validate-referral/route.ts
+
+import { NextResponse } from 'next/response'
+import { prisma } from '@/lib/prisma'
+import { cookies } from 'next/headers'
+
+export async function POST(req: Request) {
+  try {
+    const { code } = await req.json()
+    const cookieStore = cookies()
+
+    if (!code) {
+      return NextResponse.json(
+        { error: 'Código não informado' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar referral
+    const referral = await prisma.referral.findUnique({
+      where: { code: code.toUpperCase() },
+      include: { referrer: true },
+    })
+
+    if (!referral) {
+      return NextResponse.json(
+        { error: 'Código de indicação inválido' },
+        { status: 404 }
+      )
+    }
+
+    // Verificar se está ativo
+    if (!referral.is_active) {
+      return NextResponse.json(
+        { error: 'Código de indicação inativo' },
+        { status: 400 }
+      )
+    }
+
+    // Verificar expiração
+    if (referral.expires_at && new Date() > referral.expires_at) {
+      await prisma.referral.update({
+        where: { id: referral.id },
+        data: { status: 'expired', is_active: false },
+      })
+
+      return NextResponse.json(
+        { error: 'Código de indicação expirado' },
+        { status: 400 }
+      )
+    }
+
+    // Verificar auto-indicação (se tiver cookie do indicador)
+    const referrerCookieId = cookieStore.get('client_id')?.value
+    if (referrerCookieId === referral.referrer_id) {
+      return NextResponse.json(
+        { error: 'Você não pode usar seu próprio código de indicação' },
+        { status: 400 }
+      )
+    }
+
+    // Salvar código no cookie
+    cookieStore.set('referral_code', code.toUpperCase(), {
+      maxAge: 60 * 60 * 24 * 30, // 30 dias
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    })
+
+    return NextResponse.json({
+      success: true,
+      referral: {
+        code: referral.code,
+        referrer_name: referral.referrer.name,
+        discount_type: referral.discount_type,
+        discount_value: referral.discount_value,
+      },
+    })
+  } catch (error: any) {
+    console.error('Erro ao validar código:', error)
+    return NextResponse.json(
+      { error: 'Erro ao validar código' },
+      { status: 500 }
+    )
+  }
+}
+
+APLICAÇÃO DE DESCONTO E BÔNUS
+
+// lib/referral/apply-benefits.ts
+
+import { prisma } from '@/lib/prisma'
+
+interface ApplyBenefitsParams {
+  referralCode: string
+  reservationId: string
+  totalAmount: number
+  tenantId: string
+}
+
+export async function applyReferralBenefits({
+  referralCode,
+  reservationId,
+  totalAmount,
+  tenantId,
+}: ApplyBenefitsParams) {
+  // Buscar referral
+  const referral = await prisma.referral.findUnique({
+    where: { code: referralCode },
+    include: { referrer: true },
+  })
+
+  if (!referral) {
+    throw new Error('Código de indicação não encontrado')
+  }
+
+  // Buscar configurações
+  const settings = await prisma.referralSettings.findUnique({
+    where: { tenant_id: tenantId },
+  })
+
+  if (!settings || !settings.is_enabled) {
+    throw new Error('Programa de indicações não está ativo')
+  }
+
+  // Calcular desconto para o indicado
+  let discountAmount = 0
+
+  if (referral.discount_type === 'percentage') {
+    discountAmount = (totalAmount * Number(referral.discount_value)) / 100
+  } else {
+    discountAmount = Number(referral.discount_value)
+  }
+
+  // Aplicar desconto máximo se configurado
+  if (settings.max_discount && discountAmount > Number(settings.max_discount)) {
+    discountAmount = Number(settings.max_discount)
+  }
+
+  // Calcular bônus para o indicador
+  let bonusAmount = 0
+
+  if (settings.bonus_type === 'percentage') {
+    bonusAmount = (totalAmount * Number(settings.bonus_value)) / 100
+  } else if (settings.bonus_type === 'credit') {
+    bonusAmount = Number(settings.bonus_value)
+  }
+
+  // Atualizar referral
+  await prisma.referral.update({
+    where: { id: referral.id },
+    data: {
+      status: 'completed',
+      converted_at: new Date(),
+      reservation_id: reservationId,
+      discount_applied: true,
+      discount_amount: discountAmount,
+      bonus_value: bonusAmount,
+    },
+  })
+
+  // Atualizar estatísticas do indicador
+  await prisma.client.update({
+    where: { id: referral.referrer_id },
+    data: {
+      successful_referrals: { increment: 1 },
+      referral_earnings: { increment: bonusAmount },
+    },
+  })
+
+  // Criar crédito para o indicador (se configurado)
+  if (settings.bonus_type === 'credit') {
+    await prisma.clientCredit.create({
+      data: {
+        tenant_id: tenantId,
+        client_id: referral.referrer_id,
+        amount: bonusAmount,
+        type: 'referral_bonus',
+        description: `Bônus por indicação - Reserva ${reservationId}`,
+        expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 ano
+        status: 'active',
+      },
+    })
+  }
+
+  // Atualizar tracking
+  const cookieId = referral.cookie_id
+  if (cookieId) {
+    await prisma.referralTracking.updateMany({
+      where: { cookie_id: cookieId },
+      data: {
+        converted: true,
+        converted_at: new Date(),
+        reservation_id: reservationId,
+      },
+    })
+  }
+
+  return {
+    discountAmount,
+    bonusAmount,
+  }
+}
+
+DASHBOARD DE INDICAÇÕES (CRM)
+// app/(dashboard)/dashboard/indicacoes/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { ReferralStats } from '@/components/dashboard/referral/referral-stats'
+import { ReferralList } from '@/components/dashboard/referral/referral-list'
+import { ReferralSettings } from '@/components/dashboard/referral/referral-settings'
+
+export default async function ReferralPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  // Buscar estatísticas
+  const stats = await prisma.referral.groupBy({
+    by: ['status'],
+    where: { tenant_id: session.user.tenantId },
+    _count: true,
+    _sum: {
+      discount_amount: true,
+      bonus_value: true,
+    },
+  })
+
+  // Buscar top indicadores
+  const topReferrers = await prisma.client.findMany({
+    where: {
+      tenant_id: session.user.tenantId,
+      successful_referrals: { gt: 0 },
+    },
+    orderBy: { successful_referrals: 'desc' },
+    take: 10,
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      referral_code: true,
+      total_referrals: true,
+      successful_referrals: true,
+      referral_earnings: true,
+    },
+  })
+
+  // Buscar indicações recentes
+  const recentReferrals = await prisma.referral.findMany({
+    where: { tenant_id: session.user.tenantId },
+    include: {
+      referrer: true,
+      referred: true,
+      reservation: true,
+    },
+    orderBy: { created_at: 'desc' },
+    take: 20,
+  })
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold">Programa de Indicações</h1>
+        <p className="text-gray-600">
+          Gerencie e acompanhe o programa de indicações da sua agência
+        </p>
+      </div>
+
+      {/* Estatísticas */}
+      <ReferralStats stats={stats} />
+
+      {/* Top Indicadores */}
+      <div className="mt-8">
+        <h2 className="text-2xl font-bold mb-4">🏆 Top Indicadores</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {topReferrers.map((referrer, index) => (
+            <Card key={referrer.id} className="p-4">
+              <div className="flex items-center gap-3">
+                <div className="text-3xl">
+                  {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '🎖️'}
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold">{referrer.name}</p>
+                  <p className="text-sm text-gray-600">
+                    Código: {referrer.referral_code}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-bold text-green-600">
+                    {referrer.successful_referrals}
+                  </p>
+                  <p className="text-xs text-gray-600">indicações</p>
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t">
+                <p className="text-sm text-gray-600">
+                  Ganhou:{' '}
+                  <span className="font-semibold text-green-600">
+                    R$ {Number(referrer.referral_earnings).toFixed(2)}
+                  </span>
+                </p>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>
+
+      {/* Lista de Indicações */}
+      <ReferralList referrals={recentReferrals} />
+
+      {/* Configurações */}
+      <ReferralSettings />
+    </div>
+  )
+}
+
+FLUXO COMPLETO DO SISTEMA
+┌─────────────────────────────────────────────────────────────────┐
+│                    FLUXO DE INDICAÇÃO                            │
+└─────────────────────────────────────────────────────────────────┘
+
+1. CLIENTE A FAZ UMA RESERVA
+   ├── Sistema gera código automático (Ex: MARIA2026)
+   ├── Cliente recebe email com seu código
+   └── Código fica disponível na área do cliente
+
+2. CLIENTE A COMPARTILHA SEU CÓDIGO
+   ├── Via WhatsApp (link: /loja/ref/MARIA2026)
+   ├── Via Instagram (link com UTM)
+   ├── Via Email
+   └── Ou apenas o código: MARIA2026
+
+3. CLIENTE B CLICA NO LINK
+   ├── Sistema cria cookie único (30 dias)
+   ├── Rastreia: IP, navegador, dispositivo, UTM
+   ├── Salva primeira visita
+   └── Redireciona para /loja?ref=MARIA2026&welcome=true
+
+4. CLIENTE B VÊ BANNER DE BOAS-VINDAS
+   ├── "Você foi indicado por Maria!"
+   ├── "Ganhe 5% de desconto"
+   └── Código já está salvo no cookie
+
+5. CLIENTE B NAVEGA PELA LOJA
+   ├── Sistema rastreia páginas visitadas
+   ├── Conta número de visitas
+   └── Cookie mantém código por 30 dias
+
+6. CLIENTE B INICIA RESERVA
+   ├── Preenche dados pessoais
+   ├── Na revisão, campo de código já vem preenchido
+   └── Ou pode digitar manualmente: MARIA2026
+
+7. SISTEMA VALIDA CÓDIGO
+   ├── Verifica se existe
+   ├── Verifica se está ativo
+   ├── Verifica se não expirou
+   ├── Verifica se não é auto-indicação
+   └── Calcula desconto (5%)
+
+8. DESCONTO APLICADO
+   ├── Cliente B ganha 5% de desconto
+   ├── Total recalculado
+   └── Desconto aparece na revisão
+
+9. RESERVA CONFIRMADA
+   ├── Sistema marca indicação como "completed"
+   ├── Calcula bônus para Cliente A
+   ├── Cria crédito de R$ 10 para Cliente A
+   └── Atualiza estatísticas
+
+10. CLIENTE A RECEBE NOTIFICAÇÃO
+    ├── Email: "Sua indicação resultou em uma venda!"
+    ├── WhatsApp: "Você ganhou R$ 10 de crédito!"
+    └── Crédito disponível na próxima compra
+
+11. CLIENTE A USA O CRÉDITO
+    ├── Na próxima reserva, desconto automático
+    ├── Ou pode acumular mais créditos
+    └── Crédito válido por 1 ano
+
+
+📈 BENEFÍCIOS DO SISTEMA
+Para o Indicado (Cliente B):
+ 5% de desconto na primeira compra
+ Código aplicado automaticamente via cookie
+ Banner de boas-vindas personalizado
+ Experiência facilitada
+Para o Indicador (Cliente A):
+ R$ 10 de crédito por indicação convertida
+ Código personalizado (MARIA2026)
+ Link fácil de compartilhar
+ Notificações de conversão
+ Créditos acumuláveis
+Para a Agência:
+ Marketing boca a boca automatizado
+ Rastreamento completo de conversões
+ Análise de UTM e origem
+ Dashboard com estatísticas
+ ROI mensurável
+ Aumento de vendas orgânicas
+Sistema completo de indicações com rastreamento avançado! 🎁🚀
+
+

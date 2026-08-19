@@ -1,0 +1,123 @@
+Faça uma Análise Completa de todo o projeto, Corrija os Erros encontrados, atualize, otimize e Implemente Melhorias do Sistema.
+
+Revise todas as tarefas e rascunhos.
+
+Reorganize as tarefas e rascunhos.
+
+Executar implementação das tarefas, abrangendo frontend, backend, banco de dados, integrações, infraestrutura, segurança, desempenho e demais componentes da aplicação.
+
+Reinstalar as dependências. Checar e reinstalar.
+
+Limpar o cache e confirmar que o app carrega.
+
+Preservar o que gera valor para o negócio;
+Corrigir problemas técnicos existentes;
+Melhorar desempenho, segurança e escalabilidade;
+Facilitar futuras manutenções e novas implementações;
+Reduzir riscos operacionais e custos de desenvolvimento.
+
+Certifique que Todos os serviços principais estão rodando.
+
+O objetivo é corrigir todos os problemas e reorganizar as tarefas e implantar as que forem necessárias realizando uma revisão abrangente do código e da arquitetura para identificar, organizar, corrigir, otimizar e melhorar tudo o que for necessário para garantir a máxima qualidade, estabilidade, segurança e performance da plataforma.
+
+CORRIGIR ERROS de agora, e erros do passado, seja qual for o erros detectado, CORRIGIR.
+
+Faça uma Análise Completa, Corrija os Erros encontrados, atualize, otimize e Implemente Melhorias do Sistema.
+
+Executar implementação das tarefas que estão na fila de todo o sistema, abrangendo frontend, backend, banco de dados, integrações, infraestrutura, segurança, desempenho e demais componentes da aplicação.
+
+O objetivo não é apenas corrigir problemas relacionados a uma tarefa específica, mas realizar uma revisão abrangente do código e da arquitetura para identificar, corrigir e melhorar tudo o que for necessário para garantir a máxima qualidade, estabilidade, segurança e performance da plataforma.
+
+CORRIGIR ERROS de agora, e erros do passado, seja qual for o erros detectado, CORRIGIR.
+
+Análise Completa do Sistema
+
+Realizar uma auditoria técnica detalhada de todo o código-fonte, identificando:
+
+Erros;
+Bugs;
+Falhas de lógica;
+Problemas de arquitetura;
+Vulnerabilidades de segurança;
+Gargalos de desempenho;
+Código duplicado;
+Código obsoleto;
+Boas práticas não aplicadas;
+Oportunidades de otimização e melhoria.
+Corrigir Todos os Erros Identificados
+
+Corrigir todos os erros encontrados durante a análise, incluindo:
+
+Erros de TypeScript;
+Erros de compilação (Build);
+Erros de Runtime;
+Erros de Console;
+Warnings críticos;
+Falhas de integração;
+Problemas de autenticação e autorização;
+Problemas de configuração;
+Dependências incompatíveis ou quebradas;
+Falhas de validação;
+Problemas de banco de dados;
+Exceções não tratadas;
+Problemas de usabilidade e experiência do usuário.
+
+Corrigir todos os erros, mesmo se forem erros antigo ou pré-existente, corrigir tudo.
+
+Todo erro identificado deverá ser analisado e corrigido.
+
+Implementar Melhorias
+
+Além das correções, identificar e implementar melhorias que tragam benefícios para o sistema, incluindo:
+
+Melhorias de desempenho;
+Melhorias de segurança;
+Melhorias de usabilidade;
+Melhorias de estabilidade;
+Refatoração de código;
+Otimização de consultas e processamento;
+Padronização de componentes e estruturas;
+Redução de complexidade técnica;
+Melhoria da manutenção futura do sistema.
+Testes e Validação
+
+Após as correções e melhorias:
+
+Executar testes funcionais;
+Executar testes de integração;
+Validar fluxos críticos;
+Verificar compatibilidade entre módulos;
+Garantir que não existam regressões;
+Confirmar que todas as funcionalidades estejam operando corretamente.
+Relatório Final
+
+Ao concluir os trabalhos, apresentar um relatório contendo:
+
+Problemas identificados;
+Correções realizadas;
+Melhorias implementadas;
+Arquivos impactados;
+Riscos encontrados;
+Pendências (caso existam);
+Evidências dos testes executados.
+Critério de Conclusão
+
+A atividade somente poderá ser considerada concluída quando:
+
+ Todo o código tiver sido analisado;
+
+ Todos os erros identificados tiverem sido corrigidos;
+
+ As melhorias prioritárias tiverem sido implementadas;
+
+ O sistema estiver compilando sem erros;
+
+ Não existirem erros conhecidos pendentes;
+
+ Os testes tiverem sido executados e aprovados;
+
+ O sistema estiver estável, seguro, otimizado e validado para operação.
+
+Resultado Esperado
+
+Entregar uma versão do sistema mais robusta, segura, performática, organizada e sem erros, garantindo a melhor experiência possível para usuários e administradores.

@@ -1,0 +1,732 @@
+Implementar o pagamento de plano pelas agências.
+
+A agência deverá efetuar o pagamento referente ao plano Pro e Enterprise para usar o sistema.
+
+A agência poderá usar o sistema livremente quando a opção de plano for Starter.
+
+Plano Starter NÃO necessita de pagamento para a Agência usar o sistema.
+
+Plano Pro necessita sim de pagamento feito pela agência ao SuperAdmim.
+
+Plano Enterprise necessita também de pagamento feito pela agência ao SuperAdmim.
+
+Pagamento via Pix ou Stripe.
+
+O SuperAdmin é o nível mais alto de autoridade na plataforma. Ele tem acesso global a todos os recursos, independente de tenant (agência). O controle de acesso é feito tanto no backend (verificação da role superadmin em todas as rotas protegidas) quanto no frontend (páginas e menus condicionais ao papel do usuário).
+
+Funcionalidades Disponíveis
+Gestão de Tenants (Agências)
+Listar, criar e editar agências cadastradas na plataforma
+Suspender ou reativar uma agência individualmente
+Visualizar detalhes completos de cada tenant
+Gestão de Planos
+Criar, editar e excluir planos de assinatura (ex: básico, pro, enterprise)
+Associar planos a tenants via o painel de billing
+Usuários Globais
+Visualizar todos os usuários cadastrados em todas as agências
+Filtrar por agência, papel ou status
+Billing e Faturas
+Gerenciar faturas de qualquer tenant
+Criar e atualizar registros de cobrança globalmente
+Feature Flags
+Ativar ou desativar funcionalidades do sistema para tenants específicos ou globalmente, sem necessidade de deploy
+Métricas e Dashboard
+MRR histórico (receita recorrente mensal ao longo do tempo)
+Crescimento de tenants (novos cadastros por período)
+Taxa de churn (cancelamentos)
+Distribuição de tenants por status e plano
+Logs e Auditoria
+Acesso ao log de auditoria global de toda a atividade da plataforma
+Manutenção
+Ferramenta para limpar arquivos órfãos no armazenamento (UploadThing) que não estão mais associados a nenhum registro
+Configuração
+
+Sicronizar a opção de plano na configuração das Ag^ncias com o Painel do SuperAdmin.
+
+Implementar a sincronização doas planos selecionados com o sistema do SuperAdmin.
+Ao selecionar um plano nas configurações da Agência, será refletido no dashboard do SuperAdmin.
+
+O upgrade será atualizado mediante pagamento efetuado.
+
+SISTEMA DE PAGAMENTO DE PLANOS - IMPLEMENTAÇÃO COMPLETA
+ESTRUTURA DA IMPLEMENTAÇÃO
+✅ Funcionalidades:
+
+Plano Starter - Gratuito (sem pagamento)
+Plano Pro - R$ 97/mês (requer pagamento)
+Plano Enterprise - R$ 397/mês (requer pagamento)
+Pagamento via PIX - Geração automática de QR Code
+Pagamento via Stripe - Cartão de crédito/débito
+Sincronização SuperAdmin - Dashboard global
+Controle de Acesso - Bloqueio por limites do plano
+Trial Period - 14 dias grátis para Pro/Enterprise
+🗄️ SCHEMA PRISMA - PLANOS E PAGAMENTOS
+
+// prisma/schema.prisma - ADICIONAR/ATUALIZAR
+
+enum PlanType {
+  STARTER
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIAL       // Período de teste
+  ACTIVE      // Ativo e pago
+  PAST_DUE    // Pagamento atrasado
+  CANCELED    // Cancelado
+  SUSPENDED   // Suspenso por falta de pagamento
+}
+
+enum PaymentMethod {
+  PIX
+  CREDIT_CARD
+  BANK_TRANSFER
+  FREE
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model Plan {
+  id              String   @id @default(cuid())
+  
+  name            String   // "Starter", "Pro", "Enterprise"
+  slug            String   @unique // "starter", "pro", "enterprise"
+  plan_type       PlanType
+  
+  // Preços
+  price_monthly   Decimal  @db.Decimal(10, 2)
+  price_yearly    Decimal  @db.Decimal(10, 2)
+  
+  // Limites
+  max_users       Int
+  max_clients     Int
+  max_trips       Int
+  max_storage_gb  Int      @default(5)
+  
+  // Features
+  features        Json     @db.JsonB
+  
+  // Status
+  is_active       Boolean  @default(true)
+  is_featured     Boolean  @default(false)
+  
+  // Trial
+  trial_days      Int      @default(0)
+  
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  
+  subscriptions   Subscription[]
+  
+  @@map("plans")
+}
+
+model Subscription {
+  id              String   @id @default(cuid())
+  tenant_id       String   @unique
+  plan_id         String
+  
+  // Status
+  status          SubscriptionStatus @default(TRIAL)
+  
+  // Período
+  billing_cycle   String   @default("monthly") // "monthly", "yearly"
+  current_period_start DateTime
+  current_period_end   DateTime
+  
+  // Trial
+  trial_start     DateTime?
+  trial_end       DateTime?
+  
+  // Cancelamento
+  cancel_at_period_end Boolean @default(false)
+  canceled_at     DateTime?
+  
+  // Stripe
+  stripe_subscription_id String? @unique
+  stripe_customer_id     String?
+  
+  // Metadata
+  metadata        Json?    @db.JsonB
+  
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  
+  tenant          Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  plan            Plan     @relation(fields: [plan_id], references: [id])
+  invoices        Invoice[]
+  
+  @@index([tenant_id])
+  @@index([plan_id])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id              String   @id @default(cuid())
+  subscription_id String
+  tenant_id       String
+  
+  // Número da fatura
+  invoice_number  String   @unique
+  
+  // Valores
+  amount          Decimal  @db.Decimal(10, 2)
+  tax_amount      Decimal  @default(0) @db.Decimal(10, 2)
+  total_amount    Decimal  @db.Decimal(10, 2)
+  
+  // Status
+  status          PaymentStatus @default(PENDING)
+  
+  // Datas
+  issue_date      DateTime @default(now())
+  due_date        DateTime
+  paid_at         DateTime?
+  
+  // Pagamento
+  payment_method  PaymentMethod?
+  payment_id      String?  // ID da transação (Stripe, PIX, etc)
+  
+  // PIX
+  pix_code        String?  @db.Text
+  pix_qr_code_url String?
+  pix_expires_at  DateTime?
+  
+  // Stripe
+  stripe_invoice_id String? @unique
+  stripe_payment_intent_id String?
+  
+  // Metadata
+  description     String?  @db.Text
+  metadata        Json?    @db.JsonB
+  
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  
+  subscription    Subscription @relation(fields: [subscription_id], references: [id], onDelete: Cascade)
+  tenant          Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  @@index([subscription_id])
+  @@index([tenant_id])
+  @@index([status])
+  @@index([due_date])
+  @@map("invoices")
+}
+
+model UsageTracking {
+  id              String   @id @default(cuid())
+  tenant_id       String
+  
+  // Período
+  period_start    DateTime
+  period_end      DateTime
+  
+  // Uso atual
+  users_count     Int      @default(0)
+  clients_count   Int      @default(0)
+  trips_count     Int      @default(0)
+  storage_used_gb Decimal  @default(0) @db.Decimal(10, 2)
+  
+  // Limites do plano
+  users_limit     Int
+  clients_limit   Int
+  trips_limit     Int
+  storage_limit_gb Int
+  
+  // Alertas
+  users_warning_sent     Boolean @default(false)
+  clients_warning_sent   Boolean @default(false)
+  trips_warning_sent     Boolean @default(false)
+  storage_warning_sent   Boolean @default(false)
+  
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+  
+  tenant          Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  @@unique([tenant_id, period_start])
+  @@index([tenant_id])
+  @@map("usage_tracking")
+}
+
+// ATUALIZAR MODEL TENANT
+model Tenant {
+  // ... campos existentes ...
+  
+  // Plano e Assinatura
+  current_plan    PlanType @default(STARTER)
+  subscription_status SubscriptionStatus @default(TRIAL)
+  
+  subscription    Subscription?
+  invoices        Invoice[]
+  usage_tracking  UsageTracking[]
+}
+
+🎯 SEED - PLANOS INICIAIS
+// prisma/seed-plans.ts
+
+import { PrismaClient, PlanType } from '@prisma/client'
+
+const prisma = new PrismaClient()
+
+async function seedPlans() {
+  console.log('🌱 Seeding plans...')
+
+  // ═══════════════════════════════════════════════════════════
+  // PLANO STARTER (GRATUITO)
+  // ═══════════════════════════════════════════════════════════
+  await prisma.plan.upsert({
+    where: { slug: 'starter' },
+    update: {},
+    create: {
+      name: 'Starter',
+      slug: 'starter',
+      plan_type: PlanType.STARTER,
+      price_monthly: 0,
+      price_yearly: 0,
+      max_users: 3,
+      max_clients: 500,
+      max_trips: 20,
+      max_storage_gb: 2,
+      trial_days: 0,
+      features: {
+        users: 3,
+        clients: 500,
+        trips: 20,
+        storage: '2 GB',
+        features: [
+          'Gestão básica de clientes',
+          'Criação de viagens',
+          'Reservas manuais',
+          'Relatórios básicos',
+          'Suporte por email',
+        ],
+      },
+      is_active: true,
+      is_featured: false,
+    },
+  })
+
+  // ═══════════════════════════════════════════════════════════
+  // PLANO PRO
+  // ═══════════════════════════════════════════════════════════
+  await prisma.plan.upsert({
+    where: { slug: 'pro' },
+    update: {},
+    create: {
+      name: 'Pro',
+      slug: 'pro',
+      plan_type: PlanType.PRO,
+      price_monthly: 97,
+      price_yearly: 970, // 10 meses (2 de desconto)
+      max_users: 10,
+      max_clients: 2000,
+      max_trips: 100,
+      max_storage_gb: 10,
+      trial_days: 14,
+      features: {
+        users: 10,
+        clients: 2000,
+        trips: 100,
+        storage: '10 GB',
+        features: [
+          '✅ Tudo do Starter',
+          '✅ Pipeline de vendas (Kanban)',
+          '✅ Automações',
+          '✅ WhatsApp integrado',
+          '✅ Loja online',
+          '✅ Relatórios avançados',
+          '✅ Cupons de desconto',
+          '✅ Sistema de indicação',
+          '✅ Suporte prioritário',
+        ],
+      },
+      is_active: true,
+      is_featured: true,
+    },
+  })
+
+  // ═══════════════════════════════════════════════════════════
+  // PLANO ENTERPRISE
+  // ═══════════════════════════════════════════════════════════
+  await prisma.plan.upsert({
+    where: { slug: 'enterprise' },
+    update: {},
+    create: {
+      name: 'Enterprise',
+      slug: 'enterprise',
+      plan_type: PlanType.ENTERPRISE,
+      price_monthly: 397,
+      price_yearly: 1970, // 10 meses
+      max_users: 50,
+      max_clients: 10000,
+      max_trips: 500,
+      max_storage_gb: 50,
+      trial_days: 14,
+      features: {
+        users: 50,
+        clients: 10000,
+        trips: 500,
+        storage: '50 GB',
+        features: [
+          '✅ Tudo do Pro',
+          '✅ Usuários ilimitados',
+          '✅ Clientes ilimitados',
+          '✅ Viagens ilimitadas',
+          '✅ API de integração',
+          '✅ Webhooks',
+          '✅ White label',
+          '✅ Gerente de conta dedicado',
+          '✅ Suporte 24/7',
+          '✅ Treinamento personalizado',
+        ],
+      },
+      is_active: true,
+      is_featured: false,
+    },
+  })
+
+  console.log('✅ Plans seeded successfully!')
+}
+
+seedPlans()
+  .catch((e) => {
+    console.error(e)
+    process.exit(1)
+  })
+  .finally(async () => {
+    await prisma.$disconnect()
+  })
+
+🔧 API - GESTÃO DE PLANOS
+// app/api/plans/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+
+export async function GET() {
+  try {
+    const plans = await prisma.plan.findMany({
+      where: { is_active: true },
+      orderBy: { price_monthly: 'asc' },
+    })
+
+    return NextResponse.json({ plans })
+  } catch (error) {
+    console.error('Erro ao buscar planos:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar planos' },
+      { status: 500 }
+    )
+  }
+}
+
+💳 API - UPGRADE DE PLANO
+// app/api/subscriptions/upgrade/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { addDays, addMonths, addYears } from 'date-fns'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || !['admin', 'owner'].includes(session.user.role)) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { planSlug, billingCycle } = await req.json()
+
+    // Buscar plano
+    const plan = await prisma.plan.findUnique({
+      where: { slug: planSlug },
+    })
+
+    if (!plan) {
+      return NextResponse.json({ error: 'Plano não encontrado' }, { status: 404 })
+    }
+
+    // Buscar tenant
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: session.user.tenantId },
+      include: { subscription: true },
+    })
+
+    if (!tenant) {
+      return NextResponse.json({ error: 'Agência não encontrada' }, { status: 404 })
+    }
+
+    const now = new Date()
+
+    // ═══════════════════════════════════════════════════════════
+    // PLANO STARTER (GRATUITO)
+    // ═══════════════════════════════════════════════════════════
+    if (plan.plan_type === 'STARTER') {
+      // Cancelar assinatura existente se houver
+      if (tenant.subscription) {
+        await prisma.subscription.update({
+          where: { id: tenant.subscription.id },
+          data: {
+            status: 'CANCELED',
+            canceled_at: now,
+          },
+        })
+      }
+
+      // Atualizar tenant
+      await prisma.tenant.update({
+        where: { id: tenant.id },
+        data: {
+          current_plan: 'STARTER',
+          subscription_status: 'ACTIVE',
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        message: 'Plano Starter ativado com sucesso!',
+        requiresPayment: false,
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // PLANOS PRO E ENTERPRISE (PAGOS)
+    // ═══════════════════════════════════════════════════════════
+
+    const amount =
+      billingCycle === 'yearly'
+        ? plan.price_yearly.toNumber()
+        : plan.price_monthly.toNumber()
+
+    const periodEnd =
+      billingCycle === 'yearly' ? addYears(now, 1) : addMonths(now, 1)
+
+    // Verificar se já tem assinatura
+    let subscription = tenant.subscription
+
+    if (subscription) {
+      // Atualizar assinatura existente
+      subscription = await prisma.subscription.update({
+        where: { id: subscription.id },
+        data: {
+          plan_id: plan.id,
+          billing_cycle: billingCycle,
+          current_period_start: now,
+          current_period_end: periodEnd,
+          status: plan.trial_days > 0 ? 'TRIAL' : 'ACTIVE',
+          trial_start: plan.trial_days > 0 ? now : null,
+          trial_end: plan.trial_days > 0 ? addDays(now, plan.trial_days) : null,
+        },
+      })
+    } else {
+      // Criar nova assinatura
+      subscription = await prisma.subscription.create({
+        data: {
+          tenant_id: tenant.id,
+          plan_id: plan.id,
+          billing_cycle: billingCycle,
+          current_period_start: now,
+          current_period_end: periodEnd,
+          status: plan.trial_days > 0 ? 'TRIAL' : 'ACTIVE',
+          trial_start: plan.trial_days > 0 ? now : null,
+          trial_end: plan.trial_days > 0 ? addDays(now, plan.trial_days) : null,
+        },
+      })
+    }
+
+    // Gerar fatura
+    const invoiceNumber = `INV-${Date.now()}-${tenant.id.slice(0, 8)}`
+    const dueDate = plan.trial_days > 0 ? addDays(now, plan.trial_days) : addDays(now, 7)
+
+    const invoice = await prisma.invoice.create({
+      data: {
+        subscription_id: subscription.id,
+        tenant_id: tenant.id,
+        invoice_number: invoiceNumber,
+        amount: amount,
+        tax_amount: 0,
+        total_amount: amount,
+        status: plan.trial_days > 0 ? 'PENDING' : 'PENDING',
+        issue_date: now,
+        due_date: dueDate,
+        description: `Assinatura ${plan.name} - ${
+          billingCycle === 'yearly' ? 'Anual' : 'Mensal'
+        }`,
+      },
+    })
+
+    // Atualizar tenant
+    await prisma.tenant.update({
+      where: { id: tenant.id },
+      data: {
+        current_plan: plan.plan_type,
+        subscription_status: subscription.status,
+      },
+    })
+
+    // Criar tracking de uso
+    await prisma.usageTracking.create({
+      data: {
+        tenant_id: tenant.id,
+        period_start: now,
+        period_end: periodEnd,
+        users_limit: plan.max_users,
+        clients_limit: plan.max_clients,
+        trips_limit: plan.max_trips,
+        storage_limit_gb: plan.max_storage_gb,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: plan.trial_days > 0
+        ? `Trial de ${plan.trial_days} dias iniciado!`
+        : 'Upgrade realizado! Aguardando pagamento.',
+      requiresPayment: true,
+      subscription,
+      invoice: {
+        id: invoice.id,
+        number: invoiceNumber,
+        amount: amount,
+        dueDate: dueDate,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao fazer upgrade:', error)
+    return NextResponse.json(
+      { error: 'Erro ao fazer upgrade' },
+      { status: 500 }
+    )
+  }
+}
+💰 API - GERAR PIX
+// app/api/invoices/[id]/pix/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import crypto from 'crypto'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const invoice = await prisma.invoice.findUnique({
+      where: { id: params.id },
+      include: {
+        tenant: true,
+        subscription: {
+          include: { plan: true },
+        },
+      },
+    })
+
+    if (!invoice) {
+      return NextResponse.json({ error: 'Fatura não encontrada' }, { status: 404 })
+    }
+
+    if (invoice.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // GERAR CÓDIGO PIX (Simulado - Integrar com API real)
+    // ═══════════════════════════════════════════════════════════
+
+    const pixKey = process.env.PIX_KEY || 'contato@visitecrm.com'
+    const merchantName = 'VISITECRM LTDA'
+    const merchantCity = 'SAO PAULO'
+    const txid = crypto.randomBytes(16).toString('hex')
+
+    // Formato EMV do PIX (simplificado)
+    const pixCode = `00020126580014br.gov.bcb.pix0136${pixKey}520400005303986540${invoice.total_amount.toFixed(
+      2
+    )}5802BR5913${merchantName}6009${merchantCity}62070503${txid}6304`
+
+    // Calcular CRC16
+    const crc = calculateCRC16(pixCode.slice(0, -4))
+    const finalPixCode = pixCode.slice(0, -4) + crc
+
+    // URL do QR Code
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
+      finalPixCode
+    )}`
+
+    // Atualizar fatura
+    await prisma.invoice.update({
+      where: { id: params.id },
+      data: {
+        pix_code: finalPixCode,
+        pix_qr_code_url: qrCodeUrl,
+        pix_expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
+        payment_method: 'PIX',
+        status: 'PROCESSING',
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      pix: {
+        code: finalPixCode,
+        qrCodeUrl,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao gerar PIX:', error)
+    return NextResponse.json(
+      { error: 'Erro ao gerar PIX' },
+      { status: 500 }
+    )
+  }
+}
+
+// Função auxiliar para calcular CRC16
+function calculateCRC16(str: string): string {
+  let crc = 0xffff
+  for (let i = 0; i < str.length; i++) {
+    crc ^= str.charCodeAt(i) << 8
+    for (let j = 0; j < 8; j++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = (crc << 1) ^ 0x1021
+      } else {
+        crc = crc << 1
+      }
+    }
+  }
+  return (crc & 0xffff).toString(16).toUpperCase().padStart(4, '0')
+}
+💳 API - INTEGRAÇÃO STRIPE
+
+Implementar a base completa do sistema de pagamentos
+
+ Schema Prisma - Planos, Assinaturas, Faturas
+ Seed de Planos - Starter, Pro, Enterprise
+ API de Upgrade - Mudança de plano
+ Geração de PIX - QR Code automático
+ Integração Stripe - Payment Intent
+ Implementar.
+
+ Webhook Stripe - Confirmar pagamentos automaticamente
+ Dashboard SuperAdmin - Gestão global de assinaturas
+ Middleware de Controle - Bloquear acesso por limites
+ Componentes Frontend - Página de upgrade e pagamento
+ Sistema de Alertas - Avisos de limite atingido

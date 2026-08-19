@@ -1,0 +1,35 @@
+#103 - Campos Financeiros no Modal Editar Reserva
+What & Why
+O modal "Editar Reserva" expõe apenas Valor Total, Parcelas e Forma de Pagamento. Os campos financeiros completos (Preço da Passagem, Desconto, Valor Já Pago, Comissão, Consultor/Vendedor) ficam invisíveis, obrigando o usuário a usar outros fluxos para ajustar esses dados. A tarefa adiciona todos os campos do bloco financeiro ao modal, com sincronização automática entre eles.
+
+Done looks like
+O modal "Editar Reserva" exibe os campos: Preço da Passagem (R$), Quantidade de Passageiros, Desconto (R$), Comissão (R$), Consultor/Vendedor
+"Valor Total" é calculado automaticamente como (preço × quantidade) – desconto e atualizado em tempo real enquanto o usuário digita
+"Valor Já Pago" aparece como somente leitura (informativo), mostrando o paidValue atual da reserva
+Consultor/Vendedor exibe um Select com os usuários do tenant (via useListUsers)
+Ao salvar, commissionAmount, sellerId e discountTotal são persistidos junto com o totalValue
+Todos os outros campos existentes continuam funcionando normalmente
+Out of scope
+Nenhuma mudança na criação de reservas (NewReservationWizard)
+Nenhuma mudança na exibição de pagamentos/parcelas existentes
+Quantidade de Passageiros é informativa (calcula totalValue) mas não altera seats diretamente — os assentos continuam sendo editados no campo "Assentos"
+Steps
+Adicionar discountTotal ao UpdateReservationBody — No backend (artifacts/api-server/src/routes/reservations.ts), adicionar discountTotal ao schema do PATCH e persistir o valor no handler (coluna já existe na tabela reservations). Atualizar também: lib/api-spec/openapi.yaml (schema UpdateReservationBody), lib/api-zod/src/generated/api.ts (Zod schema), lib/api-client-react/src/generated/api.schemas.ts (interface TS).
+
+Adicionar os campos financeiros ao formulário — Em EditReservationModal.tsx, adicionar os campos:
+
+Preço da Passagem (R$) e Quantidade de Passageiros: estado local, recalcula totalValue em tempo real
+Desconto (R$): estado local, subtrai do cálculo do totalValue
+Valor Já Pago (R$): input readonly mostrando data.paidValue
+Comissão (R$): estado local enviado como commissionAmount
+Consultor / Vendedor: Select populado via useListUsers, enviado como sellerId
+Inicializar o estado com os dados atuais da reserva — No useEffect que popula o formulário ao abrir, inicializar preço/desconto/comissão/sellerId a partir dos campos discountTotal, commissionAmount, sellerId e totalValue da reserva carregada.
+
+Validar com typecheck — Confirmar que visitecrm-typecheck, api-typecheck passam sem erros após as alterações.
+
+Relevant files
+artifacts/visitecrm/src/pages/reservations/EditReservationModal.tsx
+artifacts/api-server/src/routes/reservations.ts
+lib/api-spec/openapi.yaml
+lib/api-zod/src/generated/api.ts
+lib/api-client-react/src/generated/api.schemas.ts

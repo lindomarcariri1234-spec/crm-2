@@ -1,0 +1,1042 @@
+Visão geral
+VisiteCRM é uma plataforma abrangente de CRM SaaS desenvolvida para agências de turismo brasileiras especializadas em excursões em grupo e viagens personalizadas. Seu objetivo principal é agilizar as operações dessas agências, oferecendo multilocação, acesso robusto baseado em função e recursos abrangentes para gerenciamento de viagens, assentos, reservas e finanças. A plataforma também inclui rastreamento financeiro, pipeline de vendas Kanban, ferramentas de comunicação, recursos de automação, programas de fidelidade, sistema de indicação, medição de NPS (Net Promoter Score) e análises avançadas dos dados. O VisiteCRM pretende ser a principal espinha dorsal operacional das agências de turismo brasileiras, aumentando a eficiência, o envolvimento do cliente e o crescimento dos negócios em um segmento de mercado especializado (excursões).
+
+--- 
+
+Mantenha o conteúdo original, mas organize as informações de maneira mais clara e objetiva com foca na funcionalidade e usabilidade do projeto.
+
+Arquitetura do sistema
+VisiteCRM é construído como um monorepo de espaço de trabalho pnpm utilizando TypeScript.
+
+Vamos deixar esse projeto (VisiteCRM) pronto para vender, escalar e entregar valor real para agências.
+
+Podemos focar no acabamento, robustez e experiência de uso.
+
+Vamos trabalhar juntos com clareza, ordem e precisão.
+
+1. Prioridade Máxima: “Acabamento do Projeto”
+
+Vamos transformar o sistema quase pronto em um SaaS Premium:
+
+Implementação
+Vou reorganizar todo o conteúdo em um documento estruturado, orientado à implementação, eliminando redundâncias e organizando por camadas de entrega.
+
+--- 
+
+Índice
+Visão Geral do Projeto
+Arquitetura Final Definida
+Estrutura do Monorepo
+Modelo de Banco de Dados Multi-Tenant
+Multi-Tenancy — 3 Camadas de Proteção
+Fluxo Completo de Reserva com Sincronização
+Sincronização Global de Dados
+Roadmap de Fases
+Checklist de Lançamento
+
+
+1. Visão Geral
+VisiteCRM é um CRM SaaS multi-tenant para agências de turismo brasileiras especializadas em excursões em grupo. O sistema gerencia o ciclo completo: viagens → assentos → reservas → pagamentos → pós-venda.
+
+Funcionalidades-chave:
+
+Gestão de viagens e assentos com mapa visual
+Reservas com sincronização multi-origem (agência, vendedor, loja pública)
+Pipeline de vendas Kanban
+Pagamentos integrados (PIX, cartão, boleto)
+Automações (Se X → fazer Y)
+NPS, marketing, fidelidade e analytics
+Painel SuperAdmin com métricas SaaS (MRR, Churn, LTV, CAC)
+
+2. Arquitetura Final Definida
+❌ Remover (duplicação arquitetural)
+Componente	Motivo da remoção
+Prisma ORM	Conflita com Drizzle — dois ORMs = migrações divergentes
+NextAuth	Conflita com Clerk — sessões inconsistentes
+Dependências Next.js (server-side)	Backend é Express puro
+✅ Stack Definitiva
+Camada	Tecnologia
+Frontend	React + Vite + Tailwind + shadcn/ui
+Backend	Express.js (API REST)
+ORM	Drizzle ORM
+Banco	PostgreSQL (com RLS)
+Auth	Clerk
+Filas	BullMQ + Redis
+Monorepo	pnpm workspaces + Turborepo
+API Client	OpenAPI + Orval (auto-generate hooks)
+Deploy	Docker (opcional)
+3. Estrutura do Monorepo
+visitecrm/
+├── package.json
+├── pnpm-workspace.yaml
+├── turbo.json
+├── docker-compose.yml
+├── .env.example
+│
+├── packages/
+│   │
+│   ├── db/                              # Camada de Banco de Dados
+│   │   ├── package.json
+│   │   ├── drizzle.config.ts
+│   │   └── src/
+│   │       ├── client.ts                # Drizzle client + connection pools
+│   │       ├── tenant-context.ts        # withTenant(), withTenantTx()
+│   │       ├── helpers.ts               # tenantScope()
+│   │       ├── index.ts                 # Barrel export
+│   │       ├── schema/
+│   │       │   ├── index.ts
+│   │       │   ├── tenants.ts
+│   │       │   ├── subscriptions.ts     # plans
+│   │       │   ├── users.ts
+│   │       │   ├── trips.ts
+│   │       │   ├── buses.ts
+│   │       │   ├── seats.ts
+│   │       │   ├── customers.ts
+│   │       │   ├── reservations.ts
+│   │       │   ├── payments.ts
+│   │       │   ├── financial.ts
+│   │       │   ├── pipeline.ts
+│   │       │   ├── marketing.ts
+│   │       │   ├── nps.ts
+│   │       │   ├── automations.ts
+│   │       │   ├── audit-logs.ts
+│   │       │   ├── categories.ts
+│   │       │   └── store.ts
+│   │       ├── migrations/
+│   │       └── seed/
+│   │           ├── default-pipeline.ts
+│   │           ├── default-categories.ts
+│   │           ├── default-email-templates.ts
+│   │           └── default-payment-settings.ts
+│   │
+│   ├── shared/                          # Tipos, Validadores, Constantes
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── types/
+│   │       │   ├── trip.ts
+│   │       │   ├── reservation.ts
+│   │       │   ├── customer.ts
+│   │       │   ├── payment.ts
+│   │       │   ├── seat.ts
+│   │       │   ├── api-responses.ts
+│   │       │   └── index.ts
+│   │       ├── validators/              # Zod schemas
+│   │       │   ├── trip.schema.ts
+│   │       │   ├── reservation.schema.ts
+│   │       │   ├── customer.schema.ts
+│   │       │   ├── payment.schema.ts
+│   │       │   └── index.ts
+│   │       ├── constants/
+│   │       │   ├── reservation-status.ts
+│   │       │   ├── payment-status.ts
+│   │       │   ├── seat-status.ts
+│   │       │   └── roles.ts
+│   │       └── utils/
+│   │           ├── currency.ts
+│   │           ├── date.ts
+│   │           └── formatting.ts
+│   │
+│   └── email-templates/                 # React Email Templates
+│       ├── package.json
+│       └── src/
+│           ├── welcome.tsx
+│           ├── booking-confirmation.tsx
+│           ├── payment-reminder.tsx
+│           ├── trip-info.tsx
+│           ├── cancellation.tsx
+│           ├── payment-confirmed.tsx
+│           ├── trip-change-notice.tsx
+│           ├── nps-survey.tsx
+│           ├── recovery-followup.tsx
+│           └── marketing-campaign.tsx
+│
+├── apps/
+│   │
+│   ├── api/                             # Backend Express
+│   │   ├── package.json
+│   │   └── src/
+│   │       ├── index.ts                 # Server entry
+│   │       ├── app.ts                   # Express app setup
+│   │       ├── middleware/
+│   │       │   ├── auth.ts              # Clerk (requireAuth, optionalAuth)
+│   │       │   ├── tenant.ts            # Multi-tenant resolver
+│   │       │   ├── roles.ts             # RBAC (requireRole, requireExactRole)
+│   │       │   ├── audit.ts             # Auto audit logging
+│   │       │   ├── rate-limit.ts        # Rate limiting
+│   │       │   ├── validate.ts          # Zod validation
+│   │       │   └── error-handler.ts
+│   │       ├── routes/
+│   │       │   ├── index.ts
+│   │       │   ├── trips.routes.ts
+│   │       │   ├── reservations.routes.ts
+│   │       │   ├── seats.routes.ts
+│   │       │   ├── customers.routes.ts
+│   │       │   ├── payments.routes.ts
+│   │       │   ├── financial.routes.ts
+│   │       │   ├── reports.routes.ts
+│   │       │   ├── marketing.routes.ts
+│   │       │   ├── store.routes.ts
+│   │       │   ├── pipeline.routes.ts
+│   │       │   ├── nps.routes.ts
+│   │       │   ├── automations.routes.ts
+│   │       │   ├── onboarding.routes.ts
+│   │       │   ├── webhooks.routes.ts
+│   │       │   └── admin.routes.ts
+│   │       ├── services/                # Lógica de negócio centralizada
+│   │       │   ├── trip.service.ts
+│   │       │   ├── reservation.service.ts   # PONTO ÚNICO de reserva
+│   │       │   ├── seat.service.ts
+│   │       │   ├── customer.service.ts
+│   │       │   ├── payment.service.ts
+│   │       │   ├── financial.service.ts
+│   │       │   ├── pipeline.service.ts
+│   │       │   ├── marketing.service.ts
+│   │       │   ├── nps.service.ts
+│   │       │   ├── automation.service.ts
+│   │       │   ├── store.service.ts
+│   │       │   ├── onboarding.service.ts
+│   │       │   ├── audit.service.ts
+│   │       │   ├── analytics.service.ts
+│   │       │   └── event-bus.ts             # EventEmitter interno
+│   │       ├── integrations/
+│   │       │   ├── payment-gateway/
+│   │       │   │   ├── gateway.interface.ts # Interface comum
+│   │       │   │   ├── stripe.adapter.ts
+│   │       │   │   ├── mercadopago.adapter.ts
+│   │       │   │   ├── pagseguro.adapter.ts
+│   │       │   │   ├── gerencianet.adapter.ts
+│   │       │   │   └── asaas.adapter.ts
+│   │       │   ├── email/
+│   │       │   │   ├── email.service.ts
+│   │       │   │   └── email.queue.ts
+│   │       │   ├── whatsapp/
+│   │       │   │   ├── whatsapp.service.ts
+│   │       │   │   └── whatsapp.queue.ts
+│   │       │   └── google-wallet/
+│   │       │       └── wallet.service.ts
+│   │       ├── jobs/                    # BullMQ Workers
+│   │       │   ├── worker.ts
+│   │       │   ├── email.job.ts
+│   │       │   ├── pdf.job.ts
+│   │       │   ├── webhook.job.ts
+│   │       │   ├── report.job.ts
+│   │       │   ├── import.job.ts
+│   │       │   ├── nps.job.ts
+│   │       │   ├── automation.job.ts
+│   │       │   └── reminder.job.ts
+│   │       ├── queues/
+│   │       │   ├── index.ts
+│   │       │   ├── email.queue.ts
+│   │       │   ├── pdf.queue.ts
+│   │       │   └── webhook.queue.ts
+│   │       └── openapi/
+│   │           ├── spec.ts
+│   │           └── swagger.ts
+│   │
+│   ├── web/                             # Frontend Agência (React)
+│   │   ├── package.json
+│   │   ├── vite.config.ts
+│   │   ├── orval.config.ts
+│   │   └── src/
+│   │       ├── main.tsx
+│   │       ├── App.tsx
+│   │       ├── api/                     # Auto-gerado pelo Orval
+│   │       ├── components/
+│   │       │   ├── ui/                  # shadcn/ui
+│   │       │   ├── layout/
+│   │       │   ├── trips/
+│   │       │   ├── reservations/
+│   │       │   ├── seats/
+│   │       │   │   └── SeatMap.tsx
+│   │       │   ├── customers/
+│   │       │   ├── pipeline/
+│   │       │   │   └── KanbanBoard.tsx
+│   │       │   ├── payments/
+│   │       │   ├── analytics/
+│   │       │   ├── marketing/
+│   │       │   ├── nps/
+│   │       │   └── onboarding/
+│   │       │       ├── OnboardingWizard.tsx
+│   │       │       ├── StepCompanyInfo.tsx
+│   │       │       ├── StepBusModel.tsx
+│   │       │       ├── StepImportTrips.tsx
+│   │       │       ├── StepImportCustomers.tsx
+│   │       │       └── StepStoreSetup.tsx
+│   │       ├── pages/
+│   │       │   ├── Dashboard.tsx
+│   │       │   ├── Trips.tsx
+│   │       │   ├── TripDetail.tsx
+│   │       │   ├── Reservations.tsx
+│   │       │   ├── ReservationConfirmation.tsx
+│   │       │   ├── Customers.tsx
+│   │       │   ├── CustomerProfile.tsx
+│   │       │   ├── Pipeline.tsx
+│   │       │   ├── Payments.tsx
+│   │       │   ├── Financial.tsx
+│   │       │   ├── Analytics.tsx
+│   │       │   ├── Marketing.tsx
+│   │       │   ├── NPS.tsx
+│   │       │   ├── Automations.tsx
+│   │       │   ├── Settings.tsx
+│   │       │   ├── AuditLog.tsx
+│   │       │   └── Onboarding.tsx
+│   │       ├── hooks/
+│   │       ├── stores/                  # Zustand
+│   │       │   ├── reservation.store.ts
+│   │       │   ├── seat.store.ts
+│   │       │   └── trip.store.ts
+│   │       ├── lib/
+│   │       └── styles/
+│   │
+│   ├── store/                           # Loja Pública (Vitrine)
+│   │   ├── package.json
+│   │   ├── vite.config.ts
+│   │   └── src/
+│   │       └── pages/
+│   │           ├── Home.tsx
+│   │           ├── TripDetail.tsx
+│   │           ├── Checkout.tsx
+│   │           ├── Confirmation.tsx
+│   │           └── MyBookings.tsx
+│   │
+│   └── admin/                           # Painel SuperAdmin
+│       ├── package.json
+│       └── src/
+│           └── pages/
+│               ├── Dashboard.tsx        # MRR, Churn, LTV, CAC
+│               ├── Tenants.tsx
+│               ├── Plans.tsx
+│               ├── Billing.tsx
+│               └── Metrics.tsx
+│
+└── infra/
+    ├── docker/
+    │   ├── Dockerfile.api
+    │   ├── Dockerfile.web
+    │   ├── Dockerfile.worker
+    │   └── docker-compose.yml
+    ├── nginx/
+    │   └── nginx.conf
+    └── scripts/
+        ├── backup.sh
+        └── deploy.sh
+
+4. Modelo de Banco de Dados Multi-Tenant
+Todas as tabelas multi-tenant possuem tenant_id obrigatório. Valores monetários em centavos (integer).
+
+4.1 Schemas Drizzle — Tabelas Core
+// ============================================================
+// packages/db/src/schema/tenants.ts
+// ============================================================
+import { pgTable, uuid, varchar, text, timestamp, boolean, integer, pgEnum } from 'drizzle-orm/pg-core';
+
+export const tenantStatusEnum = pgEnum('tenant_status', [
+  'trial', 'active', 'suspended', 'cancelled'
+]);
+
+export const tenants = pgTable('tenants', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  slug: varchar('slug', { length: 100 }).notNull().unique(),
+  cnpj: varchar('cnpj', { length: 18 }).unique(),
+  email: varchar('email', { length: 255 }).notNull(),
+  phone: varchar('phone', { length: 20 }),
+  logoUrl: text('logo_url'),
+  status: tenantStatusEnum('status').default('trial').notNull(),
+  planId: uuid('plan_id').references(() => plans.id),
+  stripeCustomerId: varchar('stripe_customer_id', { length: 255 }),
+  stripeSubscriptionId: varchar('stripe_subscription_id', { length: 255 }),
+  onboardingCompleted: boolean('onboarding_completed').default(false),
+  trialEndsAt: timestamp('trial_ends_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/subscriptions.ts
+// ============================================================
+export const plans = pgTable('plans', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: varchar('name', { length: 100 }).notNull(),
+  slug: varchar('slug', { length: 50 }).notNull().unique(),
+  priceMonthly: integer('price_monthly').notNull(),
+  priceYearly: integer('price_yearly').notNull(),
+  maxTripsPerMonth: integer('max_trips_per_month').notNull(),
+  maxUsers: integer('max_users').notNull(),
+  maxPassengers: integer('max_passengers').notNull(),
+  hasPublicStore: boolean('has_public_store').default(false),
+  hasPaymentIntegration: boolean('has_payment_integration').default(false),
+  hasAutomations: boolean('has_automations').default(false),
+  hasMarketing: boolean('has_marketing').default(false),
+  storageLimit: integer('storage_limit_mb').notNull(),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/users.ts
+// ============================================================
+export const roleEnum = pgEnum('user_role', [
+  'super_admin', 'agency_owner', 'agency_admin', 'seller', 'viewer'
+]);
+
+export const users = pgTable('users', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  clerkId: varchar('clerk_id', { length: 255 }).notNull().unique(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  role: roleEnum('role').default('viewer').notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull(),
+  phone: varchar('phone', { length: 20 }),
+  avatarUrl: text('avatar_url'),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/trips.ts
+// ============================================================
+export const tripStatusEnum = pgEnum('trip_status', [
+  'draft', 'published', 'confirmed', 'in_progress', 'completed', 'cancelled'
+]);
+
+export const trips = pgTable('trips', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  title: varchar('title', { length: 255 }).notNull(),
+  slug: varchar('slug', { length: 255 }).notNull(),
+  description: text('description'),
+  categoryId: uuid('category_id').references(() => categories.id),
+  origin: varchar('origin', { length: 255 }).notNull(),
+  destination: varchar('destination', { length: 255 }).notNull(),
+  departureDate: timestamp('departure_date').notNull(),
+  returnDate: timestamp('return_date'),
+  departureTime: varchar('departure_time', { length: 5 }),
+  returnTime: varchar('return_time', { length: 5 }),
+  meetingPoint: text('meeting_point'),
+  busModelId: uuid('bus_model_id').references(() => busModels.id),
+  totalSeats: integer('total_seats').notNull(),
+  pricePerSeat: integer('price_per_seat').notNull(),
+  childPrice: integer('child_price'),
+  status: tripStatusEnum('status').default('draft').notNull(),
+  coverImageUrl: text('cover_image_url'),
+  isPublishedToStore: boolean('is_published_to_store').default(false),
+  minPassengers: integer('min_passengers'),
+  maxInstallments: integer('max_installments').default(1),
+  cancellationPolicy: text('cancellation_policy'),
+  includes: text('includes'),
+  excludes: text('excludes'),
+  itinerary: text('itinerary'),
+  createdBy: uuid('created_by').references(() => users.id),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/buses.ts
+// ============================================================
+export const busModels = pgTable('bus_models', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  name: varchar('name', { length: 100 }).notNull(),
+  company: varchar('company', { length: 100 }),
+  totalSeats: integer('total_seats').notNull(),
+  layout: text('layout').notNull(), // JSON: rows, columns, aisles, special seats
+  hasToilet: boolean('has_toilet').default(false),
+  hasAirConditioning: boolean('has_air_conditioning').default(true),
+  hasWifi: boolean('has_wifi').default(false),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/seats.ts
+// ============================================================
+export const seatStatusEnum = pgEnum('seat_status', [
+  'available', 'reserved', 'confirmed', 'blocked', 'checked_in'
+]);
+
+export const seats = pgTable('seats', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  tripId: uuid('trip_id').references(() => trips.id).notNull(),
+  seatNumber: varchar('seat_number', { length: 10 }).notNull(),
+  row: integer('row').notNull(),
+  column: integer('column').notNull(),
+  floor: integer('floor').default(1),
+  type: varchar('type', { length: 20 }).default('standard'),
+  status: seatStatusEnum('status').default('available').notNull(),
+  reservationId: uuid('reservation_id').references(() => reservations.id),
+  price: integer('price'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/customers.ts
+// ============================================================
+export const customers = pgTable('customers', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }),
+  phone: varchar('phone', { length: 20 }),
+  cpf: varchar('cpf', { length: 14 }),
+  rg: varchar('rg', { length: 20 }),
+  birthDate: timestamp('birth_date'),
+  address: text('address'),
+  city: varchar('city', { length: 100 }),
+  state: varchar('state', { length: 2 }),
+  zipCode: varchar('zip_code', { length: 10 }),
+  emergencyContact: varchar('emergency_contact', { length: 255 }),
+  emergencyPhone: varchar('emergency_phone', { length: 20 }),
+  medicalNotes: text('medical_notes'),
+  tags: text('tags'),
+  source: varchar('source', { length: 50 }),
+  referredBy: uuid('referred_by'),
+  loyaltyPoints: integer('loyalty_points').default(0),
+  totalTrips: integer('total_trips').default(0),
+  totalSpent: integer('total_spent').default(0),
+  npsScore: integer('nps_score'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/reservations.ts
+// ============================================================
+export const reservationStatusEnum = pgEnum('reservation_status', [
+  'pending', 'confirmed', 'partial_payment', 'paid', 'cancelled', 'no_show'
+]);
+
+export const reservationSourceEnum = pgEnum('reservation_source', [
+  'agency', 'seller', 'store', 'import'
+]);
+
+export const reservations = pgTable('reservations', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  code: varchar('code', { length: 20 }).notNull().unique(),
+  tripId: uuid('trip_id').references(() => trips.id).notNull(),
+  customerId: uuid('customer_id').references(() => customers.id).notNull(),
+  sellerId: uuid('seller_id').references(() => users.id),
+  status: reservationStatusEnum('status').default('pending').notNull(),
+  source: reservationSourceEnum('source').default('agency').notNull(),
+  totalAmount: integer('total_amount').notNull(),
+  paidAmount: integer('paid_amount').default(0),
+  discountAmount: integer('discount_amount').default(0),
+  numberOfPassengers: integer('number_of_passengers').default(1),
+  notes: text('notes'),
+  pipelineStageId: uuid('pipeline_stage_id').references(() => pipelineStages.id),
+  cancelledAt: timestamp('cancelled_at'),
+  cancellationReason: text('cancellation_reason'),
+  confirmedAt: timestamp('confirmed_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/payments.ts
+// ============================================================
+export const paymentStatusEnum = pgEnum('payment_status', [
+  'pending', 'processing', 'paid', 'failed', 'refunded', 'cancelled'
+]);
+
+export const paymentMethodEnum = pgEnum('payment_method', [
+  'pix', 'credit_card', 'debit_card', 'boleto', 'cash', 'transfer'
+]);
+
+export const payments = pgTable('payments', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  reservationId: uuid('reservation_id').references(() => reservations.id).notNull(),
+  amount: integer('amount').notNull(),
+  method: paymentMethodEnum('method').notNull(),
+  status: paymentStatusEnum('status').default('pending').notNull(),
+  gateway: varchar('gateway', { length: 50 }),
+  gatewayPaymentId: varchar('gateway_payment_id', { length: 255 }),
+  gatewayResponse: text('gateway_response'),
+  pixCode: text('pix_code'),
+  pixQrCode: text('pix_qr_code'),
+  boletoUrl: text('boleto_url'),
+  installmentNumber: integer('installment_number').default(1),
+  totalInstallments: integer('total_installments').default(1),
+  dueDate: timestamp('due_date'),
+  paidAt: timestamp('paid_at'),
+  receiptUrl: text('receipt_url'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/pipeline.ts
+// ============================================================
+export const pipelineStages = pgTable('pipeline_stages', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  name: varchar('name', { length: 100 }).notNull(),
+  slug: varchar('slug', { length: 100 }).notNull(),
+  color: varchar('color', { length: 7 }),
+  order: integer('order').notNull(),
+  isDefault: boolean('is_default').default(false),
+  autoMoveOnPayment: boolean('auto_move_on_payment').default(false),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/audit-logs.ts
+// ============================================================
+export const auditLogs = pgTable('audit_logs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  userId: uuid('user_id').references(() => users.id),
+  action: varchar('action', { length: 50 }).notNull(),
+  entity: varchar('entity', { length: 50 }).notNull(),
+  entityId: uuid('entity_id'),
+  changes: text('changes'),
+  ipAddress: varchar('ip_address', { length: 45 }),
+  userAgent: text('user_agent'),
+  metadata: text('metadata'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/nps.ts
+// ============================================================
+export const npsResponses = pgTable('nps_responses', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  customerId: uuid('customer_id').references(() => customers.id).notNull(),
+  tripId: uuid('trip_id').references(() => trips.id).notNull(),
+  reservationId: uuid('reservation_id').references(() => reservations.id),
+  score: integer('score').notNull(),
+  comment: text('comment'),
+  category: varchar('category', { length: 50 }),
+  respondedAt: timestamp('responded_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/automations.ts
+// ============================================================
+export const automationTriggerEnum = pgEnum('automation_trigger', [
+  'reservation_created', 'payment_confirmed', 'trip_reminder',
+  'abandoned_cart', 'trip_completed', 'customer_birthday',
+  'nps_received', 'cancellation'
+]);
+
+export const automations = pgTable('automations', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  trigger: automationTriggerEnum('trigger').notNull(),
+  conditions: text('conditions'),
+  actions: text('actions'),
+  delayMinutes: integer('delay_minutes').default(0),
+  isActive: boolean('is_active').default(true),
+  executionCount: integer('execution_count').default(0),
+  lastExecutedAt: timestamp('last_executed_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/categories.ts
+// ============================================================
+export const categories = pgTable('categories', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  name: varchar('name', { length: 100 }).notNull(),
+  slug: varchar('slug', { length: 100 }).notNull(),
+  description: text('description'),
+  color: varchar('color', { length: 7 }),
+  icon: varchar('icon', { length: 50 }),
+  order: integer('order').default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/marketing.ts
+// ============================================================
+export const campaigns = pgTable('campaigns', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  type: varchar('type', { length: 50 }).notNull(),
+  templateId: uuid('template_id'),
+  targetTags: text('target_tags'),
+  targetFilter: text('target_filter'),
+  status: varchar('status', { length: 20 }).default('draft'),
+  scheduledAt: timestamp('scheduled_at'),
+  sentAt: timestamp('sent_at'),
+  recipientCount: integer('recipient_count').default(0),
+  openCount: integer('open_count').default(0),
+  clickCount: integer('click_count').default(0),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+// ============================================================
+// packages/db/src/schema/store.ts
+// ============================================================
+export const storeSettings = pgTable('store_settings', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tenantId: uuid('tenant_id').references(() => tenants.id).notNull().unique(),
+  isActive: boolean('is_active').default(false),
+  subdomain: varchar('subdomain', { length: 100 }).unique(),
+  customDomain: varchar('custom_domain', { length: 255 }),
+  primaryColor: varchar('primary_color', { length: 7 }).default('#3B82F6'),
+  secondaryColor: varchar('secondary_color', { length: 7 }),
+  bannerUrl: text('banner_url'),
+  aboutText: text('about_text'),
+  whatsappNumber: varchar('whatsapp_number', { length: 20 }),
+  instagramUrl: varchar('instagram_url', { length: 255 }),
+  facebookUrl: varchar('facebook_url', { length: 255 }),
+  termsOfService: text('terms_of_service'),
+  privacyPolicy: text('privacy_policy'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+
+5. Multi-Tenancy — 3 Camadas de Proteção
+A segurança multi-tenant opera em 3 níveis independentes. Mesmo que uma camada falhe, as outras protegem.
+
+
+Requisição HTTP
+      │
+      ▼
+┌──────────────────────────┐
+│  CAMADA 1: Middleware     │  Express resolve tenantId via Clerk
+│  req.tenantId = X         │  Verifica status (trial/ativo/suspenso)
+│  Rejeita se inválido      │  Cache de 5 min por clerkId
+└───────────┬──────────────┘
+            │
+            ▼
+┌──────────────────────────┐
+│  CAMADA 2: Drizzle        │  withTenant(db, X, fn)
+│  SET LOCAL tenant_id = X  │  tenantScope() no WHERE automático
+│  Código nunca esquece     │  Helper forçado em toda query
+└───────────┬──────────────┘
+            │
+            ▼
+┌──────────────────────────┐
+│  CAMADA 3: PostgreSQL RLS │  USING (tenant_id = current_tenant_id())
+│  Última barreira          │  Mesmo com bug → banco bloqueia
+│  SuperAdmin bypassa       │  Via role visitecrm_superadmin
+└──────────────────────────┘
+5.1 Camada 1 — Middleware Express
+Arquivo: apps/api/src/middleware/tenant.ts
+
+Responsabilidades:
+
+Resolver tenantId a partir do clerkId do usuário autenticado
+Verificar se o tenant está ativo (trial válido, não suspenso, não cancelado)
+Injetar req.tenantId, req.userId, req.userRole, req.isSuperAdmin
+Cache em memória (TTL 5 min) para evitar query a cada request
+Para a loja pública: resolveStoreTenant resolve o tenant pelo slug na URL.
+
+5.2 Camada 2 — Drizzle Tenant-Scoped Client
+Arquivo: packages/db/src/tenant-context.ts
+
+
+// Toda operação multi-tenant DEVE usar withTenant()
+export async function withTenant<T>(
+  db: Database,
+  tenantId: string,
+  fn: (tx: Database) => Promise<T>
+): Promise<T> {
+  return await db.transaction(async (tx) => {
+    // Define tenant_id na sessão PostgreSQL (para RLS)
+    await tx.execute(sql`SET LOCAL app.current_tenant_id = ${tenantId}`);
+    return await fn(tx as unknown as Database);
+  });
+}
+Helper adicional: tenantScope() adiciona WHERE tenant_id = X automaticamente.
+
+5.3 Camada 3 — PostgreSQL RLS
+Aplicado em todas as tabelas multi-tenant:
+
+users, trips, bus_models, seats, customers, reservations, payments, pipeline_stages, audit_logs, nps_responses, automations, categories, campaigns, store_settings
+Policies: SELECT, INSERT, UPDATE, DELETE — todas filtram por current_tenant_id().
+
+SuperAdmin: Role visitecrm_superadmin com policy USING (true) para acesso total.
+
+Índices de performance: Compostos em (tenant_id, campo_mais_usado) para cada tabela.
+
+5.4 RBAC — Controle de Acesso por Role
+Role	Nível	Acesso
+super_admin	100	Tudo + painel admin global
+agency_owner	80	Tudo dentro do tenant
+agency_admin	60	Gerenciar viagens, reservas, clientes
+seller	40	Criar reservas, ver viagens atribuídas
+viewer	20	Somente leitura
+6. Fluxo Completo de Reserva com Sincronização
+Este é o coração do sistema. Toda reserva, independente da origem, passa pelo mesmo service centralizado.
+
+6.1 Origens da Reserva
+Origem	Contexto	Source
+🏢 Agência	Admin cria pelo painel	agency
+👤 Vendedor	Vendedor cria pelo app/painel	seller
+🛒 Loja Pública	Cliente faz auto-reserva	store
+📋 Importação	CSV ou API externa	import
+6.2 Fluxo — Ponto Único de Entrada
+
+QUALQUER ORIGEM → reservation.service.ts → createReservation()
+Sequência dentro de uma única transação:
+
+1. Upsert Cliente (criar ou vincular)
+      ↓
+2. Reservar Assentos (lock otimista — verifica disponibilidade)
+      ↓ falha? → Erro: "Assentos indisponíveis"
+3. Criar Reserva (status: PENDING, code: VCR-2026-XXXXX)
+      ↓
+4. Mover no Pipeline → stage "Nova Reserva"
+      ↓
+5. Criar Cobrança (PIX / Cartão / Boleto / Manual)
+      ↓
+6. Atualizar stats do Cliente
+      ↓
+7. Audit Log
+      ↓
+8. Emitir Evento: reservation:created
+6.3 Após Criação — Fila BullMQ
+O evento reservation:created dispara jobs assíncronos:
+
+✉️ E-mail de confirmação de reserva
+📱 WhatsApp (se configurado)
+📄 Gerar PDF do comprovante
+🤖 Executar automações ativas para o trigger reservation_created
+6.4 Webhook de Pagamento — Fluxo de Confirmação
+
+Gateway confirma pagamento (webhook)
+      ↓
+payment.service.ts → confirmPayment()
+      ↓
+1. Atualizar Payment (status: PAID, paidAt)
+      ↓
+2. Atualizar Reservation (status: CONFIRMED, paidAmount += valor)
+      ↓
+3. Confirmar Assentos (status: CONFIRMED)
+      ↓
+4. Mover no Pipeline → stage "Pago"
+      ↓
+5. Atualizar Cliente (totalTrips++, totalSpent += valor)
+      ↓
+6. Audit Log
+      ↓
+7. Emitir Evento: payment:confirmed
+      ↓
+Jobs: E-mail "Pagamento OK" + Recibo PDF automático
+6.5 Tela de Confirmação (UX)
+Após criar a reserva, o usuário/cliente vê:
+
+Elemento	Descrição
+Código da reserva	VCR-2026-00001
+QR Code PIX	Se pagamento pendente via PIX
+Resumo da compra	Viagem, assentos, valor, parcelas
+Download PDF	Comprovante da reserva
+Botão WhatsApp	Enviar resumo para o cliente
+Google Wallet	Adicionar ao wallet
+Link "Minhas reservas"	Para acompanhar status
+6.6 Payment Gateway — Adapter Pattern
+
+// Interface comum — todos os gateways implementam
+interface PaymentGateway {
+  createCharge(params: ChargeParams): Promise<ChargeResult>;
+  createPixCharge(params: PixParams): Promise<PixResult>;
+  handleWebhook(payload: unknown): Promise<WebhookResult>;
+  refund(chargeId: string, amount?: number): Promise<RefundResult>;
+  getInstallments(amount: number): Promise<InstallmentOption[]>;
+}
+
+// Implementações:
+// - AsaasAdapter (PIX dinâmico robusto — ideal para agências)
+// - StripeAdapter (billing SaaS + cartões internacionais)
+// - MercadoPagoAdapter (popular no Brasil)
+// - PagSeguroAdapter
+// - GerencianetAdapter
+7. Sincronização Global de Dados
+7.1 Problema
+Quando uma reserva é criada/atualizada por qualquer via, as seguintes telas precisam refletir a mudança imediatamente:
+
+Tela	O que atualiza
+Dashboard da Agência	Contadores, receita, ocupação
+Mapa de Assentos	Status do assento (disponível → reservado → confirmado)
+Pipeline Kanban	Card move de coluna
+Página de Reservas	Nova linha na lista
+Página de Clientes	totalTrips, totalSpent
+Perfil do Cliente	Histórico de reservas
+Dashboard do Vendedor	Suas vendas
+Analytics	KPIs recalculados
+7.2 Solução — Arquitetura de Sincronização
+Camada	Tecnologia	Função
+Service Layer	EventEmitter interno	Toda mutação emite evento tipado
+Backend → Frontend	Server-Sent Events (SSE)	Push de atualizações em tempo real
+Cache do Frontend	React Query (TanStack Query)	Invalidação automática por evento
+Estado Local	Zustand	UI otimista + estado temporário
+7.3 Fluxo de Sincronização
+
+1. Service executa mutação no banco (dentro de withTenant)
+      ↓
+2. EventBus emite evento tipado:
+   - reservation:created { reservationId, tripId, customerId }
+   - payment:confirmed  { paymentId, reservationId }
+   - seat:updated       { seatId, tripId, status }
+   - customer:updated   { customerId }
+      ↓
+3. SSE Controller escuta eventos e envia para clientes conectados
+   (filtrado por tenantId — cada tenant só recebe seus eventos)
+      ↓
+4. Frontend recebe evento via EventSource:
+   - React Query invalida queries relacionadas:
+     queryClient.invalidateQueries(['trips', tripId])
+     queryClient.invalidateQueries(['reservations'])
+     queryClient.invalidateQueries(['seats', tripId])
+     queryClient.invalidateQueries(['customers', customerId])
+     queryClient.invalidateQueries(['pipeline'])
+     queryClient.invalidateQueries(['dashboard'])
+      ↓
+5. Componentes re-renderizam automaticamente com dados frescos
+7.4 Exemplo Prático
+
+Vendedor cria reserva pelo painel
+      ↓
+reservation.service.create() executa
+      ↓
+EventBus emite: reservation:created, seat:updated, customer:updated
+      ↓
+SSE envia para TODOS os usuários do mesmo tenant
+      ↓
+No painel do Admin:
+  - Dashboard: +1 reserva, +R$ no faturamento
+  - Mapa de assentos: assento muda de verde → amarelo
+  - Pipeline: novo card aparece em "Nova Reserva"
+  - Lista de reservas: nova linha
+  - Perfil do cliente: +1 viagem no histórico
+8. Roadmap de Fases
+Fase 0 — Limpeza Arquitetural ⚡  BLOQUEANTE
+Sem dependências. FAZER PRIMEIRO.
+
+ Remover Prisma, NextAuth e dependências duplicadas
+ Padronizar 100% em Drizzle ORM + Clerk Auth
+ Reorganizar monorepo na estrutura definida
+ Configurar Turborepo para builds
+ Migrar schemas existentes para novo formato Drizzle
+ Implementar middleware multi-tenant (3 camadas)
+ Implementar middleware de audit log automático
+ Implementar middleware RBAC
+ Setup Docker Compose (PostgreSQL + Redis)
+ Setup BullMQ + Redis para filas
+ Aplicar RLS no PostgreSQL
+Fase 1 — MVP Vendedor 🏗️ 
+Valor imediato para agências. Depende da Fase 0.
+
+ CRUD completo de Viagens (com geração automática de assentos)
+ Sistema de Assentos com mapa visual
+ CRUD de Clientes (com importação CSV)
+ Fluxo completo de Reserva (ponto único de entrada)
+ Sincronização: reserva ↔ assento ↔ pagamento ↔ pipeline
+ Controle de pagamento básico (manual)
+ Lista de embarque (com check-in)
+ Dashboard básico da agência
+ Tela de confirmação de reserva
+ Geração de PDF (comprovante)
+ SSE para sincronização em tempo real
+Fase 2 — Comercial + Pagamentos 💼 
+Gera receita. Depende da Fase 1.
+
+ Pipeline Kanban (vendas)
+ CRM: histórico completo do cliente
+ Integração Stripe (billing SaaS)
+ Integração Asaas (PIX dinâmico)
+ Integração Mercado Pago
+ Webhooks de pagamento → atualizar reserva automaticamente
+ Parcelamento automático
+ Comprovante automático de pagamento
+ E-mails transacionais (7 templates mínimos)
+ Loja pública (vitrine) — básica
+ Auto-reserva pela loja (mesmo fluxo do service)
+ QR Code PIX na tela de confirmação
+Fase 3 — SaaS + Escala 🚀 
+Diferencial competitivo. Depende da Fase 2.
+
+ Painel SuperAdmin (gerenciar agências, planos, billing)
+ Gestão de planos e limites
+ Cobrança automática (Stripe Billing)
+ Métricas SaaS (MRR, Churn, LTV, CAC, Growth Rate)
+ Onboarding guiado (wizard step-by-step)
+ Automações (Se X → fazer Y, processadas por BullMQ)
+ NPS nativo (envio automático 1 dia pós-viagem)
+ Marketing: campanhas, tags, templates, reengajamento
+ Analytics avançado (todos os KPIs)
+ OpenAPI spec + Orval (auto-generate hooks)
+ Google Wallet integration
+ Botão WhatsApp na confirmação
+Fase 4 — Polimento + Lançamento ✨ 
+Pronto para vender. Depende da Fase 3.
+
+ UI/UX polida em todas as telas
+ Mapa de assentos em tempo real (WebSocket upgrade)
+ Backups automáticos
+ Rate limiting + proteção DDoS
+ Testes E2E nos fluxos críticos
+ Landing page comercial
+ Documentação da API
+ Termos de uso + LGPD
+ Monitoramento (Sentry + uptime)
+ Checklist final de segurança
+9. Checklist de Lançamento — SaaS Profissional
+Infraestrutura
+ Arquitetura limpa (sem duplicação)
+ Multi-tenancy com RLS
+ Filas assíncronas (BullMQ + Redis)
+ Backups automáticos
+ Docker configurado
+ Monitoramento (Sentry)
+Funcionalidades Core
+ Onboarding perfeito (wizard step-by-step)
+ Pagamentos 100% integrados (PIX, cartão, boleto)
+ E-mails transacionais (7 templates mínimos)
+ Webhooks de pagamento
+ Sincronização em tempo real (SSE)
+ Fluxo de reserva completo e unificado
+Comercial
+ Painel SuperAdmin
+ Planos e limites
+ Cobrança automática
+ Métricas SaaS
+Engajamento
+ Automações
+ NPS
+ Marketing (campanhas, tags)
+ Programa de fidelidade
+Qualidade
+ Logs e auditorias
+ Analytics (KPIs obrigatórios)
+ UI/UX polida
+ Testes E2E
+ LGPD compliance
+KPIs Obrigatórios no Analytics
+Ocupação média por viagem
+Receita por viagem
+Ticket médio
+Reservas confirmadas vs pendentes
+Cancelamentos
+Origem dos clientes
+Vendas por vendedor
+Assentos mais vendidos
+Dias com maior conversão
+Resumo das Decisões Técnicas
+Decisão	Escolha	Motivo
+ORM único	Drizzle	Type-safe, performático, sem conflito
+Auth único	Clerk	Pronto, seguro, multi-tenant nativo
+Multi-tenancy	tenant_id + RLS + Middleware	3 camadas = zero vazamento
+Sincronização	EventBus + SSE + React Query	Simples, eficiente, sem WebSocket complexo
+Pagamentos	Adapter Pattern	Trocar gateway sem mudar lógica
+Filas	BullMQ + Redis	E-mails, PDFs, webhooks, relatórios
+Reserva	Service Layer único	Toda origem passa pelo mesmo código
+API Client	OpenAPI + Orval	Hooks auto-gerados, zero inconsistência
+Estado frontend	Zustand + React Query	Local vs servidor separados
+Princípio fundamental: Todo dado entra por um service centralizado, que executa em transação atômica, emite eventos tipados, que disparam sincronização automática em todas as telas. Não importa se a reserva veio da agência, do vendedor ou da loja — o fluxo é idêntico.
+
+

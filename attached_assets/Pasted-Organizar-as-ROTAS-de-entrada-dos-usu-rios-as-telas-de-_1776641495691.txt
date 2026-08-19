@@ -1,0 +1,6060 @@
+Organizar as ROTAS de entrada dos usuários, as telas de visualização inicial de cada usuário e os painel de cada usuário do sistema.
+
+Ao se cadastra no sistema:
+
+O usuário da web auto se cadastra no sistema ao realizar uma reserva.
+
+O usuário Vendedor é cadastrado no sistema pela Agência.
+
+O usuário Agência se cadastrar no sistema pela pagina de Cadastro/login na rota /sign-up
+
+O usuário Super Admin se cadastra no sistema manualmente no banco de dados do sistema.
+
+Após o cliente auto se cadastrar no sistema, permanece na pagina que está sendo executada a reserva.
+
+Após o vendedor aceitar o convite da Agência, ele será redirecionado para o Painel do Vendedor.
+
+Após a Agência se cadastrar no sistema, será redirecionada para a página de "configurar sua agência" na rota  /onboarding
+
+Após a SuperAdmin ser inserido no banco de dados do sistema, ele será redirecionado para o Dashboard do Super Admin.
+
+Preserve as regras e níveis de acesso no sistema.
+
+Reorganizar os Painéis dos Usuários do Sistema:
+
+PAINEL SUPER ADMIN COMPLETO - ESTRUTURA PROFISSIONAL
+ARQUITETURA DO PAINEL SUPER ADMIN
+
+┌─────────────────────────────────────────────────────────────────┐
+│                  SUPER ADMIN DASHBOARD (/admin)                  │
+└─────────────────────────────────────────────────────────────────┘
+
+ ACESSO RESTRITO: Apenas perfil "super_admin"
+
+📊 MÓDULOS:
+├── 1. Dashboard (Visão Geral)
+├── 2. Tenants (Gestão de Agências)
+├── 3. Detalhe do Tenant
+├── 4. Planos (Subscription Plans)
+├── 5. Faturamento (Billing)
+├── 6. Métricas (Analytics)
+├── 7. Usuários (Global Directory)
+├── 8. Logs (Audit Trail)
+└── 9. Configurações (Settings & Feature Flags)
+
+SCHEMA DO BANCO - SUPER ADMIN
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════
+// PLANOS DE ASSINATURA
+// ═══════════════════════════════════════════════════════════
+
+model SubscriptionPlan {
+  id                String    @id @default(cuid())
+  
+  name              String    // Starter, Pro, Enterprise
+  slug              String    @unique
+  description       String?   @db.Text
+  
+  // Preços
+  monthly_price     Decimal   @db.Decimal(10, 2)
+  yearly_price      Decimal?  @db.Decimal(10, 2)
+  setup_fee         Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // Limites
+  max_users         Int       @default(5)
+  max_customers     Int       @default(100)
+  max_trips         Int       @default(10)
+  max_storage_gb    Int       @default(1)
+  
+  // Features
+  features          Json      // Array de features habilitadas
+  
+  // Status
+  is_active         Boolean   @default(true)
+  is_visible        Boolean   @default(true) // Visível para novas assinaturas
+  
+  // Trial
+  trial_days        Int       @default(14)
+  
+  // Ordem de exibição
+  display_order     Int       @default(0)
+  
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  
+  tenants           Tenant[]
+  
+  @@map("subscription_plans")
+}
+
+// ═══════════════════════════════════════════════════════════
+// FATURAS
+// ═══════════════════════════════════════════════════════════
+
+model Invoice {
+  id                String    @id @default(cuid())
+  
+  tenant_id         String
+  tenant            Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  invoice_number    String    @unique
+  
+  // Valores
+  subtotal          Decimal   @db.Decimal(10, 2)
+  discount          Decimal   @default(0) @db.Decimal(10, 2)
+  tax               Decimal   @default(0) @db.Decimal(10, 2)
+  total             Decimal   @db.Decimal(10, 2)
+  
+  // Período
+  period_start      DateTime
+  period_end        DateTime
+  
+  // Status
+  status            String    @default("pending") // pending, paid, overdue, cancelled
+  
+  // Datas
+  issue_date        DateTime  @default(now())
+  due_date          DateTime
+  paid_date         DateTime?
+  
+  // Método de pagamento
+  payment_method    String?   // credit_card, bank_slip, pix, etc
+  payment_details   Json?
+  
+  // Observações
+  notes             String?   @db.Text
+  
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([status])
+  @@index([due_date])
+  @@map("invoices")
+}
+
+// ═══════════════════════════════════════════════════════════
+// FEATURE FLAGS
+// ═══════════════════════════════════════════════════════════
+
+model FeatureFlag {
+  id                String    @id @default(cuid())
+  
+  name              String    @unique
+  key               String    @unique
+  description       String?   @db.Text
+  
+  // Status
+  is_enabled        Boolean   @default(false)
+  
+  // Rollout
+  rollout_percentage Int      @default(0) // 0-100
+  
+  // Tenants específicos
+  enabled_tenants   String[]  // Array de tenant IDs
+  
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  
+  @@map("feature_flags")
+}
+
+// ═══════════════════════════════════════════════════════════
+// ATUALIZAR MODELO TENANT
+// ═══════════════════════════════════════════════════════════
+
+model Tenant {
+  // ... campos existentes ...
+  
+  // ═══════════════════════════════════════════════════════════
+  // ASSINATURA
+  // ═══════════════════════════════════════════════════════════
+  
+  subscription_plan_id  String?
+  subscription_plan     SubscriptionPlan? @relation(fields: [subscription_plan_id], references: [id])
+  
+  subscription_status   String    @default("trial") // trial, active, past_due, cancelled, suspended
+  
+  trial_started_at      DateTime  @default(now())
+  trial_ends_at         DateTime?
+  
+  subscription_started_at DateTime?
+  subscription_ends_at    DateTime?
+  
+  billing_cycle         String    @default("monthly") // monthly, yearly
+  
+  // MRR (Monthly Recurring Revenue)
+  mrr                   Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // Limites atuais
+  current_users         Int       @default(0)
+  current_customers     Int       @default(0)
+  current_trips         Int       @default(0)
+  current_storage_gb    Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // Faturamento
+  invoices              Invoice[]
+  last_invoice_date     DateTime?
+  next_invoice_date     DateTime?
+  
+  // Métricas
+  total_revenue         Decimal   @default(0) @db.Decimal(10, 2)
+  lifetime_value        Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // Churn
+  churn_date            DateTime?
+  churn_reason          String?   @db.Text
+}
+
+// ═══════════════════════════════════════════════════════════
+// ATUALIZAR MODELO SYSTEM LOG
+// ═══════════════════════════════════════════════════════════
+
+model SystemLog {
+  // ... campos existentes ...
+  
+  // Adicionar campos para auditoria
+  severity          String    @default("info") // info, warning, error, critical
+  category          String    @default("general") // auth, billing, tenant, user, etc
+  
+  // Request info
+  request_method    String?
+  request_url       String?   @db.Text
+  request_body      Json?
+  response_status   Int?
+  
+  // Performance
+  execution_time_ms Int?
+}
+
+npx prisma migrate dev --name add_super_admin_complete
+npx prisma generate
+
+MIDDLEWARE DE SEGURANÇA
+
+// middleware.ts
+
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+import { getToken } from 'next-auth/jwt'
+
+export async function middleware(request: NextRequest) {
+  const token = await getToken({ req: request })
+
+  // Proteger rotas /admin/*
+  if (request.nextUrl.pathname.startsWith('/admin')) {
+    if (!token) {
+      return NextResponse.redirect(new URL('/auth/login', request.url))
+    }
+
+    // Verificar se é super admin
+    if (token.role !== 'super_admin') {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+  }
+
+  return NextResponse.next()
+}
+
+export const config = {
+  matcher: ['/admin/:path*'],
+}
+
+
+API - DASHBOARD SUPER ADMIN
+
+// app/api/admin/dashboard/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // MÉTRICAS PRINCIPAIS
+    // ═══════════════════════════════════════════════════════════
+
+    // Total de Tenants
+    const totalTenants = await prisma.tenant.count()
+
+    // Tenants por Status
+    const tenantsByStatus = await prisma.tenant.groupBy({
+      by: ['subscription_status'],
+      _count: { id: true },
+    })
+
+    // MRR Total (Monthly Recurring Revenue)
+    const mrrData = await prisma.tenant.aggregate({
+      where: {
+        subscription_status: { in: ['active', 'trial'] },
+      },
+      _sum: { mrr: true },
+    })
+
+    const totalMRR = mrrData._sum.mrr?.toNumber() || 0
+
+    // ARR (Annual Recurring Revenue)
+    const totalARR = totalMRR * 12
+
+    // Novos Tenants este mês
+    const currentMonthStart = startOfMonth(new Date())
+    const currentMonthEnd = endOfMonth(new Date())
+
+    const newTenantsThisMonth = await prisma.tenant.count({
+      where: {
+        created_at: {
+          gte: currentMonthStart,
+          lte: currentMonthEnd,
+        },
+      },
+    })
+
+    // Churn este mês
+    const churnedThisMonth = await prisma.tenant.count({
+      where: {
+        churn_date: {
+          gte: currentMonthStart,
+          lte: currentMonthEnd,
+        },
+      },
+    })
+
+    // Taxa de Churn
+    const churnRate = totalTenants > 0 ? (churnedThisMonth / totalTenants) * 100 : 0
+
+    // Lifetime Value médio
+    const avgLTV = await prisma.tenant.aggregate({
+      _avg: { lifetime_value: true },
+    })
+
+    // Total de Usuários na plataforma
+    const totalUsers = await prisma.user.count()
+
+    // Total de Clientes
+    const totalCustomers = await prisma.customer.count()
+
+    // Total de Viagens
+    const totalTrips = await prisma.trip.count()
+
+    // Faturas Pendentes
+    const pendingInvoices = await prisma.invoice.count({
+      where: { status: 'pending' },
+    })
+
+    const overdueInvoices = await prisma.invoice.count({
+      where: { status: 'overdue' },
+    })
+
+    // Receita Total
+    const totalRevenue = await prisma.invoice.aggregate({
+      where: { status: 'paid' },
+      _sum: { total: true },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // CRESCIMENTO MENSAL (12 MESES)
+    // ═══════════════════════════════════════════════════════════
+
+    const monthlyGrowth = []
+
+    for (let i = 11; i >= 0; i--) {
+      const date = subMonths(new Date(), i)
+      const monthStart = startOfMonth(date)
+      const monthEnd = endOfMonth(date)
+
+      // Novos tenants
+      const newTenants = await prisma.tenant.count({
+        where: {
+          created_at: {
+            gte: monthStart,
+            lte: monthEnd,
+          },
+        },
+      })
+
+      // Churn
+      const churned = await prisma.tenant.count({
+        where: {
+          churn_date: {
+            gte: monthStart,
+            lte: monthEnd,
+          },
+        },
+      })
+
+      // MRR do mês
+      const monthlyMRR = await prisma.tenant.aggregate({
+        where: {
+          subscription_status: 'active',
+          subscription_started_at: {
+            lte: monthEnd,
+          },
+        },
+        _sum: { mrr: true },
+      })
+
+      // Receita do mês
+      const monthlyRevenue = await prisma.invoice.aggregate({
+        where: {
+          status: 'paid',
+          paid_date: {
+            gte: monthStart,
+            lte: monthEnd,
+          },
+        },
+        _sum: { total: true },
+      })
+
+      monthlyGrowth.push({
+        month: date.toISOString(),
+        newTenants,
+        churned,
+        mrr: monthlyMRR._sum.mrr?.toNumber() || 0,
+        revenue: monthlyRevenue._sum.total?.toNumber() || 0,
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // DISTRIBUIÇÃO POR PLANO
+    // ═══════════════════════════════════════════════════════════
+
+    const tenantsByPlan = await prisma.tenant.groupBy({
+      by: ['subscription_plan_id'],
+      _count: { id: true },
+      where: {
+        subscription_plan_id: { not: null },
+      },
+    })
+
+    const plansWithNames = await Promise.all(
+      tenantsByPlan.map(async (item) => {
+        const plan = await prisma.subscriptionPlan.findUnique({
+          where: { id: item.subscription_plan_id! },
+          select: { name: true, monthly_price: true },
+        })
+
+        return {
+          plan: plan?.name || 'Desconhecido',
+          count: item._count.id,
+          price: plan?.monthly_price?.toNumber() || 0,
+        }
+      })
+    )
+
+    // ═══════════════════════════════════════════════════════════
+    // TOP 10 TENANTS POR RECEITA
+    // ═══════════════════════════════════════════════════════════
+
+    const topTenants = await prisma.tenant.findMany({
+      orderBy: { lifetime_value: 'desc' },
+      take: 10,
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        subscription_status: true,
+        mrr: true,
+        lifetime_value: true,
+        created_at: true,
+        subscription_plan: {
+          select: { name: true },
+        },
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // ATIVIDADE RECENTE
+    // ═══════════════════════════════════════════════════════════
+
+    const recentActivity = await prisma.systemLog.findMany({
+      orderBy: { created_at: 'desc' },
+      take: 20,
+      include: {
+        tenant: {
+          select: { name: true },
+        },
+        user: {
+          select: { name: true, email: true },
+        },
+      },
+    })
+
+    return NextResponse.json({
+      metrics: {
+        totalTenants,
+        tenantsByStatus,
+        totalMRR,
+        totalARR,
+        newTenantsThisMonth,
+        churnedThisMonth,
+        churnRate,
+        avgLTV: avgLTV._avg.lifetime_value?.toNumber() || 0,
+        totalUsers,
+        totalCustomers,
+        totalTrips,
+        pendingInvoices,
+        overdueInvoices,
+        totalRevenue: totalRevenue._sum.total?.toNumber() || 0,
+      },
+      monthlyGrowth,
+      tenantsByPlan: plansWithNames,
+      topTenants,
+      recentActivity,
+    })
+  } catch (error) {
+    console.error('Erro ao buscar dashboard:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar dados' },
+      { status: 500 }
+    )
+  }
+}
+
+
+API - GESTÃO DE TENANTS
+
+// app/api/admin/tenants/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '20')
+    const search = searchParams.get('search') || ''
+    const status = searchParams.get('status') || 'all'
+    const plan = searchParams.get('plan') || 'all'
+
+    const skip = (page - 1) * limit
+
+    const where: any = {}
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { slug: { contains: search, mode: 'insensitive' } },
+        { cnpj: { contains: search } },
+      ]
+    }
+
+    if (status !== 'all') {
+      where.subscription_status = status
+    }
+
+    if (plan !== 'all') {
+      where.subscription_plan_id = plan
+    }
+
+    const [tenants, total] = await Promise.all([
+      prisma.tenant.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          subscription_plan: {
+            select: { name: true },
+          },
+          _count: {
+            select: {
+              users: true,
+              customers: true,
+              trips: true,
+            },
+          },
+        },
+      }),
+      prisma.tenant.count({ where }),
+    ])
+
+    return NextResponse.json({
+      tenants,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar tenants:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar tenants' },
+      { status: 500 }
+    )
+  }
+}
+
+// Atualizar Status do Tenant
+export async function PATCH(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const { tenantId, action, reason, planId } = body
+
+    if (action === 'suspend') {
+      await prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          subscription_status: 'suspended',
+          is_suspended: true,
+          suspension_reason: reason,
+        },
+      })
+
+      // Log
+      await prisma.systemLog.create({
+        data: {
+          tenant_id: tenantId,
+          user_id: session.user.id,
+          action: 'suspend_tenant',
+          entity_type: 'tenant',
+          entity_id: tenantId,
+          description: `Tenant suspenso. Motivo: ${reason}`,
+          severity: 'warning',
+          category: 'tenant',
+        },
+      })
+
+      return NextResponse.json({ success: true })
+    }
+
+    if (action === 'activate') {
+      await prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          subscription_status: 'active',
+          is_suspended: false,
+          is_active: true,
+          suspension_reason: null,
+        },
+      })
+
+      // Log
+      await prisma.systemLog.create({
+        data: {
+          tenant_id: tenantId,
+          user_id: session.user.id,
+          action: 'activate_tenant',
+          entity_type: 'tenant',
+          entity_id: tenantId,
+          description: 'Tenant ativado',
+          severity: 'info',
+          category: 'tenant',
+        },
+      })
+
+      return NextResponse.json({ success: true })
+    }
+
+    if (action === 'change_plan') {
+      const plan = await prisma.subscriptionPlan.findUnique({
+        where: { id: planId },
+      })
+
+      if (!plan) {
+        return NextResponse.json({ error: 'Plano não encontrado' }, { status: 404 })
+      }
+
+      await prisma.tenant.update({
+        where: { id: tenantId },
+        data: {
+          subscription_plan_id: planId,
+          mrr: plan.monthly_price,
+        },
+      })
+
+      // Log
+      await prisma.systemLog.create({
+        data: {
+          tenant_id: tenantId,
+          user_id: session.user.id,
+          action: 'change_plan',
+          entity_type: 'tenant',
+          entity_id: tenantId,
+          description: `Plano alterado para ${plan.name}`,
+          severity: 'info',
+          category: 'billing',
+        },
+      })
+
+      return NextResponse.json({ success: true })
+    }
+
+    return NextResponse.json({ error: 'Ação inválida' }, { status: 400 })
+  } catch (error) {
+    console.error('Erro ao atualizar tenant:', error)
+    return NextResponse.json(
+      { error: 'Erro ao atualizar tenant' },
+      { status: 500 }
+    )
+  }
+}
+
+
+API - GESTÃO DE PLANOS
+
+// app/api/admin/plans/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const plans = await prisma.subscriptionPlan.findMany({
+      orderBy: { display_order: 'asc' },
+      include: {
+        _count: {
+          select: { tenants: true },
+        },
+      },
+    })
+
+    return NextResponse.json({ plans })
+  } catch (error) {
+    console.error('Erro ao buscar planos:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar planos' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+
+    const plan = await prisma.subscriptionPlan.create({
+      data: {
+        name: body.name,
+        slug: body.slug,
+        description: body.description,
+        monthly_price: body.monthly_price,
+        yearly_price: body.yearly_price,
+        setup_fee: body.setup_fee || 0,
+        max_users: body.max_users,
+        max_customers: body.max_customers,
+        max_trips: body.max_trips,
+        max_storage_gb: body.max_storage_gb,
+        features: body.features,
+        trial_days: body.trial_days || 14,
+        display_order: body.display_order || 0,
+      },
+    })
+
+    // Log
+    await prisma.systemLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'create_plan',
+        entity_type: 'subscription_plan',
+        entity_id: plan.id,
+        description: `Plano ${plan.name} criado`,
+        severity: 'info',
+        category: 'billing',
+      },
+    })
+
+    return NextResponse.json({ plan })
+  } catch (error) {
+    console.error('Erro ao criar plano:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar plano' },
+      { status: 500 }
+    )
+  }
+}
+
+
+PAINEL SUPER ADMIN - MÓDULOS COMPLETOS
+FATURAMENTO (BILLING)
+API de Faturamento
+
+// app/api/admin/billing/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, addMonths } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '20')
+    const status = searchParams.get('status') || 'all'
+    const tenantId = searchParams.get('tenantId')
+
+    const skip = (page - 1) * limit
+
+    const where: any = {}
+
+    if (status !== 'all') {
+      where.status = status
+    }
+
+    if (tenantId) {
+      where.tenant_id = tenantId
+    }
+
+    const [invoices, total] = await Promise.all([
+      prisma.invoice.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          tenant: {
+            select: {
+              name: true,
+              slug: true,
+            },
+          },
+        },
+      }),
+      prisma.invoice.count({ where }),
+    ])
+
+    // Estatísticas
+    const stats = await prisma.invoice.groupBy({
+      by: ['status'],
+      _sum: { total: true },
+      _count: { id: true },
+    })
+
+    return NextResponse.json({
+      invoices,
+      stats,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar faturas:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar faturas' },
+      { status: 500 }
+    )
+  }
+}
+
+// Criar Fatura
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const { tenantId } = body
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      include: {
+        subscription_plan: true,
+      },
+    })
+
+    if (!tenant || !tenant.subscription_plan) {
+      return NextResponse.json(
+        { error: 'Tenant ou plano não encontrado' },
+        { status: 404 }
+      )
+    }
+
+    // Gerar número da fatura
+    const invoiceCount = await prisma.invoice.count()
+    const invoiceNumber = `INV-${new Date().getFullYear()}-${String(
+      invoiceCount + 1
+    ).padStart(6, '0')}`
+
+    // Calcular valores
+    const subtotal = tenant.subscription_plan.monthly_price
+    const tax = subtotal.toNumber() * 0.0 // Sem imposto por enquanto
+    const total = subtotal.toNumber() + tax
+
+    // Período
+    const periodStart = startOfMonth(new Date())
+    const periodEnd = endOfMonth(new Date())
+    const dueDate = addMonths(new Date(), 0)
+
+    const invoice = await prisma.invoice.create({
+      data: {
+        tenant_id: tenantId,
+        invoice_number: invoiceNumber,
+        subtotal,
+        discount: 0,
+        tax,
+        total,
+        period_start: periodStart,
+        period_end: periodEnd,
+        issue_date: new Date(),
+        due_date: dueDate,
+        status: 'pending',
+      },
+    })
+
+    // Atualizar tenant
+    await prisma.tenant.update({
+      where: { id: tenantId },
+      data: {
+        last_invoice_date: new Date(),
+        next_invoice_date: addMonths(new Date(), 1),
+      },
+    })
+
+    // Log
+    await prisma.systemLog.create({
+      data: {
+        tenant_id: tenantId,
+        user_id: session.user.id,
+        action: 'create_invoice',
+        entity_type: 'invoice',
+        entity_id: invoice.id,
+        description: `Fatura ${invoiceNumber} criada - ${total.toFixed(2)}`,
+        severity: 'info',
+        category: 'billing',
+      },
+    })
+
+    return NextResponse.json({ invoice })
+  } catch (error) {
+    console.error('Erro ao criar fatura:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar fatura' },
+      { status: 500 }
+    )
+  }
+}
+
+// Atualizar Status da Fatura
+export async function PATCH(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const { invoiceId, status, paymentMethod } = body
+
+    const updateData: any = { status }
+
+    if (status === 'paid') {
+      updateData.paid_date = new Date()
+      updateData.payment_method = paymentMethod
+    }
+
+    const invoice = await prisma.invoice.update({
+      where: { id: invoiceId },
+      data: updateData,
+    })
+
+    // Se pago, atualizar lifetime value do tenant
+    if (status === 'paid') {
+      await prisma.tenant.update({
+        where: { id: invoice.tenant_id },
+        data: {
+          lifetime_value: {
+            increment: invoice.total,
+          },
+          total_revenue: {
+            increment: invoice.total,
+          },
+        },
+      })
+    }
+
+    // Log
+    await prisma.systemLog.create({
+      data: {
+        tenant_id: invoice.tenant_id,
+        user_id: session.user.id,
+        action: 'update_invoice_status',
+        entity_type: 'invoice',
+        entity_id: invoiceId,
+        description: `Fatura ${invoice.invoice_number} marcada como ${status}`,
+        severity: 'info',
+        category: 'billing',
+      },
+    })
+
+    return NextResponse.json({ invoice })
+  } catch (error) {
+    console.error('Erro ao atualizar fatura:', error)
+    return NextResponse.json(
+      { error: 'Erro ao atualizar fatura' },
+      { status: 500 }
+    )
+  }
+}
+
+
+API de Geração de Faturas em Lote
+
+// app/api/admin/billing/generate-batch/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, addMonths } from 'date-fns'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    // Buscar tenants ativos que precisam de fatura
+    const tenants = await prisma.tenant.findMany({
+      where: {
+        subscription_status: 'active',
+        subscription_plan_id: { not: null },
+        OR: [
+          { next_invoice_date: { lte: new Date() } },
+          { next_invoice_date: null },
+        ],
+      },
+      include: {
+        subscription_plan: true,
+      },
+    })
+
+    const invoicesCreated = []
+    const errors = []
+
+    for (const tenant of tenants) {
+      try {
+        if (!tenant.subscription_plan) continue
+
+        // Gerar número da fatura
+        const invoiceCount = await prisma.invoice.count()
+        const invoiceNumber = `INV-${new Date().getFullYear()}-${String(
+          invoiceCount + 1
+        ).padStart(6, '0')}`
+
+        // Calcular valores
+        const subtotal = tenant.subscription_plan.monthly_price
+        const tax = subtotal.toNumber() * 0.0
+        const total = subtotal.toNumber() + tax
+
+        // Período
+        const periodStart = startOfMonth(new Date())
+        const periodEnd = endOfMonth(new Date())
+        const dueDate = addMonths(new Date(), 0)
+
+        const invoice = await prisma.invoice.create({
+          data: {
+            tenant_id: tenant.id,
+            invoice_number: invoiceNumber,
+            subtotal,
+            discount: 0,
+            tax,
+            total,
+            period_start: periodStart,
+            period_end: periodEnd,
+            issue_date: new Date(),
+            due_date: dueDate,
+            status: 'pending',
+          },
+        })
+
+        // Atualizar tenant
+        await prisma.tenant.update({
+          where: { id: tenant.id },
+          data: {
+            last_invoice_date: new Date(),
+            next_invoice_date: addMonths(new Date(), 1),
+          },
+        })
+
+        invoicesCreated.push({
+          tenantName: tenant.name,
+          invoiceNumber,
+          total,
+        })
+
+        // Log
+        await prisma.systemLog.create({
+          data: {
+            tenant_id: tenant.id,
+            user_id: session.user.id,
+            action: 'create_invoice_batch',
+            entity_type: 'invoice',
+            entity_id: invoice.id,
+            description: `Fatura ${invoiceNumber} gerada automaticamente`,
+            severity: 'info',
+            category: 'billing',
+          },
+        })
+      } catch (error) {
+        errors.push({
+          tenantName: tenant.name,
+          error: error instanceof Error ? error.message : 'Erro desconhecido',
+        })
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      invoicesCreated: invoicesCreated.length,
+      errors: errors.length,
+      details: {
+        invoicesCreated,
+        errors,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao gerar faturas em lote:', error)
+    return NextResponse.json(
+      { error: 'Erro ao gerar faturas' },
+      { status: 500 }
+    )
+  }
+}
+
+
+MÉTRICAS (ANALYTICS)
+API de Métricas Avançadas
+
+// app/api/admin/metrics/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths, differenceInDays } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const months = parseInt(searchParams.get('months') || '12')
+
+    // ═══════════════════════════════════════════════════════════
+    // CRESCIMENTO MENSAL
+    // ═══════════════════════════════════════════════════════════
+
+    const monthlyData = []
+
+    for (let i = months - 1; i >= 0; i--) {
+      const date = subMonths(new Date(), i)
+      const monthStart = startOfMonth(date)
+      const monthEnd = endOfMonth(date)
+
+      // Novos tenants
+      const newTenants = await prisma.tenant.count({
+        where: {
+          created_at: { gte: monthStart, lte: monthEnd },
+        },
+      })
+
+      // Tenants ativos no final do mês
+      const activeTenants = await prisma.tenant.count({
+        where: {
+          created_at: { lte: monthEnd },
+          subscription_status: { in: ['active', 'trial'] },
+          OR: [
+            { churn_date: null },
+            { churn_date: { gt: monthEnd } },
+          ],
+        },
+      })
+
+      // Churn
+      const churned = await prisma.tenant.count({
+        where: {
+          churn_date: { gte: monthStart, lte: monthEnd },
+        },
+      })
+
+      // MRR
+      const mrrData = await prisma.tenant.aggregate({
+        where: {
+          subscription_status: 'active',
+          subscription_started_at: { lte: monthEnd },
+          OR: [
+            { churn_date: null },
+            { churn_date: { gt: monthEnd } },
+          ],
+        },
+        _sum: { mrr: true },
+      })
+
+      // Receita do mês
+      const revenue = await prisma.invoice.aggregate({
+        where: {
+          status: 'paid',
+          paid_date: { gte: monthStart, lte: monthEnd },
+        },
+        _sum: { total: true },
+      })
+
+      // Novos usuários
+      const newUsers = await prisma.user.count({
+        where: {
+          created_at: { gte: monthStart, lte: monthEnd },
+        },
+      })
+
+      // Novos clientes
+      const newCustomers = await prisma.customer.count({
+        where: {
+          created_at: { gte: monthStart, lte: monthEnd },
+        },
+      })
+
+      // Taxa de churn
+      const churnRate = activeTenants > 0 ? (churned / activeTenants) * 100 : 0
+
+      monthlyData.push({
+        month: date.toISOString(),
+        newTenants,
+        activeTenants,
+        churned,
+        churnRate,
+        mrr: mrrData._sum.mrr?.toNumber() || 0,
+        revenue: revenue._sum.total?.toNumber() || 0,
+        newUsers,
+        newCustomers,
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // COHORT ANALYSIS
+    // ═══════════════════════════════════════════════════════════
+
+    const cohorts = []
+
+    for (let i = 11; i >= 0; i--) {
+      const cohortDate = subMonths(new Date(), i)
+      const cohortStart = startOfMonth(cohortDate)
+      const cohortEnd = endOfMonth(cohortDate)
+
+      // Tenants que começaram neste mês
+      const cohortTenants = await prisma.tenant.findMany({
+        where: {
+          created_at: { gte: cohortStart, lte: cohortEnd },
+        },
+        select: {
+          id: true,
+          churn_date: true,
+        },
+      })
+
+      const cohortSize = cohortTenants.length
+
+      if (cohortSize === 0) continue
+
+      // Calcular retenção mês a mês
+      const retention = []
+
+      for (let month = 0; month <= i; month++) {
+        const checkDate = endOfMonth(subMonths(new Date(), i - month))
+
+        const retained = cohortTenants.filter((t) => {
+          return !t.churn_date || new Date(t.churn_date) > checkDate
+        }).length
+
+        retention.push({
+          month,
+          retained,
+          percentage: (retained / cohortSize) * 100,
+        })
+      }
+
+      cohorts.push({
+        cohortMonth: cohortDate.toISOString(),
+        cohortSize,
+        retention,
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CUSTOMER LIFETIME VALUE (LTV)
+    // ═══════════════════════════════════════════════════════════
+
+    const allTenants = await prisma.tenant.findMany({
+      select: {
+        created_at: true,
+        churn_date: true,
+        lifetime_value: true,
+      },
+    })
+
+    const ltvData = allTenants.map((tenant) => {
+      const lifetimeDays = tenant.churn_date
+        ? differenceInDays(new Date(tenant.churn_date), new Date(tenant.created_at))
+        : differenceInDays(new Date(), new Date(tenant.created_at))
+
+      const lifetimeMonths = lifetimeDays / 30
+
+      return {
+        lifetimeMonths,
+        ltv: tenant.lifetime_value.toNumber(),
+      }
+    })
+
+    const avgLTV =
+      ltvData.reduce((sum, t) => sum + t.ltv, 0) / (ltvData.length || 1)
+
+    const avgLifetimeMonths =
+      ltvData.reduce((sum, t) => sum + t.lifetimeMonths, 0) / (ltvData.length || 1)
+
+    // ═══════════════════════════════════════════════════════════
+    // DISTRIBUIÇÃO GEOGRÁFICA
+    // ═══════════════════════════════════════════════════════════
+
+    const geographicDistribution = await prisma.tenant.groupBy({
+      by: ['state'],
+      _count: { id: true },
+      where: {
+        state: { not: null },
+      },
+      orderBy: {
+        _count: { id: 'desc' },
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // ENGAGEMENT METRICS
+    // ═══════════════════════════════════════════════════════════
+
+    const currentMonthStart = startOfMonth(new Date())
+
+    // Tenants ativos (com atividade no último mês)
+    const activeTenantsThisMonth = await prisma.systemLog.groupBy({
+      by: ['tenant_id'],
+      where: {
+        created_at: { gte: currentMonthStart },
+        tenant_id: { not: null },
+      },
+      _count: { id: true },
+    })
+
+    // Taxa de adoção de features
+    const tenantsWithGoogleCalendar = await prisma.user.count({
+      where: {
+        google_calendar_enabled: true,
+      },
+      distinct: ['tenant_id'],
+    })
+
+    const tenantsWithWhatsApp = await prisma.tenant.count({
+      where: {
+        whatsapp_enabled: true,
+      },
+    })
+
+    const totalActiveTenants = await prisma.tenant.count({
+      where: {
+        subscription_status: { in: ['active', 'trial'] },
+      },
+    })
+
+    return NextResponse.json({
+      monthlyData,
+      cohorts,
+      ltv: {
+        average: avgLTV,
+        averageLifetimeMonths: avgLifetimeMonths,
+        distribution: ltvData,
+      },
+      geographic: geographicDistribution,
+      engagement: {
+        activeTenantsThisMonth: activeTenantsThisMonth.length,
+        totalActiveTenants,
+        engagementRate:
+          (activeTenantsThisMonth.length / (totalActiveTenants || 1)) * 100,
+        featureAdoption: {
+          googleCalendar: {
+            count: tenantsWithGoogleCalendar,
+            percentage: (tenantsWithGoogleCalendar / (totalActiveTenants || 1)) * 100,
+          },
+          whatsapp: {
+            count: tenantsWithWhatsApp,
+            percentage: (tenantsWithWhatsApp / (totalActiveTenants || 1)) * 100,
+          },
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar métricas:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar métricas' },
+      { status: 500 }
+    )
+  }
+}
+
+
+USUÁRIOS GLOBAIS
+API de Usuários Globais
+
+// app/api/admin/users/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '50')
+    const search = searchParams.get('search') || ''
+    const role = searchParams.get('role') || 'all'
+    const tenantId = searchParams.get('tenantId')
+
+    const skip = (page - 1) * limit
+
+    const where: any = {}
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ]
+    }
+
+    if (role !== 'all') {
+      where.role = role
+    }
+
+    if (tenantId) {
+      where.tenant_id = tenantId
+    }
+
+    const [users, total] = await Promise.all([
+      prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          tenant: {
+            select: {
+              name: true,
+              slug: true,
+            },
+          },
+        },
+      }),
+      prisma.user.count({ where }),
+    ])
+
+    // Estatísticas
+    const stats = await prisma.user.groupBy({
+      by: ['role'],
+      _count: { id: true },
+    })
+
+    return NextResponse.json({
+      users,
+      stats,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar usuários:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar usuários' },
+      { status: 500 }
+    )
+  }
+}
+
+
+LOGS DE AUDITORIA
+API de Logs
+
+// app/api/admin/logs/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '100')
+    const action = searchParams.get('action') || 'all'
+    const category = searchParams.get('category') || 'all'
+    const severity = searchParams.get('severity') || 'all'
+    const tenantId = searchParams.get('tenantId')
+    const userId = searchParams.get('userId')
+
+    const skip = (page - 1) * limit
+
+    const where: any = {}
+
+    if (action !== 'all') {
+      where.action = action
+    }
+
+    if (category !== 'all') {
+      where.category = category
+    }
+
+    if (severity !== 'all') {
+      where.severity = severity
+    }
+
+    if (tenantId) {
+      where.tenant_id = tenantId
+    }
+
+    if (userId) {
+      where.user_id = userId
+    }
+
+    const [logs, total] = await Promise.all([
+      prisma.systemLog.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          tenant: {
+            select: { name: true },
+          },
+          user: {
+            select: { name: true, email: true },
+          },
+        },
+      }),
+      prisma.systemLog.count({ where }),
+    ])
+
+    // Estatísticas
+    const statsByCategory = await prisma.systemLog.groupBy({
+      by: ['category'],
+      _count: { id: true },
+      orderBy: {
+        _count: { id: 'desc' },
+      },
+    })
+
+    const statsBySeverity = await prisma.systemLog.groupBy({
+      by: ['severity'],
+      _count: { id: true },
+    })
+
+    return NextResponse.json({
+      logs,
+      stats: {
+        byCategory: statsByCategory,
+        bySeverity: statsBySeverity,
+      },
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar logs:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar logs' },
+      { status: 500 }
+    )
+  }
+}
+
+
+CONFIGURAÇÕES E FEATURE FLAGS
+API de Feature Flags
+
+// app/api/admin/feature-flags/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const flags = await prisma.featureFlag.findMany({
+      orderBy: { name: 'asc' },
+    })
+
+    return NextResponse.json({ flags })
+  } catch (error) {
+    console.error('Erro ao buscar feature flags:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar feature flags' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+
+    const flag = await prisma.featureFlag.create({
+      data: {
+        name: body.name,
+        key: body.key,
+        description: body.description,
+        is_enabled: body.is_enabled || false,
+        rollout_percentage: body.rollout_percentage || 0,
+        enabled_tenants: body.enabled_tenants || [],
+      },
+    })
+
+    // Log
+    await prisma.systemLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'create_feature_flag',
+        entity_type: 'feature_flag',
+        entity_id: flag.id,
+        description: `Feature flag ${flag.name} criada`,
+        severity: 'info',
+        category: 'settings',
+      },
+    })
+
+    return NextResponse.json({ flag })
+  } catch (error) {
+    console.error('Erro ao criar feature flag:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar feature flag' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const { id, ...data } = body
+
+    const flag = await prisma.featureFlag.update({
+      where: { id },
+      data,
+    })
+
+    // Log
+    await prisma.systemLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'update_feature_flag',
+        entity_type: 'feature_flag',
+        entity_id: flag.id,
+        description: `Feature flag ${flag.name} atualizada`,
+        severity: 'info',
+        category: 'settings',
+      },
+    })
+
+    return NextResponse.json({ flag })
+  } catch (error) {
+    console.error('Erro ao atualizar feature flag:', error)
+    return NextResponse.json(
+      { error: 'Erro ao atualizar feature flag' },
+      { status: 500 }
+    )
+  }
+}
+
+
+🖥️ INTERFACE COMPLETA DO PAINEL SUPER ADMIN
+🎨 1. LAYOUT PRINCIPAL DO SUPER ADMIN
+1.1 Layout Base
+
+// app/(admin)/admin/layout.tsx
+
+import { redirect } from 'next/navigation'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { SuperAdminSidebar } from '@/components/admin/sidebar'
+import { SuperAdminHeader } from '@/components/admin/header'
+
+export default async function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const session = await getServerSession(authOptions)
+
+  // Verificar se é super admin
+  if (!session || session.user.role !== 'super_admin') {
+    redirect('/dashboard')
+  }
+
+  return (
+    <div className="flex h-screen bg-gray-50">
+      {/* Sidebar */}
+      <SuperAdminSidebar />
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Header */}
+        <SuperAdminHeader user={session.user} />
+
+        {/* Content */}
+        <main className="flex-1 overflow-y-auto p-6">
+          {children}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+1.2 Sidebar do Super Admin
+// components/admin/sidebar.tsx
+
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { cn } from '@/lib/utils'
+import {
+  Crown,
+  LayoutDashboard,
+  Building2,
+  CreditCard,
+  TrendingUp,
+  Users,
+  FileText,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  Zap,
+  DollarSign,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+
+const menuItems = [
+  {
+    title: 'Dashboard',
+    icon: LayoutDashboard,
+    href: '/admin',
+  },
+  {
+    title: 'Tenants',
+    icon: Building2,
+    href: '/admin/tenants',
+  },
+  {
+    title: 'Planos',
+    icon: CreditCard,
+    href: '/admin/plans',
+  },
+  {
+    title: 'Faturamento',
+    icon: DollarSign,
+    href: '/admin/billing',
+  },
+  {
+    title: 'Métricas',
+    icon: TrendingUp,
+    href: '/admin/metrics',
+  },
+  {
+    title: 'Usuários',
+    icon: Users,
+    href: '/admin/users',
+  },
+  {
+    title: 'Logs',
+    icon: FileText,
+    href: '/admin/logs',
+  },
+  {
+    title: 'Feature Flags',
+    icon: Zap,
+    href: '/admin/feature-flags',
+  },
+  {
+    title: 'Configurações',
+    icon: Settings,
+    href: '/admin/settings',
+  },
+]
+
+export function SuperAdminSidebar() {
+  const pathname = usePathname()
+  const [collapsed, setCollapsed] = useState(false)
+
+  return (
+    <aside
+      className={cn(
+        'bg-gradient-to-b from-gray-900 to-gray-800 text-white transition-all duration-300',
+        collapsed ? 'w-20' : 'w-64'
+      )}
+    >
+      {/* Logo */}
+      <div className="h-16 flex items-center justify-between px-4 border-b border-gray-700">
+        {!collapsed && (
+          <div className="flex items-center gap-2">
+            <Crown className="h-6 w-6 text-yellow-400" />
+            <span className="font-bold text-lg">Super Admin</span>
+          </div>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setCollapsed(!collapsed)}
+          className="text-white hover:bg-gray-700"
+        >
+          {collapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronLeft className="h-4 w-4" />
+          )}
+        </Button>
+      </div>
+
+      {/* Menu */}
+      <nav className="p-4 space-y-2">
+        {menuItems.map((item) => {
+          const Icon = item.icon
+          const isActive = pathname === item.href
+
+          return (
+            <Link key={item.href} href={item.href}>
+              <div
+                className={cn(
+                  'flex items-center gap-3 px-4 py-3 rounded-lg transition-all cursor-pointer',
+                  isActive
+                    ? 'bg-yellow-500 text-gray-900 font-semibold'
+                    : 'hover:bg-gray-700 text-gray-300'
+                )}
+              >
+                <Icon className="h-5 w-5 flex-shrink-0" />
+                {!collapsed && <span>{item.title}</span>}
+              </div>
+            </Link>
+          )
+        })}
+      </nav>
+
+      {/* Footer */}
+      {!collapsed && (
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-700">
+          <div className="text-xs text-gray-400 text-center">
+            Super Admin Panel v1.0
+          </div>
+        </div>
+      )}
+    </aside>
+  )
+}
+
+1.3 Header do Super Admin
+// components/admin/header.tsx
+
+'use client'
+
+import { Bell, LogOut, User } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Badge } from '@/components/ui/badge'
+import { signOut } from 'next-auth/react'
+
+interface SuperAdminHeaderProps {
+  user: {
+    name?: string | null
+    email?: string | null
+  }
+}
+
+export function SuperAdminHeader({ user }: SuperAdminHeaderProps) {
+  return (
+    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+      {/* Breadcrumb ou título */}
+      <div>
+        <h1 className="text-xl font-semibold text-gray-800">
+          Painel de Administração
+        </h1>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-4">
+        {/* Notificações */}
+        <Button variant="ghost" size="sm" className="relative">
+          <Bell className="h-5 w-5" />
+          <Badge
+            variant="destructive"
+            className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs"
+          >
+            3
+          </Badge>
+        </Button>
+
+        {/* User Menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="gap-2">
+              <div className="h-8 w-8 rounded-full bg-yellow-500 flex items-center justify-center">
+                <User className="h-4 w-4 text-white" />
+              </div>
+              <div className="text-left hidden md:block">
+                <p className="text-sm font-semibold">{user.name}</p>
+                <p className="text-xs text-gray-500">Super Admin</p>
+              </div>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>Minha Conta</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem>
+              <User className="h-4 w-4 mr-2" />
+              Perfil
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => signOut({ callbackUrl: '/auth/login' })}
+              className="text-red-600"
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Sair
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </header>
+  )
+}
+
+📊 2. PÁGINA PRINCIPAL - DASHBOARD
+// app/(admin)/admin/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Building2,
+  DollarSign,
+  TrendingUp,
+  Users,
+  AlertCircle,
+  CheckCircle,
+  XCircle,
+  Loader2,
+  ArrowUpRight,
+  ArrowDownRight,
+} from 'lucide-react'
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import { toast } from 'sonner'
+import Link from 'next/link'
+
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+
+export default function SuperAdminDashboard() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [data, setData] = useState<any>(null)
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/admin/dashboard')
+      const result = await response.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+      toast.error('Erro ao carregar dashboard')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-yellow-500" />
+      </div>
+    )
+  }
+
+  const statusColors: Record<string, string> = {
+    trial: 'bg-blue-100 text-blue-800',
+    active: 'bg-green-100 text-green-800',
+    past_due: 'bg-orange-100 text-orange-800',
+    cancelled: 'bg-gray-100 text-gray-800',
+    suspended: 'bg-red-100 text-red-800',
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+        <p className="text-gray-600 mt-1">
+          Visão geral da plataforma e métricas principais
+        </p>
+      </div>
+
+      {/* KPIs Principais */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Total de Tenants */}
+        <Card className="p-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <Building2 className="h-8 w-8" />
+            <Badge variant="secondary" className="bg-white/20 text-white">
+              Total
+            </Badge>
+          </div>
+          <p className="text-sm opacity-75 mb-1">Agências na Plataforma</p>
+          <p className="text-4xl font-bold">{data.metrics.totalTenants}</p>
+          <div className="mt-4 flex items-center gap-2 text-sm">
+            <ArrowUpRight className="h-4 w-4" />
+            <span>+{data.metrics.newTenantsThisMonth} este mês</span>
+          </div>
+        </Card>
+
+        {/* MRR */}
+        <Card className="p-6 bg-gradient-to-br from-green-500 to-green-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <DollarSign className="h-8 w-8" />
+            <Badge variant="secondary" className="bg-white/20 text-white">
+              MRR
+            </Badge>
+          </div>
+          <p className="text-sm opacity-75 mb-1">Receita Recorrente Mensal</p>
+          <p className="text-4xl font-bold">
+            {formatCurrency(data.metrics.totalMRR)}
+          </p>
+          <div className="mt-4 text-sm opacity-75">
+            ARR: {formatCurrency(data.metrics.totalARR)}
+          </div>
+        </Card>
+
+        {/* Receita Total */}
+        <Card className="p-6 bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <TrendingUp className="h-8 w-8" />
+            <Badge variant="secondary" className="bg-white/20 text-white">
+              Total
+            </Badge>
+          </div>
+          <p className="text-sm opacity-75 mb-1">Receita Total</p>
+          <p className="text-4xl font-bold">
+            {formatCurrency(data.metrics.totalRevenue)}
+          </p>
+          <div className="mt-4 text-sm opacity-75">
+            LTV Médio: {formatCurrency(data.metrics.avgLTV)}
+          </div>
+        </Card>
+
+        {/* Usuários */}
+        <Card className="p-6 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <Users className="h-8 w-8" />
+            <Badge variant="secondary" className="bg-white/20 text-white">
+              Ativos
+            </Badge>
+          </div>
+          <p className="text-sm opacity-75 mb-1">Total de Usuários</p>
+          <p className="text-4xl font-bold">{data.metrics.totalUsers}</p>
+          <div className="mt-4 text-sm opacity-75">
+            {data.metrics.totalCustomers} clientes
+          </div>
+        </Card>
+      </div>
+
+      {/* Status dos Tenants */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Distribuição por Status */}
+        <Card className="p-6 lg:col-span-2">
+          <h3 className="text-lg font-bold mb-4">📊 Distribuição por Status</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {data.metrics.tenantsByStatus.map((status: any) => (
+              <div
+                key={status.subscription_status}
+                className="p-4 border rounded-lg"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <Badge
+                    className={
+                      statusColors[status.subscription_status] || 'bg-gray-100'
+                    }
+                  >
+                    {status.subscription_status}
+                  </Badge>
+                  <span className="text-2xl font-bold text-blue-600">
+                    {status._count.id}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 capitalize">
+                  {status.subscription_status === 'trial' && 'Em Trial'}
+                  {status.subscription_status === 'active' && 'Ativos'}
+                  {status.subscription_status === 'past_due' && 'Vencidos'}
+                  {status.subscription_status === 'cancelled' && 'Cancelados'}
+                  {status.subscription_status === 'suspended' && 'Suspensos'}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Alertas */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">⚠️ Alertas</h3>
+          <div className="space-y-3">
+            {data.metrics.overdueInvoices > 0 && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="h-4 w-4 text-red-600" />
+                  <span className="font-semibold text-red-900">
+                    Faturas Vencidas
+                  </span>
+                </div>
+                <p className="text-sm text-red-700">
+                  {data.metrics.overdueInvoices} faturas vencidas
+                </p>
+              </div>
+            )}
+
+            {data.metrics.pendingInvoices > 0 && (
+              <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="h-4 w-4 text-orange-600" />
+                  <span className="font-semibold text-orange-900">
+                    Faturas Pendentes
+                  </span>
+                </div>
+                <p className="text-sm text-orange-700">
+                  {data.metrics.pendingInvoices} faturas pendentes
+                </p>
+              </div>
+            )}
+
+            {data.metrics.churnRate > 5 && (
+              <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="h-4 w-4 text-yellow-600" />
+                  <span className="font-semibold text-yellow-900">
+                    Taxa de Churn Alta
+                  </span>
+                </div>
+                <p className="text-sm text-yellow-700">
+                  {data.metrics.churnRate.toFixed(1)}% este mês
+                </p>
+              </div>
+            )}
+
+            {data.metrics.overdueInvoices === 0 &&
+              data.metrics.pendingInvoices === 0 &&
+              data.metrics.churnRate <= 5 && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                    <span className="font-semibold text-green-900">
+                      Tudo OK!
+                    </span>
+                  </div>
+                </div>
+              )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Gráficos */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Crescimento Mensal */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📈 Crescimento Mensal</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={data.monthlyGrowth}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="month"
+                tickFormatter={(value) =>
+                  format(new Date(value), 'MMM', { locale: ptBR })
+                }
+              />
+              <YAxis />
+              <Tooltip
+                labelFormatter={(value) =>
+                  format(new Date(value), 'MMMM yyyy', { locale: ptBR })
+                }
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="newTenants"
+                name="Novos Tenants"
+                stroke="#3b82f6"
+                strokeWidth={2}
+              />
+              <Line
+                type="monotone"
+                dataKey="churned"
+                name="Churn"
+                stroke="#ef4444"
+                strokeWidth={2}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* MRR ao longo do tempo */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">💰 MRR Evolution</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={data.monthlyGrowth}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="month"
+                tickFormatter={(value) =>
+                  format(new Date(value), 'MMM', { locale: ptBR })
+                }
+              />
+              <YAxis />
+              <Tooltip
+                labelFormatter={(value) =>
+                  format(new Date(value), 'MMMM yyyy', { locale: ptBR })
+                }
+                formatter={(value: number) => formatCurrency(value)}
+              />
+              <Legend />
+              <Bar dataKey="mrr" name="MRR" fill="#10b981" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      </div>
+
+      {/* Distribuição por Plano */}
+      <Card className="p-6">
+        <h3 className="text-lg font-bold mb-4">📊 Distribuição por Plano</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={data.tenantsByPlan}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ plan, count }) => `${plan}: ${count}`}
+                outerRadius={100}
+                fill="#8884d8"
+                dataKey="count"
+              >
+                {data.tenantsByPlan.map((entry: any, index: number) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={COLORS[index % COLORS.length]}
+                  />
+                ))}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+
+          <div className="space-y-3">
+            {data.tenantsByPlan.map((plan: any, index: number) => (
+              <div
+                key={plan.plan}
+                className="flex items-center justify-between p-3 border rounded-lg"
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-4 h-4 rounded"
+                    style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                  />
+                  <div>
+                    <p className="font-semibold">{plan.plan}</p>
+                    <p className="text-xs text-gray-500">
+                      {formatCurrency(plan.price)}/mês
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-bold text-blue-600">
+                    {plan.count}
+                  </p>
+                  <p className="text-xs text-gray-500">tenants</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* Top 10 Tenants */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold">🏆 Top 10 Agências por Receita</h3>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/admin/tenants">Ver Todos</Link>
+          </Button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left py-3 px-4 font-semibold text-sm">
+                  #
+                </th>
+                <th className="text-left py-3 px-4 font-semibold text-sm">
+                  Agência
+                </th>
+                <th className="text-center py-3 px-4 font-semibold text-sm">
+                  Plano
+                </th>
+                <th className="text-center py-3 px-4 font-semibold text-sm">
+                  Status
+                </th>
+                <th className="text-right py-3 px-4 font-semibold text-sm">
+                  MRR
+                </th>
+                <th className="text-right py-3 px-4 font-semibold text-sm">
+                  LTV
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.topTenants.map((tenant: any, index: number) => (
+                <tr key={tenant.id} className="border-b hover:bg-gray-50">
+                  <td className="py-3 px-4">
+                    <span className="font-bold text-gray-400">
+                      {index + 1}
+                    </span>
+                  </td>
+                  <td className="py-3 px-4">
+                    <div>
+                      <p className="font-semibold">{tenant.name}</p>
+                      <p className="text-xs text-gray-500">@{tenant.slug}</p>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 text-center">
+                    <Badge variant="outline">
+                      {tenant.subscription_plan?.name || 'N/A'}
+                    </Badge>
+                  </td>
+                  <td className="py-3 px-4 text-center">
+                    <Badge
+                      className={
+                        statusColors[tenant.subscription_status] || 'bg-gray-100'
+                      }
+                    >
+                      {tenant.subscription_status}
+                    </Badge>
+                  </td>
+                  <td className="py-3 px-4 text-right font-semibold text-green-600">
+                    {formatCurrency(tenant.mrr?.toNumber() || 0)}
+                  </td>
+                  <td className="py-3 px-4 text-right font-bold text-blue-600">
+                    {formatCurrency(tenant.lifetime_value?.toNumber() || 0)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Atividade Recente */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold">📝 Atividade Recente</h3>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/admin/logs">Ver Todos os Logs</Link>
+          </Button>
+        </div>
+
+        <div className="space-y-3">
+          {data.recentActivity.slice(0, 10).map((log: any) => (
+            <div
+              key={log.id}
+              className="flex items-start gap-3 p-3 border rounded-lg hover:bg-gray-50"
+            >
+              <div
+                className={`p-2 rounded-lg ${
+                  log.severity === 'error'
+                    ? 'bg-red-100'
+                    : log.severity === 'warning'
+                    ? 'bg-orange-100'
+                    : 'bg-blue-100'
+                }`}
+              >
+                {log.severity === 'error' ? (
+                  <XCircle className="h-4 w-4 text-red-600" />
+                ) : log.severity === 'warning' ? (
+                  <AlertCircle className="h-4 w-4 text-orange-600" />
+                ) : (
+                  <CheckCircle className="h-4 w-4 text-blue-600" />
+                )}
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold">{log.description}</p>
+                <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                  {log.tenant && <span>• {log.tenant.name}</span>}
+                  {log.user && <span>• {log.user.name}</span>}
+                  <span>
+                    •{' '}
+                    {format(new Date(log.created_at), "dd/MM/yyyy 'às' HH:mm", {
+                      locale: ptBR,
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+🖥️ PÁGINAS COMPLETAS DO SUPER ADMIN
+🏢 3. PÁGINA DE TENANTS
+
+// app/(admin)/admin/tenants/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Search,
+  MoreVertical,
+  Eye,
+  Ban,
+  CheckCheck,
+  CreditCard,
+  Loader2,
+  Building2,
+  Users,
+  Bus,
+  DollarSign,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import Link from 'next/link'
+
+export default function TenantsPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [tenants, setTenants] = useState<any[]>([])
+  const [pagination, setPagination] = useState<any>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [planFilter, setPlanFilter] = useState('all')
+  const [plans, setPlans] = useState<any[]>([])
+
+  // Modais
+  const [suspendModal, setSuspendModal] = useState<{
+    open: boolean
+    tenantId: string | null
+    tenantName: string
+  }>({
+    open: false,
+    tenantId: null,
+    tenantName: '',
+  })
+  const [suspendReason, setSuspendReason] = useState('')
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  const [changePlanModal, setChangePlanModal] = useState<{
+    open: boolean
+    tenantId: string | null
+    tenantName: string
+    currentPlan: string
+  }>({
+    open: false,
+    tenantId: null,
+    tenantName: '',
+    currentPlan: '',
+  })
+  const [newPlanId, setNewPlanId] = useState('')
+
+  useEffect(() => {
+    loadData()
+    loadPlans()
+  }, [statusFilter, planFilter])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const params = new URLSearchParams({
+        status: statusFilter,
+        plan: planFilter,
+      })
+
+      const response = await fetch(`/api/admin/tenants?${params}`)
+      const data = await response.json()
+
+      setTenants(data.tenants)
+      setPagination(data.pagination)
+    } catch (error) {
+      console.error('Erro ao carregar tenants:', error)
+      toast.error('Erro ao carregar tenants')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const loadPlans = async () => {
+    try {
+      const response = await fetch('/api/admin/plans')
+      const data = await response.json()
+      setPlans(data.plans)
+    } catch (error) {
+      console.error('Erro ao carregar planos:', error)
+    }
+  }
+
+  const handleSuspend = async () => {
+    if (!suspendModal.tenantId || !suspendReason.trim()) {
+      toast.error('Informe o motivo da suspensão')
+      return
+    }
+
+    try {
+      setIsProcessing(true)
+
+      const response = await fetch('/api/admin/tenants', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: suspendModal.tenantId,
+          action: 'suspend',
+          reason: suspendReason,
+        }),
+      })
+
+      if (response.ok) {
+        toast.success('Tenant suspenso com sucesso')
+        setSuspendModal({ open: false, tenantId: null, tenantName: '' })
+        setSuspendReason('')
+        loadData()
+      } else {
+        toast.error('Erro ao suspender tenant')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao suspender tenant')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleActivate = async (tenantId: string) => {
+    try {
+      const response = await fetch('/api/admin/tenants', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId,
+          action: 'activate',
+        }),
+      })
+
+      if (response.ok) {
+        toast.success('Tenant ativado com sucesso')
+        loadData()
+      } else {
+        toast.error('Erro ao ativar tenant')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao ativar tenant')
+    }
+  }
+
+  const handleChangePlan = async () => {
+    if (!changePlanModal.tenantId || !newPlanId) {
+      toast.error('Selecione um plano')
+      return
+    }
+
+    try {
+      setIsProcessing(true)
+
+      const response = await fetch('/api/admin/tenants', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: changePlanModal.tenantId,
+          action: 'change_plan',
+          planId: newPlanId,
+        }),
+      })
+
+      if (response.ok) {
+        toast.success('Plano alterado com sucesso')
+        setChangePlanModal({
+          open: false,
+          tenantId: null,
+          tenantName: '',
+          currentPlan: '',
+        })
+        setNewPlanId('')
+        loadData()
+      } else {
+        toast.error('Erro ao alterar plano')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao alterar plano')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  const statusColors: Record<string, string> = {
+    trial: 'bg-blue-100 text-blue-800',
+    active: 'bg-green-100 text-green-800',
+    past_due: 'bg-orange-100 text-orange-800',
+    cancelled: 'bg-gray-100 text-gray-800',
+    suspended: 'bg-red-100 text-red-800',
+  }
+
+  const filteredTenants = tenants.filter((tenant) =>
+    tenant.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    tenant.slug.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Tenants</h1>
+          <p className="text-gray-600 mt-1">
+            Gestão de todas as agências da plataforma
+          </p>
+        </div>
+        <Button asChild>
+          <Link href="/admin/tenants/new">
+            <Building2 className="h-4 w-4 mr-2" />
+            Novo Tenant
+          </Link>
+        </Button>
+      </div>
+
+      {/* Filtros */}
+      <Card className="p-6">
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Buscar por nome ou slug..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-full md:w-48">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos Status</SelectItem>
+              <SelectItem value="trial">Trial</SelectItem>
+              <SelectItem value="active">Ativos</SelectItem>
+              <SelectItem value="past_due">Vencidos</SelectItem>
+              <SelectItem value="cancelled">Cancelados</SelectItem>
+              <SelectItem value="suspended">Suspensos</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={planFilter} onValueChange={setPlanFilter}>
+            <SelectTrigger className="w-full md:w-48">
+              <SelectValue placeholder="Plano" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos Planos</SelectItem>
+              {plans.map((plan) => (
+                <SelectItem key={plan.id} value={plan.id}>
+                  {plan.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
+
+      {/* Estatísticas Rápidas */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <Building2 className="h-5 w-5 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Total</p>
+              <p className="text-2xl font-bold">{pagination?.total || 0}</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-green-100 rounded-lg">
+              <CheckCheck className="h-5 w-5 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Ativos</p>
+              <p className="text-2xl font-bold">
+                {tenants.filter((t) => t.subscription_status === 'active').length}
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-orange-100 rounded-lg">
+              <Ban className="h-5 w-5 text-orange-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Suspensos</p>
+              <p className="text-2xl font-bold">
+                {tenants.filter((t) => t.subscription_status === 'suspended').length}
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 rounded-lg">
+              <DollarSign className="h-5 w-5 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">MRR Total</p>
+              <p className="text-xl font-bold">
+                {formatCurrency(
+                  tenants.reduce(
+                    (sum, t) => sum + (t.mrr?.toNumber() || 0),
+                    0
+                  )
+                )}
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Tabela */}
+      <Card className="p-6">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Agência</TableHead>
+                  <TableHead>Plano</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-center">Usuários</TableHead>
+                  <TableHead className="text-center">Clientes</TableHead>
+                  <TableHead className="text-center">Viagens</TableHead>
+                  <TableHead className="text-right">MRR</TableHead>
+                  <TableHead className="text-right">LTV</TableHead>
+                  <TableHead>Criado em</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredTenants.map((tenant) => (
+                  <TableRow key={tenant.id}>
+                    <TableCell>
+                      <div>
+                        <p className="font-semibold">{tenant.name}</p>
+                        <p className="text-xs text-gray-500">@{tenant.slug}</p>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">
+                        {tenant.subscription_plan?.name || 'N/A'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        className={
+                          statusColors[tenant.subscription_status] ||
+                          'bg-gray-100'
+                        }
+                      >
+                        {tenant.subscription_status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="outline">{tenant._count.users}</Badge>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="outline">{tenant._count.customers}</Badge>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="outline">{tenant._count.trips}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right font-semibold text-green-600">
+                      {formatCurrency(tenant.mrr?.toNumber() || 0)}
+                    </TableCell>
+                    <TableCell className="text-right font-semibold text-blue-600">
+                      {formatCurrency(tenant.lifetime_value?.toNumber() || 0)}
+                    </TableCell>
+                    <TableCell>
+                      {format(new Date(tenant.created_at), 'dd/MM/yyyy', {
+                        locale: ptBR,
+                      })}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm">
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuLabel>Ações</DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem asChild>
+                            <Link href={`/admin/tenants/${tenant.id}`}>
+                              <Eye className="h-4 w-4 mr-2" />
+                              Ver Detalhes
+                            </Link>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setChangePlanModal({
+                                open: true,
+                                tenantId: tenant.id,
+                                tenantName: tenant.name,
+                                currentPlan:
+                                  tenant.subscription_plan?.name || 'N/A',
+                              })
+                            }}
+                          >
+                            <CreditCard className="h-4 w-4 mr-2" />
+                            Alterar Plano
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {tenant.subscription_status === 'suspended' ? (
+                            <DropdownMenuItem
+                              onClick={() => handleActivate(tenant.id)}
+                            >
+                              <CheckCheck className="h-4 w-4 mr-2" />
+                              Ativar
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setSuspendModal({
+                                  open: true,
+                                  tenantId: tenant.id,
+                                  tenantName: tenant.name,
+                                })
+                              }}
+                              className="text-red-600"
+                            >
+                              <Ban className="h-4 w-4 mr-2" />
+                              Suspender
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </Card>
+
+      {/* Modal de Suspensão */}
+      <Dialog
+        open={suspendModal.open}
+        onOpenChange={(open) =>
+          setSuspendModal({ open, tenantId: null, tenantName: '' })
+        }
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Suspender Tenant</DialogTitle>
+            <DialogDescription>
+              Você está prestes a suspender <strong>{suspendModal.tenantName}</strong>.
+              Esta ação bloqueará o acesso da agência ao sistema.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="reason">Motivo da Suspensão *</Label>
+              <Textarea
+                id="reason"
+                placeholder="Descreva o motivo da suspensão..."
+                value={suspendReason}
+                onChange={(e) => setSuspendReason(e.target.value)}
+                rows={4}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() =>
+                setSuspendModal({ open: false, tenantId: null, tenantName: '' })
+              }
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleSuspend}
+              disabled={isProcessing || !suspendReason.trim()}
+            >
+              {isProcessing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Suspendendo...
+                </>
+              ) : (
+                'Suspender Tenant'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Alteração de Plano */}
+      <Dialog
+        open={changePlanModal.open}
+        onOpenChange={(open) =>
+          setChangePlanModal({
+            open,
+            tenantId: null,
+            tenantName: '',
+            currentPlan: '',
+          })
+        }
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Alterar Plano</DialogTitle>
+            <DialogDescription>
+              Alterar o plano de <strong>{changePlanModal.tenantName}</strong>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div>
+              <Label>Plano Atual</Label>
+              <p className="text-sm text-gray-600 mt-1">
+                {changePlanModal.currentPlan}
+              </p>
+            </div>
+
+            <div>
+              <Label htmlFor="newPlan">Novo Plano *</Label>
+              <Select value={newPlanId} onValueChange={setNewPlanId}>
+                <SelectTrigger id="newPlan">
+                  <SelectValue placeholder="Selecione um plano" />
+                </SelectTrigger>
+                <SelectContent>
+                  {plans.map((plan) => (
+                    <SelectItem key={plan.id} value={plan.id}>
+                      {plan.name} - {formatCurrency(plan.monthly_price.toNumber())}
+                      /mês
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() =>
+                setChangePlanModal({
+                  open: false,
+                  tenantId: null,
+                  tenantName: '',
+                  currentPlan: '',
+                })
+              }
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleChangePlan}
+              disabled={isProcessing || !newPlanId}
+            >
+              {isProcessing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Alterando...
+                </>
+              ) : (
+                'Alterar Plano'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+💳 4. PÁGINA DE PLANOS
+// app/(admin)/admin/plans/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  CreditCard,
+  Plus,
+  Edit,
+  Trash2,
+  Check,
+  Loader2,
+  Users,
+  UserPlus,
+  Bus,
+  HardDrive,
+} from 'lucide-react'
+import { toast } from 'sonner'
+
+export default function PlansPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [plans, setPlans] = useState<any[]>([])
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [editingPlan, setEditingPlan] = useState<any>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  const [formData, setFormData] = useState({
+    name: '',
+    slug: '',
+    description: '',
+    monthly_price: '',
+    yearly_price: '',
+    setup_fee: '',
+    max_users: '',
+    max_customers: '',
+    max_trips: '',
+    max_storage_gb: '',
+    trial_days: '14',
+    is_active: true,
+    is_visible: true,
+    display_order: '0',
+    features: [] as string[],
+  })
+
+  const [newFeature, setNewFeature] = useState('')
+
+  useEffect(() => {
+    loadPlans()
+  }, [])
+
+  const loadPlans = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/admin/plans')
+      const data = await response.json()
+      setPlans(data.plans)
+    } catch (error) {
+      console.error('Erro ao carregar planos:', error)
+      toast.error('Erro ao carregar planos')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleOpenModal = (plan?: any) => {
+    if (plan) {
+      setEditingPlan(plan)
+      setFormData({
+        name: plan.name,
+        slug: plan.slug,
+        description: plan.description || '',
+        monthly_price: plan.monthly_price.toString(),
+        yearly_price: plan.yearly_price?.toString() || '',
+        setup_fee: plan.setup_fee?.toString() || '0',
+        max_users: plan.max_users.toString(),
+        max_customers: plan.max_customers.toString(),
+        max_trips: plan.max_trips.toString(),
+        max_storage_gb: plan.max_storage_gb.toString(),
+        trial_days: plan.trial_days.toString(),
+        is_active: plan.is_active,
+        is_visible: plan.is_visible,
+        display_order: plan.display_order.toString(),
+        features: Array.isArray(plan.features) ? plan.features : [],
+      })
+    } else {
+      setEditingPlan(null)
+      setFormData({
+        name: '',
+        slug: '',
+        description: '',
+        monthly_price: '',
+        yearly_price: '',
+        setup_fee: '0',
+        max_users: '5',
+        max_customers: '100',
+        max_trips: '10',
+        max_storage_gb: '1',
+        trial_days: '14',
+        is_active: true,
+        is_visible: true,
+        display_order: '0',
+        features: [],
+      })
+    }
+    setIsModalOpen(true)
+  }
+
+  const handleSave = async () => {
+    try {
+      setIsProcessing(true)
+
+      const url = editingPlan
+        ? `/api/admin/plans/${editingPlan.id}`
+        : '/api/admin/plans'
+
+      const response = await fetch(url, {
+        method: editingPlan ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...formData,
+          monthly_price: parseFloat(formData.monthly_price),
+          yearly_price: formData.yearly_price
+            ? parseFloat(formData.yearly_price)
+            : null,
+          setup_fee: parseFloat(formData.setup_fee),
+          max_users: parseInt(formData.max_users),
+          max_customers: parseInt(formData.max_customers),
+          max_trips: parseInt(formData.max_trips),
+          max_storage_gb: parseInt(formData.max_storage_gb),
+          trial_days: parseInt(formData.trial_days),
+          display_order: parseInt(formData.display_order),
+        }),
+      })
+
+      if (response.ok) {
+        toast.success(
+          editingPlan ? 'Plano atualizado!' : 'Plano criado com sucesso!'
+        )
+        setIsModalOpen(false)
+        loadPlans()
+      } else {
+        toast.error('Erro ao salvar plano')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao salvar plano')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const addFeature = () => {
+    if (newFeature.trim()) {
+      setFormData({
+        ...formData,
+        features: [...formData.features, newFeature.trim()],
+      })
+      setNewFeature('')
+    }
+  }
+
+  const removeFeature = (index: number) => {
+    setFormData({
+      ...formData,
+      features: formData.features.filter((_, i) => i !== index),
+    })
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Planos</h1>
+          <p className="text-gray-600 mt-1">
+            Gestão dos planos de assinatura da plataforma
+          </p>
+        </div>
+        <Button onClick={() => handleOpenModal()}>
+          <Plus className="h-4 w-4 mr-2" />
+          Novo Plano
+        </Button>
+      </div>
+
+      {/* Lista de Planos */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {plans.map((plan) => (
+          <Card
+            key={plan.id}
+            className={`p-6 relative ${
+              !plan.is_active ? 'opacity-60' : ''
+            }`}
+          >
+            {/* Badge de Status */}
+            <div className="absolute top-4 right-4">
+              {plan.is_active ? (
+                <Badge className="bg-green-600">Ativo</Badge>
+              ) : (
+                <Badge variant="secondary">Inativo</Badge>
+              )}
+            </div>
+
+            {/* Nome e Preço */}
+            <div className="mb-6">
+              <h3 className="text-2xl font-bold mb-2">{plan.name}</h3>
+              <div className="flex items-baseline gap-1">
+                <span className="text-4xl font-bold text-blue-600">
+                  {formatCurrency(plan.monthly_price.toNumber())}
+                </span>
+                <span className="text-gray-600">/mês</span>
+              </div>
+              {plan.yearly_price && (
+                <p className="text-sm text-gray-500 mt-1">
+                  ou {formatCurrency(plan.yearly_price.toNumber())}/ano
+                </p>
+              )}
+            </div>
+
+            {/* Descrição */}
+            {plan.description && (
+              <p className="text-sm text-gray-600 mb-4">{plan.description}</p>
+            )}
+
+            {/* Limites */}
+            <div className="space-y-3 mb-6">
+              <div className="flex items-center gap-2 text-sm">
+                <Users className="h-4 w-4 text-gray-400" />
+                <span>Até {plan.max_users} usuários</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <UserPlus className="h-4 w-4 text-gray-400" />
+                <span>Até {plan.max_customers} clientes</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Bus className="h-4 w-4 text-gray-400" />
+                <span>Até {plan.max_trips} viagens</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <HardDrive className="h-4 w-4 text-gray-400" />
+                <span>{plan.max_storage_gb} GB de armazenamento</span>
+              </div>
+            </div>
+
+            {/* Features */}
+            {plan.features && Array.isArray(plan.features) && plan.features.length > 0 && (
+              <div className="mb-6">
+                <p className="text-sm font-semibold mb-2">Features:</p>
+                <ul className="space-y-2">
+                  {plan.features.map((feature: string, index: number) => (
+                    <li key={index} className="flex items-start gap-2 text-sm">
+                      <Check className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Info */}
+            <div className="pt-4 border-t space-y-2 text-xs text-gray-500">
+              <p>Trial: {plan.trial_days} dias</p>
+              <p>Tenants ativos: {plan._count.tenants}</p>
+            </div>
+
+            {/* Ações */}
+            <div className="mt-6 flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={() => handleOpenModal(plan)}
+              >
+                <Edit className="h-4 w-4 mr-2" />
+                Editar
+              </Button>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Modal de Criação/Edição */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingPlan ? 'Editar Plano' : 'Novo Plano'}
+            </DialogTitle>
+            <DialogDescription>
+              Configure os detalhes e limites do plano de assinatura
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Informações Básicas */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="name">Nome *</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  placeholder="Ex: Starter"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="slug">Slug *</Label>
+                <Input
+                  id="slug"
+                  value={formData.slug}
+                  onChange={(e) =>
+                    setFormData({ ...formData, slug: e.target.value })
+                  }
+                  placeholder="Ex: starter"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="description">Descrição</Label>
+              <Textarea
+                id="description"
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+                placeholder="Descrição do plano..."
+                rows={3}
+              />
+            </div>
+
+            {/* Preços */}
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <Label htmlFor="monthly_price">Preço Mensal *</Label>
+                <Input
+                  id="monthly_price"
+                  type="number"
+                  step="0.01"
+                  value={formData.monthly_price}
+                  onChange={(e) =>
+                    setFormData({ ...formData, monthly_price: e.target.value })
+                  }
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="yearly_price">Preço Anual</Label>
+                <Input
+                  id="yearly_price"
+                  type="number"
+                  step="0.01"
+                  value={formData.yearly_price}
+                  onChange={(e) =>
+                    setFormData({ ...formData, yearly_price: e.target.value })
+                  }
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="setup_fee">Taxa de Setup</Label>
+                <Input
+                  id="setup_fee"
+                  type="number"
+                  step="0.01"
+                  value={formData.setup_fee}
+                  onChange={(e) =>
+                    setFormData({ ...formData, setup_fee: e.target.value })
+                  }
+                  placeholder="0.00"
+                />
+              </div>
+            </div>
+
+            {/* Limites */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="max_users">Máx. Usuários *</Label>
+                <Input
+                  id="max_users"
+                  type="number"
+                  value={formData.max_users}
+                  onChange={(e) =>
+                    setFormData({ ...formData, max_users: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="max_customers">Máx. Clientes *</Label>
+                <Input
+                  id="max_customers"
+                  type="number"
+                  value={formData.max_customers}
+                  onChange={(e) =>
+                    setFormData({ ...formData, max_customers: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="max_trips">Máx. Viagens *</Label>
+                <Input
+                  id="max_trips"
+                  type="number"
+                  value={formData.max_trips}
+                  onChange={(e) =>
+                    setFormData({ ...formData, max_trips: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="max_storage_gb">Armazenamento (GB) *</Label>
+                <Input
+                  id="max_storage_gb"
+                  type="number"
+                  value={formData.max_storage_gb}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      max_storage_gb: e.target.value,
+                    })
+                  }
+                />
+              </div>
+            </div>
+
+            {/* Features */}
+            <div>
+              <Label>Features</Label>
+              <div className="flex gap-2 mt-2">
+                <Input
+                  value={newFeature}
+                  onChange={(e) => setNewFeature(e.target.value)}
+                  placeholder="Digite uma feature..."
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addFeature()
+                    }
+                  }}
+                />
+                <Button type="button" onClick={addFeature} variant="outline">
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {formData.features.length > 0 && (
+                <ul className="mt-3 space-y-2">
+                  {formData.features.map((feature, index) => (
+                    <li
+                      key={index}
+                      className="flex items-center justify-between p-2 bg-gray-50 rounded"
+                    >
+                      <span className="text-sm">{feature}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeFeature(index)}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-600" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* Configurações */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="trial_days">Dias de Trial</Label>
+                <Input
+                  id="trial_days"
+                  type="number"
+                  value={formData.trial_days}
+                  onChange={(e) =>
+                    setFormData({ ...formData, trial_days: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="display_order">Ordem de Exibição</Label>
+                <Input
+                  id="display_order"
+                  type="number"
+                  value={formData.display_order}
+                  onChange={(e) =>
+                    setFormData({ ...formData, display_order: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+
+            {/* Switches */}
+            <div className="flex items-center justify-between p-4 border rounded-lg">
+              <Label htmlFor="is_active">Plano Ativo</Label>
+              <Switch
+                id="is_active"
+                checked={formData.is_active}
+                onCheckedChange={(checked) =>
+                  setFormData({ ...formData, is_active: checked })
+                }
+              />
+            </div>
+
+            <div className="flex items-center justify-between p-4 border rounded-lg">
+              <Label htmlFor="is_visible">Visível para Novas Assinaturas</Label>
+              <Switch
+                id="is_visible"
+                checked={formData.is_visible}
+                onCheckedChange={(checked) =>
+                  setFormData({ ...formData, is_visible: checked })
+                }
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsModalOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleSave} disabled={isProcessing}>
+              {isProcessing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                'Salvar Plano'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+🖥️ PÁGINAS FINAIS DO SUPER ADMIN
+💰 5. PÁGINA DE FATURAMENTO
+// app/(admin)/admin/billing/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import {
+  DollarSign,
+  Search,
+  FileText,
+  CheckCircle,
+  XCircle,
+  Clock,
+  AlertCircle,
+  Loader2,
+  Download,
+  Send,
+  Zap,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default function BillingPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [invoices, setInvoices] = useState<any[]>([])
+  const [stats, setStats] = useState<any>(null)
+  const [pagination, setPagination] = useState<any>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [isGeneratingBatch, setIsGeneratingBatch] = useState(false)
+
+  // Modal de atualização de status
+  const [updateModal, setUpdateModal] = useState<{
+    open: boolean
+    invoice: any
+  }>({
+    open: false,
+    invoice: null,
+  })
+  const [newStatus, setNewStatus] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState('')
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  useEffect(() => {
+    loadData()
+  }, [statusFilter])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const params = new URLSearchParams({ status: statusFilter })
+      const response = await fetch(`/api/admin/billing?${params}`)
+      const data = await response.json()
+
+      setInvoices(data.invoices)
+      setStats(data.stats)
+      setPagination(data.pagination)
+    } catch (error) {
+      console.error('Erro ao carregar faturas:', error)
+      toast.error('Erro ao carregar faturas')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleGenerateBatch = async () => {
+    if (
+      !confirm(
+        'Deseja gerar faturas para todos os tenants ativos? Esta ação não pode ser desfeita.'
+      )
+    ) {
+      return
+    }
+
+    try {
+      setIsGeneratingBatch(true)
+      toast.info('Gerando faturas em lote...')
+
+      const response = await fetch('/api/admin/billing/generate-batch', {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success(
+          `${data.invoicesCreated} faturas geradas com sucesso!`
+        )
+        if (data.errors > 0) {
+          toast.warning(`${data.errors} erros durante a geração`)
+        }
+        loadData()
+      } else {
+        toast.error('Erro ao gerar faturas')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao gerar faturas')
+    } finally {
+      setIsGeneratingBatch(false)
+    }
+  }
+
+  const handleUpdateStatus = async () => {
+    if (!newStatus) {
+      toast.error('Selecione um status')
+      return
+    }
+
+    try {
+      setIsProcessing(true)
+
+      const response = await fetch('/api/admin/billing', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoiceId: updateModal.invoice.id,
+          status: newStatus,
+          paymentMethod: newStatus === 'paid' ? paymentMethod : undefined,
+        }),
+      })
+
+      if (response.ok) {
+        toast.success('Status atualizado com sucesso!')
+        setUpdateModal({ open: false, invoice: null })
+        setNewStatus('')
+        setPaymentMethod('')
+        loadData()
+      } else {
+        toast.error('Erro ao atualizar status')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao atualizar status')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  const statusColors: Record<string, string> = {
+    pending: 'bg-yellow-100 text-yellow-800',
+    paid: 'bg-green-100 text-green-800',
+    overdue: 'bg-red-100 text-red-800',
+    cancelled: 'bg-gray-100 text-gray-800',
+  }
+
+  const statusIcons: Record<string, any> = {
+    pending: Clock,
+    paid: CheckCircle,
+    overdue: AlertCircle,
+    cancelled: XCircle,
+  }
+
+  const filteredInvoices = invoices.filter(
+    (invoice) =>
+      invoice.tenant.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      invoice.invoice_number.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Faturamento</h1>
+          <p className="text-gray-600 mt-1">
+            Gestão de faturas e pagamentos da plataforma
+          </p>
+        </div>
+        <Button onClick={handleGenerateBatch} disabled={isGeneratingBatch}>
+          {isGeneratingBatch ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Gerando...
+            </>
+          ) : (
+            <>
+              <Zap className="h-4 w-4 mr-2" />
+              Gerar Faturas em Lote
+            </>
+          )}
+        </Button>
+      </div>
+
+      {/* Estatísticas */}
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          {stats.map((stat: any) => {
+            const StatusIcon = statusIcons[stat.status] || FileText
+            const total = stat._sum.total || 0
+            const count = stat._count.id
+
+            return (
+              <Card key={stat.status} className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <div
+                    className={`p-3 rounded-lg ${
+                      stat.status === 'paid'
+                        ? 'bg-green-100'
+                        : stat.status === 'overdue'
+                        ? 'bg-red-100'
+                        : stat.status === 'pending'
+                        ? 'bg-yellow-100'
+                        : 'bg-gray-100'
+                    }`}
+                  >
+                    <StatusIcon
+                      className={`h-6 w-6 ${
+                        stat.status === 'paid'
+                          ? 'text-green-600'
+                          : stat.status === 'overdue'
+                          ? 'text-red-600'
+                          : stat.status === 'pending'
+                          ? 'text-yellow-600'
+                          : 'text-gray-600'
+                      }`}
+                    />
+                  </div>
+                  <Badge className={statusColors[stat.status]}>
+                    {count} {count === 1 ? 'fatura' : 'faturas'}
+                  </Badge>
+                </div>
+                <p className="text-sm text-gray-600 mb-1 capitalize">
+                  {stat.status === 'paid' && 'Pagas'}
+                  {stat.status === 'pending' && 'Pendentes'}
+                  {stat.status === 'overdue' && 'Vencidas'}
+                  {stat.status === 'cancelled' && 'Canceladas'}
+                </p>
+                <p className="text-3xl font-bold">
+                  {formatCurrency(total)}
+                </p>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Filtros */}
+      <Card className="p-6">
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Buscar por agência ou número da fatura..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-full md:w-48">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos Status</SelectItem>
+              <SelectItem value="pending">Pendentes</SelectItem>
+              <SelectItem value="paid">Pagas</SelectItem>
+              <SelectItem value="overdue">Vencidas</SelectItem>
+              <SelectItem value="cancelled">Canceladas</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
+
+      {/* Tabela de Faturas */}
+      <Card className="p-6">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Número</TableHead>
+                  <TableHead>Agência</TableHead>
+                  <TableHead>Período</TableHead>
+                  <TableHead className="text-right">Subtotal</TableHead>
+                  <TableHead className="text-right">Desconto</TableHead>
+                  <TableHead className="text-right">Total</TableHead>
+                  <TableHead>Vencimento</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredInvoices.map((invoice) => {
+                  const StatusIcon = statusIcons[invoice.status]
+                  const isOverdue =
+                    invoice.status === 'pending' &&
+                    new Date(invoice.due_date) < new Date()
+
+                  return (
+                    <TableRow key={invoice.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-4 w-4 text-gray-400" />
+                          <span className="font-mono text-sm">
+                            {invoice.invoice_number}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div>
+                          <p className="font-semibold">{invoice.tenant.name}</p>
+                          <p className="text-xs text-gray-500">
+                            @{invoice.tenant.slug}
+                          </p>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          <p>
+                            {format(
+                              new Date(invoice.period_start),
+                              'dd/MM/yyyy',
+                              { locale: ptBR }
+                            )}
+                          </p>
+                          <p className="text-gray-500">
+                            até{' '}
+                            {format(
+                              new Date(invoice.period_end),
+                              'dd/MM/yyyy',
+                              { locale: ptBR }
+                            )}
+                          </p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(invoice.subtotal.toNumber())}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {invoice.discount.toNumber() > 0 ? (
+                          <span className="text-green-600">
+                            -{formatCurrency(invoice.discount.toNumber())}
+                          </span>
+                        ) : (
+                          '-'
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-bold text-blue-600">
+                        {formatCurrency(invoice.total.toNumber())}
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">
+                          <p
+                            className={
+                              isOverdue ? 'text-red-600 font-semibold' : ''
+                            }
+                          >
+                            {format(
+                              new Date(invoice.due_date),
+                              'dd/MM/yyyy',
+                              { locale: ptBR }
+                            )}
+                          </p>
+                          {invoice.paid_date && (
+                            <p className="text-gray-500">
+                              Pago em{' '}
+                              {format(
+                                new Date(invoice.paid_date),
+                                'dd/MM/yyyy',
+                                { locale: ptBR }
+                              )}
+                            </p>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={statusColors[invoice.status]}>
+                          <StatusIcon className="h-3 w-3 mr-1" />
+                          {invoice.status === 'paid' && 'Paga'}
+                          {invoice.status === 'pending' && 'Pendente'}
+                          {invoice.status === 'overdue' && 'Vencida'}
+                          {invoice.status === 'cancelled' && 'Cancelada'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setUpdateModal({ open: true, invoice })
+                              setNewStatus(invoice.status)
+                            }}
+                          >
+                            Atualizar
+                          </Button>
+                          <Button variant="ghost" size="sm">
+                            <Download className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </Card>
+
+      {/* Modal de Atualização de Status */}
+      <Dialog
+        open={updateModal.open}
+        onOpenChange={(open) => setUpdateModal({ open, invoice: null })}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Atualizar Status da Fatura</DialogTitle>
+            <DialogDescription>
+              Fatura: {updateModal.invoice?.invoice_number}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="status">Novo Status *</Label>
+              <Select value={newStatus} onValueChange={setNewStatus}>
+                <SelectTrigger id="status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pendente</SelectItem>
+                  <SelectItem value="paid">Paga</SelectItem>
+                  <SelectItem value="overdue">Vencida</SelectItem>
+                  <SelectItem value="cancelled">Cancelada</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {newStatus === 'paid' && (
+              <div>
+                <Label htmlFor="payment_method">Método de Pagamento</Label>
+                <Select
+                  value={paymentMethod}
+                  onValueChange={setPaymentMethod}
+                >
+                  <SelectTrigger id="payment_method">
+                    <SelectValue placeholder="Selecione..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="credit_card">Cartão de Crédito</SelectItem>
+                    <SelectItem value="bank_slip">Boleto</SelectItem>
+                    <SelectItem value="pix">PIX</SelectItem>
+                    <SelectItem value="bank_transfer">
+                      Transferência Bancária
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {updateModal.invoice && (
+              <div className="p-4 bg-gray-50 rounded-lg space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Agência:</span>
+                  <span className="font-semibold">
+                    {updateModal.invoice.tenant.name}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Valor Total:</span>
+                  <span className="font-bold text-blue-600">
+                    {formatCurrency(updateModal.invoice.total.toNumber())}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Vencimento:</span>
+                  <span>
+                    {format(
+                      new Date(updateModal.invoice.due_date),
+                      'dd/MM/yyyy',
+                      { locale: ptBR }
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUpdateModal({ open: false, invoice: null })}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleUpdateStatus} disabled={isProcessing}>
+              {isProcessing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Atualizando...
+                </>
+              ) : (
+                'Atualizar Status'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+📊 6. PÁGINA DE MÉTRICAS
+// app/(admin)/admin/metrics/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  TrendingUp,
+  TrendingDown,
+  Users,
+  DollarSign,
+  Percent,
+  Loader2,
+  Calendar,
+} from 'lucide-react'
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default function MetricsPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [data, setData] = useState<any>(null)
+  const [timeRange, setTimeRange] = useState('12')
+
+  useEffect(() => {
+    loadData()
+  }, [timeRange])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch(`/api/admin/metrics?months=${timeRange}`)
+      const result = await response.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar métricas:', error)
+      toast.error('Erro ao carregar métricas')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  // Calcular crescimento
+  const currentMonth = data.monthlyData[data.monthlyData.length - 1]
+  const previousMonth = data.monthlyData[data.monthlyData.length - 2]
+
+  const mrrGrowth = previousMonth
+    ? ((currentMonth.mrr - previousMonth.mrr) / previousMonth.mrr) * 100
+    : 0
+
+  const tenantsGrowth = previousMonth
+    ? ((currentMonth.activeTenants - previousMonth.activeTenants) /
+        previousMonth.activeTenants) *
+      100
+    : 0
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Métricas</h1>
+          <p className="text-gray-600 mt-1">
+            Analytics e insights da plataforma
+          </p>
+        </div>
+
+        <Select value={timeRange} onValueChange={setTimeRange}>
+          <SelectTrigger className="w-48">
+            <Calendar className="h-4 w-4 mr-2" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="6">Últimos 6 meses</SelectItem>
+            <SelectItem value="12">Últimos 12 meses</SelectItem>
+            <SelectItem value="24">Últimos 24 meses</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* KPIs de Crescimento */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-3 bg-blue-100 rounded-lg">
+              <DollarSign className="h-6 w-6 text-blue-600" />
+            </div>
+            {mrrGrowth >= 0 ? (
+              <TrendingUp className="h-5 w-5 text-green-600" />
+            ) : (
+              <TrendingDown className="h-5 w-5 text-red-600" />
+            )}
+          </div>
+          <p className="text-sm text-gray-600 mb-1">Crescimento MRR</p>
+          <p
+            className={`text-3xl font-bold ${
+              mrrGrowth >= 0 ? 'text-green-600' : 'text-red-600'
+            }`}
+          >
+            {mrrGrowth >= 0 ? '+' : ''}
+            {mrrGrowth.toFixed(1)}%
+          </p>
+          <p className="text-xs text-gray-500 mt-2">vs. mês anterior</p>
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-3 bg-green-100 rounded-lg">
+              <Users className="h-6 w-6 text-green-600" />
+            </div>
+            {tenantsGrowth >= 0 ? (
+              <TrendingUp className="h-5 w-5 text-green-600" />
+            ) : (
+              <TrendingDown className="h-5 w-5 text-red-600" />
+            )}
+          </div>
+          <p className="text-sm text-gray-600 mb-1">Crescimento Tenants</p>
+          <p
+            className={`text-3xl font-bold ${
+              tenantsGrowth >= 0 ? 'text-green-600' : 'text-red-600'
+            }`}
+          >
+            {tenantsGrowth >= 0 ? '+' : ''}
+            {tenantsGrowth.toFixed(1)}%
+          </p>
+          <p className="text-xs text-gray-500 mt-2">vs. mês anterior</p>
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-3 bg-purple-100 rounded-lg">
+              <Percent className="h-6 w-6 text-purple-600" />
+            </div>
+          </div>
+          <p className="text-sm text-gray-600 mb-1">Taxa de Churn Média</p>
+          <p className="text-3xl font-bold text-purple-600">
+            {(
+              data.monthlyData.reduce(
+                (sum: number, m: any) => sum + m.churnRate,
+                0
+              ) / data.monthlyData.length
+            ).toFixed(1)}
+            %
+          </p>
+          <p className="text-xs text-gray-500 mt-2">últimos {timeRange} meses</p>
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-3 bg-orange-100 rounded-lg">
+              <DollarSign className="h-6 w-6 text-orange-600" />
+            </div>
+          </div>
+          <p className="text-sm text-gray-600 mb-1">LTV Médio</p>
+          <p className="text-3xl font-bold text-orange-600">
+            {formatCurrency(data.ltv.average)}
+          </p>
+          <p className="text-xs text-gray-500 mt-2">
+            {data.ltv.averageLifetimeMonths.toFixed(1)} meses de vida
+          </p>
+        </Card>
+      </div>
+
+      {/* Gráficos Principais */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* MRR Evolution */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">💰 Evolução do MRR</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={data.monthlyData}>
+              <defs>
+                <linearGradient id="colorMrr" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="month"
+                tickFormatter={(value) =>
+                  format(new Date(value), 'MMM/yy', { locale: ptBR })
+                }
+              />
+              <YAxis tickFormatter={(value) => formatCurrency(value)} />
+              <Tooltip
+                labelFormatter={(value) =>
+                  format(new Date(value), 'MMMM yyyy', { locale: ptBR })
+                }
+                formatter={(value: number) => formatCurrency(value)}
+              />
+              <Area
+                type="monotone"
+                dataKey="mrr"
+                stroke="#10b981"
+                fillOpacity={1}
+                fill="url(#colorMrr)"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Crescimento de Tenants */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📈 Crescimento de Tenants</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={data.monthlyData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="month"
+                tickFormatter={(value) =>
+                  format(new Date(value), 'MMM/yy', { locale: ptBR })
+                }
+              />
+              <YAxis />
+              <Tooltip
+                labelFormatter={(value) =>
+                  format(new Date(value), 'MMMM yyyy', { locale: ptBR })
+                }
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="newTenants"
+                name="Novos"
+                stroke="#3b82f6"
+                strokeWidth={2}
+              />
+              <Line
+                type="monotone"
+                dataKey="activeTenants"
+                name="Ativos"
+                stroke="#10b981"
+                strokeWidth={2}
+              />
+              <Line
+                type="monotone"
+                dataKey="churned"
+                name="Churn"
+                stroke="#ef4444"
+                strokeWidth={2}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Receita Mensal */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">💵 Receita Mensal</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={data.monthlyData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="month"
+                tickFormatter={(value) =>
+                  format(new Date(value), 'MMM/yy', { locale: ptBR })
+                }
+              />
+              <YAxis tickFormatter={(value) => formatCurrency(value)} />
+              <Tooltip
+                labelFormatter={(value) =>
+                  format(new Date(value), 'MMMM yyyy', { locale: ptBR })
+                }
+                formatter={(value: number) => formatCurrency(value)}
+              />
+              <Bar dataKey="revenue" fill="#8b5cf6" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Taxa de Churn */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📉 Taxa de Churn</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={data.monthlyData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="month"
+                tickFormatter={(value) =>
+                  format(new Date(value), 'MMM/yy', { locale: ptBR })
+                }
+              />
+              <YAxis tickFormatter={(value) => `${value.toFixed(1)}%`} />
+              <Tooltip
+                labelFormatter={(value) =>
+                  format(new Date(value), 'MMMM yyyy', { locale: ptBR })
+                }
+                formatter={(value: number) => `${value.toFixed(2)}%`}
+              />
+              <Line
+                type="monotone"
+                dataKey="churnRate"
+                name="Taxa de Churn"
+                stroke="#ef4444"
+                strokeWidth={2}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+      </div>
+
+      {/* Cohort Analysis */}
+      <Card className="p-6">
+        <h3 className="text-lg font-bold mb-4">👥 Análise de Cohort</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b">
+                <th className="text-left py-3 px-4">Cohort</th>
+                <th className="text-center py-3 px-4">Tamanho</th>
+                {[0, 1, 2, 3, 4, 5].map((month) => (
+                  <th key={month} className="text-center py-3 px-4">
+                    Mês {month}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.cohorts.slice(0, 6).map((cohort: any) => (
+                <tr key={cohort.cohortMonth} className="border-b hover:bg-gray-50">
+                  <td className="py-3 px-4 font-semibold">
+                    {format(new Date(cohort.cohortMonth), 'MMM/yyyy', {
+                      locale: ptBR,
+                    })}
+                  </td>
+                  <td className="text-center py-3 px-4">{cohort.cohortSize}</td>
+                  {cohort.retention.slice(0, 6).map((ret: any, idx: number) => (
+                    <td
+                      key={idx}
+                      className="text-center py-3 px-4"
+                      style={{
+                        backgroundColor: `rgba(16, 185, 129, ${
+                          ret.percentage / 100
+                        })`,
+                      }}
+                    >
+                      {ret.percentage.toFixed(0)}%
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* Distribuição Geográfica */}
+      <Card className="p-6">
+        <h3 className="text-lg font-bold mb-4">🗺️ Distribuição Geográfica</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {data.geographic.slice(0, 8).map((geo: any) => (
+            <div
+              key={geo.state}
+              className="p-4 border rounded-lg text-center hover:shadow-md transition"
+            >
+              <p className="text-2xl font-bold text-blue-600">
+                {geo._count.id}
+              </p>
+              <p className="text-sm text-gray-600 mt-1">{geo.state}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Engagement */}
+      <Card className="p-6">
+        <h3 className="text-lg font-bold mb-4">⚡ Engagement & Adoção de Features</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="p-6 border rounded-lg">
+            <p className="text-sm text-gray-600 mb-2">Taxa de Engagement</p>
+            <p className="text-4xl font-bold text-blue-600">
+              {data.engagement.engagementRate.toFixed(1)}%
+            </p>
+            <p className="text-xs text-gray-500 mt-2">
+              {data.engagement.activeTenantsThisMonth} de{' '}
+              {data.engagement.totalActiveTenants} tenants ativos este mês
+            </p>
+          </div>
+
+          <div className="p-6 border rounded-lg">
+            <p className="text-sm text-gray-600 mb-2">Google Calendar</p>
+            <p className="text-4xl font-bold text-green-600">
+              {data.engagement.featureAdoption.googleCalendar.percentage.toFixed(
+                1
+              )}
+              %
+            </p>
+            <p className="text-xs text-gray-500 mt-2">
+              {data.engagement.featureAdoption.googleCalendar.count} tenants
+              usando
+            </p>
+          </div>
+
+          <div className="p-6 border rounded-lg">
+            <p className="text-sm text-gray-600 mb-2">WhatsApp</p>
+            <p className="text-4xl font-bold text-purple-600">
+              {data.engagement.featureAdoption.whatsapp.percentage.toFixed(1)}%
+            </p>
+            <p className="text-xs text-gray-500 mt-2">
+              {data.engagement.featureAdoption.whatsapp.count} tenants usando
+            </p>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+🖥️ PÁGINAS FINAIS DO SUPER ADMIN (CONTINUAÇÃO)
+👥 7. PÁGINA DE USUÁRIOS GLOBAIS
+// app/(admin)/admin/users/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Search,
+  Users,
+  Shield,
+  UserCog,
+  ShoppingCart,
+  Crown,
+  Loader2,
+  Eye,
+  Mail,
+  Phone,
+  Calendar,
+  Building2,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default function UsersPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [users, setUsers] = useState<any[]>([])
+  const [stats, setStats] = useState<any[]>([])
+  const [pagination, setPagination] = useState<any>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [selectedUser, setSelectedUser] = useState<any>(null)
+  const [detailsModal, setDetailsModal] = useState(false)
+
+  useEffect(() => {
+    loadData()
+  }, [roleFilter])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const params = new URLSearchParams({ role: roleFilter })
+      const response = await fetch(`/api/admin/users?${params}`)
+      const data = await response.json()
+
+      setUsers(data.users)
+      setStats(data.stats)
+      setPagination(data.pagination)
+    } catch (error) {
+      console.error('Erro ao carregar usuários:', error)
+      toast.error('Erro ao carregar usuários')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleViewDetails = (user: any) => {
+    setSelectedUser(user)
+    setDetailsModal(true)
+  }
+
+  const roleColors: Record<string, string> = {
+    super_admin: 'bg-yellow-100 text-yellow-800',
+    admin: 'bg-blue-100 text-blue-800',
+    sales: 'bg-green-100 text-green-800',
+    support: 'bg-purple-100 text-purple-800',
+  }
+
+  const roleIcons: Record<string, any> = {
+    super_admin: Crown,
+    admin: Shield,
+    sales: ShoppingCart,
+    support: UserCog,
+  }
+
+  const roleLabels: Record<string, string> = {
+    super_admin: 'Super Admin',
+    admin: 'Administrador',
+    sales: 'Vendedor',
+    support: 'Suporte',
+  }
+
+  const filteredUsers = users.filter(
+    (user) =>
+      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      user.tenant?.name.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">Usuários</h1>
+        <p className="text-gray-600 mt-1">
+          Diretório global de todos os usuários da plataforma
+        </p>
+      </div>
+
+      {/* Estatísticas por Role */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {stats.map((stat: any) => {
+          const RoleIcon = roleIcons[stat.role] || Users
+          return (
+            <Card key={stat.role} className="p-4">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`p-2 rounded-lg ${
+                    stat.role === 'super_admin'
+                      ? 'bg-yellow-100'
+                      : stat.role === 'admin'
+                      ? 'bg-blue-100'
+                      : stat.role === 'sales'
+                      ? 'bg-green-100'
+                      : 'bg-purple-100'
+                  }`}
+                >
+                  <RoleIcon
+                    className={`h-5 w-5 ${
+                      stat.role === 'super_admin'
+                        ? 'text-yellow-600'
+                        : stat.role === 'admin'
+                        ? 'text-blue-600'
+                        : stat.role === 'sales'
+                        ? 'text-green-600'
+                        : 'text-purple-600'
+                    }`}
+                  />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">
+                    {roleLabels[stat.role] || stat.role}
+                  </p>
+                  <p className="text-2xl font-bold">{stat._count.id}</p>
+                </div>
+              </div>
+            </Card>
+          )
+        })}
+      </div>
+
+      {/* Filtros */}
+      <Card className="p-6">
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Buscar por nome, email ou agência..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+
+          <Select value={roleFilter} onValueChange={setRoleFilter}>
+            <SelectTrigger className="w-full md:w-48">
+              <SelectValue placeholder="Perfil" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os Perfis</SelectItem>
+              <SelectItem value="super_admin">Super Admin</SelectItem>
+              <SelectItem value="admin">Administrador</SelectItem>
+              <SelectItem value="sales">Vendedor</SelectItem>
+              <SelectItem value="support">Suporte</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
+
+      {/* Tabela */}
+      <Card className="p-6">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Usuário</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Perfil</TableHead>
+                  <TableHead>Agência</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Cadastrado em</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredUsers.map((user) => {
+                  const RoleIcon = roleIcons[user.role] || Users
+
+                  return (
+                    <TableRow key={user.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-semibold">
+                            {user.name
+                              .split(' ')
+                              .map((n: string) => n[0])
+                              .join('')
+                              .toUpperCase()
+                              .slice(0, 2)}
+                          </div>
+                          <div>
+                            <p className="font-semibold">{user.name}</p>
+                            {user.phone && (
+                              <p className="text-xs text-gray-500">
+                                {user.phone}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Mail className="h-4 w-4 text-gray-400" />
+                          <span className="text-sm">{user.email}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge className={roleColors[user.role]}>
+                          <RoleIcon className="h-3 w-3 mr-1" />
+                          {roleLabels[user.role] || user.role}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {user.tenant ? (
+                          <div className="flex items-center gap-2">
+                            <Building2 className="h-4 w-4 text-gray-400" />
+                            <div>
+                              <p className="text-sm font-semibold">
+                                {user.tenant.name}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                @{user.tenant.slug}
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-sm text-gray-400">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {user.is_active ? (
+                          <Badge className="bg-green-100 text-green-800">
+                            Ativo
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">Inativo</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                          <Calendar className="h-4 w-4" />
+                          {format(new Date(user.created_at), 'dd/MM/yyyy', {
+                            locale: ptBR,
+                          })}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewDetails(user)}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          Detalhes
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {/* Paginação */}
+        {pagination && pagination.totalPages > 1 && (
+          <div className="flex items-center justify-between mt-6">
+            <p className="text-sm text-gray-600">
+              Mostrando {filteredUsers.length} de {pagination.total} usuários
+            </p>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={pagination.page === 1}>
+                Anterior
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pagination.page === pagination.totalPages}
+              >
+                Próximo
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Modal de Detalhes */}
+      <Dialog open={detailsModal} onOpenChange={setDetailsModal}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Detalhes do Usuário</DialogTitle>
+            <DialogDescription>
+              Informações completas do usuário
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedUser && (
+            <div className="space-y-6 py-4">
+              {/* Informações Básicas */}
+              <div className="flex items-center gap-4">
+                <div className="h-20 w-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-2xl">
+                  {selectedUser.name
+                    .split(' ')
+                    .map((n: string) => n[0])
+                    .join('')
+                    .toUpperCase()
+                    .slice(0, 2)}
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold">{selectedUser.name}</h3>
+                  <Badge className={roleColors[selectedUser.role]}>
+                    {roleLabels[selectedUser.role] || selectedUser.role}
+                  </Badge>
+                </div>
+              </div>
+
+              {/* Dados de Contato */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-600 mb-1">Email</p>
+                  <p className="font-semibold">{selectedUser.email}</p>
+                </div>
+                <div className="p-4 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-600 mb-1">Telefone</p>
+                  <p className="font-semibold">
+                    {selectedUser.phone || 'Não informado'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Agência */}
+              {selectedUser.tenant && (
+                <div className="p-4 border rounded-lg">
+                  <p className="text-sm text-gray-600 mb-2">Agência</p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-bold text-lg">
+                        {selectedUser.tenant.name}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        @{selectedUser.tenant.slug}
+                      </p>
+                    </div>
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={`/admin/tenants/${selectedUser.tenant_id}`}>
+                        Ver Agência
+                      </a>
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Status e Datas */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-600 mb-1">Status</p>
+                  {selectedUser.is_active ? (
+                    <Badge className="bg-green-100 text-green-800">Ativo</Badge>
+                  ) : (
+                    <Badge variant="secondary">Inativo</Badge>
+                  )}
+                </div>
+                <div className="p-4 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-600 mb-1">Cadastrado em</p>
+                  <p className="font-semibold">
+                    {format(
+                      new Date(selectedUser.created_at),
+                      "dd/MM/yyyy 'às' HH:mm",
+                      { locale: ptBR }
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Google Calendar */}
+              {selectedUser.google_calendar_enabled && (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-sm font-semibold text-blue-900 mb-1">
+                    📅 Google Calendar Conectado
+                  </p>
+                  <p className="text-xs text-blue-700">
+                    Este usuário tem o Google Calendar integrado
+                  </p>
+                </div>
+              )}
+
+              {/* WhatsApp */}
+              {selectedUser.whatsapp_enabled && (
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-sm font-semibold text-green-900 mb-1">
+                    💬 WhatsApp Conectado
+                  </p>
+                  <p className="text-xs text-green-700">
+                    Este usuário tem o WhatsApp integrado
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+📝 8. PÁGINA DE LOGS
+// app/(admin)/admin/logs/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Search,
+  FileText,
+  AlertCircle,
+  Info,
+  AlertTriangle,
+  XCircle,
+  Loader2,
+  Filter,
+  Download,
+  RefreshCw,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default function LogsPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [logs, setLogs] = useState<any[]>([])
+  const [stats, setStats] = useState<any>(null)
+  const [pagination, setPagination] = useState<any>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [severityFilter, setSeverityFilter] = useState('all')
+
+  useEffect(() => {
+    loadData()
+  }, [categoryFilter, severityFilter])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const params = new URLSearchParams({
+        category: categoryFilter,
+        severity: severityFilter,
+      })
+      const response = await fetch(`/api/admin/logs?${params}`)
+      const data = await response.json()
+
+      setLogs(data.logs)
+      setStats(data.stats)
+      setPagination(data.pagination)
+    } catch (error) {
+      console.error('Erro ao carregar logs:', error)
+      toast.error('Erro ao carregar logs')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const severityColors: Record<string, string> = {
+    info: 'bg-blue-100 text-blue-800',
+    warning: 'bg-yellow-100 text-yellow-800',
+    error: 'bg-red-100 text-red-800',
+    critical: 'bg-purple-100 text-purple-800',
+  }
+
+  const severityIcons: Record<string, any> = {
+    info: Info,
+    warning: AlertTriangle,
+    error: AlertCircle,
+    critical: XCircle,
+  }
+
+  const categoryLabels: Record<string, string> = {
+    auth: 'Autenticação',
+    billing: 'Faturamento',
+    tenant: 'Tenant',
+    user: 'Usuário',
+    settings: 'Configurações',
+    general: 'Geral',
+  }
+
+  const filteredLogs = logs.filter(
+    (log) =>
+      log.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      log.tenant?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      log.user?.name.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Logs do Sistema</h1>
+          <p className="text-gray-600 mt-1">
+            Auditoria de todas as ações na plataforma
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={loadData}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Atualizar
+          </Button>
+          <Button variant="outline">
+            <Download className="h-4 w-4 mr-2" />
+            Exportar
+          </Button>
+        </div>
+      </div>
+
+      {/* Estatísticas por Severidade */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {stats.bySeverity.map((stat: any) => {
+            const SeverityIcon = severityIcons[stat.severity] || Info
+            return (
+              <Card key={stat.severity} className="p-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`p-2 rounded-lg ${
+                      stat.severity === 'info'
+                        ? 'bg-blue-100'
+                        : stat.severity === 'warning'
+                        ? 'bg-yellow-100'
+                        : stat.severity === 'error'
+                        ? 'bg-red-100'
+                        : 'bg-purple-100'
+                    }`}
+                  >
+                    <SeverityIcon
+                      className={`h-5 w-5 ${
+                        stat.severity === 'info'
+                          ? 'text-blue-600'
+                          : stat.severity === 'warning'
+                          ? 'text-yellow-600'
+                          : stat.severity === 'error'
+                          ? 'text-red-600'
+                          : 'text-purple-600'
+                      }`}
+                    />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 capitalize">
+                      {stat.severity}
+                    </p>
+                    <p className="text-2xl font-bold">{stat._count.id}</p>
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Estatísticas por Categoria */}
+      {stats && (
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📊 Logs por Categoria</h3>
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+            {stats.byCategory.map((stat: any) => (
+              <div
+                key={stat.category}
+                className="p-4 border rounded-lg text-center hover:shadow-md transition"
+              >
+                <p className="text-2xl font-bold text-blue-600">
+                  {stat._count.id}
+                </p>
+                <p className="text-sm text-gray-600 mt-1">
+                  {categoryLabels[stat.category] || stat.category}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Filtros */}
+      <Card className="p-6">
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Buscar nos logs..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+
+          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+            <SelectTrigger className="w-full md:w-48">
+              <SelectValue placeholder="Categoria" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas Categorias</SelectItem>
+              <SelectItem value="auth">Autenticação</SelectItem>
+              <SelectItem value="billing">Faturamento</SelectItem>
+              <SelectItem value="tenant">Tenant</SelectItem>
+              <SelectItem value="user">Usuário</SelectItem>
+              <SelectItem value="settings">Configurações</SelectItem>
+              <SelectItem value="general">Geral</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={severityFilter} onValueChange={setSeverityFilter}>
+            <SelectTrigger className="w-full md:w-48">
+              <SelectValue placeholder="Severidade" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todas Severidades</SelectItem>
+              <SelectItem value="info">Info</SelectItem>
+              <SelectItem value="warning">Warning</SelectItem>
+              <SelectItem value="error">Error</SelectItem>
+              <SelectItem value="critical">Critical</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </Card>
+
+      {/* Lista de Logs */}
+      <Card className="p-6">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredLogs.map((log) => {
+              const SeverityIcon = severityIcons[log.severity] || Info
+
+              return (
+                <div
+                  key={log.id}
+                  className="flex items-start gap-4 p-4 border rounded-lg hover:bg-gray-50 transition"
+                >
+                  {/* Ícone de Severidade */}
+                  <div
+                    className={`p-2 rounded-lg flex-shrink-0 ${
+                      log.severity === 'info'
+                        ? 'bg-blue-100'
+                        : log.severity === 'warning'
+                        ? 'bg-yellow-100'
+                        : log.severity === 'error'
+                        ? 'bg-red-100'
+                        : 'bg-purple-100'
+                    }`}
+                  >
+                    <SeverityIcon
+                      className={`h-5 w-5 ${
+                        log.severity === 'info'
+                          ? 'text-blue-600'
+                          : log.severity === 'warning'
+                          ? 'text-yellow-600'
+                          : log.severity === 'error'
+                          ? 'text-red-600'
+                          : 'text-purple-600'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Conteúdo */}
+                  <div className="flex-1 min-w-0">
+                    {/* Descrição */}
+                    <p className="font-semibold text-gray-900 mb-1">
+                      {log.description}
+                    </p>
+
+                    {/* Metadados */}
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-gray-600">
+                      <Badge className={severityColors[log.severity]}>
+                        {log.severity}
+                      </Badge>
+
+                      <Badge variant="outline">
+                        {categoryLabels[log.category] || log.category}
+                      </Badge>
+
+                      <span className="font-mono">{log.action}</span>
+
+                      {log.tenant && (
+                        <span>• Tenant: {log.tenant.name}</span>
+                      )}
+
+                      {log.user && <span>• Usuário: {log.user.name}</span>}
+
+                      <span>
+                        •{' '}
+                        {format(
+                          new Date(log.created_at),
+                          "dd/MM/yyyy 'às' HH:mm:ss",
+                          { locale: ptBR }
+                        )}
+                      </span>
+                    </div>
+
+                    {/* IP e User Agent */}
+                    {(log.ip_address || log.user_agent) && (
+                      <div className="mt-2 text-xs text-gray-500">
+                        {log.ip_address && <span>IP: {log.ip_address}</span>}
+                        {log.user_agent && (
+                          <span className="ml-3 truncate max-w-md inline-block">
+                            {log.user_agent}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Metadata */}
+                    {log.metadata && (
+                      <details className="mt-2">
+                        <summary className="text-xs text-blue-600 cursor-pointer hover:underline">
+                          Ver detalhes técnicos
+                        </summary>
+                        <pre className="mt-2 p-3 bg-gray-100 rounded text-xs overflow-x-auto">
+                          {JSON.stringify(log.metadata, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+
+                  {/* Tempo de Execução */}
+                  {log.execution_time_ms && (
+                    <div className="flex-shrink-0 text-right">
+                      <p className="text-xs text-gray-500">Tempo</p>
+                      <p className="text-sm font-semibold">
+                        {log.execution_time_ms}ms
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Paginação */}
+        {pagination && pagination.totalPages > 1 && (
+          <div className="flex items-center justify-between mt-6 pt-6 border-t">
+            <p className="text-sm text-gray-600">
+              Mostrando {filteredLogs.length} de {pagination.total} logs
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pagination.page === 1}
+              >
+                Anterior
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pagination.page === pagination.totalPages}
+              >
+                Próximo
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+⚡ 9. PÁGINA DE FEATURE FLAGS
+// app/(admin)/admin/feature-flags/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Slider } from '@/components/ui/slider'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Zap,
+  Plus,
+  Edit,
+  Trash2,
+  Loader2,
+  CheckCircle,
+  XCircle,
+  Percent,
+  Users,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default function FeatureFlagsPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [flags, setFlags] = useState<any[]>([])
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [editingFlag, setEditingFlag] = useState<any>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  const [formData, setFormData] = useState({
+    name: '',
+    key: '',
+    description: '',
+    is_enabled: false,
+    rollout_percentage: 0,
+    enabled_tenants: [] as string[],
+  })
+
+  useEffect(() => {
+    loadFlags()
+  }, [])
+
+  const loadFlags = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/admin/feature-flags')
+      const data = await response.json()
+      setFlags(data.flags)
+    } catch (error) {
+      console.error('Erro ao carregar feature flags:', error)
+      toast.error('Erro ao carregar feature flags')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleOpenModal = (flag?: any) => {
+    if (flag) {
+      setEditingFlag(flag)
+      setFormData({
+        name: flag.name,
+        key: flag.key,
+        description: flag.description || '',
+        is_enabled: flag.is_enabled,
+        rollout_percentage: flag.rollout_percentage,
+        enabled_tenants: flag.enabled_tenants || [],
+      })
+    } else {
+      setEditingFlag(null)
+      setFormData({
+        name: '',
+        key: '',
+        description: '',
+        is_enabled: false,
+        rollout_percentage: 0,
+        enabled_tenants: [],
+      })
+    }
+    setIsModalOpen(true)
+  }
+
+  const handleSave = async () => {
+    try {
+      setIsProcessing(true)
+
+      const url = editingFlag
+        ? '/api/admin/feature-flags'
+        : '/api/admin/feature-flags'
+
+      const response = await fetch(url, {
+        method: editingFlag ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingFlag ? { id: editingFlag.id, ...formData } : formData),
+      })
+
+      if (response.ok) {
+        toast.success(
+          editingFlag
+            ? 'Feature flag atualizada!'
+            : 'Feature flag criada com sucesso!'
+        )
+        setIsModalOpen(false)
+        loadFlags()
+      } else {
+        toast.error('Erro ao salvar feature flag')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao salvar feature flag')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleToggle = async (flag: any) => {
+    try {
+      const response = await fetch('/api/admin/feature-flags', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: flag.id,
+          is_enabled: !flag.is_enabled,
+        }),
+      })
+
+      if (response.ok) {
+        toast.success(
+          flag.is_enabled
+            ? 'Feature flag desativada'
+            : 'Feature flag ativada'
+        )
+        loadFlags()
+      } else {
+        toast.error('Erro ao atualizar feature flag')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao atualizar feature flag')
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Feature Flags</h1>
+          <p className="text-gray-600 mt-1">
+            Controle de funcionalidades experimentais da plataforma
+          </p>
+        </div>
+        <Button onClick={() => handleOpenModal()}>
+          <Plus className="h-4 w-4 mr-2" />
+          Nova Feature Flag
+        </Button>
+      </div>
+
+      {/* Estatísticas */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="p-6">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-blue-100 rounded-lg">
+              <Zap className="h-6 w-6 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Total de Flags</p>
+              <p className="text-3xl font-bold">{flags.length}</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-green-100 rounded-lg">
+              <CheckCircle className="h-6 w-6 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Ativas</p>
+              <p className="text-3xl font-bold text-green-600">
+                {flags.filter((f) => f.is_enabled).length}
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-gray-100 rounded-lg">
+              <XCircle className="h-6 w-6 text-gray-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-600">Inativas</p>
+              <p className="text-3xl font-bold text-gray-600">
+                {flags.filter((f) => !f.is_enabled).length}
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Lista de Feature Flags */}
+      <div className="grid grid-cols-1 gap-4">
+        {flags.map((flag) => (
+          <Card key={flag.id} className="p-6">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <h3 className="text-xl font-bold">{flag.name}</h3>
+                  {flag.is_enabled ? (
+                    <Badge className="bg-green-600">
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      Ativa
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary">
+                      <XCircle className="h-3 w-3 mr-1" />
+                      Inativa
+                    </Badge>
+                  )}
+                </div>
+
+                <p className="text-sm text-gray-600 mb-3 font-mono bg-gray-100 px-2 py-1 rounded inline-block">
+                  {flag.key}
+                </p>
+
+                {flag.description && (
+                  <p className="text-sm text-gray-700 mb-4">
+                    {flag.description}
+                  </p>
+                )}
+
+                {/* Rollout */}
+                <div className="flex items-center gap-6 mb-3">
+                  <div className="flex items-center gap-2">
+                    <Percent className="h-4 w-4 text-gray-400" />
+                    <span className="text-sm text-gray-600">
+                      Rollout: <strong>{flag.rollout_percentage}%</strong>
+                    </span>
+                  </div>
+
+                  {flag.enabled_tenants && flag.enabled_tenants.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-gray-400" />
+                      <span className="text-sm text-gray-600">
+                        {flag.enabled_tenants.length} tenant(s) específico(s)
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Datas */}
+                <div className="flex items-center gap-6 text-xs text-gray-500">
+                  <span>
+                    Criada em:{' '}
+                    {format(new Date(flag.created_at), 'dd/MM/yyyy', {
+                      locale: ptBR,
+                    })}
+                  </span>
+                  <span>
+                    Atualizada em:{' '}
+                    {format(new Date(flag.updated_at), 'dd/MM/yyyy HH:mm', {
+                      locale: ptBR,
+                    })}
+                  </span>
+                </div>
+              </div>
+
+              {/* Ações */}
+              <div className="flex items-center gap-3">
+                <Switch
+                  checked={flag.is_enabled}
+                  onCheckedChange={() => handleToggle(flag)}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleOpenModal(flag)}
+                >
+                  <Edit className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Modal de Criação/Edição */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {editingFlag ? 'Editar Feature Flag' : 'Nova Feature Flag'}
+            </DialogTitle>
+            <DialogDescription>
+              Configure uma funcionalidade experimental da plataforma
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="name">Nome *</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  placeholder="Ex: Nova Interface"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="key">Key (Identificador) *</Label>
+                <Input
+                  id="key"
+                  value={formData.key}
+                  onChange={(e) =>
+                    setFormData({ ...formData, key: e.target.value })
+                  }
+                  placeholder="Ex: new_ui_enabled"
+                  disabled={!!editingFlag}
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="description">Descrição</Label>
+              <Textarea
+                id="description"
+                value={formData.description}
+                onChange={(e) =>
+                  setFormData({ ...formData, description: e.target.value })
+                }
+                placeholder="Descreva o que esta feature flag controla..."
+                rows={3}
+              />
+            </div>
+
+            <div className="flex items-center justify-between p-4 border rounded-lg">
+              <div>
+                <Label htmlFor="is_enabled">Feature Ativa</Label>
+                <p className="text-xs text-gray-500">
+                  Ativar esta funcionalidade para os tenants
+                </p>
+              </div>
+              <Switch
+                id="is_enabled"
+                checked={formData.is_enabled}
+                onCheckedChange={(checked) =>
+                  setFormData({ ...formData, is_enabled: checked })
+                }
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="rollout">
+                Rollout Percentage: {formData.rollout_percentage}%
+              </Label>
+              <Slider
+                id="rollout"
+                value={[formData.rollout_percentage]}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, rollout_percentage: value[0] })
+                }
+                max={100}
+                step={5}
+                className="mt-2"
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                Porcentagem de tenants que terão acesso a esta feature
+              </p>
+            </div>
+
+            <div>
+              <Label htmlFor="tenants">Tenants Específicos (IDs)</Label>
+              <Textarea
+                id="tenants"
+                value={formData.enabled_tenants.join(', ')}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    enabled_tenants: e.target.value
+                      .split(',')
+                      .map((id) => id.trim())
+                      .filter(Boolean),
+                  })
+                }
+                placeholder="tenant-id-1, tenant-id-2, tenant-id-3"
+                rows={2}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                IDs dos tenants que terão acesso garantido (separados por vírgula)
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsModalOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSave} disabled={isProcessing}>
+              {isProcessing ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                'Salvar Feature Flag'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+IMPLMENTAR SUPER ADMIN COMPLETO
+PAINEL SUPER ADMIN
+
+ ARQUITETURA
+├──  Middleware de segurança
+├──  Layout exclusivo
+├──  Sidebar com navegação
+└──  Header personalizado
+
+ MÓDULOS
+├──  Dashboard (Visão Geral)
+├──  Tenants (Gestão de Agências)
+├──  Planos (Subscription Plans)
+├──  Faturamento (Billing)
+├──  Métricas (Analytics Avançado)
+├──  Usuários (Diretório Global)
+├──  Logs (Auditoria Completa)
+└──  Feature Flags (Controle de Features)
+
+ SEGURANÇA
+├──  Verificação de perfil super_admin
+├──  Logs de todas as ações
+├──  Auditoria completa
+└──  Proteção de rotas
+
+ MÉTRICAS
+├──  MRR e ARR
+├──  Taxa de Churn
+├──  Cohort Analysis
+├──  LTV médio
+├──  Crescimento mensal
+└──  Distribuição geográfica
+
+ FATURAMENTO
+├──  Gestão de faturas
+├──  Geração em lote
+├──  Atualização de status
+└──  Exportação de dados
+
+Sistema Super Admin 100% completo, painel completo de Super Admin com todas as funcionalidades necessárias para gerenciar a plataforma multi-tenant.
+
+IMPLMENTAR A ESTRUTURA COMPLETA DO PAINEL DA AGÊNCIA
+
+IMPLMENTAR A ESTRUTURA COMPLETA DO PAINEL DO VENDEDOR
+
+IMPLMENTAR A ESTRUTURA COMPLETA DO PAINEL DO CLIENTE
+

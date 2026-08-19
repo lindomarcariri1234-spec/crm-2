@@ -1,0 +1,98 @@
+Solicitação de Análise Completa, Correção de Erros e Melhorias do Sistema
+
+Solicito a realização de uma análise técnica completa de todo o sistema, abrangendo frontend, backend, banco de dados, integrações, infraestrutura, segurança, desempenho e demais componentes da aplicação.
+
+O objetivo não é apenas corrigir problemas relacionados a uma tarefa específica, mas realizar uma revisão abrangente do código e da arquitetura para identificar, corrigir e melhorar tudo o que for necessário para garantir a máxima qualidade, estabilidade, segurança e performance da plataforma.
+
+Atividades Esperadas
+1. Análise Completa do Sistema
+
+Realizar uma auditoria técnica detalhada de todo o código-fonte, identificando:
+
+Erros;
+Bugs;
+Falhas de lógica;
+Problemas de arquitetura;
+Vulnerabilidades de segurança;
+Gargalos de desempenho;
+Código duplicado;
+Código obsoleto;
+Boas práticas não aplicadas;
+Oportunidades de otimização e melhoria.
+2. Correção de Todos os Erros Identificados
+
+Corrigir todos os erros encontrados durante a análise, incluindo:
+
+Erros de TypeScript;
+Erros de compilação (Build);
+Erros de Runtime;
+Erros de Console;
+Warnings críticos;
+Falhas de integração;
+Problemas de autenticação e autorização;
+Problemas de configuração;
+Dependências incompatíveis ou quebradas;
+Falhas de validação;
+Problemas de banco de dados;
+Exceções não tratadas;
+Problemas de usabilidade e experiência do usuário.
+
+Não considerar nenhum erro como "fora do escopo" apenas por ser antigo ou pré-existente.
+
+Todo erro identificado deverá ser analisado e corrigido.
+
+3. Implementação de Melhorias
+
+Além das correções, identificar e implementar melhorias que tragam benefícios para o sistema, incluindo:
+
+Melhorias de desempenho;
+Melhorias de segurança;
+Melhorias de usabilidade;
+Melhorias de estabilidade;
+Refatoração de código;
+Otimização de consultas e processamento;
+Padronização de componentes e estruturas;
+Redução de complexidade técnica;
+Melhoria da manutenção futura do sistema.
+4. Testes e Validação
+
+Após as correções e melhorias:
+
+Executar testes funcionais;
+Executar testes de integração;
+Validar fluxos críticos;
+Verificar compatibilidade entre módulos;
+Garantir que não existam regressões;
+Confirmar que todas as funcionalidades estejam operando corretamente.
+5. Relatório Final
+
+Ao concluir os trabalhos, apresentar um relatório contendo:
+
+Problemas identificados;
+Correções realizadas;
+Melhorias implementadas;
+Arquivos impactados;
+Riscos encontrados;
+Pendências (caso existam);
+Evidências dos testes executados.
+Critério de Conclusão
+
+A atividade somente poderá ser considerada concluída quando:
+
+ Todo o código tiver sido analisado;
+
+ Todos os erros identificados tiverem sido corrigidos;
+
+ As melhorias prioritárias tiverem sido implementadas;
+
+ O sistema estiver compilando sem erros;
+
+ Não existirem erros conhecidos pendentes;
+
+ Os testes tiverem sido executados e aprovados;
+
+ O sistema estiver estável, seguro, otimizado e validado para operação.
+
+Resultado Esperado
+
+Entregar uma versão do sistema mais robusta, segura, performática, organizada e sem erros conhecidos, garantindo a melhor experiência possível para usuários e administradores.

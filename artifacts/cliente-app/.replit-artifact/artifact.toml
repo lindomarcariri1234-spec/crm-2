@@ -1,0 +1,27 @@
+kind = "mobile"
+  previewPath = "/cliente/"
+  title = "VisiteCRM Cliente"
+  version = "1.0.0"
+  id = "artifacts/cliente-app"
+  router = "expo-domain"
+
+  [[integratedSkills]]
+  name = "expo"
+  version = "1.0.0"
+
+  [[services]]
+  name = "expo"
+  paths = [ "/cliente/" ]
+  localPort = 19000
+
+  [services.development]
+  run = "pnpm --filter @workspace/cliente-app run dev"
+
+  [services.production]
+  build = [ "pnpm", "--filter", "@workspace/cliente-app", "run", "build" ]
+  run = [ "pnpm", "--filter", "@workspace/cliente-app", "run", "serve" ]
+
+  [services.env]
+  PORT = "19000"
+  BASE_PATH = "/cliente/"
+  

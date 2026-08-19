@@ -1,0 +1,1314 @@
+Implementar sincronização de dados do cliente no Pipeline:
+
+O cliente ao realizar a RESERVA NA LOJA PÚBLICA através da web e os dados será exibido no Pipeline de Vendas no segundo/2º Card (Vitrine).
+
+Loja → CRM → Pipeline.
+
+Sincronizar todas as informações relacionadas.
+
+O Assento selecionado: Exemplo, Assento 8. Deverá aparecer no Card do Pipeline, assim como deve aparecer no Vouchers e Check-in, na página de Reservas na coluna "Assentos" o Assento 8.
+
+SINCRONIZAÇÃO COMPLETA: LOJA → CRM → PIPELINE → VOUCHERS → RESERVAS
+📊 VISÃO GERAL DA SINCRONIZAÇÃO
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    EXEMPLO: FLUXO DE SINCRONIZAÇÃO                        │
+└─────────────────────────────────────────────────────────────────┘
+
+Cliente faz reserva na Loja (Assento 8)
+           ↓
+┌──────────────────────────────────────────────────────────────┐
+│  1. CLIENTE criado/atualizado no CRM                          │
+│     ├── Nome: Lindomar Santos                                 │
+│     ├── CPF: 88981552447                                      │
+│     ├── Email: lindomarturismocariri@gmail.com               │
+│     └── Telefone: (88) 98155-2447                            │
+└──────────────────────────────────────────────────────────────┘
+           ↓
+┌──────────────────────────────────────────────────────────────┐
+│  2. RESERVA criada                                            │
+│     ├── Número: RES-2026-00001                               │
+│     ├── Voucher: VC-ABC123                                   │
+│     ├── Viagem: Excursão para Canoa Quebrada                 │
+│     ├── Data: 12/04/2026                                     │
+│     ├── Valor: R$ 180,00                                     │
+│     ├── Status: Pendente                                     │
+│     └── Assento: 8 ✅                                        │
+└──────────────────────────────────────────────────────────────┘
+           ↓
+┌──────────────────────────────────────────────────────────────┐
+│  3. DEAL criado no Pipeline (Estágio "Vitrine")              │
+│     ├── Título: Excursão para Canoa Quebrada                 │
+│     ├── Cliente: Lindomar Santos                             │
+│     ├── Valor: R$ 180,00                                     │
+│     ├── Origem: Web (badge azul)                             │
+│     ├── Assento: 8 ✅                                        │
+│     └── Link para Reserva                                    │
+└──────────────────────────────────────────────────────────────┘
+           ↓
+┌──────────────────────────────────────────────────────────────┐
+│  4. VOUCHER gerado                                            │
+│     ├── Código: VC-ABC123                                    │
+│     ├── Cliente: Lindomar Santos                             │
+│     ├── Viagem: Excursão para Canoa Quebrada                 │
+│     ├── Assento: 8 ✅                                        │
+│     └── QR Code                                              │
+└──────────────────────────────────────────────────────────────┘
+           ↓
+┌──────────────────────────────────────────────────────────────┐
+│  5. CHECK-IN disponível                                       │
+│     ├── Lista de embarque                                     │
+│     ├── Cliente: Lindomar Santos                             │
+│     ├── Assento: 8 ✅                                        │
+│     └── Status: Pendente                                     │
+└──────────────────────────────────────────────────────────────┘
+SCHEMA COMPLETO COM ASSENTOS
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE ASSENTOS RESERVADOS
+// ═══════════════════════════════════════════════════════════════
+
+model ReservationSeat {
+  id              String    @id @default(cuid())
+  
+  // RELACIONAMENTOS
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id])
+  
+  itinerary_id    String
+  itinerary       Itinerary @relation(fields: [itinerary_id], references: [id])
+  
+  // DADOS DO ASSENTO
+  seat_number     String    // "8", "15", "31"
+  passenger_name  String?   // Nome do passageiro (se diferente do titular)
+  passenger_cpf   String?   // CPF do passageiro
+  
+  // STATUS
+  status          String    @default("reserved") // reserved, confirmed, checked_in, cancelled
+  
+  // CHECK-IN
+  checked_in      Boolean   @default(false)
+  checked_in_at   DateTime?
+  checked_in_by   String?   // ID do usuário que fez check-in
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([trip_id, itinerary_id, seat_number])
+  @@index([reservation_id])
+  @@index([trip_id, itinerary_id])
+  @@map("reservation_seats")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ATUALIZAÇÃO DA TABELA DE RESERVAS
+// ═══════════════════════════════════════════════════════════════
+
+model Reservation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ... campos existentes ...
+  
+  // ASSENTOS
+  seats           ReservationSeat[]
+  seats_summary   String?   // "8, 15, 31" (para exibição rápida)
+  
+  // DEAL VINCULADO
+  deal_id         String?   @unique
+  deal            Deal?
+  
+  // ... resto do modelo ...
+  
+  @@map("reservations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ATUALIZAÇÃO DA TABELA DE DEALS
+// ═══════════════════════════════════════════════════════════════
+
+model Deal {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ... campos existentes ...
+  
+  // RESERVA VINCULADA
+  reservation_id  String?   @unique
+  reservation     Reservation? @relation(fields: [reservation_id], references: [id])
+  
+  // DADOS SINCRONIZADOS DA RESERVA
+  seats_info      String?   // "Assento 8" ou "Assentos 8, 15"
+  trip_info       String?   // "Excursão para Canoa Quebrada"
+  departure_date  DateTime? // Data de saída
+  
+  // ... resto do modelo ...
+  
+  @@map("deals")
+}
+
+API ATUALIZADA DE CRIAÇÃO DE RESERVA
+
+// app/api/public/reservations/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/events/event-emitter'
+import { createDealFromReservation } from '@/lib/deals/create-from-reservation'
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+
+    const {
+      trip_id,
+      itinerary_id,
+      name,
+      cpf,
+      email,
+      phone,
+      birthdate,
+      passengers_count,
+      selected_seats, // ["8"] ou ["8", "15", "31"]
+      referral_code,
+      coupon_code,
+      referral_discount,
+      coupon_discount,
+      payment_method,
+      observations,
+    } = body
+
+    // Validações
+    if (!trip_id || !itinerary_id || !name || !cpf || !email || !phone) {
+      return NextResponse.json(
+        { error: 'Campos obrigatórios faltando' },
+        { status: 400 }
+      )
+    }
+
+    if (!selected_seats || selected_seats.length === 0) {
+      return NextResponse.json(
+        { error: 'Nenhum assento selecionado' },
+        { status: 400 }
+      )
+    }
+
+    if (selected_seats.length !== passengers_count) {
+      return NextResponse.json(
+        { error: 'Quantidade de assentos não corresponde ao número de passageiros' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar viagem
+    const trip = await prisma.trip.findUnique({
+      where: { id: trip_id },
+      include: { itineraries: true },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    const itinerary = trip.itineraries.find((it) => it.id === itinerary_id)
+
+    if (!itinerary) {
+      return NextResponse.json(
+        { error: 'Itinerário não encontrado' },
+        { status: 404 }
+      )
+    }
+
+    // Verificar se assentos estão disponíveis
+    const occupiedSeats = await prisma.reservationSeat.findMany({
+      where: {
+        trip_id,
+        itinerary_id,
+        seat_number: { in: selected_seats },
+        status: { in: ['reserved', 'confirmed', 'checked_in'] },
+      },
+    })
+
+    if (occupiedSeats.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Um ou mais assentos já estão ocupados',
+          occupied: occupiedSeats.map((s) => s.seat_number),
+        },
+        { status: 400 }
+      )
+    }
+
+    // Calcular valores
+    const basePrice = trip.promotional_price || trip.price_per_person
+    const subtotal = basePrice * passengers_count
+    const totalDiscount = (referral_discount || 0) + (coupon_discount || 0)
+    const totalAmount = subtotal - totalDiscount
+
+    // Criar ou atualizar cliente
+    let client = await prisma.client.findFirst({
+      where: {
+        tenant_id: trip.tenant_id,
+        OR: [{ cpf }, { email }],
+      },
+    })
+
+    if (!client) {
+      client = await prisma.client.create({
+        data: {
+          tenant_id: trip.tenant_id,
+          name,
+          cpf,
+          email,
+          phone,
+          birthdate: new Date(birthdate),
+          source: 'website',
+          segment: 'individual',
+          status: 'active',
+        },
+      })
+    } else {
+      client = await prisma.client.update({
+        where: { id: client.id },
+        data: { name, email, phone, birthdate: new Date(birthdate) },
+      })
+    }
+
+    // Gerar número de reserva e voucher
+    const reservationNumber = await generateReservationNumber(trip.tenant_id)
+    const voucherCode = generateVoucherCode()
+
+    // Criar resumo dos assentos
+    const seatsSummary = selected_seats.sort((a, b) => parseInt(a) - parseInt(b)).join(', ')
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR RESERVA COM ASSENTOS
+    // ═══════════════════════════════════════════════════════════
+
+    const reservation = await prisma.reservation.create({
+      data: {
+        tenant_id: trip.tenant_id,
+        reservation_number: reservationNumber,
+        voucher_code: voucherCode,
+        trip_id,
+        itinerary_id,
+        client_id: client.id,
+        client_name: name,
+        client_cpf: cpf,
+        client_email: email,
+        client_phone: phone,
+        total_passengers: passengers_count,
+        adults_count: passengers_count,
+        subtotal_amount: subtotal,
+        discount_amount: totalDiscount,
+        total_amount: totalAmount,
+        amount_pending: totalAmount,
+        payment_method,
+        payment_status: 'pending',
+        status: 'pending',
+        source: 'website',
+        observations,
+        departure_date: itinerary.departure_date,
+        seats_summary: seatsSummary, // ✅ "8" ou "8, 15, 31"
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR ASSENTOS INDIVIDUAIS
+    // ═══════════════════════════════════════════════════════════
+
+    for (const seatNumber of selected_seats) {
+      await prisma.reservationSeat.create({
+        data: {
+          reservation_id: reservation.id,
+          trip_id,
+          itinerary_id,
+          seat_number: seatNumber,
+          passenger_name: name, // Nome do titular (pode ser diferente depois)
+          passenger_cpf: cpf,
+          status: 'reserved',
+        },
+      })
+    }
+
+    // Processar referral
+    if (referral_code) {
+      const referral = await prisma.referral.findFirst({
+        where: { code: referral_code, status: 'active' },
+      })
+
+      if (referral) {
+        await prisma.reservation.update({
+          where: { id: reservation.id },
+          data: { referral_id: referral.id, referral_code },
+        })
+
+        await applyReferralBenefits({
+          referralCode: referral_code,
+          reservationId: reservation.id,
+          totalAmount,
+          tenantId: trip.tenant_id,
+        })
+      }
+    }
+
+    // Atualizar vagas do itinerário
+    await prisma.itinerary.update({
+      where: { id: itinerary_id },
+      data: { available_seats: { decrement: passengers_count } },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR DEAL NO PIPELINE COM INFORMAÇÕES DOS ASSENTOS
+    // ═══════════════════════════════════════════════════════════
+
+    const deal = await createDealFromReservation({
+      tenantId: trip.tenant_id,
+      clientId: client.id,
+      reservationId: reservation.id,
+      tripId: trip_id,
+      totalAmount,
+      seatsSummary, // ✅ Passar assentos
+      tripTitle: trip.title,
+      departureDate: itinerary.departure_date,
+    })
+
+    // Vincular deal à reserva
+    await prisma.reservation.update({
+      where: { id: reservation.id },
+      data: { deal_id: deal.id },
+    })
+
+    // Emitir eventos
+    eventEmitter.emitEvent('reservation.created', {
+      tenant_id: trip.tenant_id,
+      timestamp: new Date(),
+      data: reservation,
+    })
+
+    eventEmitter.emitEvent('deal.created', {
+      tenant_id: trip.tenant_id,
+      timestamp: new Date(),
+      data: deal,
+    })
+
+    // Buscar reserva completa
+    const fullReservation = await prisma.reservation.findUnique({
+      where: { id: reservation.id },
+      include: {
+        seats: true,
+        client: true,
+        deal: true,
+        trip: true,
+        itinerary: true,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      reservation: fullReservation,
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar reserva:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar reserva' },
+      { status: 500 }
+    )
+  }
+}
+
+// Utilitários
+async function generateReservationNumber(tenantId: string): Promise<string> {
+  const lastReservation = await prisma.reservation.findFirst({
+    where: { tenant_id: tenantId },
+    orderBy: { created_at: 'desc' },
+    select: { reservation_number: true },
+  })
+
+  const lastNumber = lastReservation
+    ? parseInt(lastReservation.reservation_number.split('-').pop() || '0')
+    : 0
+
+  return `RES-${new Date().getFullYear()}-${String(lastNumber + 1).padStart(5, '0')}`
+}
+
+function generateVoucherCode(): string {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let code = 'VC-'
+
+  for (let i = 0; i < 6; i++) {
+    code += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+
+  return code
+}
+
+FUNÇÃO ATUALIZADA DE CRIAÇÃO DE DEAL
+
+// lib/deals/create-from-reservation.ts
+
+import { prisma } from '@/lib/prisma'
+
+interface CreateDealFromReservationParams {
+  tenantId: string
+  clientId: string
+  reservationId: string
+  tripId: string
+  totalAmount: number
+  seatsSummary: string // ✅ "8" ou "8, 15, 31"
+  tripTitle: string
+  departureDate: Date
+}
+
+export async function createDealFromReservation({
+  tenantId,
+  clientId,
+  reservationId,
+  tripId,
+  totalAmount,
+  seatsSummary,
+  tripTitle,
+  departureDate,
+}: CreateDealFromReservationParams) {
+  // Buscar pipeline padrão
+  const pipeline = await prisma.pipeline.findFirst({
+    where: {
+      tenant_id: tenantId,
+      is_default: true,
+    },
+    include: {
+      stages: {
+        where: { slug: 'vitrine' }, // ✅ Estágio "Vitrine"
+        orderBy: { order: 'asc' },
+      },
+    },
+  })
+
+  if (!pipeline) {
+    throw new Error('Pipeline padrão não encontrado')
+  }
+
+  // Buscar estágio "Vitrine"
+  let vitrineStage = pipeline.stages[0]
+
+  if (!vitrineStage) {
+    vitrineStage = await prisma.pipelineStage.findFirst({
+      where: {
+        tenant_id: tenantId,
+        pipeline_id: pipeline.id,
+        order: 2, // Segundo estágio
+      },
+    })
+  }
+
+  if (!vitrineStage) {
+    throw new Error('Estágio "Vitrine" não encontrado')
+  }
+
+  // Buscar viagem
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { title: true, destination: true },
+  })
+
+  // Formatar informações dos assentos
+  const seatsCount = seatsSummary.split(',').length
+  const seatsInfo = seatsCount === 1
+    ? `Assento ${seatsSummary}`
+    : `Assentos ${seatsSummary}`
+
+  // Criar deal
+  const deal = await prisma.deal.create({
+    data: {
+      tenant_id: tenantId,
+      client_id: clientId,
+      pipeline_id: pipeline.id,
+      stage_id: vitrineStage.id,
+      title: trip ? `${trip.title} - ${trip.destination}` : 'Reserva Web',
+      value: totalAmount,
+      expected_close_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      probability: 70,
+      source: 'website',
+      source_url: '/loja',
+      auto_created: true,
+      reservation_id: reservationId,
+      status: 'open',
+      
+      // ✅ INFORMAÇÕES SINCRONIZADAS
+      seats_info: seatsInfo, // "Assento 8" ou "Assentos 8, 15, 31"
+      trip_info: trip ? `${trip.title} - ${trip.destination}` : null,
+      departure_date: departureDate,
+    },
+  })
+
+  // Criar atividade automática
+  await prisma.activity.create({
+    data: {
+      tenant_id: tenantId,
+      client_id: clientId,
+      deal_id: deal.id,
+      type: 'note',
+      title: 'Reserva criada via site',
+      description: `Cliente realizou reserva através da loja pública.\n\n📋 Reserva: ${reservationId}\n💺 ${seatsInfo}\n📅 Saída: ${departureDate.toLocaleDateString('pt-BR')}`,
+      completed: true,
+      completed_at: new Date(),
+    },
+  })
+
+  return deal
+}
+
+CARD DO PIPELINE COM ASSENTOS
+
+// components/dashboard/pipeline/deal-card.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Globe,
+  Phone,
+  Mail,
+  MessageSquare,
+  User,
+  Calendar,
+  Armchair,
+  ExternalLink,
+} from 'lucide-react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import { useRouter } from 'next/navigation'
+
+interface DealCardProps {
+  deal: any
+}
+
+export function DealCard({ deal }: DealCardProps) {
+  const router = useRouter()
+
+  const getSourceIcon = (source: string) => {
+    switch (source) {
+      case 'website':
+        return <Globe className="h-3 w-3" />
+      case 'phone':
+        return <Phone className="h-3 w-3" />
+      case 'email':
+        return <Mail className="h-3 w-3" />
+      case 'whatsapp':
+        return <MessageSquare className="h-3 w-3" />
+      default:
+        return <User className="h-3 w-3" />
+    }
+  }
+
+  return (
+    <Card
+      className="p-4 mb-3 cursor-pointer hover:shadow-lg transition-all"
+      onClick={() => router.push(`/dashboard/deals/${deal.id}`)}
+    >
+      {/* Badges de Origem e Status */}
+      <div className="flex items-center gap-2 mb-3">
+        {deal.auto_created && (
+          <Badge
+            variant="outline"
+            className="text-xs bg-blue-50 text-blue-700 border-blue-200"
+          >
+            {getSourceIcon(deal.source)}
+            <span className="ml-1">
+              {deal.source === 'website' && 'Web'}
+              {deal.source === 'phone' && 'Telefone'}
+              {deal.source === 'whatsapp' && 'WhatsApp'}
+            </span>
+          </Badge>
+        )}
+
+        {deal.reservation_id && (
+          <Badge
+            variant="outline"
+            className="text-xs bg-green-50 text-green-700 border-green-200"
+          >
+            ✓ Reserva
+          </Badge>
+        )}
+      </div>
+
+      {/* Título */}
+      <h4 className="font-semibold mb-2 line-clamp-2">{deal.title}</h4>
+
+      {/* Cliente */}
+      <div className="flex items-center gap-2 mb-2">
+        <User className="h-4 w-4 text-gray-400" />
+        <p className="text-sm text-gray-700">{deal.client?.name}</p>
+      </div>
+
+      {/* CPF */}
+      {deal.client?.cpf && (
+        <p className="text-xs text-gray-500 mb-2">CPF: {deal.client.cpf}</p>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* ASSENTOS - INFORMAÇÃO PRINCIPAL */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {deal.seats_info && (
+        <div className="flex items-center gap-2 mb-2 p-2 bg-orange-50 border border-orange-200 rounded">
+          <Armchair className="h-4 w-4 text-orange-600" />
+          <span className="text-sm font-semibold text-orange-900">
+            {deal.seats_info}
+          </span>
+        </div>
+      )}
+
+      {/* Data de Saída */}
+      {deal.departure_date && (
+        <div className="flex items-center gap-2 mb-3">
+          <Calendar className="h-4 w-4 text-gray-400" />
+          <span className="text-xs text-gray-600">
+            Saída:{' '}
+            {format(new Date(deal.departure_date), "dd/MM/yyyy 'às' HH:mm", {
+              locale: ptBR,
+            })}
+          </span>
+        </div>
+      )}
+
+      {/* Valor */}
+      <div className="flex items-center justify-between pt-3 border-t">
+        <span className="text-lg font-bold text-green-600">
+          R$ {Number(deal.value).toFixed(2)}
+        </span>
+
+        {deal.reservation && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={(e) => {
+              e.stopPropagation()
+              router.push(`/dashboard/reservas/${deal.reservation_id}`)
+            }}
+          >
+            <ExternalLink className="h-3 w-3 mr-1" />
+            Ver Reserva
+          </Button>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+
+PÁGINA DE RESERVAS COM COLUNA DE ASSENTOS
+
+// app/(dashboard)/dashboard/reservas/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { DataTable } from '@/components/ui/data-table'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Armchair, Eye } from 'lucide-react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default async function ReservasPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  const reservations = await prisma.reservation.findMany({
+    where: { tenant_id: session.user.tenantId },
+    include: {
+      client: true,
+      trip: true,
+      seats: {
+        orderBy: { seat_number: 'asc' },
+      },
+    },
+    orderBy: { created_at: 'desc' },
+  })
+
+  const columns = [
+    {
+      header: 'Voucher',
+      accessorKey: 'voucher_code',
+      cell: ({ row }: any) => (
+        <Badge variant="outline" className="font-mono">
+          {row.original.voucher_code}
+        </Badge>
+      ),
+    },
+    {
+      header: 'Cliente',
+      accessorKey: 'client_name',
+      cell: ({ row }: any) => (
+        <div>
+          <p className="font-semibold">{row.original.client_name}</p>
+          <p className="text-xs text-gray-500">{row.original.client_cpf}</p>
+        </div>
+      ),
+    },
+    {
+      header: 'Viagem',
+      accessorKey: 'trip.title',
+      cell: ({ row }: any) => (
+        <div>
+          <p className="font-medium">{row.original.trip?.title}</p>
+          <p className="text-xs text-gray-500">
+            📍 {row.original.trip?.destination}
+          </p>
+        </div>
+      ),
+    },
+    {
+      header: 'Embarque',
+      accessorKey: 'departure_date',
+      cell: ({ row }: any) => (
+        <span className="text-sm">
+          {format(new Date(row.original.departure_date), 'dd/MM/yyyy', {
+            locale: ptBR,
+          })}
+        </span>
+      ),
+    },
+    // ═══════════════════════════════════════════════════════════
+    // COLUNA DE ASSENTOS
+    // ═══════════════════════════════════════════════════════════
+    {
+      header: 'Assentos',
+      accessorKey: 'seats',
+      cell: ({ row }: any) => {
+        const seats = row.original.seats || []
+        
+        if (seats.length === 0) {
+          return <span className="text-gray-400">-</span>
+        }
+
+        return (
+          <div className="flex items-center gap-2">
+            <Armchair className="h-4 w-4 text-orange-600" />
+            <div className="flex flex-wrap gap-1">
+              {seats.map((seat: any) => (
+                <Badge
+                  key={seat.id}
+                  className="bg-orange-500 text-white"
+                >
+                  {seat.seat_number}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )
+      },
+    },
+    {
+      header: 'Valor Total',
+      accessorKey: 'total_amount',
+      cell: ({ row }: any) => (
+        <span className="font-semibold text-green-600">
+          R$ {Number(row.original.total_amount).toFixed(2)}
+        </span>
+      ),
+    },
+    {
+      header: 'Pago',
+      accessorKey: 'amount_paid',
+      cell: ({ row }: any) => (
+        <span className="text-sm">
+          R$ {Number(row.original.amount_paid || 0).toFixed(2)}
+        </span>
+      ),
+    },
+    {
+      header: 'Status',
+      accessorKey: 'payment_status',
+      cell: ({ row }: any) => {
+        const status = row.original.payment_status
+        const colors = {
+          pending: 'bg-yellow-100 text-yellow-800',
+          partial: 'bg-blue-100 text-blue-800',
+          paid: 'bg-green-100 text-green-800',
+          cancelled: 'bg-red-100 text-red-800',
+        }
+
+        return (
+          <Badge className={colors[status as keyof typeof colors]}>
+            {status === 'pending' && 'Pendente'}
+            {status === 'partial' && 'Parcial'}
+            {status === 'paid' && 'Pago'}
+            {status === 'cancelled' && 'Cancelado'}
+          </Badge>
+        )
+      },
+    },
+    {
+      header: 'Ações',
+      cell: ({ row }: any) => (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            window.location.href = `/dashboard/reservas/${row.original.id}`
+          }
+        >
+          <Eye className="h-4 w-4 mr-1" />
+          Ver
+        </Button>
+      ),
+    },
+  ]
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Reservas</h1>
+          <p className="text-gray-600">
+            Gerencie todas as reservas da agência
+          </p>
+        </div>
+        <Button onClick={() => (window.location.href = '/dashboard/reservas/new')}>
+          + Nova Reserva
+        </Button>
+      </div>
+
+      <DataTable columns={columns} data={reservations} />
+    </div>
+  )
+}
+
+
+VOUCHER COM ASSENTOS
+
+// components/dashboard/vouchers/voucher-card.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
+import {
+  Download,
+  Printer,
+  Armchair,
+  Calendar,
+  MapPin,
+  User,
+  Phone,
+  Mail,
+} from 'lucide-react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import QRCode from 'react-qr-code'
+
+interface VoucherCardProps {
+  reservation: any
+}
+
+export function VoucherCard({ reservation }: VoucherCardProps) {
+  const handlePrint = () => {
+    window.print()
+  }
+
+  const handleDownload = async () => {
+    const response = await fetch(
+      `/api/dashboard/reservations/${reservation.id}/voucher`
+    )
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `voucher-${reservation.voucher_code}.pdf`
+    document.body.appendChild(a)
+    a.click()
+    window.URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+  }
+
+  return (
+    <Card className="max-w-4xl mx-auto p-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-2xl font-bold">Voucher de Viagem</h2>
+          <p className="text-gray-600">Código: {reservation.voucher_code}</p>
+        </div>
+
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={handlePrint}>
+            <Printer className="h-4 w-4 mr-2" />
+            Imprimir
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleDownload}>
+            <Download className="h-4 w-4 mr-2" />
+            Baixar PDF
+          </Button>
+        </div>
+      </div>
+
+      <Separator className="mb-6" />
+
+      {/* Conteúdo Principal */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Informações da Viagem */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Viagem */}
+          <div>
+            <h3 className="text-lg font-bold mb-3">Informações da Viagem</h3>
+            <div className="space-y-2">
+              <div className="flex items-start gap-2">
+                <MapPin className="h-5 w-5 text-blue-600 mt-0.5" />
+                <div>
+                  <p className="font-semibold">{reservation.trip?.title}</p>
+                  <p className="text-gray-600">{reservation.trip?.destination}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-blue-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Data de Saída</p>
+                  <p className="font-semibold">
+                    {format(
+                      new Date(reservation.departure_date),
+                      "dd 'de' MMMM 'de' yyyy 'às' HH:mm",
+                      { locale: ptBR }
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Passageiro */}
+          <div>
+            <h3 className="text-lg font-bold mb-3">Dados do Passageiro</h3>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <User className="h-5 w-5 text-purple-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Nome</p>
+                  <p className="font-semibold">{reservation.client_name}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 ml-7">CPF:</span>
+                <span className="font-semibold">{reservation.client_cpf}</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Phone className="h-5 w-5 text-purple-600" />
+                <span className="font-semibold">{reservation.client_phone}</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Mail className="h-5 w-5 text-purple-600" />
+                <span className="font-semibold">{reservation.client_email}</span>
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* ═══════════════════════════════════════════════════════ */}
+          {/* ASSENTOS - DESTAQUE NO VOUCHER */}
+          {/* ═══════════════════════════════════════════════════════ */}
+          <div>
+            <h3 className="text-lg font-bold mb-3">Assentos Reservados</h3>
+            <div className="flex items-center gap-3 p-4 bg-orange-50 border-2 border-orange-200 rounded-lg">
+              <Armchair className="h-8 w-8 text-orange-600" />
+              <div className="flex flex-wrap gap-2">
+                {reservation.seats?.map((seat: any) => (
+                  <Badge
+                    key={seat.id}
+                    className="bg-orange-500 text-white text-lg px-4 py-2"
+                  >
+                    Assento {seat.seat_number}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mt-2">
+              ⚠️ Apresente este voucher e um documento com foto no embarque
+            </p>
+          </div>
+        </div>
+
+        {/* QR Code */}
+        <div className="flex flex-col items-center justify-center">
+          <div className="bg-white p-4 rounded-lg border-2 border-gray-200">
+            <QRCode
+              value={`${process.env.NEXT_PUBLIC_APP_URL}/voucher/${reservation.voucher_code}`}
+              size={200}
+            />
+          </div>
+          <p className="text-sm text-gray-600 text-center mt-4">
+            Escaneie o QR Code para validar o voucher
+          </p>
+        </div>
+      </div>
+
+      {/* Informações Importantes */}
+      <div className="mt-8 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <h4 className="font-bold mb-2">📋 Informações Importantes</h4>
+        <ul className="text-sm text-gray-700 space-y-1">
+          <li>• Chegue com 30 minutos de antecedência ao ponto de embarque</li>
+          <li>• Apresente este voucher e documento com foto original</li>
+          <li>• Sente-se apenas no assento indicado neste voucher</li>
+          <li>• Em caso de dúvidas, entre em contato com a agência</li>
+        </ul>
+      </div>
+    </Card>
+  )
+}
+
+
+CHECK-IN COM ASSENTOS
+
+// app/(dashboard)/dashboard/checkin/[tripId]/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { CheckInList } from '@/components/dashboard/checkin/checkin-list'
+
+export default async function CheckInPage({
+  params,
+}: {
+  params: { tripId: string }
+}) {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  const trip = await prisma.trip.findUnique({
+    where: { id: params.tripId },
+    include: {
+      itineraries: {
+        where: { status: 'open' },
+        orderBy: { departure_date: 'asc' },
+      },
+    },
+  })
+
+  if (!trip) {
+    return <div>Viagem não encontrada</div>
+  }
+
+  // Buscar reservas com assentos
+  const reservations = await prisma.reservation.findMany({
+    where: {
+      tenant_id: session.user.tenantId,
+      trip_id: params.tripId,
+      status: { in: ['confirmed', 'pending'] },
+    },
+    include: {
+      client: true,
+      seats: {
+        orderBy: { seat_number: 'asc' },
+      },
+    },
+    orderBy: { created_at: 'desc' },
+  })
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">Check-in de Embarque</h1>
+        <p className="text-gray-600">{trip.title}</p>
+      </div>
+
+      <CheckInList reservations={reservations} trip={trip} />
+    </div>
+  )
+}
+
+
+// components/dashboard/checkin/checkin-list.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Armchair, Check, X } from 'lucide-react'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+
+interface CheckInListProps {
+  reservations: any[]
+  trip: any
+}
+
+export function CheckInList({ reservations, trip }: CheckInListProps) {
+  const router = useRouter()
+  const [checkedIn, setCheckedIn] = useState<Set<string>>(new Set())
+
+  const handleCheckIn = async (reservationId: string, seatId: string) => {
+    try {
+      const response = await fetch(`/api/dashboard/checkin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reservation_id: reservationId,
+          seat_id: seatId,
+        }),
+      })
+
+      if (response.ok) {
+        setCheckedIn((prev) => new Set(prev).add(seatId))
+        router.refresh()
+      }
+    } catch (error) {
+      alert('Erro ao fazer check-in')
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {reservations.map((reservation) => (
+        <Card key={reservation.id} className="p-6">
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-bold">{reservation.client_name}</h3>
+              <p className="text-sm text-gray-600">CPF: {reservation.client_cpf}</p>
+              <p className="text-sm text-gray-600">
+                Voucher: {reservation.voucher_code}
+              </p>
+            </div>
+
+            <Badge
+              className={
+                reservation.status === 'confirmed'
+                  ? 'bg-green-100 text-green-800'
+                  : 'bg-yellow-100 text-yellow-800'
+              }
+            >
+              {reservation.status === 'confirmed' ? 'Confirmado' : 'Pendente'}
+            </Badge>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════ */}
+          {/* LISTA DE ASSENTOS PARA CHECK-IN */}
+          {/* ═══════════════════════════════════════════════════════ */}
+          <div className="space-y-2">
+            <p className="text-sm font-semibold text-gray-700 mb-2">
+              Assentos:
+            </p>
+            {reservation.seats?.map((seat: any) => (
+              <div
+                key={seat.id}
+                className={`
+                  flex items-center justify-between p-3 rounded-lg border-2
+                  ${
+                    seat.checked_in
+                      ? 'bg-green-50 border-green-200'
+                      : 'bg-gray-50 border-gray-200'
+                  }
+                `}
+              >
+                <div className="flex items-center gap-3">
+                  <Armchair
+                    className={`h-5 w-5 ${
+                      seat.checked_in ? 'text-green-600' : 'text-orange-600'
+                    }`}
+                  />
+                  <div>
+                    <p className="font-semibold">Assento {seat.seat_number}</p>
+                    {seat.passenger_name && (
+                      <p className="text-sm text-gray-600">
+                        {seat.passenger_name}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {seat.checked_in ? (
+                  <Badge className="bg-green-500">
+                    <Check className="h-3 w-3 mr-1" />
+                    Check-in Feito
+                  </Badge>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={() => handleCheckIn(reservation.id, seat.id)}
+                    className="bg-blue-600 hover:bg-blue-700"
+                  >
+                    Fazer Check-in
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+
+RESUMO DA SINCRONIZAÇÃO COMPLETA
+
+┌─────────────────────────────────────────────────────────────────┐
+│           SINCRONIZAÇÃO TOTAL - EXEMPLO: ASSENTO 8                        │
+└─────────────────────────────────────────────────────────────────┘
+
+1. LOJA PÚBLICA
+   ├── Cliente seleciona Assento 8
+   ├── Wizard mostra "Assento 8 selecionado"
+   └── Confirmação exibe "Assento 8"
+
+2. BANCO DE DADOS
+   ├── Reservation.seats_summary = "8"
+   ├── ReservationSeat.seat_number = "8"
+   └── Deal.seats_info = "Assento 8"
+
+3. PIPELINE (Card "Vitrine")
+   ├── Badge laranja: 💺 "Assento 8"
+   ├── Visível no card do deal
+   └── Sincronizado em tempo real
+
+4. RESERVAS (Página de Listagem)
+   ├── Coluna "Assentos"
+   ├── Badge laranja com número "8"
+   └── Ícone de poltrona
+
+5. VOUCHER
+   ├── Seção destacada "Assentos Reservados"
+   ├── Badge grande: "Assento 8"
+   ├── Aviso: "Sente-se apenas no assento indicado"
+   └── QR Code com informação
+
+6. CHECK-IN
+   ├── Lista de embarque
+   ├── "Assento 8" por passageiro
+   ├── Botão "Fazer Check-in"
+   └── Status visual (verde quando feito)
+
+7. DETALHES DA RESERVA
+   ├── Origem: "Vitrine Online"
+   ├── Número do pedido: #2826-87861
+   ├── Assento: 8
+   └── Todas as informações sincronizadas
+
+Sistema 100% sincronizado em todas as telas.

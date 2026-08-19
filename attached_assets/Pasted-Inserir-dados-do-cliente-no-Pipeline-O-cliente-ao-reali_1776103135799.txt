@@ -1,0 +1,845 @@
+Inserir dados do cliente no Pipeline.
+
+O cliente ao realizar a RESERVA NA LOJA PÚBLICA:
+
+Ao realizar a reserva através da web, na loja pública, os dados será exibido no Pipeline de Vendas no segundo/2º Card (Vitrine).
+
+
+INTEGRAÇÃO AUTOMÁTICA: LOJA PÚBLICA → PIPELINE DE VENDAS
+
+Cliente faz reserva na Loja Pública
+           ↓
+Sistema cria/atualiza Cliente no CRM
+           ↓
+Cria Deal automaticamente
+           ↓
+Deal aparece no Pipeline no estágio "Vitrine" (2º card)
+           ↓
+Vendedor pode mover pelo funil
+           ↓
+Ao ganhar deal → Reserva já está criada
+ATUALIZAÇÃO DO SCHEMA PRISMA
+
+// prisma/schema.prisma
+
+model Deal {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ... campos existentes ...
+  
+  // ORIGEM DO DEAL
+  source          String    @default("manual") // manual, website, whatsapp, phone, email
+  source_url      String?   // URL de origem (se veio da web)
+  
+  // RESERVA ASSOCIADA
+  reservation_id  String?   @unique
+  reservation     Reservation? @relation(fields: [reservation_id], references: [id])
+  
+  // AUTO-CRIADO
+  auto_created    Boolean   @default(false) // Se foi criado automaticamente
+  
+  // ... resto do modelo ...
+  
+  @@index([tenant_id, source])
+  @@map("deals")
+}
+
+model Reservation {
+  // ... campos existentes ...
+  
+  // DEAL ASSOCIADO
+  deal_id         String?   @unique
+  deal            Deal?
+  
+  // ... resto do modelo ...
+}
+
+model PipelineStage {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  pipeline_id     String
+  pipeline        Pipeline  @relation(fields: [pipeline_id], references: [id], onDelete: Cascade)
+  
+  name            String    // Lead, Vitrine, Interessado, Cliente, Em Viagem, Pós-venda
+  slug            String    // lead, vitrine, interessado, cliente, em_viagem, pos_venda
+  order           Int       // 1, 2, 3, 4, 5, 6
+  color           String    @default("#3B82F6")
+  
+  // CONFIGURAÇÕES
+  is_default_web  Boolean   @default(false) // Estágio padrão para reservas web
+  
+  deals           Deal[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([pipeline_id, slug])
+  @@index([tenant_id])
+  @@map("pipeline_stages")
+}
+
+SEED DO PIPELINE PADRÃO
+
+// prisma/seed.ts
+
+import { PrismaClient } from '@prisma/client'
+
+const prisma = new PrismaClient()
+
+async function seedDefaultPipeline(tenantId: string) {
+  // Criar pipeline padrão
+  const pipeline = await prisma.pipeline.create({
+    data: {
+      tenant_id: tenantId,
+      name: 'Pipeline de Vendas',
+      is_default: true,
+    },
+  })
+
+  // Criar estágios padrão
+  const stages = [
+    {
+      name: 'Lead',
+      slug: 'lead',
+      order: 1,
+      color: '#6B7280',
+      is_default_web: false,
+    },
+    {
+      name: 'Vitrine',
+      slug: 'vitrine',
+      order: 2,
+      color: '#3B82F6',
+      is_default_web: true, // ✅ Estágio padrão para web
+    },
+    {
+      name: 'Interessado',
+      slug: 'interessado',
+      order: 3,
+      color: '#8B5CF6',
+      is_default_web: false,
+    },
+    {
+      name: 'Cliente',
+      slug: 'cliente',
+      order: 4,
+      color: '#10B981',
+      is_default_web: false,
+    },
+    {
+      name: 'Em Viagem',
+      slug: 'em_viagem',
+      order: 5,
+      color: '#F59E0B',
+      is_default_web: false,
+    },
+    {
+      name: 'Pós-venda',
+      slug: 'pos_venda',
+      order: 6,
+      color: '#EC4899',
+      is_default_web: false,
+    },
+  ]
+
+  for (const stage of stages) {
+    await prisma.pipelineStage.create({
+      data: {
+        tenant_id: tenantId,
+        pipeline_id: pipeline.id,
+        ...stage,
+      },
+    })
+  }
+
+  return pipeline
+}
+
+ATUALIZAÇÃO DA API DE RESERVA
+// app/api/public/reservations/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/events/event-emitter'
+import { createDealFromReservation } from '@/lib/deals/create-from-reservation'
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+
+    const {
+      trip_id,
+      itinerary_id,
+      name,
+      cpf,
+      email,
+      phone,
+      birthdate,
+      passengers_count,
+      selected_seats,
+      referral_code,
+      coupon_code,
+      referral_discount,
+      coupon_discount,
+      payment_method,
+      observations,
+    } = body
+
+    // Validações básicas
+    if (!trip_id || !itinerary_id || !name || !cpf || !email || !phone) {
+      return NextResponse.json(
+        { error: 'Campos obrigatórios faltando' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar viagem
+    const trip = await prisma.trip.findUnique({
+      where: { id: trip_id },
+      include: { itineraries: true },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    const itinerary = trip.itineraries.find((it) => it.id === itinerary_id)
+
+    if (!itinerary) {
+      return NextResponse.json(
+        { error: 'Itinerário não encontrado' },
+        { status: 404 }
+      )
+    }
+
+    // Verificar disponibilidade
+    if (itinerary.available_seats < passengers_count) {
+      return NextResponse.json(
+        { error: 'Vagas insuficientes' },
+        { status: 400 }
+      )
+    }
+
+    // Calcular valores
+    const basePrice = trip.promotional_price || trip.price_per_person
+    const subtotal = basePrice * passengers_count
+    const totalDiscount = (referral_discount || 0) + (coupon_discount || 0)
+    const totalAmount = subtotal - totalDiscount
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR OU ATUALIZAR CLIENTE
+    // ═══════════════════════════════════════════════════════════
+
+    let client = await prisma.client.findFirst({
+      where: {
+        tenant_id: trip.tenant_id,
+        OR: [{ cpf }, { email }],
+      },
+    })
+
+    if (!client) {
+      // Criar novo cliente
+      client = await prisma.client.create({
+        data: {
+          tenant_id: trip.tenant_id,
+          name,
+          cpf,
+          email,
+          phone,
+          birthdate: new Date(birthdate),
+          source: 'website',
+          segment: 'individual',
+          status: 'active',
+        },
+      })
+    } else {
+      // Atualizar dados do cliente existente
+      client = await prisma.client.update({
+        where: { id: client.id },
+        data: {
+          name,
+          email,
+          phone,
+          birthdate: new Date(birthdate),
+        },
+      })
+    }
+
+    // Gerar número de reserva e voucher
+    const reservationNumber = await generateReservationNumber(trip.tenant_id)
+    const voucherCode = generateVoucherCode()
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR RESERVA
+    // ═══════════════════════════════════════════════════════════
+
+    const reservation = await prisma.reservation.create({
+      data: {
+        tenant_id: trip.tenant_id,
+        reservation_number: reservationNumber,
+        voucher_code: voucherCode,
+        trip_id,
+        itinerary_id,
+        client_id: client.id,
+        client_name: name,
+        client_cpf: cpf,
+        client_email: email,
+        client_phone: phone,
+        total_passengers: passengers_count,
+        adults_count: passengers_count,
+        subtotal_amount: subtotal,
+        discount_amount: totalDiscount,
+        total_amount: totalAmount,
+        amount_pending: totalAmount,
+        payment_method,
+        payment_status: 'pending',
+        status: 'pending',
+        source: 'website',
+        observations,
+        departure_date: itinerary.departure_date,
+      },
+    })
+
+    // Criar assentos
+    for (const seatNumber of selected_seats) {
+      await prisma.reservationSeat.create({
+        data: {
+          reservation_id: reservation.id,
+          trip_id,
+          itinerary_id,
+          seat_number: seatNumber,
+          status: 'reserved',
+        },
+      })
+    }
+
+    // Processar referral
+    if (referral_code) {
+      const referral = await prisma.referral.findFirst({
+        where: { code: referral_code, status: 'active' },
+      })
+
+      if (referral) {
+        await prisma.reservation.update({
+          where: { id: reservation.id },
+          data: { referral_id: referral.id, referral_code },
+        })
+
+        await applyReferralBenefits({
+          referralCode: referral_code,
+          reservationId: reservation.id,
+          totalAmount,
+          tenantId: trip.tenant_id,
+        })
+      }
+    }
+
+    // Atualizar vagas
+    await prisma.itinerary.update({
+      where: { id: itinerary_id },
+      data: { available_seats: { decrement: passengers_count } },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR DEAL NO PIPELINE (ESTÁGIO "VITRINE")
+    // ═══════════════════════════════════════════════════════════
+
+    const deal = await createDealFromReservation({
+      tenantId: trip.tenant_id,
+      clientId: client.id,
+      reservationId: reservation.id,
+      tripId: trip_id,
+      totalAmount,
+    })
+
+    // Vincular deal à reserva
+    await prisma.reservation.update({
+      where: { id: reservation.id },
+      data: { deal_id: deal.id },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // EMITIR EVENTOS
+    // ═══════════════════════════════════════════════════════════
+
+    eventEmitter.emitEvent('reservation.created', {
+      tenant_id: trip.tenant_id,
+      timestamp: new Date(),
+      data: reservation,
+    })
+
+    eventEmitter.emitEvent('deal.created', {
+      tenant_id: trip.tenant_id,
+      timestamp: new Date(),
+      data: deal,
+    })
+
+    // Buscar reserva completa
+    const fullReservation = await prisma.reservation.findUnique({
+      where: { id: reservation.id },
+      include: {
+        seats: true,
+        client: true,
+        deal: true,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      reservation: fullReservation,
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar reserva:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar reserva' },
+      { status: 500 }
+    )
+  }
+}
+
+// Utilitários
+async function generateReservationNumber(tenantId: string): Promise<string> {
+  const lastReservation = await prisma.reservation.findFirst({
+    where: { tenant_id: tenantId },
+    orderBy: { created_at: 'desc' },
+    select: { reservation_number: true },
+  })
+
+  const lastNumber = lastReservation
+    ? parseInt(lastReservation.reservation_number.split('-').pop() || '0')
+    : 0
+
+  return `RES-${new Date().getFullYear()}-${String(lastNumber + 1).padStart(5, '0')}`
+}
+
+function generateVoucherCode(): string {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let code = 'VC-'
+
+  for (let i = 0; i < 6; i++) {
+    code += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+
+  return code
+}
+
+FUNÇÃO DE CRIAÇÃO DE DEAL
+// lib/deals/create-from-reservation.ts
+
+import { prisma } from '@/lib/prisma'
+
+interface CreateDealFromReservationParams {
+  tenantId: string
+  clientId: string
+  reservationId: string
+  tripId: string
+  totalAmount: number
+}
+
+export async function createDealFromReservation({
+  tenantId,
+  clientId,
+  reservationId,
+  tripId,
+  totalAmount,
+}: CreateDealFromReservationParams) {
+  // Buscar pipeline padrão
+  const pipeline = await prisma.pipeline.findFirst({
+    where: {
+      tenant_id: tenantId,
+      is_default: true,
+    },
+    include: {
+      stages: {
+        where: { is_default_web: true }, // Estágio "Vitrine"
+        orderBy: { order: 'asc' },
+      },
+    },
+  })
+
+  if (!pipeline) {
+    throw new Error('Pipeline padrão não encontrado')
+  }
+
+  // Buscar estágio "Vitrine" (2º card)
+  let vitrineStage = pipeline.stages.find((s) => s.is_default_web)
+
+  if (!vitrineStage) {
+    // Se não encontrar, buscar pelo slug
+    vitrineStage = await prisma.pipelineStage.findFirst({
+      where: {
+        tenant_id: tenantId,
+        pipeline_id: pipeline.id,
+        slug: 'vitrine',
+      },
+    })
+  }
+
+  if (!vitrineStage) {
+    // Se ainda não encontrar, usar o segundo estágio
+    vitrineStage = await prisma.pipelineStage.findFirst({
+      where: {
+        tenant_id: tenantId,
+        pipeline_id: pipeline.id,
+        order: 2,
+      },
+    })
+  }
+
+  if (!vitrineStage) {
+    throw new Error('Estágio "Vitrine" não encontrado')
+  }
+
+  // Buscar viagem para o título
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { title: true, destination: true },
+  })
+
+  // Criar deal
+  const deal = await prisma.deal.create({
+    data: {
+      tenant_id: tenantId,
+      client_id: clientId,
+      pipeline_id: pipeline.id,
+      stage_id: vitrineStage.id,
+      title: trip ? `${trip.title} - ${trip.destination}` : 'Reserva Web',
+      value: totalAmount,
+      expected_close_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 dias
+      probability: 70, // 70% de chance (já fez reserva)
+      source: 'website',
+      source_url: '/loja',
+      auto_created: true,
+      reservation_id: reservationId,
+      status: 'open',
+    },
+  })
+
+  // Criar atividade automática
+  await prisma.activity.create({
+    data: {
+      tenant_id: tenantId,
+      client_id: clientId,
+      deal_id: deal.id,
+      type: 'note',
+      title: 'Reserva criada via site',
+      description: `Cliente realizou reserva através da loja pública. Reserva #${reservationId}`,
+      completed: true,
+      completed_at: new Date(),
+    },
+  })
+
+  return deal
+}
+
+VISUALIZAÇÃO NO PIPELINE
+// components/dashboard/pipeline/pipeline-board.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
+import { Globe, Phone, Mail, MessageSquare, User } from 'lucide-react'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+
+interface PipelineBoardProps {
+  pipeline: any
+  stages: any[]
+  deals: any[]
+}
+
+export function PipelineBoard({ pipeline, stages, deals }: PipelineBoardProps) {
+  const router = useRouter()
+  const [dealsByStage, setDealsByStage] = useState(() => {
+    const grouped: Record<string, any[]> = {}
+    
+    stages.forEach((stage) => {
+      grouped[stage.id] = deals.filter((deal) => deal.stage_id === stage.id)
+    })
+    
+    return grouped
+  })
+
+  const handleDragEnd = async (result: any) => {
+    if (!result.destination) return
+
+    const { source, destination, draggableId } = result
+
+    if (source.droppableId === destination.droppableId) {
+      // Mesma coluna, apenas reordenar
+      return
+    }
+
+    // Mover para outra coluna
+    const deal = deals.find((d) => d.id === draggableId)
+    if (!deal) return
+
+    // Atualizar no backend
+    await fetch(`/api/dashboard/deals/${deal.id}/move`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage_id: destination.droppableId }),
+    })
+
+    // Atualizar estado local
+    const newDealsByStage = { ...dealsByStage }
+    newDealsByStage[source.droppableId] = newDealsByStage[
+      source.droppableId
+    ].filter((d) => d.id !== draggableId)
+    newDealsByStage[destination.droppableId] = [
+      ...newDealsByStage[destination.droppableId],
+      deal,
+    ]
+    setDealsByStage(newDealsByStage)
+
+    router.refresh()
+  }
+
+  const getSourceIcon = (source: string) => {
+    switch (source) {
+      case 'website':
+        return <Globe className="h-4 w-4" />
+      case 'phone':
+        return <Phone className="h-4 w-4" />
+      case 'email':
+        return <Mail className="h-4 w-4" />
+      case 'whatsapp':
+        return <MessageSquare className="h-4 w-4" />
+      default:
+        return <User className="h-4 w-4" />
+    }
+  }
+
+  return (
+    <DragDropContext onDragEnd={handleDragEnd}>
+      <div className="flex gap-4 overflow-x-auto pb-4">
+        {stages.map((stage) => (
+          <div key={stage.id} className="flex-shrink-0 w-80">
+            {/* Header do Estágio */}
+            <div
+              className="p-3 rounded-t-lg"
+              style={{ backgroundColor: stage.color }}
+            >
+              <div className="flex items-center justify-between text-white">
+                <h3 className="font-semibold">{stage.name}</h3>
+                <Badge variant="secondary" className="bg-white/20">
+                  {dealsByStage[stage.id]?.length || 0}
+                </Badge>
+              </div>
+              <p className="text-sm text-white/80 mt-1">
+                R${' '}
+                {dealsByStage[stage.id]
+                  ?.reduce((sum, deal) => sum + Number(deal.value), 0)
+                  .toFixed(2) || '0.00'}
+              </p>
+            </div>
+
+            {/* Lista de Deals */}
+            <Droppable droppableId={stage.id}>
+              {(provided, snapshot) => (
+                <div
+                  ref={provided.innerRef}
+                  {...provided.droppableProps}
+                  className={`
+                    min-h-[500px] p-3 bg-gray-50 rounded-b-lg
+                    ${snapshot.isDraggingOver ? 'bg-blue-50' : ''}
+                  `}
+                >
+                  {dealsByStage[stage.id]?.map((deal, index) => (
+                    <Draggable
+                      key={deal.id}
+                      draggableId={deal.id}
+                      index={index}
+                    >
+                      {(provided, snapshot) => (
+                        <Card
+                          ref={provided.innerRef}
+                          {...provided.draggableProps}
+                          {...provided.dragHandleProps}
+                          className={`
+                            p-4 mb-3 cursor-pointer hover:shadow-lg transition-shadow
+                            ${snapshot.isDragging ? 'shadow-xl rotate-2' : ''}
+                          `}
+                          onClick={() =>
+                            router.push(`/dashboard/deals/${deal.id}`)
+                          }
+                        >
+                          {/* Badges de Origem */}
+                          <div className="flex items-center gap-2 mb-2">
+                            {deal.auto_created && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs bg-blue-50 text-blue-700 border-blue-200"
+                              >
+                                {getSourceIcon(deal.source)}
+                                <span className="ml-1">
+                                  {deal.source === 'website' && 'Web'}
+                                  {deal.source === 'phone' && 'Telefone'}
+                                  {deal.source === 'whatsapp' && 'WhatsApp'}
+                                  {deal.source === 'email' && 'Email'}
+                                </span>
+                              </Badge>
+                            )}
+                            
+                            {deal.reservation_id && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs bg-green-50 text-green-700 border-green-200"
+                              >
+                                ✓ Reserva
+                              </Badge>
+                            )}
+                          </div>
+
+                          {/* Título */}
+                          <h4 className="font-semibold mb-1 line-clamp-2">
+                            {deal.title}
+                          </h4>
+
+                          {/* Cliente */}
+                          <p className="text-sm text-gray-600 mb-2">
+                            {deal.client?.name}
+                          </p>
+
+                          {/* CPF */}
+                          {deal.client?.cpf && (
+                            <p className="text-xs text-gray-500 mb-2">
+                              CPF: {deal.client.cpf}
+                            </p>
+                          )}
+
+                          {/* Viagem */}
+                          {deal.reservation?.trip && (
+                            <p className="text-xs text-gray-500 mb-3">
+                              📍 {deal.reservation.trip.destination}
+                            </p>
+                          )}
+
+                          {/* Valor */}
+                          <div className="flex items-center justify-between pt-3 border-t">
+                            <span className="text-lg font-bold text-green-600">
+                              R$ {Number(deal.value).toFixed(2)}
+                            </span>
+                            
+                            {deal.reservation && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  router.push(
+                                    `/dashboard/reservas/${deal.reservation_id}`
+                                  )
+                                }}
+                              >
+                                Ver Reserva
+                              </Button>
+                            )}
+                          </div>
+                        </Card>
+                      )}
+                    </Draggable>
+                  ))}
+                  {provided.placeholder}
+
+                  {/* Botão Adicionar */}
+                  <Button
+                    variant="ghost"
+                    className="w-full mt-2"
+                    onClick={() =>
+                      router.push(
+                        `/dashboard/deals/new?stage_id=${stage.id}`
+                      )
+                    }
+                  >
+                    + Adicionar Lead
+                  </Button>
+                </div>
+              )}
+            </Droppable>
+          </div>
+        ))}
+      </div>
+    </DragDropContext>
+  )
+}
+
+FLUXO COMPLETO
+
+1. Cliente acessa Loja Pública
+   ↓
+2. Seleciona viagem e clica "Reservar Agora"
+   ↓
+3. Preenche wizard de 5 passos
+   ├── Dados pessoais
+   ├── Revisão (com código de indicação)
+   ├── Seleção de assentos
+   ├── Pagamento
+   └── Confirmação
+   ↓
+4. Sistema cria/atualiza Cliente no CRM
+   ├── Busca por CPF ou Email
+   ├── Se não existir, cria novo
+   └── Se existir, atualiza dados
+   ↓
+5. Sistema cria Reserva
+   ├── Gera número único (RES-2026-00001)
+   ├── Gera voucher (VC-ABC123)
+   ├── Reserva assentos
+   ├── Aplica descontos (referral/cupom)
+   └── Status: "pending"
+   ↓
+6. Sistema cria Deal automaticamente
+   ├── Pipeline: Pipeline de Vendas
+   ├── Estágio: "Vitrine" (2º card)
+   ├── Título: Nome da viagem + destino
+   ├── Valor: Total da reserva
+   ├── Probabilidade: 70%
+   ├── Origem: "website" (badge azul)
+   ├── Auto-criado: true
+   └── Vinculado à reserva
+   ↓
+7. Deal aparece no Pipeline
+   ├── Card com badge "Web" (ícone de globo)
+   ├── Card com badge "✓ Reserva"
+   ├── Mostra nome do cliente e CPF
+   ├── Mostra destino da viagem
+   ├── Mostra valor total
+   └── Botão "Ver Reserva"
+   ↓
+8. Vendedor pode:
+   ├── Arrastar deal entre estágios
+   ├── Clicar no card para ver detalhes
+   ├── Clicar em "Ver Reserva" para ver a reserva
+   ├── Adicionar atividades e notas
+   ├── Acompanhar evolução do cliente
+   └── Fechar venda (já tem reserva criada)
+
+BENEFÍCIOS DA INTEGRAÇÃO
+Para o Cliente:
+ Processo 100% online e automatizado
+ Recebe confirmação imediata
+ Não precisa ligar ou enviar WhatsApp
+ Voucher gerado automaticamente
+Para o Vendedor:
+ Lead qualificado (já fez reserva)
+ Dados completos no CRM
+ Histórico de interações
+ Pode acompanhar evolução
+ Pode oferecer upgrades ou outras viagens
+Para a Agência:
+ Vendas 24/7 sem intervenção manual
+ Pipeline sempre atualizado
+ Métricas precisas de conversão
+ Redução de trabalho manual
+ Aumento de eficiência
+Sistema totalmente integrado: Loja → CRM → Pipeline

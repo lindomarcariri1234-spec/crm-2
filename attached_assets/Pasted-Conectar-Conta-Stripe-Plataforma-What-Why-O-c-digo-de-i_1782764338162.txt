@@ -1,0 +1,22 @@
+Conectar Conta Stripe à Plataforma
+What & Why
+O código de integração Stripe já existe (checkout de assinaturas SaaS, webhooks, Payment Elements na Vitrine). O que falta é conectar uma conta Stripe real: configurar as chaves de API como secrets, criar os produtos/preços dos planos no Stripe, registrar o webhook da plataforma e verificar o fluxo de ponta a ponta.
+
+A integração Replit Stripe (stripe==1.0.0) já está instalada — ela expõe as credenciais via Replit Connector, que stripeClient.ts já lê.
+
+Done looks like
+O servidor API inicializa o SDK Stripe sem erros (STRIPE_SECRET_KEY disponível).
+Os planos Starter, Pro e Enterprise existem como Products/Prices no Stripe Dashboard.
+O webhook da plataforma está registrado no Stripe e o STRIPE_WEBHOOK_SECRET está configurado.
+Um tenant consegue gerar um Checkout Session e ver a tela de pagamento do Stripe (em modo teste).
+O webhook checkout.session.completed é recebido e ativa o plano no banco de dados.
+Out of scope
+Stripe Connect para agências (cada agência configura suas próprias chaves na tela /loja/configuracoes).
+Configuração de Stripe das agências (já existe UI para isso).
+Métodos de pagamento alternativos (Apple Pay, Google Pay).
+Automação de reembolso/disputa.
+Steps
+Configurar secrets Stripe — Ler as credenciais via Replit Stripe integration (Connector) e/ou pedir as chaves ao usuário (STRIPE_SECRET_KEY, VITE_STRIPE_PUBLISHABLE_KEY). Configurar também STRIPE_WEBHOOK_SECRET. Garantir que stripeClient.ts consegue inicializar o SDK corretamente em produção.
+Criar produtos e preços no Stripe — Rodar o script seed:stripe-plans que cria os Products e Prices (Starter/Pro/Enterprise) no Stripe e salva os priceIds nos planos do banco. Verificar que os planos no banco têm stripePriceId preenchido.
+Registrar webhook da plataforma — Criar (ou verificar) o endpoint de webhook no Stripe apontando para https://<domínio-produção>/api/webhooks/stripe-platform. Copiar o Signing Secret gerado e salvar como STRIPE_WEBHOOK_SECRET.
+Validar fluxo de checkout — Em modo teste, iniciar um checkout de assinatura por um tenant, completar com cartão de teste do Stripe, confirmar que o webhook checkout.session.completed chega, o plano é ativado e stripeSubscriptionId é salvo no tenant.

@@ -1,0 +1,358 @@
+/**
+ * Stripe price health-check cron.
+ *
+ * Runs daily and sends one alert email per calendar day (Brazil time) when any
+ * non-free plan is missing a matching active monthly or annual Stripe price.
+ *
+ * ── Deduplication: atomic, cross-instance, restart-safe ──────────────────────
+ *
+ * Uses a single-statement conditional upsert:
+ *
+ *   INSERT INTO platform_settings (id, key, value, …)
+ *   VALUES (…, DEDUP_KEY, '{today}:{token}', …)
+ *   ON CONFLICT (key) DO UPDATE
+ *     SET value = EXCLUDED.value, updated_at = now()
+ *     WHERE platform_settings.value NOT LIKE '{today}:%'
+ *   RETURNING value
+ *
+ * PostgreSQL serialises concurrent inserts on the unique key.  The first
+ * instance wins — its INSERT succeeds and RETURNING carries the row.  Any
+ * concurrent attempt that conflicts either sees the winner's today-prefixed
+ * value (WHERE is false → DO UPDATE is skipped → RETURNING is empty) or, if
+ * no row existed yet, blocks at the INSERT until the winner commits, then
+ * sees the winner's value in its conflict check and also gets RETURNING empty.
+ *
+ * The claimed value is `{today}:{token}` where token is a per-invocation
+ * UUID.  Release checks `WHERE value = {today}:{token}` so only the owner
+ * can restore the pre-claim state — a late-failing sender cannot reopen a
+ * slot that another instance has already successfully used.
+ *
+ * On a failed send, the owner restores the previous DB value (or deletes the
+ * row when it was newly created) so the next cron run can retry delivery.
+ */
+
+import { db, plansTable, platformSettingsTable } from "@workspace/db";
+import { asc, eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import Stripe from "stripe";
+import { getStripeSecretKey } from "./stripeClient";
+import { sendStripeHealthAlertEmail } from "@workspace/email";
+import { logger } from "./logger";
+import { generateId } from "./id";
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const DEDUP_KEY = "stripe_health_alert_last_sent";
+/** Separator between the date part and the per-claim ownership token. */
+const SEP = ":";
+
+// ─── Date helper ──────────────────────────────────────────────────────────────
+
+function brazilDateString(): string {
+  // "sv-SE" locale produces ISO 8601 date — convenient YYYY-MM-DD output.
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "America/Sao_Paulo",
+  }).format(new Date());
+}
+
+// ─── Alert recipient ──────────────────────────────────────────────────────────
+// Reads platform_settings key `stripe_health_alert_email` first; falls back
+// to the SUPERADMIN_EMAIL env var.  DB errors fall back silently so a secondary
+// outage never blocks alert delivery.
+async function getAlertEmail(): Promise<string | null> {
+  try {
+    const [row] = await db
+      .select({ value: platformSettingsTable.value })
+      .from(platformSettingsTable)
+      .where(eq(platformSettingsTable.key, "stripe_health_alert_email"))
+      .limit(1);
+    if (row?.value?.trim()) return row.value.trim();
+  } catch {
+    // fall through
+  }
+  return process.env["SUPERADMIN_EMAIL"]?.trim() ?? null;
+}
+
+// ─── Atomic slot claim ────────────────────────────────────────────────────────
+
+interface ClaimResult {
+  /** True when this invocation won the race and may send the email. */
+  claimed: boolean;
+  /** Ownership token embedded in the DB value — needed to release the slot. */
+  claimToken: string;
+  /** Value that was in the row before this invocation (null if absent). */
+  previousValue: string | null;
+  /** Whether the dedup row existed before this invocation. */
+  rowExisted: boolean;
+}
+
+/**
+ * Atomically tries to claim the "send slot" for today's Brazil date.
+ *
+ * Uses a single INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING statement.
+ * PostgreSQL serialises concurrent INSERTs on the unique key — only the winner
+ * gets a RETURNING row; all other instances get an empty result.
+ */
+async function tryClaimAlertSlot(today: string): Promise<ClaimResult> {
+  const claimToken = randomUUID();
+  const claimValue = `${today}${SEP}${claimToken}`;
+  // Pattern that matches any claim from today — used in the WHERE guard.
+  const todayPattern = `${today}${SEP}%`;
+
+  // Read the pre-claim value so we can restore it on failure.
+  // This non-transactional read is safe: if another instance wins between
+  // here and the INSERT we will not get RETURNING rows and therefore will
+  // never call release — previousValue is only used by the winner.
+  const before = await db
+    .select({ value: platformSettingsTable.value })
+    .from(platformSettingsTable)
+    .where(eq(platformSettingsTable.key, DEDUP_KEY))
+    .limit(1);
+  const previousValue = before[0]?.value ?? null;
+  const rowExisted = before.length > 0;
+
+  const raw = await db.execute(sql`
+    INSERT INTO platform_settings (id, key, value, label, description, type)
+    VALUES (
+      ${generateId()},
+      ${DEDUP_KEY},
+      ${claimValue},
+      ${"Último envio do alerta de saúde Stripe"},
+      ${"Data e token (YYYY-MM-DD:uuid, horário de Brasília) do último e-mail de alerta de preços Stripe ausentes enviado pelo cron."},
+      ${"string"}
+    )
+    ON CONFLICT (key) DO UPDATE
+      SET value = EXCLUDED.value,
+          updated_at = now()
+      WHERE platform_settings.value NOT LIKE ${todayPattern}
+    RETURNING value
+  `);
+
+  const rows = (raw as unknown as { rows: Array<{ value: string }> }).rows;
+  const claimed = rows.length > 0;
+
+  return { claimed, claimToken, previousValue, rowExisted };
+}
+
+/**
+ * Releases the slot claimed by this invocation — but ONLY if the DB value
+ * still matches our ownership token.  A late-running release cannot
+ * accidentally reopen a slot that another instance has already successfully
+ * used.
+ */
+async function releaseAlertSlot(
+  today: string,
+  claimToken: string,
+  previousValue: string | null,
+  rowExisted: boolean,
+): Promise<void> {
+  const claimValue = `${today}${SEP}${claimToken}`;
+  try {
+    if (!rowExisted) {
+      // Row was created by this invocation — delete it, but only if we still own it.
+      await db.execute(sql`
+        DELETE FROM platform_settings
+        WHERE key = ${DEDUP_KEY}
+          AND value = ${claimValue}
+      `);
+    } else {
+      // Restore the previous value, but only if we still own the row.
+      await db.execute(sql`
+        UPDATE platform_settings
+        SET value      = ${previousValue},
+            updated_at = now()
+        WHERE key   = ${DEDUP_KEY}
+          AND value = ${claimValue}
+      `);
+    }
+  } catch (err) {
+    logger.error(
+      { err, claimToken, previousValue, rowExisted },
+      "[stripe-health] Failed to release alert slot after send failure — next run may skip incorrectly if this error persists",
+    );
+  }
+}
+
+// ─── Core health-check logic (mirrors /admin/plans/stripe-health route) ───────
+
+interface PlanHealthResult {
+  planId: string;
+  slug: string;
+  name: string;
+  isActive: boolean | null;
+  monthlyOk: boolean;
+  annualOk: boolean;
+  isFree: boolean;
+  error?: string;
+}
+
+async function checkStripeHealth(stripe: Stripe): Promise<PlanHealthResult[]> {
+  const plans = await db
+    .select()
+    .from(plansTable)
+    .orderBy(asc(plansTable.sortOrder), asc(plansTable.createdAt));
+
+  return Promise.all(
+    plans.map(async (plan): Promise<PlanHealthResult> => {
+      const monthlyPriceCents = Math.round(Number(plan.monthlyPrice) * 100);
+      const annualPriceCents = Math.round(Number(plan.annualPrice) * 100);
+
+      const needsMonthly = monthlyPriceCents > 0;
+      const needsAnnual = annualPriceCents > 0;
+
+      if (!needsMonthly && !needsAnnual) {
+        return {
+          planId: plan.id,
+          slug: plan.slug,
+          name: plan.name,
+          isActive: plan.isActive,
+          monthlyOk: true,
+          annualOk: true,
+          isFree: true,
+        };
+      }
+
+      let stripePrices: Stripe.Price[] = [];
+      try {
+        const result = await stripe.prices.search({
+          query: `metadata['planSlug']:'${plan.slug}' AND active:'true'`,
+          limit: 20,
+        });
+        stripePrices = result.data;
+      } catch {
+        return {
+          planId: plan.id,
+          slug: plan.slug,
+          name: plan.name,
+          isActive: plan.isActive,
+          monthlyOk: false,
+          annualOk: false,
+          isFree: false,
+          error: "Falha ao consultar preços no Stripe",
+        };
+      }
+
+      const monthlyOk =
+        !needsMonthly ||
+        stripePrices.some(
+          (p) =>
+            p.recurring?.interval === "month" &&
+            p.unit_amount === monthlyPriceCents &&
+            p.currency === "brl",
+        );
+      const annualOk =
+        !needsAnnual ||
+        stripePrices.some(
+          (p) =>
+            p.recurring?.interval === "year" &&
+            p.unit_amount === annualPriceCents &&
+            p.currency === "brl",
+        );
+
+      return {
+        planId: plan.id,
+        slug: plan.slug,
+        name: plan.name,
+        isActive: plan.isActive,
+        monthlyOk,
+        annualOk,
+        isFree: false,
+      };
+    }),
+  );
+}
+
+// ─── Exported cron handler ────────────────────────────────────────────────────
+
+export async function runStripeHealthCheckCron(): Promise<void> {
+  const secretKey = await getStripeSecretKey();
+  if (!secretKey) {
+    logger.info("[stripe-health] Stripe not configured — skipping health check");
+    return;
+  }
+
+  const stripe = new Stripe(secretKey, {
+    apiVersion: "2025-08-27.basil" as Stripe.LatestApiVersion,
+  });
+
+  let results: PlanHealthResult[];
+  try {
+    results = await checkStripeHealth(stripe);
+  } catch (err) {
+    logger.error({ err }, "[stripe-health] Failed to check Stripe prices — aborting cron");
+    return;
+  }
+
+  const unhealthy = results.filter((r) => !r.isFree && (!r.monthlyOk || !r.annualOk));
+
+  if (unhealthy.length === 0) {
+    logger.info(
+      "[stripe-health] All non-free plans have matching Stripe prices — no alert needed",
+    );
+    return;
+  }
+
+  // ── Atomic cross-instance slot claim ──
+  const today = brazilDateString();
+  let claim: ClaimResult;
+  try {
+    claim = await tryClaimAlertSlot(today);
+  } catch (err) {
+    logger.error(
+      { err },
+      "[stripe-health] Failed to acquire alert slot from DB — skipping to avoid duplicate sends",
+    );
+    return;
+  }
+
+  if (!claim.claimed) {
+    logger.info(
+      { date: today, unhealthyCount: unhealthy.length },
+      "[stripe-health] Alert already claimed for today by another instance — skipping",
+    );
+    return;
+  }
+
+  // We hold the slot. Resolve recipient.
+  const alertEmail = await getAlertEmail();
+  if (!alertEmail) {
+    await releaseAlertSlot(today, claim.claimToken, claim.previousValue, claim.rowExisted);
+    logger.warn(
+      "[stripe-health] No alert email configured (set stripe_health_alert_email in platform settings or SUPERADMIN_EMAIL env) — slot released",
+    );
+    return;
+  }
+
+  const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
+  const dashboardUrl = appUrl ? `${appUrl}/admin/plans` : null;
+
+  const emailResult = await sendStripeHealthAlertEmail({
+    to: alertEmail,
+    missingPlans: unhealthy.map((r) => ({
+      name: r.name,
+      slug: r.slug,
+      monthlyOk: r.monthlyOk,
+      annualOk: r.annualOk,
+    })),
+    dashboardUrl,
+  });
+
+  if (emailResult.success) {
+    // Slot stays written with today's date+token — other instances will skip.
+    logger.warn(
+      {
+        to: alertEmail,
+        unhealthyCount: unhealthy.length,
+        plans: unhealthy.map((r) => r.slug),
+      },
+      "[stripe-health] Alert email sent — missing Stripe prices detected",
+    );
+  } else {
+    // Release ownership so the next cron run (or a healthy instance) can retry.
+    await releaseAlertSlot(today, claim.claimToken, claim.previousValue, claim.rowExisted);
+    logger.error(
+      { error: emailResult.error, unhealthyCount: unhealthy.length },
+      "[stripe-health] Failed to send alert email — slot released, will retry on next cron run",
+    );
+  }
+}

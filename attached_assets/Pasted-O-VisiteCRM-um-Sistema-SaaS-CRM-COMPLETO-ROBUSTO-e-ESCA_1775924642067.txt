@@ -1,0 +1,3993 @@
+O **VisiteCRM**, é um Sistema SaaS CRM COMPLETO, ROBUSTO e ESCALÁVEL
+para agências de turismo especializadas em excursões.
+Contém Sistema de Reservas COMPLETO, ROBUSTO e sofisticado com reserva criado pelo vendedor, pela Agência e pelo próprio cliente na loja.  seleção de poltronas, passageiros, voucher PDF, QR Code entre outras funcionalidades.
+
+RESERVAS E PASSAGEIROS
+═══════════════════════════════════════════════════════════════
+
+## OBJETIVO
+Implementar sistema completo de reservas com fluxo em etapas,
+gestão de passageiros e integrações.
+
+## FUNCIONALIDADES
+ Fluxo de reserva
+ Múltiplos passageiros por reserva
+ Seleção de assentos integrada
+ Cálculo automático de valores
+ Sincronizado com a loja
+ Cálculo automático de bônus, Cupom, Indicação
+ Gestão de pagamentos
+ Geração de vouchers
+ Gestão de Indicação
+ Check-in de passageiros
+
+
+Sistema de Reservas — Descrição Completa
+Fluxo de Criação
+Passo 1 — Seleção
+
+Escolha da viagem (dropdown com viagens cadastradas)
+Escolha do cliente (dropdown com clientes cadastrados)
+Ponto de Embarque — preenchido automaticamente com base na viagem
+ Seleção de assentos integrada
+ Cálculo automático de valores
+ Sincronizado com a loja
+ Cálculo automático de bônus, Cupom, Indicação
+Passo 2 — Pagamento e Detalhes
+
+Valor Total (R$) — preenchido automaticamente com base na viagem
+Valor Pago (R$) — quanto já foi recebido
+Forma de Pagamento: PIX, Cartão de Crédito, Débito, Dinheiro, Transferência, Parcelado
+Parcelas — número de parcelas
+ Geração de vouchers
+ Gestão de Indicação
+
+Observações — campo livre
+Passo 3 — Confirmação
+
+Check-in de passageiros
+
+Resumo completo: viagem, cliente, valor, pago, saldo em aberto, forma de pagamento
+Botão Confirmar Reserva
+Dados Armazenados por Reserva
+vínculo com a viagem
+assentos reservados
+lista de passageiros (nome, CPF, data de nascimento, categoria etária, tipo de viagem, assento)
+ponto de embarque
+balance — controle financeiro
+voucher code — código único gerado automaticamente
+Funcionalidades da Lista de Reservas
+Visualização em tabela com status colorido
+Filtro por status
+Indicador de saldo pendente
+Botões de ação por reserva
+O que está faltando / pode ser melhorado:
+Seleção de assentos no wizard (integrar com o SeatMap da viagem)
+Adição de múltiplos passageiros com dados individuais
+Geração de voucher PDF
+Check-in diretamente da lista
+Registro de pagamentos parciais (parcelamento com controle por parcela)
+Envio automático de confirmação via WhatsApp/Email
+
+
+
+
+
+    
+
+    ┌───────────────────┼───────────────────┐
+        ↓                   ↓                   ↓
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│    USERS     │  │   CLIENTS    │  │    TRIPS     │
+│ (Usuários)   │  │ (Clientes)   │  │  (Viagens)   │
+└──────────────┘  └──────────────┘  └──────────────┘
+        ↓                   ↓                   ↓
+        │                   │        ┌──────────┴──────────┐
+        │                   │        ↓                     ↓
+        │                   │  ┌──────────────┐  ┌──────────────┐
+        │                   │  │ RESERVATIONS │  │ TRIP_DETAILS │
+        │                   │  │ (Reservas)   │  │ (Detalhes)   │
+        │                   │  └──────────────┘  └──────────────┘
+        │                   │        ↓
+        │                   │  ┌──────────────┐
+        │                   │  │  PASSENGERS  │
+        │                   │  │ (Passageiros)│
+        │                   │  └──────────────┘
+        │                   │        ↓
+        │                   │  ┌──────────────┐
+        │                   │  │   PAYMENTS   │
+        │                   │  │ (Pagamentos) │
+        │                   │  └──────────────┘
+        │                   │
+        │                   └──→ ┌──────────────┐
+        │                        │  VOUCHERS    │
+        │                        │ (Vouchers)   │
+        │                        └──────────────┘
+        │
+        └──→ ┌──────────────┐
+             │ CONVERSATIONS│
+             │ (Mensagens)  │
+             └──────────────┘
+
+├── GESTÃO DE RESERVAS
+│   ├── Criar reserva
+│   ├── Múltiplos passageiros
+│   ├── Seleção de poltrona
+│   ├── Voucher automático
+│   └── Confirmação automática
+
+
+
+
+
+
+Mapa de Poltronas Interativo
+
+Funcionalidades:
+├── Layout visual do ônibus (2+2)
+├── Cores por status:
+│   ├── Branco = Disponível
+│   ├── Laranja = Reservado
+│   ├── Verde = Confirmado
+│   └── Cinza = Bloqueado
+├── Click para selecionar
+├── Informações ao hover
+├── Legenda visual
+├── Estatísticas em tempo real
+│   ├── Total de assentos
+│   ├── Ocupados
+│   ├── Disponíveis
+│   └── Percentual de ocupação
+├── Modal ao clicar
+│   ├── Selecionar cliente
+│   ├── Dados preenchidos automaticamente
+│   ├── Observações
+│   ├── Botão Salvar
+│   └── Botão Liberar
+└── Sincronização em tempo real
+
+
+GESTÃO DE RESERVAS
+
+3.1 Fluxo de Reserva (4 Passos)
+
+PASSO 1: SELEÇÃO DE VIAGEM
+├── Dropdown com viagens disponíveis
+├── Filtros (destino, data, preço)
+├── Informações da viagem
+└── Botão "Próximo"
+
+
+
+3.2 Status de Reserva
+
+Fluxo de Status:
+Pré-reserva → Confirmada → Paga → Em Viagem → Finalizada
+                ↓
+            Cancelada → Reembolsada
+
+
+
+MÓDULO 4: GESTÃO FINANCEIRA
+
+4.1 Contas a Receber
+
+Tabela:
+┌─────────────┬──────────┬────────┬──────────┬──────────┐
+│ Viagem      │ Cliente  │ Valor  │ Recebido │ Pendente │
+├─────────────┼──────────┼────────┼──────────┼──────────┤
+
+
+Funcionalidades:
+├── Filtros (período, status, viagem)
+
+
+4.2 Comissões
+
+Cálculo Automático:
+Comissão = Valor da Reserva × Percentual de Comissão
+
+
+Exemplo:
+Reserva: R$ 5.000
+Comissão: 5%
+Valor da Comissão: R$ 250
+
+
+MÓDULO 6: AUTOMAÇÕES
+
+6.1 Gatilhos Disponíveis
+
+Gatilhos de Reserva:
+├── Reserva criada
+├── Pagamento confirmado
+├── Pagamento pendente
+├── Reserva cancelada
+└── Reserva modificada
+
+
+Gatilhos de Viagem:
+├── Viagem em 7 dias
+├── Viagem em 3 dias
+├── Viagem em 1 dia
+├── Viagem iniciada
+└── Viagem finalizada
+
+6.3 Exemplo de Workflow
+
+Gatilho: Pagamento confirmado
+├── Ação 1: Enviar WhatsApp de confirmação
+├── Ação 2: Enviar e-mail com voucher
+├── Ação 3: Criar evento no Google Calendar
+├── Ação 4: Notificar agência
+├── Ação 5: Atualizar status da reserva
+└── Ação 6: Criar tarefa de follow-up
+
+
+
+6. FLUXOS DE NEGÓCIO {#fluxos-de-negócio}
+
+Fluxo 1: Venda de Viagem (Completo)
+
+
+CLIENTE ACESSA LOJA
+↓
+
+BUSCA E SELECIONA VIAGEM
+├── Filtra por destino
+├── Filtra por data
+├── Filtra por preço
+└── Clica em "Reservar Agora"
+↓
+
+IDENTIFICA-SE OU CRIA CONTA
+├── Se novo: Cadastro rápido
+├── Se existente: Login
+└── Aceita LGPD
+↓
+
+SELECIONA VIAGEM E POLTRONA
+├── Quantidade de passageiros
+├── Tipo de pacote
+├── Seleção de poltrona (mapa)
+├── Inclusão de extras
+└── Resumo de valores
+↓
+
+PREENCHE DADOS DOS PASSAGEIROS
+├── Nome
+├── CPF
+├── Data de nascimento
+├── Necessidades especiais
+└── Informações de criança
+↓
+
+SELECIONA FORMA DE PAGAMENTO
+├── PIX (QR Code)
+├── Cartão (à vista ou parcelado)
+├── Boleto
+└── Carteira digital
+↓
+
+CONFIRMA PAGAMENTO
+├── Validação com gateway
+├── Webhook de confirmação
+└── Atualização de status
+↓
+
+AUTOMAÇÕES ACIONADAS
+├── Reserva muda para "Confirmada"
+├── Poltrona marcada como "Confirmada"
+├── Voucher gerado automaticamente
+├── WhatsApp de confirmação enviado
+├── E-mail com contrato e voucher
+├── Evento criado no Google Calendar
+├── Notificação para agência
+└── Tarefa de follow-up criada
+↓
+
+CLIENTE RECEBE CONFIRMAÇÃO
+├── WhatsApp com voucher
+├── E-mail com detalhes
+├── Acesso ao painel do cliente
+└── Pode fazer download do voucher
+↓
+
+AGÊNCIA ACOMPANHA
+├── Visualiza reserva no CRM
+├── Acompanha pagamentos
+├── Gerencia passageiros
+├── Envia lembretes
+└── Realiza check-in
+
+SISTEMA RECEBE WEBHOOK
+├── Valida assinatura
+├── Atualiza status do pagamento
+├── Atualiza status da reserva
+└── Registra transação
+↓
+
+
+
+Localização:  cliente  trips  :id  (Exemplo: MALDIVAS)
+
+Layout:
+
+
+────────────────────────────────────────────────────────┐
+│  DETALHES DA VIAGEM                                     │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  [← Voltar]                                             │
+│                                                         │
+│  Exemplo: MALDIVAS                                               │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │ [Galeria de Fotos]                              │   │
+│  │ ◄ [Foto 1] [Foto 2] [Foto 3] ►                  │   │
+│  └─────────────────────────────────────────────────┘   │
+│                                                         │
+│  INFORMAÇÕES GERAIS                                     │
+│  ├── Data: 15/06/2024 - 22/06/2024 (7 dias)            │
+│  ├── Horário: 08:00 - 18:00                            │
+│  ├── Destino: Maldivas                                 │
+│  ├── Origem: São Paulo                                 │
+│  ├── Guia: João Silva                                  │
+│  ├── Veículo: Ônibus 50 lugares                        │
+│  └── Status: Confirmada                                │
+│                                                         │
+│  MINHA RESERVA                                          │
+│  ├── Poltrona: 12                                       │
+│  ├── Passageiros: 2 (João Silva, Maria Silva)           │
+│  ├── Local de Embarque: Terminal Rodoviário             │
+│  ├── Horário de Embarque: 08:00                        │
+│  └── Observações: Nenhuma                              │
+│                                                         │
+│  ITINERÁRIO                                             │
+│  ├── Dia 1 (15/06)                                      │
+│  │  ├── 08:00 - Saída do terminal                      │
+│  │  ├── 10:30 - Parada para café                       │
+│  │  ├── 12:00 - Almoço                                 │
+│  │  └── 18:00 - Check-in no hotel                      │
+│  │                                                     │
+│  ├── Dia 2 (16/06)                                      │
+│  │  ├── 08:00 - Café da manhã                          │
+│  │  ├── 09:00 - Passeio de barco                       │
+│  │  ├── 12:00 - Almoço                                 │
+│  │  └── 18:00 - Retorno ao hotel                       │
+│  │                                                     │
+│  └── [Ver Itinerário Completo]                         │
+│                                                         │
+│  O QUE INCLUI                                           │
+│  ├── ✓ Transporte
+│  ├── ✓ Hospedagem (3 noites)
+│  ├── ✓ Alimentação (café, almoço, jantar)
+│  ├── ✓ Passeios inclusos
+│  ├── ✓ Guia turístico
+│  └── ✗ Bebidas alcoólicas
+│                                                         │
+│  FINANCEIRO                                             │
+│  ├── Valor Total: R$ 5.000                             │
+│  ├── Valor Pago: R$ 5.000                              │
+│  ├── Valor Pendente: R$ 0                              │
+│  ├── Status: Pago                                      │
+│  └── [Ver Comprovante]                                 │
+│                                                         │
+│  AÇÕES                                                  │
+│  ├── [Baixar Voucher] [Imprimir] [Compartilhar]        │
+│  ├── [Editar Reserva] [Cancelar Reserva]               │
+│  ├── [Avaliar Viagem] [Contato com Agência]            │
+│  └── [Adicionar Seguro] [Adicionar Serviços]           │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+
+
+
+Cliente acessa  cliente  trips
+2. Clica em uma viagem
+3. Sistema carrega detalhes:
+   ├── Informações gerais
+   ├── Minha reserva
+   ├── Itinerário
+   ├── Passageiros
+   ├── Documentos
+   └── Avaliações
+4. Cliente visualiza todas as informações
+5. Cliente pode:
+   ├── Baixar voucher
+   ├── Imprimir
+   ├── Compartilhar
+   ├── Editar reserva
+   ├── Cancelar reserva
+   ├── Avaliar viagem
+   └── Contatar agência
+
+
+Gestão de viagens completa
+    Mapa de poltronas interativo funcional
+    Sistema de reservas funcional
+    Financeiro com cálculos automáticos funcional
+    Comunicação omnichannel funcional
+    Automações funcionais
+    Relatórios funcionais
+    Integrações configuradas e funcionais
+
+
+
+Reservas
+
+Controle das reservas realizadas pelos clientes.
+
+### Funcionalidades
+- Registro de reservas
+- Status de pagamento
+- Vínculo cliente ↔ viagem
+- Acompanhamento financeiro da reserva
+
+[1 Viagem] ──────> [2 Passageiros] ──────> [3 Assentos] ──────> [4 Pagamento]
+   ●                     ○                       ○                    ○
+ETAPA 1 - VIAGEM:
+
+┌─────────────────────────────────────────────────────┐
+│ Selecione a Viagem                                  │
+├─────────────────────────────────────────────────────┤
+│ [🔍 Buscar viagem...                            ▼] │
+│                                                     │
+│ ┌─────────────────────────────────────────────┐   │
+│ │ Canoa Quebrada - CE                         │   │
+│ │ 📅 15/06/2024 às 06:00                      │   │
+│ │ 💺 10 vagas disponíveis                     │   │
+│ │ 💰 R$ 600,00 por pessoa                     │   │
+│ │ [Selecionar]                                │   │
+│ ├─────────────────────────────────────────────┤   │
+│ │ Jericoacoara - CE                           │   │
+│ │ 📅 20/06/2024 às 05:00                      │   │
+│ │ 💺 17 vagas disponíveis                     │   │
+│ │ 💰 R$ 800,00 por pessoa                     │   │
+│ │ [Selecionar]                                │   │
+│ └─────────────────────────────────────────────┘   │
+│                                                     │
+│ Viagem Selecionada:                                 │
+│ ┌─────────────────────────────────────────────┐   │
+│ │ [Imagem] Canoa Quebrada - CE                │   │
+│ │ 📅 15/06/2024 às 06:00                      │   │
+│ │ 📍 Destino: Canoa Quebrada                  │   │
+│ │ 💺 Vagas: 10/52                             │   │
+│ │ 💰 Preço: R$ 600,00/pessoa                  │   │
+│ └─────────────────────────────────────────────┘   │
+│                                                     │
+│ Vendedor:                                           │
+│ [Carlos Vendedor                                ▼] │
+│                                                     │
+│ Ponto de Embarque:                                  │
+│ [Terminal Rodoviário                            ▼] │
+│   • Terminal Rodoviário - 06:00                    │
+│   • Shopping Iguatemi - 06:30                      │
+│   • Praia de Iracema - 07:00                       │
+│                                                     │
+│ [Cancelar]                        [Próximo →]     │
+└─────────────────────────────────────────────────────┘
+ETAPA 2 - CLIENTES/PASSAGEIROS:
+
+┌─────────────────────────────────────────────────────┐
+│ Passageiros                                         │
+├─────────────────────────────────────────────────────┤
+│ Cliente Principal:                                  │
+│ [🔍 Buscar cliente existente...                 ▼] │
+│   ┌─────────────────────────────────────────────┐  │
+│   │ João Silva - (85) 99999-9999                │  │
+│   │ Maria Santos - (85) 98888-8888              │  │
+│   └─────────────────────────────────────────────┘  │
+│                                                     │
+│ ─── OU CADASTRAR NOVO ───                          │
+│                                                     │
+│ Nome: [                                          ]  │
+│ CPF: [                                           ]  │
+│ WhatsApp: [                                      ]  │
+│ Email: [                                         ]  │
+│                                                     │
+│ ═══════════════════════════════════════════════════ │
+│                                                     │
+│ Lista de Passageiros:                               │
+│                                                     │
+│ Passageiro 1 (Principal):                           │
+│ ┌─────────────────────────────────────────────┐   │
+│ │ Nome: [João Silva                         ] │   │
+│ │ CPF: [123.456.789-00                      ] │   │
+│ │ Data Nasc: [15/03/1985                    ] │   │
+│ │ Tipo: [Adulto                             ▼]│   │
+│ │ Local Embarque: [Terminal Rodoviário      ▼]│   │
+│ └─────────────────────────────────────────────┘   │
+│                                                     │
+│ Passageiro 2:                                       │
+│ ┌─────────────────────────────────────────────┐   │
+│ │ Nome: [Maria Silva                        ] │   │
+│ │ CPF: [987.654.321-00                      ] │   │
+│ │ Data Nasc: [20/05/1987                    ] │   │
+│ │ Tipo: [Adulto                             ▼]│   │
+│ │ Local Embarque: [Terminal Rodoviário      ▼]│   │
+│ │                                    [Remover]│   │
+│ └─────────────────────────────────────────────┘   │
+│                                                     │
+│ [+ Adicionar Passageiro]                           │
+│                                                     │
+│ [← Voltar]                          [Próximo →]   │
+└─────────────────────────────────────────────────────┘
+ETAPA 3 - ASSENTOS:
+┌─────────────────────────────────────────────────────┐
+│ Seleção de Assentos                                 │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│ Passageiro 1: João Silva                            │
+│ Assento: [15                                    ▼] │
+│ Tipo Pacote: [Individual                        ▼] │
+│   • Individual                                      │
+│   • Casal                                           │
+│   • Família                                         │
+│   • Grupo                                           │
+│                                                     │
+│ Passageiro 2: Maria Silva                           │
+│ Assento: [16                                    ▼] │
+│ Tipo Pacote: [Individual                        ▼] │
+│                                                     │
+│ ─────────────────────────────────────────────────  │
+│                                                     │
+│ Mapa de Assentos (Pré-visualização):                │
+│                                                     │
+│        [🚗 Motorista]                               │
+│                                                     │
+│ ┌─────────────────────────┐                        │
+│ │ [01]      [02]          │                        │
+│ │ ⬜        ⬜            │                        │
+│ │                         │                        │
+│ │ [15]      [16]          │                        │
+│ │ João      Maria         │ ← Selecionados        │
+│ │                         │                        │
+│ │ [17]      [18]          │                        │
+│ │ ⬜        ⬜            │                        │
+│ └─────────────────────────┘                        │
+│                                                     │
+│ Campo Adicional:                                    │
+│ Observações: [                                   ]  │
+│                                                     │
+│ [← Voltar]                          [Próximo →]   │
+└─────────────────────────────────────────────────────┘
+ETAPA 4 - PAGAMENTO:
+
+┌─────────────────────────────────────────────────────┐
+│ Pagamento                                           │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│ Resumo da Reserva:                                  │
+│ ┌─────────────────────────────────────────────┐   │
+│ │ Viagem: Canoa Quebrada - CE                 │   │
+│ │ Data: 15/06/2024 às 06:00                   │   │
+│ │ Passageiros: 2                              │   │
+│ │   • João Silva (Assento 15)                 │   │
+│ │   • Maria Silva (Assento 16)                │   │
+│ └─────────────────────────────────────────────┘   │
+│                                                     │
+│ Valores:                                            │
+│ Valor por Pessoa: R$ 600,00                         │
+│ Quantidade: 2 passageiros                           │
+│ Subtotal: R$ 1.200,00                               │
+│ Desconto: [R$ 0,00                              ]   │
+│ ─────────────────────────────────────────────────  │
+│ VALOR TOTAL: R$ 1.200,00                            │
+│                                                     │
+│ Pagamento:                                          │
+│ Valor Pago: [R$ 600,00                          ]   │
+│ Falta Pagar: R$ 600,00 (calculado automaticamente) │
+│                                                     │
+│ Forma de Pagamento:                                 │
+│ [PIX                                            ▼] │
+│   • PIX                                             │
+│   • Dinheiro                                        │
+│   • Débito                                          │
+│   • Crédito                                         │
+│   • Parcelado                                       │
+│   • Transferência                                   │
+│   • Boleto                                          │
+│                                                     │
+│ Se Parcelado/Crédito:                               │
+│ Número de Parcelas: [2                          ▼] │
+│ Valor da Parcela: R$ 300,00                         │
+│                                                     │
+│ Status da Reserva:                                  │
+│ ● Pendente  ○ Confirmada                           │
+│                                                     │
+│ Comissão do Vendedor:                               │
+│ [5] % = R$ 60,00                                    │
+│                                                     │
+│ [← Voltar]                    [Finalizar Reserva]  │
+└─────────────────────────────────────────────────────┘
+Cartão "Resumo da Reserva" (após criação):
+
+┌─────────────────────────────────────────────────────┐
+│ ✅ Reserva Criada com Sucesso!                      │
+├─────────────────────────────────────────────────────┤
+│ ID da Reserva: #12345                               │
+│ Voucher: VTC-2024-12345                             │
+│                                                     │
+│ Cliente: João Silva                                 │
+│ Viagem: Canoa Quebrada - CE                         │
+│ Data: 15/06/2024 às 06:00                          │
+│ Passageiros: 2                                      │
+│ Assentos: 15, 16                                    │
+│                                                     │
+│ Valor Total: R$ 1.200,00                            │
+│ Pago: R$ 600,00                                     │
+│ Pendente: R$ 600,00                                 │
+│                                                     │
+│ [Ver Reserva] [Gerar Voucher] [Enviar WhatsApp]   │
+└─────────────────────────────────────────────────────┘
+
+
+---
+
+Loja
+
+Sistema e sincronizado com a loja online, as viagens aprece na loja para o usuário realizar a reserva.
+
+### Funcionalidades
+- Criação de regras automáticas
+- Execução de ações programadas
+- Notificações automáticas
+- Redução de tarefas manuais
+
+**Ações Rápidas:**
+- [ + Novo Cliente ]
+- [ + Nova Viagem ]
+- [ + Nova Reserva ]
+- [ Ver Relatórios ]
+---
+
+  // RESERVAS
+  'reservas:criar': { label: 'Criar Reserva', roles: ['superadmin', 'agencia', 'vendedor'] },
+  'reservas:editar': { label: 'Editar Reserva', roles: ['superadmin', 'agencia'] },
+  'reservas:editar-proprias': { label: 'Editar Próprias Reservas', roles: ['vendedor'] },
+  'reservas:deletar': { label: 'Deletar Reserva', roles: ['superadmin', 'agencia'] },
+  'reservas:ver': { label: 'Ver Reserva', roles: ['superadmin', 'agencia', 'vendedor', 'cliente'] },
+  'reservas:ver-proprias': { label: 'Ver Próprias Reservas', roles: ['cliente'] },
+  'reservas:listar': { label: 'Listar Reservas', roles: ['superadmin', 'agencia', 'vendedor'] },
+  'reservas:cancelar': { label: 'Cancelar Reserva', roles: ['superadmin', 'agencia'] },
+
+
+
+
+Sistema de Reservas — VisiteCRM
+🧙 Wizard de Nova Reserva
+Passo 1 — Viagem & Cliente
+
+Seleção de viagem (filtra apenas viagens ativas, mostra vagas disponíveis)
+Seleção de cliente com WhatsApp
+Sicronização
+Passo 2 — Passageiros
+
+Adicionar múltiplos passageiros com nome, CPF, data de nascimento
+Categoria por passageiro: Adulto ou Criança (preços diferentes)
+Cálculo automático do valor total
+Passo 3 — Assentos
+
+Mapa visual do ônibus com layout real (4 colunas, corredor central)
+Seleção interativa: disponível / selecionado / ocupado
+Limite de seleção igual ao número de passageiros
+Assentos salvos vinculados a cada passageiro
+Passo 4 — Pagamento & Descontos
+
+Resumo financeiro em tempo real (base → desconto → total final)
+Cupom de desconto (ex: CODIGO10 = 10% off)
+Bônus de indicação (R$ 50 por cliente que indicou)
+Valor pago inicial + saldo restante calculado automaticamente
+Forma de pagamento (PIX, cartão, dinheiro, transferência, parcelado)
+Número de parcelas
+Passo 5 — Confirmação
+
+Resumo completo da reserva antes de confirmar
+Lista de passageiros com assentos e categorias
+Criação automática do código voucher (ex: VC-M3X9KA)
+Status automático: confirmado se pago integralmente, pendente se houver saldo
+📋 Detalhes da Reserva (Sheet Lateral)
+Ao clicar em qualquer reserva na tabela:
+
+Dados do cliente e viagem, ponto de embarque, assentos
+Lista completa de passageiros com CPF, nascimento, assento e categoria
+Painel financeiro: total / pago / saldo em destaque (vermelho se devendo, verde se quitado)
+Registrar pagamento parcial: valor + forma de pagamento na hora
+Fluxo de status com botões de ação:
+Pendente → Confirmar
+Confirmado → Check-in (salva timestamp)
+Check-in → Concluir
+Qualquer status → Cancelar
+Timestamps de check-in e conclusão
+Botão Ver / Imprimir Voucher
+🎫 Voucher
+Modal com layout profissional pronto para impressão
+Mostra: código, status, viagem, cliente, passageiros, assentos, financeiro
+Botão de impressão
+Emitido com data e marca VisiteCRM
+
+
+
+
+
+SISTEMA DE RESERVAS
+├── 1. SCHEMA DO BANCO DE DADOS
+│   ├── Reservations (Reservas)
+│   ├── Passengers (Passageiros)
+│   ├── Seats (Assentos/Poltronas)
+│   ├── Payments (Pagamentos)
+│   ├── Vouchers (Vouchers)
+│   └── Referrals (Indicações)
+│
+├── 2. WIZARD DE CRIAÇÃO (5 PASSOS)
+│   ├── Passo 1: Seleção de Viagem
+│   ├── Passo 2: Passageiros
+│   ├── Passo 3: Seleção de Assentos
+│   ├── Passo 4: Pagamento e Descontos
+│   └── Passo 5: Confirmação
+│
+├── 3. GESTÃO DE RESERVAS
+│   ├── Lista de Reservas
+│   ├── Detalhes da Reserva (Sheet)
+│   ├── Mapa de Poltronas Interativo
+│   ├── Gestão de Pagamentos
+│   └── Check-in de Passageiros
+│
+├── 4. VOUCHERS
+│   ├── Geração Automática
+│   ├── QR Code
+│   ├── PDF para Download
+│   └── Impressão
+│
+├── 5. INTEGRAÇÕES
+│   ├── Loja Online (Storefront)
+│   ├── Sistema de Indicação
+│   ├── Cupons de Desconto
+│   ├── WhatsApp/Email
+│   └── Automações
+│
+└── 6. ÁREA DO CLIENTE
+    ├── Minhas Viagens
+    ├── Detalhes da Reserva
+    ├── Download de Voucher
+    └── Check-in Online
+
+
+SISTEMA DE RESERVAS
+├── 1. SCHEMA DO BANCO DE DADOS
+│   ├── Reservations (Reservas)
+│   ├── Passengers (Passageiros)
+│   ├── Seats (Assentos/Poltronas)
+│   ├── Payments (Pagamentos)
+│   ├── Vouchers (Vouchers)
+│   └── Referrals (Indicações)
+│
+├── 2. WIZARD DE CRIAÇÃO (5 PASSOS)
+│   ├── Passo 1: Seleção de Viagem
+│   ├── Passo 2: Passageiros
+│   ├── Passo 3: Seleção de Assentos
+│   ├── Passo 4: Pagamento e Descontos
+│   └── Passo 5: Confirmação
+│
+├── 3. GESTÃO DE RESERVAS
+│   ├── Lista de Reservas
+│   ├── Detalhes da Reserva (Sheet)
+│   ├── Mapa de Poltronas Interativo
+│   ├── Gestão de Pagamentos
+│   └── Check-in de Passageiros
+│
+├── 4. VOUCHERS
+│   ├── Geração Automática
+│   ├── QR Code
+│   ├── PDF para Download
+│   └── Impressão
+│
+├── 5. INTEGRAÇÕES
+│   ├── Loja Online (Storefront)
+│   ├── Sistema de Indicação
+│   ├── Cupons de Desconto
+│   ├── WhatsApp/Email
+│   └── Automações
+│
+└── 6. ÁREA DO CLIENTE
+    ├── Minhas Viagens
+    ├── Detalhes da Reserva
+    ├── Download de Voucher
+    └── Check-in Online
+
+1. SCHEMA PRISMA - SISTEMA DE RESERVAS
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════════
+// SISTEMA DE RESERVAS COMPLETO
+// ═══════════════════════════════════════════════════════════════
+
+model Reservation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ─────────────────────────────────────────────────────────────
+  // CÓDIGO E IDENTIFICAÇÃO
+  // ─────────────────────────────────────────────────────────────
+  reservation_number String  @unique // Ex: RES-2024-00001
+  voucher_code    String    @unique // Ex: VC-M3X9KA
+  
+  // ─────────────────────────────────────────────────────────────
+  // RELACIONAMENTOS PRINCIPAIS
+  // ─────────────────────────────────────────────────────────────
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id], onDelete: Restrict)
+  
+  client_id       String
+  client          Client    @relation(fields: [client_id], references: [id], onDelete: Restrict)
+  
+  seller_id       String?
+  seller          User?     @relation("SellerReservations", fields: [seller_id], references: [id])
+  
+  // ─────────────────────────────────────────────────────────────
+  // PASSAGEIROS E ASSENTOS
+  // ─────────────────────────────────────────────────────────────
+  passengers      Passenger[]
+  seats           ReservationSeat[]
+  
+  total_passengers Int      @default(1)
+  adults_count    Int       @default(1)
+  children_count  Int       @default(0)
+  
+  // ─────────────────────────────────────────────────────────────
+  // EMBARQUE
+  // ─────────────────────────────────────────────────────────────
+  boarding_location_id String?
+  boarding_location BoardingLocation? @relation(fields: [boarding_location_id], references: [id])
+  
+  // ─────────────────────────────────────────────────────────────
+  // VALORES E PAGAMENTO
+  // ─────────────────────────────────────────────────────────────
+  subtotal_amount Decimal   @db.Decimal(10, 2) // Valor base
+  discount_amount Decimal   @default(0) @db.Decimal(10, 2) // Descontos
+  coupon_discount Decimal   @default(0) @db.Decimal(10, 2) // Desconto cupom
+  referral_discount Decimal @default(0) @db.Decimal(10, 2) // Desconto indicação
+  total_amount    Decimal   @db.Decimal(10, 2) // Valor final
+  
+  amount_paid     Decimal   @default(0) @db.Decimal(10, 2) // Já pago
+  amount_pending  Decimal   @db.Decimal(10, 2) // Falta pagar
+  
+  // ─────────────────────────────────────────────────────────────
+  // CUPOM E INDICAÇÃO
+  // ─────────────────────────────────────────────────────────────
+  coupon_code     String?
+  coupon_id       String?
+  coupon          Coupon?   @relation(fields: [coupon_id], references: [id])
+  
+  referral_id     String?   @unique
+  referral        Referral? @relation(fields: [referral_id], references: [id])
+  
+  referred_by_code String? // Código de quem indicou
+  
+  // ─────────────────────────────────────────────────────────────
+  // PAGAMENTOS
+  // ─────────────────────────────────────────────────────────────
+  payments        ReservationPayment[]
+  
+  payment_method  String? // pix, credit_card, debit_card, cash, transfer, installment
+  installments    Int?    @default(1)
+  installment_amount Decimal? @db.Decimal(10, 2)
+  
+  // ─────────────────────────────────────────────────────────────
+  // COMISSÃO
+  // ─────────────────────────────────────────────────────────────
+  commission_percentage Decimal? @db.Decimal(5, 2)
+  commission_amount Decimal? @db.Decimal(10, 2)
+  commission_paid Boolean @default(false)
+  
+  // ─────────────────────────────────────────────────────────────
+  // STATUS E FLUXO
+  // ─────────────────────────────────────────────────────────────
+  status          String    @default("pending") 
+  // pending | confirmed | paid | checked_in | completed | cancelled | refunded
+  
+  payment_status  String    @default("pending")
+  // pending | partial | paid | refunded
+  
+  // ─────────────────────────────────────────────────────────────
+  // CHECK-IN E CONCLUSÃO
+  // ─────────────────────────────────────────────────────────────
+  checked_in      Boolean   @default(false)
+  checked_in_at   DateTime?
+  checked_in_by   String?
+  
+  completed_at    DateTime?
+  cancelled_at    DateTime?
+  cancellation_reason String? @db.Text
+  
+  // ─────────────────────────────────────────────────────────────
+  // OBSERVAÇÕES
+  // ─────────────────────────────────────────────────────────────
+  notes           String?   @db.Text
+  internal_notes  String?   @db.Text // Notas internas da agência
+  
+  // ─────────────────────────────────────────────────────────────
+  // ORIGEM DA RESERVA
+  // ─────────────────────────────────────────────────────────────
+  source          String    @default("admin") // admin | store | api
+  
+  // ─────────────────────────────────────────────────────────────
+  // INTEGRAÇÃO COM LOJA
+  // ─────────────────────────────────────────────────────────────
+  store_order_id  String?   @unique
+  store_order     StoreOrder? @relation(fields: [store_order_id], references: [id])
+  
+  // ─────────────────────────────────────────────────────────────
+  // TIMESTAMPS
+  // ─────────────────────────────────────────────────────────────
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([trip_id])
+  @@index([client_id])
+  @@index([seller_id])
+  @@index([status])
+  @@index([voucher_code])
+  @@index([created_at])
+  @@map("reservations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PASSAGEIROS
+// ═══════════════════════════════════════════════════════════════
+
+model Passenger {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  // ─────────────────────────────────────────────────────────────
+  // DADOS PESSOAIS
+  // ─────────────────────────────────────────────────────────────
+  name            String
+  cpf             String?
+  rg              String?
+  birth_date      DateTime?
+  
+  // ─────────────────────────────────────────────────────────────
+  // CATEGORIA E TIPO
+  // ─────────────────────────────────────────────────────────────
+  category        String    @default("adult") // adult | child | infant
+  age             Int?
+  
+  // ─────────────────────────────────────────────────────────────
+  // ASSENTO
+  // ─────────────────────────────────────────────────────────────
+  seat_number     String?
+  
+  // ─────────────────────────────────────────────────────────────
+  // EMBARQUE
+  // ─────────────────────────────────────────────────────────────
+  boarding_location_id String?
+  boarding_location BoardingLocation? @relation(fields: [boarding_location_id], references: [id])
+  
+  // ─────────────────────────────────────────────────────────────
+  // NECESSIDADES ESPECIAIS
+  // ─────────────────────────────────────────────────────────────
+  special_needs   String?   @db.Text
+  dietary_restrictions String? @db.Text
+  
+  // ─────────────────────────────────────────────────────────────
+  // CONTATO (se diferente do cliente principal)
+  // ─────────────────────────────────────────────────────────────
+  phone           String?
+  email           String?
+  
+  // ─────────────────────────────────────────────────────────────
+  // CHECK-IN
+  // ─────────────────────────────────────────────────────────────
+  checked_in      Boolean   @default(false)
+  checked_in_at   DateTime?
+  
+  // ─────────────────────────────────────────────────────────────
+  // PRINCIPAL
+  // ─────────────────────────────────────────────────────────────
+  is_primary      Boolean   @default(false) // Passageiro principal
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([reservation_id])
+  @@index([cpf])
+  @@map("passengers")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ASSENTOS/POLTRONAS
+// ═══════════════════════════════════════════════════════════════
+
+model ReservationSeat {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id], onDelete: Cascade)
+  
+  // ─────────────────────────────────────────────────────────────
+  // ASSENTO
+  // ─────────────────────────────────────────────────────────────
+  seat_number     String    // Ex: "15", "16A"
+  seat_row        Int       // Fileira
+  seat_column     String    // Coluna (A, B, C, D)
+  
+  // ─────────────────────────────────────────────────────────────
+  // PASSAGEIRO VINCULADO
+  // ─────────────────────────────────────────────────────────────
+  passenger_name  String?
+  passenger_cpf   String?
+  
+  // ─────────────────────────────────────────────────────────────
+  // STATUS
+  // ─────────────────────────────────────────────────────────────
+  status          String    @default("reserved") 
+  // available | reserved | confirmed | blocked
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([trip_id, seat_number])
+  @@index([reservation_id])
+  @@index([trip_id])
+  @@map("reservation_seats")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PAGAMENTOS DA RESERVA
+// ═══════════════════════════════════════════════════════════════
+
+model ReservationPayment {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  // ─────────────────────────────────────────────────────────────
+  // VALOR E MÉTODO
+  // ─────────────────────────────────────────────────────────────
+  amount          Decimal   @db.Decimal(10, 2)
+  payment_method  String    // pix, credit_card, debit_card, cash, transfer
+  
+  // ─────────────────────────────────────────────────────────────
+  // PARCELAMENTO
+  // ─────────────────────────────────────────────────────────────
+  installment_number Int?   // Número da parcela (1, 2, 3...)
+  total_installments Int?   // Total de parcelas
+  
+  // ─────────────────────────────────────────────────────────────
+  // STATUS
+  // ─────────────────────────────────────────────────────────────
+  status          String    @default("pending") // pending | paid | failed | refunded
+  
+  // ─────────────────────────────────────────────────────────────
+  // DATAS
+  // ─────────────────────────────────────────────────────────────
+  payment_date    DateTime  @default(now())
+  due_date        DateTime?
+  paid_at         DateTime?
+  
+  // ─────────────────────────────────────────────────────────────
+  // INTEGRAÇÃO GATEWAY
+  // ─────────────────────────────────────────────────────────────
+  transaction_id  String?   @unique // ID do gateway
+  gateway         String?   // stripe, mercadopago, pagseguro
+  
+  // ─────────────────────────────────────────────────────────────
+  // COMPROVANTE
+  // ─────────────────────────────────────────────────────────────
+  receipt_url     String?
+  
+  // ─────────────────────────────────────────────────────────────
+  // OBSERVAÇÕES
+  // ─────────────────────────────────────────────────────────────
+  notes           String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([reservation_id])
+  @@index([status])
+  @@map("reservation_payments")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOCAIS DE EMBARQUE
+// ═══════════════════════════════════════════════════════════════
+
+model BoardingLocation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ─────────────────────────────────────────────────────────────
+  // INFORMAÇÕES
+  // ─────────────────────────────────────────────────────────────
+  name            String    // Ex: "Terminal Rodoviário"
+  address         String?
+  city            String?
+  state           String?
+  
+  // ─────────────────────────────────────────────────────────────
+  // COORDENADAS
+  // ─────────────────────────────────────────────────────────────
+  latitude        Decimal?  @db.Decimal(10, 8)
+  longitude       Decimal?  @db.Decimal(11, 8)
+  
+  // ─────────────────────────────────────────────────────────────
+  // HORÁRIO PADRÃO
+  // ─────────────────────────────────────────────────────────────
+  default_time    String?   // Ex: "06:00"
+  
+  // ─────────────────────────────────────────────────────────────
+  // STATUS
+  // ─────────────────────────────────────────────────────────────
+  is_active       Boolean   @default(true)
+  
+  // ─────────────────────────────────────────────────────────────
+  // RELACIONAMENTOS
+  // ─────────────────────────────────────────────────────────────
+  trip_locations  TripBoardingLocation[]
+  reservations    Reservation[]
+  passengers      Passenger[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@map("boarding_locations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOCAIS DE EMBARQUE POR VIAGEM
+// ═══════════════════════════════════════════════════════════════
+
+model TripBoardingLocation {
+  id              String    @id @default(cuid())
+  
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id], onDelete: Cascade)
+  
+  location_id     String
+  location        BoardingLocation @relation(fields: [location_id], references: [id], onDelete: Cascade)
+  
+  // ─────────────────────────────────────────────────────────────
+  // HORÁRIO ESPECÍFICO DESTA VIAGEM
+  // ─────────────────────────────────────────────────────────────
+  boarding_time   String    // Ex: "06:30"
+  
+  // ─────────────────────────────────────────────────────────────
+  // ORDEM
+  // ─────────────────────────────────────────────────────────────
+  order           Int       @default(0)
+  
+  created_at      DateTime  @default(now())
+  
+  @@unique([trip_id, location_id])
+  @@index([trip_id])
+  @@map("trip_boarding_locations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ATUALIZAR MODELS EXISTENTES
+// ═══════════════════════════════════════════════════════════════
+
+// Adicionar ao model Trip:
+model Trip {
+  // ... campos existentes ...
+  
+  // Relacionamentos de reserva
+  reservations    Reservation[]
+  seats           ReservationSeat[]
+  boarding_locations TripBoardingLocation[]
+  
+  // Configuração de assentos
+  total_seats     Int       @default(50)
+  seat_layout     String    @default("2+2") // 2+2, 3+2, etc
+  
+  // ... resto do model ...
+}
+
+// Adicionar ao model Client:
+model Client {
+  // ... campos existentes ...
+  
+  // Relacionamentos de reserva
+  reservations    Reservation[]
+  
+  // ... resto do model ...
+}
+
+// Adicionar ao model StoreOrder:
+model StoreOrder {
+  // ... campos existentes ...
+  
+  // Relacionamento com reserva
+  reservation     Reservation?
+  
+  // ... resto do model ...
+}
+
+WIZARD DE CRIAÇÃO DE RESERVAS - IMPLEMENTAÇÃO COMPLETA
+📋 ESTRUTURA DO WIZARD
+
+WIZARD DE RESERVAS (5 PASSOS)
+├── Passo 1: Seleção de Viagem e Cliente
+├── Passo 2: Passageiros
+├── Passo 3: Seleção de Assentos
+├── Passo 4: Pagamento e Descontos
+└── Passo 5: Confirmação
+
+1. PÁGINA PRINCIPAL DO WIZARD
+// app/(dashboard)/dashboard/reservas/nova/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { ReservationWizard } from '@/components/dashboard/reservations/reservation-wizard'
+import { redirect } from 'next/navigation'
+
+export default async function NewReservationPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    redirect('/login')
+  }
+
+  // Buscar dados necessários
+  const [trips, clients, boardingLocations, coupons] = await Promise.all([
+    // Viagens ativas com vagas disponíveis
+    prisma.trip.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        status: 'active',
+        departure_date: {
+          gte: new Date(),
+        },
+      },
+      include: {
+        boarding_locations: {
+          include: {
+            location: true,
+          },
+          orderBy: {
+            order: 'asc',
+          },
+        },
+      },
+      orderBy: {
+        departure_date: 'asc',
+      },
+    }),
+
+    // Clientes ativos
+    prisma.client.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        cpf: true,
+        referral_code: true,
+      },
+    }),
+
+    // Locais de embarque
+    prisma.boardingLocation.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        is_active: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    }),
+
+    // Cupons ativos
+    prisma.coupon.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        is_active: true,
+        OR: [
+          { valid_until: null },
+          { valid_until: { gte: new Date() } },
+        ],
+      },
+    }),
+  ])
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold">Nova Reserva</h1>
+        <p className="text-gray-600">
+          Crie uma nova reserva seguindo os passos abaixo
+        </p>
+      </div>
+
+      <ReservationWizard
+        trips={trips}
+        clients={clients}
+        boardingLocations={boardingLocations}
+        coupons={coupons}
+        sellerId={session.user.id}
+        tenantId={session.user.tenantId}
+      />
+    </div>
+  )
+}
+
+2. COMPONENTE PRINCIPAL DO WIZARD
+// components/dashboard/reservations/reservation-wizard.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { useToast } from '@/components/ui/use-toast'
+import { useRouter } from 'next/navigation'
+import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
+
+// Importar os passos
+import { Step1TripSelection } from './steps/step1-trip-selection'
+import { Step2Passengers } from './steps/step2-passengers'
+import { Step3SeatSelection } from './steps/step3-seat-selection'
+import { Step4Payment } from './steps/step4-payment'
+import { Step5Confirmation } from './steps/step5-confirmation'
+
+interface ReservationWizardProps {
+  trips: any[]
+  clients: any[]
+  boardingLocations: any[]
+  coupons: any[]
+  sellerId: string
+  tenantId: string
+}
+
+export interface ReservationData {
+  // Passo 1
+  trip_id: string
+  trip?: any
+  client_id: string
+  client?: any
+  boarding_location_id: string
+  seller_id: string
+
+  // Passo 2
+  passengers: Array<{
+    name: string
+    cpf: string
+    birth_date: string
+    category: 'adult' | 'child' | 'infant'
+    age?: number
+    boarding_location_id?: string
+    special_needs?: string
+    is_primary: boolean
+  }>
+
+  // Passo 3
+  seats: Array<{
+    seat_number: string
+    passenger_name: string
+    passenger_cpf: string
+  }>
+
+  // Passo 4
+  subtotal_amount: number
+  discount_amount: number
+  coupon_code?: string
+  coupon_discount: number
+  referral_discount: number
+  total_amount: number
+  amount_paid: number
+  amount_pending: number
+  payment_method: string
+  installments: number
+  installment_amount?: number
+  commission_percentage?: number
+  commission_amount?: number
+  status: string
+  notes?: string
+}
+
+export function ReservationWizard({
+  trips,
+  clients,
+  boardingLocations,
+  coupons,
+  sellerId,
+  tenantId,
+}: ReservationWizardProps) {
+  const { toast } = useToast()
+  const router = useRouter()
+
+  const [currentStep, setCurrentStep] = useState(1)
+  const [loading, setLoading] = useState(false)
+
+  const [reservationData, setReservationData] = useState<ReservationData>({
+    trip_id: '',
+    client_id: '',
+    boarding_location_id: '',
+    seller_id: sellerId,
+    passengers: [],
+    seats: [],
+    subtotal_amount: 0,
+    discount_amount: 0,
+    coupon_discount: 0,
+    referral_discount: 0,
+    total_amount: 0,
+    amount_paid: 0,
+    amount_pending: 0,
+    payment_method: 'pix',
+    installments: 1,
+    status: 'pending',
+  })
+
+  const steps = [
+    { number: 1, title: 'Viagem', component: Step1TripSelection },
+    { number: 2, title: 'Passageiros', component: Step2Passengers },
+    { number: 3, title: 'Assentos', component: Step3SeatSelection },
+    { number: 4, title: 'Pagamento', component: Step4Payment },
+    { number: 5, title: 'Confirmação', component: Step5Confirmation },
+  ]
+
+  const CurrentStepComponent = steps[currentStep - 1].component
+
+  const handleNext = () => {
+    // Validações por passo
+    if (currentStep === 1) {
+      if (!reservationData.trip_id || !reservationData.client_id) {
+        toast({
+          title: 'Campos obrigatórios',
+          description: 'Selecione a viagem e o cliente',
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
+    if (currentStep === 2) {
+      if (reservationData.passengers.length === 0) {
+        toast({
+          title: 'Adicione passageiros',
+          description: 'É necessário adicionar pelo menos um passageiro',
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
+    if (currentStep === 3) {
+      if (reservationData.seats.length !== reservationData.passengers.length) {
+        toast({
+          title: 'Selecione os assentos',
+          description: 'Selecione um assento para cada passageiro',
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
+    if (currentStep < 5) {
+      setCurrentStep(currentStep + 1)
+    }
+  }
+
+  const handleBack = () => {
+    if (currentStep > 1) {
+      setCurrentStep(currentStep - 1)
+    }
+  }
+
+  const handleSubmit = async () => {
+    setLoading(true)
+    try {
+      const response = await fetch('/api/dashboard/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...reservationData,
+          tenant_id: tenantId,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erro ao criar reserva')
+      }
+
+      toast({
+        title: 'Reserva criada com sucesso! 🎉',
+        description: `Voucher: ${data.reservation.voucher_code}`,
+      })
+
+      router.push(`/dashboard/reservas/${data.reservation.id}`)
+    } catch (error: any) {
+      toast({
+        title: 'Erro ao criar reserva',
+        description: error.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto">
+      {/* Progress Steps */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between">
+          {steps.map((step, index) => (
+            <div key={step.number} className="flex items-center flex-1">
+              <div className="flex flex-col items-center flex-1">
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-colors ${
+                    currentStep > step.number
+                      ? 'bg-green-500 text-white'
+                      : currentStep === step.number
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-200 text-gray-600'
+                  }`}
+                >
+                  {currentStep > step.number ? (
+                    <Check className="h-5 w-5" />
+                  ) : (
+                    step.number
+                  )}
+                </div>
+                <span
+                  className={`text-sm mt-2 font-medium ${
+                    currentStep >= step.number
+                      ? 'text-gray-900'
+                      : 'text-gray-500'
+                  }`}
+                >
+                  {step.title}
+                </span>
+              </div>
+              {index < steps.length - 1 && (
+                <div
+                  className={`h-1 flex-1 mx-2 transition-colors ${
+                    currentStep > step.number ? 'bg-green-500' : 'bg-gray-200'
+                  }`}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Step Content */}
+      <Card>
+        <CardContent className="pt-6">
+          <CurrentStepComponent
+            data={reservationData}
+            setData={setReservationData}
+            trips={trips}
+            clients={clients}
+            boardingLocations={boardingLocations}
+            coupons={coupons}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Navigation Buttons */}
+      <div className="flex justify-between mt-6">
+        <Button
+          variant="outline"
+          onClick={handleBack}
+          disabled={currentStep === 1 || loading}
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Voltar
+        </Button>
+
+        {currentStep < 5 ? (
+          <Button onClick={handleNext} disabled={loading}>
+            Próximo
+            <ArrowRight className="h-4 w-4 ml-2" />
+          </Button>
+        ) : (
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading ? 'Criando...' : 'Finalizar Reserva'}
+            <Check className="h-4 w-4 ml-2" />
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+3. PASSO 1 - SELEÇÃO DE VIAGEM E CLIENTE
+// components/dashboard/reservations/steps/step1-trip-selection.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Search, MapPin, Calendar, Users, DollarSign } from 'lucide-react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import Image from 'next/image'
+
+interface Step1Props {
+  data: any
+  setData: (data: any) => void
+  trips: any[]
+  clients: any[]
+  boardingLocations: any[]
+}
+
+export function Step1TripSelection({
+  data,
+  setData,
+  trips,
+  clients,
+  boardingLocations,
+}: Step1Props) {
+  const [searchTrip, setSearchTrip] = useState('')
+  const [searchClient, setSearchClient] = useState('')
+  const [filteredTrips, setFilteredTrips] = useState(trips)
+  const [filteredClients, setFilteredClients] = useState(clients)
+  const [selectedTrip, setSelectedTrip] = useState<any>(null)
+  const [selectedClient, setSelectedClient] = useState<any>(null)
+
+  // Filtrar viagens
+  useEffect(() => {
+    if (searchTrip) {
+      const filtered = trips.filter(
+        (trip) =>
+          trip.destination.toLowerCase().includes(searchTrip.toLowerCase()) ||
+          trip.title.toLowerCase().includes(searchTrip.toLowerCase())
+      )
+      setFilteredTrips(filtered)
+    } else {
+      setFilteredTrips(trips)
+    }
+  }, [searchTrip, trips])
+
+  // Filtrar clientes
+  useEffect(() => {
+    if (searchClient) {
+      const filtered = clients.filter(
+        (client) =>
+          client.name.toLowerCase().includes(searchClient.toLowerCase()) ||
+          client.email?.toLowerCase().includes(searchClient.toLowerCase()) ||
+          client.phone?.includes(searchClient)
+      )
+      setFilteredClients(filtered)
+    } else {
+      setFilteredClients(clients)
+    }
+  }, [searchClient, clients])
+
+  // Carregar viagem selecionada
+  useEffect(() => {
+    if (data.trip_id) {
+      const trip = trips.find((t) => t.id === data.trip_id)
+      setSelectedTrip(trip)
+    }
+  }, [data.trip_id, trips])
+
+  // Carregar cliente selecionado
+  useEffect(() => {
+    if (data.client_id) {
+      const client = clients.find((c) => c.id === data.client_id)
+      setSelectedClient(client)
+    }
+  }, [data.client_id, clients])
+
+  const handleTripSelect = (tripId: string) => {
+    const trip = trips.find((t) => t.id === tripId)
+    setSelectedTrip(trip)
+    setData({
+      ...data,
+      trip_id: tripId,
+      trip: trip,
+      // Resetar assentos ao mudar de viagem
+      seats: [],
+    })
+  }
+
+  const handleClientSelect = (clientId: string) => {
+    const client = clients.find((c) => c.id === clientId)
+    setSelectedClient(client)
+    setData({
+      ...data,
+      client_id: clientId,
+      client: client,
+    })
+  }
+
+  const calculateAvailableSeats = (trip: any) => {
+    const totalSeats = trip.total_seats || 50
+    const occupiedSeats = trip.seats?.filter(
+      (s: any) => s.status !== 'available'
+    ).length || 0
+    return totalSeats - occupiedSeats
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold mb-2">Seleção de Viagem e Cliente</h2>
+        <p className="text-gray-600">
+          Escolha a viagem e o cliente para iniciar a reserva
+        </p>
+      </div>
+
+      {/* Seleção de Viagem */}
+      <div className="space-y-4">
+        <div>
+          <Label htmlFor="trip-search" className="text-lg font-semibold">
+            Selecione a Viagem
+          </Label>
+          <div className="relative mt-2">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              id="trip-search"
+              placeholder="Buscar por destino ou título..."
+              value={searchTrip}
+              onChange={(e) => setSearchTrip(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 max-h-[400px] overflow-y-auto">
+          {filteredTrips.map((trip) => {
+            const availableSeats = calculateAvailableSeats(trip)
+            const isSelected = data.trip_id === trip.id
+
+            return (
+              <Card
+                key={trip.id}
+                className={`p-4 cursor-pointer transition-all hover:shadow-md ${
+                  isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : ''
+                }`}
+                onClick={() => handleTripSelect(trip.id)}
+              >
+                <div className="flex gap-4">
+                  {/* Imagem */}
+                  <div className="relative w-24 h-24 flex-shrink-0 rounded-lg overflow-hidden bg-gray-100">
+                    {trip.thumbnail ? (
+                      <Image
+                        src={trip.thumbnail}
+                        alt={trip.title}
+                        fill
+                        className="object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-gray-400">
+                        <MapPin className="h-8 w-8" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Informações */}
+                  <div className="flex-1">
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <h3 className="font-bold text-lg">{trip.title}</h3>
+                        <p className="text-sm text-gray-600 flex items-center gap-1">
+                          <MapPin className="h-3 w-3" />
+                          {trip.destination}
+                        </p>
+                      </div>
+                      {isSelected && (
+                        <Badge className="bg-blue-500">Selecionada</Badge>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                      <div className="flex items-center gap-1 text-gray-600">
+                        <Calendar className="h-4 w-4" />
+                        <span>
+                          {format(new Date(trip.departure_date), 'dd/MM/yyyy', {
+                            locale: ptBR,
+                          })}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 text-gray-600">
+                        <Users className="h-4 w-4" />
+                        <span>
+                          {availableSeats} vagas disponíveis
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 text-gray-600">
+                        <DollarSign className="h-4 w-4" />
+                        <span className="font-bold text-green-600">
+                          R${' '}
+                          {Number(trip.price_adult).toLocaleString('pt-BR', {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+
+                      <div>
+                        <Badge
+                          variant={
+                            availableSeats > 10
+                              ? 'default'
+                              : availableSeats > 0
+                              ? 'secondary'
+                              : 'destructive'
+                          }
+                        >
+                          {availableSeats > 10
+                            ? 'Disponível'
+                            : availableSeats > 0
+                            ? 'Poucas vagas'
+                            : 'Esgotado'}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+
+          {filteredTrips.length === 0 && (
+            <div className="text-center py-8 text-gray-500">
+              Nenhuma viagem encontrada
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Viagem Selecionada - Resumo */}
+      {selectedTrip && (
+        <Card className="p-4 bg-blue-50 border-blue-200">
+          <h3 className="font-bold mb-3">Viagem Selecionada</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <p className="text-gray-600">Destino</p>
+              <p className="font-medium">{selectedTrip.destination}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Data</p>
+              <p className="font-medium">
+                {format(new Date(selectedTrip.departure_date), 'dd/MM/yyyy', {
+                  locale: ptBR,
+                })}
+              </p>
+            </div>
+            <div>
+              <p className="text-gray-600">Vagas</p>
+              <p className="font-medium">
+                {calculateAvailableSeats(selectedTrip)}/
+                {selectedTrip.total_seats}
+              </p>
+            </div>
+            <div>
+              <p className="text-gray-600">Preço/pessoa</p>
+              <p className="font-medium text-green-600">
+                R${' '}
+                {Number(selectedTrip.price_adult).toLocaleString('pt-BR', {
+                  minimumFractionDigits: 2,
+                })}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Seleção de Cliente */}
+      <div className="space-y-4">
+        <div>
+          <Label htmlFor="client-search" className="text-lg font-semibold">
+            Selecione o Cliente
+          </Label>
+          <div className="relative mt-2">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              id="client-search"
+              placeholder="Buscar por nome, email ou telefone..."
+              value={searchClient}
+              onChange={(e) => setSearchClient(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+        </div>
+
+        <Select value={data.client_id} onValueChange={handleClientSelect}>
+          <SelectTrigger>
+            <SelectValue placeholder="Selecione um cliente" />
+          </SelectTrigger>
+          <SelectContent>
+            {filteredClients.map((client) => (
+              <SelectItem key={client.id} value={client.id}>
+                <div className="flex flex-col">
+                  <span className="font-medium">{client.name}</span>
+                  <span className="text-sm text-gray-600">
+                    {client.phone} • {client.email}
+                  </span>
+                </div>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Cliente Selecionado - Resumo */}
+      {selectedClient && (
+        <Card className="p-4 bg-green-50 border-green-200">
+          <h3 className="font-bold mb-3">Cliente Selecionado</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <p className="text-gray-600">Nome</p>
+              <p className="font-medium">{selectedClient.name}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Telefone</p>
+              <p className="font-medium">{selectedClient.phone || 'N/A'}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">Email</p>
+              <p className="font-medium">{selectedClient.email || 'N/A'}</p>
+            </div>
+            <div>
+              <p className="text-gray-600">CPF</p>
+              <p className="font-medium">{selectedClient.cpf || 'N/A'}</p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Ponto de Embarque */}
+      {selectedTrip && selectedTrip.boarding_locations?.length > 0 && (
+        <div className="space-y-2">
+          <Label htmlFor="boarding-location" className="text-lg font-semibold">
+            Ponto de Embarque
+          </Label>
+          <Select
+            value={data.boarding_location_id}
+            onValueChange={(value) =>
+              setData({ ...data, boarding_location_id: value })
+            }
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Selecione o ponto de embarque" />
+            </SelectTrigger>
+            <SelectContent>
+              {selectedTrip.boarding_locations.map((bl: any) => (
+                <SelectItem key={bl.location.id} value={bl.location.id}>
+                  {bl.location.name} - {bl.boarding_time}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+    </div>
+  )
+}
+
+👥 PASSO 2 - PASSAGEIROS
+// components/dashboard/reservations/steps/step2-passengers.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Card } from '@/components/ui/card'
+import { Textarea } from '@/components/ui/textarea'
+import { Plus, Trash2, User, Users } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+
+interface Step2Props {
+  data: any
+  setData: (data: any) => void
+  clients: any[]
+  boardingLocations: any[]
+}
+
+interface Passenger {
+  name: string
+  cpf: string
+  birth_date: string
+  category: 'adult' | 'child' | 'infant'
+  age?: number
+  boarding_location_id?: string
+  special_needs?: string
+  phone?: string
+  email?: string
+  is_primary: boolean
+}
+
+export function Step2Passengers({
+  data,
+  setData,
+  clients,
+  boardingLocations,
+}: Step2Props) {
+  const [passengers, setPassengers] = useState<Passenger[]>(
+    data.passengers.length > 0
+      ? data.passengers
+      : [
+          {
+            name: data.client?.name || '',
+            cpf: data.client?.cpf || '',
+            birth_date: '',
+            category: 'adult',
+            boarding_location_id: data.boarding_location_id,
+            special_needs: '',
+            phone: data.client?.phone || '',
+            email: data.client?.email || '',
+            is_primary: true,
+          },
+        ]
+  )
+
+  const calculateAge = (birthDate: string) => {
+    if (!birthDate) return null
+    const today = new Date()
+    const birth = new Date(birthDate)
+    let age = today.getFullYear() - birth.getFullYear()
+    const monthDiff = today.getMonth() - birth.getMonth()
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+      age--
+    }
+    return age
+  }
+
+  const getCategoryByAge = (age: number | null) => {
+    if (!age) return 'adult'
+    if (age < 2) return 'infant'
+    if (age < 12) return 'child'
+    return 'adult'
+  }
+
+  const handlePassengerChange = (index: number, field: string, value: any) => {
+    const updatedPassengers = [...passengers]
+    updatedPassengers[index] = {
+      ...updatedPassengers[index],
+      [field]: value,
+    }
+
+    // Auto-calcular idade e categoria
+    if (field === 'birth_date') {
+      const age = calculateAge(value)
+      updatedPassengers[index].age = age || undefined
+      updatedPassengers[index].category = getCategoryByAge(age)
+    }
+
+    setPassengers(updatedPassengers)
+    setData({ ...data, passengers: updatedPassengers })
+  }
+
+  const addPassenger = () => {
+    const newPassenger: Passenger = {
+      name: '',
+      cpf: '',
+      birth_date: '',
+      category: 'adult',
+      boarding_location_id: data.boarding_location_id,
+      special_needs: '',
+      is_primary: false,
+    }
+    const updatedPassengers = [...passengers, newPassenger]
+    setPassengers(updatedPassengers)
+    setData({ ...data, passengers: updatedPassengers })
+  }
+
+  const removePassenger = (index: number) => {
+    if (passengers[index].is_primary) {
+      alert('Não é possível remover o passageiro principal')
+      return
+    }
+    const updatedPassengers = passengers.filter((_, i) => i !== index)
+    setPassengers(updatedPassengers)
+    setData({ ...data, passengers: updatedPassengers })
+  }
+
+  const calculateTotals = () => {
+    const adults = passengers.filter((p) => p.category === 'adult').length
+    const children = passengers.filter((p) => p.category === 'child').length
+    const infants = passengers.filter((p) => p.category === 'infant').length
+
+    const trip = data.trip
+    if (!trip) return { adults: 0, children: 0, infants: 0, subtotal: 0 }
+
+    const adultPrice = Number(trip.price_adult || 0)
+    const childPrice = Number(trip.price_child || adultPrice * 0.5)
+    const infantPrice = Number(trip.price_infant || 0)
+
+    const subtotal = adults * adultPrice + children * childPrice + infants * infantPrice
+
+    return { adults, children, infants, subtotal }
+  }
+
+  const totals = calculateTotals()
+
+  // Atualizar subtotal no data
+  if (data.subtotal_amount !== totals.subtotal) {
+    setData({
+      ...data,
+      subtotal_amount: totals.subtotal,
+      total_amount: totals.subtotal,
+      amount_pending: totals.subtotal,
+    })
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold mb-2">Passageiros</h2>
+        <p className="text-gray-600">
+          Adicione os dados de todos os passageiros da reserva
+        </p>
+      </div>
+
+      {/* Resumo */}
+      <Card className="p-4 bg-blue-50 border-blue-200">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Users className="h-8 w-8 text-blue-600" />
+            <div>
+              <p className="font-bold text-lg">
+                {passengers.length} Passageiro(s)
+              </p>
+              <p className="text-sm text-gray-600">
+                {totals.adults} adulto(s) • {totals.children} criança(s) •{' '}
+                {totals.infants} bebê(s)
+              </p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-sm text-gray-600">Subtotal</p>
+            <p className="text-2xl font-bold text-green-600">
+              R${' '}
+              {totals.subtotal.toLocaleString('pt-BR', {
+                minimumFractionDigits: 2,
+              })}
+            </p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Lista de Passageiros */}
+      <div className="space-y-4">
+        {passengers.map((passenger, index) => (
+          <Card key={index} className="p-4">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <User className="h-5 w-5 text-gray-600" />
+                <h3 className="font-bold">
+                  Passageiro {index + 1}
+                  {passenger.is_primary && (
+                    <Badge className="ml-2 bg-blue-500">Principal</Badge>
+                  )}
+                </h3>
+              </div>
+              {!passenger.is_primary && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removePassenger(index)}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Nome */}
+              <div>
+                <Label htmlFor={`name-${index}`}>
+                  Nome Completo <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id={`name-${index}`}
+                  value={passenger.name}
+                  onChange={(e) =>
+                    handlePassengerChange(index, 'name', e.target.value)
+                  }
+                  placeholder="Nome completo do passageiro"
+                />
+              </div>
+
+              {/* CPF */}
+              <div>
+                <Label htmlFor={`cpf-${index}`}>
+                  CPF <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id={`cpf-${index}`}
+                  value={passenger.cpf}
+                  onChange={(e) =>
+                    handlePassengerChange(index, 'cpf', e.target.value)
+                  }
+                  placeholder="000.000.000-00"
+                  maxLength={14}
+                />
+              </div>
+
+              {/* Data de Nascimento */}
+              <div>
+                <Label htmlFor={`birth-${index}`}>
+                  Data de Nascimento <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id={`birth-${index}`}
+                  type="date"
+                  value={passenger.birth_date}
+                  onChange={(e) =>
+                    handlePassengerChange(index, 'birth_date', e.target.value)
+                  }
+                />
+                {passenger.age !== undefined && (
+                  <p className="text-sm text-gray-600 mt-1">
+                    Idade: {passenger.age} anos
+                  </p>
+                )}
+              </div>
+
+              {/* Categoria */}
+              <div>
+                <Label htmlFor={`category-${index}`}>Categoria</Label>
+                <Select
+                  value={passenger.category}
+                  onValueChange={(value) =>
+                    handlePassengerChange(index, 'category', value)
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="adult">
+                      Adulto (12+ anos) - R${' '}
+                      {Number(data.trip?.price_adult || 0).toFixed(2)}
+                    </SelectItem>
+                    <SelectItem value="child">
+                      Criança (2-11 anos) - R${' '}
+                      {Number(
+                        data.trip?.price_child || data.trip?.price_adult * 0.5
+                      ).toFixed(2)}
+                    </SelectItem>
+                    <SelectItem value="infant">
+                      Bebê (0-1 ano) - R${' '}
+                      {Number(data.trip?.price_infant || 0).toFixed(2)}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Telefone */}
+              <div>
+                <Label htmlFor={`phone-${index}`}>Telefone</Label>
+                <Input
+                  id={`phone-${index}`}
+                  value={passenger.phone || ''}
+                  onChange={(e) =>
+                    handlePassengerChange(index, 'phone', e.target.value)
+                  }
+                  placeholder="(00) 00000-0000"
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <Label htmlFor={`email-${index}`}>Email</Label>
+                <Input
+                  id={`email-${index}`}
+                  type="email"
+                  value={passenger.email || ''}
+                  onChange={(e) =>
+                    handlePassengerChange(index, 'email', e.target.value)
+                  }
+                  placeholder="email@exemplo.com"
+                />
+              </div>
+
+              {/* Ponto de Embarque */}
+              {data.trip?.boarding_locations?.length > 0 && (
+                <div className="md:col-span-2">
+                  <Label htmlFor={`boarding-${index}`}>Ponto de Embarque</Label>
+                  <Select
+                    value={passenger.boarding_location_id}
+                    onValueChange={(value) =>
+                      handlePassengerChange(index, 'boarding_location_id', value)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Selecione o ponto de embarque" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {data.trip.boarding_locations.map((bl: any) => (
+                        <SelectItem key={bl.location.id} value={bl.location.id}>
+                          {bl.location.name} - {bl.boarding_time}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Necessidades Especiais */}
+              <div className="md:col-span-2">
+                <Label htmlFor={`special-${index}`}>
+                  Necessidades Especiais / Observações
+                </Label>
+                <Textarea
+                  id={`special-${index}`}
+                  value={passenger.special_needs || ''}
+                  onChange={(e) =>
+                    handlePassengerChange(index, 'special_needs', e.target.value)
+                  }
+                  placeholder="Ex: Cadeirante, dieta especial, medicação..."
+                  rows={2}
+                />
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Botão Adicionar Passageiro */}
+      <Button onClick={addPassenger} variant="outline" className="w-full">
+        <Plus className="h-4 w-4 mr-2" />
+        Adicionar Passageiro
+      </Button>
+
+      {/* Resumo de Valores */}
+      <Card className="p-4 bg-gray-50">
+        <h3 className="font-bold mb-3">Resumo de Valores</h3>
+        <div className="space-y-2">
+          {totals.adults > 0 && (
+            <div className="flex justify-between text-sm">
+              <span>
+                {totals.adults} Adulto(s) × R${' '}
+                {Number(data.trip?.price_adult || 0).toFixed(2)}
+              </span>
+              <span className="font-medium">
+                R${' '}
+                {(totals.adults * Number(data.trip?.price_adult || 0)).toFixed(
+                  2
+                )}
+              </span>
+            </div>
+          )}
+          {totals.children > 0 && (
+            <div className="flex justify-between text-sm">
+              <span>
+                {totals.children} Criança(s) × R${' '}
+                {Number(
+                  data.trip?.price_child || data.trip?.price_adult * 0.5
+                ).toFixed(2)}
+              </span>
+              <span className="font-medium">
+                R${' '}
+                {(
+                  totals.children *
+                  Number(data.trip?.price_child || data.trip?.price_adult * 0.5)
+                ).toFixed(2)}
+              </span>
+            </div>
+          )}
+          {totals.infants > 0 && (
+            <div className="flex justify-between text-sm">
+              <span>
+                {totals.infants} Bebê(s) × R${' '}
+                {Number(data.trip?.price_infant || 0).toFixed(2)}
+              </span>
+              <span className="font-medium">
+                R${' '}
+                {(totals.infants * Number(data.trip?.price_infant || 0)).toFixed(
+                  2
+                )}
+              </span>
+            </div>
+          )}
+          <div className="border-t pt-2 mt-2">
+            <div className="flex justify-between font-bold text-lg">
+              <span>Subtotal:</span>
+              <span className="text-green-600">
+                R${' '}
+                {totals.subtotal.toLocaleString('pt-BR', {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+💺 PASSO 3 - SELEÇÃO DE ASSENTOS
+// components/dashboard/reservations/steps/step3-seat-selection.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Check, X, User } from 'lucide-react'
+
+interface Step3Props {
+  data: any
+  setData: (data: any) => void
+}
+
+interface Seat {
+  number: string
+  row: number
+  column: string
+  status: 'available' | 'selected' | 'occupied' | 'blocked'
+  passenger_name?: string
+  passenger_cpf?: string
+}
+
+export function Step3SeatSelection({ data, setData }: Step3Props) {
+  const [seats, setSeats] = useState<Seat[]>([])
+  const [selectedSeats, setSelectedSeats] = useState<any[]>(data.seats || [])
+  const [loading, setLoading] = useState(true)
+
+  // Carregar assentos da viagem
+  useEffect(() => {
+    if (data.trip_id) {
+      loadSeats()
+    }
+  }, [data.trip_id])
+
+  const loadSeats = async () => {
+    try {
+      const response = await fetch(`/api/dashboard/trips/${data.trip_id}/seats`)
+      const result = await response.json()
+
+      if (result.seats) {
+        setSeats(result.seats)
+      } else {
+        // Gerar assentos se não existirem
+        generateSeats()
+      }
+    } catch (error) {
+      console.error('Erro ao carregar assentos:', error)
+      generateSeats()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const generateSeats = () => {
+    const totalSeats = data.trip?.total_seats || 50
+    const layout = data.trip?.seat_layout || '2+2'
+    const [left, right] = layout.split('+').map(Number)
+    const seatsPerRow = left + right
+    const totalRows = Math.ceil(totalSeats / seatsPerRow)
+
+    const generatedSeats: Seat[] = []
+    const columns = ['A', 'B', 'C', 'D', 'E', 'F']
+
+    for (let row = 1; row <= totalRows; row++) {
+      for (let col = 0; col < seatsPerRow; col++) {
+        const seatNumber = `${row}${columns[col]}`
+        generatedSeats.push({
+          number: seatNumber,
+          row,
+          column: columns[col],
+          status: 'available',
+        })
+      }
+    }
+
+    setSeats(generatedSeats.slice(0, totalSeats))
+  }
+
+  const handleSeatClick = (seat: Seat) => {
+    if (seat.status === 'occupied' || seat.status === 'blocked') {
+      return
+    }
+
+    const isSelected = selectedSeats.some((s) => s.seat_number === seat.number)
+
+    if (isSelected) {
+      // Desselecionar
+      const updated = selectedSeats.filter((s) => s.seat_number !== seat.number)
+      setSelectedSeats(updated)
+      setData({ ...data, seats: updated })
+    } else {
+      // Verificar se já selecionou todos os assentos necessários
+      if (selectedSeats.length >= data.passengers.length) {
+        alert('Você já selecionou assentos para todos os passageiros')
+        return
+      }
+
+      // Selecionar
+      const updated = [
+        ...selectedSeats,
+        {
+          seat_number: seat.number,
+          passenger_name: '',
+          passenger_cpf: '',
+        },
+      ]
+      setSelectedSeats(updated)
+      setData({ ...data, seats: updated })
+    }
+  }
+
+  const handlePassengerAssignment = (
+    seatNumber: string,
+    passengerId: number
+  ) => {
+    const passenger = data.passengers[passengerId]
+    const updated = selectedSeats.map((s) =>
+      s.seat_number === seatNumber
+        ? {
+            ...s,
+            passenger_name: passenger.name,
+            passenger_cpf: passenger.cpf,
+          }
+        : s
+    )
+    setSelectedSeats(updated)
+    setData({ ...data, seats: updated })
+  }
+
+  const getSeatStatus = (seat: Seat): Seat['status'] => {
+    const isSelected = selectedSeats.some((s) => s.seat_number === seat.number)
+    if (isSelected) return 'selected'
+    return seat.status
+  }
+
+  const getSeatColor = (status: Seat['status']) => {
+    switch (status) {
+      case 'available':
+        return 'bg-white border-gray-300 hover:bg-blue-50 hover:border-blue-300 cursor-pointer'
+      case 'selected':
+        return 'bg-blue-500 border-blue-600 text-white cursor-pointer'
+      case 'occupied':
+        return 'bg-orange-500 border-orange-600 text-white cursor-not-allowed'
+      case 'blocked':
+        return 'bg-gray-400 border-gray-500 text-white cursor-not-allowed'
+      default:
+        return 'bg-white border-gray-300'
+    }
+  }
+
+  const layout = data.trip?.seat_layout || '2+2'
+  const [leftSeats, rightSeats] = layout.split('+').map(Number)
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <p className="text-gray-600">Carregando mapa de assentos...</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold mb-2">Seleção de Assentos</h2>
+        <p className="text-gray-600">
+          Selecione {data.passengers.length} assento(s) para os passageiros
+        </p>
+      </div>
+
+      {/* Legenda */}
+      <Card className="p-4">
+        <div className="flex flex-wrap gap-4 justify-center">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 border-2 border-gray-300 bg-white rounded" />
+            <span className="text-sm">Disponível</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 border-2 border-blue-600 bg-blue-500 rounded" />
+            <span className="text-sm">Selecionado</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 border-2 border-orange-600 bg-orange-500 rounded" />
+            <span className="text-sm">Ocupado</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 border-2 border-gray-500 bg-gray-400 rounded" />
+            <span className="text-sm">Bloqueado</span>
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Mapa de Assentos */}
+        <div className="lg:col-span-2">
+          <Card className="p-6">
+            <div className="mb-4 text-center">
+              <div className="inline-block bg-gray-200 px-4 py-2 rounded-lg">
+                🚗 Motorista
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {Array.from(
+                new Set(seats.map((s) => s.row))
+              ).map((row) => {
+                const rowSeats = seats.filter((s) => s.row === row)
+                const leftSide = rowSeats.slice(0, leftSeats)
+                const rightSide = rowSeats.slice(leftSeats)
+
+                return (
+                  <div key={row} className="flex items-center justify-center gap-4">
+                    {/* Número da fileira */}
+                    <div className="w-8 text-center text-sm font-bold text-gray-600">
+                      {row}
+                    </div>
+
+                    {/* Lado esquerdo */}
+                    <div className="flex gap-2">
+                      {leftSide.map((seat) => {
+                        const status = getSeatStatus(seat)
+                        return (
+                          <button
+                            key={seat.number}
+                            onClick={() => handleSeatClick(seat)}
+                            className={`w-12 h-12 border-2 rounded flex items-center justify-center text-sm font-bold transition-all ${getSeatColor(
+                              status
+                            )}`}
+                            disabled={
+                              status === 'occupied' || status === 'blocked'
+                            }
+                            title={seat.number}
+                          >
+                            {status === 'selected' ? (
+                              <Check className="h-5 w-5" />
+                            ) : status === 'occupied' ? (
+                              <X className="h-5 w-5" />
+                            ) : (
+                              seat.column
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    {/* Corredor */}
+                    <div className="w-8" />
+
+                    {/* Lado direito */}
+                    <div className="flex gap-2">
+                      {rightSide.map((seat) => {
+                        const status = getSeatStatus(seat)
+                        return (
+                          <button
+                            key={seat.number}
+                            onClick={() => handleSeatClick(seat)}
+                            className={`w-12 h-12 border-2 rounded flex items-center justify-center text-sm font-bold transition-all ${getSeatColor(
+                              status
+                            )}`}
+                            disabled={
+                              status === 'occupied' || status === 'blocked'
+                            }
+                            title={seat.number}
+                          >
+                            {status === 'selected' ? (
+                              <Check className="h-5 w-5" />
+                            ) : status === 'occupied' ? (
+                              <X className="h-5 w-5" />
+                            ) : (
+                              seat.column
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Estatísticas */}
+            <div className="mt-6 pt-6 border-t">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <p className="text-2xl font-bold">{seats.length}</p>
+                  <p className="text-sm text-gray-600">Total</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-orange-600">
+                    {seats.filter((s) => s.status === 'occupied').length}
+                  </p>
+                  <p className="text-sm text-gray-600">Ocupados</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-green-600">
+                    {
+                      seats.filter(
+                        (s) =>
+                          s.status === 'available' &&
+                          !selectedSeats.some((sel) => sel.seat_number === s.number)
+                      ).length
+                    }
+                  </p>
+                  <p className="text-sm text-gray-600">Disponíveis</p>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Assentos Selecionados */}
+        <div>
+          <Card className="p-4">
+            <h3 className="font-bold mb-4">
+              Assentos Selecionados ({selectedSeats.length}/{data.passengers.length})
+            </h3>
+
+            {selectedSeats.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                <p className="text-sm">Nenhum assento selecionado</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {selectedSeats.map((seat, index) => (
+                  <div key={seat.seat_number} className="border rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <Badge className="bg-blue-500">
+                        Assento {seat.seat_number}
+                      </Badge>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          const updated = selectedSeats.filter(
+                            (s) => s.seat_number !== seat.seat_number
+                          )
+                          setSelectedSeats(updated)
+                          setData({ ...data, seats: updated })
+                        }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    <div>
+                      <Label className="text-xs">Passageiro</Label>
+                      <Select
+                        value={
+                          data.passengers.findIndex(
+                            (p: any) => p.cpf === seat.passenger_cpf
+                          ).toString()
+                        }
+                        onValueChange={(value) =>
+                          handlePassengerAssignment(seat.seat_number, parseInt(value))
+                        }
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="Selecione" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {data.passengers.map((passenger: any, idx: number) => (
+                            <SelectItem key={idx} value={idx.toString()}>
+                              <div className="flex items-center gap-2">
+                                <User className="h-4 w-4" />
+                                {passenger.name}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {selectedSeats.length < data.passengers.length && (
+              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-sm text-yellow-800">
+                  ⚠️ Selecione mais{' '}
+                  {data.passengers.length - selectedSeats.length} assento(s)
+                </p>
+              </div>
+            )}
+
+            {selectedSeats.length === data.passengers.length && (
+              <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm text-green-800">
+                  ✓ Todos os assentos foram selecionados
+                </p>
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+PASSO 4 - PAGAMENTO E DESCONTOS
+// components/dashboard/reservations/steps/step4-payment.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
+import { Badge } from '@/components/ui/badge'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import {
+  DollarSign,
+  Percent,
+  Gift,
+  Tag,
+  CreditCard,
+  Banknote,
+  Smartphone,
+} from 'lucide-react'
+import { useToast } from '@/components/ui/use-toast'
+
+interface Step4Props {
+  data: any
+  setData: (data: any) => void
+  coupons: any[]
+}
+
+export function Step4Payment({ data, setData, coupons }: Step4Props) {
+  const { toast } = useToast()
+  const [couponCode, setCouponCode] = useState(data.coupon_code || '')
+  const [appliedCoupon, setAppliedCoupon] = useState<any>(null)
+  const [referralCode, setReferralCode] = useState(data.referred_by_code || '')
+  const [appliedReferral, setAppliedReferral] = useState<any>(null)
+  const [loadingCoupon, setLoadingCoupon] = useState(false)
+  const [loadingReferral, setLoadingReferral] = useState(false)
+
+  // Calcular valores
+  const calculateTotals = () => {
+    const subtotal = data.subtotal_amount || 0
+    let couponDiscount = 0
+    let referralDiscount = 0
+
+    // Desconto do cupom
+    if (appliedCoupon) {
+      if (appliedCoupon.discount_type === 'percentage') {
+        couponDiscount = (subtotal * appliedCoupon.discount_value) / 100
+        if (appliedCoupon.max_discount_amount) {
+          couponDiscount = Math.min(
+            couponDiscount,
+            appliedCoupon.max_discount_amount
+          )
+        }
+      } else {
+        couponDiscount = appliedCoupon.discount_value
+      }
+    }
+
+    // Desconto de indicação (5%)
+    if (appliedReferral && data.client?.is_first_purchase !== false) {
+      referralDiscount = subtotal * 0.05 // 5%
+      // Limite máximo de R$ 100
+      referralDiscount = Math.min(referralDiscount, 100)
+    }
+
+    const totalDiscount = couponDiscount + referralDiscount
+    const total = Math.max(subtotal - totalDiscount, 0)
+    const amountPaid = data.amount_paid || 0
+    const amountPending = Math.max(total - amountPaid, 0)
+
+    return {
+      subtotal,
+      couponDiscount,
+      referralDiscount,
+      totalDiscount,
+      total,
+      amountPaid,
+      amountPending,
+    }
+  }
+
+  const totals = calculateTotals()
+
+  // Atualizar data quando valores mudarem
+  useEffect(() => {
+    setData({
+      ...data,
+      subtotal_amount: totals.subtotal,
+      coupon_discount: totals.couponDiscount,
+      referral_discount: totals.referralDiscount,
+      discount_amount: totals.totalDiscount,
+      total_amount: totals.total,
+      amount_pending: totals.amountPending,
+    })
+  }, [appliedCoupon, appliedReferral, data.amount_paid])
+
+  // Aplicar cupom
+  const handleApplyCoupon = async () => {
+    if (!couponCode.trim()) {
+      toast({
+        title: 'Digite um cupom',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setLoadingCoupon(true)
+    try {
+      const response = await fetch('/api/dashboard/coupons/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: couponCode.toUpperCase(),
+          subtotal: totals.subtotal,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Cupom inválido')
+      }
+
+      setAppliedCoupon(result.coupon)
+      setData({
+        ...data,
+        coupon_code: couponCode.toUpperCase(),
+        coupon_id: result.coupon.id,
+      })
+
+      toast({
+        title: 'Cupom aplicado! 🎉',
+        description: `Desconto de ${
+          result.coupon.discount_type === 'percentage'
+            ? `${result.coupon.discount_value}%`
+            : `R$ ${result.coupon.discount_value}`
+        }`,
+      })
+    } catch (error: any) {
+      toast({
+        title: 'Erro ao aplicar cupom',
+        description: error.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setLoadingCoupon(false)
+    }
+  }
+
+  // Remover cupom
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null)
+    setCouponCode('')
+    setData({
+      ...data,
+      coupon_code: null,
+      coupon_id: null,
+      coupon_discount: 0,
+    })
+  }
+
+  // Aplicar código de indicação
+  const handleApplyReferral = async () => {
+    if (!referralCode.trim()) {
+      toast({
+        title: 'Digite um código de indicação',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setLoadingReferral(true)
+    try {
+      const response = await fetch('/api/dashboard/referrals/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: referralCode.toUpperCase(),
+          client_id: data.client_id,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Código inválido')
+      }
+
+      setAppliedReferral(result.referrer)
+      setData({
+        ...data,
+        referred_by_code: referralCode.toUpperCase(),
+      })
+
+      toast({
+        title: 'Código de indicação aplicado! 🎁',
+        description: 'Desconto de 5% aplicado',
+      })
+    } catch (error: any) {
+      toast({
+        title: 'Erro ao aplicar código',
+        description: error.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setLoadingReferral(false)
+    }
+  }
+
+  // Remover indicação
+  const handleRemoveReferral = () => {
+    setAppliedReferral(null)
+    setReferralCode('')
+    setData({
+      ...data,
+      referred_by_code: null,
+      referral_discount: 0,
+    })
+  }
+
+  // Calcular parcelas
+  const calculateInstallment = (installments: number) => {
+    if (installments <= 1) return totals.total
+    return totals.total / installments
+  }
+
+  // Calcular comissão
+  const calculateCommission = () => {
+    const percentage = data.commission_percentage || 5
+    return (totals.total * percentage) / 100
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold mb-2">Pagamento e Descontos</h2>
+        <p className="text-gray-600">
+          Configure os valores e forma de pagamento da reserva
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Formulário de Pagamento */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Cupom de Desconto */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Tag className="h-5 w-5 text-purple-600" />
+              <h3 className="font-bold">Cupom de Desconto</h3>
+            </div>
+
+            {appliedCoupon ? (
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-purple-900">
+                      {appliedCoupon.code}
+                    </p>
+                    <p className="text-sm text-purple-700">
+                      Desconto:{' '}
+                      {appliedCoupon.discount_type === 'percentage'
+                        ? `${appliedCoupon.discount_value}%`
+                        : `R$ ${appliedCoupon.discount_value}`}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRemoveCoupon}
+                    className="text-purple-600"
+                  >
+                    Remover
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Digite o código do cupom"
+                  value={couponCode}
+                  onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleApplyCoupon}
+                  disabled={loadingCoupon}
+                  variant="outline"
+                >
+                  {loadingCoupon ? 'Aplicando...' : 'Aplicar'}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Código de Indicação */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Gift className="h-5 w-5 text-blue-600" />
+              <h3 className="font-bold">Código de Indicação</h3>
+            </div>
+
+            {appliedReferral ? (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-blue-900">
+                      Indicado por: {appliedReferral.name}
+                    </p>
+                    <p className="text-sm text-blue-700">
+                      Desconto de 5% aplicado
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRemoveReferral}
+                    className="text-blue-600"
+                  >
+                    Remover
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Digite o código de indicação"
+                  value={referralCode}
+                  onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleApplyReferral}
+                  disabled={loadingReferral}
+                  variant="outline"
+                >
+                  {loadingReferral ? 'Aplicando...' : 'Aplicar'}
+                </Button>
+              </div>
+            )}
+          </Card>
+
+          {/* Valores */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <DollarSign className="h-5 w-5 text-green-600" />
+              <h3 className="font-bold">Valores</h3>
+            </div>
+
+            <div className="space-y-4">
+              {/* Valor Pago */}
+              <div>
+                <Label htmlFor="amount-paid">
+                  Valor Pago (R$) <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="amount-paid"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max={totals.total}
+                  value={data.amount_paid || ''}
+                  onChange={(e) =>
+                    setData({
+                      ...data,
+                      amount_paid: parseFloat(e.target.value) || 0,
+                    })
+                  }
+                  placeholder="0.00"
+                />
+                <p className="text-sm text-gray-600 mt-1">
+                  Quanto o cliente já pagou
+                </p>
+              </div>
+
+              {/* Valor Pendente (calculado) */}
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Valor Pendente:</span>
+                  <span
+                    className={`text-lg font-bold ${
+                      totals.amountPending > 0 ? 'text-red-600' : 'text-green-600'
+                    }`}
+                  >
+                    R${' '}
+                    {totals.amountPending.toLocaleString('pt-BR', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Forma de Pagamento */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <CreditCard className="h-5 w-5 text-blue-600" />
+              <h3 className="font-bold">Forma de Pagamento</h3>
+            </div>
+
+            <RadioGroup
+              value={data.payment_method}
+              onValueChange={(value) =>
+                setData({ ...data, payment_method: value })
+              }
+            >
+              <div className="space-y-3">
+                <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-gray-50 cursor-pointer">
+                  <RadioGroupItem value="pix" id="pix" />
+                  <Label htmlFor="pix" className="flex-1 cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <Smartphone className="h-4 w-4" />
+                      <span className="font-medium">PIX</span>
+                    </div>
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-gray-50 cursor-pointer">
+                  <RadioGroupItem value="credit_card" id="credit_card" />
+                  <Label htmlFor="credit_card" className="flex-1 cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="h-4 w-4" />
+                      <span className="font-medium">Cartão de Crédito</span>
+                    </div>
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-gray-50 cursor-pointer">
+                  <RadioGroupItem value="debit_card" id="debit_card" />
+                  <Label htmlFor="debit_card" className="flex-1 cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="h-4 w-4" />
+                      <span className="font-medium">Cartão de Débito</span>
+                    </div>
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-gray-50 cursor-pointer">
+                  <RadioGroupItem value="cash" id="cash" />
+                  <Label htmlFor="cash" className="flex-1 cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <Banknote className="h-4 w-4" />
+                      <span className="font-medium">Dinheiro</span>
+                    </div>
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-gray-50 cursor-pointer">
+                  <RadioGroupItem value="transfer" id="transfer" />
+                  <Label htmlFor="transfer" className="flex-1 cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <DollarSign className="h-4 w-4" />
+                      <span className="font-medium">Transferência</span>
+                    </div>
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2 border rounded-lg p-3 hover:bg-gray-50 cursor-pointer">
+                  <RadioGroupItem value="installment" id="installment" />
+                  <Label htmlFor="installment" className="flex-1 cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="h-4 w-4" />
+                      <span className="font-medium">Parcelado</span>
+                    </div>
+                  </Label>
+                </div>
+              </div>
+            </RadioGroup>
+
+            {/* Parcelamento */}
+            {(data.payment_method === 'installment' ||
+              data.payment_method === 'credit_card') && (
+              <div className="mt-4 space-y-2">
+                <Label htmlFor="installments">Número de Parcelas</Label>
+                <Select
+                  value={data.installments?.toString() || '1'}
+                  onValueChange={(value) => {
+                    const installments = parseInt(value)
+                    setData({
+                      ...data,
+                      installments,
+                      installment_amount: calculateInstallment(installments),
+                    })
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((num) => (
+                      <SelectItem key={num} value={num.toString()}>
+                        {num}x de R${' '}
+                        {calculateInstallment(num).toLocaleString('pt-BR', {
+                          minimumFractionDigits: 2,
+                        })}
+                        {num === 1 ? ' (à vista)' : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </Card>
+
+          {/* Status da Reserva */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <h3 className="font-bold">Status da Reserva</h3>
+            </div>
+
+            <RadioGroup
+              value={data.status}
+              onValueChange={(value) => setData({ ...data, status: value })}
+            >
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="pending" id="pending" />
+                  <Label htmlFor="pending" className="cursor-pointer">
+                    <Badge variant="secondary">Pendente</Badge>
+                    <span className="ml-2 text-sm text-gray-600">
+                      Aguardando pagamento
+                    </span>
+                  </Label>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="confirmed" id="confirmed" />
+                  <Label htmlFor="confirmed" className="cursor-pointer">
+                    <Badge className="bg-blue-500">Confirmada</Badge>
+                    <span className="ml-2 text-sm text-gray-600">
+                      Pagamento confirmado
+                    </span>
+                  </Label>
+                </div>
+              </div>
+            </RadioGroup>
+          </Card>
+
+          {/* Comissão do Vendedor */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Percent className="h-5 w-5 text-orange-600" />
+              <h3 className="font-bold">Comissão do Vendedor</h3>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="commission">Percentual de Comissão (%)</Label>
+                <Input
+                  id="commission"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  value={data.commission_percentage || 5}
+                  onChange={(e) => {
+                    const percentage = parseFloat(e.target.value) || 0
+                    setData({
+                      ...data,
+                      commission_percentage: percentage,
+                      commission_amount: calculateCommission(),
+                    })
+                  }}
+                />
+              </div>
+
+              <div className="bg-orange-50 p-3 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">
+                    Valor da Comissão:
+                  </span>
+                  <span className="text-lg font-bold text-orange-600">
+                    R${' '}
+                    {calculateCommission().toLocaleString('pt-BR', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Observações */}
+          <Card className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <h3 className="font-bold">Observações</h3>
+            </div>
+
+            <Textarea
+              value={data.notes || ''}
+              onChange={(e) => setData({ ...data, notes: e.target.value })}
+              placeholder="Observações sobre a reserva..."
+              rows={4}
+            />
+          </Card>
+        </div>
+
+        {/* Resumo Financeiro */}
+        <div className="lg:col-span-1">
+          <Card className="p-4 sticky top-4">
+            <h3 className="font-bold mb-4">Resumo Financeiro</h3>
+
+            <div className="space-y-3">
+              {/* Subtotal */}
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Subtotal:</span>
+                <span className="font-medium">
+                  R${' '}
+                  {totals.subtotal.toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+
+              {/* Desconto Cupom */}
+              {totals.couponDiscount > 0 && (
+                <div className="flex justify-between text-sm text-purple-600">
+                  <span>Desconto Cupom:</span>
+                  <span className="font-medium">
+                    - R${' '}
+                    {totals.couponDiscount.toLocaleString('pt-BR', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              )}
+
+              {/* Desconto Indicação */}
+              {totals.referralDiscount > 0 && (
+                <div className="flex justify-between text-sm text-blue-600">
+                  <span>🎁 Desconto Indicação:</span>
+                  <span className="font-medium">
+                    - R${' '}
+                    {totals.referralDiscount.toLocaleString('pt-BR', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              )}
+
+              {/* Total de Descontos */}
+              {totals.totalDiscount > 0 && (
+                <div className="flex justify-between text-sm border-t pt-2">
+                  <span className="text-gray-600">Total de Descontos:</span>
+                  <span className="font-medium text-green-600">
+                    - R${' '}
+                    {totals.totalDiscount.toLocaleString('pt-BR', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+              )}
+
+              {/* Total Final */}
+              <div className="flex justify-between border-t pt-3">
+                <span className="font-bold text-lg">Total:</span>
+                <span className="font-bold text-lg text-green-600">
+                  R${' '}
+                  {totals.total.toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+
+              {/* Valor Pago */}
+              <div className="flex justify-between text-sm bg-green-50 p-2 rounded">
+                <span className="text-gray-600">Valor Pago:</span>
+                <span className="font-medium text-green-600">
+                  R${' '}
+                  {totals.amountPaid.toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+
+              {/* Valor Pendente */}
+              <div
+                className={`flex justify-between text-sm p-2 rounded ${
+                  totals.amountPending > 0 ? 'bg-red-50' : 'bg-green-50'
+                }`}
+              >
+                <span className="text-gray-600">Valor Pendente:</span>
+                <span
+                  className={`font-bold ${
+                    totals.amountPending > 0 ? 'text-red-600' : 'text-green-600'
+                  }`}
+                >
+                  R${' '}
+                  {totals.amountPending.toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+
+              {/* Parcelamento */}
+              {data.installments > 1 && (
+                <div className="bg-blue-50 p-3 rounded-lg mt-3">
+                  <p className="text-sm text-blue-900 font-medium">
+                    {data.installments}x de R${' '}
+                    {(data.installment_amount || 0).toLocaleString('pt-BR', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </p>
+                </div>
+              )}
+
+              {/* Comissão */}
+              {data.commission_percentage > 0 && (
+                <div className="bg-orange-50 p-3 rounded-lg mt-3 border-t">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600">
+                      Comissão ({data.commission_percentage}%):
+                    </span>
+                    <span className="font-medium text-orange-600">
+                      R${' '}
+                      {calculateCommission().toLocaleString('pt-BR', {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+PASSO 5 - CONFIRMAÇÃO
+// components/dashboard/reservations/steps/step5-confirmation.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
+import {
+  CheckCircle,
+  MapPin,
+  Calendar,
+  Users,
+  CreditCard,
+  DollarSign,
+  User,
+  Armchair,
+  Gift,
+  Tag,
+  Percent,
+} from 'lucide-react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+interface Step5Props {
+  data: any
+}
+
+export function Step5Confirmation({ data }: Step5Props) {
+  const getPaymentMethodLabel = (method: string) => {
+    const labels: Record<string, string> = {
+      pix: 'PIX',
+      credit_card: 'Cartão de Crédito',
+      debit_card: 'Cartão de Débito',
+      cash: 'Dinheiro',
+      transfer: 'Transferência',
+      installment: 'Parcelado',
+    }
+    return labels[method] || method
+  }
+
+  const getStatusLabel = (status: string) => {
+    const labels: Record<string, string> = {
+      pending: 'Pendente',
+      confirmed: 'Confirmada',
+      paid: 'Paga',
+    }
+    return labels[status] || status
+  }
+
+  const getStatusColor = (status: string) => {
+    const colors: Record<string, string> = {
+      pending: 'bg-yellow-100 text-yellow-800',
+      confirmed: 'bg-blue-100 text-blue-800',
+      paid: 'bg-green-100 text-green-800',
+    }
+    return colors[status] || 'bg-gray-100 text-gray-800'
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="text-center">
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
+          <CheckCircle className="h-10 w-10 text-green-600" />
+        </div>
+        <h2 className="text-2xl font-bold mb-2">Confirme os Dados da Reserva</h2>
+        <p className="text-gray-600">
+          Revise todas as informações antes de finalizar
+        </p>
+      </div>
+
+      {/* Informações da Viagem */}
+      <Card className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <MapPin className="h-5 w-5 text-blue-600" />
+          <h3 className="font-bold text-lg">Informações da Viagem</h3>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <p className="text-sm text-gray-600">Destino</p>
+            <p className="font-medium">{data.trip?.destination}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">Título</p>
+            <p className="font-medium">{data.trip?.title}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">Data de Partida</p>
+            <p className="font-medium">
+              {data.trip?.departure_date &&
+                format(new Date(data.trip.departure_date), "dd 'de' MMMM 'de' yyyy", {
+                  locale: ptBR,
+                })}
+            </p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">Horário</p>
+            <p className="font-medium">{data.trip?.departure_time}</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Cliente */}
+      <Card className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <User className="h-5 w-5 text-purple-600" />
+          <h3 className="font-bold text-lg">Cliente</h3>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <p className="text-sm text-gray-600">Nome</p>
+            <p className="font-medium">{data.client?.name}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">Telefone</p>
+            <p className="font-medium">{data.client?.phone || 'N/A'}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">Email</p>
+            <p className="font-medium">{data.client?.email || 'N/A'}</p>
+          </div>
+          <div>
+            <p className="text-sm text-gray-600">CPF</p>
+            <p className="font-medium">{data.client?.cpf || 'N/A'}</p>
+          </div>
+        </div>
+      </Card>
+
+      {/* Passageiros */}
+      <Card className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Users className="h-5 w-5 text-green-600" />
+          <h3 className="font-bold text-lg">
+            Passageiros ({data.passengers?.length || 0})
+          </h3>
+        </div>
+
+        <div className="space-y-4">
+          {data.passengers?.map((passenger: any, index: number) => (
+            <div key={index} className="border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold">Passageiro {index + 1}</span>
+                  {passenger.is_primary && (
+                    <Badge className="bg-blue-500">Principal</Badge>
+                  )}
+                </div>
+                <Badge
+                  variant={
+                    passenger.category === 'adult'
+                      ? 'default'
+                      : passenger.category === 'child'
+                      ? 'secondary'
+                      : 'outline'
+                  }
+                >
+                  {passenger.category === 'adult'
+                    ? 'Adulto'
+                    : passenger.category === 'child'
+                    ? 'Criança'
+                    : 'Bebê'}
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <div>
+                  <p className="text-gray-600">Nome</p>
+                  <p className="font-medium">{passenger.name}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">CPF</p>
+                  <p className="font-medium">{passenger.cpf || 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Data de Nasc.</p>
+                  <p className="font-medium">
+                    {passenger.birth_date
+                      ? format(new Date(passenger.birth_date), 'dd/MM/yyyy')
+                      : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Idade</p>
+                  <p className="font-medium">{passenger.age || 'N/A'} anos</p>
+                </div>
+              </div>
+
+              {passenger.special_needs && (
+                <div className="mt-3 pt-3 border-t">
+                  <p className="text-sm text-gray-600">Necessidades Especiais:</p>
+                  <p className="text-sm">{passenger.special_needs}</p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Assentos */}
+      <Card className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Armchair className="h-5 w-5 text-orange-600" />
+          <h3 className="font-bold text-lg">
+            Assentos Selecionados ({data.seats?.length || 0})
+          </h3>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {data.seats?.map((seat: any, index: number) => (
+            <div
+              key={index}
+              className="border rounded-lg p-3 bg-blue-50 border-blue-200"
+            >
+              <div className="flex items-center gap-2">
+                <Badge className="bg-blue-500">{seat.seat_number}</Badge>
+                <span className="text-sm font-medium">{seat.passenger_name}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Pagamento */}
+      <Card className="p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <CreditCard className="h-5 w-5 text-blue-600" />
+          <h3 className="font-bold text-lg">Pagamento</h3>
+        </div>
+
+        <div className="space-y-4">
+          {/* Resumo Financeiro */}
+          <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">Subtotal:</span>
+              <span className="font-medium">
+                R${' '}
+                {(data.subtotal_amount || 0).toLocaleString('pt-BR', {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
+            </div>
+
+            {data.coupon_discount > 0 && (
+              <div className="flex justify-between text-sm text-purple-600">
+                <span className="flex items-center gap-1">
+                  <Tag className="h-3 w-3" />
+                  Desconto Cupom:
+                </span>
+                <span className="font-medium">
+                  - R${' '}
+                  {(data.coupon_discount || 0).toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            )}
+
+            {data.referral_discount > 0 && (
+              <div className="flex justify-between text-sm text-blue-600">
+                <span className="flex items-center gap-1">
+                  <Gift className="h-3 w-3" />
+                  Desconto Indicação:
+                </span>
+                <span className="font-medium">
+                  - R${' '}
+                  {(data.referral_discount || 0).toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            )}
+
+            <Separator />
+
+            <div className="flex justify-between font-bold text-lg">
+              <span>Total:</span>
+              <span className="text-green-600">
+                R${' '}
+                {(data.total_amount || 0).toLocaleString('pt-BR', {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
+            </div>
+
+            <div className="flex justify-between text-sm bg-white p-2 rounded">
+              <span className="text-gray-600">Valor Pago:</span>
+              <span className="font-medium text-green-600">
+                R${' '}
+                {(data.amount_paid || 0).toLocaleString('pt-BR', {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
+            </div>
+
+            <div
+              className={`flex justify-between text-sm p-2 rounded ${
+                data.amount_pending > 0 ? 'bg-red-50' : 'bg-green-50'
+              }`}
+            >
+              <span className="text-gray-600">Valor Pendente:</span>
+              <span
+                className={`font-bold ${
+                  data.amount_pending > 0 ? 'text-red-600' : 'text-green-600'
+                }`}
+              >
+                R${' '}
+                {(data.amount_pending || 0).toLocaleString('pt-BR', {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
+            </div>
+          </div>
+
+          {/* Forma de Pagamento */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <p className="text-sm text-gray-600">Forma de Pagamento</p>
+              <p className="font-medium">
+                {getPaymentMethodLabel(data.payment_method)}
+              </p>
+            </div>
+            {data.installments > 1 && (
+              <div>
+                <p className="text-sm text-gray-600">Parcelamento</p>
+                <p className="font-medium">
+                  {data.installments}x de R${' '}
+                  {(data.installment_amount || 0).toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Status */}
+          <div>
+            <p className="text-sm text-gray-600 mb-2">Status da Reserva</p>
+            <Badge className={getStatusColor(data.status)}>
+              {getStatusLabel(data.status)}
+            </Badge>
+          </div>
+
+          {/* Comissão */}
+          {data.commission_percentage > 0 && (
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Percent className="h-4 w-4 text-orange-600" />
+                  <span className="text-sm font-medium">
+                    Comissão ({data.commission_percentage}%)
+                  </span>
+                </div>
+                <span className="font-bold text-orange-600">
+                  R${' '}
+                  {(data.commission_amount || 0).toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Observações */}
+      {data.notes && (
+        <Card className="p-6">
+          <h3 className="font-bold mb-2">Observações</h3>
+          <p className="text-sm text-gray-700 whitespace-pre-wrap">{data.notes}</p>
+        </Card>
+      )}
+
+      {/* Alerta Final */}
+      <Card className="p-4 bg-blue-50 border-blue-200">
+        <div className="flex items-start gap-3">
+          <CheckCircle className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-blue-900">Tudo pronto!</p>
+            <p className="text-sm text-blue-700 mt-1">
+              Ao clicar em "Finalizar Reserva", um voucher será gerado automaticamente
+              e o cliente receberá uma confirmação por WhatsApp e e-mail.
+            </p>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+SISTEMA DE VOUCHERS COMPLETO
+📋 ESTRUTURA DO SISTEMA DE VOUCHERS
+Copiar
+SISTEMA DE VOUCHERS
+├── 1. API de Criação de Reserva
+├── 2. Geração Automática de Voucher
+├── 3. Componente de Visualização
+├── 4. Geração de PDF
+├── 5. QR Code
+├── 6. Envio por Email/WhatsApp
+└── 7. Impressão

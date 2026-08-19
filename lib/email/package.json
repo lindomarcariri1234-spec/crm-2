@@ -1,0 +1,20 @@
+{
+  "name": "@workspace/email",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@react-email/components": "^0.0.36",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "resend": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:"
+  }
+}

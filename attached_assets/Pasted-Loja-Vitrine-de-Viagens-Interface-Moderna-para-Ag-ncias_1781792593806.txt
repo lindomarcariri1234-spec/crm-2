@@ -1,0 +1,356 @@
+Loja / Vitrine de Viagens — Interface Moderna para Agências de Turismo
+Objetivo
+
+Criar uma vitrine digital elegante, persuasiva e altamente intuitiva, projetada para aumentar a conversão de visitantes em clientes, destacando destinos, promoções, pacotes turísticos, excursões, hospedagens e passagens de forma organizada e visualmente atrativa.
+
+🎨 Conceito Visual
+Estilo
+Moderno
+Premium
+Inspirador
+Mobile First
+Experiência semelhante aos melhores marketplaces de viagem do mundo
+Identidade Visual (Visite Cariri)
+Elemento	Cor
+🤎 Marrom Cariri	#5D3E2A
+💙 Azul Chapada	#1E5B8C
+💚 Verde Araripe	#4C8B5F
+☀️ Dourado do Sol	#D8A646
+🤍 Branco Neutro	#FFFFFF
+🩶 Cinza Claro	#F5F7FA
+🏠 Página Inicial da Loja
+Hero Principal
+
+Imagem ou vídeo em tela cheia.
+
+Texto Principal
+
+Colecione momentos, não desculpas.
+
+Subtítulo
+
+Descubra destinos incríveis, excursões, pacotes e experiências inesquecíveis.
+
+Campo de Busca Inteligente
+
+🔍 Para onde você deseja viajar?
+
+Destino
+Data
+Quantidade de passageiros
+CTA Principal
+
+✈️ Encontrar Viagens
+
+🔥 Seção de Destaques
+
+Cards grandes e elegantes.
+
+Categorias
+
+🏖️ Praias
+
+⛰️ Natureza
+
+🙏 Turismo Religioso
+
+🎭 Turismo Cultural
+
+🚌 Excursões
+
+✈️ Aéreo + Hotel
+
+🏨 Hospedagem
+
+🚐 Transfers
+
+🌟 Promoções em Destaque
+
+Carrossel moderno.
+
+Cada card apresenta:
+
+Imagem impactante
+
+Nome da viagem
+
+Preço promocional
+
+Economia
+
+Parcelamento
+
+Botão:
+
+👉 Ver Oferta
+
+💎 Destinos Mais Procurados
+
+Layout em mosaico.
+
+Exemplo:
+
+🏖️ Jericoacoara
+
+🏝️ Porto de Galinhas
+
+🌊 Maragogi
+
+🏙️ Fortaleza
+
+🌅 Canoa Quebrada
+
+⛰️ Chapada do Araripe
+
+Ao passar o mouse:
+
+✓ Valor a partir de
+
+✓ Duração
+
+✓ Botão Ver Detalhes
+
+🚀 Área de Ofertas Relâmpago
+
+Banner animado.
+
+⏰ Últimas vagas
+
+🔥 Promoção termina em:
+
+00:12:34
+
+Botão:
+
+Reservar Agora
+
+🚌 Excursões Disponíveis
+
+Cards modernos.
+
+Cada excursão exibe:
+
+Foto
+
+Destino
+
+Data
+
+Horário de saída
+
+Quantidade de vagas
+
+Preço
+
+Botão:
+
+🎟️ Reservar Vaga
+
+📅 Calendário de Saídas
+
+Visual semelhante a aplicativos modernos.
+
+Mês atual
+
+Datas disponíveis destacadas
+
+Ao clicar:
+
+Mostra viagens daquele dia.
+
+❤️ Favoritos
+
+O cliente pode salvar:
+
+⭐ Destinos
+
+⭐ Excursões
+
+⭐ Pacotes
+
+⭐ Promoções
+
+🎁 Clube de Benefícios
+
+Área exclusiva.
+
+Exibe:
+
+Pontos acumulados
+
+Cashback
+
+Indicações
+
+Cupons
+
+Botão:
+
+Resgatar Benefícios
+
+🤝 Programa de Indicação
+
+Card estratégico.
+
+Headline
+
+A partir de agora, cada amigo que viajar com você pode gerar recompensas exclusivas.
+
+Mostrar:
+
+Código de indicação
+
+QR Code
+
+Saldo acumulado
+
+Botão:
+
+Compartilhar
+
+📲 WhatsApp Flutuante Inteligente
+
+Sempre visível.
+
+Mensagem automática:
+
+Olá! Gostaria de receber mais informações sobre esta viagem.
+
+⭐ Avaliações dos Clientes
+
+Carrossel de depoimentos.
+
+Exibir:
+
+Foto
+
+Nome
+
+Nota
+
+Comentário
+
+Experiência realizada
+
+📍 Mapa Interativo
+
+Mostrar:
+
+Destinos
+
+Pontos turísticos
+
+Locais de embarque
+
+Agências parceiras
+
+🎥 Experiências em Vídeo
+
+Reels e vídeos curtos.
+
+Formato vertical.
+
+Exibir:
+
+▶️ Assista como foi essa experiência
+
+🛒 Página do Produto (Viagem)
+Galeria Premium
+
+Fotos grandes
+
+Vídeos
+
+Tour virtual
+
+Informações Principais
+
+Nome da viagem
+
+Preço
+
+Parcelamento
+
+Data de saída
+
+Duração
+
+Vagas disponíveis
+
+CTA Destacado
+
+🚀 Reservar Agora
+
+O que está incluso
+
+✓ Transporte
+
+✓ Hospedagem
+
+✓ Guia
+
+✓ Seguro
+
+✓ Passeios
+
+O que não está incluso
+
+Informações transparentes.
+
+Roteiro Completo
+
+Timeline visual.
+
+Dia 1
+
+Dia 2
+
+Dia 3
+
+Avaliações
+
+Comentários reais.
+
+🧠 Recursos Inteligentes
+IA de Recomendação
+
+"Você também pode gostar de..."
+
+Comparador de Viagens
+
+Comparar até 3 pacotes.
+
+Simulador de Parcelamento
+
+Visual instantâneo.
+
+Alerta de Preço
+
+O cliente recebe notificação quando o valor baixar.
+
+📱 Aplicativo Mobile
+
+Menu inferior:
+
+🏠 Início
+
+🔍 Buscar
+
+❤️ Favoritos
+
+🎟️ Minhas Reservas
+
+👤 Perfil
+
+Resultado Esperado
+
+Esta vitrine deve transmitir:
+
+✅ Confiança
+✅ Desejo de viajar
+✅ Facilidade de compra
+✅ Experiência premium
+✅ Conversão elevada
+✅ Integração total com o VISITECRM
+
+Transformando a loja da agência em um verdadeiro Marketplace Turístico Inteligente, onde cada visitante encontra, escolhe, reserva e compartilha viagens com poucos cliques, aumentando significativamente as oportunidades de vendas e fidelização.

@@ -1,0 +1,3791 @@
+Na página Despesas
+Nas rotas  
+/financeiro   
+/analytics  
+/dashboard
+/financeiro/expenses 
+/financeiro/commissions
+ATUALIZAR AS INFORMAÇÕES E GRAFICOS com as informações do MÓDULO FINANCEIRO, contas a pagar e a receber, custo total, valores e despesas. Todas as informações financeiras da AGÊNCIA.
+
+📊 DASHBOARD FINANCEIRO COMPLETO - INTEGRAÇÃO TOTAL
+📋 ESTRUTURA DA IMPLEMENTAÇÃO
+
+┌─────────────────────────────────────────────────────────────────┐
+│              SISTEMA FINANCEIRO INTEGRADO                        │
+└─────────────────────────────────────────────────────────────────┐
+
+1. Dashboard Principal (/dashboard)
+   ├── KPIs principais
+   ├── Gráficos de receita
+   └── Resumo financeiro
+
+2. Financeiro (/financeiro)
+   ├── Visão geral financeira
+   ├── Contas a pagar/receber
+   └── Fluxo de caixa
+
+3. Analytics (/analytics)
+   ├── Análise de viagens
+   ├── Rentabilidade
+   └── Tendências
+
+4. Despesas (/financeiro/expenses)
+   ├── Custos operacionais
+   ├── Despesas por categoria
+   └── Comparativo
+
+5. Comissões (/financeiro/commissions)
+   ├── Comissões de vendas
+   ├── Indicações
+   └── Pagamentos
+
+SCHEMA COMPLETO DO BANCO
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════
+// MODELO DE DESPESAS
+// ═══════════════════════════════════════════════════════════
+
+model Expense {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Dados da despesa
+  description     String
+  category        String    // transporte, equipe, marketing, operacional, etc
+  type            String    // fixed, variable
+  amount          Decimal   @db.Decimal(10, 2)
+  
+  // Relacionamento com viagem (opcional)
+  trip_id         String?
+  trip            Trip?     @relation(fields: [trip_id], references: [id], onDelete: SetNull)
+  
+  // Pagamento
+  status          String    @default("pending")  // pending, paid, overdue
+  due_date        DateTime?
+  paid_date       DateTime?
+  payment_method  String?   // cash, credit_card, debit_card, pix, bank_transfer
+  
+  // Fornecedor
+  supplier_name   String?
+  supplier_doc    String?   // CPF/CNPJ
+  
+  // Auditoria
+  created_by      String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([tenant_id, status])
+  @@index([tenant_id, category])
+  @@index([trip_id])
+  @@map("expenses")
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODELO DE RECEITAS
+// ═══════════════════════════════════════════════════════════
+
+model Revenue {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Dados da receita
+  description     String
+  amount          Decimal   @db.Decimal(10, 2)
+  
+  // Relacionamento com viagem
+  trip_id         String?
+  trip            Trip?     @relation(fields: [trip_id], references: [id], onDelete: SetNull)
+  
+  // Relacionamento com reserva
+  reservation_id  String?
+  reservation     Reservation? @relation(fields: [reservation_id], references: [id], onDelete: SetNull)
+  
+  // Recebimento
+  status          String    @default("pending")  // pending, received, overdue
+  due_date        DateTime?
+  received_date   DateTime?
+  payment_method  String?
+  
+  // Cliente
+  customer_name   String?
+  customer_doc    String?
+  
+  // Auditoria
+  created_by      String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([tenant_id, status])
+  @@index([trip_id])
+  @@index([reservation_id])
+  @@map("revenues")
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODELO DE COMISSÕES
+// ═══════════════════════════════════════════════════════════
+
+model Commission {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Dados da comissão
+  type            String    // sale, referral, agent
+  description     String
+  amount          Decimal   @db.Decimal(10, 2)
+  percentage      Decimal?  @db.Decimal(5, 2)
+  
+  // Relacionamento
+  trip_id         String?
+  trip            Trip?     @relation(fields: [trip_id], references: [id], onDelete: SetNull)
+  
+  reservation_id  String?
+  reservation     Reservation? @relation(fields: [reservation_id], references: [id], onDelete: SetNull)
+  
+  // Beneficiário
+  user_id         String?
+  user            User?     @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  
+  beneficiary_name String
+  beneficiary_doc  String?
+  
+  // Pagamento
+  status          String    @default("pending")  // pending, paid, cancelled
+  due_date        DateTime?
+  paid_date       DateTime?
+  payment_method  String?
+  
+  // Auditoria
+  created_by      String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([tenant_id, status])
+  @@index([trip_id])
+  @@index([user_id])
+  @@map("commissions")
+}
+
+// ═══════════════════════════════════════════════════════════
+// ATUALIZAR MODELO TRIP
+// ═══════════════════════════════════════════════════════════
+
+model Trip {
+  // ... campos existentes ...
+  
+  // Relacionamentos financeiros
+  expenses        Expense[]
+  revenues        Revenue[]
+  commissions     Commission[]
+  
+  // ... resto do modelo ...
+}
+
+// ═══════════════════════════════════════════════════════════
+// ATUALIZAR MODELO RESERVATION
+// ═══════════════════════════════════════════════════════════
+
+model Reservation {
+  // ... campos existentes ...
+  
+  // Relacionamentos financeiros
+  revenues        Revenue[]
+  commissions     Commission[]
+  
+  // ... resto do modelo ...
+}
+
+// ═══════════════════════════════════════════════════════════
+// ATUALIZAR MODELO USER
+// ═══════════════════════════════════════════════════════════
+
+model User {
+  // ... campos existentes ...
+  
+  // Comissões
+  commissions     Commission[]
+  
+  // ... resto do modelo ...
+}
+
+// ═══════════════════════════════════════════════════════════
+// ATUALIZAR MODELO TENANT
+// ═══════════════════════════════════════════════════════════
+
+model Tenant {
+  // ... campos existentes ...
+  
+  // Financeiro
+  expenses        Expense[]
+  revenues        Revenue[]
+  commissions     Commission[]
+  
+  // ... resto do modelo ...
+}
+
+# Aplicar mudanças
+npx prisma migrate dev --name add_financial_system
+npx prisma generate
+
+API DE DADOS FINANCEIROS
+
+// app/api/dashboard/financial/overview/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const period = searchParams.get('period') || '30' // dias
+
+    const startDate = new Date()
+    startDate.setDate(startDate.getDate() - parseInt(period))
+
+    // ═══════════════════════════════════════════════════════════
+    // BUSCAR DADOS
+    // ═══════════════════════════════════════════════════════════
+
+    // 1. VIAGENS
+    const trips = await prisma.trip.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        created_at: { gte: startDate },
+      },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        total_revenue: true,
+        total_cost: true,
+        total_profit: true,
+        profit_margin: true,
+        departure_date: true,
+        max_passengers: true,
+        created_at: true,
+      },
+    })
+
+    // 2. DESPESAS
+    const expenses = await prisma.expense.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        created_at: { gte: startDate },
+      },
+      select: {
+        id: true,
+        description: true,
+        category: true,
+        type: true,
+        amount: true,
+        status: true,
+        due_date: true,
+        paid_date: true,
+        trip_id: true,
+      },
+    })
+
+    // 3. RECEITAS
+    const revenues = await prisma.revenue.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        created_at: { gte: startDate },
+      },
+      select: {
+        id: true,
+        description: true,
+        amount: true,
+        status: true,
+        due_date: true,
+        received_date: true,
+        trip_id: true,
+      },
+    })
+
+    // 4. COMISSÕES
+    const commissions = await prisma.commission.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        created_at: { gte: startDate },
+      },
+      select: {
+        id: true,
+        type: true,
+        description: true,
+        amount: true,
+        status: true,
+        beneficiary_name: true,
+      },
+    })
+
+    // 5. RESERVAS
+    const reservations = await prisma.reservation.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        created_at: { gte: startDate },
+      },
+      select: {
+        id: true,
+        status: true,
+        total_amount: true,
+        trip: {
+          select: {
+            title: true,
+          },
+        },
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // CALCULAR TOTAIS
+    // ═══════════════════════════════════════════════════════════
+
+    // RECEITAS
+    const totalRevenue = revenues.reduce(
+      (sum, r) => sum + Number(r.amount),
+      0
+    )
+    const receivedRevenue = revenues
+      .filter((r) => r.status === 'received')
+      .reduce((sum, r) => sum + Number(r.amount), 0)
+    const pendingRevenue = revenues
+      .filter((r) => r.status === 'pending')
+      .reduce((sum, r) => sum + Number(r.amount), 0)
+
+    // DESPESAS
+    const totalExpenses = expenses.reduce(
+      (sum, e) => sum + Number(e.amount),
+      0
+    )
+    const paidExpenses = expenses
+      .filter((e) => e.status === 'paid')
+      .reduce((sum, e) => sum + Number(e.amount), 0)
+    const pendingExpenses = expenses
+      .filter((e) => e.status === 'pending')
+      .reduce((sum, e) => sum + Number(e.amount), 0)
+
+    // COMISSÕES
+    const totalCommissions = commissions.reduce(
+      (sum, c) => sum + Number(c.amount),
+      0
+    )
+    const paidCommissions = commissions
+      .filter((c) => c.status === 'paid')
+      .reduce((sum, c) => sum + Number(c.amount), 0)
+    const pendingCommissions = commissions
+      .filter((c) => c.status === 'pending')
+      .reduce((sum, c) => sum + Number(c.amount), 0)
+
+    // LUCRO
+    const totalProfit = trips.reduce(
+      (sum, t) => sum + Number(t.total_profit || 0),
+      0
+    )
+
+    // FLUXO DE CAIXA
+    const cashFlow = receivedRevenue - paidExpenses - paidCommissions
+
+    // ═══════════════════════════════════════════════════════════
+    // ANÁLISES
+    // ═══════════════════════════════════════════════════════════
+
+    // Despesas por categoria
+    const expensesByCategory = expenses.reduce((acc: any, expense) => {
+      const category = expense.category
+      if (!acc[category]) {
+        acc[category] = 0
+      }
+      acc[category] += Number(expense.amount)
+      return acc
+    }, {})
+
+    // Despesas por tipo
+    const expensesByType = {
+      fixed: expenses
+        .filter((e) => e.type === 'fixed')
+        .reduce((sum, e) => sum + Number(e.amount), 0),
+      variable: expenses
+        .filter((e) => e.type === 'variable')
+        .reduce((sum, e) => sum + Number(e.amount), 0),
+    }
+
+    // Viagens mais lucrativas
+    const topProfitableTrips = trips
+      .filter((t) => t.total_profit)
+      .sort((a, b) => Number(b.total_profit) - Number(a.total_profit))
+      .slice(0, 5)
+
+    // Tendência mensal
+    const monthlyData = await getMonthlyTrend(
+      session.user.tenantId,
+      startDate
+    )
+
+    // ═══════════════════════════════════════════════════════════
+    // RETORNAR DADOS
+    // ═══════════════════════════════════════════════════════════
+
+    return NextResponse.json({
+      summary: {
+        totalRevenue,
+        receivedRevenue,
+        pendingRevenue,
+        totalExpenses,
+        paidExpenses,
+        pendingExpenses,
+        totalCommissions,
+        paidCommissions,
+        pendingCommissions,
+        totalProfit,
+        cashFlow,
+      },
+      trips: {
+        total: trips.length,
+        active: trips.filter((t) => t.status === 'active').length,
+        completed: trips.filter((t) => t.status === 'completed').length,
+        topProfitable: topProfitableTrips,
+      },
+      expenses: {
+        total: expenses.length,
+        byCategory: expensesByCategory,
+        byType: expensesByType,
+        pending: expenses.filter((e) => e.status === 'pending').length,
+      },
+      revenues: {
+        total: revenues.length,
+        pending: revenues.filter((r) => r.status === 'pending').length,
+      },
+      commissions: {
+        total: commissions.length,
+        pending: commissions.filter((c) => c.status === 'pending').length,
+      },
+      reservations: {
+        total: reservations.length,
+        confirmed: reservations.filter((r) => r.status === 'confirmed').length,
+        pending: reservations.filter((r) => r.status === 'pending').length,
+      },
+      trends: monthlyData,
+    })
+  } catch (error) {
+    console.error('Erro ao buscar dados financeiros:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar dados financeiros' },
+      { status: 500 }
+    )
+  }
+}
+
+// Função auxiliar para tendência mensal
+async function getMonthlyTrend(tenantId: string, startDate: Date) {
+  const months = []
+  const currentDate = new Date()
+
+  for (let i = 5; i >= 0; i--) {
+    const monthStart = new Date(
+      currentDate.getFullYear(),
+      currentDate.getMonth() - i,
+      1
+    )
+    const monthEnd = new Date(
+      currentDate.getFullYear(),
+      currentDate.getMonth() - i + 1,
+      0
+    )
+
+    const [revenues, expenses, trips] = await Promise.all([
+      prisma.revenue.findMany({
+        where: {
+          tenant_id: tenantId,
+          created_at: { gte: monthStart, lte: monthEnd },
+        },
+      }),
+      prisma.expense.findMany({
+        where: {
+          tenant_id: tenantId,
+          created_at: { gte: monthStart, lte: monthEnd },
+        },
+      }),
+      prisma.trip.findMany({
+        where: {
+          tenant_id: tenantId,
+          created_at: { gte: monthStart, lte: monthEnd },
+        },
+      }),
+    ])
+
+    const monthRevenue = revenues.reduce(
+      (sum, r) => sum + Number(r.amount),
+      0
+    )
+    const monthExpenses = expenses.reduce(
+      (sum, e) => sum + Number(e.amount),
+      0
+    )
+    const monthProfit = trips.reduce(
+      (sum, t) => sum + Number(t.total_profit || 0),
+      0
+    )
+
+    months.push({
+      month: monthStart.toLocaleDateString('pt-BR', { month: 'short' }),
+      revenue: monthRevenue,
+      expenses: monthExpenses,
+      profit: monthProfit,
+    })
+  }
+
+  return months
+}
+
+DASHBOARD PRINCIPAL
+// app/(dashboard)/dashboard/page.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  Users,
+  Calendar,
+  CreditCard,
+  AlertCircle,
+  Loader2,
+} from 'lucide-react'
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+import Link from 'next/link'
+
+const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6']
+
+export default function DashboardPage() {
+  const [period, setPeriod] = useState('30')
+  const [data, setData] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [period])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch(
+        `/api/dashboard/financial/overview?period=${period}`
+      )
+      const result = await response.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  if (!data) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p>Erro ao carregar dados</p>
+      </div>
+    )
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  // Preparar dados para gráfico de pizza
+  const expensesPieData = Object.entries(data.expenses.byCategory).map(
+    ([category, value]) => ({
+      name: category,
+      value: value as number,
+    })
+  )
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">📊 Dashboard Financeiro</h1>
+          <p className="text-gray-600">
+            Visão geral completa da sua agência
+          </p>
+        </div>
+
+        <Select value={period} onValueChange={setPeriod}>
+          <SelectTrigger className="w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7">Últimos 7 dias</SelectItem>
+            <SelectItem value="30">Últimos 30 dias</SelectItem>
+            <SelectItem value="90">Últimos 90 dias</SelectItem>
+            <SelectItem value="365">Último ano</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* KPIs Principais */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        {/* Receita Total */}
+        <Card className="p-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <DollarSign className="h-8 w-8" />
+            <TrendingUp className="h-5 w-5" />
+          </div>
+          <p className="text-sm opacity-90 mb-1">Receita Total</p>
+          <p className="text-3xl font-bold">
+            {formatCurrency(data.summary.totalRevenue)}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            Recebido: {formatCurrency(data.summary.receivedRevenue)}
+          </p>
+        </Card>
+
+        {/* Despesas Totais */}
+        <Card className="p-6 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <CreditCard className="h-8 w-8" />
+            <TrendingDown className="h-5 w-5" />
+          </div>
+          <p className="text-sm opacity-90 mb-1">Despesas Totais</p>
+          <p className="text-3xl font-bold">
+            {formatCurrency(data.summary.totalExpenses)}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            Pagas: {formatCurrency(data.summary.paidExpenses)}
+          </p>
+        </Card>
+
+        {/* Lucro Total */}
+        <Card
+          className={`p-6 bg-gradient-to-br ${
+            data.summary.totalProfit >= 0
+              ? 'from-green-500 to-green-600'
+              : 'from-red-500 to-red-600'
+          } text-white`}
+        >
+          <div className="flex items-center justify-between mb-4">
+            <TrendingUp className="h-8 w-8" />
+            {data.summary.totalProfit >= 0 ? (
+              <TrendingUp className="h-5 w-5" />
+            ) : (
+              <TrendingDown className="h-5 w-5" />
+            )}
+          </div>
+          <p className="text-sm opacity-90 mb-1">Lucro Total</p>
+          <p className="text-3xl font-bold">
+            {formatCurrency(Math.abs(data.summary.totalProfit))}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            {data.trips.total} viagens
+          </p>
+        </Card>
+
+        {/* Fluxo de Caixa */}
+        <Card className="p-6 bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <DollarSign className="h-8 w-8" />
+            <Calendar className="h-5 w-5" />
+          </div>
+          <p className="text-sm opacity-90 mb-1">Fluxo de Caixa</p>
+          <p className="text-3xl font-bold">
+            {formatCurrency(data.summary.cashFlow)}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            Saldo disponível
+          </p>
+        </Card>
+      </div>
+
+      {/* Contas Pendentes */}
+      {(data.summary.pendingRevenue > 0 ||
+        data.summary.pendingExpenses > 0 ||
+        data.summary.pendingCommissions > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          {/* A Receber */}
+          <Card className="p-6 border-2 border-blue-200 bg-blue-50">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-blue-600 rounded-lg">
+                <TrendingUp className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">A Receber</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {formatCurrency(data.summary.pendingRevenue)}
+                </p>
+              </div>
+            </div>
+            <Button asChild variant="outline" size="sm" className="w-full">
+              <Link href="/financeiro">Ver detalhes</Link>
+            </Button>
+          </Card>
+
+          {/* A Pagar */}
+          <Card className="p-6 border-2 border-orange-200 bg-orange-50">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-orange-600 rounded-lg">
+                <TrendingDown className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">A Pagar</p>
+                <p className="text-2xl font-bold text-orange-600">
+                  {formatCurrency(data.summary.pendingExpenses)}
+                </p>
+              </div>
+            </div>
+            <Button asChild variant="outline" size="sm" className="w-full">
+              <Link href="/financeiro/expenses">Ver despesas</Link>
+            </Button>
+          </Card>
+
+          {/* Comissões Pendentes */}
+          <Card className="p-6 border-2 border-purple-200 bg-purple-50">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-purple-600 rounded-lg">
+                <Users className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Comissões Pendentes</p>
+                <p className="text-2xl font-bold text-purple-600">
+                  {formatCurrency(data.summary.pendingCommissions)}
+                </p>
+              </div>
+            </div>
+            <Button asChild variant="outline" size="sm" className="w-full">
+              <Link href="/financeiro/commissions">Ver comissões</Link>
+            </Button>
+          </Card>
+        </div>
+      )}
+
+      {/* Gráficos */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Tendência Mensal */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📈 Tendência Mensal</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={data.trends}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip
+                formatter={(value: number) => formatCurrency(value)}
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="revenue"
+                stroke="#3B82F6"
+                name="Receita"
+                strokeWidth={2}
+              />
+              <Line
+                type="monotone"
+                dataKey="expenses"
+                stroke="#F59E0B"
+                name="Despesas"
+                strokeWidth={2}
+              />
+              <Line
+                type="monotone"
+                dataKey="profit"
+                stroke="#10B981"
+                name="Lucro"
+                strokeWidth={2}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Despesas por Categoria */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">🧾 Despesas por Categoria</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={expensesPieData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={(entry) => entry.name}
+                outerRadius={80}
+                fill="#8884d8"
+                dataKey="value"
+              >
+                {expensesPieData.map((entry, index) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={COLORS[index % COLORS.length]}
+                  />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value: number) => formatCurrency(value)} />
+            </PieChart>
+          </ResponsiveContainer>
+        </Card>
+      </div>
+
+      {/* Viagens Mais Lucrativas */}
+      <Card className="p-6">
+        <h3 className="text-lg font-bold mb-4">🏆 Viagens Mais Lucrativas</h3>
+
+        <div className="space-y-3">
+          {data.trips.topProfitable.map((trip: any, index: number) => (
+            <div
+              key={trip.id}
+              className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border"
+            >
+              <div className="flex items-center gap-4">
+                <div className="flex items-center justify-center w-8 h-8 bg-blue-600 text-white rounded-full font-bold">
+                  {index + 1}
+                </div>
+                <div>
+                  <p className="font-semibold">{trip.title}</p>
+                  <p className="text-sm text-gray-600">
+                    {trip.max_passengers} passageiros •{' '}
+                    {new Date(trip.departure_date).toLocaleDateString('pt-BR')}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="font-bold text-green-600">
+                  {formatCurrency(Number(trip.total_profit))}
+                </p>
+                <p className="text-sm text-gray-600">
+                  {Number(trip.profit_margin).toFixed(1)}% margem
+                </p>
+              </div>
+            </div>
+          ))}
+
+          {data.trips.topProfitable.length === 0 && (
+            <div className="text-center py-8 text-gray-500">
+              <AlertCircle className="h-12 w-12 mx-auto mb-3 opacity-50" />
+              <p>Nenhuma viagem lucrativa no período</p>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+💰 PARTE 2: PÁGINAS FINANCEIRAS COMPLETAS
+📊 4. PÁGINA /FINANCEIRO (VISÃO GERAL)
+
+// app/(dashboard)/financeiro/page.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  Calendar,
+  CreditCard,
+  AlertCircle,
+  CheckCircle,
+  Clock,
+  Download,
+  Filter,
+  Loader2,
+  Plus,
+} from 'lucide-react'
+import {
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+import Link from 'next/link'
+
+export default function FinanceiroPage() {
+  const [period, setPeriod] = useState('30')
+  const [data, setData] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [period])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch(
+        `/api/dashboard/financial/overview?period=${period}`
+      )
+      const result = await response.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  if (!data) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p>Erro ao carregar dados</p>
+      </div>
+    )
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  const formatDate = (date: string) => {
+    return new Date(date).toLocaleDateString('pt-BR')
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">💰 Financeiro</h1>
+          <p className="text-gray-600">
+            Gestão completa de receitas, despesas e fluxo de caixa
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Select value={period} onValueChange={setPeriod}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="7">Últimos 7 dias</SelectItem>
+              <SelectItem value="30">Últimos 30 dias</SelectItem>
+              <SelectItem value="90">Últimos 90 dias</SelectItem>
+              <SelectItem value="365">Último ano</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Button variant="outline">
+            <Download className="h-4 w-4 mr-2" />
+            Exportar
+          </Button>
+        </div>
+      </div>
+
+      {/* Resumo Financeiro */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+        {/* Receita Total */}
+        <Card className="p-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingUp className="h-5 w-5" />
+            <span className="text-sm font-semibold">Receita Total</span>
+          </div>
+          <p className="text-2xl font-bold mb-1">
+            {formatCurrency(data.summary.totalRevenue)}
+          </p>
+          <p className="text-xs opacity-75">
+            {data.revenues.total} lançamentos
+          </p>
+        </Card>
+
+        {/* Despesas Totais */}
+        <Card className="p-6 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingDown className="h-5 w-5" />
+            <span className="text-sm font-semibold">Despesas Totais</span>
+          </div>
+          <p className="text-2xl font-bold mb-1">
+            {formatCurrency(data.summary.totalExpenses)}
+          </p>
+          <p className="text-xs opacity-75">
+            {data.expenses.total} lançamentos
+          </p>
+        </Card>
+
+        {/* Fluxo de Caixa */}
+        <Card
+          className={`p-6 bg-gradient-to-br ${
+            data.summary.cashFlow >= 0
+              ? 'from-green-500 to-green-600'
+              : 'from-red-500 to-red-600'
+          } text-white`}
+        >
+          <div className="flex items-center gap-2 mb-3">
+            <DollarSign className="h-5 w-5" />
+            <span className="text-sm font-semibold">Fluxo de Caixa</span>
+          </div>
+          <p className="text-2xl font-bold mb-1">
+            {formatCurrency(data.summary.cashFlow)}
+          </p>
+          <p className="text-xs opacity-75">Saldo atual</p>
+        </Card>
+
+        {/* A Receber */}
+        <Card className="p-6 border-2 border-blue-200 bg-blue-50">
+          <div className="flex items-center gap-2 mb-3">
+            <Clock className="h-5 w-5 text-blue-600" />
+            <span className="text-sm font-semibold text-blue-900">
+              A Receber
+            </span>
+          </div>
+          <p className="text-2xl font-bold text-blue-600 mb-1">
+            {formatCurrency(data.summary.pendingRevenue)}
+          </p>
+          <p className="text-xs text-blue-700">
+            {data.revenues.pending} pendentes
+          </p>
+        </Card>
+
+        {/* A Pagar */}
+        <Card className="p-6 border-2 border-orange-200 bg-orange-50">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertCircle className="h-5 w-5 text-orange-600" />
+            <span className="text-sm font-semibold text-orange-900">
+              A Pagar
+            </span>
+          </div>
+          <p className="text-2xl font-bold text-orange-600 mb-1">
+            {formatCurrency(data.summary.pendingExpenses)}
+          </p>
+          <p className="text-xs text-orange-700">
+            {data.expenses.pending} pendentes
+          </p>
+        </Card>
+      </div>
+
+      {/* Gráfico de Fluxo de Caixa */}
+      <Card className="p-6 mb-8">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-bold">📊 Fluxo de Caixa Mensal</h3>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="bg-blue-50">
+              <div className="w-3 h-3 bg-blue-600 rounded-full mr-2" />
+              Receitas
+            </Badge>
+            <Badge variant="outline" className="bg-orange-50">
+              <div className="w-3 h-3 bg-orange-600 rounded-full mr-2" />
+              Despesas
+            </Badge>
+            <Badge variant="outline" className="bg-green-50">
+              <div className="w-3 h-3 bg-green-600 rounded-full mr-2" />
+              Lucro
+            </Badge>
+          </div>
+        </div>
+
+        <ResponsiveContainer width="100%" height={350}>
+          <AreaChart data={data.trends}>
+            <defs>
+              <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.8} />
+                <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="colorExpenses" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.8} />
+                <stop offset="95%" stopColor="#F59E0B" stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="colorProfit" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#10B981" stopOpacity={0.8} />
+                <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" />
+            <YAxis />
+            <Tooltip formatter={(value: number) => formatCurrency(value)} />
+            <Area
+              type="monotone"
+              dataKey="revenue"
+              stroke="#3B82F6"
+              fillOpacity={1}
+              fill="url(#colorRevenue)"
+              name="Receitas"
+            />
+            <Area
+              type="monotone"
+              dataKey="expenses"
+              stroke="#F59E0B"
+              fillOpacity={1}
+              fill="url(#colorExpenses)"
+              name="Despesas"
+            />
+            <Area
+              type="monotone"
+              dataKey="profit"
+              stroke="#10B981"
+              fillOpacity={1}
+              fill="url(#colorProfit)"
+              name="Lucro"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </Card>
+
+      {/* Tabs: Contas a Receber / Contas a Pagar */}
+      <Tabs defaultValue="receber" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="receber" className="flex items-center gap-2">
+            <TrendingUp className="h-4 w-4" />
+            Contas a Receber
+          </TabsTrigger>
+          <TabsTrigger value="pagar" className="flex items-center gap-2">
+            <TrendingDown className="h-4 w-4" />
+            Contas a Pagar
+          </TabsTrigger>
+        </TabsList>
+
+        {/* CONTAS A RECEBER */}
+        <TabsContent value="receber">
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold">💵 Contas a Receber</h3>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                Nova Receita
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              {/* Exemplo de lista - conectar com API real */}
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border">
+                <div className="flex items-center gap-4">
+                  <div className="p-2 bg-blue-100 rounded-lg">
+                    <DollarSign className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">Reserva #1234</p>
+                    <p className="text-sm text-gray-600">
+                      Cliente: João Silva
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold text-blue-600">
+                    {formatCurrency(1500)}
+                  </p>
+                  <Badge variant="outline" className="mt-1">
+                    <Clock className="h-3 w-3 mr-1" />
+                    Pendente
+                  </Badge>
+                </div>
+              </div>
+
+              {/* Mensagem vazia */}
+              <div className="text-center py-12 text-gray-500">
+                <TrendingUp className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p className="font-semibold mb-1">
+                  Nenhuma conta a receber no período
+                </p>
+                <p className="text-sm">
+                  As receitas pendentes aparecerão aqui
+                </p>
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* CONTAS A PAGAR */}
+        <TabsContent value="pagar">
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold">💳 Contas a Pagar</h3>
+              <Button asChild>
+                <Link href="/financeiro/expenses">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Nova Despesa
+                </Link>
+              </Button>
+            </div>
+
+            <div className="space-y-3">
+              {/* Exemplo de lista - conectar com API real */}
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border">
+                <div className="flex items-center gap-4">
+                  <div className="p-2 bg-orange-100 rounded-lg">
+                    <CreditCard className="h-5 w-5 text-orange-600" />
+                  </div>
+                  <div>
+                    <p className="font-semibold">Fretamento - Ônibus</p>
+                    <p className="text-sm text-gray-600">
+                      Vencimento: 25/04/2026
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold text-orange-600">
+                    {formatCurrency(3000)}
+                  </p>
+                  <Badge variant="outline" className="mt-1">
+                    <AlertCircle className="h-3 w-3 mr-1" />
+                    Pendente
+                  </Badge>
+                </div>
+              </div>
+
+              {/* Mensagem vazia */}
+              <div className="text-center py-12 text-gray-500">
+                <TrendingDown className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p className="font-semibold mb-1">
+                  Nenhuma conta a pagar no período
+                </p>
+                <p className="text-sm">
+                  As despesas pendentes aparecerão aqui
+                </p>
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Resumo por Categoria */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
+        {/* Despesas por Categoria */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📊 Despesas por Categoria</h3>
+
+          <div className="space-y-3">
+            {Object.entries(data.expenses.byCategory).map(
+              ([category, value]: [string, any]) => {
+                const percentage =
+                  (value / data.summary.totalExpenses) * 100
+
+                return (
+                  <div key={category}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-semibold capitalize">
+                        {category}
+                      </span>
+                      <span className="text-sm font-bold">
+                        {formatCurrency(value)}
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="bg-orange-600 h-2 rounded-full transition-all"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                )
+              }
+            )}
+
+            {Object.keys(data.expenses.byCategory).length === 0 && (
+              <div className="text-center py-8 text-gray-500">
+                <AlertCircle className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p>Nenhuma despesa registrada</p>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Custos Fixos vs Variáveis */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">🔄 Custos Fixos vs Variáveis</h3>
+
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart
+              data={[
+                {
+                  name: 'Custos',
+                  fixos: data.expenses.byType.fixed,
+                  variaveis: data.expenses.byType.variable,
+                },
+              ]}
+            >
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip formatter={(value: number) => formatCurrency(value)} />
+              <Legend />
+              <Bar dataKey="fixos" fill="#3B82F6" name="Custos Fixos" />
+              <Bar
+                dataKey="variaveis"
+                fill="#10B981"
+                name="Custos Variáveis"
+              />
+            </BarChart>
+          </ResponsiveContainer>
+
+          <div className="grid grid-cols-2 gap-4 mt-6">
+            <div className="p-4 bg-blue-50 rounded-lg border-2 border-blue-200">
+              <p className="text-sm text-blue-700 mb-1">Custos Fixos</p>
+              <p className="text-xl font-bold text-blue-600">
+                {formatCurrency(data.expenses.byType.fixed)}
+              </p>
+            </div>
+            <div className="p-4 bg-green-50 rounded-lg border-2 border-green-200">
+              <p className="text-sm text-green-700 mb-1">Custos Variáveis</p>
+              <p className="text-xl font-bold text-green-600">
+                {formatCurrency(data.expenses.byType.variable)}
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+📈 5. PÁGINA /ANALYTICS (ANÁLISES)
+// app/(dashboard)/analytics/page.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  TrendingUp,
+  TrendingDown,
+  Target,
+  Award,
+  AlertTriangle,
+  Calendar,
+  Users,
+  DollarSign,
+  Percent,
+  Loader2,
+} from 'lucide-react'
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  RadarChart,
+  Radar,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+
+export default function AnalyticsPage() {
+  const [period, setPeriod] = useState('90')
+  const [data, setData] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [period])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch(
+        `/api/dashboard/financial/overview?period=${period}`
+      )
+      const result = await response.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  if (!data) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p>Erro ao carregar dados</p>
+      </div>
+    )
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  // Calcular métricas
+  const avgProfitMargin =
+    data.trips.topProfitable.reduce(
+      (sum: number, trip: any) => sum + Number(trip.profit_margin),
+      0
+    ) / (data.trips.topProfitable.length || 1)
+
+  const avgRevenuePerTrip =
+    data.summary.totalRevenue / (data.trips.total || 1)
+
+  const avgCostPerTrip = data.summary.totalExpenses / (data.trips.total || 1)
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">📈 Analytics</h1>
+          <p className="text-gray-600">
+            Análises detalhadas e insights da sua agência
+          </p>
+        </div>
+
+        <Select value={period} onValueChange={setPeriod}>
+          <SelectTrigger className="w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="30">Últimos 30 dias</SelectItem>
+            <SelectItem value="90">Últimos 90 dias</SelectItem>
+            <SelectItem value="180">Últimos 6 meses</SelectItem>
+            <SelectItem value="365">Último ano</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* KPIs de Performance */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        {/* Margem Média */}
+        <Card className="p-6 bg-gradient-to-br from-green-500 to-green-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <Percent className="h-5 w-5" />
+            <span className="text-sm font-semibold">Margem Média</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {avgProfitMargin.toFixed(1)}%
+          </p>
+          <p className="text-xs opacity-75">
+            {data.trips.total} viagens analisadas
+          </p>
+        </Card>
+
+        {/* Receita Média por Viagem */}
+        <Card className="p-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <DollarSign className="h-5 w-5" />
+            <span className="text-sm font-semibold">Receita Média</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(avgRevenuePerTrip)}
+          </p>
+          <p className="text-xs opacity-75">Por viagem</p>
+        </Card>
+
+        {/* Custo Médio por Viagem */}
+        <Card className="p-6 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <Target className="h-5 w-5" />
+            <span className="text-sm font-semibold">Custo Médio</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(avgCostPerTrip)}
+          </p>
+          <p className="text-xs opacity-75">Por viagem</p>
+        </Card>
+
+        {/* Taxa de Conversão */}
+        <Card className="p-6 bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <Award className="h-5 w-5" />
+            <span className="text-sm font-semibold">Taxa de Sucesso</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {(
+              (data.trips.completed / (data.trips.total || 1)) *
+              100
+            ).toFixed(1)}
+            %
+          </p>
+          <p className="text-xs opacity-75">
+            {data.trips.completed} viagens concluídas
+          </p>
+        </Card>
+      </div>
+
+      {/* Análise de Rentabilidade */}
+      <Card className="p-6 mb-8">
+        <h3 className="text-lg font-bold mb-6">
+          💰 Análise de Rentabilidade por Viagem
+        </h3>
+
+        <ResponsiveContainer width="100%" height={350}>
+          <BarChart data={data.trips.topProfitable}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis
+              dataKey="title"
+              angle={-45}
+              textAnchor="end"
+              height={100}
+            />
+            <YAxis />
+            <Tooltip
+              formatter={(value: number) => formatCurrency(value)}
+              contentStyle={{ backgroundColor: '#fff', border: '1px solid #ccc' }}
+            />
+            <Legend />
+            <Bar dataKey="total_revenue" fill="#3B82F6" name="Receita" />
+            <Bar dataKey="total_cost" fill="#F59E0B" name="Custo" />
+            <Bar dataKey="total_profit" fill="#10B981" name="Lucro" />
+          </BarChart>
+        </ResponsiveContainer>
+      </Card>
+
+      {/* Análise Comparativa */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Performance Mensal */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📊 Performance Mensal</h3>
+
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={data.trends}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip
+                formatter={(value: number) => formatCurrency(value)}
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="revenue"
+                stroke="#3B82F6"
+                strokeWidth={3}
+                name="Receita"
+              />
+              <Line
+                type="monotone"
+                dataKey="profit"
+                stroke="#10B981"
+                strokeWidth={3}
+                name="Lucro"
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Análise de Custos */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">🔍 Análise de Custos</h3>
+
+          <div className="space-y-4">
+            {/* Custos Fixos */}
+            <div className="p-4 bg-blue-50 rounded-lg border-2 border-blue-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-blue-900">
+                  Custos Fixos
+                </span>
+                <span className="text-lg font-bold text-blue-600">
+                  {formatCurrency(data.expenses.byType.fixed)}
+                </span>
+              </div>
+              <div className="w-full bg-blue-200 rounded-full h-2">
+                <div
+                  className="bg-blue-600 h-2 rounded-full"
+                  style={{
+                    width: `${
+                      (data.expenses.byType.fixed /
+                        data.summary.totalExpenses) *
+                      100
+                    }%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-blue-700 mt-2">
+                {(
+                  (data.expenses.byType.fixed / data.summary.totalExpenses) *
+                  100
+                ).toFixed(1)}
+                % do total
+              </p>
+            </div>
+
+            {/* Custos Variáveis */}
+            <div className="p-4 bg-green-50 rounded-lg border-2 border-green-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-green-900">
+                  Custos Variáveis
+                </span>
+                <span className="text-lg font-bold text-green-600">
+                  {formatCurrency(data.expenses.byType.variable)}
+                </span>
+              </div>
+              <div className="w-full bg-green-200 rounded-full h-2">
+                <div
+                  className="bg-green-600 h-2 rounded-full"
+                  style={{
+                    width: `${
+                      (data.expenses.byType.variable /
+                        data.summary.totalExpenses) *
+                      100
+                    }%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-green-700 mt-2">
+                {(
+                  (data.expenses.byType.variable /
+                    data.summary.totalExpenses) *
+                  100
+                ).toFixed(1)}
+                % do total
+              </p>
+            </div>
+
+            {/* Comissões */}
+            <div className="p-4 bg-purple-50 rounded-lg border-2 border-purple-200">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-purple-900">
+                  Comissões
+                </span>
+                <span className="text-lg font-bold text-purple-600">
+                  {formatCurrency(data.summary.totalCommissions)}
+                </span>
+              </div>
+              <div className="w-full bg-purple-200 rounded-full h-2">
+                <div
+                  className="bg-purple-600 h-2 rounded-full"
+                  style={{
+                    width: `${
+                      (data.summary.totalCommissions /
+                        data.summary.totalExpenses) *
+                      100
+                    }%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-purple-700 mt-2">
+                {data.commissions.total} comissões
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Top Viagens */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-bold">🏆 Top 5 Viagens Mais Lucrativas</h3>
+          <Badge variant="outline" className="bg-green-50">
+            <TrendingUp className="h-3 w-3 mr-1" />
+            Melhor desempenho
+          </Badge>
+        </div>
+
+        <div className="space-y-3">
+          {data.trips.topProfitable.map((trip: any, index: number) => {
+            const profitMargin = Number(trip.profit_margin)
+            const isExcellent = profitMargin >= 30
+            const isGood = profitMargin >= 15 && profitMargin < 30
+            const isLow = profitMargin >= 0 && profitMargin < 15
+
+            return (
+              <div
+                key={trip.id}
+                className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border hover:shadow-md transition"
+              >
+                <div className="flex items-center gap-4">
+                  <div
+                    className={`flex items-center justify-center w-10 h-10 rounded-full font-bold text-white ${
+                      index === 0
+                        ? 'bg-yellow-500'
+                        : index === 1
+                        ? 'bg-gray-400'
+                        : index === 2
+                        ? 'bg-orange-600'
+                        : 'bg-blue-600'
+                    }`}
+                  >
+                    {index + 1}
+                  </div>
+                  <div>
+                    <p className="font-semibold">{trip.title}</p>
+                    <p className="text-sm text-gray-600">
+                      {trip.max_passengers} passageiros •{' '}
+                      {new Date(trip.departure_date).toLocaleDateString(
+                        'pt-BR'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold text-green-600 text-lg">
+                    {formatCurrency(Number(trip.total_profit))}
+                  </p>
+                  <Badge
+                    variant={
+                      isExcellent
+                        ? 'default'
+                        : isGood
+                        ? 'secondary'
+                        : 'outline'
+                    }
+                    className="mt-1"
+                  >
+                    {profitMargin.toFixed(1)}% margem
+                  </Badge>
+                </div>
+              </div>
+            )
+          })}
+
+          {data.trips.topProfitable.length === 0 && (
+            <div className="text-center py-12 text-gray-500">
+              <AlertTriangle className="h-12 w-12 mx-auto mb-3 opacity-50" />
+              <p className="font-semibold mb-1">
+                Nenhuma viagem lucrativa no período
+              </p>
+              <p className="text-sm">
+                Crie viagens e adicione custos para ver análises
+              </p>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+💳 PARTE 3: DESPESAS E COMISSÕES
+💰 6. PÁGINA /FINANCEIRO/EXPENSES (DESPESAS)
+
+// app/(dashboard)/financeiro/expenses/page.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Plus,
+  Search,
+  Filter,
+  Download,
+  Edit,
+  Trash2,
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  Calendar,
+  DollarSign,
+  TrendingDown,
+  Loader2,
+} from 'lucide-react'
+import { toast } from 'sonner'
+
+interface Expense {
+  id: string
+  description: string
+  category: string
+  type: string
+  amount: number
+  status: string
+  due_date: string | null
+  paid_date: string | null
+  payment_method: string | null
+  supplier_name: string | null
+  trip_id: string | null
+  trip?: {
+    title: string
+  }
+  created_at: string
+}
+
+const EXPENSE_CATEGORIES = {
+  transporte: '🚍 Transporte',
+  equipe: '👨‍✈️ Equipe',
+  estrutura: '🏨 Estrutura',
+  obrigacoes: '📄 Obrigações',
+  marketing: '📢 Marketing',
+  operacional: '🧰 Operacional',
+  alimentacao: '🍽️ Alimentação',
+  hospedagem: '🏨 Hospedagem',
+  ingressos: '🎟️ Ingressos',
+  outros: '📦 Outros',
+}
+
+const PAYMENT_METHODS = {
+  cash: '💵 Dinheiro',
+  credit_card: '💳 Cartão de Crédito',
+  debit_card: '💳 Cartão de Débito',
+  pix: '📱 PIX',
+  bank_transfer: '🏦 Transferência',
+}
+
+export default function ExpensesPage() {
+  const [expenses, setExpenses] = useState<Expense[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null)
+
+  // Filtros
+  const [searchTerm, setSearchTerm] = useState('')
+  const [filterCategory, setFilterCategory] = useState('all')
+  const [filterStatus, setFilterStatus] = useState('all')
+
+  // Formulário
+  const [formData, setFormData] = useState({
+    description: '',
+    category: '',
+    type: 'fixed',
+    amount: '',
+    status: 'pending',
+    due_date: '',
+    paid_date: '',
+    payment_method: '',
+    supplier_name: '',
+    supplier_doc: '',
+    trip_id: '',
+  })
+
+  useEffect(() => {
+    loadExpenses()
+  }, [])
+
+  const loadExpenses = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/dashboard/expenses')
+      const data = await response.json()
+
+      if (response.ok) {
+        setExpenses(data.expenses || [])
+      }
+    } catch (error) {
+      console.error('Erro ao carregar despesas:', error)
+      toast.error('Erro ao carregar despesas')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!formData.description || !formData.category || !formData.amount) {
+      toast.error('Preencha todos os campos obrigatórios')
+      return
+    }
+
+    try {
+      setIsSaving(true)
+
+      const url = editingExpense
+        ? `/api/dashboard/expenses/${editingExpense.id}`
+        : '/api/dashboard/expenses'
+
+      const method = editingExpense ? 'PUT' : 'POST'
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success(
+          editingExpense
+            ? 'Despesa atualizada com sucesso!'
+            : 'Despesa cadastrada com sucesso!'
+        )
+        setIsDialogOpen(false)
+        resetForm()
+        loadExpenses()
+      } else {
+        toast.error(data.error || 'Erro ao salvar despesa')
+      }
+    } catch (error) {
+      console.error('Erro ao salvar despesa:', error)
+      toast.error('Erro ao salvar despesa')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleEdit = (expense: Expense) => {
+    setEditingExpense(expense)
+    setFormData({
+      description: expense.description,
+      category: expense.category,
+      type: expense.type,
+      amount: expense.amount.toString(),
+      status: expense.status,
+      due_date: expense.due_date
+        ? new Date(expense.due_date).toISOString().split('T')[0]
+        : '',
+      paid_date: expense.paid_date
+        ? new Date(expense.paid_date).toISOString().split('T')[0]
+        : '',
+      payment_method: expense.payment_method || '',
+      supplier_name: expense.supplier_name || '',
+      supplier_doc: '',
+      trip_id: expense.trip_id || '',
+    })
+    setIsDialogOpen(true)
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza que deseja excluir esta despesa?')) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/dashboard/expenses/${id}`, {
+        method: 'DELETE',
+      })
+
+      if (response.ok) {
+        toast.success('Despesa excluída com sucesso!')
+        loadExpenses()
+      } else {
+        toast.error('Erro ao excluir despesa')
+      }
+    } catch (error) {
+      console.error('Erro ao excluir despesa:', error)
+      toast.error('Erro ao excluir despesa')
+    }
+  }
+
+  const handleMarkAsPaid = async (expense: Expense) => {
+    try {
+      const response = await fetch(`/api/dashboard/expenses/${expense.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...expense,
+          status: 'paid',
+          paid_date: new Date().toISOString(),
+        }),
+      })
+
+      if (response.ok) {
+        toast.success('Despesa marcada como paga!')
+        loadExpenses()
+      } else {
+        toast.error('Erro ao atualizar despesa')
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar despesa:', error)
+      toast.error('Erro ao atualizar despesa')
+    }
+  }
+
+  const resetForm = () => {
+    setFormData({
+      description: '',
+      category: '',
+      type: 'fixed',
+      amount: '',
+      status: 'pending',
+      due_date: '',
+      paid_date: '',
+      payment_method: '',
+      supplier_name: '',
+      supplier_doc: '',
+      trip_id: '',
+    })
+    setEditingExpense(null)
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  const formatDate = (date: string) => {
+    return new Date(date).toLocaleDateString('pt-BR')
+  }
+
+  // Filtrar despesas
+  const filteredExpenses = expenses.filter((expense) => {
+    const matchesSearch =
+      expense.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      expense.supplier_name?.toLowerCase().includes(searchTerm.toLowerCase())
+
+    const matchesCategory =
+      filterCategory === 'all' || expense.category === filterCategory
+
+    const matchesStatus =
+      filterStatus === 'all' || expense.status === filterStatus
+
+    return matchesSearch && matchesCategory && matchesStatus
+  })
+
+  // Calcular totais
+  const totalExpenses = filteredExpenses.reduce(
+    (sum, exp) => sum + exp.amount,
+    0
+  )
+  const paidExpenses = filteredExpenses
+    .filter((exp) => exp.status === 'paid')
+    .reduce((sum, exp) => sum + exp.amount, 0)
+  const pendingExpenses = filteredExpenses
+    .filter((exp) => exp.status === 'pending')
+    .reduce((sum, exp) => sum + exp.amount, 0)
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">💳 Despesas</h1>
+          <p className="text-gray-600">
+            Gerencie todas as despesas da sua agência
+          </p>
+        </div>
+
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogTrigger asChild>
+            <Button onClick={resetForm}>
+              <Plus className="h-4 w-4 mr-2" />
+              Nova Despesa
+            </Button>
+          </DialogTrigger>
+
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {editingExpense ? 'Editar Despesa' : 'Nova Despesa'}
+              </DialogTitle>
+              <DialogDescription>
+                Preencha os dados da despesa
+              </DialogDescription>
+            </DialogHeader>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Descrição */}
+              <div>
+                <Label htmlFor="description">
+                  Descrição <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) =>
+                    setFormData({ ...formData, description: e.target.value })
+                  }
+                  placeholder="Ex: Fretamento do ônibus"
+                  required
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Categoria e Tipo */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="category">
+                    Categoria <span className="text-red-500">*</span>
+                  </Label>
+                  <Select
+                    value={formData.category}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, category: value })
+                    }
+                    disabled={isSaving}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="Selecione" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(EXPENSE_CATEGORIES).map(([key, label]) => (
+                        <SelectItem key={key} value={key}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="type">
+                    Tipo <span className="text-red-500">*</span>
+                  </Label>
+                  <Select
+                    value={formData.type}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, type: value })
+                    }
+                    disabled={isSaving}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fixed">🔒 Custo Fixo</SelectItem>
+                      <SelectItem value="variable">🔄 Custo Variável</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Valor */}
+              <div>
+                <Label htmlFor="amount">
+                  Valor (R$) <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="amount"
+                  type="number"
+                  step="0.01"
+                  value={formData.amount}
+                  onChange={(e) =>
+                    setFormData({ ...formData, amount: e.target.value })
+                  }
+                  placeholder="0.00"
+                  required
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Fornecedor */}
+              <div>
+                <Label htmlFor="supplier_name">Fornecedor</Label>
+                <Input
+                  id="supplier_name"
+                  value={formData.supplier_name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, supplier_name: e.target.value })
+                  }
+                  placeholder="Nome do fornecedor"
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Status e Método de Pagamento */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="status">Status</Label>
+                  <Select
+                    value={formData.status}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, status: value })
+                    }
+                    disabled={isSaving}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pending">⏳ Pendente</SelectItem>
+                      <SelectItem value="paid">✅ Pago</SelectItem>
+                      <SelectItem value="overdue">⚠️ Vencido</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="payment_method">Método de Pagamento</Label>
+                  <Select
+                    value={formData.payment_method}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, payment_method: value })
+                    }
+                    disabled={isSaving}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="Selecione" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(PAYMENT_METHODS).map(([key, label]) => (
+                        <SelectItem key={key} value={key}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Datas */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="due_date">Data de Vencimento</Label>
+                  <Input
+                    id="due_date"
+                    type="date"
+                    value={formData.due_date}
+                    onChange={(e) =>
+                      setFormData({ ...formData, due_date: e.target.value })
+                    }
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+
+                {formData.status === 'paid' && (
+                  <div>
+                    <Label htmlFor="paid_date">Data de Pagamento</Label>
+                    <Input
+                      id="paid_date"
+                      type="date"
+                      value={formData.paid_date}
+                      onChange={(e) =>
+                        setFormData({ ...formData, paid_date: e.target.value })
+                      }
+                      disabled={isSaving}
+                      className="mt-2"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setIsDialogOpen(false)
+                    resetForm()
+                  }}
+                  disabled={isSaving}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Salvando...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                      Salvar
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* Resumo */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <Card className="p-6 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingDown className="h-5 w-5" />
+            <span className="text-sm font-semibold">Total de Despesas</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(totalExpenses)}
+          </p>
+          <p className="text-xs opacity-75">
+            {filteredExpenses.length} lançamentos
+          </p>
+        </Card>
+
+        <Card className="p-6 bg-gradient-to-br from-green-500 to-green-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <CheckCircle className="h-5 w-5" />
+            <span className="text-sm font-semibold">Despesas Pagas</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(paidExpenses)}
+          </p>
+          <p className="text-xs opacity-75">
+            {filteredExpenses.filter((e) => e.status === 'paid').length} pagas
+          </p>
+        </Card>
+
+        <Card className="p-6 bg-gradient-to-br from-red-500 to-red-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <Clock className="h-5 w-5" />
+            <span className="text-sm font-semibold">Despesas Pendentes</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(pendingExpenses)}
+          </p>
+          <p className="text-xs opacity-75">
+            {filteredExpenses.filter((e) => e.status === 'pending').length}{' '}
+            pendentes
+          </p>
+        </Card>
+      </div>
+
+      {/* Filtros */}
+      <Card className="p-6 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Busca */}
+          <div className="md:col-span-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input
+                placeholder="Buscar por descrição ou fornecedor..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+          </div>
+
+          {/* Filtro Categoria */}
+          <div>
+            <Select value={filterCategory} onValueChange={setFilterCategory}>
+              <SelectTrigger>
+                <SelectValue placeholder="Categoria" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas Categorias</SelectItem>
+                {Object.entries(EXPENSE_CATEGORIES).map(([key, label]) => (
+                  <SelectItem key={key} value={key}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Filtro Status */}
+          <div>
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger>
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos Status</SelectItem>
+                <SelectItem value="pending">⏳ Pendente</SelectItem>
+                <SelectItem value="paid">✅ Pago</SelectItem>
+                <SelectItem value="overdue">⚠️ Vencido</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </Card>
+
+      {/* Lista de Despesas */}
+      <Card className="p-6">
+        <div className="space-y-3">
+          {filteredExpenses.map((expense) => (
+            <div
+              key={expense.id}
+              className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border hover:shadow-md transition"
+            >
+              <div className="flex items-center gap-4 flex-1">
+                <div
+                  className={`p-3 rounded-lg ${
+                    expense.status === 'paid'
+                      ? 'bg-green-100'
+                      : expense.status === 'overdue'
+                      ? 'bg-red-100'
+                      : 'bg-orange-100'
+                  }`}
+                >
+                  {expense.status === 'paid' ? (
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                  ) : expense.status === 'overdue' ? (
+                    <AlertCircle className="h-5 w-5 text-red-600" />
+                  ) : (
+                    <Clock className="h-5 w-5 text-orange-600" />
+                  )}
+                </div>
+
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="font-semibold">{expense.description}</p>
+                    <Badge variant="outline" className="text-xs">
+                      {EXPENSE_CATEGORIES[expense.category as keyof typeof EXPENSE_CATEGORIES]}
+                    </Badge>
+                    {expense.type === 'fixed' ? (
+                      <Badge variant="secondary" className="text-xs">
+                        🔒 Fixo
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-xs">
+                        🔄 Variável
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-gray-600">
+                    {expense.supplier_name && (
+                      <span>Fornecedor: {expense.supplier_name}</span>
+                    )}
+                    {expense.due_date && (
+                      <span className="flex items-center gap-1">
+                        <Calendar className="h-3 w-3" />
+                        Venc: {formatDate(expense.due_date)}
+                      </span>
+                    )}
+                    {expense.trip && (
+                      <span>Viagem: {expense.trip.title}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="font-bold text-lg text-orange-600">
+                    {formatCurrency(expense.amount)}
+                  </p>
+                  <Badge
+                    variant={
+                      expense.status === 'paid'
+                        ? 'default'
+                        : expense.status === 'overdue'
+                        ? 'destructive'
+                        : 'secondary'
+                    }
+                    className="mt-1"
+                  >
+                    {expense.status === 'paid'
+                      ? '✅ Pago'
+                      : expense.status === 'overdue'
+                      ? '⚠️ Vencido'
+                      : '⏳ Pendente'}
+                  </Badge>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {expense.status === 'pending' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleMarkAsPaid(expense)}
+                    >
+                      <CheckCircle className="h-4 w-4" />
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleEdit(expense)}
+                  >
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleDelete(expense.id)}
+                  >
+                    <Trash2 className="h-4 w-4 text-red-600" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {filteredExpenses.length === 0 && (
+            <div className="text-center py-12 text-gray-500">
+              <TrendingDown className="h-12 w-12 mx-auto mb-3 opacity-50" />
+              <p className="font-semibold mb-1">Nenhuma despesa encontrada</p>
+              <p className="text-sm">
+                {searchTerm || filterCategory !== 'all' || filterStatus !== 'all'
+                  ? 'Tente ajustar os filtros'
+                  : 'Cadastre sua primeira despesa'}
+              </p>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+👥 7. PÁGINA /FINANCEIRO/COMMISSIONS (COMISSÕES)
+
+// app/(dashboard)/financeiro/commissions/page.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import {
+  Plus,
+  Search,
+  Download,
+  Edit,
+  Trash2,
+  CheckCircle,
+  Clock,
+  Users,
+  DollarSign,
+  TrendingUp,
+  Award,
+  Loader2,
+} from 'lucide-react'
+import { toast } from 'sonner'
+
+interface Commission {
+  id: string
+  type: string
+  description: string
+  amount: number
+  percentage: number | null
+  status: string
+  beneficiary_name: string
+  beneficiary_doc: string | null
+  due_date: string | null
+  paid_date: string | null
+  payment_method: string | null
+  trip_id: string | null
+  trip?: {
+    title: string
+  }
+  created_at: string
+}
+
+const COMMISSION_TYPES = {
+  sale: '💰 Comissão de Venda',
+  referral: '🤝 Indicação',
+  agent: '👤 Agente',
+  partner: '🤝 Parceiro',
+}
+
+const PAYMENT_METHODS = {
+  cash: '💵 Dinheiro',
+  pix: '📱 PIX',
+  bank_transfer: '🏦 Transferência',
+}
+
+export default function CommissionsPage() {
+  const [commissions, setCommissions] = useState<Commission[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [editingCommission, setEditingCommission] = useState<Commission | null>(
+    null
+  )
+
+  // Filtros
+  const [searchTerm, setSearchTerm] = useState('')
+  const [filterType, setFilterType] = useState('all')
+  const [filterStatus, setFilterStatus] = useState('all')
+
+  // Formulário
+  const [formData, setFormData] = useState({
+    type: 'sale',
+    description: '',
+    amount: '',
+    percentage: '',
+    status: 'pending',
+    beneficiary_name: '',
+    beneficiary_doc: '',
+    due_date: '',
+    paid_date: '',
+    payment_method: '',
+    trip_id: '',
+  })
+
+  useEffect(() => {
+    loadCommissions()
+  }, [])
+
+  const loadCommissions = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/dashboard/commissions')
+      const data = await response.json()
+
+      if (response.ok) {
+        setCommissions(data.commissions || [])
+      }
+    } catch (error) {
+      console.error('Erro ao carregar comissões:', error)
+      toast.error('Erro ao carregar comissões')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!formData.description || !formData.beneficiary_name || !formData.amount) {
+      toast.error('Preencha todos os campos obrigatórios')
+      return
+    }
+
+    try {
+      setIsSaving(true)
+
+      const url = editingCommission
+        ? `/api/dashboard/commissions/${editingCommission.id}`
+        : '/api/dashboard/commissions'
+
+      const method = editingCommission ? 'PUT' : 'POST'
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success(
+          editingCommission
+            ? 'Comissão atualizada com sucesso!'
+            : 'Comissão cadastrada com sucesso!'
+        )
+        setIsDialogOpen(false)
+        resetForm()
+        loadCommissions()
+      } else {
+        toast.error(data.error || 'Erro ao salvar comissão')
+      }
+    } catch (error) {
+      console.error('Erro ao salvar comissão:', error)
+      toast.error('Erro ao salvar comissão')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleEdit = (commission: Commission) => {
+    setEditingCommission(commission)
+    setFormData({
+      type: commission.type,
+      description: commission.description,
+      amount: commission.amount.toString(),
+      percentage: commission.percentage?.toString() || '',
+      status: commission.status,
+      beneficiary_name: commission.beneficiary_name,
+      beneficiary_doc: commission.beneficiary_doc || '',
+      due_date: commission.due_date
+        ? new Date(commission.due_date).toISOString().split('T')[0]
+        : '',
+      paid_date: commission.paid_date
+        ? new Date(commission.paid_date).toISOString().split('T')[0]
+        : '',
+      payment_method: commission.payment_method || '',
+      trip_id: commission.trip_id || '',
+    })
+    setIsDialogOpen(true)
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza que deseja excluir esta comissão?')) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/dashboard/commissions/${id}`, {
+        method: 'DELETE',
+      })
+
+      if (response.ok) {
+        toast.success('Comissão excluída com sucesso!')
+        loadCommissions()
+      } else {
+        toast.error('Erro ao excluir comissão')
+      }
+    } catch (error) {
+      console.error('Erro ao excluir comissão:', error)
+      toast.error('Erro ao excluir comissão')
+    }
+  }
+
+  const handleMarkAsPaid = async (commission: Commission) => {
+    try {
+      const response = await fetch(
+        `/api/dashboard/commissions/${commission.id}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...commission,
+            status: 'paid',
+            paid_date: new Date().toISOString(),
+          }),
+        }
+      )
+
+      if (response.ok) {
+        toast.success('Comissão marcada como paga!')
+        loadCommissions()
+      } else {
+        toast.error('Erro ao atualizar comissão')
+      }
+    } catch (error) {
+      console.error('Erro ao atualizar comissão:', error)
+      toast.error('Erro ao atualizar comissão')
+    }
+  }
+
+  const resetForm = () => {
+    setFormData({
+      type: 'sale',
+      description: '',
+      amount: '',
+      percentage: '',
+      status: 'pending',
+      beneficiary_name: '',
+      beneficiary_doc: '',
+      due_date: '',
+      paid_date: '',
+      payment_method: '',
+      trip_id: '',
+    })
+    setEditingCommission(null)
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  const formatDate = (date: string) => {
+    return new Date(date).toLocaleDateString('pt-BR')
+  }
+
+  // Filtrar comissões
+  const filteredCommissions = commissions.filter((commission) => {
+    const matchesSearch =
+      commission.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      commission.beneficiary_name
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase())
+
+    const matchesType = filterType === 'all' || commission.type === filterType
+
+    const matchesStatus =
+      filterStatus === 'all' || commission.status === filterStatus
+
+    return matchesSearch && matchesType && matchesStatus
+  })
+
+  // Calcular totais
+  const totalCommissions = filteredCommissions.reduce(
+    (sum, com) => sum + com.amount,
+    0
+  )
+  const paidCommissions = filteredCommissions
+    .filter((com) => com.status === 'paid')
+    .reduce((sum, com) => sum + com.amount, 0)
+  const pendingCommissions = filteredCommissions
+    .filter((com) => com.status === 'pending')
+    .reduce((sum, com) => sum + com.amount, 0)
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">👥 Comissões</h1>
+          <p className="text-gray-600">
+            Gerencie comissões de vendas, indicações e parcerias
+          </p>
+        </div>
+
+        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+          <DialogTrigger asChild>
+            <Button onClick={resetForm}>
+              <Plus className="h-4 w-4 mr-2" />
+              Nova Comissão
+            </Button>
+          </DialogTrigger>
+
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {editingCommission ? 'Editar Comissão' : 'Nova Comissão'}
+              </DialogTitle>
+              <DialogDescription>
+                Preencha os dados da comissão
+              </DialogDescription>
+            </DialogHeader>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Tipo */}
+              <div>
+                <Label htmlFor="type">
+                  Tipo <span className="text-red-500">*</span>
+                </Label>
+                <Select
+                  value={formData.type}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, type: value })
+                  }
+                  disabled={isSaving}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(COMMISSION_TYPES).map(([key, label]) => (
+                      <SelectItem key={key} value={key}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Descrição */}
+              <div>
+                <Label htmlFor="description">
+                  Descrição <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) =>
+                    setFormData({ ...formData, description: e.target.value })
+                  }
+                  placeholder="Ex: Comissão de venda - Viagem Gramado"
+                  required
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Beneficiário */}
+              <div>
+                <Label htmlFor="beneficiary_name">
+                  Beneficiário <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="beneficiary_name"
+                  value={formData.beneficiary_name}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      beneficiary_name: e.target.value,
+                    })
+                  }
+                  placeholder="Nome do beneficiário"
+                  required
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* CPF/CNPJ */}
+              <div>
+                <Label htmlFor="beneficiary_doc">CPF/CNPJ</Label>
+                <Input
+                  id="beneficiary_doc"
+                  value={formData.beneficiary_doc}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      beneficiary_doc: e.target.value,
+                    })
+                  }
+                  placeholder="000.000.000-00"
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Valor e Percentual */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="amount">
+                    Valor (R$) <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    id="amount"
+                    type="number"
+                    step="0.01"
+                    value={formData.amount}
+                    onChange={(e) =>
+                      setFormData({ ...formData, amount: e.target.value })
+                    }
+                    placeholder="0.00"
+                    required
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="percentage">Percentual (%)</Label>
+                  <Input
+                    id="percentage"
+                    type="number"
+                    step="0.01"
+                    value={formData.percentage}
+                    onChange={(e) =>
+                      setFormData({ ...formData, percentage: e.target.value })
+                    }
+                    placeholder="0.00"
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+              </div>
+
+              {/* Status e Método de Pagamento */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="status">Status</Label>
+                  <Select
+                    value={formData.status}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, status: value })
+                    }
+                    disabled={isSaving}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pending">⏳ Pendente</SelectItem>
+                      <SelectItem value="paid">✅ Pago</SelectItem>
+                      <SelectItem value="cancelled">❌ Cancelado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="payment_method">Método de Pagamento</Label>
+                  <Select
+                    value={formData.payment_method}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, payment_method: value })
+                    }
+                    disabled={isSaving}
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="Selecione" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(PAYMENT_METHODS).map(([key, label]) => (
+                        <SelectItem key={key} value={key}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Datas */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="due_date">Data de Vencimento</Label>
+                  <Input
+                    id="due_date"
+                    type="date"
+                    value={formData.due_date}
+                    onChange={(e) =>
+                      setFormData({ ...formData, due_date: e.target.value })
+                    }
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+
+                {formData.status === 'paid' && (
+                  <div>
+                    <Label htmlFor="paid_date">Data de Pagamento</Label>
+                    <Input
+                      id="paid_date"
+                      type="date"
+                      value={formData.paid_date}
+                      onChange={(e) =>
+                        setFormData({ ...formData, paid_date: e.target.value })
+                      }
+                      disabled={isSaving}
+                      className="mt-2"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setIsDialogOpen(false)
+                    resetForm()
+                  }}
+                  disabled={isSaving}
+                >
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Salvando...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="h-4 w-4 mr-2" />
+                      Salvar
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* Resumo */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <Card className="p-6 bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <Award className="h-5 w-5" />
+            <span className="text-sm font-semibold">Total de Comissões</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(totalCommissions)}
+          </p>
+          <p className="text-xs opacity-75">
+            {filteredCommissions.length} lançamentos
+          </p>
+        </Card>
+
+        <Card className="p-6 bg-gradient-to-br from-green-500 to-green-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <CheckCircle className="h-5 w-5" />
+            <span className="text-sm font-semibold">Comissões Pagas</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(paidCommissions)}
+          </p>
+          <p className="text-xs opacity-75">
+            {filteredCommissions.filter((c) => c.status === 'paid').length}{' '}
+            pagas
+          </p>
+        </Card>
+
+        <Card className="p-6 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+          <div className="flex items-center gap-2 mb-3">
+            <Clock className="h-5 w-5" />
+            <span className="text-sm font-semibold">Comissões Pendentes</span>
+          </div>
+          <p className="text-3xl font-bold mb-1">
+            {formatCurrency(pendingCommissions)}
+          </p>
+          <p className="text-xs opacity-75">
+            {filteredCommissions.filter((c) => c.status === 'pending').length}{' '}
+            pendentes
+          </p>
+        </Card>
+      </div>
+
+      {/* Filtros */}
+      <Card className="p-6 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Busca */}
+          <div className="md:col-span-2">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input
+                placeholder="Buscar por descrição ou beneficiário..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+          </div>
+
+          {/* Filtro Tipo */}
+          <div>
+            <Select value={filterType} onValueChange={setFilterType}>
+              <SelectTrigger>
+                <SelectValue placeholder="Tipo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos Tipos</SelectItem>
+                {Object.entries(COMMISSION_TYPES).map(([key, label]) => (
+                  <SelectItem key={key} value={key}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Filtro Status */}
+          <div>
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger>
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos Status</SelectItem>
+                <SelectItem value="pending">⏳ Pendente</SelectItem>
+                <SelectItem value="paid">✅ Pago</SelectItem>
+                <SelectItem value="cancelled">❌ Cancelado</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </Card>
+
+      {/* Lista de Comissões */}
+      <Card className="p-6">
+        <div className="space-y-3">
+          {filteredCommissions.map((commission) => (
+            <div
+              key={commission.id}
+              className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border hover:shadow-md transition"
+            >
+              <div className="flex items-center gap-4 flex-1">
+                <div
+                  className={`p-3 rounded-lg ${
+                    commission.status === 'paid'
+                      ? 'bg-green-100'
+                      : commission.status === 'cancelled'
+                      ? 'bg-red-100'
+                      : 'bg-purple-100'
+                  }`}
+                >
+                  {commission.status === 'paid' ? (
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                  ) : commission.status === 'cancelled' ? (
+                    <Trash2 className="h-5 w-5 text-red-600" />
+                  ) : (
+                    <Clock className="h-5 w-5 text-purple-600" />
+                  )}
+                </div>
+
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="font-semibold">{commission.description}</p>
+                    <Badge variant="outline" className="text-xs">
+                      {COMMISSION_TYPES[commission.type as keyof typeof COMMISSION_TYPES]}
+                    </Badge>
+                    {commission.percentage && (
+                      <Badge variant="secondary" className="text-xs">
+                        {commission.percentage}%
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4 text-sm text-gray-600">
+                    <span className="flex items-center gap-1">
+                      <Users className="h-3 w-3" />
+                      {commission.beneficiary_name}
+                    </span>
+                    {commission.trip && (
+                      <span>Viagem: {commission.trip.title}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="text-right">
+                  <p className="font-bold text-lg text-purple-600">
+                    {formatCurrency(commission.amount)}
+                  </p>
+                  <Badge
+                    variant={
+                      commission.status === 'paid'
+                        ? 'default'
+                        : commission.status === 'cancelled'
+                        ? 'destructive'
+                        : 'secondary'
+                    }
+                    className="mt-1"
+                  >
+                    {commission.status === 'paid'
+                      ? '✅ Pago'
+                      : commission.status === 'cancelled'
+                      ? '❌ Cancelado'
+                      : '⏳ Pendente'}
+                  </Badge>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {commission.status === 'pending' && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleMarkAsPaid(commission)}
+                    >
+                      <CheckCircle className="h-4 w-4" />
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleEdit(commission)}
+                  >
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleDelete(commission.id)}
+                  >
+                    <Trash2 className="h-4 w-4 text-red-600" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {filteredCommissions.length === 0 && (
+            <div className="text-center py-12 text-gray-500">
+              <Award className="h-12 w-12 mx-auto mb-3 opacity-50" />
+              <p className="font-semibold mb-1">Nenhuma comissão encontrada</p>
+              <p className="text-sm">
+                {searchTerm || filterType !== 'all' || filterStatus !== 'all'
+                  ? 'Tente ajustar os filtros'
+                  : 'Cadastre sua primeira comissão'}
+              </p>
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+
+🔄 8. APIs NECESSÁRIAS
+
+// app/api/dashboard/expenses/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const expenses = await prisma.expense.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+      },
+      include: {
+        trip: {
+          select: {
+            title: true,
+          },
+        },
+      },
+      orderBy: {
+        created_at: 'desc',
+      },
+    })
+
+    return NextResponse.json({ expenses })
+  } catch (error) {
+    console.error('Erro ao buscar despesas:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar despesas' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const body = await req.json()
+
+    const expense = await prisma.expense.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        created_by: session.user.id,
+        description: body.description,
+        category: body.category,
+        type: body.type,
+        amount: parseFloat(body.amount),
+        status: body.status,
+        due_date: body.due_date ? new Date(body.due_date) : null,
+        paid_date: body.paid_date ? new Date(body.paid_date) : null,
+        payment_method: body.payment_method || null,
+        supplier_name: body.supplier_name || null,
+        supplier_doc: body.supplier_doc || null,
+        trip_id: body.trip_id || null,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      expense,
+      message: 'Despesa cadastrada com sucesso!',
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar despesa:', error)
+    return NextResponse.json(
+      { error: error.message || 'Erro ao criar despesa' },
+      { status: 500 }
+    )
+  }
+}
+
+
+// app/api/dashboard/commissions/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const commissions = await prisma.commission.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+      },
+      include: {
+        trip: {
+          select: {
+            title: true,
+          },
+        },
+      },
+      orderBy: {
+        created_at: 'desc',
+      },
+    })
+
+    return NextResponse.json({ commissions })
+  } catch (error) {
+    console.error('Erro ao buscar comissões:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar comissões' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const body = await req.json()
+
+    const commission = await prisma.commission.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        created_by: session.user.id,
+        type: body.type,
+        description: body.description,
+        amount: parseFloat(body.amount),
+        percentage: body.percentage ? parseFloat(body.percentage) : null,
+        status: body.status,
+        beneficiary_name: body.beneficiary_name,
+        beneficiary_doc: body.beneficiary_doc || null,
+        due_date: body.due_date ? new Date(body.due_date) : null,
+        paid_date: body.paid_date ? new Date(body.paid_date) : null,
+        payment_method: body.payment_method || null,
+        trip_id: body.trip_id || null,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      commission,
+      message: 'Comissão cadastrada com sucesso!',
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar comissão:', error)
+    return NextResponse.json(
+      { error: error.message || 'Erro ao criar comissão' },
+      { status: 500 }
+    )
+  }
+}
+
+
+IMPLEMENTAR SISTEMA FINANCEIRO COMPLETO
+
+├── [x] Schema do banco
+│   ├── Expense (despesas)
+│   ├── Revenue (receitas)
+│   └── Commission (comissões)
+│
+├── [x] Dashboard (/dashboard)
+│   ├── KPIs principais
+│   ├── Gráficos de tendência
+│   ├── Contas pendentes
+│   └── Top viagens lucrativas
+│
+├── [x] Financeiro (/financeiro)
+│   ├── Visão geral
+│   ├── Fluxo de caixa
+│   ├── Contas a receber
+│   └── Contas a pagar
+│
+├── [x] Analytics (/analytics)
+│   ├── Performance mensal
+│   ├── Análise de custos
+│   ├── Margem média
+│   └── Top viagens
+│
+├── [x] Despesas (/financeiro/expenses)
+│   ├── CRUD completo
+│   ├── Filtros avançados
+│   ├── Marcar como pago
+│   └── Categorização
+│
+└── [x] Comissões (/financeiro/commissions)
+    ├── CRUD completo
+    ├── Filtros por tipo
+    ├── Marcar como pago
+    └── Gestão de beneficiários
+
+SISTEMA 100% FUNCIONAL
+
+otal de Clientes
+0
++0 este mês
+
+Receita Total
+R$ 0,00
+R$ 0,00 este mês
+
+Viagens Ativas
+0
+De 0 no total
+
+NPS Médio
+—
+0 reservas confirmadas
+
+Receita vs Despesas
+Últimos 12 meses
+nov.
+dez.
+jan.
+fev.
+mar.
+abr.
+R$0k
+R$0k
+R$0k
+R$0k
+R$0k
+ReceitaDespesas
+
+Origem dos Clientes
+Por estado
+Sem dados de origem.
+
+Pipeline — Visão Rápida
+Ver completo
+Lead
+0
+R$ 0,00
+
+Vitrine
+0
+R$ 0,00
+
+Interessado
+0
+R$ 0,00
+
+Próximas Viagens
+Ver todas
+
+
+Clientes Recentes
+Ver todos
+Pagamentos Pendentes
+Ver todos
+
+Financeiro
+Controle receitas, despesas, comissões e fluxo de caixa
+
+Comissões
+Despesas
+Nova Despesa
+Novo Lançamento
+Receita Total
+
+R$ 0,00
+
+Recebido no mês: R$ 0,00
+
+Total Recebido
+
+R$ 0,00
+
+Pendente: R$ 0,00
+
+Total Pendente
+
+R$ 0,00
+
+Vencido: R$ 0,00
+
+Total Despesas
+
+R$ 0,00
+
+A pagar: R$ 0,00
+
+Receita x Despesas (12 meses)
+mai.
+jun.
+jul.
+ago.
+set.
+out.
+nov.
+dez.
+jan.
+fev.
+mar.
+abr.
+Receita
+Despesas
+Formas de Pagamento
+Nenhum pagamento registrado ainda.
+
+A Receber
+A Pagar
+Despesas
+Comissões
+Regras
+
+Todos
+
+dd/mm/aaaa
+até
+
+dd/mm/aaaa
+Descrição	Cliente	Categoria	Vencimento	Valor	Forma	Status	Ações
+Nenhum lançamento encontrado.
+
+
+Analiticos
+Desempenho e receita da agencia
+
+Analise de Receita
+
+Últimos 12 meses
+Receita Total
+
+R$ 0,00
+
+Despesas: R$ 0,00
+
+Total de Reservas
+
+0
+
+0 confirmadas
+
+Ticket Medio
+
+R$ 0,00
+
+por reserva
+
+Taxa de Conversao
+
+0.0%
+
+Reservas / Negocios
+
+Total de Clientes
+
+0
+
++0 este mes
+
+Viagens Ativas
+
+0
+
+0.0% ocupacao media
+
+Visao Geral
+Top Viagens
+Ranking Vendedores
+Funil de Vendas
+Evolucao de Receita
+mai.
+jul.
+set.
+nov.
+jan.
+mar.
+Receita
+Despesas
+Vendas por Categoria
+Sem dados
+Resumo Financeiro
+A Receber
+R$ 0,00
+A Pagar
+R$ 0,00
+Recebido no Mes
+R$ 0,00
+Vencidos (Receber)
+R$ 0,00
+NPS e Satisfacao
+

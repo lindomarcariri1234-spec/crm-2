@@ -1,0 +1,2890 @@
+FUNCIONALIDADES DE MANUTENÇÃO E MELHORIAS
+LIMPEZA DE ARQUIVOS ÓRFÃOS
+API de Limpeza de Arquivos
+
+// app/api/admin/maintenance/orphaned-files/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { Storage } from '@google-cloud/storage'
+import { S3Client, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3'
+
+// Configurar storage (exemplo com Google Cloud Storage e AWS S3)
+const storage = new Storage({
+  projectId: process.env.GCS_PROJECT_ID,
+  keyFilename: process.env.GCS_KEY_FILE,
+})
+
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+})
+
+interface OrphanedFile {
+  path: string
+  size: number
+  lastModified: Date
+  reason: string
+}
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'super_admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { dryRun = true, storageType = 'gcs' } = await req.json()
+
+    console.log(`🔍 Iniciando varredura de arquivos órfãos (Dry Run: ${dryRun})...`)
+
+    // ═══════════════════════════════════════════════════════════
+    // PASSO 1: Coletar todos os arquivos referenciados no banco
+    // ═══════════════════════════════════════════════════════════
+
+    const referencedFiles = new Set<string>()
+
+    // 1.1 - Logos de Tenants
+    const tenants = await prisma.tenant.findMany({
+      select: { logo_url: true },
+    })
+    tenants.forEach((t) => {
+      if (t.logo_url) referencedFiles.add(extractPath(t.logo_url))
+    })
+
+    // 1.2 - Fotos de Perfil de Usuários
+    const users = await prisma.user.findMany({
+      select: { avatar_url: true },
+    })
+    users.forEach((u) => {
+      if (u.avatar_url) referencedFiles.add(extractPath(u.avatar_url))
+    })
+
+    // 1.3 - Imagens de Viagens
+    const trips = await prisma.trip.findMany({
+      select: { cover_image: true, gallery_images: true },
+    })
+    trips.forEach((t) => {
+      if (t.cover_image) referencedFiles.add(extractPath(t.cover_image))
+      if (Array.isArray(t.gallery_images)) {
+        t.gallery_images.forEach((img: string) => {
+          referencedFiles.add(extractPath(img))
+        })
+      }
+    })
+
+    // 1.4 - Imagens de Hospedagens
+    const accommodations = await prisma.accommodation.findMany({
+      select: { cover_image: true, gallery_images: true },
+    })
+    accommodations.forEach((a) => {
+      if (a.cover_image) referencedFiles.add(extractPath(a.cover_image))
+      if (Array.isArray(a.gallery_images)) {
+        a.gallery_images.forEach((img: string) => {
+          referencedFiles.add(extractPath(img))
+        })
+      }
+    })
+
+    // 1.5 - Imagens de Destinos
+    const destinations = await prisma.destination.findMany({
+      select: { cover_image: true, gallery_images: true },
+    })
+    destinations.forEach((d) => {
+      if (d.cover_image) referencedFiles.add(extractPath(d.cover_image))
+      if (Array.isArray(d.gallery_images)) {
+        d.gallery_images.forEach((img: string) => {
+          referencedFiles.add(extractPath(img))
+        })
+      }
+    })
+
+    // 1.6 - Imagens de Produtos (Loja)
+    const products = await prisma.product.findMany({
+      select: { cover_image: true, gallery_images: true },
+    })
+    products.forEach((p) => {
+      if (p.cover_image) referencedFiles.add(extractPath(p.cover_image))
+      if (Array.isArray(p.gallery_images)) {
+        p.gallery_images.forEach((img: string) => {
+          referencedFiles.add(extractPath(img))
+        })
+      }
+    })
+
+    // 1.7 - Anexos de Documentos
+    const documents = await prisma.document.findMany({
+      select: { file_url: true },
+    })
+    documents.forEach((d) => {
+      if (d.file_url) referencedFiles.add(extractPath(d.file_url))
+    })
+
+    // 1.8 - Vouchers
+    const vouchers = await prisma.voucher.findMany({
+      select: { pdf_url: true },
+    })
+    vouchers.forEach((v) => {
+      if (v.pdf_url) referencedFiles.add(extractPath(v.pdf_url))
+    })
+
+    console.log(`✅ ${referencedFiles.size} arquivos referenciados no banco`)
+
+    // ═══════════════════════════════════════════════════════════
+    // PASSO 2: Listar todos os arquivos no storage
+    // ═══════════════════════════════════════════════════════════
+
+    let storageFiles: string[] = []
+
+    if (storageType === 'gcs') {
+      // Google Cloud Storage
+      const bucket = storage.bucket(process.env.GCS_BUCKET_NAME!)
+      const [files] = await bucket.getFiles()
+      storageFiles = files.map((f) => f.name)
+    } else if (storageType === 's3') {
+      // AWS S3
+      const command = new ListObjectsV2Command({
+        Bucket: process.env.AWS_S3_BUCKET_NAME!,
+      })
+      const response = await s3Client.send(command)
+      storageFiles = response.Contents?.map((obj) => obj.Key!) || []
+    }
+
+    console.log(`✅ ${storageFiles.length} arquivos encontrados no storage`)
+
+    // ═══════════════════════════════════════════════════════════
+    // PASSO 3: Identificar arquivos órfãos
+    // ═══════════════════════════════════════════════════════════
+
+    const orphanedFiles: OrphanedFile[] = []
+
+    for (const filePath of storageFiles) {
+      // Ignorar pastas e arquivos do sistema
+      if (
+        filePath.endsWith('/') ||
+        filePath.startsWith('.') ||
+        filePath.includes('system/')
+      ) {
+        continue
+      }
+
+      if (!referencedFiles.has(filePath)) {
+        let fileSize = 0
+        let lastModified = new Date()
+
+        if (storageType === 'gcs') {
+          const bucket = storage.bucket(process.env.GCS_BUCKET_NAME!)
+          const file = bucket.file(filePath)
+          const [metadata] = await file.getMetadata()
+          fileSize = parseInt(metadata.size || '0')
+          lastModified = new Date(metadata.updated || Date.now())
+        } else if (storageType === 's3') {
+          // Para S3, você precisaria fazer uma chamada adicional para obter metadados
+          fileSize = 0 // Simplificado
+          lastModified = new Date()
+        }
+
+        orphanedFiles.push({
+          path: filePath,
+          size: fileSize,
+          lastModified,
+          reason: 'Não referenciado em nenhuma tabela',
+        })
+      }
+    }
+
+    console.log(`🗑️  ${orphanedFiles.length} arquivos órfãos encontrados`)
+
+    // ═══════════════════════════════════════════════════════════
+    // PASSO 4: Executar limpeza (se não for dry-run)
+    // ═══════════════════════════════════════════════════════════
+
+    let deletedCount = 0
+    let deletedSize = 0
+
+    if (!dryRun && orphanedFiles.length > 0) {
+      console.log('🔥 Iniciando remoção de arquivos órfãos...')
+
+      for (const file of orphanedFiles) {
+        try {
+          if (storageType === 'gcs') {
+            const bucket = storage.bucket(process.env.GCS_BUCKET_NAME!)
+            await bucket.file(file.path).delete()
+          } else if (storageType === 's3') {
+            const command = new DeleteObjectCommand({
+              Bucket: process.env.AWS_S3_BUCKET_NAME!,
+              Key: file.path,
+            })
+            await s3Client.send(command)
+          }
+
+          deletedCount++
+          deletedSize += file.size
+
+          console.log(`  ✅ Removido: ${file.path}`)
+        } catch (error) {
+          console.error(`  ❌ Erro ao remover ${file.path}:`, error)
+        }
+      }
+
+      // Registrar log da operação
+      await prisma.systemLog.create({
+        data: {
+          category: 'maintenance',
+          action: 'orphaned_files_cleanup',
+          severity: 'info',
+          description: `Limpeza de arquivos órfãos concluída: ${deletedCount} arquivos removidos (${formatBytes(deletedSize)})`,
+          metadata: {
+            deletedCount,
+            deletedSize,
+            storageType,
+          },
+        },
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // RESPOSTA
+    // ═══════════════════════════════════════════════════════════
+
+    return NextResponse.json({
+      success: true,
+      dryRun,
+      summary: {
+        totalReferencedFiles: referencedFiles.size,
+        totalStorageFiles: storageFiles.length,
+        orphanedFiles: orphanedFiles.length,
+        totalOrphanedSize: orphanedFiles.reduce((sum, f) => sum + f.size, 0),
+        deletedCount: dryRun ? 0 : deletedCount,
+        deletedSize: dryRun ? 0 : deletedSize,
+      },
+      orphanedFiles: orphanedFiles.map((f) => ({
+        path: f.path,
+        size: formatBytes(f.size),
+        lastModified: f.lastModified,
+        reason: f.reason,
+      })),
+    })
+  } catch (error) {
+    console.error('❌ Erro na limpeza de arquivos órfãos:', error)
+    return NextResponse.json(
+      { error: 'Erro ao executar limpeza de arquivos' },
+      { status: 500 }
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// FUNÇÕES AUXILIARES
+// ═══════════════════════════════════════════════════════════
+
+function extractPath(url: string): string {
+  try {
+    // Remove domínio e protocolo, mantém apenas o path
+    const urlObj = new URL(url)
+    return urlObj.pathname.replace(/^\//, '')
+  } catch {
+    // Se não for URL válida, retorna como está
+    return url
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+Página de Manutenção no Admin
+// app/(admin)/admin/maintenance/page.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Progress } from '@/components/ui/progress'
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Trash2,
+  Search,
+  AlertTriangle,
+  CheckCircle,
+  Loader2,
+  Download,
+  HardDrive,
+  FileWarning,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default function MaintenancePage() {
+  const [isScanning, setIsScanning] = useState(false)
+  const [isCleaning, setIsCleaning] = useState(false)
+  const [scanResult, setScanResult] = useState<any>(null)
+
+  const handleScan = async () => {
+    try {
+      setIsScanning(true)
+      toast.info('Iniciando varredura de arquivos órfãos...')
+
+      const response = await fetch('/api/admin/maintenance/orphaned-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: true }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        setScanResult(data)
+        toast.success(
+          `Varredura concluída: ${data.orphanedFiles.length} arquivos órfãos encontrados`
+        )
+      } else {
+        toast.error('Erro ao executar varredura')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao executar varredura')
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
+  const handleCleanup = async () => {
+    if (
+      !confirm(
+        `Tem certeza que deseja remover ${scanResult.orphanedFiles.length} arquivos órfãos? Esta ação não pode ser desfeita.`
+      )
+    ) {
+      return
+    }
+
+    try {
+      setIsCleaning(true)
+      toast.info('Removendo arquivos órfãos...')
+
+      const response = await fetch('/api/admin/maintenance/orphaned-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: false }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success(
+          `${data.summary.deletedCount} arquivos removidos com sucesso! (${data.summary.deletedSize})`
+        )
+        setScanResult(null)
+      } else {
+        toast.error('Erro ao remover arquivos')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao remover arquivos')
+    } finally {
+      setIsCleaning(false)
+    }
+  }
+
+  const handleExportReport = () => {
+    if (!scanResult) return
+
+    const csv = [
+      ['Caminho', 'Tamanho', 'Última Modificação', 'Motivo'],
+      ...scanResult.orphanedFiles.map((file: any) => [
+        file.path,
+        file.size,
+        format(new Date(file.lastModified), 'dd/MM/yyyy HH:mm', {
+          locale: ptBR,
+        }),
+        file.reason,
+      ]),
+    ]
+      .map((row) => row.join(','))
+      .join('\n')
+
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `orphaned-files-${Date.now()}.csv`
+    a.click()
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">Manutenção do Sistema</h1>
+        <p className="text-gray-600 mt-1">
+          Ferramentas de limpeza e otimização da plataforma
+        </p>
+      </div>
+
+      {/* Alerta de Segurança */}
+      <Alert className="border-orange-200 bg-orange-50">
+        <AlertTriangle className="h-5 w-5 text-orange-600" />
+        <AlertTitle>Atenção</AlertTitle>
+        <AlertDescription>
+          As operações de manutenção podem afetar o funcionamento da plataforma.
+          Sempre execute uma varredura (dry-run) antes de confirmar a limpeza.
+        </AlertDescription>
+      </Alert>
+
+      {/* Card Principal */}
+      <Card className="p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="p-3 bg-blue-100 rounded-lg">
+            <HardDrive className="h-6 w-6 text-blue-600" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Limpeza de Arquivos Órfãos</h2>
+            <p className="text-sm text-gray-600">
+              Remove arquivos do storage que não estão mais referenciados no banco de
+              dados
+            </p>
+          </div>
+        </div>
+
+        {/* Ações */}
+        <div className="flex gap-3">
+          <Button onClick={handleScan} disabled={isScanning || isCleaning}>
+            {isScanning ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Varrendo...
+              </>
+            ) : (
+              <>
+                <Search className="h-4 w-4 mr-2" />
+                Varrer Arquivos (Dry Run)
+              </>
+            )}
+          </Button>
+
+          {scanResult && scanResult.orphanedFiles.length > 0 && (
+            <>
+              <Button
+                variant="destructive"
+                onClick={handleCleanup}
+                disabled={isScanning || isCleaning}
+              >
+                {isCleaning ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Removendo...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Remover Arquivos Órfãos
+                  </>
+                )}
+              </Button>
+
+              <Button variant="outline" onClick={handleExportReport}>
+                <Download className="h-4 w-4 mr-2" />
+                Exportar Relatório
+              </Button>
+            </>
+          )}
+        </div>
+      </Card>
+
+      {/* Resultado da Varredura */}
+      {scanResult && (
+        <>
+          {/* Resumo */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <Card className="p-4">
+              <div className="flex items-center gap-3">
+                <CheckCircle className="h-5 w-5 text-green-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Arquivos Referenciados</p>
+                  <p className="text-2xl font-bold">
+                    {scanResult.summary.totalReferencedFiles}
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="p-4">
+              <div className="flex items-center gap-3">
+                <HardDrive className="h-5 w-5 text-blue-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Total no Storage</p>
+                  <p className="text-2xl font-bold">
+                    {scanResult.summary.totalStorageFiles}
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="p-4">
+              <div className="flex items-center gap-3">
+                <FileWarning className="h-5 w-5 text-orange-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Arquivos Órfãos</p>
+                  <p className="text-2xl font-bold text-orange-600">
+                    {scanResult.summary.orphanedFiles}
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            <Card className="p-4">
+              <div className="flex items-center gap-3">
+                <Trash2 className="h-5 w-5 text-red-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Tamanho Total</p>
+                  <p className="text-2xl font-bold text-red-600">
+                    {(scanResult.summary.totalOrphanedSize / 1024 / 1024).toFixed(
+                      2
+                    )}{' '}
+                    MB
+                  </p>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* Lista de Arquivos Órfãos */}
+          {scanResult.orphanedFiles.length > 0 ? (
+            <Card className="p-6">
+              <h3 className="text-lg font-bold mb-4">
+                📋 Arquivos Órfãos Encontrados
+              </h3>
+
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Caminho</TableHead>
+                      <TableHead>Tamanho</TableHead>
+                      <TableHead>Última Modificação</TableHead>
+                      <TableHead>Motivo</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {scanResult.orphanedFiles.slice(0, 100).map((file: any) => (
+                      <TableRow key={file.path}>
+                        <TableCell className="font-mono text-xs">
+                          {file.path}
+                        </TableCell>
+                        <TableCell>{file.size}</TableCell>
+                        <TableCell>
+                          {format(
+                            new Date(file.lastModified),
+                            'dd/MM/yyyy HH:mm',
+                            { locale: ptBR }
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{file.reason}</Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {scanResult.orphanedFiles.length > 100 && (
+                <p className="text-sm text-gray-500 mt-4 text-center">
+                  Mostrando 100 de {scanResult.orphanedFiles.length} arquivos.
+                  Exporte o relatório completo para ver todos.
+                </p>
+              )}
+            </Card>
+          ) : (
+            <Alert className="border-green-200 bg-green-50">
+              <CheckCircle className="h-5 w-5 text-green-600" />
+              <AlertTitle>Tudo limpo!</AlertTitle>
+              <AlertDescription>
+                Nenhum arquivo órfão foi encontrado no storage.
+              </AlertDescription>
+            </Alert>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+MELHORIAS NA FILA - GESTÃO DE CUSTOS POR VIAGEM
+Schema Prisma - Custos de Viagem
+
+// prisma/schema.prisma
+
+model TripCost {
+  id          String   @id @default(cuid())
+  tenant_id   String
+  trip_id     String
+  category    String   // 'transport', 'accommodation', 'food', 'guide', 'tickets', 'insurance', 'other'
+  description String
+  supplier_id String?
+  amount      Decimal  @db.Decimal(10, 2)
+  paid        Boolean  @default(false)
+  paid_date   DateTime?
+  payment_method String? // 'cash', 'credit_card', 'bank_transfer', 'pix'
+  notes       String?  @db.Text
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  trip     Trip      @relation(fields: [trip_id], references: [id], onDelete: Cascade)
+  supplier Supplier? @relation(fields: [supplier_id], references: [id])
+
+  @@index([tenant_id])
+  @@index([trip_id])
+  @@index([supplier_id])
+  @@map("trip_costs")
+}
+
+API de Custos de Viagem
+// app/api/trips/[tripId]/costs/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { z } from 'zod'
+
+const costSchema = z.object({
+  category: z.enum([
+    'transport',
+    'accommodation',
+    'food',
+    'guide',
+    'tickets',
+    'insurance',
+    'other',
+  ]),
+  description: z.string().min(1),
+  supplier_id: z.string().optional(),
+  amount: z.number().positive(),
+  paid: z.boolean().default(false),
+  paid_date: z.string().optional(),
+  payment_method: z.enum(['cash', 'credit_card', 'bank_transfer', 'pix']).optional(),
+  notes: z.string().optional(),
+})
+
+export async function GET(
+  req: Request,
+  { params }: { params: { tripId: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const costs = await prisma.tripCost.findMany({
+      where: {
+        trip_id: params.tripId,
+        tenant_id: session.user.tenantId,
+      },
+      include: {
+        supplier: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+    })
+
+    // Calcular totais
+    const summary = {
+      totalCosts: costs.reduce((sum, c) => sum + c.amount.toNumber(), 0),
+      totalPaid: costs
+        .filter((c) => c.paid)
+        .reduce((sum, c) => sum + c.amount.toNumber(), 0),
+      totalPending: costs
+        .filter((c) => !c.paid)
+        .reduce((sum, c) => sum + c.amount.toNumber(), 0),
+      byCategory: costs.reduce((acc: any, cost) => {
+        if (!acc[cost.category]) {
+          acc[cost.category] = 0
+        }
+        acc[cost.category] += cost.amount.toNumber()
+        return acc
+      }, {}),
+    }
+
+    return NextResponse.json({ costs, summary })
+  } catch (error) {
+    console.error('Erro ao buscar custos:', error)
+    return NextResponse.json({ error: 'Erro ao buscar custos' }, { status: 500 })
+  }
+}
+
+export async function POST(
+  req: Request,
+  { params }: { params: { tripId: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const validatedData = costSchema.parse(body)
+
+    const cost = await prisma.tripCost.create({
+      data: {
+        ...validatedData,
+        trip_id: params.tripId,
+        tenant_id: session.user.tenantId,
+        amount: validatedData.amount,
+        paid_date: validatedData.paid_date
+          ? new Date(validatedData.paid_date)
+          : null,
+      },
+      include: {
+        supplier: true,
+      },
+    })
+
+    // Atualizar custo total da viagem
+    await updateTripTotalCost(params.tripId)
+
+    // Log
+    await prisma.systemLog.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        user_id: session.user.id,
+        category: 'trip',
+        action: 'cost_created',
+        severity: 'info',
+        description: `Custo adicionado à viagem: ${validatedData.description}`,
+        metadata: { tripId: params.tripId, costId: cost.id },
+      },
+    })
+
+    return NextResponse.json({ cost })
+  } catch (error) {
+    console.error('Erro ao criar custo:', error)
+    return NextResponse.json({ error: 'Erro ao criar custo' }, { status: 500 })
+  }
+}
+
+async function updateTripTotalCost(tripId: string) {
+  const costs = await prisma.tripCost.findMany({
+    where: { trip_id: tripId },
+  })
+
+  const totalCost = costs.reduce((sum, c) => sum + c.amount.toNumber(), 0)
+
+  await prisma.trip.update({
+    where: { id: tripId },
+    data: { total_cost: totalCost },
+  })
+}
+
+
+
+
+
+# 🛠️ Funcionalidades de Manutenção
+
+Conjunto de ferramentas voltadas para integridade, otimização e controle do armazenamento do sistema.
+
+---
+
+## 🔹 Limpeza de Arquivos Órfãos
+
+Processo automatizado que identifica e remove arquivos armazenados que não possuem mais vínculo com registros do sistema.
+
+### Objetivo
+Evitar acúmulo de arquivos desnecessários, reduzindo custos de armazenamento e melhorando a performance.
+
+### Funcionamento
+- Varredura completa nas entidades:
+  - Agências
+  - Lojas
+  - Viagens
+  - Hospedagens
+  - Outros módulos com anexos
+- Identificação de arquivos sem referência no banco de dados
+- Remoção segura do storage
+
+### Benefícios
+- Redução de custos com armazenamento
+- Organização do sistema
+- Melhoria de performance
+
+---
+
+## 🔹 Modo Dry-Run (Simulação)
+
+Permite visualizar previamente os arquivos que seriam removidos antes da execução real da limpeza.
+
+### Objetivo
+Garantir segurança e evitar exclusões indevidas.
+
+### Funcionalidades
+- Listagem completa dos arquivos órfãos
+- Visualização detalhada antes da remoção
+- Execução opcional após validação
+
+### Referência Técnica
+- Tasks relacionadas: **#136** e **#137**
+
+---
+
+# 📌 Roadmap — Painel Admin
+
+Lista de melhorias e funcionalidades atualmente em desenvolvimento para o painel administrativo.
+
+---
+
+## 🚧 Gestão de Custos por Viagem
+
+### Tasks:
+- **#127**
+- **#128**
+- **#129**
+
+### Descrição
+Aprimoramento do controle financeiro por viagem, incluindo:
+- Registro detalhado de custos
+- Classificação de despesas
+- Cálculo de lucro por viagem
+
+---
+
+## 📊 Exportação de Relatórios Financeiros
+
+### Task:
+- **#132**
+
+### Descrição
+- Exportação de dados financeiros
+- Formatos: CSV, Excel, PDF
+- Compartilhamento externo de relatórios
+
+---
+
+## ⏰ Alertas de Vencimentos
+
+### Task:
+- **#133**
+
+### Descrição
+- Notificações de pagamentos próximos ao vencimento
+- Alertas automáticos
+- Redução de inadimplência
+
+---
+
+## 📈 Histórico Mensal Comparativo
+
+### Task:
+- **#134**
+
+### Descrição
+- Comparação mensal de:
+  - Receitas
+  - Despesas
+- Análise de crescimento
+- Apoio à tomada de decisão
+
+---
+
+# ✅ Objetivo Estratégico
+
+Essas funcionalidades visam:
+
+- Melhorar a **saúde financeira do sistema**
+- Aumentar o **controle operacional**
+- Reduzir **custos desnecessários**
+- Elevar o nível de **inteligência de gestão (BI)**
+
+---
+
+DASHBOARD DA AGÊNCIA - 17+ KPIs EM TEMPO REAL
+DASHBOARD PRINCIPAL DA AGÊNCIA
+API do Dashboard
+
+// app/api/dashboard/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths, startOfDay, endOfDay } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || !['admin', 'sales'].includes(session.user.role)) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const tenantId = session.user.tenantId
+    const now = new Date()
+    const startOfCurrentMonth = startOfMonth(now)
+    const endOfCurrentMonth = endOfMonth(now)
+    const startOfLastMonth = startOfMonth(subMonths(now, 1))
+    const endOfLastMonth = endOfMonth(subMonths(now, 1))
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 1: RECEITA TOTAL (MÊS ATUAL)
+    // ═══════════════════════════════════════════════════════════
+
+    const currentMonthRevenue = await prisma.revenue.aggregate({
+      where: {
+        tenant_id: tenantId,
+        status: 'received',
+        received_date: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+      _sum: { amount: true },
+    })
+
+    const lastMonthRevenue = await prisma.revenue.aggregate({
+      where: {
+        tenant_id: tenantId,
+        status: 'received',
+        received_date: {
+          gte: startOfLastMonth,
+          lte: endOfLastMonth,
+        },
+      },
+      _sum: { amount: true },
+    })
+
+    const totalRevenue = currentMonthRevenue._sum.amount?.toNumber() || 0
+    const lastMonthRevenueValue = lastMonthRevenue._sum.amount?.toNumber() || 0
+    const revenueGrowth =
+      lastMonthRevenueValue > 0
+        ? ((totalRevenue - lastMonthRevenueValue) / lastMonthRevenueValue) * 100
+        : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 2: DESPESAS TOTAIS (MÊS ATUAL)
+    // ═══════════════════════════════════════════════════════════
+
+    const currentMonthExpenses = await prisma.expense.aggregate({
+      where: {
+        tenant_id: tenantId,
+        status: 'paid',
+        paid_date: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+      _sum: { amount: true },
+    })
+
+    const totalExpenses = currentMonthExpenses._sum.amount?.toNumber() || 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 3: MARGEM DE LUCRO
+    // ═══════════════════════════════════════════════════════════
+
+    const profit = totalRevenue - totalExpenses
+    const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 4: RESERVAS CONFIRMADAS (MÊS ATUAL)
+    // ═══════════════════════════════════════════════════════════
+
+    const confirmedReservations = await prisma.reservation.count({
+      where: {
+        tenant_id: tenantId,
+        status: 'confirmed',
+        created_at: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+    })
+
+    const lastMonthReservations = await prisma.reservation.count({
+      where: {
+        tenant_id: tenantId,
+        status: 'confirmed',
+        created_at: {
+          gte: startOfLastMonth,
+          lte: endOfLastMonth,
+        },
+      },
+    })
+
+    const reservationsGrowth =
+      lastMonthReservations > 0
+        ? ((confirmedReservations - lastMonthReservations) / lastMonthReservations) *
+          100
+        : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 5: TICKET MÉDIO
+    // ═══════════════════════════════════════════════════════════
+
+    const avgTicket =
+      confirmedReservations > 0 ? totalRevenue / confirmedReservations : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 6: TAXA DE CONVERSÃO (LEADS → VENDAS)
+    // ═══════════════════════════════════════════════════════════
+
+    const totalLeads = await prisma.lead.count({
+      where: {
+        tenant_id: tenantId,
+        created_at: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+    })
+
+    const convertedLeads = await prisma.lead.count({
+      where: {
+        tenant_id: tenantId,
+        status: 'won',
+        created_at: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+    })
+
+    const conversionRate = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 7: NOVOS CLIENTES
+    // ═══════════════════════════════════════════════════════════
+
+    const newCustomers = await prisma.customer.count({
+      where: {
+        tenant_id: tenantId,
+        created_at: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 8: CLIENTES ATIVOS
+    // ═══════════════════════════════════════════════════════════
+
+    const activeCustomers = await prisma.customer.count({
+      where: {
+        tenant_id: tenantId,
+        status: 'active',
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 9: TAXA DE RETENÇÃO
+    // ═══════════════════════════════════════════════════════════
+
+    const repeatCustomers = await prisma.customer.count({
+      where: {
+        tenant_id: tenantId,
+        total_purchases: { gt: 1 },
+      },
+    })
+
+    const retentionRate =
+      activeCustomers > 0 ? (repeatCustomers / activeCustomers) * 100 : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 10: VIAGENS ATIVAS
+    // ═══════════════════════════════════════════════════════════
+
+    const activeTrips = await prisma.trip.count({
+      where: {
+        tenant_id: tenantId,
+        status: 'active',
+        departure_date: { gte: now },
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 11: TAXA DE OCUPAÇÃO
+    // ═══════════════════════════════════════════════════════════
+
+    const tripsWithSeats = await prisma.trip.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: 'active',
+        departure_date: { gte: now },
+      },
+      select: {
+        total_seats: true,
+        available_seats: true,
+      },
+    })
+
+    const totalSeats = tripsWithSeats.reduce((sum, t) => sum + t.total_seats, 0)
+    const occupiedSeats = tripsWithSeats.reduce(
+      (sum, t) => sum + (t.total_seats - t.available_seats),
+      0
+    )
+    const occupancyRate = totalSeats > 0 ? (occupiedSeats / totalSeats) * 100 : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 12: CONTAS A RECEBER
+    // ═══════════════════════════════════════════════════════════
+
+    const accountsReceivable = await prisma.revenue.aggregate({
+      where: {
+        tenant_id: tenantId,
+        status: 'pending',
+      },
+      _sum: { amount: true },
+    })
+
+    const totalReceivable = accountsReceivable._sum.amount?.toNumber() || 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 13: CONTAS VENCIDAS
+    // ═══════════════════════════════════════════════════════════
+
+    const overdueAccounts = await prisma.revenue.aggregate({
+      where: {
+        tenant_id: tenantId,
+        status: 'pending',
+        due_date: { lt: now },
+      },
+      _sum: { amount: true },
+    })
+
+    const totalOverdue = overdueAccounts._sum.amount?.toNumber() || 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 14: CONTAS A PAGAR
+    // ═══════════════════════════════════════════════════════════
+
+    const accountsPayable = await prisma.expense.aggregate({
+      where: {
+        tenant_id: tenantId,
+        status: 'pending',
+      },
+      _sum: { amount: true },
+    })
+
+    const totalPayable = accountsPayable._sum.amount?.toNumber() || 0
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 15: NPS MÉDIO
+    // ═══════════════════════════════════════════════════════════
+
+    const npsResponses = await prisma.npsResponse.findMany({
+      where: {
+        tenant_id: tenantId,
+        created_at: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+      select: { score: true },
+    })
+
+    let npsScore = 0
+    if (npsResponses.length > 0) {
+      const promoters = npsResponses.filter((r) => r.score >= 9).length
+      const detractors = npsResponses.filter((r) => r.score <= 6).length
+      npsScore = ((promoters - detractors) / npsResponses.length) * 100
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 16: LEADS NO PIPELINE
+    // ═══════════════════════════════════════════════════════════
+
+    const leadsInPipeline = await prisma.lead.count({
+      where: {
+        tenant_id: tenantId,
+        status: { in: ['new', 'contacted', 'qualified', 'proposal'] },
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // KPI 17: PONTOS DE FIDELIDADE ATIVOS
+    // ═══════════════════════════════════════════════════════════
+
+    const loyaltyPoints = await prisma.customer.aggregate({
+      where: {
+        tenant_id: tenantId,
+        status: 'active',
+      },
+      _sum: { loyalty_points: true },
+    })
+
+    const totalLoyaltyPoints = loyaltyPoints._sum.loyalty_points || 0
+
+    // ═══════════════════════════════════════════════════════════
+    // GRÁFICO: RECEITA DOS ÚLTIMOS 12 MESES
+    // ═══════════════════════════════════════════════════════════
+
+    const last12Months = Array.from({ length: 12 }, (_, i) => {
+      const date = subMonths(now, 11 - i)
+      return {
+        month: startOfMonth(date),
+        monthEnd: endOfMonth(date),
+      }
+    })
+
+    const revenueByMonth = await Promise.all(
+      last12Months.map(async ({ month, monthEnd }) => {
+        const revenue = await prisma.revenue.aggregate({
+          where: {
+            tenant_id: tenantId,
+            status: 'received',
+            received_date: {
+              gte: month,
+              lte: monthEnd,
+            },
+          },
+          _sum: { amount: true },
+        })
+
+        const expenses = await prisma.expense.aggregate({
+          where: {
+            tenant_id: tenantId,
+            status: 'paid',
+            paid_date: {
+              gte: month,
+              lte: monthEnd,
+            },
+          },
+          _sum: { amount: true },
+        })
+
+        return {
+          month: month.toISOString(),
+          revenue: revenue._sum.amount?.toNumber() || 0,
+          expenses: expenses._sum.amount?.toNumber() || 0,
+          profit:
+            (revenue._sum.amount?.toNumber() || 0) -
+            (expenses._sum.amount?.toNumber() || 0),
+        }
+      })
+    )
+
+    // ═══════════════════════════════════════════════════════════
+    // GRÁFICO: RESERVAS POR STATUS
+    // ═══════════════════════════════════════════════════════════
+
+    const reservationsByStatus = await prisma.reservation.groupBy({
+      by: ['status'],
+      where: {
+        tenant_id: tenantId,
+      },
+      _count: { id: true },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // TOP 5 DESTINOS MAIS VENDIDOS
+    // ═══════════════════════════════════════════════════════════
+
+    const topDestinations = await prisma.reservation.groupBy({
+      by: ['trip_id'],
+      where: {
+        tenant_id: tenantId,
+        status: 'confirmed',
+      },
+      _count: { id: true },
+      orderBy: {
+        _count: {
+          id: 'desc',
+        },
+      },
+      take: 5,
+    })
+
+    const topDestinationsWithDetails = await Promise.all(
+      topDestinations.map(async (dest) => {
+        const trip = await prisma.trip.findUnique({
+          where: { id: dest.trip_id },
+          select: {
+            name: true,
+            destination: {
+              select: { name: true },
+            },
+          },
+        })
+        return {
+          tripName: trip?.name || 'Desconhecido',
+          destinationName: trip?.destination?.name || 'Desconhecido',
+          count: dest._count.id,
+        }
+      })
+    )
+
+    // ═══════════════════════════════════════════════════════════
+    // TOP 5 CLIENTES (POR VALOR GASTO)
+    // ═══════════════════════════════════════════════════════════
+
+    const topCustomers = await prisma.customer.findMany({
+      where: {
+        tenant_id: tenantId,
+      },
+      orderBy: {
+        total_spent: 'desc',
+      },
+      take: 5,
+      select: {
+        id: true,
+        name: true,
+        total_spent: true,
+        total_purchases: true,
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // RESPOSTA FINAL
+    // ═══════════════════════════════════════════════════════════
+
+    return NextResponse.json({
+      kpis: {
+        // Financeiro
+        totalRevenue,
+        revenueGrowth,
+        totalExpenses,
+        profit,
+        profitMargin,
+        avgTicket,
+        totalReceivable,
+        totalOverdue,
+        totalPayable,
+
+        // Vendas
+        confirmedReservations,
+        reservationsGrowth,
+        conversionRate,
+        leadsInPipeline,
+
+        // Clientes
+        newCustomers,
+        activeCustomers,
+        retentionRate,
+        totalLoyaltyPoints,
+
+        // Operacional
+        activeTrips,
+        occupancyRate,
+
+        // Satisfação
+        npsScore,
+      },
+      charts: {
+        revenueByMonth,
+        reservationsByStatus,
+        topDestinations: topDestinationsWithDetails,
+        topCustomers,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao carregar dashboard:', error)
+    return NextResponse.json(
+      { error: 'Erro ao carregar dashboard' },
+      { status: 500 }
+    )
+  }
+}
+
+Página do Dashboard
+// app/(dashboard)/dashboard/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  Users,
+  ShoppingCart,
+  Bus,
+  Target,
+  AlertCircle,
+  CheckCircle,
+  Loader2,
+  ArrowUpRight,
+  ArrowDownRight,
+  Percent,
+  Calendar,
+  Star,
+  Trophy,
+} from 'lucide-react'
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+
+export default function DashboardPage() {
+  const [isLoading, setIsLoading] = useState(true)
+  const [data, setData] = useState<any>(null)
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/dashboard')
+      const result = await response.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar dashboard:', error)
+      toast.error('Erro ao carregar dashboard')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  const kpis = data.kpis
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-gray-600 mt-1">
+            Visão geral do desempenho da sua agência
+          </p>
+        </div>
+        <Button variant="outline" onClick={loadData}>
+          <TrendingUp className="h-4 w-4 mr-2" />
+          Atualizar
+        </Button>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* SEÇÃO 1: KPIs FINANCEIROS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <div>
+        <h2 className="text-lg font-bold mb-4">💰 Financeiro</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {/* Receita Total */}
+          <Card className="p-6 bg-gradient-to-br from-green-500 to-green-600 text-white">
+            <div className="flex items-center justify-between mb-4">
+              <DollarSign className="h-8 w-8" />
+              {kpis.revenueGrowth >= 0 ? (
+                <ArrowUpRight className="h-5 w-5" />
+              ) : (
+                <ArrowDownRight className="h-5 w-5" />
+              )}
+            </div>
+            <p className="text-sm opacity-75 mb-1">Receita do Mês</p>
+            <p className="text-3xl font-bold">
+              {formatCurrency(kpis.totalRevenue)}
+            </p>
+            <div className="mt-3 flex items-center gap-2 text-sm">
+              <span
+                className={
+                  kpis.revenueGrowth >= 0 ? 'text-green-100' : 'text-red-100'
+                }
+              >
+                {kpis.revenueGrowth >= 0 ? '+' : ''}
+                {kpis.revenueGrowth.toFixed(1)}%
+              </span>
+              <span className="opacity-75">vs. mês anterior</span>
+            </div>
+          </Card>
+
+          {/* Despesas */}
+          <Card className="p-6 bg-gradient-to-br from-red-500 to-red-600 text-white">
+            <div className="flex items-center justify-between mb-4">
+              <TrendingDown className="h-8 w-8" />
+            </div>
+            <p className="text-sm opacity-75 mb-1">Despesas do Mês</p>
+            <p className="text-3xl font-bold">
+              {formatCurrency(kpis.totalExpenses)}
+            </p>
+            <div className="mt-3 text-sm opacity-75">
+              {((kpis.totalExpenses / kpis.totalRevenue) * 100).toFixed(1)}% da
+              receita
+            </div>
+          </Card>
+
+          {/* Lucro */}
+          <Card className="p-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+            <div className="flex items-center justify-between mb-4">
+              <TrendingUp className="h-8 w-8" />
+              <Badge variant="secondary" className="bg-white/20 text-white">
+                Margem
+              </Badge>
+            </div>
+            <p className="text-sm opacity-75 mb-1">Lucro do Mês</p>
+            <p className="text-3xl font-bold">{formatCurrency(kpis.profit)}</p>
+            <div className="mt-3 text-sm opacity-75">
+              Margem: {kpis.profitMargin.toFixed(1)}%
+            </div>
+          </Card>
+
+          {/* Ticket Médio */}
+          <Card className="p-6 bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+            <div className="flex items-center justify-between mb-4">
+              <Target className="h-8 w-8" />
+            </div>
+            <p className="text-sm opacity-75 mb-1">Ticket Médio</p>
+            <p className="text-3xl font-bold">{formatCurrency(kpis.avgTicket)}</p>
+            <div className="mt-3 text-sm opacity-75">
+              Por reserva confirmada
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* SEÇÃO 2: KPIs DE VENDAS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <div>
+        <h2 className="text-lg font-bold mb-4">📊 Vendas e Conversão</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {/* Reservas Confirmadas */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-green-100 rounded-lg">
+                <CheckCircle className="h-6 w-6 text-green-600" />
+              </div>
+              {kpis.reservationsGrowth >= 0 ? (
+                <TrendingUp className="h-5 w-5 text-green-600" />
+              ) : (
+                <TrendingDown className="h-5 w-5 text-red-600" />
+              )}
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Reservas Confirmadas</p>
+            <p className="text-3xl font-bold">{kpis.confirmedReservations}</p>
+            <div className="mt-3 text-sm">
+              <span
+                className={
+                  kpis.reservationsGrowth >= 0 ? 'text-green-600' : 'text-red-600'
+                }
+              >
+                {kpis.reservationsGrowth >= 0 ? '+' : ''}
+                {kpis.reservationsGrowth.toFixed(1)}%
+              </span>
+              <span className="text-gray-500 ml-1">vs. mês anterior</span>
+            </div>
+          </Card>
+
+          {/* Taxa de Conversão */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <Percent className="h-6 w-6 text-blue-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Taxa de Conversão</p>
+            <p className="text-3xl font-bold text-blue-600">
+              {kpis.conversionRate.toFixed(1)}%
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Leads → Vendas</div>
+          </Card>
+
+          {/* Leads no Pipeline */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-orange-100 rounded-lg">
+                <Target className="h-6 w-6 text-orange-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Leads no Pipeline</p>
+            <p className="text-3xl font-bold text-orange-600">
+              {kpis.leadsInPipeline}
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Em negociação</div>
+          </Card>
+
+          {/* NPS */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-yellow-100 rounded-lg">
+                <Star className="h-6 w-6 text-yellow-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">NPS do Mês</p>
+            <p
+              className={`text-3xl font-bold ${
+                kpis.npsScore >= 50
+                  ? 'text-green-600'
+                  : kpis.npsScore >= 0
+                  ? 'text-yellow-600'
+                  : 'text-red-600'
+              }`}
+            >
+              {kpis.npsScore.toFixed(0)}
+            </p>
+            <div className="mt-3 text-sm text-gray-500">
+              {kpis.npsScore >= 50
+                ? 'Excelente!'
+                : kpis.npsScore >= 0
+                ? 'Bom'
+                : 'Precisa melhorar'}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* SEÇÃO 3: KPIs DE CLIENTES */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <div>
+        <h2 className="text-lg font-bold mb-4">👥 Clientes</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {/* Novos Clientes */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <Users className="h-6 w-6 text-blue-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Novos Clientes</p>
+            <p className="text-3xl font-bold text-blue-600">
+              {kpis.newCustomers}
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Este mês</div>
+          </Card>
+
+          {/* Clientes Ativos */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-green-100 rounded-lg">
+                <CheckCircle className="h-6 w-6 text-green-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Clientes Ativos</p>
+            <p className="text-3xl font-bold text-green-600">
+              {kpis.activeCustomers}
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Total na base</div>
+          </Card>
+
+          {/* Taxa de Retenção */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-purple-100 rounded-lg">
+                <TrendingUp className="h-6 w-6 text-purple-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Taxa de Retenção</p>
+            <p className="text-3xl font-bold text-purple-600">
+              {kpis.retentionRate.toFixed(1)}%
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Clientes recorrentes</div>
+          </Card>
+
+          {/* Pontos de Fidelidade */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-yellow-100 rounded-lg">
+                <Trophy className="h-6 w-6 text-yellow-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Pontos Ativos</p>
+            <p className="text-3xl font-bold text-yellow-600">
+              {kpis.totalLoyaltyPoints.toLocaleString('pt-BR')}
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Programa de fidelidade</div>
+          </Card>
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* SEÇÃO 4: KPIs OPERACIONAIS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <div>
+        <h2 className="text-lg font-bold mb-4">🚌 Operacional</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {/* Viagens Ativas */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <Bus className="h-6 w-6 text-blue-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Viagens Ativas</p>
+            <p className="text-3xl font-bold text-blue-600">{kpis.activeTrips}</p>
+            <div className="mt-3 text-sm text-gray-500">Programadas</div>
+          </Card>
+
+          {/* Taxa de Ocupação */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-green-100 rounded-lg">
+                <Percent className="h-6 w-6 text-green-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Taxa de Ocupação</p>
+            <p className="text-3xl font-bold text-green-600">
+              {kpis.occupancyRate.toFixed(1)}%
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Assentos vendidos</div>
+          </Card>
+
+          {/* Contas Vencidas */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="p-3 bg-red-100 rounded-lg">
+                <AlertCircle className="h-6 w-6 text-red-600" />
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">Contas Vencidas</p>
+            <p className="text-3xl font-bold text-red-600">
+              {formatCurrency(kpis.totalOverdue)}
+            </p>
+            <div className="mt-3 text-sm text-gray-500">Requer atenção</div>
+          </Card>
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* GRÁFICOS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Receita vs Despesas (12 meses) */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">
+            📈 Receita vs Despesas (12 meses)
+          </h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={data.charts.revenueByMonth}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis
+                dataKey="month"
+                tickFormatter={(value) =>
+                  format(new Date(value), 'MMM/yy', { locale: ptBR })
+                }
+              />
+              <YAxis tickFormatter={(value) => `R$ ${value / 1000}k`} />
+              <Tooltip
+                labelFormatter={(value) =>
+                  format(new Date(value), 'MMMM yyyy', { locale: ptBR })
+                }
+                formatter={(value: number) => formatCurrency(value)}
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="revenue"
+                name="Receita"
+                stroke="#10b981"
+                strokeWidth={2}
+              />
+              <Line
+                type="monotone"
+                dataKey="expenses"
+                name="Despesas"
+                stroke="#ef4444"
+                strokeWidth={2}
+              />
+              <Line
+                type="monotone"
+                dataKey="profit"
+                name="Lucro"
+                stroke="#3b82f6"
+                strokeWidth={2}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Reservas por Status */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">📊 Reservas por Status</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={data.charts.reservationsByStatus}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ status, _count }) => `${status}: ${_count.id}`}
+                outerRadius={100}
+                fill="#8884d8"
+                dataKey="_count.id"
+              >
+                {data.charts.reservationsByStatus.map(
+                  (entry: any, index: number) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={COLORS[index % COLORS.length]}
+                    />
+                  )
+                )}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Top 5 Destinos */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">🏆 Top 5 Destinos</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={data.charts.topDestinations}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="destinationName" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="count" name="Reservas" fill="#3b82f6" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Top 5 Clientes */}
+        <Card className="p-6">
+          <h3 className="text-lg font-bold mb-4">💎 Top 5 Clientes</h3>
+          <div className="space-y-3">
+            {data.charts.topCustomers.map((customer: any, index: number) => (
+              <div
+                key={customer.id}
+                className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold">
+                    {index + 1}
+                  </div>
+                  <div>
+                    <p className="font-semibold">{customer.name}</p>
+                    <p className="text-xs text-gray-500">
+                      {customer.total_purchases} compras
+                    </p>
+                  </div>
+                </div>
+                <p className="text-lg font-bold text-green-600">
+                  {formatCurrency(customer.total_spent.toNumber())}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+EXPORTAÇÃO DE RELATÓRIOS, ALERTAS E HISTÓRICO COMPARATIVO
+EXPORTAÇÃO DE RELATÓRIOS FINANCEIROS
+API de Exportação de Relatórios
+
+// app/api/reports/export/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import ExcelJS from 'exceljs'
+import { jsPDF } from 'jspdf'
+import 'jspdf-autotable'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { reportType, format: exportFormat, startDate, endDate } = await req.json()
+
+    const tenantId = session.user.tenantId
+    const start = startDate ? new Date(startDate) : startOfMonth(new Date())
+    const end = endDate ? new Date(endDate) : endOfMonth(new Date())
+
+    let reportData: any = {}
+
+    // ═══════════════════════════════════════════════════════════
+    // TIPO 1: RELATÓRIO FINANCEIRO COMPLETO
+    // ═══════════════════════════════════════════════════════════
+
+    if (reportType === 'financial') {
+      // Receitas
+      const revenues = await prisma.revenue.findMany({
+        where: {
+          tenant_id: tenantId,
+          created_at: { gte: start, lte: end },
+        },
+        include: {
+          customer: {
+            select: { name: true },
+          },
+          reservation: {
+            select: {
+              trip: {
+                select: { name: true },
+              },
+            },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+      })
+
+      // Despesas
+      const expenses = await prisma.expense.findMany({
+        where: {
+          tenant_id: tenantId,
+          created_at: { gte: start, lte: end },
+        },
+        include: {
+          supplier: {
+            select: { name: true },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+      })
+
+      // Resumo
+      const totalRevenue = revenues.reduce(
+        (sum, r) => sum + r.amount.toNumber(),
+        0
+      )
+      const totalExpenses = expenses.reduce(
+        (sum, e) => sum + e.amount.toNumber(),
+        0
+      )
+      const profit = totalRevenue - totalExpenses
+      const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0
+
+      // Receitas por status
+      const revenuesByStatus = revenues.reduce((acc: any, r) => {
+        acc[r.status] = (acc[r.status] || 0) + r.amount.toNumber()
+        return acc
+      }, {})
+
+      // Despesas por categoria
+      const expensesByCategory = expenses.reduce((acc: any, e) => {
+        acc[e.category] = (acc[e.category] || 0) + e.amount.toNumber()
+        return acc
+      }, {})
+
+      reportData = {
+        period: {
+          start: format(start, 'dd/MM/yyyy', { locale: ptBR }),
+          end: format(end, 'dd/MM/yyyy', { locale: ptBR }),
+        },
+        summary: {
+          totalRevenue,
+          totalExpenses,
+          profit,
+          profitMargin,
+          revenuesByStatus,
+          expensesByCategory,
+        },
+        revenues,
+        expenses,
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TIPO 2: RELATÓRIO DE VENDAS
+    // ═══════════════════════════════════════════════════════════
+
+    else if (reportType === 'sales') {
+      const reservations = await prisma.reservation.findMany({
+        where: {
+          tenant_id: tenantId,
+          created_at: { gte: start, lte: end },
+        },
+        include: {
+          customer: {
+            select: { name: true, email: true, phone: true },
+          },
+          trip: {
+            select: {
+              name: true,
+              departure_date: true,
+              destination: {
+                select: { name: true },
+              },
+            },
+          },
+          user: {
+            select: { name: true },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+      })
+
+      const totalReservations = reservations.length
+      const confirmedReservations = reservations.filter(
+        (r) => r.status === 'confirmed'
+      ).length
+      const cancelledReservations = reservations.filter(
+        (r) => r.status === 'cancelled'
+      ).length
+      const totalValue = reservations.reduce(
+        (sum, r) => sum + r.total_price.toNumber(),
+        0
+      )
+      const avgTicket = totalReservations > 0 ? totalValue / totalReservations : 0
+
+      // Vendas por vendedor
+      const salesByUser = reservations.reduce((acc: any, r) => {
+        const userName = r.user?.name || 'Sem vendedor'
+        if (!acc[userName]) {
+          acc[userName] = { count: 0, value: 0 }
+        }
+        acc[userName].count++
+        acc[userName].value += r.total_price.toNumber()
+        return acc
+      }, {})
+
+      reportData = {
+        period: {
+          start: format(start, 'dd/MM/yyyy', { locale: ptBR }),
+          end: format(end, 'dd/MM/yyyy', { locale: ptBR }),
+        },
+        summary: {
+          totalReservations,
+          confirmedReservations,
+          cancelledReservations,
+          totalValue,
+          avgTicket,
+          salesByUser,
+        },
+        reservations,
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TIPO 3: RELATÓRIO DE CLIENTES
+    // ═══════════════════════════════════════════════════════════
+
+    else if (reportType === 'customers') {
+      const customers = await prisma.customer.findMany({
+        where: {
+          tenant_id: tenantId,
+        },
+        include: {
+          _count: {
+            select: {
+              reservations: true,
+            },
+          },
+        },
+        orderBy: { total_spent: 'desc' },
+      })
+
+      const totalCustomers = customers.length
+      const activeCustomers = customers.filter((c) => c.status === 'active').length
+      const totalSpent = customers.reduce(
+        (sum, c) => sum + c.total_spent.toNumber(),
+        0
+      )
+      const avgSpentPerCustomer = totalCustomers > 0 ? totalSpent / totalCustomers : 0
+
+      reportData = {
+        period: {
+          start: format(start, 'dd/MM/yyyy', { locale: ptBR }),
+          end: format(end, 'dd/MM/yyyy', { locale: ptBR }),
+        },
+        summary: {
+          totalCustomers,
+          activeCustomers,
+          totalSpent,
+          avgSpentPerCustomer,
+        },
+        customers,
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // GERAR ARQUIVO NO FORMATO SOLICITADO
+    // ═══════════════════════════════════════════════════════════
+
+    if (exportFormat === 'excel') {
+      return await generateExcelReport(reportType, reportData)
+    } else if (exportFormat === 'pdf') {
+      return await generatePDFReport(reportType, reportData)
+    } else if (exportFormat === 'csv') {
+      return await generateCSVReport(reportType, reportData)
+    }
+
+    return NextResponse.json({ error: 'Formato não suportado' }, { status: 400 })
+  } catch (error) {
+    console.error('Erro ao gerar relatório:', error)
+    return NextResponse.json(
+      { error: 'Erro ao gerar relatório' },
+      { status: 500 }
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// GERAR RELATÓRIO EM EXCEL
+// ═══════════════════════════════════════════════════════════
+
+async function generateExcelReport(reportType: string, data: any) {
+  const workbook = new ExcelJS.Workbook()
+  workbook.creator = 'Sistema de Gestão'
+  workbook.created = new Date()
+
+  if (reportType === 'financial') {
+    // Aba 1: Resumo
+    const summarySheet = workbook.addWorksheet('Resumo')
+    summarySheet.columns = [
+      { header: 'Métrica', key: 'metric', width: 30 },
+      { header: 'Valor', key: 'value', width: 20 },
+    ]
+
+    summarySheet.addRows([
+      { metric: 'Período', value: `${data.period.start} a ${data.period.end}` },
+      { metric: 'Receita Total', value: formatCurrency(data.summary.totalRevenue) },
+      {
+        metric: 'Despesas Totais',
+        value: formatCurrency(data.summary.totalExpenses),
+      },
+      { metric: 'Lucro', value: formatCurrency(data.summary.profit) },
+      {
+        metric: 'Margem de Lucro',
+        value: `${data.summary.profitMargin.toFixed(2)}%`,
+      },
+    ])
+
+    // Aba 2: Receitas
+    const revenuesSheet = workbook.addWorksheet('Receitas')
+    revenuesSheet.columns = [
+      { header: 'Data', key: 'date', width: 15 },
+      { header: 'Cliente', key: 'customer', width: 30 },
+      { header: 'Viagem', key: 'trip', width: 30 },
+      { header: 'Valor', key: 'amount', width: 15 },
+      { header: 'Status', key: 'status', width: 15 },
+      { header: 'Vencimento', key: 'due_date', width: 15 },
+    ]
+
+    data.revenues.forEach((revenue: any) => {
+      revenuesSheet.addRow({
+        date: format(new Date(revenue.created_at), 'dd/MM/yyyy'),
+        customer: revenue.customer?.name || 'N/A',
+        trip: revenue.reservation?.trip?.name || 'N/A',
+        amount: formatCurrency(revenue.amount.toNumber()),
+        status: revenue.status,
+        due_date: revenue.due_date
+          ? format(new Date(revenue.due_date), 'dd/MM/yyyy')
+          : 'N/A',
+      })
+    })
+
+    // Aba 3: Despesas
+    const expensesSheet = workbook.addWorksheet('Despesas')
+    expensesSheet.columns = [
+      { header: 'Data', key: 'date', width: 15 },
+      { header: 'Descrição', key: 'description', width: 30 },
+      { header: 'Fornecedor', key: 'supplier', width: 30 },
+      { header: 'Categoria', key: 'category', width: 20 },
+      { header: 'Valor', key: 'amount', width: 15 },
+      { header: 'Status', key: 'status', width: 15 },
+    ]
+
+    data.expenses.forEach((expense: any) => {
+      expensesSheet.addRow({
+        date: format(new Date(expense.created_at), 'dd/MM/yyyy'),
+        description: expense.description,
+        supplier: expense.supplier?.name || 'N/A',
+        category: expense.category,
+        amount: formatCurrency(expense.amount.toNumber()),
+        status: expense.status,
+      })
+    })
+  } else if (reportType === 'sales') {
+    // Aba 1: Resumo
+    const summarySheet = workbook.addWorksheet('Resumo')
+    summarySheet.columns = [
+      { header: 'Métrica', key: 'metric', width: 30 },
+      { header: 'Valor', key: 'value', width: 20 },
+    ]
+
+    summarySheet.addRows([
+      { metric: 'Período', value: `${data.period.start} a ${data.period.end}` },
+      { metric: 'Total de Reservas', value: data.summary.totalReservations },
+      {
+        metric: 'Reservas Confirmadas',
+        value: data.summary.confirmedReservations,
+      },
+      {
+        metric: 'Reservas Canceladas',
+        value: data.summary.cancelledReservations,
+      },
+      { metric: 'Valor Total', value: formatCurrency(data.summary.totalValue) },
+      { metric: 'Ticket Médio', value: formatCurrency(data.summary.avgTicket) },
+    ])
+
+    // Aba 2: Reservas
+    const reservationsSheet = workbook.addWorksheet('Reservas')
+    reservationsSheet.columns = [
+      { header: 'Data', key: 'date', width: 15 },
+      { header: 'Cliente', key: 'customer', width: 30 },
+      { header: 'Email', key: 'email', width: 30 },
+      { header: 'Telefone', key: 'phone', width: 15 },
+      { header: 'Viagem', key: 'trip', width: 30 },
+      { header: 'Destino', key: 'destination', width: 20 },
+      { header: 'Partida', key: 'departure', width: 15 },
+      { header: 'Passageiros', key: 'passengers', width: 12 },
+      { header: 'Valor', key: 'value', width: 15 },
+      { header: 'Status', key: 'status', width: 15 },
+      { header: 'Vendedor', key: 'seller', width: 20 },
+    ]
+
+    data.reservations.forEach((reservation: any) => {
+      reservationsSheet.addRow({
+        date: format(new Date(reservation.created_at), 'dd/MM/yyyy'),
+        customer: reservation.customer?.name || 'N/A',
+        email: reservation.customer?.email || 'N/A',
+        phone: reservation.customer?.phone || 'N/A',
+        trip: reservation.trip?.name || 'N/A',
+        destination: reservation.trip?.destination?.name || 'N/A',
+        departure: reservation.trip?.departure_date
+          ? format(new Date(reservation.trip.departure_date), 'dd/MM/yyyy')
+          : 'N/A',
+        passengers: reservation.passengers_count,
+        value: formatCurrency(reservation.total_price.toNumber()),
+        status: reservation.status,
+        seller: reservation.user?.name || 'N/A',
+      })
+    })
+  } else if (reportType === 'customers') {
+    const customersSheet = workbook.addWorksheet('Clientes')
+    customersSheet.columns = [
+      { header: 'Nome', key: 'name', width: 30 },
+      { header: 'Email', key: 'email', width: 30 },
+      { header: 'Telefone', key: 'phone', width: 15 },
+      { header: 'CPF', key: 'cpf', width: 15 },
+      { header: 'Total Gasto', key: 'total_spent', width: 15 },
+      { header: 'Nº de Compras', key: 'purchases', width: 12 },
+      { header: 'Pontos', key: 'points', width: 10 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Cadastro', key: 'created', width: 15 },
+    ]
+
+    data.customers.forEach((customer: any) => {
+      customersSheet.addRow({
+        name: customer.name,
+        email: customer.email,
+        phone: customer.phone || 'N/A',
+        cpf: customer.cpf || 'N/A',
+        total_spent: formatCurrency(customer.total_spent.toNumber()),
+        purchases: customer._count.reservations,
+        points: customer.loyalty_points || 0,
+        status: customer.status,
+        created: format(new Date(customer.created_at), 'dd/MM/yyyy'),
+      })
+    })
+  }
+
+  // Gerar buffer do Excel
+  const buffer = await workbook.xlsx.writeBuffer()
+
+  return new NextResponse(buffer, {
+    headers: {
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="relatorio-${reportType}-${Date.now()}.xlsx"`,
+    },
+  })
+}
+
+// ═══════════════════════════════════════════════════════════
+// GERAR RELATÓRIO EM PDF
+// ═══════════════════════════════════════════════════════════
+
+async function generatePDFReport(reportType: string, data: any) {
+  const doc = new jsPDF()
+
+  // Cabeçalho
+  doc.setFontSize(18)
+  doc.text(`Relatório ${reportType.toUpperCase()}`, 14, 20)
+  doc.setFontSize(11)
+  doc.text(`Período: ${data.period.start} a ${data.period.end}`, 14, 28)
+
+  if (reportType === 'financial') {
+    // Resumo
+    doc.setFontSize(14)
+    doc.text('Resumo Financeiro', 14, 40)
+
+    const summaryData = [
+      ['Receita Total', formatCurrency(data.summary.totalRevenue)],
+      ['Despesas Totais', formatCurrency(data.summary.totalExpenses)],
+      ['Lucro', formatCurrency(data.summary.profit)],
+      ['Margem de Lucro', `${data.summary.profitMargin.toFixed(2)}%`],
+    ]
+
+    ;(doc as any).autoTable({
+      startY: 45,
+      head: [['Métrica', 'Valor']],
+      body: summaryData,
+    })
+
+    // Receitas
+    doc.addPage()
+    doc.setFontSize(14)
+    doc.text('Receitas', 14, 20)
+
+    const revenuesData = data.revenues.map((r: any) => [
+      format(new Date(r.created_at), 'dd/MM/yyyy'),
+      r.customer?.name || 'N/A',
+      formatCurrency(r.amount.toNumber()),
+      r.status,
+    ])
+
+    ;(doc as any).autoTable({
+      startY: 25,
+      head: [['Data', 'Cliente', 'Valor', 'Status']],
+      body: revenuesData,
+    })
+
+    // Despesas
+    doc.addPage()
+    doc.setFontSize(14)
+    doc.text('Despesas', 14, 20)
+
+    const expensesData = data.expenses.map((e: any) => [
+      format(new Date(e.created_at), 'dd/MM/yyyy'),
+      e.description,
+      e.category,
+      formatCurrency(e.amount.toNumber()),
+      e.status,
+    ])
+
+    ;(doc as any).autoTable({
+      startY: 25,
+      head: [['Data', 'Descrição', 'Categoria', 'Valor', 'Status']],
+      body: expensesData,
+    })
+  }
+
+  const pdfBuffer = doc.output('arraybuffer')
+
+  return new NextResponse(pdfBuffer, {
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="relatorio-${reportType}-${Date.now()}.pdf"`,
+    },
+  })
+}
+
+// ═══════════════════════════════════════════════════════════
+// GERAR RELATÓRIO EM CSV
+// ═══════════════════════════════════════════════════════════
+
+async function generateCSVReport(reportType: string, data: any) {
+  let csv = ''
+
+  if (reportType === 'financial') {
+    csv = 'Data,Cliente,Viagem,Valor,Status,Vencimento\n'
+    data.revenues.forEach((revenue: any) => {
+      csv += `${format(new Date(revenue.created_at), 'dd/MM/yyyy')},${
+        revenue.customer?.name || 'N/A'
+      },${revenue.reservation?.trip?.name || 'N/A'},${formatCurrency(
+        revenue.amount.toNumber()
+      )},${revenue.status},${
+        revenue.due_date
+          ? format(new Date(revenue.due_date), 'dd/MM/yyyy')
+          : 'N/A'
+      }\n`
+    })
+  } else if (reportType === 'sales') {
+    csv =
+      'Data,Cliente,Email,Telefone,Viagem,Destino,Partida,Passageiros,Valor,Status,Vendedor\n'
+    data.reservations.forEach((reservation: any) => {
+      csv += `${format(new Date(reservation.created_at), 'dd/MM/yyyy')},${
+        reservation.customer?.name || 'N/A'
+      },${reservation.customer?.email || 'N/A'},${
+        reservation.customer?.phone || 'N/A'
+      },${reservation.trip?.name || 'N/A'},${
+        reservation.trip?.destination?.name || 'N/A'
+      },${
+        reservation.trip?.departure_date
+          ? format(new Date(reservation.trip.departure_date), 'dd/MM/yyyy')
+          : 'N/A'
+      },${reservation.passengers_count},${formatCurrency(
+        reservation.total_price.toNumber()
+      )},${reservation.status},${reservation.user?.name || 'N/A'}\n`
+    })
+  }
+
+  return new NextResponse(csv, {
+    headers: {
+      'Content-Type': 'text/csv',
+      'Content-Disposition': `attachment; filename="relatorio-${reportType}-${Date.now()}.csv"`,
+    },
+  })
+}
+
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(value)
+}
+
+SISTEMA DE ALERTAS DE VENCIMENTO
+API de Alertas
+
+// app/api/alerts/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { addDays, startOfDay, endOfDay } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || !['admin', 'sales'].includes(session.user.role)) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const tenantId = session.user.tenantId
+    const now = new Date()
+    const alerts: any[] = []
+
+    // ═══════════════════════════════════════════════════════════
+    // ALERTA 1: Contas a Receber Vencendo Hoje
+    // ═══════════════════════════════════════════════════════════
+
+    const dueTodayRevenues = await prisma.revenue.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: 'pending',
+        due_date: {
+          gte: startOfDay(now),
+          lte: endOfDay(now),
+        },
+      },
+      include: {
+        customer: {
+          select: { name: true },
+        },
+      },
+    })
+
+    if (dueTodayRevenues.length > 0) {
+      alerts.push({
+        id: 'due-today-revenues',
+        type: 'warning',
+        category: 'financial',
+        title: `${dueTodayRevenues.length} conta(s) vencendo hoje`,
+        description: `Total: ${formatCurrency(
+          dueTodayRevenues.reduce((sum, r) => sum + r.amount.toNumber(), 0)
+        )}`,
+        action: {
+          label: 'Ver Contas',
+          href: '/dashboard/financial?filter=due-today',
+        },
+        items: dueTodayRevenues.map((r) => ({
+          customer: r.customer?.name,
+          amount: r.amount.toNumber(),
+          due_date: r.due_date,
+        })),
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ALERTA 2: Contas a Receber Vencidas
+    // ═══════════════════════════════════════════════════════════
+
+    const overdueRevenues = await prisma.revenue.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: 'pending',
+        due_date: { lt: startOfDay(now) },
+      },
+      include: {
+        customer: {
+          select: { name: true },
+        },
+      },
+      orderBy: { due_date: 'asc' },
+    })
+
+    if (overdueRevenues.length > 0) {
+      alerts.push({
+        id: 'overdue-revenues',
+        type: 'critical',
+        category: 'financial',
+        title: `${overdueRevenues.length} conta(s) vencida(s)`,
+        description: `Total: ${formatCurrency(
+          overdueRevenues.reduce((sum, r) => sum + r.amount.toNumber(), 0)
+        )}`,
+        action: {
+          label: 'Ver Contas Vencidas',
+          href: '/dashboard/financial?filter=overdue',
+        },
+        items: overdueRevenues.map((r) => ({
+          customer: r.customer?.name,
+          amount: r.amount.toNumber(),
+          due_date: r.due_date,
+          days_overdue: Math.floor(
+            (now.getTime() - new Date(r.due_date).getTime()) / (1000 * 60 * 60 * 24)
+          ),
+        })),
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ALERTA 3: Contas a Pagar Vencendo em 3 Dias
+    // ═══════════════════════════════════════════════════════════
+
+    const upcomingExpenses = await prisma.expense.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: 'pending',
+        due_date: {
+          gte: startOfDay(now),
+          lte: endOfDay(addDays(now, 3)),
+        },
+      },
+      include: {
+        supplier: {
+          select: { name: true },
+        },
+      },
+      orderBy: { due_date: 'asc' },
+    })
+
+    if (upcomingExpenses.length > 0) {
+      alerts.push({
+        id: 'upcoming-expenses',
+        type: 'warning',
+        category: 'financial',
+        title: `${upcomingExpenses.length} conta(s) a pagar nos próximos 3 dias`,
+        description: `Total: ${formatCurrency(
+          upcomingExpenses.reduce((sum, e) => sum + e.amount.toNumber(), 0)
+        )}`,
+        action: {
+          label: 'Ver Contas a Pagar',
+          href: '/dashboard/financial?tab=expenses&filter=upcoming',
+        },
+        items: upcomingExpenses.map((e) => ({
+          supplier: e.supplier?.name || 'N/A',
+          description: e.description,
+          amount: e.amount.toNumber(),
+          due_date: e.due_date,
+        })),
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ALERTA 4: Viagens Partindo em 24h sem Reservas
+    // ═══════════════════════════════════════════════════════════
+
+    const emptyTrips = await prisma.trip.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: 'active',
+        departure_date: {
+          gte: now,
+          lte: addDays(now, 1),
+        },
+      },
+      include: {
+        _count: {
+          select: {
+            reservations: {
+              where: { status: 'confirmed' },
+            },
+          },
+        },
+        destination: {
+          select: { name: true },
+        },
+      },
+    })
+
+    const tripsWithoutReservations = emptyTrips.filter(
+      (trip) => trip._count.reservations === 0
+    )
+
+    if (tripsWithoutReservations.length > 0) {
+      alerts.push({
+        id: 'empty-trips-24h',
+        type: 'warning',
+        category: 'operational',
+        title: `${tripsWithoutReservations.length} viagem(ns) partindo em 24h sem reservas`,
+        description: 'Viagens que podem precisar ser canceladas',
+        action: {
+          label: 'Ver Viagens',
+          href: '/dashboard/trips?filter=empty-upcoming',
+        },
+        items: tripsWithoutReservations.map((t) => ({
+          name: t.name,
+          destination: t.destination?.name,
+          departure_date: t.departure_date,
+        })),
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ALERTA 5: Viagens com Baixa Ocupação (< 50%)
+    // ═══════════════════════════════════════════════════════════
+
+    const upcomingTrips = await prisma.trip.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: 'active',
+        departure_date: {
+          gte: now,
+          lte: addDays(now, 7),
+        },
+      },
+      include: {
+        destination: {
+          select: { name: true },
+        },
+      },
+    })
+
+    const lowOccupancyTrips = upcomingTrips.filter((trip) => {
+      const occupancyRate =
+        ((trip.total_seats - trip.available_seats) / trip.total_seats) * 100
+      return occupancyRate < 50
+    })
+
+    if (lowOccupancyTrips.length > 0) {
+      alerts.push({
+        id: 'low-occupancy-trips',
+        type: 'info',
+        category: 'operational',
+        title: `${lowOccupancyTrips.length} viagem(ns) com baixa ocupação`,
+        description: 'Viagens nos próximos 7 dias com menos de 50% de ocupação',
+        action: {
+          label: 'Ver Viagens',
+          href: '/dashboard/trips?filter=low-occupancy',
+        },
+        items: lowOccupancyTrips.map((t) => ({
+          name: t.name,
+          destination: t.destination?.name,
+          departure_date: t.departure_date,
+          occupancy: (
+            ((t.total_seats - t.available_seats) / t.total_seats) *
+            100
+          ).toFixed(1),
+        })),
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ALERTA 6: Leads Sem Atividade há 7+ Dias
+    // ═══════════════════════════════════════════════════════════
+
+    const staleLeads = await prisma.lead.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: { in: ['contacted', 'qualified', 'proposal'] },
+        updated_at: { lt: addDays(now, -7) },
+      },
+      include: {
+        user: {
+          select: { name: true },
+        },
+      },
+      orderBy: { updated_at: 'asc' },
+      take: 10,
+    })
+
+    if (staleLeads.length > 0) {
+      alerts.push({
+        id: 'stale-leads',
+        type: 'info',
+        category: 'sales',
+        title: `${staleLeads.length} lead(s) sem movimentação há 7+ dias`,
+        description: 'Leads que precisam de follow-up',
+        action: {
+          label: 'Ver Pipeline',
+          href: '/dashboard/pipeline?filter=stale',
+        },
+        items: staleLeads.map((l) => ({
+          name: l.name,
+          status: l.status,
+          responsible: l.user?.name,
+          last_update: l.updated_at,
+        })),
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ALERTA 7: Aniversariantes do Dia
+    // ═══════════════════════════════════════════════════════════
+
+    const todayMonth = now.getMonth() + 1
+    const todayDay = now.getDate()
+
+    const birthdayCustomers = await prisma.customer.findMany({
+      where: {
+        tenant_id: tenantId,
+        status: 'active',
+        birth_date: {
+          not: null,
+        },
+      },
+    })
+
+    const todayBirthdays = birthdayCustomers.filter((customer) => {
+      if (!customer.birth_date) return false
+      const birthDate = new Date(customer.birth_date)
+      return (
+        birthDate.getMonth() + 1 === todayMonth && birthDate.getDate() === todayDay
+      )
+    })
+
+    if (todayBirthdays.length > 0) {
+      alerts.push({
+        id: 'birthdays-today',
+        type: 'info',
+        category: 'marketing',
+        title: `${todayBirthdays.length} aniversariante(s) hoje! 🎉`,
+        description: 'Envie uma mensagem especial',
+        action: {
+          label: 'Ver Clientes',
+          href: '/dashboard/customers?filter=birthdays-today',
+        },
+        items: todayBirthdays.map((c) => ({
+          name: c.name,
+          email: c.email,
+          phone: c.phone,
+        })),
+      })
+    }
+
+    return NextResponse.json({ alerts, count: alerts.length })
+  } catch (error) {
+    console.error('Erro ao carregar alertas:', error)
+    return NextResponse.json({ error: 'Erro ao carregar alertas' }, { status: 500 })
+  }
+}
+
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(value)
+}
+
+
+HISTÓRICO COMPARATIVO MENSAL E COMPONENTE DE ALERTAS
+API DE HISTÓRICO COMPARATIVO MENSAL
+API de Comparativo Financeiro
+
+PÁGINA DE HISTÓRICO COMPARATIVO
+
+COMPONENTE DE ALERTAS NA UI
+Integrar Alertas no Header
+
+IMPLEMENTAR SISTEMA COMPLETO
+
+ INFRAESTRUTURA
+├──  Multi-tenancy com isolamento total
+├──  Autenticação e autorização
+├──  Sistema de logs e auditoria
+└──  Feature flags
+
+ PAINEL SUPER ADMIN
+├──  Dashboard com métricas globais
+├──  Gestão de tenants
+├──  Gestão de planos
+├──  Faturamento e billing
+├──  Métricas avançadas
+├──  Usuários globais
+├──  Logs do sistema
+└──  Manutenção (limpeza de arquivos)
+
+ PAINEL DA AGÊNCIA
+├──  Dashboard (17+ KPIs em tempo real)
+├──  Motor de diagnóstico
+├──  Sistema de alertas inteligentes
+├──  Exportação de relatórios (Excel/PDF/CSV)
+├──  Histórico comparativo mensal
+├──  Análise de sazonalidade
+└──  Gestão de custos por viagem
+
+ RELATÓRIOS
+├──  Relatório financeiro completo
+├──  Relatório de vendas
+├──  Relatório de clientes
+├──  Comparativo mensal
+└──  Exportação em múltiplos formatos
+
+ ALERTAS
+├──  Contas a receber vencendo
+├──  Contas vencidas
+├──  Contas a pagar
+├──  Viagens sem reservas
+├──  Baixa ocupação
+├──  Leads parados
+└──  Aniversariantes
+
+

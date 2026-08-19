@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/guia/"
+title = "Guia de Check-in"
+version = "1.0.0"
+id = "artifacts/guide-app"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/guia/" ]
+localPort = 21508
+
+[services.development]
+run = "pnpm --filter @workspace/guide-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/guide-app", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/guide-app", "run", "serve" ]
+
+[services.env]
+PORT = "21508"
+BASE_PATH = "/guia/"

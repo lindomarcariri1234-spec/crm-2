@@ -1,0 +1,213 @@
+modules = ["nodejs-24", "python-3.11", "postgresql-16"]
+
+  [[artifacts]]
+  id = "artifacts/visitecrm"
+
+  [[artifacts]]
+  id = "artifacts/api-server"
+
+  [[artifacts]]
+  id = "artifacts/mockup-sandbox"
+
+  [deployment]
+  router = "application"
+deploymentTarget = "autoscale"
+run = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+build = ["bash", "-c", "pnpm --filter @workspace/visitecrm run build && pnpm --filter @workspace/api-server run build"]
+
+  [deployment.postBuild]
+  args = ["pnpm", "store", "prune"]
+  env = { "CI" = "true" }
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+mode = "parallel"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=5000 BASE_PATH=/ pnpm --filter @workspace/visitecrm run dev"
+waitForPort = 5000
+
+[[workflows.workflow]]
+name = "artifacts/visitecrm: web"
+author = "agent"
+mode = "sequential"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+artifactId = "artifacts/visitecrm"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/visitecrm run dev"
+cwd = "./artifacts/visitecrm"
+waitForPort = 19951
+router = "path"
+
+[workflows.workflow.tasks.env]
+PORT = "19951"
+BASE_PATH = "/"
+
+[[workflows.workflow]]
+name = "artifacts/api-server: API Server"
+author = "agent"
+mode = "sequential"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+artifactId = "3B4_FFSkEVBkAeYMFRJ2e"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server run dev"
+cwd = "./artifacts/api-server"
+waitForPort = 8080
+
+[workflows.workflow.tasks.env]
+PORT = "8080"
+
+[[workflows.workflow]]
+name = "artifacts/mockup-sandbox: Component Preview Server"
+author = "agent"
+mode = "sequential"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+artifactId = "XegfDyZt7HqfW2Bb8Ghoy"
+isCanvasWorkflow = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/mockup-sandbox run dev"
+cwd = "./artifacts/mockup-sandbox"
+waitForPort = 8081
+
+[workflows.workflow.tasks.env]
+PORT = "8081"
+BASE_PATH = "/__mockup"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "artifacts/cliente-app: expo"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "api-typecheck"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "visitecrm-typecheck"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "schema-drift"
+
+[[workflows.workflow]]
+name = "artifacts/cliente-app: expo"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=19000 pnpm --filter @workspace/cliente-app run dev"
+
+[[workflows.workflow]]
+name = "api-typecheck"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "set -e; NODE_OPTIONS='--max-old-space-size=1100' pnpm --filter @workspace/db exec tsc --build; NODE_OPTIONS='--max-old-space-size=1100' pnpm --filter @workspace/api-zod exec tsc --build; cd artifacts/api-server; NODE_OPTIONS='--max-old-space-size=1100' node scripts/typecheck-batches.mjs"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "visitecrm-typecheck"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "NODE_OPTIONS='--max-old-space-size=4096' pnpm --filter @workspace/visitecrm run typecheck"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "schema-drift"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/db check && pnpm --filter @workspace/db validate-coverage && pnpm --filter @workspace/db validate-columns && pnpm --filter @workspace/db validate-tables"
+
+  [agent]
+stack = "BEST_EFFORT_FALLBACK"
+expertMode = true
+integrations = ["stripe:1.0.0", "javascript_openai_ai_integrations:2.0.0"]
+
+  [postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 300000
+
+  [nix]
+  channel = "stable-25_05"
+
+  [userenv]
+
+  [userenv.production]
+NODE_ENV = "production"
+ENABLE_WORKERS = "true"
+UPLOADTHING_CALLBACK_URL = "https://visitecrm.com/api/uploadthing"
+CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY3JtLmNvbSQ"
+
+  [userenv.shared]
+  VITE_UPLOADTHING_URL = "/api/uploadthing"
+SUPERADMIN_CLERK_ID = "user_3HaDzC14MwYlHVrzWU6jTFtsZGi"
+FRONTEND_URL = "https://visitecrm.com/"
+VITE_APP_URL = "https://visitecrm.com/"
+VITE_STRIPE_PUBLIC_KEY = "pk_live_51TSu3dKLGMGrnwqHxjXo5fRdJdAyFQHsuFoWG6BaJKx6GGza4pjg2PPMQzFch9OMDVeLOHU07SxYp3J4v27FL5lT00yZoKCeXr"
+
+  [userenv.development]
+CLERK_PUBLISHABLE_KEY = "pk_test_ZW1pbmVudC1jYXQtMjMuY2xlcmsuYWNjb3VudHMuZGV2JA"
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
+[[ports]]
+localPort = 8081
+externalPort = 8081
+
+[[ports]]
+localPort = 19000
+externalPort = 3000
+
+[[ports]]
+localPort = 19951
+externalPort = 3001
+
+[[ports]]
+localPort = 21508
+externalPort = 80

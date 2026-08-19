@@ -1,0 +1,210 @@
+Aqui está o mapa completo de rotas do sistema, organizado por papel de usuário:
+ATUALIZAR ROTAS e criar Dashboard pra cada usuário
+
+Rotas por Role
+🌐 Público (sem login)
+Rotas acessíveis a qualquer visitante, sem autenticação.
+
+Frontend
+
+Rota	Descrição
+/	Página inicial / landing
+/sign-in	Login (Clerk)
+/sign-up	Cadastro (Clerk)
+/loja/:slug	Vitrine da agência
+/loja/:slug/produtos	Catálogo de produtos
+/loja/:slug/produtos/:productSlug	Detalhe do produto
+/loja/:slug/reservar/:productSlug	Assistente de reserva
+/loja/:slug/checkout	Checkout
+/loja/:slug/pedido/:orderNumber	Rastreamento de pedido ATUALIZAR PARA QUE O RASTREAMENTO SEJA FEITO APENAS POR USUARIOS LOGADOS NO SISTEMA no painel do cliente (perfil).
+/loja/:slug/consultar-pedido	Busca de pedido ATUALIZAR PARA QUE A BUSCA DE PEDIDO SEJA FEITA APENAS POR USUARIOS LOGADOS NO SISTEMA no painel do cliente (perfil).
+/loja/:slug/indicacao	Landing de indicação  A visualização da Landing de indicação, codigo de indicação e informações de quantas pessoas usaram a indicação e os valores a receber, são APENAS POR USUARIOS LOGADOS NO SISTEMA no painel do cliente (perfil).
+/loja/:slug/ref/:code	Captura de código de indicação
+APÓS a finalização da reserva criar automaticamente um painel do cliente (O Painel do Cliente deverá conter apenas informações referente ao cliente. Por exemplo: Informações da reserva, configuração do perfil, código de indicação...).
+API
+
+Método	Rota	Descrição
+GET	/api/public/store/:slug	Configuração da loja
+GET	/api/public/store/:slug/products	Produtos da loja
+GET	/api/public/store/:slug/trips/:tripId/seat-map	Mapa de assentos público
+POST	/api/public/store/:slug/orders	Criar pedido/reserva
+POST	/api/public/store/:slug/referral/validate	Validar código de indicação
+GET	/api/healthz	Health check
+👤 Vendedor (vendedor)
+Acesso restrito a operação comercial de frente (clientes e reservas). Não acessa financeiro, equipe ou configurações.
+
+Frontend (todas as rotas de Autenticado Compartilhado, exceto criação/edição de viagens)
+
+Rota	Descrição
+/meu-painel	Painel exclusivo do vendedor O Painel do vendedor deverá conter apenas informações referente ao vendedor. Por exemplo: quantidade de vendas realizadas, valor da comissão...
+/dashboard	Dashboard geral
+/pipeline	Pipeline de vendas/CRM
+/clients	Lista de clientes
+/clients/:id	Detalhes do cliente
+/trips	Lista de viagens (somente visualização)
+/trips/calendar	Calendário de viagens
+/trips/:id	Detalhe da viagem
+/trips/:id/seat-map	Mapa de assentos  Os Mapas de Assentos deverá conter o nome do passageiro ao clicar na poltrona.
+/trips/:id/passengers	Lista de passageiros
+/trips/:id/passengers-overview	Visão geral de passageiros
+/reservations	Lista de reservas
+/reservations/:id	Detalhe da reserva
+/comunicacao	Central de comunicação
+/vouchers	Vouchers
+❌ Bloqueado: /trips/new, /trips/:id/edit, /financeiro, /cadastros, /analytics, /configuracoes, /loja/* (admin), /automacoes, /fidelidade, /nps, /marketing, /indicacoes, /downloads
+
+API permitida
+
+Recurso	Ações
+Viagens	Visualizar
+Reservas	Visualizar, Criar, Editar
+Clientes	Visualizar, Criar, Editar
+Catálogo	Visualizar
+Comissões	Visualizar (próprias)
+🛠️ Suporte (suporte)
+Acesso operacional para apoiar clientes e viagens, sem gestão financeira ou de equipe.
+
+Frontend (todas as rotas Compartilhadas + rotas de Agência, exceto criação de viagens)
+
+Acessa tudo que o Vendedor acessa, mais:
+
+Rota	Descrição
+/financeiro	Visão financeira (somente leitura)
+/cadastros e subrotas	Hub de cadastros
+/analytics	Analytics gerais
+/loja/pedidos	Pedidos da loja
+❌ Bloqueado: configurações de equipe, exclusão de registros críticos
+
+API permitida
+
+Recurso	Ações
+Viagens	Visualizar
+Reservas	Visualizar, Criar, Editar
+Clientes	Visualizar, Editar
+Financeiro	Visualizar
+Relatórios	Visualizar
+📋 Gerente (gerente)
+Gestão ampla da agência, sem permissões de exclusão em recursos críticos.
+
+Frontend — Acessa todas as rotas de Agência (AgenciaOnlyRoute + AgenciaRoute):
+
+Rota	Descrição
+/trips/new	Criar nova viagem
+/trips/:id/edit	Editar viagem
+/financeiro	Financeiro completo
+/financeiro/commissions	Comissões
+/financeiro/expenses	Despesas
+/comunicacao/campanhas	Campanhas
+/automacoes	Automações
+/marketing	Marketing
+/fidelidade	Programa de fidelidade
+/nps	NPS
+/cadastros/**	Todos os cadastros
+/analytics/**	Todos os analytics
+/indicacoes	Indicações
+/configuracoes	Configurações da agência
+/downloads	Downloads
+/loja/**	Toda a gestão da loja
+API permitida
+
+Recurso	Ações
+Viagens	Visualizar, Criar, Editar, Gerenciar
+Reservas	Visualizar, Criar, Editar, Gerenciar
+Clientes	Visualizar, Criar, Editar
+Financeiro	Visualizar
+Relatórios	Visualizar
+Catálogo	Visualizar, Criar, Editar
+Comissões	Visualizar
+❌ Bloqueado: exclusão de clientes/viagens, gestão de equipe, configurações avançadas de plano
+
+🏢 Agência Admin (agencia)
+Dono da agência. Acesso total ao tenant, sem acesso à plataforma multi-tenant.
+
+Frontend — Todas as rotas do Gerente, mais controle total:
+
+Adicional	Descrição
+Exclusão de registros	Clientes, viagens, produtos
+Gestão de equipe	Convidar/remover usuários
+Configurações completas	Plano, integrações
+API permitida
+
+Recurso	Ações
+Todos os recursos	Visualizar, Criar, Editar, Excluir, Gerenciar
+❌ Bloqueado: rotas /admin/* (plataforma global)
+Dashboard a Agencia, Agências tem acesso a todas as informações referente a operação da Agência.
+
+👑 Super Admin (superadmin)
+Acesso irrestrito a toda a plataforma, incluindo gestão multi-tenant.
+
+Frontend — Todas as rotas acima, mais:
+
+Rota	Descrição
+/admin	Painel da plataforma
+/admin/tenants	Listagem de agências
+/admin/tenants/:id	Detalhe de agência
+/admin/plans	Gestão de planos SaaS
+/admin/billing	Faturamento global
+/admin/metrics	Métricas de saúde da plataforma
+/admin/users	Usuários da plataforma
+/admin/logs	Logs de auditoria
+/admin/settings	Configurações globais
+/admin/maintenance	Manutenção da plataforma
+API
+
+Método	Rota	Descrição
+GET	/api/admin/metrics/mrr	MRR
+GET	/api/admin/metrics/churn	Churn
+GET	/api/admin/metrics/growth	Crescimento
+GET	/api/admin/tenants	Listar tenants
+GET	/api/admin/tenants/:id/details	Detalhe do tenant
+POST	/api/admin/tenants/:id/suspend	Suspender tenant
+POST	/api/admin/tenants/:id/activate	Ativar tenant
+GET	/api/admin/users	Usuários da plataforma
+GET	/api/admin/audit-logs	Logs de auditoria
+GET/POST	/api/admin/plans	Planos SaaS
+PATCH/DELETE	/api/admin/plans/:id	Editar/remover plano
+GET	/api/admin/invoices	Faturas
+GET/POST	/api/admin/feature-flags	Feature flags
+GET	/api/admin/platform-settings	Configurações globais
+PUT	/api/admin/platform-settings/:key	Atualizar configuração
+Rotas Especiais
+Rota	Quem acessa	Descrição
+/onboarding	Usuário logado sem tenantId	Setup inicial da agência
+/financial, /communication, /settings	Todos autenticados	Redirecionamentos legados
+Resumo da hierarquia de acesso:
+
+superadmin  →  acesso total (plataforma + todos os tenants)
+agencia     →  acesso total dentro do próprio tenant
+gerente     →  gestão ampla, sem exclusões críticas
+suporte     →  operacional, sem financeiro ou equipe
+vendedor    →  foco em clientes e reservas
+cliente     →  somente storefront público
+público     →  somente vitrine e checkout
+
+
+superadmin  →  acesso total (plataforma + todos os tenants) O usuário com permissão superadmin é criado diretamente no código do projeto.
+agencia     →  acesso total dentro do próprio tenant  O usuário com permissão agencia é criado na pagina de /sign-in	Login (Clerk) e /sign-up	Cadastro (Clerk).
+gerente     →  gestão ampla, sem exclusões críticas   O usuário com permissão gerente é criado pela a Agência na página Configurações Aba equipe.
+suporte     →  operacional, sem financeiro ou equipe  O usuário com permissão suporte é criado pela a Agência na página Configurações Aba equipe.
+vendedor    →  foco em clientes e reservas    O usuário com permissão vendedor é criado pela a Agência na página Configurações Aba equipe.
+cliente     →  somente storefront público   O usuário com permissão cliente é criado no ato da reserva.
+público     →  somente vitrine e checkout
+
+Criar Dashboard
+
+Usuário superadmin já foi criado o Dashboard OK
+Usuário agencia já foi criado o Dashboard OK
+Usuário gerente já foi criado o Dashboard OK
+Usuário suporte já foi criado o Dashboard OK
+Usuário vendedor já foi criado o Dashboard OK
+Usuário cliente precisa criar um Painel de Cliente com informações referente ao Cliente
+
+
+Após a finalização da reserva, o cliente pode clicar no menu superior com o seguinte nome Meu Perfil, e entrará no Painel do cliente para visualizar as informações referentes ao perfil de cliente.
+O painel do cliente deverá conter apenas informações referente ao cliente.
+O Cliente NÃO pode ter acesso ao Dashboard do:
+Usuário superadmin
+Usuário agencia
+Usuário gerente
+Usuário suporte
+Usuário vendedor

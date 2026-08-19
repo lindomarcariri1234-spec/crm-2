@@ -1,0 +1,31 @@
+#270 - Fix Date Timezone Display Across App
+What & Why
+Dates stored in the database are UTC midnight timestamps (e.g., 2026-12-21T00:00:00.000Z). When a browser in Brazil (UTC-3) renders these, midnight UTC becomes 9 PM the previous day, causing December 21 to display as December 20. The vitrine product.tsx already has the correct fix (slice(0,10) + "T12:00:00" to render at local noon), but several other parts of the app do not, creating inconsistency between the form (which shows the correct date) and the trip card display (which shows the wrong date).
+
+Done looks like
+Trip departure and return dates shown in the admin cards, trip detail views, and vitrine quick-view always match the date the user entered in the form
+No date is shifted by one day due to timezone conversion
+The formatDate helper in trips.tsx extracts only the YYYY-MM-DD portion before formatting, avoiding UTC offset issues
+fmtDate in ProductQuickView.tsx applies the same slice(0,10) + "T12:00:00" fix when the input is a full ISO string
+Other direct new Date(dateStr).toLocaleDateString() calls for trip departure/return dates are also corrected
+Out of scope
+Changing how dates are stored in the database
+Timestamps for createdAt, sentAt, paidAt and other datetime fields (these represent actual moments in time and should respect timezone)
+Changing the form input behavior (it already works correctly)
+Steps
+Fix formatDate in trips.tsx — Update the function to extract the date-only portion (d.slice(0, 10)) and create a local-noon Date before formatting, matching the pattern already used in product.tsx.
+
+Fix fmtDate in ProductQuickView.tsx — The current check only adds T12:00:00 for strings of length ≤ 10. Update it to always extract slice(0, 10) from any input and append T12:00:00, so full ISO strings are also handled correctly.
+
+Fix remaining trip date displays in trips.tsx — Audit new Date(trip.departureDate).toLocaleDateString("pt-BR") and similar calls used for trip departure/return dates (not for createdAt or other fields) and apply the same slice fix.
+
+Fix trip dates in other pages — Apply the same fix to campaigns.tsx, nps.tsx, reservations.tsx, clients.tsx, cadastros/veiculos.tsx, and any other page that displays trip departure/return dates using new Date(dateStr).toLocaleDateString().
+
+Relevant files
+artifacts/visitecrm/src/pages/trips.tsx:116-119
+artifacts/visitecrm/src/components/vitrine/ProductQuickView.tsx:37-45
+artifacts/visitecrm/src/pages/vitrine/product.tsx:598-624
+artifacts/visitecrm/src/pages/campaigns.tsx
+artifacts/visitecrm/src/pages/nps.tsx
+artifacts/visitecrm/src/pages/reservations.tsx
+artifacts/visitecrm/src/pages/cadastros/veiculos.tsx

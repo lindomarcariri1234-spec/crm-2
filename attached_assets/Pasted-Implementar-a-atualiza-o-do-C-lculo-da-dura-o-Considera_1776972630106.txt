@@ -1,0 +1,603 @@
+Implementar a atualização do Cálculo da duração:
+Considera-se o período total desde o embarque (17/12 às 20h) até o desembarque (21/12 às 02h), resultando em 3 dias e 6 horas de viagem.
+
+Atualizar para "Duração: 3 dias e 6"
+
+👉 Cálculo da duração da excursão:
+A duração da viagem é calculada considerando todo o período em que o cliente está em deslocamento e fora de sua cidade, desde o embarque até o retorno.
+
+Início: 17/12/2026 às 20h (embarque)
+Fim: 21/12/2026 às 02h (desembarque)
+
+Fazendo a contagem do tempo:
+
+De 17/12 às 20h até 18/12 às 20h = 1 dia
+De 18/12 às 20h até 19/12 às 20h = 2 dias
+De 19/12 às 20h até 20/12 às 20h = 3 dias
+De 20/12 às 20h até 21/12 às 02h = +6 horas
+
+👉 Somando tudo, temos 3 dias e 6 horas de viagem, que representa o tempo total da experiência do cliente, incluindo deslocamento, estadia e retorno.
+
+
+Calculo de Bate e volta:
+Vamos concluir o cálculo no mesmo padrão 👇
+👉 Fazendo a contagem do tempo:
+
+
+De 04/07 às 21h até 05/07 às 21h = 1 dia
+
+
+De 05/07 às 21h até 06/07 às 02h = +5 horas
+
+
+
+👉 Resultado final:
+Duração da viagem: 1 dia e 5 horas de viagem
+
+Atualizar para "Duração: 1 dia e 5 horas"
+
+👉 Explicação resumida:
+Considera-se todo o período desde o embarque (04/07 às 21h) até o desembarque (06/07 às 02h), totalizando 1 dia e 5 horas, que representa o tempo completo da experiência do cliente fora da sua cidade.
+
+LÓGICA DE CÁLCULO
+Regra:
+Duração = Data/Hora de Desembarque - Data/Hora de Embarque
+Formato: "X dias e Y horas" ou "X dias" (se Y = 0)
+
+Exemplos:
+Maceió: 17/12 20h → 21/12 02h = 3 dias e 6 horas
+Canoa Quebrada: 04/07 21h → 06/07 02h = 1 dia e 5 horas
+
+FUNÇÃO UTILITÁRIA DE CÁLCULO
+// lib/utils/trip-duration.ts
+
+import { differenceInHours, differenceInDays } from 'date-fns'
+
+interface DurationResult {
+  days: number
+  hours: number
+  formatted: string
+  formattedShort: string
+}
+
+/**
+ * Calcula a duração precisa de uma viagem
+ * considerando data/hora de embarque e desembarque
+ */
+export function calculateTripDuration(
+  departureDate: Date,
+  departureTime: string, // "20:00"
+  returnDate: Date,
+  returnTime: string // "02:00"
+): DurationResult {
+  // Criar timestamps completos
+  const [depHour, depMinute] = departureTime.split(':').map(Number)
+  const [retHour, retMinute] = returnTime.split(':').map(Number)
+
+  const departure = new Date(departureDate)
+  departure.setHours(depHour, depMinute, 0, 0)
+
+  const returnDateTime = new Date(returnDate)
+  returnDateTime.setHours(retHour, retMinute, 0, 0)
+
+  // Calcular diferença total em horas
+  const totalHours = differenceInHours(returnDateTime, departure)
+
+  // Separar dias e horas
+  const days = Math.floor(totalHours / 24)
+  const hours = totalHours % 24
+
+  // Formatar texto
+  let formatted = ''
+  let formattedShort = ''
+
+  if (days > 0 && hours > 0) {
+    formatted = `${days} ${days === 1 ? 'dia' : 'dias'} e ${hours} ${
+      hours === 1 ? 'hora' : 'horas'
+    }`
+    formattedShort = `${days}d ${hours}h`
+  } else if (days > 0) {
+    formatted = `${days} ${days === 1 ? 'dia' : 'dias'}`
+    formattedShort = `${days}d`
+  } else {
+    formatted = `${hours} ${hours === 1 ? 'hora' : 'horas'}`
+    formattedShort = `${hours}h`
+  }
+
+  return {
+    days,
+    hours,
+    formatted,
+    formattedShort,
+  }
+}
+
+/**
+ * Versão simplificada para itinerários
+ */
+export function getItineraryDuration(itinerary: {
+  departure_date: Date
+  departure_time: string
+  return_date: Date
+  return_time: string
+}): string {
+  const duration = calculateTripDuration(
+    itinerary.departure_date,
+    itinerary.departure_time,
+    itinerary.return_date,
+    itinerary.return_time
+  )
+
+  return duration.formatted
+}
+
+/**
+ * Versão curta para badges e cards
+ */
+export function getItineraryDurationShort(itinerary: {
+  departure_date: Date
+  departure_time: string
+  return_date: Date
+  return_time: string
+}): string {
+  const duration = calculateTripDuration(
+    itinerary.departure_date,
+    itinerary.departure_time,
+    itinerary.return_date,
+    itinerary.return_time
+  )
+
+  return duration.formattedShort
+}
+
+ATUALIZAÇÃO DO CARD DE VIAGEM
+// components/public/loja/trip-grid.tsx (ATUALIZADO)
+
+'use client'
+
+import { calculateTripDuration } from '@/lib/utils/trip-duration'
+// ... outros imports
+
+export function TripGrid({ trips }: TripGridProps) {
+  // ... código existente
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {trips.map((trip) => {
+        const nextItinerary = trip.itineraries[0]
+        const basePrice = trip.promotional_price || trip.price_per_person
+        const hasDiscount = trip.promotional_price && trip.promotional_price < trip.price_per_person
+
+        // 🆕 CALCULAR DURAÇÃO PRECISA
+        let durationText = ''
+        if (nextItinerary) {
+          const duration = calculateTripDuration(
+            new Date(nextItinerary.departure_date),
+            nextItinerary.departure_time || '06:00',
+            new Date(nextItinerary.return_date),
+            nextItinerary.return_time || '23:59'
+          )
+          durationText = duration.formatted
+        }
+
+        return (
+          <Card
+            key={trip.id}
+            className="overflow-hidden hover:shadow-xl transition-all duration-300 cursor-pointer group"
+            onClick={() => handleTripClick(trip)}
+          >
+            {/* ... imagem e badges ... */}
+
+            <div className="p-5">
+              {/* ... título e destino ... */}
+
+              {/* Informações */}
+              <div className="space-y-2 mb-4">
+                {nextItinerary && (
+                  <div className="flex items-center text-sm text-gray-600">
+                    <Calendar className="h-4 w-4 mr-2" />
+                    Próxima saída:{' '}
+                    {format(new Date(nextItinerary.departure_date), "dd 'de' MMM", {
+                      locale: ptBR,
+                    })}
+                  </div>
+                )}
+
+                {/* 🆕 DURAÇÃO PRECISA */}
+                <div className="flex items-center text-sm text-gray-600">
+                  <Clock className="h-4 w-4 mr-2" />
+                  <span className="font-medium">{durationText}</span>
+                </div>
+
+                <div className="flex items-center text-sm text-gray-600">
+                  <Users className="h-4 w-4 mr-2" />
+                  {nextItinerary?.available_seats || 0} vagas disponíveis
+                </div>
+
+                {/* ... avaliação ... */}
+              </div>
+
+              {/* ... preço e ação ... */}
+            </div>
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
+ATUALIZAÇÃO DO MODAL DE DETALHES
+// components/public/loja/trip-modal.tsx (ATUALIZADO)
+
+'use client'
+
+import { calculateTripDuration } from '@/lib/utils/trip-duration'
+// ... outros imports
+
+export function TripModal({ trip, open, onOpenChange }: TripModalProps) {
+  const [selectedItinerary, setSelectedItinerary] = useState(
+    trip.itineraries[0]?.id
+  )
+
+  const currentItinerary = trip.itineraries.find(
+    (it: any) => it.id === selectedItinerary
+  )
+
+  // 🆕 CALCULAR DURAÇÃO DO ITINERÁRIO SELECIONADO
+  let durationInfo = null
+  if (currentItinerary) {
+    durationInfo = calculateTripDuration(
+      new Date(currentItinerary.departure_date),
+      currentItinerary.departure_time || '06:00',
+      new Date(currentItinerary.return_date),
+      currentItinerary.return_time || '23:59'
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        {/* ... header e galeria ... */}
+
+        {/* Tabs de Conteúdo */}
+        <Tabs defaultValue="detalhes" className="mt-6">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="detalhes">Detalhes</TabsTrigger>
+            <TabsTrigger value="itinerario">Itinerário</TabsTrigger>
+            <TabsTrigger value="incluso">O que inclui</TabsTrigger>
+            <TabsTrigger value="datas">Datas</TabsTrigger>
+          </TabsList>
+
+          {/* Detalhes */}
+          <TabsContent value="detalhes" className="space-y-4">
+            {/* ... descrição ... */}
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* 🆕 DURAÇÃO PRECISA */}
+              <div className="text-center p-3 bg-gray-50 rounded-lg">
+                <Clock className="h-6 w-6 mx-auto mb-2 text-blue-600" />
+                <p className="text-sm text-gray-600">Duração</p>
+                <p className="font-bold text-sm">
+                  {durationInfo?.formatted || 'N/A'}
+                </p>
+              </div>
+
+              <div className="text-center p-3 bg-gray-50 rounded-lg">
+                <Users className="h-6 w-6 mx-auto mb-2 text-purple-600" />
+                <p className="text-sm text-gray-600">Vagas</p>
+                <p className="font-bold">{trip.total_seats}</p>
+              </div>
+
+              <div className="text-center p-3 bg-gray-50 rounded-lg">
+                <MapPin className="h-6 w-6 mx-auto mb-2 text-orange-600" />
+                <p className="text-sm text-gray-600">Destino</p>
+                <p className="font-bold text-sm">{trip.destination}</p>
+              </div>
+
+              <div className="text-center p-3 bg-gray-50 rounded-lg">
+                <Star className="h-6 w-6 mx-auto mb-2 text-yellow-500 fill-yellow-500" />
+                <p className="text-sm text-gray-600">Avaliação</p>
+                <p className="font-bold">4.8/5</p>
+              </div>
+            </div>
+
+            {/* 🆕 INFORMAÇÕES DE HORÁRIO */}
+            {currentItinerary && (
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h4 className="font-bold mb-3 flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-blue-600" />
+                  Horários da Viagem
+                </h4>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-gray-600">🚌 Embarque</p>
+                    <p className="font-bold">
+                      {format(
+                        new Date(currentItinerary.departure_date),
+                        "dd/MM/yyyy 'às' ",
+                        { locale: ptBR }
+                      )}
+                      {currentItinerary.departure_time || '06:00'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">🏠 Desembarque</p>
+                    <p className="font-bold">
+                      {format(
+                        new Date(currentItinerary.return_date),
+                        "dd/MM/yyyy 'às' ",
+                        { locale: ptBR }
+                      )}
+                      {currentItinerary.return_time || '23:59'}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-blue-300">
+                  <p className="text-sm text-blue-900">
+                    ⏱️ <strong>Duração total:</strong> {durationInfo?.formatted}
+                  </p>
+                </div>
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ... outras tabs ... */}
+
+          {/* Datas Disponíveis */}
+          <TabsContent value="datas" className="space-y-3">
+            {trip.itineraries.map((itinerary: any) => {
+              // 🆕 CALCULAR DURAÇÃO DE CADA ITINERÁRIO
+              const duration = calculateTripDuration(
+                new Date(itinerary.departure_date),
+                itinerary.departure_time || '06:00',
+                new Date(itinerary.return_date),
+                itinerary.return_time || '23:59'
+              )
+
+              return (
+                <div
+                  key={itinerary.id}
+                  className={`
+                    p-4 border-2 rounded-lg cursor-pointer transition-all
+                    ${
+                      selectedItinerary === itinerary.id
+                        ? 'border-orange-500 bg-orange-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }
+                  `}
+                  onClick={() => setSelectedItinerary(itinerary.id)}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="font-bold text-lg">
+                        {format(
+                          new Date(itinerary.departure_date),
+                          "dd 'de' MMMM 'de' yyyy",
+                          { locale: ptBR }
+                        )}
+                      </p>
+                      <p className="text-sm text-gray-600">
+                        Saída às {itinerary.departure_time || '06:00'}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <Badge
+                        variant={
+                          itinerary.available_seats <= 5
+                            ? 'destructive'
+                            : 'secondary'
+                        }
+                      >
+                        {itinerary.available_seats} vagas
+                      </Badge>
+                    </div>
+                  </div>
+
+                  {/* 🆕 INFORMAÇÕES DE DURAÇÃO E RETORNO */}
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="flex items-center gap-2 text-gray-600">
+                      <Clock className="h-4 w-4" />
+                      <span>
+                        <strong>Duração:</strong> {duration.formatted}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-gray-600">
+                      <Calendar className="h-4 w-4" />
+                      <span>
+                        <strong>Retorno:</strong>{' '}
+                        {format(new Date(itinerary.return_date), 'dd/MM', {
+                          locale: ptBR,
+                        })}{' '}
+                        às {itinerary.return_time || '23:59'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </TabsContent>
+        </Tabs>
+
+        {/* ... rodapé fixo ... */}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+ATUALIZAÇÃO DO WIZARD - PASSO 2 (REVISÃO)
+// components/public/wizard/step-revisao.tsx (ATUALIZADO)
+
+'use client'
+
+import { calculateTripDuration } from '@/lib/utils/trip-duration'
+// ... outros imports
+
+export function StepRevisao({
+  formData,
+  updateFormData,
+  trip,
+  itinerary,
+  calculateTotal,
+}: StepRevisaoProps) {
+  // 🆕 CALCULAR DURAÇÃO
+  const duration = calculateTripDuration(
+    new Date(itinerary.departure_date),
+    itinerary.departure_time || '06:00',
+    new Date(itinerary.return_date),
+    itinerary.return_time || '23:59'
+  )
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 space-y-6">
+        <Card className="p-6">
+          <h2 className="text-2xl font-bold mb-6">Resumo da Reserva</h2>
+
+          <div className="space-y-4">
+            {/* Viagem */}
+            <div>
+              <p className="text-sm text-gray-600">Viagem</p>
+              <p className="font-semibold text-lg">{trip.title}</p>
+              <p className="text-gray-600">📍 {trip.destination}</p>
+            </div>
+
+            <Separator />
+
+            {/* 🆕 DATAS E HORÁRIOS DETALHADOS */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-600">🚌 Embarque</p>
+                <p className="font-semibold">
+                  {format(
+                    new Date(itinerary.departure_date),
+                    "dd/MM/yyyy",
+                    { locale: ptBR }
+                  )}
+                </p>
+                <p className="text-sm text-gray-500">
+                  às {itinerary.departure_time || '06:00'}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-600">🏠 Desembarque</p>
+                <p className="font-semibold">
+                  {format(
+                    new Date(itinerary.return_date),
+                    "dd/MM/yyyy",
+                    { locale: ptBR }
+                  )}
+                </p>
+                <p className="text-sm text-gray-500">
+                  às {itinerary.return_time || '23:59'}
+                </p>
+              </div>
+            </div>
+
+            {/* 🆕 DURAÇÃO TOTAL */}
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Clock className="h-5 w-5 text-blue-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Duração Total</p>
+                  <p className="font-bold text-blue-900">{duration.formatted}</p>
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* ... restante do código ... */}
+          </div>
+        </Card>
+
+        {/* ... cupons e códigos ... */}
+      </div>
+
+      {/* ... resumo financeiro ... */}
+    </div>
+  )
+}
+
+EXEMPLO DE EXIBIÇÃO NO MOBILE
+// components/public/loja/trip-card-mobile.tsx (NOVO)
+
+'use client'
+
+import { calculateTripDuration } from '@/lib/utils/trip-duration'
+import { Badge } from '@/components/ui/badge'
+import { Clock, MapPin, Users } from 'lucide-react'
+
+export function TripCardMobile({ trip, itinerary }: any) {
+  const duration = calculateTripDuration(
+    new Date(itinerary.departure_date),
+    itinerary.departure_time || '06:00',
+    new Date(itinerary.return_date),
+    itinerary.return_time || '23:59'
+  )
+
+  return (
+    <div className="p-4 bg-white rounded-lg shadow">
+      {/* Título */}
+      <h3 className="font-bold text-lg mb-3">{trip.title}</h3>
+
+      {/* Badges de Info */}
+      <div className="flex flex-wrap gap-2 mb-3">
+        <Badge variant="outline" className="flex items-center gap-1">
+          <Clock className="h-3 w-3" />
+          {duration.formattedShort}
+        </Badge>
+
+        <Badge variant="outline" className="flex items-center gap-1">
+          <MapPin className="h-3 w-3" />
+          {trip.destination}
+        </Badge>
+
+        <Badge variant="outline" className="flex items-center gap-1">
+          <Users className="h-3 w-3" />
+          {itinerary.available_seats} vagas
+        </Badge>
+      </div>
+
+      {/* Detalhes de Horário */}
+      <div className="text-xs text-gray-600 space-y-1">
+        <p>
+          🚌 Saída: {format(new Date(itinerary.departure_date), 'dd/MM')} às{' '}
+          {itinerary.departure_time}
+        </p>
+        <p>
+          🏠 Retorno: {format(new Date(itinerary.return_date), 'dd/MM')} às{' '}
+          {itinerary.return_time}
+        </p>
+      </div>
+
+      {/* Preço */}
+      <div className="mt-3 pt-3 border-t flex items-center justify-between">
+        <div>
+          <p className="text-sm text-gray-600">a partir de</p>
+          <p className="text-2xl font-bold text-green-600">
+            R$ {trip.price_per_person.toFixed(2)}
+          </p>
+        </div>
+        <button className="bg-orange-500 text-white px-4 py-2 rounded-lg font-semibold">
+          Reservar
+        </button>
+      </div>
+    </div>
+  )
+}
+
+Exemplos de saída:
+// Maceió (17/12 20h → 21/12 02h)
+duration.formatted // "3 dias e 6 horas"
+duration.formattedShort // "3d 6h"
+
+// Canoa Quebrada (04/07 21h → 06/07 02h)
+duration.formatted // "1 dia e 5 horas"
+duration.formattedShort // "1d 5h"
+
+// Viagem curta (10h → 18h mesmo dia)
+duration.formatted // "8 horas"
+duration.formattedShort // "8h"
+

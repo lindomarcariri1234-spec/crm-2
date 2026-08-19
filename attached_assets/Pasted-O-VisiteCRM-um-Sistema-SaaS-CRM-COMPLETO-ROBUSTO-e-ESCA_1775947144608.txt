@@ -1,0 +1,5678 @@
+O **VisiteCRM**, é um Sistema SaaS CRM COMPLETO, ROBUSTO e ESCALÁVEL
+para agências de turismo especializadas em excursões.
+
+
+Sincronizar/cruzar os dados
+
+Integração conectada: Relacionamento entre, cliente, viagem, reservas, poltronas, embarque, vendedor, agência, pagamento, loja, Papiline, Kanbam, Automação ou seja, todo sistema é relacionado entre si para um perfeito funcionamento.
+
+
+Contém Sistema de Reservas COMPLETO, ROBUSTO e sofisticado com reserva criado pelo vendedor, pela Agência e pelo próprio cliente na loja.  seleção de poltronas, passageiros, voucher PDF, QR Code entre outras funcionalidades.
+
+Melhorar a UX..
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│                      VisiteCRM - CORE                           │
+│                   Sistema Multi-Tenant SaaS                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
+   │ CLIENTES│          │ VIAGENS │          │ RESERVAS│
+   └────┬────┘          └────┬────┘          └────┬────┘
+        │                    │                     │
+        └────────┬───────────┴──────────┬──────────┘
+                 │                      │
+        ┌────────▼──────────┐  ┌────────▼─────────┐
+        │   PASSAGEIROS     │  │    POLTRONAS     │
+        └────────┬──────────┘  └────────┬─────────┘
+                 │                      │
+        ┌────────▼──────────────────────▼─────────┐
+        │         EMBARQUE & CHECK-IN              │
+        └────────┬─────────────────────────────────┘
+                 │
+        ┌────────▼──────────┬──────────┬───────────┐
+        │                   │          │           │
+   ┌────▼────┐      ┌──────▼─────┐  ┌─▼────┐  ┌──▼─────┐
+   │PAGAMENTO│      │  VENDEDOR  │  │LOJA  │  │PIPELINE│
+   └────┬────┘      └──────┬─────┘  └─┬────┘  └──┬─────┘
+        │                  │          │          │
+        └──────────────────┴──────────┴──────────┘
+                           │
+                    ┌──────▼──────┐
+                    │  AUTOMAÇÃO  │
+                    │   & KANBAN  │
+                    └─────────────┘
+
+
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TENANT (Multi-Tenancy)
+// ═══════════════════════════════════════════════════════════════
+
+model Tenant {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique
+  domain          String?   @unique
+  
+  // Configurações
+  settings        Json?
+  
+  // Status
+  is_active       Boolean   @default(true)
+  subscription_status String @default("trial") // trial, active, suspended, cancelled
+  subscription_plan String  @default("basic") // basic, pro, enterprise
+  
+  // Limites
+  max_users       Int       @default(5)
+  max_clients     Int       @default(1000)
+  max_trips       Int       @default(100)
+  
+  // Relacionamentos
+  users           User[]
+  clients         Client[]
+  trips           Trip[]
+  reservations    Reservation[]
+  passengers      Passenger[]
+  seats           ReservationSeat[]
+  payments        ReservationPayment[]
+  boarding_locations BoardingLocation[]
+  coupons         Coupon[]
+  referrals       Referral[]
+  pipelines       Pipeline[]
+  deals           Deal[]
+  automations     Automation[]
+  store_products  StoreProduct[]
+  store_orders    StoreOrder[]
+  audit_logs      AuditLog[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@map("tenants")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// USUÁRIOS (Vendedores/Agentes)
+// ═══════════════════════════════════════════════════════════════
+
+model User {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  name            String
+  email           String
+  password        String
+  avatar          String?
+  
+  // Papel e Permissões
+  role            String    @default("agent") // admin, manager, agent, viewer
+  permissions     Json?
+  
+  // Comissões
+  commission_percentage Decimal? @db.Decimal(5, 2)
+  
+  // Status
+  is_active       Boolean   @default(true)
+  
+  // Relacionamentos
+  clients         Client[]  @relation("ClientOwner")
+  reservations    Reservation[] @relation("SellerReservations")
+  deals           Deal[]
+  tasks           Task[]
+  activities      Activity[]
+  
+  // Autenticação
+  email_verified  DateTime?
+  last_login      DateTime?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, email])
+  @@index([tenant_id])
+  @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CLIENTES
+// ═══════════════════════════════════════════════════════════════
+
+model Client {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Dados Pessoais
+  name            String
+  email           String?
+  phone           String?
+  cpf             String?
+  rg              String?
+  birth_date      DateTime?
+  
+  // Endereço
+  address         String?
+  city            String?
+  state           String?
+  zip_code        String?
+  
+  // Relacionamento
+  owner_id        String?
+  owner           User?     @relation("ClientOwner", fields: [owner_id], references: [id])
+  
+  // Pipeline/Kanban
+  pipeline_stage_id String?
+  pipeline_stage  PipelineStage? @relation(fields: [pipeline_stage_id], references: [id])
+  
+  // Tags e Segmentação
+  tags            String[]
+  segment         String?   // vip, regular, potential
+  
+  // Score e Engajamento
+  lead_score      Int       @default(0)
+  engagement_level String   @default("cold") // cold, warm, hot
+  
+  // Sistema de Indicação
+  referral_code   String?   @unique
+  referred_by_id  String?
+  referred_by     Client?   @relation("ClientReferrals", fields: [referred_by_id], references: [id])
+  referrals_made  Client[]  @relation("ClientReferrals")
+  
+  // Estatísticas
+  total_trips     Int       @default(0)
+  total_spent     Decimal   @default(0) @db.Decimal(10, 2)
+  is_first_purchase Boolean @default(true)
+  last_purchase_date DateTime?
+  
+  // Relacionamentos
+  reservations    Reservation[]
+  deals           Deal[]
+  activities      Activity[]
+  referrals_as_referrer Referral[] @relation("ReferrerClient")
+  referrals_as_referred Referral[] @relation("ReferredClient")
+  store_orders    StoreOrder[]
+  
+  // Status
+  is_active       Boolean   @default(true)
+  
+  // Observações
+  notes           String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([owner_id])
+  @@index([pipeline_stage_id])
+  @@index([email])
+  @@index([phone])
+  @@index([cpf])
+  @@map("clients")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VIAGENS
+// ═══════════════════════════════════════════════════════════════
+
+model Trip {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Informações Básicas
+  title           String
+  description     String?   @db.Text
+  destination     String
+  
+  // Datas
+  departure_date  DateTime
+  return_date     DateTime?
+  departure_time  String?
+  return_time     String?
+  duration_days   Int       @default(1)
+  
+  // Preços
+  price_adult     Decimal   @db.Decimal(10, 2)
+  price_child     Decimal?  @db.Decimal(10, 2)
+  price_infant    Decimal?  @db.Decimal(10, 2)
+  
+  // Capacidade
+  total_seats     Int       @default(50)
+  seat_layout     String    @default("2+2")
+  available_seats Int       @default(50)
+  
+  // Mídia
+  thumbnail       String?
+  images          String[]
+  
+  // Status
+  status          String    @default("draft") // draft, active, full, completed, cancelled
+  is_featured     Boolean   @default(false)
+  
+  // Relacionamentos
+  reservations    Reservation[]
+  seats           ReservationSeat[]
+  boarding_locations TripBoardingLocation[]
+  store_product   StoreProduct?
+  
+  // Itinerário
+  itinerary       Json?
+  
+  // Observações
+  notes           String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([status])
+  @@index([departure_date])
+  @@map("trips")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RESERVAS (Centro de Integração)
+// ═══════════════════════════════════════════════════════════════
+
+model Reservation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Códigos
+  reservation_number String  @unique
+  voucher_code    String    @unique
+  
+  // Relacionamentos Principais
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id], onDelete: Restrict)
+  
+  client_id       String
+  client          Client    @relation(fields: [client_id], references: [id], onDelete: Restrict)
+  
+  seller_id       String?
+  seller          User?     @relation("SellerReservations", fields: [seller_id], references: [id])
+  
+  // Pipeline/Deal
+  deal_id         String?   @unique
+  deal            Deal?     @relation(fields: [deal_id], references: [id])
+  
+  // Passageiros e Assentos
+  passengers      Passenger[]
+  seats           ReservationSeat[]
+  total_passengers Int      @default(1)
+  adults_count    Int       @default(1)
+  children_count  Int       @default(0)
+  
+  // Embarque
+  boarding_location_id String?
+  boarding_location BoardingLocation? @relation(fields: [boarding_location_id], references: [id])
+  
+  // Valores
+  subtotal_amount Decimal   @db.Decimal(10, 2)
+  discount_amount Decimal   @default(0) @db.Decimal(10, 2)
+  coupon_discount Decimal   @default(0) @db.Decimal(10, 2)
+  referral_discount Decimal @default(0) @db.Decimal(10, 2)
+  total_amount    Decimal   @db.Decimal(10, 2)
+  amount_paid     Decimal   @default(0) @db.Decimal(10, 2)
+  amount_pending  Decimal   @db.Decimal(10, 2)
+  
+  // Cupom e Indicação
+  coupon_code     String?
+  coupon_id       String?
+  coupon          Coupon?   @relation(fields: [coupon_id], references: [id])
+  
+  referral_id     String?   @unique
+  referral        Referral? @relation(fields: [referral_id], references: [id])
+  referred_by_code String?
+  
+  // Pagamentos
+  payments        ReservationPayment[]
+  payment_method  String?
+  installments    Int?      @default(1)
+  installment_amount Decimal? @db.Decimal(10, 2)
+  
+  // Comissão
+  commission_percentage Decimal? @db.Decimal(5, 2)
+  commission_amount Decimal? @db.Decimal(10, 2)
+  commission_paid Boolean @default(false)
+  
+  // Status
+  status          String    @default("pending")
+  payment_status  String    @default("pending")
+  
+  // Check-in
+  checked_in      Boolean   @default(false)
+  checked_in_at   DateTime?
+  checked_in_by   String?
+  
+  completed_at    DateTime?
+  cancelled_at    DateTime?
+  cancellation_reason String? @db.Text
+  
+  // Observações
+  notes           String?   @db.Text
+  internal_notes  String?   @db.Text
+  
+  // Origem
+  source          String    @default("admin") // admin, store, api, pipeline
+  
+  // Loja
+  store_order_id  String?   @unique
+  store_order     StoreOrder? @relation(fields: [store_order_id], references: [id])
+  
+  // Automações
+  automation_triggered Boolean @default(false)
+  automation_logs Json?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([trip_id])
+  @@index([client_id])
+  @@index([seller_id])
+  @@index([deal_id])
+  @@index([status])
+  @@index([payment_status])
+  @@map("reservations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PASSAGEIROS
+// ═══════════════════════════════════════════════════════════════
+
+model Passenger {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  // Dados
+  name            String
+  cpf             String?
+  rg              String?
+  birth_date      DateTime?
+  category        String    @default("adult")
+  age             Int?
+  
+  // Assento
+  seat_number     String?
+  
+  // Embarque
+  boarding_location_id String?
+  boarding_location BoardingLocation? @relation(fields: [boarding_location_id], references: [id])
+  
+  // Necessidades
+  special_needs   String?   @db.Text
+  dietary_restrictions String? @db.Text
+  
+  // Contato
+  phone           String?
+  email           String?
+  
+  // Check-in
+  checked_in      Boolean   @default(false)
+  checked_in_at   DateTime?
+  
+  is_primary      Boolean   @default(false)
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([reservation_id])
+  @@index([cpf])
+  @@map("passengers")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// POLTRONAS/ASSENTOS
+// ═══════════════════════════════════════════════════════════════
+
+model ReservationSeat {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id], onDelete: Cascade)
+  
+  // Assento
+  seat_number     String
+  seat_row        Int
+  seat_column     String
+  
+  // Passageiro
+  passenger_name  String?
+  passenger_cpf   String?
+  
+  // Status
+  status          String    @default("reserved")
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([trip_id, seat_number])
+  @@index([reservation_id])
+  @@index([trip_id])
+  @@index([tenant_id])
+  @@map("reservation_seats")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOCAIS DE EMBARQUE
+// ═══════════════════════════════════════════════════════════════
+
+model BoardingLocation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  name            String
+  address         String?
+  city            String?
+  state           String?
+  latitude        Decimal?  @db.Decimal(10, 8)
+  longitude       Decimal?  @db.Decimal(11, 8)
+  default_time    String?
+  is_active       Boolean   @default(true)
+  
+  trip_locations  TripBoardingLocation[]
+  reservations    Reservation[]
+  passengers      Passenger[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@map("boarding_locations")
+}
+
+model TripBoardingLocation {
+  id              String    @id @default(cuid())
+  
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id], onDelete: Cascade)
+  
+  location_id     String
+  location        BoardingLocation @relation(fields: [location_id], references: [id], onDelete: Cascade)
+  
+  boarding_time   String
+  order           Int       @default(0)
+  
+  created_at      DateTime  @default(now())
+  
+  @@unique([trip_id, location_id])
+  @@index([trip_id])
+  @@map("trip_boarding_locations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PAGAMENTOS
+// ═══════════════════════════════════════════════════════════════
+
+model ReservationPayment {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  amount          Decimal   @db.Decimal(10, 2)
+  payment_method  String
+  
+  installment_number Int?
+  total_installments Int?
+  
+  status          String    @default("pending")
+  
+  payment_date    DateTime  @default(now())
+  due_date        DateTime?
+  paid_at         DateTime?
+  
+  transaction_id  String?   @unique
+  gateway         String?
+  receipt_url     String?
+  
+  notes           String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([reservation_id])
+  @@index([status])
+  @@index([tenant_id])
+  @@map("reservation_payments")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PIPELINE/KANBAN
+// ═══════════════════════════════════════════════════════════════
+
+model Pipeline {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  name            String
+  description     String?   @db.Text
+  type            String    @default("sales") // sales, onboarding, support
+  
+  is_default      Boolean   @default(false)
+  is_active       Boolean   @default(true)
+  
+  stages          PipelineStage[]
+  deals           Deal[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@map("pipelines")
+}
+
+model PipelineStage {
+  id              String    @id @default(cuid())
+  
+  pipeline_id     String
+  pipeline        Pipeline  @relation(fields: [pipeline_id], references: [id], onDelete: Cascade)
+  
+  name            String
+  color           String    @default("#3b82f6")
+  order           Int       @default(0)
+  
+  is_closed_won   Boolean   @default(false)
+  is_closed_lost  Boolean   @default(false)
+  
+  deals           Deal[]
+  clients         Client[]
+  
+  // Automações
+  automation_on_enter String? // ID da automação
+  automation_on_exit  String? // ID da automação
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([pipeline_id])
+  @@map("pipeline_stages")
+}
+
+model Deal {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  title           String
+  description     String?   @db.Text
+  
+  // Pipeline
+  pipeline_id     String
+  pipeline        Pipeline  @relation(fields: [pipeline_id], references: [id])
+  
+  stage_id        String
+  stage           PipelineStage @relation(fields: [stage_id], references: [id])
+  
+  // Cliente
+  client_id       String
+  client          Client    @relation(fields: [client_id], references: [id])
+  
+  // Responsável
+  owner_id        String
+  owner           User      @relation(fields: [owner_id], references: [id])
+  
+  // Viagem (se aplicável)
+  trip_id         String?
+  
+  // Valor
+  value           Decimal   @db.Decimal(10, 2)
+  probability     Int       @default(50) // 0-100%
+  
+  // Datas
+  expected_close_date DateTime?
+  closed_date     DateTime?
+  
+  // Status
+  status          String    @default("open") // open, won, lost
+  lost_reason     String?
+  
+  // Reserva (quando convertido)
+  reservation     Reservation?
+  
+  // Atividades
+  activities      Activity[]
+  tasks           Task[]
+  
+  // Observações
+  notes           String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([pipeline_id])
+  @@index([stage_id])
+  @@index([client_id])
+  @@index([owner_id])
+  @@index([status])
+  @@map("deals")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ATIVIDADES (Timeline)
+// ═══════════════════════════════════════════════════════════════
+
+model Activity {
+  id              String    @id @default(cuid())
+  
+  type            String    // call, email, meeting, note, whatsapp
+  subject         String
+  description     String?   @db.Text
+  
+  // Relacionamentos
+  client_id       String?
+  client          Client?   @relation(fields: [client_id], references: [id])
+  
+  deal_id         String?
+  deal            Deal?     @relation(fields: [deal_id], references: [id])
+  
+  user_id         String
+  user            User      @relation(fields: [user_id], references: [id])
+  
+  // Data
+  activity_date   DateTime  @default(now())
+  
+  // Metadata
+  metadata        Json?
+  
+  created_at      DateTime  @default(now())
+  
+  @@index([client_id])
+  @@index([deal_id])
+  @@index([user_id])
+  @@map("activities")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TAREFAS
+// ═══════════════════════════════════════════════════════════════
+
+model Task {
+  id              String    @id @default(cuid())
+  
+  title           String
+  description     String?   @db.Text
+  
+  // Relacionamentos
+  deal_id         String?
+  deal            Deal?     @relation(fields: [deal_id], references: [id])
+  
+  assigned_to_id  String
+  assigned_to     User      @relation(fields: [assigned_to_id], references: [id])
+  
+  // Datas
+  due_date        DateTime?
+  completed_at    DateTime?
+  
+  // Status
+  status          String    @default("pending") // pending, completed, cancelled
+  priority        String    @default("medium") // low, medium, high
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([deal_id])
+  @@index([assigned_to_id])
+  @@index([status])
+  @@map("tasks")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUTOMAÇÕES
+// ═══════════════════════════════════════════════════════════════
+
+model Automation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  name            String
+  description     String?   @db.Text
+  
+  // Trigger
+  trigger_type    String    // reservation_created, payment_received, stage_changed, etc
+  trigger_config  Json
+  
+  // Condições
+  conditions      Json?
+  
+  // Ações
+  actions         Json      // email, whatsapp, task, webhook, etc
+  
+  // Status
+  is_active       Boolean   @default(true)
+  
+  // Estatísticas
+  execution_count Int       @default(0)
+  last_executed   DateTime?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([trigger_type])
+  @@map("automations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOJA ONLINE
+// ═══════════════════════════════════════════════════════════════
+
+model StoreProduct {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  trip_id         String    @unique
+  trip            Trip      @relation(fields: [trip_id], references: [id])
+  
+  is_published    Boolean   @default(false)
+  slug            String
+  
+  seo_title       String?
+  seo_description String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, slug])
+  @@index([tenant_id])
+  @@map("store_products")
+}
+
+model StoreOrder {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  order_number    String    @unique
+  
+  client_id       String
+  client          Client    @relation(fields: [client_id], references: [id])
+  
+  total_amount    Decimal   @db.Decimal(10, 2)
+  status          String    @default("pending")
+  
+  reservation     Reservation?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([client_id])
+  @@map("store_orders")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CUPONS
+// ═══════════════════════════════════════════════════════════════
+
+model Coupon {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  code            String
+  description     String?
+  
+  discount_type   String    // percentage, fixed
+  discount_value  Decimal   @db.Decimal(10, 2)
+  max_discount_amount Decimal? @db.Decimal(10, 2)
+  
+  min_purchase_amount Decimal? @db.Decimal(10, 2)
+  
+  usage_limit     Int?
+  usage_count     Int       @default(0)
+  
+  valid_from      DateTime?
+  valid_until     DateTime?
+  
+  is_active       Boolean   @default(true)
+  
+  reservations    Reservation[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, code])
+  @@index([tenant_id])
+  @@map("coupons")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SISTEMA DE INDICAÇÃO
+// ═══════════════════════════════════════════════════════════════
+
+model Referral {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  referrer_id     String
+  referrer        Client    @relation("ReferrerClient", fields: [referrer_id], references: [id])
+  
+  referred_id     String
+  referred        Client    @relation("ReferredClient", fields: [referred_id], references: [id])
+  
+  status          String    @default("pending") // pending, completed, paid
+  
+  bonus_amount    Decimal   @db.Decimal(10, 2)
+  discount_percentage Decimal @db.Decimal(5, 2)
+  
+  discount_used   Boolean   @default(false)
+  discount_amount Decimal?  @db.Decimal(10, 2)
+  
+  bonus_paid      Boolean   @default(false)
+  bonus_paid_at   DateTime?
+  
+  reservation     Reservation?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([referrer_id])
+  @@index([referred_id])
+  @@map("referrals")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUDITORIA
+// ═══════════════════════════════════════════════════════════════
+
+model AuditLog {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  user_id         String
+  action          String    // create, update, delete
+  resource        String    // reservation, client, trip, etc
+  resource_id     String
+  
+  metadata        Json?
+  
+  ip_address      String?
+  user_agent      String?
+  
+  created_at      DateTime  @default(now())
+  
+  @@index([tenant_id])
+  @@index([user_id])
+  @@index([resource])
+  @@index([created_at])
+  @@map("audit_logs")
+}
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    EVENT-DRIVEN ARCHITECTURE                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
+   │ EVENTOS │          │  HOOKS  │          │LISTENERS│
+   └────┬────┘          └────┬────┘          └────┬────┘
+        │                    │                     │
+        └────────┬───────────┴──────────┬──────────┘
+                 │                      │
+        ┌────────▼──────────┐  ┌────────▼─────────┐
+        │   SINCRONIZAÇÃO   │  │    AUTOMAÇÃO     │
+        └───────────────────┘  └──────────────────┘
+
+// lib/events/event-emitter.ts
+
+import { EventEmitter } from 'events'
+
+export type EventType =
+  // Clientes
+  | 'client.created'
+  | 'client.updated'
+  | 'client.deleted'
+  | 'client.stage_changed'
+  
+  // Viagens
+  | 'trip.created'
+  | 'trip.updated'
+  | 'trip.published'
+  | 'trip.cancelled'
+  | 'trip.completed'
+  
+  // Reservas
+  | 'reservation.created'
+  | 'reservation.updated'
+  | 'reservation.confirmed'
+  | 'reservation.cancelled'
+  | 'reservation.checked_in'
+  | 'reservation.completed'
+  
+  // Pagamentos
+  | 'payment.received'
+  | 'payment.pending'
+  | 'payment.failed'
+  | 'payment.refunded'
+  
+  // Pipeline/Deals
+  | 'deal.created'
+  | 'deal.updated'
+  | 'deal.stage_changed'
+  | 'deal.won'
+  | 'deal.lost'
+  
+  // Poltronas
+  | 'seat.reserved'
+  | 'seat.released'
+  | 'seat.confirmed'
+  
+  // Embarque
+  | 'boarding.checked_in'
+  | 'boarding.completed'
+  
+  // Loja
+  | 'store.order_created'
+  | 'store.order_paid'
+  
+  // Indicação
+  | 'referral.created'
+  | 'referral.completed'
+  | 'referral.bonus_paid'
+
+export interface EventPayload {
+  tenant_id: string
+  user_id?: string
+  timestamp: Date
+  data: any
+  metadata?: Record<string, any>
+}
+
+class AppEventEmitter extends EventEmitter {
+  private static instance: AppEventEmitter
+
+  private constructor() {
+    super()
+    this.setMaxListeners(100) // Aumentar limite de listeners
+  }
+
+  static getInstance(): AppEventEmitter {
+    if (!AppEventEmitter.instance) {
+      AppEventEmitter.instance = new AppEventEmitter()
+    }
+    return AppEventEmitter.instance
+  }
+
+  emitEvent(event: EventType, payload: EventPayload): void {
+    console.log(`[EVENT] ${event}`, {
+      tenant_id: payload.tenant_id,
+      timestamp: payload.timestamp,
+    })
+    
+    this.emit(event, payload)
+    
+    // Emit evento genérico para logging
+    this.emit('*', { event, payload })
+  }
+
+  onEvent(event: EventType | '*', handler: (payload: EventPayload) => void | Promise<void>): void {
+    this.on(event, async (payload) => {
+      try {
+        await handler(payload)
+      } catch (error) {
+        console.error(`[EVENT ERROR] ${event}`, error)
+      }
+    })
+  }
+}
+
+export const eventEmitter = AppEventEmitter.getInstance()
+
+// lib/hooks/sync-hooks.ts
+
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/events/event-emitter'
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Sincronizar Cliente com Pipeline
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('client.created', async (payload) => {
+  const { data } = payload
+  
+  try {
+    // Buscar pipeline padrão
+    const defaultPipeline = await prisma.pipeline.findFirst({
+      where: {
+        tenant_id: payload.tenant_id,
+        is_default: true,
+      },
+      include: {
+        stages: {
+          orderBy: { order: 'asc' },
+          take: 1,
+        },
+      },
+    })
+
+    if (defaultPipeline && defaultPipeline.stages[0]) {
+      // Atualizar cliente com primeiro estágio
+      await prisma.client.update({
+        where: { id: data.id },
+        data: {
+          pipeline_stage_id: defaultPipeline.stages[0].id,
+        },
+      })
+
+      console.log(`[SYNC] Cliente ${data.id} adicionado ao pipeline`)
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] client.created -> pipeline', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Criar Deal ao Criar Cliente
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('client.created', async (payload) => {
+  const { data } = payload
+  
+  try {
+    const defaultPipeline = await prisma.pipeline.findFirst({
+      where: {
+        tenant_id: payload.tenant_id,
+        is_default: true,
+      },
+      include: {
+        stages: {
+          orderBy: { order: 'asc' },
+          take: 1,
+        },
+      },
+    })
+
+    if (defaultPipeline && defaultPipeline.stages[0]) {
+      await prisma.deal.create({
+        data: {
+          tenant_id: payload.tenant_id,
+          title: `Oportunidade - ${data.name}`,
+          client_id: data.id,
+          owner_id: data.owner_id || payload.user_id!,
+          pipeline_id: defaultPipeline.id,
+          stage_id: defaultPipeline.stages[0].id,
+          value: 0,
+          status: 'open',
+        },
+      })
+
+      console.log(`[SYNC] Deal criado para cliente ${data.id}`)
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] client.created -> deal', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Atualizar Estatísticas do Cliente ao Criar Reserva
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('reservation.created', async (payload) => {
+  const { data } = payload
+  
+  try {
+    const client = await prisma.client.findUnique({
+      where: { id: data.client_id },
+      select: {
+        total_trips: true,
+        total_spent: true,
+      },
+    })
+
+    if (client) {
+      await prisma.client.update({
+        where: { id: data.client_id },
+        data: {
+          total_trips: client.total_trips + 1,
+          total_spent: {
+            increment: data.total_amount,
+          },
+          is_first_purchase: false,
+          last_purchase_date: new Date(),
+        },
+      })
+
+      console.log(`[SYNC] Estatísticas do cliente ${data.client_id} atualizadas`)
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] reservation.created -> client stats', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Atualizar Vagas Disponíveis da Viagem
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('reservation.created', async (payload) => {
+  const { data } = payload
+  
+  try {
+    await updateTripAvailableSeats(data.trip_id)
+    console.log(`[SYNC] Vagas da viagem ${data.trip_id} atualizadas`)
+  } catch (error) {
+    console.error('[SYNC ERROR] reservation.created -> trip seats', error)
+  }
+})
+
+eventEmitter.onEvent('reservation.cancelled', async (payload) => {
+  const { data } = payload
+  
+  try {
+    // Liberar assentos
+    await prisma.reservationSeat.updateMany({
+      where: { reservation_id: data.id },
+      data: { status: 'available' },
+    })
+
+    // Atualizar vagas
+    await updateTripAvailableSeats(data.trip_id)
+    
+    console.log(`[SYNC] Assentos liberados e vagas atualizadas`)
+  } catch (error) {
+    console.error('[SYNC ERROR] reservation.cancelled -> seats', error)
+  }
+})
+
+async function updateTripAvailableSeats(tripId: string) {
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: {
+      total_seats: true,
+      seats: {
+        where: {
+          status: { in: ['reserved', 'confirmed'] },
+        },
+      },
+    },
+  })
+
+  if (trip) {
+    const occupiedSeats = trip.seats.length
+    const availableSeats = trip.total_seats - occupiedSeats
+
+    await prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        available_seats: availableSeats,
+        status: availableSeats === 0 ? 'full' : 'active',
+      },
+    })
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Atualizar Status de Pagamento da Reserva
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('payment.received', async (payload) => {
+  const { data } = payload
+  
+  try {
+    const reservation = await prisma.reservation.findUnique({
+      where: { id: data.reservation_id },
+      select: {
+        total_amount: true,
+        amount_paid: true,
+      },
+    })
+
+    if (reservation) {
+      const newAmountPaid = Number(reservation.amount_paid) + Number(data.amount)
+      const totalAmount = Number(reservation.total_amount)
+      const amountPending = totalAmount - newAmountPaid
+
+      let paymentStatus = 'pending'
+      let reservationStatus = 'pending'
+
+      if (amountPending <= 0) {
+        paymentStatus = 'paid'
+        reservationStatus = 'confirmed'
+      } else if (newAmountPaid > 0) {
+        paymentStatus = 'partial'
+        reservationStatus = 'confirmed'
+      }
+
+      await prisma.reservation.update({
+        where: { id: data.reservation_id },
+        data: {
+          amount_paid: newAmountPaid,
+          amount_pending: Math.max(amountPending, 0),
+          payment_status: paymentStatus,
+          status: reservationStatus,
+        },
+      })
+
+      console.log(`[SYNC] Status de pagamento da reserva ${data.reservation_id} atualizado`)
+
+      // Emitir evento de confirmação se totalmente pago
+      if (paymentStatus === 'paid') {
+        eventEmitter.emitEvent('reservation.confirmed', {
+          tenant_id: payload.tenant_id,
+          timestamp: new Date(),
+          data: { id: data.reservation_id },
+        })
+      }
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] payment.received -> reservation', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Converter Deal em Reserva
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('deal.won', async (payload) => {
+  const { data } = payload
+  
+  try {
+    const deal = await prisma.deal.findUnique({
+      where: { id: data.id },
+      include: {
+        client: true,
+      },
+    })
+
+    if (deal && deal.trip_id && !data.reservation_id) {
+      // Criar reserva automaticamente
+      const reservationNumber = await generateReservationNumber(deal.tenant_id)
+      const voucherCode = generateVoucherCode()
+
+      const reservation = await prisma.reservation.create({
+        data: {
+          tenant_id: deal.tenant_id,
+          reservation_number: reservationNumber,
+          voucher_code: voucherCode,
+          trip_id: deal.trip_id,
+          client_id: deal.client_id,
+          seller_id: deal.owner_id,
+          deal_id: deal.id,
+          subtotal_amount: deal.value,
+          total_amount: deal.value,
+          amount_pending: deal.value,
+          status: 'pending',
+          payment_status: 'pending',
+          source: 'pipeline',
+          total_passengers: 1,
+          adults_count: 1,
+        },
+      })
+
+      console.log(`[SYNC] Reserva ${reservation.id} criada a partir do deal ${deal.id}`)
+
+      // Emitir evento de criação de reserva
+      eventEmitter.emitEvent('reservation.created', {
+        tenant_id: deal.tenant_id,
+        user_id: deal.owner_id,
+        timestamp: new Date(),
+        data: reservation,
+      })
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] deal.won -> reservation', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Atualizar Deal ao Confirmar Reserva
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('reservation.confirmed', async (payload) => {
+  const { data } = payload
+  
+  try {
+    const reservation = await prisma.reservation.findUnique({
+      where: { id: data.id },
+      select: { deal_id: true },
+    })
+
+    if (reservation?.deal_id) {
+      // Buscar estágio "Ganho"
+      const wonStage = await prisma.pipelineStage.findFirst({
+        where: {
+          is_closed_won: true,
+        },
+      })
+
+      if (wonStage) {
+        await prisma.deal.update({
+          where: { id: reservation.deal_id },
+          data: {
+            stage_id: wonStage.id,
+            status: 'won',
+            closed_date: new Date(),
+          },
+        })
+
+        console.log(`[SYNC] Deal ${reservation.deal_id} marcado como ganho`)
+      }
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] reservation.confirmed -> deal', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Processar Indicação
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('reservation.confirmed', async (payload) => {
+  const { data } = payload
+  
+  try {
+    if (data.referral_id) {
+      await prisma.referral.update({
+        where: { id: data.referral_id },
+        data: {
+          status: 'completed',
+        },
+      })
+
+      console.log(`[SYNC] Indicação ${data.referral_id} marcada como completa`)
+
+      eventEmitter.emitEvent('referral.completed', {
+        tenant_id: payload.tenant_id,
+        timestamp: new Date(),
+        data: { id: data.referral_id },
+      })
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] reservation.confirmed -> referral', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Sincronizar Pedido da Loja com Reserva
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('store.order_paid', async (payload) => {
+  const { data } = payload
+  
+  try {
+    const order = await prisma.storeOrder.findUnique({
+      where: { id: data.id },
+      include: {
+        client: true,
+      },
+    })
+
+    if (order && !order.reservation) {
+      // Criar reserva a partir do pedido
+      // (lógica similar ao wizard)
+      console.log(`[SYNC] Criando reserva a partir do pedido ${order.id}`)
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] store.order_paid -> reservation', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Atualizar Lead Score
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('client.created', async (payload) => {
+  await updateClientLeadScore(payload.data.id, 10) // +10 por cadastro
+})
+
+eventEmitter.onEvent('reservation.created', async (payload) => {
+  await updateClientLeadScore(payload.data.client_id, 50) // +50 por reserva
+})
+
+eventEmitter.onEvent('payment.received', async (payload) => {
+  const reservation = await prisma.reservation.findUnique({
+    where: { id: payload.data.reservation_id },
+    select: { client_id: true },
+  })
+  if (reservation) {
+    await updateClientLeadScore(reservation.client_id, 30) // +30 por pagamento
+  }
+})
+
+async function updateClientLeadScore(clientId: string, points: number) {
+  try {
+    const client = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { lead_score: true },
+    })
+
+    if (client) {
+      const newScore = client.lead_score + points
+
+      // Atualizar score e engagement level
+      let engagementLevel = 'cold'
+      if (newScore >= 100) engagementLevel = 'hot'
+      else if (newScore >= 50) engagementLevel = 'warm'
+
+      await prisma.client.update({
+        where: { id: clientId },
+        data: {
+          lead_score: newScore,
+          engagement_level: engagementLevel,
+        },
+      })
+
+      console.log(`[SYNC] Lead score do cliente ${clientId}: ${newScore}`)
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] updateClientLeadScore', error)
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Registrar Atividade Automática
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('reservation.created', async (payload) => {
+  const { data } = payload
+  
+  try {
+    await prisma.activity.create({
+      data: {
+        type: 'note',
+        subject: 'Reserva criada',
+        description: `Reserva ${data.reservation_number} criada com sucesso`,
+        client_id: data.client_id,
+        user_id: data.seller_id || payload.user_id!,
+        activity_date: new Date(),
+        metadata: {
+          reservation_id: data.id,
+          voucher_code: data.voucher_code,
+          total_amount: data.total_amount,
+        },
+      },
+    })
+
+    console.log(`[SYNC] Atividade registrada para reserva ${data.id}`)
+  } catch (error) {
+    console.error('[SYNC ERROR] reservation.created -> activity', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// HOOK: Atualizar Comissão do Vendedor
+// ═══════════════════════════════════════════════════════════════
+
+eventEmitter.onEvent('payment.received', async (payload) => {
+  const { data } = payload
+  
+  try {
+    const reservation = await prisma.reservation.findUnique({
+      where: { id: data.reservation_id },
+      select: {
+        seller_id: true,
+        commission_percentage: true,
+        commission_amount: true,
+        payment_status: true,
+      },
+    })
+
+    if (
+      reservation?.seller_id &&
+      reservation.payment_status === 'paid' &&
+      reservation.commission_amount
+    ) {
+      // Aqui você pode criar um registro de comissão a pagar
+      console.log(
+        `[SYNC] Comissão de R$ ${reservation.commission_amount} para vendedor ${reservation.seller_id}`
+      )
+    }
+  } catch (error) {
+    console.error('[SYNC ERROR] payment.received -> commission', error)
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+// UTILITÁRIOS
+// ═══════════════════════════════════════════════════════════════
+
+async function generateReservationNumber(tenantId: string): Promise<string> {
+  const lastReservation = await prisma.reservation.findFirst({
+    where: { tenant_id: tenantId },
+    orderBy: { created_at: 'desc' },
+    select: { reservation_number: true },
+  })
+
+  const lastNumber = lastReservation
+    ? parseInt(lastReservation.reservation_number.split('-').pop() || '0')
+    : 0
+
+  return `RES-${new Date().getFullYear()}-${String(lastNumber + 1).padStart(5, '0')}`
+}
+
+function generateVoucherCode(): string {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let code = 'VC-'
+
+  for (let i = 0; i < 6; i++) {
+    code += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+
+  return code
+}
+
+// lib/hooks/index.ts
+
+import './sync-hooks'
+import { eventEmitter } from '@/lib/events/event-emitter'
+
+// Log de todos os eventos (desenvolvimento)
+if (process.env.NODE_ENV === 'development') {
+  eventEmitter.onEvent('*', (payload) => {
+    console.log('[EVENT LOG]', payload)
+  })
+}
+
+export { eventEmitter }
+
+// lib/actions/reservation-actions.ts
+
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/hooks'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+
+export async function createReservation(data: any) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  // Criar reserva
+  const reservation = await prisma.reservation.create({
+    data: {
+      ...data,
+      tenant_id: session.user.tenantId,
+    },
+    include: {
+      trip: true,
+      client: true,
+      passengers: true,
+      seats: true,
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('reservation.created', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: reservation,
+  })
+
+  return reservation
+}
+
+export async function confirmReservation(reservationId: string) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  const reservation = await prisma.reservation.update({
+    where: { id: reservationId },
+    data: {
+      status: 'confirmed',
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('reservation.confirmed', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: reservation,
+  })
+
+  return reservation
+}
+
+export async function cancelReservation(
+  reservationId: string,
+  reason: string
+) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  const reservation = await prisma.reservation.update({
+    where: { id: reservationId },
+    data: {
+      status: 'cancelled',
+      cancelled_at: new Date(),
+      cancellation_reason: reason,
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('reservation.cancelled', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: reservation,
+  })
+
+  return reservation
+}
+
+export async function checkInReservation(reservationId: string) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  const reservation = await prisma.reservation.update({
+    where: { id: reservationId },
+    data: {
+      checked_in: true,
+      checked_in_at: new Date(),
+      checked_in_by: session.user.id,
+    },
+  })
+
+  // Check-in de todos os passageiros
+  await prisma.passenger.updateMany({
+    where: { reservation_id: reservationId },
+    data: {
+      checked_in: true,
+      checked_in_at: new Date(),
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('reservation.checked_in', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: reservation,
+  })
+
+  return reservation
+}
+
+// lib/actions/payment-actions.ts
+
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/hooks'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+
+export async function registerPayment(data: {
+  reservation_id: string
+  amount: number
+  payment_method: string
+  notes?: string
+}) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  // Criar pagamento
+  const payment = await prisma.reservationPayment.create({
+    data: {
+      tenant_id: session.user.tenantId,
+      reservation_id: data.reservation_id,
+      amount: data.amount,
+      payment_method: data.payment_method,
+      status: 'paid',
+      payment_date: new Date(),
+      paid_at: new Date(),
+      notes: data.notes,
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('payment.received', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: payment,
+  })
+
+  return payment
+}
+
+export async function refundPayment(paymentId: string, reason: string) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  const payment = await prisma.reservationPayment.update({
+    where: { id: paymentId },
+    data: {
+      status: 'refunded',
+      notes: reason,
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('payment.refunded', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: payment,
+  })
+
+  return payment
+}
+
+// lib/actions/deal-actions.ts
+
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/hooks'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+
+export async function createDeal(data: any) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  const deal = await prisma.deal.create({
+    data: {
+      ...data,
+      tenant_id: session.user.tenantId,
+    },
+    include: {
+      client: true,
+      stage: true,
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('deal.created', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: deal,
+  })
+
+  return deal
+}
+
+export async function moveDealToStage(dealId: string, stageId: string) {
+  const session = await getServerSession(authOptions)
+  
+  if (!session) {
+    throw new Error('Não autorizado')
+  }
+
+  const deal = await prisma.deal.findUnique({
+    where: { id: dealId },
+    select: { stage_id: true },
+  })
+
+  const oldStageId = deal?.stage_id
+
+  const updatedDeal = await prisma.deal.update({
+    where: { id: dealId },
+    data: { stage_id: stageId },
+    include: {
+      stage: true,
+      client: true,
+    },
+  })
+
+  // Emitir evento
+  eventEmitter.emitEvent('deal.stage_changed', {
+    tenant_id: session.user.tenantId,
+    user_id: session.user.id,
+    timestamp: new Date(),
+    data: {
+      ...updatedDeal,
+      old_stage_id: oldStageId,
+      new_stage_id: stageId,
+    },
+  })
+
+  // Se moveu para estágio ganho
+  if (updatedDeal.stage.is_closed_won) {
+    eventEmitter.emitEvent('deal.won', {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      timestamp: new Date(),
+      data: updatedDeal,
+    })
+  }
+
+  // Se moveu para estágio perdido
+  if (updatedDeal.stage.is_closed_lost) {
+    eventEmitter.emitEvent('deal.lost', {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      timestamp: new Date(),
+      data: updatedDeal,
+    })
+  }
+
+  return updatedDeal
+}
+
+// app/(dashboard)/dashboard/sync/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { SyncDashboard } from '@/components/dashboard/sync/sync-dashboard'
+
+export default async function SyncPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  // Estatísticas de sincronização
+  const stats = await prisma.$transaction([
+    // Total de clientes
+    prisma.client.count({
+      where: { tenant_id: session.user.tenantId },
+    }),
+
+    // Clientes com pipeline
+    prisma.client.count({
+      where: {
+        tenant_id: session.user.tenantId,
+        pipeline_stage_id: { not: null },
+      },
+    }),
+
+    // Reservas com deal
+    prisma.reservation.count({
+      where: {
+        tenant_id: session.user.tenantId,
+        deal_id: { not: null },
+      },
+    }),
+
+    // Reservas sem deal
+    prisma.reservation.count({
+      where: {
+        tenant_id: session.user.tenantId,
+        deal_id: null,
+      },
+    }),
+
+    // Pagamentos processados
+    prisma.reservationPayment.count({
+      where: {
+        tenant_id: session.user.tenantId,
+        status: 'paid',
+      },
+    }),
+
+    // Indicações ativas
+    prisma.referral.count({
+      where: {
+        tenant_id: session.user.tenantId,
+        status: 'completed',
+      },
+    }),
+  ])
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold">Sincronização de Dados</h1>
+        <p className="text-gray-600">
+          Monitor de integração entre todos os módulos do sistema
+        </p>
+      </div>
+
+      <SyncDashboard
+        stats={{
+          totalClients: stats[0],
+          clientsWithPipeline: stats[1],
+          reservationsWithDeal: stats[2],
+          reservationsWithoutDeal: stats[3],
+          paymentsProcessed: stats[4],
+          activeReferrals: stats[5],
+        }}
+      />
+    </div>
+  )
+}
+
+┌─────────────────────────────────────────────────────────────────┐
+│                  AUTOMATION ENGINE                               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
+   │TRIGGERS │          │CONDITIONS│          │ ACTIONS │
+   └────┬────┘          └────┬────┘          └────┬────┘
+        │                    │                     │
+        └────────┬───────────┴──────────┬──────────┘
+                 │                      │
+        ┌────────▼──────────┐  ┌────────▼─────────┐
+        │   WORKFLOW        │  │    WEBHOOKS      │
+        │   EXECUTOR        │  │    MANAGER       │
+        └───────────────────┘  └──────────────────┘
+
+// prisma/schema.prisma - Adicionar
+
+// ═══════════════════════════════════════════════════════════════
+// AUTOMAÇÕES
+// ═══════════════════════════════════════════════════════════════
+
+model Automation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Informações Básicas
+  name            String
+  description     String?   @db.Text
+  
+  // Trigger (Gatilho)
+  trigger_type    String    
+  // reservation_created, payment_received, deal_stage_changed, 
+  // client_created, trip_published, etc
+  trigger_config  Json      // Configurações específicas do trigger
+  
+  // Condições (Filtros)
+  conditions      Json?     
+  // Ex: { "field": "total_amount", "operator": ">=", "value": 1000 }
+  
+  // Ações
+  actions         Json      
+  // Array de ações: email, whatsapp, task, webhook, update_field, etc
+  
+  // Delay/Agendamento
+  delay_type      String?   @default("immediate") // immediate, delay, scheduled
+  delay_value     Int?      // Em minutos
+  delay_unit      String?   // minutes, hours, days
+  
+  // Status
+  is_active       Boolean   @default(true)
+  
+  // Estatísticas
+  execution_count Int       @default(0)
+  success_count   Int       @default(0)
+  error_count     Int       @default(0)
+  last_executed   DateTime?
+  last_error      String?   @db.Text
+  
+  // Logs
+  executions      AutomationExecution[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([trigger_type])
+  @@index([is_active])
+  @@map("automations")
+}
+
+model AutomationExecution {
+  id              String    @id @default(cuid())
+  
+  automation_id   String
+  automation      Automation @relation(fields: [automation_id], references: [id], onDelete: Cascade)
+  
+  // Dados da Execução
+  trigger_data    Json      // Dados que dispararam a automação
+  
+  // Status
+  status          String    // pending, running, completed, failed
+  
+  // Resultado
+  result          Json?     // Resultado de cada ação
+  error_message   String?   @db.Text
+  
+  // Timing
+  started_at      DateTime  @default(now())
+  completed_at    DateTime?
+  duration_ms     Int?      // Duração em milissegundos
+  
+  @@index([automation_id])
+  @@index([status])
+  @@index([started_at])
+  @@map("automation_executions")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// WEBHOOKS
+// ═══════════════════════════════════════════════════════════════
+
+model Webhook {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  
+  // Informações
+  name            String
+  description     String?   @db.Text
+  
+  // URL e Autenticação
+  url             String
+  method          String    @default("POST") // POST, GET, PUT
+  headers         Json?     // Headers customizados
+  secret          String?   // Secret para validação
+  
+  // Eventos
+  events          String[]  // Eventos que disparam o webhook
+  
+  // Retry
+  retry_enabled   Boolean   @default(true)
+  max_retries     Int       @default(3)
+  retry_delay     Int       @default(60) // segundos
+  
+  // Status
+  is_active       Boolean   @default(true)
+  
+  // Estatísticas
+  total_calls     Int       @default(0)
+  success_calls   Int       @default(0)
+  failed_calls    Int       @default(0)
+  last_called     DateTime?
+  last_status     Int?      // HTTP status code
+  last_error      String?   @db.Text
+  
+  // Logs
+  logs            WebhookLog[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([is_active])
+  @@map("webhooks")
+}
+
+model WebhookLog {
+  id              String    @id @default(cuid())
+  
+  webhook_id      String
+  webhook         Webhook   @relation(fields: [webhook_id], references: [id], onDelete: Cascade)
+  
+  // Requisição
+  event           String
+  payload         Json
+  
+  // Resposta
+  status_code     Int?
+  response_body   String?   @db.Text
+  error_message   String?   @db.Text
+  
+  // Timing
+  duration_ms     Int?
+  
+  // Retry
+  attempt         Int       @default(1)
+  
+  created_at      DateTime  @default(now())
+  
+  @@index([webhook_id])
+  @@index([event])
+  @@index([created_at])
+  @@map("webhook_logs")
+}
+
+// lib/automation/automation-engine.ts
+
+import { prisma } from '@/lib/prisma'
+import { eventEmitter, EventType, EventPayload } from '@/lib/events/event-emitter'
+import { executeAction } from './actions'
+import { evaluateConditions } from './conditions'
+
+interface AutomationConfig {
+  id: string
+  name: string
+  trigger_type: string
+  trigger_config: any
+  conditions: any
+  actions: any[]
+  delay_type: string
+  delay_value?: number
+  delay_unit?: string
+}
+
+class AutomationEngine {
+  private static instance: AutomationEngine
+  private automations: Map<string, AutomationConfig[]> = new Map()
+
+  private constructor() {
+    this.initializeAutomations()
+    this.setupEventListeners()
+  }
+
+  static getInstance(): AutomationEngine {
+    if (!AutomationEngine.instance) {
+      AutomationEngine.instance = new AutomationEngine()
+    }
+    return AutomationEngine.instance
+  }
+
+  // Carregar automações do banco
+  async initializeAutomations() {
+    try {
+      const automations = await prisma.automation.findMany({
+        where: { is_active: true },
+      })
+
+      // Agrupar por trigger_type
+      automations.forEach((automation) => {
+        const triggerType = automation.trigger_type
+        if (!this.automations.has(triggerType)) {
+          this.automations.set(triggerType, [])
+        }
+        this.automations.get(triggerType)!.push(automation as any)
+      })
+
+      console.log(`[AUTOMATION] ${automations.length} automações carregadas`)
+    } catch (error) {
+      console.error('[AUTOMATION] Erro ao carregar automações:', error)
+    }
+  }
+
+  // Recarregar automações
+  async reloadAutomations() {
+    this.automations.clear()
+    await this.initializeAutomations()
+  }
+
+  // Configurar listeners para eventos
+  setupEventListeners() {
+    // Mapear eventos para triggers
+    const eventToTriggerMap: Record<string, string> = {
+      'reservation.created': 'reservation_created',
+      'reservation.confirmed': 'reservation_confirmed',
+      'reservation.cancelled': 'reservation_cancelled',
+      'reservation.checked_in': 'reservation_checked_in',
+      'payment.received': 'payment_received',
+      'payment.failed': 'payment_failed',
+      'deal.created': 'deal_created',
+      'deal.stage_changed': 'deal_stage_changed',
+      'deal.won': 'deal_won',
+      'deal.lost': 'deal_lost',
+      'client.created': 'client_created',
+      'client.updated': 'client_updated',
+      'trip.published': 'trip_published',
+      'referral.completed': 'referral_completed',
+    }
+
+    // Registrar listener para cada evento
+    Object.entries(eventToTriggerMap).forEach(([event, trigger]) => {
+      eventEmitter.onEvent(event as EventType, async (payload) => {
+        await this.processAutomations(trigger, payload)
+      })
+    })
+
+    console.log('[AUTOMATION] Event listeners configurados')
+  }
+
+  // Processar automações para um trigger
+  async processAutomations(triggerType: string, payload: EventPayload) {
+    const automations = this.automations.get(triggerType) || []
+
+    if (automations.length === 0) {
+      return
+    }
+
+    console.log(
+      `[AUTOMATION] Processando ${automations.length} automação(ões) para ${triggerType}`
+    )
+
+    for (const automation of automations) {
+      // Verificar se pertence ao mesmo tenant
+      if (automation.trigger_config?.tenant_id && 
+          automation.trigger_config.tenant_id !== payload.tenant_id) {
+        continue
+      }
+
+      // Executar automação
+      await this.executeAutomation(automation, payload)
+    }
+  }
+
+  // Executar uma automação
+  async executeAutomation(automation: AutomationConfig, payload: EventPayload) {
+    const executionId = await this.createExecution(automation.id, payload)
+
+    try {
+      await prisma.automationExecution.update({
+        where: { id: executionId },
+        data: { status: 'running' },
+      })
+
+      // Avaliar condições
+      if (automation.conditions) {
+        const conditionsMet = await evaluateConditions(
+          automation.conditions,
+          payload.data
+        )
+
+        if (!conditionsMet) {
+          console.log(
+            `[AUTOMATION] Condições não atendidas para ${automation.name}`
+          )
+          await prisma.automationExecution.update({
+            where: { id: executionId },
+            data: {
+              status: 'completed',
+              completed_at: new Date(),
+              result: { skipped: true, reason: 'Condições não atendidas' },
+            },
+          })
+          return
+        }
+      }
+
+      // Aplicar delay se configurado
+      if (automation.delay_type === 'delay' && automation.delay_value) {
+        const delayMs = this.calculateDelayMs(
+          automation.delay_value,
+          automation.delay_unit || 'minutes'
+        )
+        await this.scheduleExecution(
+          automation,
+          payload,
+          executionId,
+          delayMs
+        )
+        return
+      }
+
+      // Executar ações
+      const results = await this.executeActions(
+        automation.actions,
+        payload,
+        executionId
+      )
+
+      // Atualizar execução
+      await prisma.automationExecution.update({
+        where: { id: executionId },
+        data: {
+          status: 'completed',
+          completed_at: new Date(),
+          result: results,
+          duration_ms: Date.now() - new Date(payload.timestamp).getTime(),
+        },
+      })
+
+      // Atualizar estatísticas da automação
+      await prisma.automation.update({
+        where: { id: automation.id },
+        data: {
+          execution_count: { increment: 1 },
+          success_count: { increment: 1 },
+          last_executed: new Date(),
+        },
+      })
+
+      console.log(`[AUTOMATION] ${automation.name} executada com sucesso`)
+    } catch (error: any) {
+      console.error(`[AUTOMATION] Erro ao executar ${automation.name}:`, error)
+
+      await prisma.automationExecution.update({
+        where: { id: executionId },
+        data: {
+          status: 'failed',
+          completed_at: new Date(),
+          error_message: error.message,
+        },
+      })
+
+      await prisma.automation.update({
+        where: { id: automation.id },
+        data: {
+          error_count: { increment: 1 },
+          last_error: error.message,
+        },
+      })
+    }
+  }
+
+  // Criar registro de execução
+  async createExecution(
+    automationId: string,
+    payload: EventPayload
+  ): Promise<string> {
+    const execution = await prisma.automationExecution.create({
+      data: {
+        automation_id: automationId,
+        trigger_data: payload as any,
+        status: 'pending',
+      },
+    })
+    return execution.id
+  }
+
+  // Executar ações
+  async executeActions(
+    actions: any[],
+    payload: EventPayload,
+    executionId: string
+  ) {
+    const results: any[] = []
+
+    for (const action of actions) {
+      try {
+        const result = await executeAction(action, payload)
+        results.push({
+          action: action.type,
+          status: 'success',
+          result,
+        })
+      } catch (error: any) {
+        results.push({
+          action: action.type,
+          status: 'error',
+          error: error.message,
+        })
+      }
+    }
+
+    return results
+  }
+
+  // Calcular delay em milissegundos
+  calculateDelayMs(value: number, unit: string): number {
+    const multipliers: Record<string, number> = {
+      minutes: 60 * 1000,
+      hours: 60 * 60 * 1000,
+      days: 24 * 60 * 60 * 1000,
+    }
+    return value * (multipliers[unit] || multipliers.minutes)
+  }
+
+  // Agendar execução com delay
+  async scheduleExecution(
+    automation: AutomationConfig,
+    payload: EventPayload,
+    executionId: string,
+    delayMs: number
+  ) {
+    console.log(
+      `[AUTOMATION] Agendando ${automation.name} para daqui a ${delayMs}ms`
+    )
+
+    setTimeout(async () => {
+      const results = await this.executeActions(
+        automation.actions,
+        payload,
+        executionId
+      )
+
+      await prisma.automationExecution.update({
+        where: { id: executionId },
+        data: {
+          status: 'completed',
+          completed_at: new Date(),
+          result: results,
+        },
+      })
+
+      await prisma.automation.update({
+        where: { id: automation.id },
+        data: {
+          execution_count: { increment: 1 },
+          success_count: { increment: 1 },
+          last_executed: new Date(),
+        },
+      })
+    }, delayMs)
+  }
+}
+
+export const automationEngine = AutomationEngine.getInstance()
+
+// lib/automation/actions.ts
+
+import { EventPayload } from '@/lib/events/event-emitter'
+import { prisma } from '@/lib/prisma'
+import { sendEmail } from '@/lib/emails/send-email'
+import { sendWhatsApp } from '@/lib/whatsapp/send-message'
+import { webhookManager } from './webhook-manager'
+
+export async function executeAction(action: any, payload: EventPayload) {
+  console.log(`[ACTION] Executando ação: ${action.type}`)
+
+  switch (action.type) {
+    case 'send_email':
+      return await executeSendEmail(action, payload)
+
+    case 'send_whatsapp':
+      return await executeSendWhatsApp(action, payload)
+
+    case 'create_task':
+      return await executeCreateTask(action, payload)
+
+    case 'update_field':
+      return await executeUpdateField(action, payload)
+
+    case 'add_tag':
+      return await executeAddTag(action, payload)
+
+    case 'move_deal_stage':
+      return await executeMoveDealStage(action, payload)
+
+    case 'webhook':
+      return await executeWebhook(action, payload)
+
+    case 'create_activity':
+      return await executeCreateActivity(action, payload)
+
+    case 'send_notification':
+      return await executeSendNotification(action, payload)
+
+    default:
+      throw new Error(`Tipo de ação desconhecido: ${action.type}`)
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Enviar Email
+// ═══════════════════════════════════════════════════════════════
+
+async function executeSendEmail(action: any, payload: EventPayload) {
+  const { to, subject, template, variables } = action.config
+
+  // Substituir variáveis
+  const processedSubject = replaceVariables(subject, payload.data)
+  const processedTo = replaceVariables(to, payload.data)
+
+  await sendEmail({
+    to: processedTo,
+    subject: processedSubject,
+    template,
+    data: {
+      ...variables,
+      ...payload.data,
+    },
+  })
+
+  return { sent: true, to: processedTo }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Enviar WhatsApp
+// ═══════════════════════════════════════════════════════════════
+
+async function executeSendWhatsApp(action: any, payload: EventPayload) {
+  const { phone, message, template } = action.config
+
+  const processedPhone = replaceVariables(phone, payload.data)
+  const processedMessage = replaceVariables(message, payload.data)
+
+  await sendWhatsApp({
+    phone: processedPhone,
+    message: processedMessage,
+    template,
+  })
+
+  return { sent: true, phone: processedPhone }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Criar Tarefa
+// ═══════════════════════════════════════════════════════════════
+
+async function executeCreateTask(action: any, payload: EventPayload) {
+  const { title, description, assigned_to, due_date, priority } = action.config
+
+  const task = await prisma.task.create({
+    data: {
+      title: replaceVariables(title, payload.data),
+      description: replaceVariables(description, payload.data),
+      assigned_to_id: assigned_to,
+      due_date: due_date ? new Date(due_date) : null,
+      priority: priority || 'medium',
+      status: 'pending',
+    },
+  })
+
+  return { task_id: task.id }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Atualizar Campo
+// ═══════════════════════════════════════════════════════════════
+
+async function executeUpdateField(action: any, payload: EventPayload) {
+  const { model, record_id, field, value } = action.config
+
+  // Determinar qual model atualizar
+  const modelMap: Record<string, any> = {
+    client: prisma.client,
+    reservation: prisma.reservation,
+    deal: prisma.deal,
+    trip: prisma.trip,
+  }
+
+  const prismaModel = modelMap[model]
+  if (!prismaModel) {
+    throw new Error(`Model desconhecido: ${model}`)
+  }
+
+  const recordIdValue = replaceVariables(record_id, payload.data)
+  const fieldValue = replaceVariables(value, payload.data)
+
+  await prismaModel.update({
+    where: { id: recordIdValue },
+    data: { [field]: fieldValue },
+  })
+
+  return { updated: true, model, field }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Adicionar Tag
+// ═══════════════════════════════════════════════════════════════
+
+async function executeAddTag(action: any, payload: EventPayload) {
+  const { client_id, tag } = action.config
+
+  const clientId = replaceVariables(client_id, payload.data)
+
+  const client = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { tags: true },
+  })
+
+  if (client) {
+    const tags = client.tags || []
+    if (!tags.includes(tag)) {
+      await prisma.client.update({
+        where: { id: clientId },
+        data: {
+          tags: [...tags, tag],
+        },
+      })
+    }
+  }
+
+  return { tag_added: tag }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Mover Deal de Estágio
+// ═══════════════════════════════════════════════════════════════
+
+async function executeMoveDealStage(action: any, payload: EventPayload) {
+  const { deal_id, stage_id } = action.config
+
+  const dealId = replaceVariables(deal_id, payload.data)
+
+  await prisma.deal.update({
+    where: { id: dealId },
+    data: { stage_id },
+  })
+
+  return { deal_moved: true, stage_id }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Webhook
+// ═══════════════════════════════════════════════════════════════
+
+async function executeWebhook(action: any, payload: EventPayload) {
+  const { url, method, headers, body } = action.config
+
+  const response = await fetch(url, {
+    method: method || 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+    body: JSON.stringify(body || payload.data),
+  })
+
+  return {
+    status: response.status,
+    ok: response.ok,
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Criar Atividade
+// ═══════════════════════════════════════════════════════════════
+
+async function executeCreateActivity(action: any, payload: EventPayload) {
+  const { type, subject, description, client_id, user_id } = action.config
+
+  const activity = await prisma.activity.create({
+    data: {
+      type,
+      subject: replaceVariables(subject, payload.data),
+      description: replaceVariables(description, payload.data),
+      client_id: replaceVariables(client_id, payload.data),
+      user_id: user_id || payload.user_id!,
+      activity_date: new Date(),
+    },
+  })
+
+  return { activity_id: activity.id }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AÇÃO: Enviar Notificação
+// ═══════════════════════════════════════════════════════════════
+
+async function executeSendNotification(action: any, payload: EventPayload) {
+  const { user_id, title, message } = action.config
+
+  // Aqui você implementaria o sistema de notificações
+  // Por exemplo, usando Pusher, Socket.io, etc
+
+  console.log(`[NOTIFICATION] ${title} para usuário ${user_id}`)
+
+  return { notification_sent: true }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UTILITÁRIO: Substituir Variáveis
+// ═══════════════════════════════════════════════════════════════
+
+function replaceVariables(text: string, data: any): string {
+  if (!text) return text
+
+  let result = text
+
+  // Substituir variáveis no formato {{variable}}
+  const matches = text.match(/\{\{([^}]+)\}\}/g)
+
+  if (matches) {
+    matches.forEach((match) => {
+      const variable = match.replace(/\{\{|\}\}/g, '').trim()
+      const value = getNestedValue(data, variable)
+      result = result.replace(match, value || '')
+    })
+  }
+
+  return result
+}
+
+function getNestedValue(obj: any, path: string): any {
+  return path.split('.').reduce((current, key) => current?.[key], obj)
+}
+
+// lib/automation/conditions.ts
+
+export async function evaluateConditions(
+  conditions: any,
+  data: any
+): Promise<boolean> {
+  if (!conditions) return true
+
+  const { operator, rules } = conditions
+
+  // Operador lógico: AND ou OR
+  if (operator === 'AND') {
+    return rules.every((rule: any) => evaluateRule(rule, data))
+  } else if (operator === 'OR') {
+    return rules.some((rule: any) => evaluateRule(rule, data))
+  }
+
+  // Condição única
+  return evaluateRule(conditions, data)
+}
+
+function evaluateRule(rule: any, data: any): boolean {
+  const { field, operator, value } = rule
+
+  // Obter valor do campo
+  const fieldValue = getNestedValue(data, field)
+
+  // Avaliar operador
+  switch (operator) {
+    case 'equals':
+    case '==':
+      return fieldValue == value
+
+    case 'not_equals':
+    case '!=':
+      return fieldValue != value
+
+    case 'greater_than':
+    case '>':
+      return Number(fieldValue) > Number(value)
+
+    case 'greater_than_or_equal':
+    case '>=':
+      return Number(fieldValue) >= Number(value)
+
+    case 'less_than':
+    case '<':
+      return Number(fieldValue) < Number(value)
+
+    case 'less_than_or_equal':
+    case '<=':
+      return Number(fieldValue) <= Number(value)
+
+    case 'contains':
+      return String(fieldValue).includes(String(value))
+
+    case 'not_contains':
+      return !String(fieldValue).includes(String(value))
+
+    case 'starts_with':
+      return String(fieldValue).startsWith(String(value))
+
+    case 'ends_with':
+      return String(fieldValue).endsWith(String(value))
+
+    case 'in':
+      return Array.isArray(value) && value.includes(fieldValue)
+
+    case 'not_in':
+      return Array.isArray(value) && !value.includes(fieldValue)
+
+    case 'is_empty':
+      return !fieldValue || fieldValue === '' || fieldValue === null
+
+    case 'is_not_empty':
+      return !!fieldValue && fieldValue !== '' && fieldValue !== null
+
+    default:
+      console.warn(`Operador desconhecido: ${operator}`)
+      return false
+  }
+}
+
+function getNestedValue(obj: any, path: string): any {
+  return path.split('.').reduce((current, key) => current?.[key], obj)
+}
+
+// lib/automation/webhook-manager.ts
+
+import { prisma } from '@/lib/prisma'
+import crypto from 'crypto'
+
+class WebhookManager {
+  private static instance: WebhookManager
+
+  private constructor() {}
+
+  static getInstance(): WebhookManager {
+    if (!WebhookManager.instance) {
+      WebhookManager.instance = new WebhookManager()
+    }
+    return WebhookManager.instance
+  }
+
+  // Disparar webhook
+  async trigger(event: string, tenantId: string, payload: any) {
+    try {
+      // Buscar webhooks ativos para este evento
+      const webhooks = await prisma.webhook.findMany({
+        where: {
+          tenant_id: tenantId,
+          is_active: true,
+          events: {
+            has: event,
+          },
+        },
+      })
+
+      if (webhooks.length === 0) {
+        return
+      }
+
+      console.log(
+        `[WEBHOOK] Disparando ${webhooks.length} webhook(s) para evento ${event}`
+      )
+
+      // Disparar cada webhook
+      for (const webhook of webhooks) {
+        await this.callWebhook(webhook, event, payload)
+      }
+    } catch (error) {
+      console.error('[WEBHOOK] Erro ao disparar webhooks:', error)
+    }
+  }
+
+  // Chamar webhook
+  async callWebhook(webhook: any, event: string, payload: any, attempt: number = 1) {
+    const startTime = Date.now()
+
+    try {
+      // Preparar headers
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Webhook-Event': event,
+        'X-Webhook-ID': webhook.id,
+        'User-Agent': 'VisiteCRM-Webhook/1.0',
+        ...webhook.headers,
+      }
+
+      // Adicionar assinatura se houver secret
+      if (webhook.secret) {
+        const signature = this.generateSignature(payload, webhook.secret)
+        headers['X-Webhook-Signature'] = signature
+      }
+
+      // Fazer requisição
+      const response = await fetch(webhook.url, {
+        method: webhook.method,
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(30000), // 30 segundos timeout
+      })
+
+      const duration = Date.now() - startTime
+      const responseBody = await response.text()
+
+      // Registrar log
+      await prisma.webhookLog.create({
+        data: {
+          webhook_id: webhook.id,
+          event,
+          payload,
+          status_code: response.status,
+          response_body: responseBody.substring(0, 5000), // Limitar tamanho
+          duration_ms: duration,
+          attempt,
+        },
+      })
+
+      // Atualizar estatísticas
+      await prisma.webhook.update({
+        where: { id: webhook.id },
+        data: {
+          total_calls: { increment: 1 },
+          success_calls: response.ok ? { increment: 1 } : undefined,
+          failed_calls: !response.ok ? { increment: 1 } : undefined,
+          last_called: new Date(),
+          last_status: response.status,
+          last_error: !response.ok ? `HTTP ${response.status}` : null,
+        },
+      })
+
+      // Retry se falhou e retry está habilitado
+      if (!response.ok && webhook.retry_enabled && attempt < webhook.max_retries) {
+        console.log(
+          `[WEBHOOK] Tentativa ${attempt} falhou, agendando retry...`
+        )
+        setTimeout(() => {
+          this.callWebhook(webhook, event, payload, attempt + 1)
+        }, webhook.retry_delay * 1000)
+      }
+
+      return response.ok
+    } catch (error: any) {
+      const duration = Date.now() - startTime
+
+      console.error(`[WEBHOOK] Erro ao chamar ${webhook.url}:`, error)
+
+      // Registrar log de erro
+      await prisma.webhookLog.create({
+        data: {
+          webhook_id: webhook.id,
+          event,
+          payload,
+          error_message: error.message,
+          duration_ms: duration,
+          attempt,
+        },
+      })
+
+      // Atualizar estatísticas
+      await prisma.webhook.update({
+        where: { id: webhook.id },
+        data: {
+          total_calls: { increment: 1 },
+          failed_calls: { increment: 1 },
+          last_called: new Date(),
+          last_error: error.message,
+        },
+      })
+
+      // Retry se retry está habilitado
+      if (webhook.retry_enabled && attempt < webhook.max_retries) {
+        console.log(
+          `[WEBHOOK] Tentativa ${attempt} falhou, agendando retry...`
+        )
+        setTimeout(() => {
+          this.callWebhook(webhook, event, payload, attempt + 1)
+        }, webhook.retry_delay * 1000)
+      }
+
+      return false
+    }
+  }
+
+  // Gerar assinatura HMAC
+  generateSignature(payload: any, secret: string): string {
+    const hmac = crypto.createHmac('sha256', secret)
+    hmac.update(JSON.stringify(payload))
+    return hmac.digest('hex')
+  }
+
+  // Validar assinatura
+  validateSignature(payload: any, signature: string, secret: string): boolean {
+    const expectedSignature = this.generateSignature(payload, secret)
+    return crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expectedSignature)
+    )
+  }
+}
+
+export const webhookManager = WebhookManager.getInstance()
+
+CRIAÇÃO DE AUTOMAÇÕES
+├── 1. Lista de Automações
+├── 2. Builder de Automação (Drag & Drop)
+│   ├── Seleção de Trigger
+│   ├── Configuração de Condições
+│   ├── Configuração de Ações
+│   └── Configuração de Delay
+├── 3. Templates Prontos
+├── 4. Logs e Monitoramento
+└── 5. Gerenciamento de Webhooks
+// app/api/dashboard/automations/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { automationEngine } from '@/lib/automation/automation-engine'
+
+// ═══════════════════════════════════════════════════════════════
+// GET - Listar Automações
+// ═══════════════════════════════════════════════════════════════
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '20')
+    const search = searchParams.get('search') || ''
+    const triggerType = searchParams.get('trigger_type') || ''
+    const isActive = searchParams.get('is_active')
+
+    const skip = (page - 1) * limit
+
+    // Filtros
+    const where: any = {
+      tenant_id: session.user.tenantId,
+    }
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+      ]
+    }
+
+    if (triggerType) {
+      where.trigger_type = triggerType
+    }
+
+    if (isActive !== null) {
+      where.is_active = isActive === 'true'
+    }
+
+    // Buscar automações
+    const [automations, total] = await Promise.all([
+      prisma.automation.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          _count: {
+            select: { executions: true },
+          },
+        },
+      }),
+      prisma.automation.count({ where }),
+    ])
+
+    return NextResponse.json({
+      automations,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    })
+  } catch (error: any) {
+    console.error('Erro ao buscar automações:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar automações' },
+      { status: 500 }
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// POST - Criar Automação
+// ═══════════════════════════════════════════════════════════════
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const body = await req.json()
+
+    // Validações
+    if (!body.name || !body.trigger_type || !body.actions) {
+      return NextResponse.json(
+        { error: 'Campos obrigatórios faltando' },
+        { status: 400 }
+      )
+    }
+
+    // Criar automação
+    const automation = await prisma.automation.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        name: body.name,
+        description: body.description,
+        trigger_type: body.trigger_type,
+        trigger_config: body.trigger_config || {},
+        conditions: body.conditions,
+        actions: body.actions,
+        delay_type: body.delay_type || 'immediate',
+        delay_value: body.delay_value,
+        delay_unit: body.delay_unit,
+        is_active: body.is_active !== false,
+      },
+    })
+
+    // Recarregar automações no engine
+    await automationEngine.reloadAutomations()
+
+    // Log de auditoria
+    await prisma.auditLog.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        user_id: session.user.id,
+        action: 'create',
+        resource: 'automation',
+        resource_id: automation.id,
+        metadata: {
+          name: automation.name,
+          trigger_type: automation.trigger_type,
+        },
+      },
+    })
+
+    return NextResponse.json({ automation })
+  } catch (error: any) {
+    console.error('Erro ao criar automação:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar automação' },
+      { status: 500 }
+    )
+  }
+}
+
+// app/api/dashboard/automations/[id]/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { automationEngine } from '@/lib/automation/automation-engine'
+
+// ═══════════════════════════════════════════════════════════════
+// GET - Buscar Automação
+// ═══════════════════════════════════════════════════════════════
+
+export async function GET(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const automation = await prisma.automation.findUnique({
+      where: { id: params.id },
+      include: {
+        executions: {
+          take: 10,
+          orderBy: { started_at: 'desc' },
+        },
+        _count: {
+          select: { executions: true },
+        },
+      },
+    })
+
+    if (!automation) {
+      return NextResponse.json(
+        { error: 'Automação não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    if (automation.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    }
+
+    return NextResponse.json({ automation })
+  } catch (error: any) {
+    console.error('Erro ao buscar automação:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar automação' },
+      { status: 500 }
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PUT - Atualizar Automação
+// ═══════════════════════════════════════════════════════════════
+
+export async function PUT(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const body = await req.json()
+
+    // Verificar se existe
+    const existing = await prisma.automation.findUnique({
+      where: { id: params.id },
+    })
+
+    if (!existing) {
+      return NextResponse.json(
+        { error: 'Automação não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    if (existing.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    }
+
+    // Atualizar
+    const automation = await prisma.automation.update({
+      where: { id: params.id },
+      data: {
+        name: body.name,
+        description: body.description,
+        trigger_type: body.trigger_type,
+        trigger_config: body.trigger_config,
+        conditions: body.conditions,
+        actions: body.actions,
+        delay_type: body.delay_type,
+        delay_value: body.delay_value,
+        delay_unit: body.delay_unit,
+        is_active: body.is_active,
+      },
+    })
+
+    // Recarregar automações
+    await automationEngine.reloadAutomations()
+
+    // Log de auditoria
+    await prisma.auditLog.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        user_id: session.user.id,
+        action: 'update',
+        resource: 'automation',
+        resource_id: automation.id,
+        metadata: {
+          name: automation.name,
+        },
+      },
+    })
+
+    return NextResponse.json({ automation })
+  } catch (error: any) {
+    console.error('Erro ao atualizar automação:', error)
+    return NextResponse.json(
+      { error: 'Erro ao atualizar automação' },
+      { status: 500 }
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DELETE - Deletar Automação
+// ═══════════════════════════════════════════════════════════════
+
+export async function DELETE(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const automation = await prisma.automation.findUnique({
+      where: { id: params.id },
+    })
+
+    if (!automation) {
+      return NextResponse.json(
+        { error: 'Automação não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    if (automation.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    }
+
+    await prisma.automation.delete({
+      where: { id: params.id },
+    })
+
+    // Recarregar automações
+    await automationEngine.reloadAutomations()
+
+    // Log de auditoria
+    await prisma.auditLog.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        user_id: session.user.id,
+        action: 'delete',
+        resource: 'automation',
+        resource_id: params.id,
+        metadata: {
+          name: automation.name,
+        },
+      },
+    })
+
+    return NextResponse.json({ success: true })
+  } catch (error: any) {
+    console.error('Erro ao deletar automação:', error)
+    return NextResponse.json(
+      { error: 'Erro ao deletar automação' },
+      { status: 500 }
+    )
+  }
+}
+
+// app/api/dashboard/automations/[id]/toggle/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { automationEngine } from '@/lib/automation/automation-engine'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const automation = await prisma.automation.findUnique({
+      where: { id: params.id },
+    })
+
+    if (!automation) {
+      return NextResponse.json(
+        { error: 'Automação não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    if (automation.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    }
+
+    // Toggle
+    const updated = await prisma.automation.update({
+      where: { id: params.id },
+      data: {
+        is_active: !automation.is_active,
+      },
+    })
+
+    // Recarregar automações
+    await automationEngine.reloadAutomations()
+
+    return NextResponse.json({ automation: updated })
+  } catch (error: any) {
+    console.error('Erro ao alternar automação:', error)
+    return NextResponse.json(
+      { error: 'Erro ao alternar automação' },
+      { status: 500 }
+    )
+  }
+}
+
+// app/api/dashboard/automations/[id]/test/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { automationEngine } from '@/lib/automation/automation-engine'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const body = await req.json()
+
+    const automation = await prisma.automation.findUnique({
+      where: { id: params.id },
+    })
+
+    if (!automation) {
+      return NextResponse.json(
+        { error: 'Automação não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    if (automation.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    }
+
+    // Executar automação com dados de teste
+    const payload = {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      timestamp: new Date(),
+      data: body.test_data || {},
+    }
+
+    await automationEngine.executeAutomation(automation as any, payload)
+
+    return NextResponse.json({ success: true, message: 'Teste executado' })
+  } catch (error: any) {
+    console.error('Erro ao testar automação:', error)
+    return NextResponse.json(
+      { error: error.message || 'Erro ao testar automação' },
+      { status: 500 }
+    )
+  }
+}
+
+// app/(dashboard)/dashboard/automations/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { AutomationsList } from '@/components/dashboard/automations/automations-list'
+import { Button } from '@/components/ui/button'
+import { Plus } from 'lucide-react'
+import Link from 'next/link'
+
+export default async function AutomationsPage({
+  searchParams,
+}: {
+  searchParams: { page?: string; search?: string }
+}) {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  const page = parseInt(searchParams.page || '1')
+  const limit = 20
+  const skip = (page - 1) * limit
+  const search = searchParams.search || ''
+
+  const where: any = {
+    tenant_id: session.user.tenantId,
+  }
+
+  if (search) {
+    where.OR = [
+      { name: { contains: search, mode: 'insensitive' } },
+      { description: { contains: search, mode: 'insensitive' } },
+    ]
+  }
+
+  const [automations, total] = await Promise.all([
+    prisma.automation.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { created_at: 'desc' },
+      include: {
+        _count: {
+          select: { executions: true },
+        },
+      },
+    }),
+    prisma.automation.count({ where }),
+  ])
+
+  // Estatísticas
+  const stats = await prisma.automation.aggregate({
+    where: { tenant_id: session.user.tenantId },
+    _count: { id: true },
+    _sum: {
+      execution_count: true,
+      success_count: true,
+      error_count: true,
+    },
+  })
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Automações</h1>
+          <p className="text-gray-600">
+            Automatize tarefas e processos do seu negócio
+          </p>
+        </div>
+        <Link href="/dashboard/automations/new">
+          <Button>
+            <Plus className="h-4 w-4 mr-2" />
+            Nova Automação
+          </Button>
+        </Link>
+      </div>
+
+      {/* Estatísticas */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div className="bg-white rounded-lg border p-4">
+          <p className="text-sm text-gray-600">Total de Automações</p>
+          <p className="text-2xl font-bold">{stats._count.id}</p>
+        </div>
+        <div className="bg-white rounded-lg border p-4">
+          <p className="text-sm text-gray-600">Execuções</p>
+          <p className="text-2xl font-bold">{stats._sum.execution_count || 0}</p>
+        </div>
+        <div className="bg-white rounded-lg border p-4">
+          <p className="text-sm text-gray-600">Sucessos</p>
+          <p className="text-2xl font-bold text-green-600">
+            {stats._sum.success_count || 0}
+          </p>
+        </div>
+        <div className="bg-white rounded-lg border p-4">
+          <p className="text-sm text-gray-600">Erros</p>
+          <p className="text-2xl font-bold text-red-600">
+            {stats._sum.error_count || 0}
+          </p>
+        </div>
+      </div>
+
+      <AutomationsList
+        automations={automations}
+        total={total}
+        page={page}
+        limit={limit}
+      />
+    </div>
+  )
+}
+
+// components/dashboard/automations/automations-list.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  MoreVertical,
+  Play,
+  Pause,
+  Edit,
+  Trash2,
+  Copy,
+  BarChart3,
+  Zap,
+} from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { useToast } from '@/components/ui/use-toast'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+interface AutomationsListProps {
+  automations: any[]
+  total: number
+  page: number
+  limit: number
+}
+
+export function AutomationsList({
+  automations: initialAutomations,
+  total,
+  page,
+  limit,
+}: AutomationsListProps) {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [automations, setAutomations] = useState(initialAutomations)
+
+  const handleToggle = async (id: string, currentStatus: boolean) => {
+    try {
+      const response = await fetch(`/api/dashboard/automations/${id}/toggle`, {
+        method: 'POST',
+      })
+
+      if (!response.ok) {
+        throw new Error('Erro ao alternar automação')
+      }
+
+      const { automation } = await response.json()
+
+      setAutomations((prev) =>
+        prev.map((a) => (a.id === id ? automation : a))
+      )
+
+      toast({
+        title: automation.is_active ? 'Automação ativada' : 'Automação desativada',
+      })
+    } catch (error) {
+      toast({
+        title: 'Erro ao alternar automação',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza que deseja deletar esta automação?')) {
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/dashboard/automations/${id}`, {
+        method: 'DELETE',
+      })
+
+      if (!response.ok) {
+        throw new Error('Erro ao deletar automação')
+      }
+
+      setAutomations((prev) => prev.filter((a) => a.id !== id))
+
+      toast({
+        title: 'Automação deletada com sucesso',
+      })
+    } catch (error) {
+      toast({
+        title: 'Erro ao deletar automação',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const getTriggerLabel = (type: string) => {
+    const labels: Record<string, string> = {
+      reservation_created: 'Reserva Criada',
+      reservation_confirmed: 'Reserva Confirmada',
+      payment_received: 'Pagamento Recebido',
+      deal_stage_changed: 'Estágio do Deal Alterado',
+      deal_won: 'Deal Ganho',
+      client_created: 'Cliente Criado',
+      trip_published: 'Viagem Publicada',
+    }
+    return labels[type] || type
+  }
+
+  const getSuccessRate = (automation: any) => {
+    if (automation.execution_count === 0) return 0
+    return Math.round(
+      (automation.success_count / automation.execution_count) * 100
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {automations.length === 0 ? (
+        <Card className="p-12 text-center">
+          <Zap className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+          <h3 className="text-lg font-semibold mb-2">Nenhuma automação criada</h3>
+          <p className="text-gray-600 mb-4">
+            Crie sua primeira automação para começar
+          </p>
+          <Button onClick={() => router.push('/dashboard/automations/new')}>
+            <Plus className="h-4 w-4 mr-2" />
+            Nova Automação
+          </Button>
+        </Card>
+      ) : (
+        <>
+          {automations.map((automation) => (
+            <Card key={automation.id} className="p-6">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h3 className="text-lg font-bold">{automation.name}</h3>
+                    <Badge
+                      variant={automation.is_active ? 'default' : 'secondary'}
+                    >
+                      {automation.is_active ? 'Ativa' : 'Inativa'}
+                    </Badge>
+                  </div>
+
+                  {automation.description && (
+                    <p className="text-sm text-gray-600 mb-3">
+                      {automation.description}
+                    </p>
+                  )}
+
+                  <div className="flex flex-wrap gap-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-blue-600" />
+                      <span className="text-gray-600">Trigger:</span>
+                      <span className="font-medium">
+                        {getTriggerLabel(automation.trigger_type)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <BarChart3 className="h-4 w-4 text-green-600" />
+                      <span className="text-gray-600">Execuções:</span>
+                      <span className="font-medium">
+                        {automation.execution_count}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-600">Taxa de Sucesso:</span>
+                      <span
+                        className={`font-medium ${
+                          getSuccessRate(automation) >= 80
+                            ? 'text-green-600'
+                            : getSuccessRate(automation) >= 50
+                            ? 'text-yellow-600'
+                            : 'text-red-600'
+                        }`}
+                      >
+                        {getSuccessRate(automation)}%
+                      </span>
+                    </div>
+
+                    {automation.last_executed && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-600">Última execução:</span>
+                        <span className="font-medium">
+                          {format(
+                            new Date(automation.last_executed),
+                            "dd/MM/yyyy 'às' HH:mm",
+                            { locale: ptBR }
+                          )}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={automation.is_active}
+                    onCheckedChange={() =>
+                      handleToggle(automation.id, automation.is_active)
+                    }
+                  />
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm">
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() =>
+                          router.push(`/dashboard/automations/${automation.id}`)
+                        }
+                      >
+                        <Edit className="h-4 w-4 mr-2" />
+                        Editar
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() =>
+                          router.push(`/dashboard/automations/${automation.id}/logs`)
+                        }
+                      >
+                        <BarChart3 className="h-4 w-4 mr-2" />
+                        Ver Logs
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() =>
+                          router.push(
+                            `/dashboard/automations/new?duplicate=${automation.id}`
+                          )
+                        }
+                      >
+                        <Copy className="h-4 w-4 mr-2" />
+                        Duplicar
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => handleDelete(automation.id)}
+                        className="text-red-600"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Deletar
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+            </Card>
+          ))}
+
+          {/* Paginação */}
+          {total > limit && (
+            <div className="flex justify-center gap-2 mt-6">
+              {Array.from({ length: Math.ceil(total / limit) }, (_, i) => (
+                <Button
+                  key={i}
+                  variant={page === i + 1 ? 'default' : 'outline'}
+                  onClick={() => router.push(`?page=${i + 1}`)}
+                >
+                  {i + 1}
+                </Button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// components/dashboard/automations/builder/actions-builder.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import {
+  Plus,
+  Trash2,
+  Mail,
+  MessageSquare,
+  CheckSquare,
+  Edit,
+  Tag,
+  Webhook,
+  Bell,
+  FileText,
+  GripVertical,
+} from 'lucide-react'
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
+
+interface ActionsBuilderProps {
+  actions: any[]
+  onChange: (actions: any[]) => void
+  users: any[]
+  pipelines: any[]
+  triggerType: string
+}
+
+const ACTION_TYPES = [
+  {
+    id: 'send_email',
+    name: 'Enviar Email',
+    description: 'Enviar email para o cliente ou equipe',
+    icon: Mail,
+    color: 'text-blue-600',
+    bgColor: 'bg-blue-100',
+  },
+  {
+    id: 'send_whatsapp',
+    name: 'Enviar WhatsApp',
+    description: 'Enviar mensagem via WhatsApp',
+    icon: MessageSquare,
+    color: 'text-green-600',
+    bgColor: 'bg-green-100',
+  },
+  {
+    id: 'create_task',
+    name: 'Criar Tarefa',
+    description: 'Criar uma tarefa para a equipe',
+    icon: CheckSquare,
+    color: 'text-purple-600',
+    bgColor: 'bg-purple-100',
+  },
+  {
+    id: 'update_field',
+    name: 'Atualizar Campo',
+    description: 'Atualizar campo de um registro',
+    icon: Edit,
+    color: 'text-orange-600',
+    bgColor: 'bg-orange-100',
+  },
+  {
+    id: 'add_tag',
+    name: 'Adicionar Tag',
+    description: 'Adicionar tag ao cliente',
+    icon: Tag,
+    color: 'text-pink-600',
+    bgColor: 'bg-pink-100',
+  },
+  {
+    id: 'webhook',
+    name: 'Webhook',
+    description: 'Enviar dados para URL externa',
+    icon: Webhook,
+    color: 'text-indigo-600',
+    bgColor: 'bg-indigo-100',
+  },
+  {
+    id: 'send_notification',
+    name: 'Enviar Notificação',
+    description: 'Notificar usuário no sistema',
+    icon: Bell,
+    color: 'text-yellow-600',
+    bgColor: 'bg-yellow-100',
+  },
+  {
+    id: 'create_activity',
+    name: 'Criar Atividade',
+    description: 'Registrar atividade no timeline',
+    icon: FileText,
+    color: 'text-gray-600',
+    bgColor: 'bg-gray-100',
+  },
+]
+
+export function ActionsBuilder({
+  actions,
+  onChange,
+  users,
+  pipelines,
+  triggerType,
+}: ActionsBuilderProps) {
+  const [selectedAction, setSelectedAction] = useState<string | null>(null)
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+
+  const addAction = (actionType: string) => {
+    const newAction = {
+      type: actionType,
+      config: getDefaultConfig(actionType),
+    }
+
+    if (editingIndex !== null) {
+      const newActions = [...actions]
+      newActions[editingIndex] = newAction
+      onChange(newActions)
+      setEditingIndex(null)
+    } else {
+      onChange([...actions, newAction])
+    }
+
+    setDialogOpen(false)
+    setSelectedAction(null)
+  }
+
+  const removeAction = (index: number) => {
+    onChange(actions.filter((_, i) => i !== index))
+  }
+
+  const updateActionConfig = (index: number, config: any) => {
+    const newActions = [...actions]
+    newActions[index].config = config
+    onChange(newActions)
+  }
+
+  const handleDragEnd = (result: any) => {
+    if (!result.destination) return
+
+    const items = Array.from(actions)
+    const [reorderedItem] = items.splice(result.source.index, 1)
+    items.splice(result.destination.index, 0, reorderedItem)
+
+    onChange(items)
+  }
+
+  const getDefaultConfig = (actionType: string) => {
+    const defaults: Record<string, any> = {
+      send_email: {
+        to: '{{client.email}}',
+        subject: '',
+        template: 'default',
+        variables: {},
+      },
+      send_whatsapp: {
+        phone: '{{client.phone}}',
+        message: '',
+      },
+      create_task: {
+        title: '',
+        description: '',
+        assigned_to: '',
+        priority: 'medium',
+      },
+      update_field: {
+        model: 'client',
+        record_id: '{{client.id}}',
+        field: '',
+        value: '',
+      },
+      add_tag: {
+        client_id: '{{client.id}}',
+        tag: '',
+      },
+      webhook: {
+        url: '',
+        method: 'POST',
+        headers: {},
+        body: {},
+      },
+      send_notification: {
+        user_id: '',
+        title: '',
+        message: '',
+      },
+      create_activity: {
+        type: 'note',
+        subject: '',
+        description: '',
+        client_id: '{{client.id}}',
+        user_id: '',
+      },
+    }
+
+    return defaults[actionType] || {}
+  }
+
+  const getActionTypeInfo = (type: string) => {
+    return ACTION_TYPES.find((a) => a.id === type)
+  }
+
+  if (actions.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <div className="inline-flex items-center justify-center w-16 h-16 bg-gray-100 rounded-full mb-4">
+          <Plus className="h-8 w-8 text-gray-400" />
+        </div>
+        <p className="text-gray-600 mb-4">
+          Nenhuma ação configurada. Adicione pelo menos uma ação.
+        </p>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="h-4 w-4 mr-2" />
+              Adicionar Ação
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Selecione uma Ação</DialogTitle>
+            </DialogHeader>
+            <ActionSelector
+              onSelect={(type) => {
+                setSelectedAction(type)
+                addAction(type)
+              }}
+            />
+          </DialogContent>
+        </Dialog>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <DragDropContext onDragEnd={handleDragEnd}>
+        <Droppable droppableId="actions">
+          {(provided) => (
+            <div
+              {...provided.droppableProps}
+              ref={provided.innerRef}
+              className="space-y-3"
+            >
+              {actions.map((action, index) => {
+                const actionInfo = getActionTypeInfo(action.type)
+                if (!actionInfo) return null
+
+                const Icon = actionInfo.icon
+
+                return (
+                  <Draggable
+                    key={index}
+                    draggableId={`action-${index}`}
+                    index={index}
+                  >
+                    {(provided) => (
+                      <Card
+                        ref={provided.innerRef}
+                        {...provided.draggableProps}
+                        className="p-4"
+                      >
+                        <div className="flex items-start gap-3">
+                          {/* Drag Handle */}
+                          <div
+                            {...provided.dragHandleProps}
+                            className="cursor-move pt-1"
+                          >
+                            <GripVertical className="h-5 w-5 text-gray-400" />
+                          </div>
+
+                          {/* Icon */}
+                          <div className={`p-2 rounded-lg ${actionInfo.bgColor}`}>
+                            <Icon className={`h-5 w-5 ${actionInfo.color}`} />
+                          </div>
+
+                          {/* Content */}
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-3">
+                              <div>
+                                <h4 className="font-semibold">
+                                  {index + 1}. {actionInfo.name}
+                                </h4>
+                                <p className="text-sm text-gray-600">
+                                  {actionInfo.description}
+                                </p>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => removeAction(index)}
+                                className="text-red-600"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+
+                            {/* Action Config */}
+                            <ActionConfig
+                              type={action.type}
+                              config={action.config}
+                              onChange={(config) =>
+                                updateActionConfig(index, config)
+                              }
+                              users={users}
+                              pipelines={pipelines}
+                              triggerType={triggerType}
+                            />
+                          </div>
+                        </div>
+                      </Card>
+                    )}
+                  </Draggable>
+                )
+              })}
+              {provided.placeholder}
+            </div>
+          )}
+        </Droppable>
+      </DragDropContext>
+
+      {/* Adicionar Nova Ação */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogTrigger asChild>
+          <Button variant="outline" className="w-full">
+            <Plus className="h-4 w-4 mr-2" />
+            Adicionar Outra Ação
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Selecione uma Ação</DialogTitle>
+          </DialogHeader>
+          <ActionSelector
+            onSelect={(type) => {
+              setSelectedAction(type)
+              addAction(type)
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SELETOR DE AÇÕES
+// ═══════════════════════════════════════════════════════════════
+
+function ActionSelector({ onSelect }: { onSelect: (type: string) => void }) {
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {ACTION_TYPES.map((action) => {
+        const Icon = action.icon
+
+        return (
+          <Card
+            key={action.id}
+            className="p-4 cursor-pointer transition-all hover:shadow-md hover:border-blue-500"
+            onClick={() => onSelect(action.id)}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`p-2 rounded-lg ${action.bgColor}`}>
+                <Icon className={`h-5 w-5 ${action.color}`} />
+              </div>
+              <div>
+                <h4 className="font-semibold mb-1">{action.name}</h4>
+                <p className="text-sm text-gray-600">{action.description}</p>
+              </div>
+            </div>
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONFIGURAÇÃO DE AÇÃO
+// ═══════════════════════════════════════════════════════════════
+
+function ActionConfig({
+  type,
+  config,
+  onChange,
+  users,
+  pipelines,
+  triggerType,
+}: any) {
+  switch (type) {
+    case 'send_email':
+      return (
+        <div className="space-y-3">
+          <div>
+            <Label>Para (Email)</Label>
+            <Input
+              value={config.to}
+              onChange={(e) => onChange({ ...config, to: e.target.value })}
+              placeholder="{{client.email}}"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Use variáveis: &#123;&#123;client.email&#125;&#125;
+            </p>
+          </div>
+          <div>
+            <Label>Assunto</Label>
+            <Input
+              value={config.subject}
+              onChange={(e) => onChange({ ...config, subject: e.target.value })}
+              placeholder="Ex: Confirmação de Reserva"
+            />
+          </div>
+          <div>
+            <Label>Mensagem</Label>
+            <Textarea
+              value={config.message || ''}
+              onChange={(e) => onChange({ ...config, message: e.target.value })}
+              placeholder="Digite a mensagem do email..."
+              rows={4}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Variáveis disponíveis: &#123;&#123;client.name&#125;&#125;,
+              &#123;&#123;reservation_number&#125;&#125;,
+              &#123;&#123;voucher_code&#125;&#125;
+            </p>
+          </div>
+        </div>
+      )
+
+    case 'send_whatsapp':
+      return (
+        <div className="space-y-3">
+          <div>
+            <Label>Telefone</Label>
+            <Input
+              value={config.phone}
+              onChange={(e) => onChange({ ...config, phone: e.target.value })}
+              placeholder="{{client.phone}}"
+            />
+          </div>
+          <div>
+            <Label>Mensagem</Label>
+            <Textarea
+              value={config.message}
+              onChange={(e) => onChange({ ...config, message: e.target.value })}
+              placeholder="Digite a mensagem..."
+              rows={4}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Variáveis: &#123;&#123;client.name&#125;&#125;,
+              &#123;&#123;reservation_number&#125;&#125;
+            </p>
+          </div>
+        </div>
+      )
+
+    case 'create_task':
+      return (
+        <div className="space-y-3">
+          <div>
+            <Label>Título da Tarefa</Label>
+            <Input
+              value={config.title}
+              onChange={(e) => onChange({ ...config, title: e.target.value })}
+              placeholder="Ex: Ligar para cliente"
+            />
+          </div>
+          <div>
+            <Label>Descrição</Label>
+            <Textarea
+              value={config.description}
+              onChange={(e) =>
+                onChange({ ...config, description: e.target.value })
+              }
+              placeholder="Detalhes da tarefa..."
+              rows={3}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Atribuir para</Label>
+              <Select
+                value={config.assigned_to}
+                onValueChange={(value) =>
+                  onChange({ ...config, assigned_to: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione" />
+                </SelectTrigger>
+                <SelectContent>
+                  {users.map((user) => (
+                    <SelectItem key={user.id} value={user.id}>
+                      {user.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Prioridade</Label>
+              <Select
+                value={config.priority}
+                onValueChange={(value) =>
+                  onChange({ ...config, priority: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">Baixa</SelectItem>
+                  <SelectItem value="medium">Média</SelectItem>
+                  <SelectItem value="high">Alta</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+      )
+
+    case 'add_tag':
+      return (
+        <div>
+          <Label>Tag</Label>
+          <Input
+            value={config.tag}
+            onChange={(e) => onChange({ ...config, tag: e.target.value })}
+            placeholder="Ex: vip, interessado, follow-up"
+          />
+        </div>
+      )
+
+    case 'webhook':
+      return (
+        <div className="space-y-3">
+          <div>
+            <Label>URL</Label>
+            <Input
+              value={config.url}
+              onChange={(e) => onChange({ ...config, url: e.target.value })}
+              placeholder="https://..."
+            />
+          </div>
+          <div>
+            <Label>Método</Label>
+            <Select
+              value={config.method}
+              onValueChange={(value) => onChange({ ...config, method: value })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="POST">POST</SelectItem>
+                <SelectItem value="GET">GET</SelectItem>
+                <SelectItem value="PUT">PUT</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      )
+
+    case 'send_notification':
+      return (
+        <div className="space-y-3">
+          <div>
+            <Label>Usuário</Label>
+            <Select
+              value={config.user_id}
+              onValueChange={(value) => onChange({ ...config, user_id: value })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione" />
+              </SelectTrigger>
+              <SelectContent>
+                {users.map((user) => (
+                  <SelectItem key={user.id} value={user.id}>
+                    {user.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>Título</Label>
+            <Input
+              value={config.title}
+              onChange={(e) => onChange({ ...config, title: e.target.value })}
+              placeholder="Título da notificação"
+            />
+          </div>
+          <div>
+            <Label>Mensagem</Label>
+            <Textarea
+              value={config.message}
+              onChange={(e) => onChange({ ...config, message: e.target.value })}
+              placeholder="Mensagem da notificação"
+              rows={3}
+            />
+          </div>
+        </div>
+      )
+
+    default:
+      return null
+  }
+}
+
+// components/dashboard/automations/builder/delay-config.tsx
+
+'use client'
+
+import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Card } from '@/components/ui/card'
+import { Clock, Zap, Calendar } from 'lucide-react'
+
+interface DelayConfigProps {
+  delayType: string
+  delayValue: number | null
+  delayUnit: string
+  onChange: (delayType: string, delayValue: number | null, delayUnit: string) => void
+}
+
+export function DelayConfig({
+  delayType,
+  delayValue,
+  delayUnit,
+  onChange,
+}: DelayConfigProps) {
+  return (
+    <div className="space-y-4">
+      <RadioGroup
+        value={delayType}
+        onValueChange={(value) => onChange(value, delayValue, delayUnit)}
+      >
+        {/* Imediato */}
+        <Card
+          className={`p-4 cursor-pointer transition-all ${
+            delayType === 'immediate'
+              ? 'ring-2 ring-blue-500 bg-blue-50'
+              : 'hover:bg-gray-50'
+          }`}
+          onClick={() => onChange('immediate', null, 'minutes')}
+        >
+          <div className="flex items-start gap-3">
+            <RadioGroupItem value="immediate" id="immediate" className="mt-1" />
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <Zap className="h-5 w-5 text-blue-600" />
+                <Label htmlFor="immediate" className="cursor-pointer font-semibold">
+                  Executar Imediatamente
+                </Label>
+              </div>
+              <p className="text-sm text-gray-600">
+                As ações serão executadas assim que o trigger ocorrer
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Com Delay */}
+        <Card
+          className={`p-4 cursor-pointer transition-all ${
+            delayType === 'delay'
+              ? 'ring-2 ring-blue-500 bg-blue-50'
+              : 'hover:bg-gray-50'
+          }`}
+          onClick={() => onChange('delay', delayValue || 1, delayUnit)}
+        >
+          <div className="flex items-start gap-3">
+            <RadioGroupItem value="delay" id="delay" className="mt-1" />
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <Clock className="h-5 w-5 text-orange-600" />
+                <Label htmlFor="delay" className="cursor-pointer font-semibold">
+                  Aguardar um Período
+                </Label>
+              </div>
+              <p className="text-sm text-gray-600 mb-3">
+                Executar após um tempo específico
+              </p>
+
+              {delayType === 'delay' && (
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <Label className="text-xs">Quantidade</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={delayValue || 1}
+                      onChange={(e) =>
+                        onChange(delayType, parseInt(e.target.value), delayUnit)
+                      }
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <Label className="text-xs">Unidade</Label>
+                    <Select
+                      value={delayUnit}
+                      onValueChange={(value) =>
+                        onChange(delayType, delayValue, value)
+                      }
+                    >
+                      <SelectTrigger onClick={(e) => e.stopPropagation()}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="minutes">Minutos</SelectItem>
+                        <SelectItem value="hours">Horas</SelectItem>
+                        <SelectItem value="days">Dias</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+
+        {/* Agendado */}
+        <Card
+          className={`p-4 cursor-pointer transition-all ${
+            delayType === 'scheduled'
+              ? 'ring-2 ring-blue-500 bg-blue-50'
+              : 'hover:bg-gray-50'
+          }`}
+          onClick={() => onChange('scheduled', delayValue, delayUnit)}
+        >
+          <div className="flex items-start gap-3">
+            <RadioGroupItem value="scheduled" id="scheduled" className="mt-1" />
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <Calendar className="h-5 w-5 text-purple-600" />
+                <Label htmlFor="scheduled" className="cursor-pointer font-semibold">
+                  Agendar para Data/Hora Específica
+                </Label>
+              </div>
+              <p className="text-sm text-gray-600">
+                Em desenvolvimento - Executar em data e hora específicas
+              </p>
+            </div>
+          </div>
+        </Card>
+      </RadioGroup>
+
+      {/* Preview do Delay */}
+      {delayType === 'delay' && delayValue && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <p className="text-sm text-blue-900">
+            ⏱️ As ações serão executadas{' '}
+            <strong>
+              {delayValue} {delayUnit === 'minutes' ? 'minuto(s)' : delayUnit === 'hours' ? 'hora(s)' : 'dia(s)'}
+            </strong>{' '}
+            após o trigger ocorrer
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// components/dashboard/automations/automation-templates.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import {
+  Mail,
+  MessageSquare,
+  Gift,
+  TrendingUp,
+  Users,
+  Calendar,
+  Zap,
+  Star,
+} from 'lucide-react'
+import { useRouter } from 'next/navigation'
+
+const TEMPLATES = [
+  {
+    id: 'welcome-email',
+    name: 'Email de Boas-vindas',
+    description: 'Enviar email automático quando um novo cliente é cadastrado',
+    category: 'Clientes',
+    icon: Mail,
+    color: 'text-blue-600',
+    bgColor: 'bg-blue-100',
+    popular: true,
+    trigger: 'Cliente Criado',
+    actions: ['Enviar Email'],
+  },
+  {
+    id: 'reservation-confirmation',
+    name: 'Confirmação de Reserva',
+    description: 'Enviar confirmação por email e WhatsApp quando reserva é criada',
+    category: 'Reservas',
+    icon: MessageSquare,
+    color: 'text-green-600',
+    bgColor: 'bg-green-100',
+    popular: true,
+    trigger: 'Reserva Criada',
+    actions: ['Enviar Email', 'Enviar WhatsApp'],
+  },
+  {
+    id: 'payment-reminder',
+    name: 'Lembrete de Pagamento',
+    description: 'Lembrar cliente sobre pagamento pendente após 24h',
+    category: 'Pagamentos',
+    icon: Calendar,
+    color: 'text-orange-600',
+    bgColor: 'bg-orange-100',
+    popular: true,
+    trigger: 'Reserva Criada',
+    actions: ['Aguardar 24h', 'Enviar WhatsApp'],
+  },
+  {
+    id: 'deal-won-celebration',
+    name: 'Comemoração de Venda',
+    description: 'Notificar equipe quando um deal é ganho',
+    category: 'Vendas',
+    icon: TrendingUp,
+    color: 'text-purple-600',
+    bgColor: 'bg-purple-100',
+    trigger: 'Deal Ganho',
+    actions: ['Enviar Notificação', 'Criar Atividade'],
+  },
+  {
+    id: 'referral-bonus',
+    name: 'Bônus de Indicação',
+    description: 'Notificar cliente sobre bônus quando indicação é confirmada',
+    category: 'Indicações',
+    icon: Gift,
+    color: 'text-pink-600',
+    bgColor: 'bg-pink-100',
+    trigger: 'Indicação Completada',
+    actions: ['Enviar WhatsApp', 'Adicionar Tag'],
+  },
+  {
+    id: 'birthday-greeting',
+    name: 'Parabéns de Aniversário',
+    description: 'Enviar mensagem de aniversário para clientes',
+    category: 'Clientes',
+    icon: Gift,
+    color: 'text-yellow-600',
+    bgColor: 'bg-yellow-100',
+    trigger: 'Data Agendada',
+    actions: ['Enviar WhatsApp', 'Enviar Email'],
+  },
+  {
+    id: 'follow-up-lead',
+    name: 'Follow-up de Lead',
+    description: 'Criar tarefa de follow-up quando lead entra no pipeline',
+    category: 'Vendas',
+    icon: Users,
+    color: 'text-indigo-600',
+    bgColor: 'bg-indigo-100',
+    trigger: 'Cliente Criado',
+    actions: ['Criar Tarefa', 'Adicionar Tag'],
+  },
+  {
+    id: 'trip-reminder',
+    name: 'Lembrete de Viagem',
+    description: 'Lembrar cliente 3 dias antes da viagem',
+    category: 'Viagens',
+    icon: Calendar,
+    color: 'text-teal-600',
+    bgColor: 'bg-teal-100',
+    trigger: 'Data Agendada',
+    actions: ['Enviar WhatsApp', 'Enviar Email'],
+  },
+  {
+    id: 'abandoned-cart',
+    name: 'Carrinho Abandonado',
+    description: 'Recuperar carrinhos abandonados na loja online',
+    category: 'Loja',
+    icon: MessageSquare,
+    color: 'text-red-600',
+    bgColor: 'bg-red-100',
+    trigger: 'Carrinho Abandonado',
+    actions: ['Aguardar 1h', 'Enviar Email'],
+  },
+  {
+    id: 'payment-confirmation',
+    name: 'Confirmação de Pagamento',
+    description: 'Confirmar recebimento de pagamento',
+    category: 'Pagamentos',
+    icon: Zap,
+    color: 'text-emerald-600',
+    bgColor: 'bg-emerald-100',
+    popular: true,
+    trigger: 'Pagamento Recebido',
+    actions: ['Enviar Email', 'Atualizar Status'],
+  },
+  {
+    id: 'vip-client-tag',
+    name: 'Marcar Cliente VIP',
+    description: 'Adicionar tag VIP quando cliente gasta mais de R$ 5.000',
+    category: 'Clientes',
+    icon: Star,
+    color: 'text-amber-600',
+    bgColor: 'bg-amber-100',
+    trigger: 'Reserva Confirmada',
+    actions: ['Adicionar Tag', 'Enviar Notificação'],
+  },
+  {
+    id: 'feedback-request',
+    name: 'Solicitar Feedback',
+    description: 'Pedir avaliação 2 dias após a viagem',
+    category: 'Pós-venda',
+    icon: MessageSquare,
+    color: 'text-blue-600',
+    bgColor: 'bg-blue-100',
+    trigger: 'Viagem Concluída',
+    actions: ['Aguardar 2 dias', 'Enviar WhatsApp'],
+  },
+]
+
+export function AutomationTemplates() {
+  const router = useRouter()
+
+  const categories = Array.from(new Set(TEMPLATES.map((t) => t.category)))
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h2 className="text-2xl font-bold mb-2">Templates de Automação</h2>
+        <p className="text-gray-600">
+          Comece rapidamente com templates prontos para uso
+        </p>
+      </div>
+
+      {/* Populares */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <Star className="h-5 w-5 text-yellow-500 fill-yellow-500" />
+          <h3 className="text-lg font-bold">Mais Populares</h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {TEMPLATES.filter((t) => t.popular).map((template) => {
+            const Icon = template.icon
+
+            return (
+              <Card
+                key={template.id}
+                className="p-4 hover:shadow-lg transition-all cursor-pointer"
+                onClick={() =>
+                  router.push(
+                    `/dashboard/automations/new?template=${template.id}`
+                  )
+                }
+              >
+                <div className="flex items-start gap-3 mb-3">
+                  <div className={`p-2 rounded-lg ${template.bgColor}`}>
+                    <Icon className={`h-5 w-5 ${template.color}`} />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold mb-1">{template.name}</h4>
+                    <p className="text-sm text-gray-600">
+                      {template.description}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <Badge variant="outline" className="text-xs">
+                    {template.trigger}
+                  </Badge>
+                  {template.actions.map((action, i) => (
+                    <Badge key={i} variant="secondary" className="text-xs">
+                      {action}
+                    </Badge>
+                  ))}
+                </div>
+
+                <Button variant="outline" size="sm" className="w-full">
+                  Usar Template
+                </Button>
+              </Card>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Por Categoria */}
+      {categories.map((category) => {
+        const categoryTemplates = TEMPLATES.filter((t) => t.category === category)
+
+        return (
+          <div key={category}>
+            <h3 className="text-lg font-bold mb-4">{category}</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {categoryTemplates.map((template) => {
+                const Icon = template.icon
+
+                return (
+                  <Card
+                    key={template.id}
+                    className="p-4 hover:shadow-lg transition-all cursor-pointer"
+                    onClick={() =>
+                      router.push(
+                        `/dashboard/automations/new?template=${template.id}`
+                      )
+                    }
+                  >
+                    <div className="flex items-start gap-3 mb-3">
+                      <div className={`p-2 rounded-lg ${template.bgColor}`}>
+                        <Icon className={`h-5 w-5 ${template.color}`} />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="font-semibold mb-1">{template.name}</h4>
+                        <p className="text-sm text-gray-600">
+                          {template.description}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <Badge variant="outline" className="text-xs">
+                        {template.trigger}
+                      </Badge>
+                      {template.actions.slice(0, 2).map((action, i) => (
+                        <Badge key={i} variant="secondary" className="text-xs">
+                          {action}
+                        </Badge>
+                      ))}
+                      {template.actions.length > 2 && (
+                        <Badge variant="secondary" className="text-xs">
+                          +{template.actions.length - 2}
+                        </Badge>
+                      )}
+                    </div>
+
+                    <Button variant="outline" size="sm" className="w-full">
+                      Usar Template
+                    </Button>
+                  </Card>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// app/(dashboard)/dashboard/automations/templates/page.tsx
+
+import { AutomationTemplates } from '@/components/dashboard/automations/automation-templates'
+import { Button } from '@/components/ui/button'
+import { ArrowLeft } from 'lucide-react'
+import Link from 'next/link'
+
+export default function TemplatesPage() {
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-6">
+        <Link href="/dashboard/automations">
+          <Button variant="ghost" size="sm">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Voltar
+          </Button>
+        </Link>
+      </div>
+
+      <AutomationTemplates />
+    </div>
+  )
+}
+
+// components/dashboard/automations/builder/automation-preview.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
+import {
+  Zap,
+  Filter,
+  Clock,
+  ArrowRight,
+  Mail,
+  MessageSquare,
+  CheckSquare,
+  Edit,
+  Tag,
+  Webhook,
+  Bell,
+  FileText,
+} from 'lucide-react'
+
+export function AutomationPreview({ data }: { data: any }) {
+  const getActionIcon = (type: string) => {
+    const icons: Record<string, any> = {
+      send_email: Mail,
+      send_whatsapp: MessageSquare,
+      create_task: CheckSquare,
+      update_field: Edit,
+      add_tag: Tag,
+      webhook: Webhook,
+      send_notification: Bell,
+      create_activity: FileText,
+    }
+    return icons[type] || Zap
+  }
+
+  const getTriggerLabel = (type: string) => {
+    const labels: Record<string, string> = {
+      reservation_created: 'Reserva Criada',
+      reservation_confirmed: 'Reserva Confirmada',
+      payment_received: 'Pagamento Recebido',
+      client_created: 'Cliente Criado',
+      deal_stage_changed: 'Estágio do Deal Alterado',
+      deal_won: 'Deal Ganho',
+      trip_published: 'Viagem Publicada',
+      referral_completed: 'Indicação Completada',
+    }
+    return labels[type] || type
+  }
+
+  const getActionLabel = (type: string) => {
+    const labels: Record<string, string> = {
+      send_email: 'Enviar Email',
+      send_whatsapp: 'Enviar WhatsApp',
+      create_task: 'Criar Tarefa',
+      update_field: 'Atualizar Campo',
+      add_tag: 'Adicionar Tag',
+      webhook: 'Webhook',
+      send_notification: 'Enviar Notificação',
+      create_activity: 'Criar Atividade',
+    }
+    return labels[type] || type
+  }
+
+  return (
+    <Card className="p-6">
+      <h3 className="text-lg font-bold mb-6">Preview da Automação</h3>
+
+      <div className="space-y-6">
+        {/* Nome */}
+        <div>
+          <h4 className="font-semibold text-2xl">{data.name || 'Sem nome'}</h4>
+          {data.description && (
+            <p className="text-gray-600 mt-1">{data.description}</p>
+          )}
+        </div>
+
+        <Separator />
+
+        {/* Fluxo Visual */}
+        <div className="space-y-4">
+          {/* Trigger */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 bg-blue-100 rounded-full">
+              <Zap className="h-5 w-5 text-blue-600" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm text-gray-600">Quando</p>
+              <p className="font-semibold">
+                {data.trigger_type
+                  ? getTriggerLabel(data.trigger_type)
+                  : 'Nenhum trigger selecionado'}
+              </p>
+            </div>
+          </div>
+
+          {/* Condições */}
+          {data.conditions && (
+            <>
+              <div className="flex items-center gap-3 pl-5">
+                <ArrowRight className="h-5 w-5 text-gray-400" />
+                <div className="flex-1">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center w-10 h-10 bg-purple-100 rounded-full">
+                      <Filter className="h-5 w-5 text-purple-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-600">Se</p>
+                      <p className="font-semibold">
+                        {data.conditions.rules?.length || 0} condição(ões)
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {data.conditions.rules?.map((rule: any, i: number) => (
+                          <Badge key={i} variant="outline" className="text-xs">
+                            {rule.field} {rule.operator} {rule.value}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Delay */}
+          {data.delay_type === 'delay' && data.delay_value && (
+            <>
+              <div className="flex items-center gap-3 pl-5">
+                <ArrowRight className="h-5 w-5 text-gray-400" />
+                <div className="flex-1">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center w-10 h-10 bg-orange-100 rounded-full">
+                      <Clock className="h-5 w-5 text-orange-600" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-600">Aguardar</p>
+                      <p className="font-semibold">
+                        {data.delay_value}{' '}
+                        {data.delay_unit === 'minutes'
+                          ? 'minuto(s)'
+                          : data.delay_unit === 'hours'
+                          ? 'hora(s)'
+                          : 'dia(s)'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Ações */}
+          {data.actions && data.actions.length > 0 ? (
+            <>
+              <div className="flex items-center gap-3 pl-5">
+                <ArrowRight className="h-5 w-5 text-gray-400" />
+                <div className="flex-1">
+                  <p className="text-sm text-gray-600 mb-3">Então</p>
+                  <div className="space-y-3">
+                    {data.actions.map((action: any, index: number) => {
+                      const Icon = getActionIcon(action.type)
+
+                      return (
+                        <div
+                          key={index}
+                          className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg"
+                        >
+                          <div className="flex items-center justify-center w-8 h-8 bg-white rounded-full border-2">
+                            <Icon className="h-4 w-4 text-gray-600" />
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-medium">
+                              {index + 1}. {getActionLabel(action.type)}
+                            </p>
+                            {action.config.subject && (
+                              <p className="text-sm text-gray-600">
+                                {action.config.subject}
+                              </p>
+                            )}
+                            {action.config.title && (
+                              <p className="text-sm text-gray-600">
+                                {action.config.title}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <p className="text-sm">Nenhuma ação configurada</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+SINCRONIZAÇÃO E RELACIONAMENTO DO SISTEMA
+📊 VISÃO GERAL DA ARQUITETURA
+┌─────────────────────────────────────────────────────────────────┐
+│                    VISITÉCRM - ECOSSISTEMA                       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+   ┌────▼────┐          ┌────▼────┐          ┌────▼────┐
+   │  CORE   │          │ EVENTOS │          │AUTOMAÇÃO│
+   │ MODULES │          │  HOOKS  │          │ ENGINE  │
+   └────┬────┘          └────┬────┘          └────┬────┘
+        │                    │                     │
+        └────────────────────┴─────────────────────┘
+                         SINCRONIZAÇÃO
+MÓDULOS PRINCIPAIS E SUAS RELAÇÕES
+A. CLIENTES (Core do Sistema)
+Cliente
+├── Pipeline Stage (Estágio no Funil)
+├── Deals (Oportunidades)
+├── Reservas
+├── Atividades (Timeline)
+├── Tarefas
+├── Documentos
+├── Tags
+├── Indicações (Referrer/Referred)
+└── Estatísticas (Total Gasto, Viagens, etc)
+Sincronizações Automáticas:
+
+✅ Ao criar cliente:
+
+Adiciona ao primeiro estágio do pipeline padrão
+Cria deal inicial automaticamente
+Registra atividade de criação
+Calcula lead score inicial (+10 pontos)
+✅ Ao atualizar cliente:
+
+Sincroniza dados em deals relacionados
+Atualiza histórico de atividades
+Recalcula engagement level
+PIPELINE & DEALS (Funil de Vendas)
+Pipeline
+├── Stages (Estágios)
+│   ├── Ordem
+│   ├── Probabilidade
+│   └── Status (Won/Lost)
+└── Deals
+    ├── Cliente
+    ├── Viagem (Opcional)
+    ├── Valor
+    ├── Atividades
+    └── Reserva (Quando ganho)
+Sincronizações Automáticas:
+
+✅ Ao mover deal entre estágios:
+
+Atualiza probabilidade
+Registra atividade de movimentação
+Dispara automações configuradas
+Atualiza métricas do pipeline
+✅ Ao marcar deal como ganho:
+
+Cria reserva automaticamente (se tiver viagem)
+Vincula reserva ao deal
+Atualiza estatísticas do cliente
+Dispara celebração/notificação
+✅ Ao confirmar reserva:
+
+Move deal para estágio "Ganho"
+Fecha deal com data
+Atualiza valor real
+C. VIAGENS (Produtos)
+Viagem
+├── Informações Básicas
+├── Itinerário
+├── Poltronas/Assentos
+├── Preços
+├── Reservas
+├── Disponibilidade
+└── Status (Ativo/Lotado/Concluído)
+Sincronizações Automáticas:
+
+✅ Ao criar reserva:
+
+Decrementa vagas disponíveis
+Reserva assentos específicos
+Atualiza status (se lotar)
+Bloqueia assentos
+✅ Ao cancelar reserva:
+
+Incrementa vagas disponíveis
+Libera assentos
+Atualiza status para ativo
+Remove bloqueios
+✅ Ao fazer check-in:
+
+Confirma assento
+Atualiza lista de embarque
+Registra horário
+D. RESERVAS (Transações)
+Reserva
+├── Cliente
+├── Viagem
+├── Deal (Origem)
+├── Passageiros
+├── Assentos
+├── Pagamentos
+├── Voucher
+├── Status
+└── Valores (Total, Pago, Pendente)
+Sincronizações Automáticas:
+
+✅ Ao criar reserva:
+
+Atualiza estatísticas do cliente (+1 viagem)
+Incrementa total gasto do cliente
+Marca is_first_purchase = false
+Cria passageiros
+Reserva assentos na viagem
+Gera número de reserva e voucher
+Cria atividade no timeline
+Processa indicação (se houver)
+Calcula comissão do vendedor
+Dispara automações (email, WhatsApp)
+✅ Ao receber pagamento:
+
+Atualiza amount_paid
+Recalcula amount_pending
+Atualiza payment_status (pending/partial/paid)
+Muda status para confirmed (se pago totalmente)
+Registra atividade de pagamento
+Atualiza deal relacionado
+Dispara confirmação automática
+✅ Ao confirmar reserva:
+
+Marca deal como ganho
+Confirma assentos
+Envia voucher
+Processa bônus de indicação
+Atualiza lead score (+50 pontos)
+✅ Ao cancelar reserva:
+
+Libera assentos
+Atualiza vagas da viagem
+Processa reembolso (se aplicável)
+Registra motivo do cancelamento
+Atualiza estatísticas do cliente
+E. PAGAMENTOS
+Pagamento
+├── Reserva
+├── Valor
+├── Método
+├── Status
+├── Data
+└── Comprovante
+Sincronizações Automáticas:
+
+✅ Ao registrar pagamento:
+
+Atualiza valores da reserva
+Muda status de pagamento
+Confirma reserva (se total pago)
+Registra no financeiro
+Calcula comissão
+Dispara recibo/confirmação
+Atualiza lead score (+30 pontos)
+F. LOJA ONLINE
+Pedido Loja
+├── Cliente
+├── Viagem
+├── Itens (Passageiros)
+├── Pagamento Online
+├── Carrinho
+└── Status
+Sincronizações Automáticas:
+
+✅ Ao finalizar pedido pago:
+
+Cria reserva automaticamente
+Vincula cliente
+Cria passageiros
+Reserva assentos
+Gera voucher
+Envia confirmação
+Registra pagamento
+✅ Carrinho abandonado:
+
+Dispara email de recuperação (após 1h)
+Cria tarefa de follow-up
+Adiciona tag "carrinho-abandonado"
+G. INDICAÇÕES (REFERRAL)
+Indicação
+├── Indicador (Referrer)
+├── Indicado (Referred)
+├── Código
+├── Reserva (Quando completa)
+├── Bônus
+└── Status
+Sincronizações Automáticas:
+
+✅ Ao criar cliente com código:
+
+Vincula ao indicador
+Cria registro de indicação
+Adiciona tag ao indicado
+✅ Ao confirmar reserva do indicado:
+
+Marca indicação como completa
+Calcula bônus do indicador
+Registra crédito/desconto
+Notifica indicador
+Cria atividade
+H. EMBARQUE (CHECK-IN)
+Embarque
+├── Viagem
+├── Reservas
+├── Passageiros
+├── Status Check-in
+├── Assentos Confirmados
+└── Relatórios
+Sincronizações Automáticas:
+
+✅ Ao fazer check-in:
+
+Marca passageiro como embarcado
+Confirma assento final
+Atualiza status da reserva
+Registra horário
+Gera relatório de embarque
+🔗 2. FLUXOS DE SINCRONIZAÇÃO PRINCIPAIS
+FLUXO 1: Novo Cliente → Venda
+1. Cliente Criado
+   ↓
+2. Adicionado ao Pipeline (Estágio Inicial)
+   ↓
+3. Deal Criado Automaticamente
+   ↓
+4. Atividades Registradas
+   ↓
+5. Lead Score Calculado
+   ↓
+6. Automações Disparadas (Boas-vindas)
+FLUXO 2: Deal Ganho → Reserva
+1. Deal Movido para "Ganho"
+   ↓
+2. Reserva Criada Automaticamente
+   ↓
+3. Assentos Reservados
+   ↓
+4. Voucher Gerado
+   ↓
+5. Cliente Notificado
+   ↓
+6. Estatísticas Atualizadas
+FLUXO 3: Pagamento → Confirmação
+1. Pagamento Registrado
+   ↓
+2. Valores da Reserva Atualizados
+   ↓
+3. Status Mudado para "Confirmado"
+   ↓
+4. Assentos Confirmados
+   ↓
+5. Deal Marcado como Ganho
+   ↓
+6. Comissão Calculada
+   ↓
+7. Confirmação Enviada
+FLUXO 4: Loja Online → Reserva
+1. Pedido Pago na Loja
+   ↓
+2. Cliente Criado/Atualizado
+   ↓
+3. Reserva Gerada Automaticamente
+   ↓
+4. Passageiros Criados
+   ↓
+5. Assentos Reservados
+   ↓
+6. Voucher Enviado
+   ↓
+7. Deal Criado e Ganho
+FLUXO 5: Indicação → Bônus
+1. Cliente Usa Código de Indicação
+   ↓
+2. Indicação Registrada
+   ↓
+3. Reserva Criada
+   ↓
+4. Reserva Confirmada
+   ↓
+5. Indicação Marcada como Completa
+   ↓
+6. Bônus Calculado
+   ↓
+7. Indicador Notificado
+⚡ 3. SISTEMA DE EVENTOS (Event-Driven)
+Eventos Disponíveis:
+// CLIENTES
+'client.created'
+'client.updated'
+'client.deleted'
+'client.stage_changed'
+
+// VIAGENS
+'trip.created'
+'trip.updated'
+'trip.published'
+'trip.cancelled'
+'trip.completed'
+
+// RESERVAS
+'reservation.created'
+'reservation.updated'
+'reservation.confirmed'
+'reservation.cancelled'
+'reservation.checked_in'
+'reservation.completed'
+
+// PAGAMENTOS
+'payment.received'
+'payment.pending'
+'payment.failed'
+'payment.refunded'
+
+// DEALS
+'deal.created'
+'deal.updated'
+'deal.stage_changed'
+'deal.won'
+'deal.lost'
+
+// POLTRONAS
+'seat.reserved'
+'seat.released'
+'seat.confirmed'
+
+// EMBARQUE
+'boarding.checked_in'
+'boarding.completed'
+
+// LOJA
+'store.order_created'
+'store.order_paid'
+
+// INDICAÇÃO
+'referral.created'
+'referral.completed'
+'referral.bonus_paid'
+🤖 4. AUTOMAÇÕES INTEGRADAS
+Hooks Automáticos Ativos:
+Evento	Ação Automática
+client.created	• Adiciona ao pipeline
+• Cria deal inicial
+• Calcula lead score
+• Envia boas-vindas
+reservation.created	• Atualiza estatísticas cliente
+• Reserva assentos
+• Atualiza vagas viagem
+• Registra atividade
+• Processa indicação
+payment.received	• Atualiza valores reserva
+• Confirma se pago total
+• Calcula comissão
+• Atualiza lead score
+• Envia confirmação
+reservation.confirmed	• Move deal para ganho
+• Confirma assentos
+• Completa indicação
+• Dispara automações
+deal.won	• Cria reserva (se tiver viagem)
+• Notifica vendedor
+• Registra atividade
+store.order_paid	• Cria reserva
+• Vincula cliente
+• Gera voucher
+📊 5. CAMPOS CALCULADOS AUTOMATICAMENTE
+Cliente:
+total_trips → Conta reservas confirmadas
+total_spent → Soma valores pagos
+lead_score → Baseado em ações (+10 cadastro, +50 reserva, +30 pagamento)
+engagement_level → cold/warm/hot (baseado no score)
+is_first_purchase → false após primeira reserva
+last_purchase_date → Data da última reserva
+Viagem:
+available_seats → total_seats - assentos reservados/confirmados
+status → 'full' se available_seats = 0
+Reserva:
+amount_paid → Soma de pagamentos
+amount_pending → total_amount - amount_paid
+payment_status → pending/partial/paid
+commission_amount → Baseado em % configurada
+Deal:
+probability → Baseado no estágio
+expected_close_date → Calculado por estágio
+days_in_stage → Diferença de datas
+🔄 6. SINCRONIZAÇÃO EM TEMPO REAL
+Atualizações Bidirecionais:
+
+Cliente ←→ Deal
+├── Nome, Email, Telefone
+├── Segmento
+└── Tags
+
+Deal ←→ Reserva
+├── Valor
+├── Cliente
+├── Viagem
+└── Status
+
+Reserva ←→ Pagamento
+├── Valores
+├── Status de Pagamento
+└── Confirmação
+
+Viagem ←→ Assentos
+├── Disponibilidade
+├── Status
+└── Lotação
+🎯 7. REGRAS DE NEGÓCIO IMPLEMENTADAS
+Validações Automáticas:
+✅ Reserva:
+
+Não permite reservar se viagem lotada
+Não permite assentos duplicados
+Valida CPF único por viagem
+Verifica idade mínima/máxima
+✅ Pagamento:
+
+Não permite pagar mais que o pendente
+Valida método de pagamento
+Registra comprovante obrigatório
+✅ Deal:
+
+Não permite valor negativo
+Valida probabilidade por estágio
+Requer cliente vinculado
+✅ Check-in:
+
+Só permite se reserva confirmada
+Valida pagamento completo
+Confirma documento do passageiro
+📈 8. MÉTRICAS E RELATÓRIOS SINCRONIZADOS
+Dashboard Unificado:
+
+// Métricas calculadas em tempo real:
+
+- Total de Clientes
+- Clientes Ativos (com reservas)
+- Taxa de Conversão (Leads → Clientes → Vendas)
+- Ticket Médio
+- Receita Total
+- Receita Pendente
+- Taxa de Ocupação das Viagens
+- Performance por Vendedor
+- Taxa de Indicação
+- LTV (Lifetime Value) por Cliente
+- Churn Rate
+- Net Promoter Score (NPS)
+🔐 9. SEGURANÇA E ISOLAMENTO
+Multi-tenancy:
+
+// Todos os dados isolados por tenant_id
+
+✅ Cliente só vê seus dados
+✅ Usuário só acessa seu tenant
+✅ Automações só disparam no tenant correto
+✅ Webhooks isolados por tenant
+✅ Relatórios filtrados por tenant
+🚀 10. PERFORMANCE E OTIMIZAÇÃO
+Estratégias Implementadas:
+✅ Índices no Banco:
+
+tenant_id em todas as tabelas
+Campos de busca frequente
+Foreign keys otimizadas
+✅ Cache:
+
+Automações carregadas em memória
+Pipelines e estágios cacheados
+Configurações do tenant
+✅ Processamento Assíncrono:
+
+Eventos processados em background
+Webhooks com retry automático
+Emails em fila
+✅ Paginação:
+
+Todas as listagens paginadas
+Lazy loading de relacionamentos
+Queries otimizadas
+📝 RESUMO FINAL
+O VisitéCRM é um sistema totalmente integrado onde:
+
+Tudo começa no Cliente → Centro do sistema
+Pipeline gerencia o funil → Leads até venda
+Reservas são o objetivo → Conversão
+Pagamentos confirmam → Fechamento
+Eventos sincronizam tudo → Tempo real
+Automações executam ações → Sem intervenção
+Webhooks integram externos → Extensibilidade
+Métricas mostram resultado → Visibilidade
+Fluxo Completo Ideal:
+
+Lead → Cliente → Pipeline → Deal → Reserva → Pagamento → Confirmação → Check-in → Viagem → Feedback
+  ↓       ↓         ↓        ↓        ↓          ↓            ↓           ↓         ↓         ↓
+ Tag   Score   Automação  Notif   Voucher   Comissão    WhatsApp     Embarque  Avaliação  NPS
+Tudo sincronizado, automatizado e rastreável! 🎉
+
+
+

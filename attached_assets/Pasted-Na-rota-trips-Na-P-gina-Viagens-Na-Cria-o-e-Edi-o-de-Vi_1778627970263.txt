@@ -1,0 +1,163 @@
+Na rota  /trips
+Na Página Viagens
+Na Criação e Edição de Viagem na Aba Informações Básicas:
+Substituir o editor de texto.
+
+React
+ + Tiptap
+ + Markdown
+ + Slash Commands
+ + Blocks
+ + Tailwind
+ + rehype-sanitize
+ + PostgreSQL
+
+Quero um Editor semelhante ao Editor Clássico do WordPress (antes do Gutenberg) e Microsoft Word.
+
+1. Interface semelhante ao Word
+
+Possuía:
+
+barra de ferramentas
+negrito
+itálico
+alinhamento
+listas
+links
+imagens
+tabelas
+
+Muito parecido com:
+
+Word
+Google Docs antigo
+editores de email
+
+2. Área única de edição
+
+3. Baseado em HTML
+
+4. TinyMCE como motor principal
+
+5. Aba Visual e Texto
+
+6. Estrutura simples
+
+Arquitetura simplificada:
+
+Textarea
+   ↓
+TinyMCE
+   ↓
+HTML
+   ↓
+Banco de dados
+
+Interface parecida com:
+
+Word
+Gmail
+WordPress clássico
+
+seguro
+
+O CKEditor possui:
+
+sanitização interna
+proteção XSS
+filtros HTML
+whitelist de elementos
+plugins auditados
+
+E funciona muito bem com:
+
+DOMPurify
+CSP
+backend validation
+
+O conteúdo gerado pelo CKEditor normalmente fica:
+
+limpo
+elegante
+organizado
+semanticamente correto
+agradável visualmente
+fácil de estilizar com CSS
+
+responsividade
+tipografia bonita
+temas
+dark mode
+leitura confortável
+
+visualização profissional
+1. HTML semântico
+
+Ele usa corretamente:
+
+<p>
+<h1>
+<ul>
+<blockquote>
+
+
+tipografia bonita
+espaçamento automático
+títulos elegantes
+listas bem renderizadas
+
+
+Stack ideal de segurança para editor:
+Editor
+Tiptap
+Markdown
+remark
+rehype
+Sanitização
+rehype-sanitize
+DOMPurify
+Segurança adicional
+CSP
+JWT
+Rate limit
+Escape output
+
+Markdown
+MDX
+React Markdown
+Tiptap + HTML
+
+→ use:
+
+rehype-sanitize + DOMPurify
+Arquitetura segura recomendada
+Frontend
+DOMPurify
+rehype-sanitize
+Backend
+validação de payload
+escape HTML
+CSP headers
+Banco
+salvar Markdown bruto
+NÃO salvar HTML inseguro
+
+sanitizar:
+
+HTML
+Markdown convertido
+uploads HTML
+embeds
+snippets
+
+Markdown
+   ↓
+remark
+   ↓
+rehype
+   ↓
+rehype-sanitize
+   ↓
+HTML seguro
+   ↓
+React/UI

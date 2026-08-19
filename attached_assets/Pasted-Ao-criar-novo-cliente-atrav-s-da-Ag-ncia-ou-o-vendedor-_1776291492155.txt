@@ -1,0 +1,2777 @@
+Ao criar novo cliente, através da Agência ou o vendedor efetuar o cadastro do cliente no sistema. Deverá sincronizar automaticamente e puxar todas as informações referente a viagem (valores) Valores entre outras informações.
+
+Inserir a Comissão já antes definida o valor da comissão do vendedor.
+
+Inserir no ato do cadastro de cliente a comissão do vendedor.
+
+Sincronizar e atualizar os ganhos do vendedor, metas, resultados entre outras informações no painel do vendedor.
+
+SISTEMA COMPLETO DE COMISSÕES E METAS PARA VENDEDORES
+
+┌─────────────────────────────────────────────────────────────────┐
+│              FLUXO DE COMISSÕES E METAS                          │
+└─────────────────────────────────────────────────────────────────┘
+
+1. CADASTRO DE CLIENTE/RESERVA
+   ├── Vendedor preenche dados
+   ├── Seleciona viagem (valores sincronizam)
+   ├── Sistema calcula comissão automaticamente
+   ├── Vendedor pode ajustar comissão (se permitido)
+   └── Reserva é criada
+           ↓
+2. REGISTRO DE COMISSÃO
+   ├── Comissão vinculada à reserva
+   ├── Status: pendente (aguardando pagamento)
+   ├── Valor calculado baseado em regras
+   └── Histórico registrado
+           ↓
+3. ATUALIZAÇÃO DE METAS
+   ├── Vendas do mês atualizadas
+   ├── Progresso de meta calculado
+   ├── Ranking atualizado
+   └── Notificações enviadas
+           ↓
+4. PAINEL DO VENDEDOR
+   ├── Comissões pendentes
+   ├── Comissões pagas
+   ├── Progresso de metas
+   ├── Ranking
+   └── Histórico completo
+
+SCHEMA COMPLETO DO BANCO DE DADOS
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE USUÁRIOS (VENDEDORES) - ATUALIZADA
+// ═══════════════════════════════════════════════════════════════
+
+model User {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  name            String
+  email           String    @unique
+  password        String
+  
+  // TIPO E PERMISSÕES
+  role            String    @default("seller") // admin, manager, seller
+  permissions     Json?     // Permissões específicas
+  
+  // CONFIGURAÇÕES DE COMISSÃO
+  commission_type String    @default("percentage") // percentage, fixed, hybrid
+  commission_rate Decimal   @default(0) @db.Decimal(5, 2) // 10.00 = 10%
+  commission_fixed Decimal  @default(0) @db.Decimal(10, 2) // Valor fixo por venda
+  
+  // METAS
+  monthly_goal    Decimal?  @db.Decimal(10, 2) // Meta mensal em R$
+  quarterly_goal  Decimal?  @db.Decimal(10, 2) // Meta trimestral
+  annual_goal     Decimal?  @db.Decimal(10, 2) // Meta anual
+  
+  // STATUS
+  status          String    @default("active") // active, inactive, suspended
+  
+  // RELACIONAMENTOS
+  reservations    Reservation[]
+  commissions     Commission[]
+  sales_goals     SalesGoal[]
+  activities      Activity[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([tenant_id, role])
+  @@index([tenant_id, status])
+  @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE COMISSÕES
+// ═══════════════════════════════════════════════════════════════
+
+model Commission {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // VENDEDOR
+  user_id         String
+  user            User      @relation(fields: [user_id], references: [id])
+  
+  // RESERVA
+  reservation_id  String    @unique
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  // VALORES
+  sale_amount     Decimal   @db.Decimal(10, 2) // Valor total da venda
+  commission_rate Decimal   @db.Decimal(5, 2)  // Taxa aplicada (%)
+  commission_amount Decimal @db.Decimal(10, 2) // Valor da comissão
+  
+  // TIPO DE COMISSÃO
+  commission_type String    // percentage, fixed, bonus, manual
+  
+  // STATUS
+  status          String    @default("pending") // pending, approved, paid, cancelled
+  
+  // PAGAMENTO
+  payment_date    DateTime?
+  payment_method  String?   // pix, bank_transfer, cash
+  payment_proof   String?   // URL do comprovante
+  
+  // APROVAÇÃO
+  approved_by     String?
+  approved_at     DateTime?
+  
+  // OBSERVAÇÕES
+  notes           String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([user_id])
+  @@index([reservation_id])
+  @@index([tenant_id, user_id, status])
+  @@index([tenant_id, status])
+  @@map("commissions")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE METAS DE VENDAS
+// ═══════════════════════════════════════════════════════════════
+
+model SalesGoal {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // VENDEDOR
+  user_id         String
+  user            User      @relation(fields: [user_id], references: [id])
+  
+  // PERÍODO
+  period_type     String    // monthly, quarterly, annual
+  year            Int
+  month           Int?      // 1-12 (null para trimestral/anual)
+  quarter         Int?      // 1-4 (null para mensal/anual)
+  
+  // META
+  goal_amount     Decimal   @db.Decimal(10, 2) // Valor da meta
+  goal_quantity   Int?      // Quantidade de vendas (opcional)
+  
+  // REALIZADO
+  achieved_amount Decimal   @default(0) @db.Decimal(10, 2)
+  achieved_quantity Int     @default(0)
+  
+  // PROGRESSO
+  progress_percentage Decimal @default(0) @db.Decimal(5, 2)
+  
+  // STATUS
+  status          String    @default("active") // active, completed, cancelled
+  
+  // PRÊMIO/BÔNUS
+  bonus_amount    Decimal?  @db.Decimal(10, 2)
+  bonus_paid      Boolean   @default(false)
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, user_id, period_type, year, month, quarter])
+  @@index([tenant_id, user_id])
+  @@index([tenant_id, period_type, year, month])
+  @@map("sales_goals")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE RESERVAS - ATUALIZADA
+// ═══════════════════════════════════════════════════════════════
+
+model Reservation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ... campos existentes ...
+  
+  // VENDEDOR
+  seller_id       String?
+  seller          User?     @relation(fields: [seller_id], references: [id])
+  
+  // COMISSÃO
+  commission_rate Decimal?  @db.Decimal(5, 2)
+  commission_amount Decimal? @db.Decimal(10, 2)
+  commission      Commission?
+  
+  // ... resto do modelo ...
+  
+  @@map("reservations")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE HISTÓRICO DE COMISSÕES
+// ═══════════════════════════════════════════════════════════════
+
+model CommissionHistory {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  commission_id   String
+  
+  // MUDANÇA
+  field_changed   String    // status, amount, payment_date
+  old_value       String?
+  new_value       String?
+  
+  // USUÁRIO QUE FEZ A MUDANÇA
+  changed_by      String
+  change_reason   String?   @db.Text
+  
+  created_at      DateTime  @default(now())
+  
+  @@index([tenant_id, commission_id])
+  @@map("commission_history")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE RANKING DE VENDEDORES
+// ═══════════════════════════════════════════════════════════════
+
+model SellerRanking {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  user_id         String
+  user            User      @relation(fields: [user_id], references: [id])
+  
+  // PERÍODO
+  period_type     String    // monthly, quarterly, annual
+  year            Int
+  month           Int?
+  quarter         Int?
+  
+  // MÉTRICAS
+  total_sales     Decimal   @db.Decimal(10, 2)
+  total_reservations Int
+  total_commission Decimal  @db.Decimal(10, 2)
+  
+  // RANKING
+  rank_position   Int
+  rank_score      Decimal   @db.Decimal(10, 2)
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, user_id, period_type, year, month, quarter])
+  @@index([tenant_id, period_type, year, month])
+  @@map("seller_rankings")
+}
+
+SERVIÇO DE CÁLCULO DE COMISSÕES
+// lib/commissions/calculate-commission.ts
+
+import { prisma } from '@/lib/prisma'
+
+interface CalculateCommissionParams {
+  tenantId: string
+  userId: string
+  saleAmount: number
+  reservationId?: string
+}
+
+interface CommissionResult {
+  commissionType: string
+  commissionRate: number
+  commissionAmount: number
+  saleAmount: number
+}
+
+/**
+ * Calcula comissão do vendedor baseado em suas configurações
+ */
+export async function calculateCommission({
+  tenantId,
+  userId,
+  saleAmount,
+}: CalculateCommissionParams): Promise<CommissionResult> {
+  // Buscar configurações do vendedor
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+  })
+
+  if (!user) {
+    throw new Error('Vendedor não encontrado')
+  }
+
+  let commissionAmount = 0
+  let commissionRate = Number(user.commission_rate)
+  let commissionType = user.commission_type
+
+  switch (user.commission_type) {
+    case 'percentage':
+      // Comissão percentual
+      commissionAmount = (saleAmount * commissionRate) / 100
+      break
+
+    case 'fixed':
+      // Comissão fixa por venda
+      commissionAmount = Number(user.commission_fixed)
+      commissionRate = (commissionAmount / saleAmount) * 100
+      break
+
+    case 'hybrid':
+      // Comissão híbrida (% + fixo)
+      const percentageAmount = (saleAmount * commissionRate) / 100
+      const fixedAmount = Number(user.commission_fixed)
+      commissionAmount = percentageAmount + fixedAmount
+      break
+
+    default:
+      commissionAmount = 0
+  }
+
+  return {
+    commissionType,
+    commissionRate,
+    commissionAmount: Math.round(commissionAmount * 100) / 100,
+    saleAmount,
+  }
+}
+
+/**
+ * Cria registro de comissão
+ */
+export async function createCommission({
+  tenantId,
+  userId,
+  reservationId,
+  saleAmount,
+  commissionType,
+  commissionRate,
+  commissionAmount,
+  notes,
+}: {
+  tenantId: string
+  userId: string
+  reservationId: string
+  saleAmount: number
+  commissionType: string
+  commissionRate: number
+  commissionAmount: number
+  notes?: string
+}) {
+  const commission = await prisma.commission.create({
+    data: {
+      tenant_id: tenantId,
+      user_id: userId,
+      reservation_id: reservationId,
+      sale_amount: saleAmount,
+      commission_type: commissionType,
+      commission_rate: commissionRate,
+      commission_amount: commissionAmount,
+      status: 'pending',
+      notes,
+    },
+  })
+
+  // Atualizar reserva com dados de comissão
+  await prisma.reservation.update({
+    where: { id: reservationId },
+    data: {
+      commission_rate: commissionRate,
+      commission_amount: commissionAmount,
+    },
+  })
+
+  return commission
+}
+
+SERVIÇO DE ATUALIZAÇÃO DE METAS
+
+// lib/goals/update-seller-goals.ts
+
+import { prisma } from '@/lib/prisma'
+
+/**
+ * Atualiza metas do vendedor após nova venda
+ */
+export async function updateSellerGoals({
+  tenantId,
+  userId,
+  saleAmount,
+}: {
+  tenantId: string
+  userId: string
+  saleAmount: number
+}) {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
+  const quarter = Math.ceil(month / 3)
+
+  // ═══════════════════════════════════════════════════════════
+  // ATUALIZAR META MENSAL
+  // ═══════════════════════════════════════════════════════════
+  
+  const monthlyGoal = await prisma.salesGoal.findFirst({
+    where: {
+      tenant_id: tenantId,
+      user_id: userId,
+      period_type: 'monthly',
+      year,
+      month,
+    },
+  })
+
+  if (monthlyGoal) {
+    const newAchievedAmount = Number(monthlyGoal.achieved_amount) + saleAmount
+    const newAchievedQuantity = monthlyGoal.achieved_quantity + 1
+    const progressPercentage = (newAchievedAmount / Number(monthlyGoal.goal_amount)) * 100
+
+    await prisma.salesGoal.update({
+      where: { id: monthlyGoal.id },
+      data: {
+        achieved_amount: newAchievedAmount,
+        achieved_quantity: newAchievedQuantity,
+        progress_percentage: Math.min(progressPercentage, 100),
+        status: progressPercentage >= 100 ? 'completed' : 'active',
+      },
+    })
+  } else {
+    // Criar meta mensal se não existir
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    })
+
+    if (user?.monthly_goal) {
+      await prisma.salesGoal.create({
+        data: {
+          tenant_id: tenantId,
+          user_id: userId,
+          period_type: 'monthly',
+          year,
+          month,
+          goal_amount: user.monthly_goal,
+          achieved_amount: saleAmount,
+          achieved_quantity: 1,
+          progress_percentage: (saleAmount / Number(user.monthly_goal)) * 100,
+        },
+      })
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ATUALIZAR META TRIMESTRAL
+  // ═══════════════════════════════════════════════════════════
+  
+  const quarterlyGoal = await prisma.salesGoal.findFirst({
+    where: {
+      tenant_id: tenantId,
+      user_id: userId,
+      period_type: 'quarterly',
+      year,
+      quarter,
+    },
+  })
+
+  if (quarterlyGoal) {
+    const newAchievedAmount = Number(quarterlyGoal.achieved_amount) + saleAmount
+    const progressPercentage = (newAchievedAmount / Number(quarterlyGoal.goal_amount)) * 100
+
+    await prisma.salesGoal.update({
+      where: { id: quarterlyGoal.id },
+      data: {
+        achieved_amount: newAchievedAmount,
+        achieved_quantity: quarterlyGoal.achieved_quantity + 1,
+        progress_percentage: Math.min(progressPercentage, 100),
+        status: progressPercentage >= 100 ? 'completed' : 'active',
+      },
+    })
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ATUALIZAR META ANUAL
+  // ═══════════════════════════════════════════════════════════
+  
+  const annualGoal = await prisma.salesGoal.findFirst({
+    where: {
+      tenant_id: tenantId,
+      user_id: userId,
+      period_type: 'annual',
+      year,
+    },
+  })
+
+  if (annualGoal) {
+    const newAchievedAmount = Number(annualGoal.achieved_amount) + saleAmount
+    const progressPercentage = (newAchievedAmount / Number(annualGoal.goal_amount)) * 100
+
+    await prisma.salesGoal.update({
+      where: { id: annualGoal.id },
+      data: {
+        achieved_amount: newAchievedAmount,
+        achieved_quantity: annualGoal.achieved_quantity + 1,
+        progress_percentage: Math.min(progressPercentage, 100),
+        status: progressPercentage >= 100 ? 'completed' : 'active',
+      },
+    })
+  }
+}
+
+/**
+ * Atualiza ranking de vendedores
+ */
+export async function updateSellerRanking({
+  tenantId,
+  userId,
+}: {
+  tenantId: string
+  userId: string
+}) {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
+
+  // Calcular totais do vendedor no mês
+  const monthlyStats = await prisma.reservation.aggregate({
+    where: {
+      tenant_id: tenantId,
+      seller_id: userId,
+      created_at: {
+        gte: new Date(year, month - 1, 1),
+        lt: new Date(year, month, 1),
+      },
+      status: {
+        in: ['confirmed', 'completed'],
+      },
+    },
+    _sum: {
+      total_amount: true,
+      commission_amount: true,
+    },
+    _count: true,
+  })
+
+  const totalSales = Number(monthlyStats._sum.total_amount || 0)
+  const totalCommission = Number(monthlyStats._sum.commission_amount || 0)
+  const totalReservations = monthlyStats._count
+
+  // Calcular score (pode ser customizado)
+  const rankScore = totalSales + totalReservations * 100
+
+  // Atualizar ou criar ranking
+  await prisma.sellerRanking.upsert({
+    where: {
+      tenant_id_user_id_period_type_year_month_quarter: {
+        tenant_id: tenantId,
+        user_id: userId,
+        period_type: 'monthly',
+        year,
+        month,
+        quarter: null,
+      },
+    },
+    create: {
+      tenant_id: tenantId,
+      user_id: userId,
+      period_type: 'monthly',
+      year,
+      month,
+      total_sales: totalSales,
+      total_reservations: totalReservations,
+      total_commission: totalCommission,
+      rank_score: rankScore,
+      rank_position: 0, // Será calculado depois
+    },
+    update: {
+      total_sales: totalSales,
+      total_reservations: totalReservations,
+      total_commission: totalCommission,
+      rank_score: rankScore,
+    },
+  })
+
+  // Recalcular posições do ranking
+  await recalculateRankingPositions(tenantId, year, month)
+}
+
+async function recalculateRankingPositions(
+  tenantId: string,
+  year: number,
+  month: number
+) {
+  const rankings = await prisma.sellerRanking.findMany({
+    where: {
+      tenant_id: tenantId,
+      period_type: 'monthly',
+      year,
+      month,
+    },
+    orderBy: {
+      rank_score: 'desc',
+    },
+  })
+
+  for (let i = 0; i < rankings.length; i++) {
+    await prisma.sellerRanking.update({
+      where: { id: rankings[i].id },
+      data: { rank_position: i + 1 },
+    })
+  }
+}
+
+COMPONENTE DE FORMULÁRIO COM COMISSÃO
+
+// components/dashboard/clients/client-form-with-commission.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { TripSelectorWithDetails } from './trip-selector-with-details'
+import { SeatSelectionMap } from '@/components/public/seat-selection-map'
+import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { DollarSign, TrendingUp, Target } from 'lucide-react'
+
+export function ClientFormWithCommission({ currentUser }: { currentUser: any }) {
+  const [formData, setFormData] = useState({
+    // ... campos existentes ...
+    tripId: '',
+    selectedSeats: [],
+    totalPrice: 0,
+    
+    // COMISSÃO
+    commissionRate: Number(currentUser.commission_rate),
+    commissionAmount: 0,
+    commissionType: currentUser.commission_type,
+  })
+
+  const [selectedTrip, setSelectedTrip] = useState<any>(null)
+
+  // Calcular comissão automaticamente quando preço mudar
+  useEffect(() => {
+    if (formData.totalPrice > 0) {
+      calculateCommission()
+    }
+  }, [formData.totalPrice, formData.commissionRate])
+
+  const calculateCommission = async () => {
+    try {
+      const response = await fetch('/api/dashboard/commissions/calculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          saleAmount: formData.totalPrice,
+        }),
+      })
+
+      const data = await response.json()
+
+      setFormData({
+        ...formData,
+        commissionAmount: data.commissionAmount,
+        commissionRate: data.commissionRate,
+        commissionType: data.commissionType,
+      })
+    } catch (error) {
+      console.error('Erro ao calcular comissão:', error)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* ... Abas existentes ... */}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* CARD DE RESUMO FINANCEIRO COM COMISSÃO */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      
+      {formData.totalPrice > 0 && (
+        <Card className="p-6 bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-200">
+          <h4 className="font-bold text-lg mb-4 flex items-center gap-2">
+            <DollarSign className="h-5 w-5 text-green-600" />
+            Resumo Financeiro
+          </h4>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Valor Total da Venda */}
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <p className="text-sm text-gray-600 mb-1">Valor Total da Venda</p>
+              <p className="text-2xl font-bold text-gray-800">
+                R$ {formData.totalPrice.toFixed(2)}
+              </p>
+              {formData.selectedSeats.length > 0 && (
+                <p className="text-xs text-gray-500 mt-1">
+                  {formData.selectedSeats.length} assento(s)
+                </p>
+              )}
+            </div>
+
+            {/* Taxa de Comissão */}
+            <div className="bg-white rounded-lg p-4 shadow-sm">
+              <p className="text-sm text-gray-600 mb-1">Taxa de Comissão</p>
+              <div className="flex items-center gap-2">
+                {currentUser.role === 'admin' ? (
+                  <Input
+                    type="number"
+                    value={formData.commissionRate}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        commissionRate: Number(e.target.value),
+                      })
+                    }
+                    className="w-20 text-lg font-bold"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                  />
+                ) : (
+                  <p className="text-2xl font-bold text-blue-600">
+                    {formData.commissionRate}%
+                  </p>
+                )}
+                <Badge className="bg-blue-500">
+                  {formData.commissionType === 'percentage' && 'Percentual'}
+                  {formData.commissionType === 'fixed' && 'Fixo'}
+                  {formData.commissionType === 'hybrid' && 'Híbrido'}
+                </Badge>
+              </div>
+            </div>
+
+            {/* Sua Comissão */}
+            <div className="bg-gradient-to-br from-green-500 to-green-600 rounded-lg p-4 shadow-lg">
+              <p className="text-sm text-green-100 mb-1">Sua Comissão</p>
+              <p className="text-3xl font-bold text-white">
+                R$ {formData.commissionAmount.toFixed(2)}
+              </p>
+              <p className="text-xs text-green-100 mt-1">
+                ✨ Ganho nesta venda
+              </p>
+            </div>
+          </div>
+
+          {/* Alerta de Comissão */}
+          <Alert className="mt-4 bg-blue-50 border-blue-200">
+            <TrendingUp className="h-4 w-4 text-blue-600" />
+            <AlertDescription className="text-blue-800">
+              <strong>Parabéns!</strong> Esta venda será adicionada às suas metas e
+              comissões. Continue assim! 🎯
+            </AlertDescription>
+          </Alert>
+        </Card>
+      )}
+
+      {/* Meta do Mês (Preview) */}
+      {currentUser.monthly_goal && (
+        <Card className="p-4 bg-purple-50 border-purple-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Target className="h-5 w-5 text-purple-600" />
+              <div>
+                <p className="text-sm text-gray-600">Meta do Mês</p>
+                <p className="font-bold text-purple-600">
+                  R$ {Number(currentUser.monthly_goal).toFixed(2)}
+                </p>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <p className="text-xs text-gray-600">Após esta venda</p>
+              <p className="text-sm font-semibold text-purple-600">
+                +{((formData.totalPrice / Number(currentUser.monthly_goal)) * 100).toFixed(1)}%
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+API DE CRIAÇÃO COM COMISSÃO
+
+// app/api/dashboard/clients/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { findOrCreateClient } from '@/lib/clients/find-or-create'
+import { calculateCommission, createCommission } from '@/lib/commissions/calculate-commission'
+import { updateSellerGoals, updateSellerRanking } from '@/lib/goals/update-seller-goals'
+import { prisma } from '@/lib/prisma'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const body = await req.json()
+
+    // ... código de criação de cliente e reserva ...
+
+    const reservation = await prisma.reservation.create({
+      data: {
+        // ... dados da reserva ...
+        seller_id: session.user.id,
+        total_amount: body.totalPrice,
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // CALCULAR E CRIAR COMISSÃO
+    // ═══════════════════════════════════════════════════════════
+    
+    const commissionData = await calculateCommission({
+      tenantId: session.user.tenantId,
+      userId: session.user.id,
+      saleAmount: body.totalPrice,
+    })
+
+    const commission = await createCommission({
+      tenantId: session.user.tenantId,
+      userId: session.user.id,
+      reservationId: reservation.id,
+      saleAmount: body.totalPrice,
+      commissionType: commissionData.commissionType,
+      commissionRate: commissionData.commissionRate,
+      commissionAmount: commissionData.commissionAmount,
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // ATUALIZAR METAS DO VENDEDOR
+    // ═══════════════════════════════════════════════════════════
+    
+    await updateSellerGoals({
+      tenantId: session.user.tenantId,
+      userId: session.user.id,
+      saleAmount: body.totalPrice,
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // ATUALIZAR RANKING
+    // ═══════════════════════════════════════════════════════════
+    
+    await updateSellerRanking({
+      tenantId: session.user.tenantId,
+      userId: session.user.id,
+    })
+
+    return NextResponse.json({
+      success: true,
+      client,
+      reservation,
+      commission,
+      message: 'Cliente criado e comissão registrada com sucesso!',
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar cliente:', error)
+    return NextResponse.json(
+      { error: error.message || 'Erro ao criar cliente' },
+      { status: 500 }
+    )
+  }
+}
+
+
+
+PAINEL COMPLETO DO VENDEDOR - COMISSÕES, METAS E RESULTADOS
+
+VISÃO GERAL DO PAINEL
+
+┌─────────────────────────────────────────────────────────────────┐
+│                  PAINEL DO VENDEDOR                              │
+└─────────────────────────────────────────────────────────────────┘
+
+📊 DASHBOARD PRINCIPAL
+├── Cards de Estatísticas (Mês Atual)
+│   ├── Total de Vendas (R$)
+│   ├── Comissões Pendentes (R$)
+│   ├── Comissões Pagas (R$)
+│   └── Número de Reservas
+│
+├── Progresso de Metas
+│   ├── Meta Mensal (barra de progresso)
+│   ├── Meta Trimestral
+│   └── Meta Anual
+│
+├── Gráficos
+│   ├── Vendas por Dia (últimos 30 dias)
+│   ├── Comissões por Mês (ano atual)
+│   └── Conversão de Leads
+│
+└── Ranking de Vendedores
+    ├── Posição atual
+    ├── Top 5 vendedores
+    └── Comparativo
+
+💰 COMISSÕES
+├── Pendentes (aguardando pagamento)
+├── Aprovadas (aguardando pagamento)
+├── Pagas (histórico)
+└── Canceladas
+
+🎯 METAS
+├── Definição de metas
+├── Acompanhamento em tempo real
+├── Histórico de metas
+└── Prêmios e bônus
+
+📈 RELATÓRIOS
+├── Vendas por período
+├── Comissões por período
+├── Performance individual
+└── Exportação (PDF/Excel)
+
+DASHBOARD PRINCIPAL DO VENDEDOR
+
+// app/(dashboard)/vendedor/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Progress } from '@/components/ui/progress'
+import {
+  DollarSign,
+  TrendingUp,
+  Target,
+  Award,
+  Clock,
+  CheckCircle,
+  Users,
+  ShoppingCart,
+} from 'lucide-react'
+import { SalesChart } from '@/components/dashboard/seller/sales-chart'
+import { CommissionsChart } from '@/components/dashboard/seller/commissions-chart'
+import { SellerRankingCard } from '@/components/dashboard/seller/ranking-card'
+
+export default async function SellerDashboardPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session || session.user.role === 'client') {
+    redirect('/login')
+  }
+
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = now.getMonth() + 1
+  const quarter = Math.ceil(month / 3)
+
+  // ═══════════════════════════════════════════════════════════
+  // BUSCAR ESTATÍSTICAS DO MÊS ATUAL
+  // ═══════════════════════════════════════════════════════════
+
+  const monthStart = new Date(year, month - 1, 1)
+  const monthEnd = new Date(year, month, 0, 23, 59, 59)
+
+  // Total de vendas do mês
+  const monthSales = await prisma.reservation.aggregate({
+    where: {
+      tenant_id: session.user.tenantId,
+      seller_id: session.user.id,
+      created_at: {
+        gte: monthStart,
+        lte: monthEnd,
+      },
+      status: {
+        in: ['pending', 'confirmed', 'completed'],
+      },
+    },
+    _sum: {
+      total_amount: true,
+    },
+    _count: true,
+  })
+
+  const totalSales = Number(monthSales._sum.total_amount || 0)
+  const totalReservations = monthSales._count
+
+  // Comissões do mês
+  const commissions = await prisma.commission.groupBy({
+    by: ['status'],
+    where: {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      created_at: {
+        gte: monthStart,
+        lte: monthEnd,
+      },
+    },
+    _sum: {
+      commission_amount: true,
+    },
+  })
+
+  const pendingCommissions = Number(
+    commissions.find((c) => c.status === 'pending')?._sum.commission_amount || 0
+  )
+  const approvedCommissions = Number(
+    commissions.find((c) => c.status === 'approved')?._sum.commission_amount || 0
+  )
+  const paidCommissions = Number(
+    commissions.find((c) => c.status === 'paid')?._sum.commission_amount || 0
+  )
+
+  // ═══════════════════════════════════════════════════════════
+  // BUSCAR METAS
+  // ═══════════════════════════════════════════════════════════
+
+  const monthlyGoal = await prisma.salesGoal.findFirst({
+    where: {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      period_type: 'monthly',
+      year,
+      month,
+    },
+  })
+
+  const quarterlyGoal = await prisma.salesGoal.findFirst({
+    where: {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      period_type: 'quarterly',
+      year,
+      quarter,
+    },
+  })
+
+  const annualGoal = await prisma.salesGoal.findFirst({
+    where: {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      period_type: 'annual',
+      year,
+    },
+  })
+
+  // ═══════════════════════════════════════════════════════════
+  // BUSCAR RANKING
+  // ═══════════════════════════════════════════════════════════
+
+  const myRanking = await prisma.sellerRanking.findFirst({
+    where: {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      period_type: 'monthly',
+      year,
+      month,
+    },
+  })
+
+  const topSellers = await prisma.sellerRanking.findMany({
+    where: {
+      tenant_id: session.user.tenantId,
+      period_type: 'monthly',
+      year,
+      month,
+    },
+    include: {
+      user: true,
+    },
+    orderBy: {
+      rank_position: 'asc',
+    },
+    take: 5,
+  })
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">
+          Olá, {session.user.name}! 👋
+        </h1>
+        <p className="text-gray-600">
+          Aqui está o resumo do seu desempenho em {new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
+        </p>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* CARDS DE ESTATÍSTICAS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        {/* Total de Vendas */}
+        <Card className="p-6 bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center">
+              <DollarSign className="h-6 w-6" />
+            </div>
+            <Badge className="bg-white/20 text-white border-0">
+              Este mês
+            </Badge>
+          </div>
+          <p className="text-sm opacity-90 mb-1">Total de Vendas</p>
+          <p className="text-3xl font-bold">
+            R$ {totalSales.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            {totalReservations} reserva{totalReservations !== 1 ? 's' : ''}
+          </p>
+        </Card>
+
+        {/* Comissões Pendentes */}
+        <Card className="p-6 bg-gradient-to-br from-yellow-500 to-orange-500 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center">
+              <Clock className="h-6 w-6" />
+            </div>
+            <Badge className="bg-white/20 text-white border-0">
+              Pendente
+            </Badge>
+          </div>
+          <p className="text-sm opacity-90 mb-1">Comissões Pendentes</p>
+          <p className="text-3xl font-bold">
+            R$ {pendingCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            Aguardando aprovação
+          </p>
+        </Card>
+
+        {/* Comissões Aprovadas */}
+        <Card className="p-6 bg-gradient-to-br from-purple-500 to-purple-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center">
+              <CheckCircle className="h-6 w-6" />
+            </div>
+            <Badge className="bg-white/20 text-white border-0">
+              Aprovado
+            </Badge>
+          </div>
+          <p className="text-sm opacity-90 mb-1">Comissões Aprovadas</p>
+          <p className="text-3xl font-bold">
+            R$ {approvedCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            Aguardando pagamento
+          </p>
+        </Card>
+
+        {/* Comissões Pagas */}
+        <Card className="p-6 bg-gradient-to-br from-green-500 to-green-600 text-white">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center">
+              <TrendingUp className="h-6 w-6" />
+            </div>
+            <Badge className="bg-white/20 text-white border-0">
+              Recebido
+            </Badge>
+          </div>
+          <p className="text-sm opacity-90 mb-1">Comissões Pagas</p>
+          <p className="text-3xl font-bold">
+            R$ {paidCommissions.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs opacity-75 mt-2">
+            Já recebido este mês
+          </p>
+        </Card>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* PROGRESSO DE METAS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <Card className="p-6 mb-8">
+        <div className="flex items-center gap-2 mb-6">
+          <Target className="h-6 w-6 text-purple-600" />
+          <h2 className="text-2xl font-bold">Progresso de Metas</h2>
+        </div>
+
+        <div className="space-y-6">
+          {/* Meta Mensal */}
+          {monthlyGoal && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="font-semibold">Meta Mensal</p>
+                  <p className="text-sm text-gray-600">
+                    R$ {Number(monthlyGoal.achieved_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de R$ {Number(monthlyGoal.goal_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <Badge
+                  className={
+                    Number(monthlyGoal.progress_percentage) >= 100
+                      ? 'bg-green-500'
+                      : Number(monthlyGoal.progress_percentage) >= 75
+                      ? 'bg-blue-500'
+                      : Number(monthlyGoal.progress_percentage) >= 50
+                      ? 'bg-yellow-500'
+                      : 'bg-red-500'
+                  }
+                >
+                  {Number(monthlyGoal.progress_percentage).toFixed(1)}%
+                </Badge>
+              </div>
+              <Progress
+                value={Math.min(Number(monthlyGoal.progress_percentage), 100)}
+                className="h-3"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Faltam R$ {(Number(monthlyGoal.goal_amount) - Number(monthlyGoal.achieved_amount)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} para atingir a meta
+              </p>
+            </div>
+          )}
+
+          {/* Meta Trimestral */}
+          {quarterlyGoal && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="font-semibold">Meta Trimestral (Q{quarter})</p>
+                  <p className="text-sm text-gray-600">
+                    R$ {Number(quarterlyGoal.achieved_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de R$ {Number(quarterlyGoal.goal_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <Badge
+                  className={
+                    Number(quarterlyGoal.progress_percentage) >= 100
+                      ? 'bg-green-500'
+                      : 'bg-blue-500'
+                  }
+                >
+                  {Number(quarterlyGoal.progress_percentage).toFixed(1)}%
+                </Badge>
+              </div>
+              <Progress
+                value={Math.min(Number(quarterlyGoal.progress_percentage), 100)}
+                className="h-3"
+              />
+            </div>
+          )}
+
+          {/* Meta Anual */}
+          {annualGoal && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="font-semibold">Meta Anual {year}</p>
+                  <p className="text-sm text-gray-600">
+                    R$ {Number(annualGoal.achieved_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de R$ {Number(annualGoal.goal_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <Badge
+                  className={
+                    Number(annualGoal.progress_percentage) >= 100
+                      ? 'bg-green-500'
+                      : 'bg-blue-500'
+                  }
+                >
+                  {Number(annualGoal.progress_percentage).toFixed(1)}%
+                </Badge>
+              </div>
+              <Progress
+                value={Math.min(Number(annualGoal.progress_percentage), 100)}
+                className="h-3"
+              />
+            </div>
+          )}
+
+          {/* Sem Metas */}
+          {!monthlyGoal && !quarterlyGoal && !annualGoal && (
+            <div className="text-center py-8">
+              <Target className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-600 mb-4">
+                Você ainda não possui metas definidas
+              </p>
+              <p className="text-sm text-gray-500">
+                Entre em contato com seu gerente para definir suas metas
+              </p>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* RANKING DE VENDEDORES */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <Card className="p-6 mb-8">
+        <div className="flex items-center gap-2 mb-6">
+          <Award className="h-6 w-6 text-yellow-600" />
+          <h2 className="text-2xl font-bold">Ranking do Mês</h2>
+        </div>
+
+        {myRanking && (
+          <div className="mb-6 p-4 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-200 rounded-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-16 h-16 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center text-white font-bold text-2xl">
+                  {myRanking.rank_position}º
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">Sua Posição</p>
+                  <p className="font-bold text-lg">
+                    {myRanking.rank_position === 1 && '🏆 Primeiro Lugar!'}
+                    {myRanking.rank_position === 2 && '🥈 Segundo Lugar!'}
+                    {myRanking.rank_position === 3 && '🥉 Terceiro Lugar!'}
+                    {myRanking.rank_position > 3 && `${myRanking.rank_position}º Lugar`}
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <p className="text-sm text-gray-600">Total de Vendas</p>
+                <p className="text-2xl font-bold text-green-600">
+                  R$ {Number(myRanking.total_sales).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Top 5 Vendedores */}
+        <div className="space-y-3">
+          {topSellers.map((seller, index) => (
+            <div
+              key={seller.id}
+              className={`
+                flex items-center justify-between p-4 rounded-lg transition
+                ${seller.user_id === session.user.id
+                  ? 'bg-blue-50 border-2 border-blue-200'
+                  : 'bg-gray-50 hover:bg-gray-100'
+                }
+              `}
+            >
+              <div className="flex items-center gap-4">
+                <div
+                  className={`
+                    w-10 h-10 rounded-full flex items-center justify-center font-bold
+                    ${index === 0 ? 'bg-yellow-400 text-white' : ''}
+                    ${index === 1 ? 'bg-gray-300 text-white' : ''}
+                    ${index === 2 ? 'bg-orange-400 text-white' : ''}
+                    ${index > 2 ? 'bg-gray-200 text-gray-700' : ''}
+                  `}
+                >
+                  {seller.rank_position}
+                </div>
+
+                <div>
+                  <p className="font-semibold">
+                    {seller.user.name}
+                    {seller.user_id === session.user.id && (
+                      <Badge className="ml-2 bg-blue-500">Você</Badge>
+                    )}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    {seller.total_reservations} venda{seller.total_reservations !== 1 ? 's' : ''}
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <p className="font-bold text-green-600">
+                  R$ {Number(seller.total_sales).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+                <p className="text-xs text-gray-500">
+                  Comissão: R$ {Number(seller.total_commission).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* GRÁFICOS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Gráfico de Vendas */}
+        <Card className="p-6">
+          <h3 className="text-xl font-bold mb-4">Vendas dos Últimos 30 Dias</h3>
+          <SalesChart userId={session.user.id} tenantId={session.user.tenantId} />
+        </Card>
+
+        {/* Gráfico de Comissões */}
+        <Card className="p-6">
+          <h3 className="text-xl font-bold mb-4">Comissões por Mês ({year})</h3>
+          <CommissionsChart userId={session.user.id} tenantId={session.user.tenantId} />
+        </Card>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* ÚLTIMAS VENDAS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+
+      <RecentSalesCard userId={session.user.id} tenantId={session.user.tenantId} />
+    </div>
+  )
+}
+
+PÁGINA DE COMISSÕES
+
+// app/(dashboard)/vendedor/comissoes/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import {
+  Clock,
+  CheckCircle,
+  DollarSign,
+  XCircle,
+  Download,
+  Eye,
+} from 'lucide-react'
+import Link from 'next/link'
+
+export default async function CommissionsPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    redirect('/login')
+  }
+
+  // Buscar comissões
+  const commissions = await prisma.commission.findMany({
+    where: {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+    },
+    include: {
+      reservation: {
+        include: {
+          trip: true,
+          client: true,
+        },
+      },
+    },
+    orderBy: {
+      created_at: 'desc',
+    },
+  })
+
+  // Agrupar por status
+  const pending = commissions.filter((c) => c.status === 'pending')
+  const approved = commissions.filter((c) => c.status === 'approved')
+  const paid = commissions.filter((c) => c.status === 'paid')
+  const cancelled = commissions.filter((c) => c.status === 'cancelled')
+
+  // Totais
+  const totalPending = pending.reduce(
+    (sum, c) => sum + Number(c.commission_amount),
+    0
+  )
+  const totalApproved = approved.reduce(
+    (sum, c) => sum + Number(c.commission_amount),
+    0
+  )
+  const totalPaid = paid.reduce(
+    (sum, c) => sum + Number(c.commission_amount),
+    0
+  )
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">💰 Minhas Comissões</h1>
+        <p className="text-gray-600">
+          Acompanhe suas comissões e histórico de pagamentos
+        </p>
+      </div>
+
+      {/* Cards de Resumo */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <Card className="p-6 bg-yellow-50 border-yellow-200">
+          <div className="flex items-center gap-3 mb-2">
+            <Clock className="h-5 w-5 text-yellow-600" />
+            <p className="text-sm text-gray-600">Pendentes</p>
+          </div>
+          <p className="text-2xl font-bold text-yellow-600">
+            R$ {totalPending.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            {pending.length} comissão{pending.length !== 1 ? 'ões' : ''}
+          </p>
+        </Card>
+
+        <Card className="p-6 bg-purple-50 border-purple-200">
+          <div className="flex items-center gap-3 mb-2">
+            <CheckCircle className="h-5 w-5 text-purple-600" />
+            <p className="text-sm text-gray-600">Aprovadas</p>
+          </div>
+          <p className="text-2xl font-bold text-purple-600">
+            R$ {totalApproved.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            {approved.length} comissão{approved.length !== 1 ? 'ões' : ''}
+          </p>
+        </Card>
+
+        <Card className="p-6 bg-green-50 border-green-200">
+          <div className="flex items-center gap-3 mb-2">
+            <DollarSign className="h-5 w-5 text-green-600" />
+            <p className="text-sm text-gray-600">Pagas</p>
+          </div>
+          <p className="text-2xl font-bold text-green-600">
+            R$ {totalPaid.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            {paid.length} comissão{paid.length !== 1 ? 'ões' : ''}
+          </p>
+        </Card>
+
+        <Card className="p-6 bg-gray-50 border-gray-200">
+          <div className="flex items-center gap-3 mb-2">
+            <XCircle className="h-5 w-5 text-gray-600" />
+            <p className="text-sm text-gray-600">Canceladas</p>
+          </div>
+          <p className="text-2xl font-bold text-gray-600">
+            {cancelled.length}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">
+            comissão{cancelled.length !== 1 ? 'ões' : ''}
+          </p>
+        </Card>
+      </div>
+
+      {/* Tabs de Comissões */}
+      <Card className="p-6">
+        <Tabs defaultValue="pending">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="pending">
+              Pendentes ({pending.length})
+            </TabsTrigger>
+            <TabsTrigger value="approved">
+              Aprovadas ({approved.length})
+            </TabsTrigger>
+            <TabsTrigger value="paid">
+              Pagas ({paid.length})
+            </TabsTrigger>
+            <TabsTrigger value="cancelled">
+              Canceladas ({cancelled.length})
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Pendentes */}
+          <TabsContent value="pending" className="mt-6">
+            <CommissionsList commissions={pending} status="pending" />
+          </TabsContent>
+
+          {/* Aprovadas */}
+          <TabsContent value="approved" className="mt-6">
+            <CommissionsList commissions={approved} status="approved" />
+          </TabsContent>
+
+          {/* Pagas */}
+          <TabsContent value="paid" className="mt-6">
+            <CommissionsList commissions={paid} status="paid" />
+          </TabsContent>
+
+          {/* Canceladas */}
+          <TabsContent value="cancelled" className="mt-6">
+            <CommissionsList commissions={cancelled} status="cancelled" />
+          </TabsContent>
+        </Tabs>
+      </Card>
+    </div>
+  )
+}
+
+// Componente de Lista de Comissões
+function CommissionsList({
+  commissions,
+  status,
+}: {
+  commissions: any[]
+  status: string
+}) {
+  if (commissions.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-gray-500">Nenhuma comissão {status === 'pending' ? 'pendente' : status === 'approved' ? 'aprovada' : status === 'paid' ? 'paga' : 'cancelada'}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {commissions.map((commission) => (
+        <div
+          key={commission.id}
+          className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 transition"
+        >
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-2">
+              <p className="font-bold">
+                {commission.reservation.trip.title}
+              </p>
+              <Badge
+                className={
+                  status === 'pending'
+                    ? 'bg-yellow-500'
+                    : status === 'approved'
+                    ? 'bg-purple-500'
+                    : status === 'paid'
+                    ? 'bg-green-500'
+                    : 'bg-gray-500'
+                }
+              >
+                {status === 'pending' && 'Pendente'}
+                {status === 'approved' && 'Aprovada'}
+                {status === 'paid' && 'Paga'}
+                {status === 'cancelled' && 'Cancelada'}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div>
+                <p className="text-gray-600">Cliente</p>
+                <p className="font-semibold">
+                  {commission.reservation.client_name}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-gray-600">Valor da Venda</p>
+                <p className="font-semibold">
+                  R$ {Number(commission.sale_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+
+              <div>
+                <p className="text-gray-600">Taxa</p>
+                <p className="font-semibold">
+                  {Number(commission.commission_rate).toFixed(2)}%
+                </p>
+              </div>
+
+              <div>
+                <p className="text-gray-600">Data</p>
+                <p className="font-semibold">
+                  {format(new Date(commission.created_at), 'dd/MM/yyyy', {
+                    locale: ptBR,
+                  })}
+                </p>
+              </div>
+            </div>
+
+            {commission.payment_date && (
+              <p className="text-xs text-gray-500 mt-2">
+                Pago em: {format(new Date(commission.payment_date), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+              </p>
+            )}
+          </div>
+
+          <div className="text-right ml-6">
+            <p className="text-2xl font-bold text-green-600">
+              R$ {Number(commission.commission_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+            </p>
+
+            <div className="flex gap-2 mt-3">
+              <Button size="sm" variant="outline" asChild>
+                <Link href={`/vendedor/comissoes/${commission.id}`}>
+                  <Eye className="h-3 w-3 mr-1" />
+                  Ver
+                </Link>
+              </Button>
+
+              {status === 'paid' && commission.payment_proof && (
+                <Button size="sm" variant="outline" asChild>
+                  <a href={commission.payment_proof} target="_blank" rel="noopener noreferrer">
+                    <Download className="h-3 w-3 mr-1" />
+                    Comprovante
+                  </a>
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+GRÁFICOS E RELATÓRIOS COMPLETOS PARA VENDEDORES
+
+COMPONENTE DE GRÁFICO DE VENDAS (ÚLTIMOS 30 DIAS)
+
+// components/dashboard/seller/sales-chart.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import {
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from 'recharts'
+import { Loader2 } from 'lucide-react'
+
+interface SalesChartProps {
+  userId: string
+  tenantId: string
+}
+
+export function SalesChart({ userId, tenantId }: SalesChartProps) {
+  const [data, setData] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [userId])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch(
+        `/api/dashboard/seller/sales-chart?userId=${userId}`
+      )
+      const result = await response.json()
+      setData(result.data)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+      </div>
+    )
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <AreaChart data={data}>
+        <defs>
+          <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
+            <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+        <XAxis
+          dataKey="date"
+          stroke="#6b7280"
+          fontSize={12}
+          tickLine={false}
+        />
+        <YAxis
+          stroke="#6b7280"
+          fontSize={12}
+          tickLine={false}
+          tickFormatter={(value) => `R$ ${value}`}
+        />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: '8px',
+          }}
+          formatter={(value: any) => [
+            `R$ ${Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
+            'Vendas',
+          ]}
+        />
+        <Area
+          type="monotone"
+          dataKey="amount"
+          stroke="#3b82f6"
+          strokeWidth={2}
+          fillOpacity={1}
+          fill="url(#colorSales)"
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+COMPONENTE DE GRÁFICO DE COMISSÕES
+
+// components/dashboard/seller/commissions-chart.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+  Cell,
+} from 'recharts'
+import { Loader2 } from 'lucide-react'
+
+interface CommissionsChartProps {
+  userId: string
+  tenantId: string
+}
+
+const COLORS = {
+  pending: '#f59e0b',
+  approved: '#a855f7',
+  paid: '#10b981',
+}
+
+export function CommissionsChart({ userId, tenantId }: CommissionsChartProps) {
+  const [data, setData] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [userId])
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch(
+        `/api/dashboard/seller/commissions-chart?userId=${userId}`
+      )
+      const result = await response.json()
+      setData(result.data)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+      </div>
+    )
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <BarChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+        <XAxis
+          dataKey="month"
+          stroke="#6b7280"
+          fontSize={12}
+          tickLine={false}
+        />
+        <YAxis
+          stroke="#6b7280"
+          fontSize={12}
+          tickLine={false}
+          tickFormatter={(value) => `R$ ${value}`}
+        />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: '8px',
+          }}
+          formatter={(value: any) => [
+            `R$ ${Number(value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
+          ]}
+        />
+        <Legend />
+        <Bar
+          dataKey="pending"
+          name="Pendentes"
+          fill={COLORS.pending}
+          radius={[8, 8, 0, 0]}
+        />
+        <Bar
+          dataKey="approved"
+          name="Aprovadas"
+          fill={COLORS.approved}
+          radius={[8, 8, 0, 0]}
+        />
+        <Bar
+          dataKey="paid"
+          name="Pagas"
+          fill={COLORS.paid}
+          radius={[8, 8, 0, 0]}
+        />
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+COMPONENTE DE PROGRESSO DE META
+
+// components/dashboard/seller/goal-progress.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
+import { Badge } from '@/components/ui/badge'
+import { Target, TrendingUp, Award } from 'lucide-react'
+
+interface GoalProgressProps {
+  goal: {
+    id: string
+    period_type: string
+    goal_amount: number
+    achieved_amount: number
+    progress_percentage: number
+    status: string
+  }
+  title: string
+}
+
+export function GoalProgress({ goal, title }: GoalProgressProps) {
+  const remaining = goal.goal_amount - goal.achieved_amount
+  const isCompleted = goal.progress_percentage >= 100
+
+  return (
+    <Card className={`p-6 ${isCompleted ? 'bg-green-50 border-green-200' : ''}`}>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          {isCompleted ? (
+            <Award className="h-5 w-5 text-green-600" />
+          ) : (
+            <Target className="h-5 w-5 text-blue-600" />
+          )}
+          <h3 className="font-bold">{title}</h3>
+        </div>
+
+        <Badge
+          className={
+            isCompleted
+              ? 'bg-green-500'
+              : goal.progress_percentage >= 75
+              ? 'bg-blue-500'
+              : goal.progress_percentage >= 50
+              ? 'bg-yellow-500'
+              : 'bg-red-500'
+          }
+        >
+          {goal.progress_percentage.toFixed(1)}%
+        </Badge>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-gray-600">Realizado</span>
+          <span className="font-bold text-green-600">
+            R$ {goal.achieved_amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </span>
+        </div>
+
+        <Progress
+          value={Math.min(goal.progress_percentage, 100)}
+          className="h-3"
+        />
+
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-gray-600">Meta</span>
+          <span className="font-bold">
+            R$ {goal.goal_amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </span>
+        </div>
+
+        {!isCompleted && (
+          <div className="pt-3 border-t">
+            <div className="flex items-center gap-2 text-sm">
+              <TrendingUp className="h-4 w-4 text-orange-500" />
+              <span className="text-gray-600">
+                Faltam{' '}
+                <strong className="text-orange-600">
+                  R$ {remaining.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </strong>{' '}
+                para atingir a meta
+              </span>
+            </div>
+          </div>
+        )}
+
+        {isCompleted && (
+          <div className="pt-3 border-t">
+            <div className="flex items-center gap-2 text-sm text-green-600">
+              <Award className="h-4 w-4" />
+              <span className="font-semibold">
+                🎉 Parabéns! Meta atingida!
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+API DE DADOS PARA GRÁFICO DE VENDAS
+
+// app/api/dashboard/seller/sales-chart/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { subDays, format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const userId = searchParams.get('userId') || session.user.id
+
+    // Últimos 30 dias
+    const endDate = new Date()
+    const startDate = subDays(endDate, 30)
+
+    // Buscar vendas por dia
+    const sales = await prisma.reservation.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        seller_id: userId,
+        created_at: {
+          gte: startDate,
+          lte: endDate,
+        },
+        status: {
+          in: ['pending', 'confirmed', 'completed'],
+        },
+      },
+      select: {
+        created_at: true,
+        total_amount: true,
+      },
+    })
+
+    // Agrupar por dia
+    const dailySales: Record<string, number> = {}
+
+    // Inicializar todos os dias com 0
+    for (let i = 0; i <= 30; i++) {
+      const date = subDays(endDate, i)
+      const dateKey = format(date, 'yyyy-MM-dd')
+      dailySales[dateKey] = 0
+    }
+
+    // Somar vendas por dia
+    sales.forEach((sale) => {
+      const dateKey = format(new Date(sale.created_at), 'yyyy-MM-dd')
+      dailySales[dateKey] += Number(sale.total_amount)
+    })
+
+    // Formatar dados para o gráfico
+    const chartData = Object.entries(dailySales)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, amount]) => ({
+        date: format(new Date(date), 'dd/MM', { locale: ptBR }),
+        amount: Math.round(amount * 100) / 100,
+      }))
+
+    return NextResponse.json({ data: chartData })
+  } catch (error) {
+    console.error('Erro ao buscar dados do gráfico:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar dados' },
+      { status: 500 }
+    )
+  }
+}
+
+API DE DADOS PARA GRÁFICO DE COMISSÕES
+// app/api/dashboard/seller/commissions-chart/route.ts
+
+import { NextResponse } from 'next/request'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const userId = searchParams.get('userId') || session.user.id
+
+    const currentYear = new Date().getFullYear()
+
+    // Buscar comissões do ano atual agrupadas por mês e status
+    const commissions = await prisma.commission.groupBy({
+      by: ['status'],
+      where: {
+        tenant_id: session.user.tenantId,
+        user_id: userId,
+        created_at: {
+          gte: new Date(currentYear, 0, 1),
+          lte: new Date(currentYear, 11, 31, 23, 59, 59),
+        },
+      },
+      _sum: {
+        commission_amount: true,
+      },
+    })
+
+    // Buscar comissões por mês
+    const monthlyCommissions = await prisma.$queryRaw<any[]>`
+      SELECT 
+        EXTRACT(MONTH FROM created_at) as month,
+        status,
+        SUM(commission_amount) as total
+      FROM commissions
+      WHERE 
+        tenant_id = ${session.user.tenantId}
+        AND user_id = ${userId}
+        AND EXTRACT(YEAR FROM created_at) = ${currentYear}
+      GROUP BY EXTRACT(MONTH FROM created_at), status
+      ORDER BY month
+    `
+
+    // Formatar dados para o gráfico
+    const months = [
+      'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez',
+    ]
+
+    const chartData = months.map((monthName, index) => {
+      const monthNumber = index + 1
+      const monthData = monthlyCommissions.filter(
+        (c) => Number(c.month) === monthNumber
+      )
+
+      return {
+        month: monthName,
+        pending: Number(
+          monthData.find((c) => c.status === 'pending')?.total || 0
+        ),
+        approved: Number(
+          monthData.find((c) => c.status === 'approved')?.total || 0
+        ),
+        paid: Number(
+          monthData.find((c) => c.status === 'paid')?.total || 0
+        ),
+      }
+    })
+
+    return NextResponse.json({ data: chartData })
+  } catch (error) {
+    console.error('Erro ao buscar dados do gráfico:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar dados' },
+      { status: 500 }
+    )
+  }
+}
+
+PÁGINA DE RELATÓRIOS COMPLETA
+// app/(dashboard)/vendedor/relatorios/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Download, FileText, Calendar } from 'lucide-react'
+import { PerformanceReport } from '@/components/dashboard/seller/performance-report'
+import { SalesReport } from '@/components/dashboard/seller/sales-report'
+import { CommissionsReport } from '@/components/dashboard/seller/commissions-report'
+
+export default async function ReportsPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    redirect('/login')
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">📊 Relatórios</h1>
+          <p className="text-gray-600">
+            Visualize e exporte seus relatórios de desempenho
+          </p>
+        </div>
+
+        <Button className="bg-green-600 hover:bg-green-700">
+          <Download className="h-4 w-4 mr-2" />
+          Exportar Tudo (PDF)
+        </Button>
+      </div>
+
+      {/* Filtros */}
+      <Card className="p-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-2">Período</label>
+            <Select defaultValue="current_month">
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="current_month">Mês Atual</SelectItem>
+                <SelectItem value="last_month">Mês Passado</SelectItem>
+                <SelectItem value="current_quarter">Trimestre Atual</SelectItem>
+                <SelectItem value="last_quarter">Trimestre Passado</SelectItem>
+                <SelectItem value="current_year">Ano Atual</SelectItem>
+                <SelectItem value="last_year">Ano Passado</SelectItem>
+                <SelectItem value="custom">Personalizado</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Data Início</label>
+            <input
+              type="date"
+              className="w-full px-3 py-2 border rounded-lg"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Data Fim</label>
+            <input
+              type="date"
+              className="w-full px-3 py-2 border rounded-lg"
+            />
+          </div>
+
+          <div className="flex items-end">
+            <Button className="w-full">
+              <Calendar className="h-4 w-4 mr-2" />
+              Aplicar Filtros
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* Tabs de Relatórios */}
+      <Tabs defaultValue="performance">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="performance">Performance Geral</TabsTrigger>
+          <TabsTrigger value="sales">Vendas Detalhadas</TabsTrigger>
+          <TabsTrigger value="commissions">Comissões</TabsTrigger>
+        </TabsList>
+
+        {/* Performance Geral */}
+        <TabsContent value="performance" className="mt-6">
+          <PerformanceReport userId={session.user.id} />
+        </TabsContent>
+
+        {/* Vendas Detalhadas */}
+        <TabsContent value="sales" className="mt-6">
+          <SalesReport userId={session.user.id} />
+        </TabsContent>
+
+        {/* Comissões */}
+        <TabsContent value="commissions" className="mt-6">
+          <CommissionsReport userId={session.user.id} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+COMPONENTE DE RELATÓRIO DE PERFORMANCE
+
+// components/dashboard/seller/performance-report.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Progress } from '@/components/ui/progress'
+import {
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  ShoppingCart,
+  Users,
+  Target,
+  Award,
+  Percent,
+} from 'lucide-react'
+
+interface PerformanceReportProps {
+  userId: string
+}
+
+export function PerformanceReport({ userId }: PerformanceReportProps) {
+  const [data, setData] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [userId])
+
+  const loadData = async () => {
+    try {
+      const response = await fetch(
+        `/api/dashboard/seller/performance?userId=${userId}`
+      )
+      const result = await response.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar relatório:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return <div>Carregando...</div>
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Cards de KPIs */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Total de Vendas */}
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+              <DollarSign className="h-6 w-6 text-blue-600" />
+            </div>
+            {data.comparison.sales > 0 ? (
+              <Badge className="bg-green-500">
+                <TrendingUp className="h-3 w-3 mr-1" />
+                +{data.comparison.sales.toFixed(1)}%
+              </Badge>
+            ) : (
+              <Badge className="bg-red-500">
+                <TrendingDown className="h-3 w-3 mr-1" />
+                {data.comparison.sales.toFixed(1)}%
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm text-gray-600 mb-1">Total de Vendas</p>
+          <p className="text-2xl font-bold">
+            R$ {data.totalSales.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+        </Card>
+
+        {/* Número de Reservas */}
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+              <ShoppingCart className="h-6 w-6 text-purple-600" />
+            </div>
+            {data.comparison.reservations > 0 ? (
+              <Badge className="bg-green-500">
+                <TrendingUp className="h-3 w-3 mr-1" />
+                +{data.comparison.reservations.toFixed(1)}%
+              </Badge>
+            ) : (
+              <Badge className="bg-red-500">
+                <TrendingDown className="h-3 w-3 mr-1" />
+                {data.comparison.reservations.toFixed(1)}%
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm text-gray-600 mb-1">Reservas</p>
+          <p className="text-2xl font-bold">{data.totalReservations}</p>
+        </Card>
+
+        {/* Ticket Médio */}
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+              <Target className="h-6 w-6 text-green-600" />
+            </div>
+            {data.comparison.avgTicket > 0 ? (
+              <Badge className="bg-green-500">
+                <TrendingUp className="h-3 w-3 mr-1" />
+                +{data.comparison.avgTicket.toFixed(1)}%
+              </Badge>
+            ) : (
+              <Badge className="bg-red-500">
+                <TrendingDown className="h-3 w-3 mr-1" />
+                {data.comparison.avgTicket.toFixed(1)}%
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm text-gray-600 mb-1">Ticket Médio</p>
+          <p className="text-2xl font-bold">
+            R$ {data.avgTicket.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+          </p>
+        </Card>
+
+        {/* Taxa de Conversão */}
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-orange-100 rounded-lg flex items-center justify-center">
+              <Percent className="h-6 w-6 text-orange-600" />
+            </div>
+            {data.comparison.conversion > 0 ? (
+              <Badge className="bg-green-500">
+                <TrendingUp className="h-3 w-3 mr-1" />
+                +{data.comparison.conversion.toFixed(1)}%
+              </Badge>
+            ) : (
+              <Badge className="bg-red-500">
+                <TrendingDown className="h-3 w-3 mr-1" />
+                {data.comparison.conversion.toFixed(1)}%
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm text-gray-600 mb-1">Taxa de Conversão</p>
+          <p className="text-2xl font-bold">{data.conversionRate.toFixed(1)}%</p>
+        </Card>
+      </div>
+
+      {/* Progresso de Metas */}
+      <Card className="p-6">
+        <h3 className="text-xl font-bold mb-6">Progresso de Metas</h3>
+
+        <div className="space-y-6">
+          {data.goals.map((goal: any) => (
+            <div key={goal.id}>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <p className="font-semibold">{goal.title}</p>
+                  <p className="text-sm text-gray-600">
+                    R$ {goal.achieved.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de R$ {goal.target.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <Badge
+                  className={
+                    goal.progress >= 100
+                      ? 'bg-green-500'
+                      : goal.progress >= 75
+                      ? 'bg-blue-500'
+                      : goal.progress >= 50
+                      ? 'bg-yellow-500'
+                      : 'bg-red-500'
+                  }
+                >
+                  {goal.progress.toFixed(1)}%
+                </Badge>
+              </div>
+              <Progress value={Math.min(goal.progress, 100)} className="h-3" />
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Top Produtos/Viagens */}
+      <Card className="p-6">
+        <h3 className="text-xl font-bold mb-6">Top 5 Viagens Mais Vendidas</h3>
+
+        <div className="space-y-4">
+          {data.topTrips.map((trip: any, index: number) => (
+            <div
+              key={trip.id}
+              className="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold">
+                  {index + 1}
+                </div>
+                <div>
+                  <p className="font-semibold">{trip.title}</p>
+                  <p className="text-sm text-gray-600">
+                    {trip.count} venda{trip.count !== 1 ? 's' : ''}
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <p className="font-bold text-green-600">
+                  R$ {trip.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+                <p className="text-xs text-gray-500">
+                  Comissão: R$ {trip.commission.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+API DE RELATÓRIO DE PERFORMANCE
+// app/api/dashboard/seller/performance/route.ts
+
+import { NextResponse } from 'next/response'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const userId = searchParams.get('userId') || session.user.id
+
+    const now = new Date()
+    const currentMonthStart = startOfMonth(now)
+    const currentMonthEnd = endOfMonth(now)
+    const lastMonthStart = startOfMonth(subMonths(now, 1))
+    const lastMonthEnd = endOfMonth(subMonths(now, 1))
+
+    // ═══════════════════════════════════════════════════════════
+    // DADOS DO MÊS ATUAL
+    // ═══════════════════════════════════════════════════════════
+
+    const currentMonth = await prisma.reservation.aggregate({
+      where: {
+        tenant_id: session.user.tenantId,
+        seller_id: userId,
+        created_at: {
+          gte: currentMonthStart,
+          lte: currentMonthEnd,
+        },
+        status: {
+          in: ['pending', 'confirmed', 'completed'],
+        },
+      },
+      _sum: {
+        total_amount: true,
+      },
+      _count: true,
+    })
+
+    const totalSales = Number(currentMonth._sum.total_amount || 0)
+    const totalReservations = currentMonth._count
+    const avgTicket = totalReservations > 0 ? totalSales / totalReservations : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // DADOS DO MÊS PASSADO (COMPARAÇÃO)
+    // ═══════════════════════════════════════════════════════════
+
+    const lastMonth = await prisma.reservation.aggregate({
+      where: {
+        tenant_id: session.user.tenantId,
+        seller_id: userId,
+        created_at: {
+          gte: lastMonthStart,
+          lte: lastMonthEnd,
+        },
+        status: {
+          in: ['pending', 'confirmed', 'completed'],
+        },
+      },
+      _sum: {
+        total_amount: true,
+      },
+      _count: true,
+    })
+
+    const lastMonthSales = Number(lastMonth._sum.total_amount || 0)
+    const lastMonthReservations = lastMonth._count
+    const lastMonthAvgTicket =
+      lastMonthReservations > 0 ? lastMonthSales / lastMonthReservations : 0
+
+    // Calcular variações percentuais
+    const salesComparison =
+      lastMonthSales > 0
+        ? ((totalSales - lastMonthSales) / lastMonthSales) * 100
+        : 0
+
+    const reservationsComparison =
+      lastMonthReservations > 0
+        ? ((totalReservations - lastMonthReservations) / lastMonthReservations) * 100
+        : 0
+
+    const avgTicketComparison =
+      lastMonthAvgTicket > 0
+        ? ((avgTicket - lastMonthAvgTicket) / lastMonthAvgTicket) * 100
+        : 0
+
+    // ═══════════════════════════════════════════════════════════
+    // METAS
+    // ═══════════════════════════════════════════════════════════
+
+    const goals = await prisma.salesGoal.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        user_id: userId,
+        year: now.getFullYear(),
+        month: now.getMonth() + 1,
+      },
+    })
+
+    const goalsFormatted = goals.map((goal) => ({
+      id: goal.id,
+      title:
+        goal.period_type === 'monthly'
+          ? 'Meta Mensal'
+          : goal.period_type === 'quarterly'
+          ? 'Meta Trimestral'
+          : 'Meta Anual',
+      target: Number(goal.goal_amount),
+      achieved: Number(goal.achieved_amount),
+      progress: Number(goal.progress_percentage),
+    }))
+
+    // ═══════════════════════════════════════════════════════════
+    // TOP VIAGENS
+    // ═══════════════════════════════════════════════════════════
+
+    const topTrips = await prisma.reservation.groupBy({
+      by: ['trip_id'],
+      where: {
+        tenant_id: session.user.tenantId,
+        seller_id: userId,
+        created_at: {
+          gte: currentMonthStart,
+          lte: currentMonthEnd,
+        },
+        status: {
+          in: ['pending', 'confirmed', 'completed'],
+        },
+      },
+      _sum: {
+        total_amount: true,
+        commission_amount: true,
+      },
+      _count: true,
+      orderBy: {
+        _sum: {
+          total_amount: 'desc',
+        },
+      },
+      take: 5,
+    })
+
+    const topTripsWithDetails = await Promise.all(
+      topTrips.map(async (trip) => {
+        const tripDetails = await prisma.trip.findUnique({
+          where: { id: trip.trip_id },
+          select: { title: true },
+        })
+
+        return {
+          id: trip.trip_id,
+          title: tripDetails?.title || 'Viagem',
+          count: trip._count,
+          total: Number(trip._sum.total_amount || 0),
+          commission: Number(trip._sum.commission_amount || 0),
+        }
+      })
+    )
+
+    return NextResponse.json({
+      totalSales,
+      totalReservations,
+      avgTicket,
+      conversionRate: 0, // Calcular baseado em leads/deals
+      comparison: {
+        sales: salesComparison,
+        reservations: reservationsComparison,
+        avgTicket: avgTicketComparison,
+        conversion: 0,
+      },
+      goals: goalsFormatted,
+      topTrips: topTripsWithDetails,
+    })
+  } catch (error) {
+    console.error('Erro ao gerar relatório:', error)
+    return NextResponse.json(
+      { error: 'Erro ao gerar relatório' },
+      { status: 500 }
+    )
+  }
+}
+
+RESUMO COMPLETO DO SISTEMA
+
+┌─────────────────────────────────────────────────────────────────┐
+│                 IMPLEMENTAR SISTEMA COMPLETO DE VENDEDOR                     │
+└─────────────────────────────────────────────────────────────────┘
+
+ DASHBOARD
+├── Cards de estatísticas em tempo real
+├── Progresso de metas (mensal, trimestral, anual)
+├── Ranking de vendedores
+├── Gráfico de vendas (últimos 30 dias)
+├── Gráfico de comissões (ano atual)
+└── Últimas vendas
+
+ COMISSÕES
+├── Cálculo automático na venda
+├── Sincronização com reservas
+├── Status (pendente, aprovada, paga)
+├── Histórico completo
+└── Comprovantes de pagamento
+
+ METAS
+├── Definição por período
+├── Atualização automática
+├── Progresso visual
+├── Alertas de conquista
+└── Bônus por meta atingida
+
+ RANKING
+├── Posição em tempo real
+├── Top 5 vendedores
+├── Comparativo mensal
+└── Gamificação
+
+ GRÁFICOS
+├── Vendas por dia
+├── Comissões por mês
+├── Performance comparativa
+└── Responsivos e interativos
+
+ RELATÓRIOS
+├── Performance geral
+├── Vendas detalhadas
+├── Comissões
+├── Exportação PDF/Excel
+└── Filtros personalizados
+
+ INTEGRAÇÕES
+├── Cadastro de cliente
+├── Criação de reserva
+├── Atualização automática
+└── Notificações
+

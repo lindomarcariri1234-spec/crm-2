@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@workspace/db": ["../../lib/db/dist/index.d.ts"],
+      "@workspace/db/schema": ["../../lib/db/dist/schema/index.d.ts"],
+      "@workspace/api-zod": ["../../lib/api-zod/dist/index.d.ts"],
+      "googleapis": ["src/typecheck-googleapis.d.ts"]
+    },
+    "customConditions": ["workspace"],
+    "disableReferencedProjectLoad": true,
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo.check",
+    "noEmit": true
+  },
+  "references": [],
+  "exclude": ["src/__tests__"]
+}

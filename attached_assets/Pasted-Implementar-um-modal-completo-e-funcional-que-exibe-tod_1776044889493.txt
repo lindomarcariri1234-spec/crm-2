@@ -1,0 +1,712 @@
+Implementar um modal completo e funcional que exibe todas as informações da viagem sincronizadas do CRM.
+
+Ao clicar em um card na Loja, abre um modal (popup) com as seguintes informações e ações:
+
+🖼️ Área Visual (Topo)
+Banner/imagem da viagem
+Badge de categoria no canto superior esquerdo (ex: "Pacote", "Excursão", "Aventura")
+Botão ✕ para fechar o modal no canto superior direito
+Ícone de ônibus centralizado quando não há foto cadastrada
+📋 Informações Principais ( Informações reais que foram sincronizadas )
+Campo	Exemplo
+Título da viagem	"Canoa Quebrada - Réveillon 2025"
+Destino	📍 Canoa Quebrada - CE
+Data de saída	📅 27 de dezembro
+Descrição curta	"Celebre a virada do ano nas praias paradisíacas do Ceará!"
+✅ O que está incluído
+Lista visual com badges verdes mostrando os serviços inclusos:
+✓ Transporte aéreo
+✓ Hospedagem
+✓ Café da manhã
+✓ Transfer
+✓ Seguro Viagem
+(e outros serviços configurados pela agência)
+As informações são todas já cadastrada anteriormente no CRM e sincronizadas para a pagina da Loja
+💰 Rodapé — Preço e Ação
+"Preço em destaque: R$      e    Botão "Reservar Agora" (laranja/destaque) → inicia o fluxo de reserva
+🎯 O que o botão "Reservar Agora" faz
+Ao clicar, o cliente é direcionado para o Wizard de Reservas (5 passos) onde poderá:
+
+Dados
+Revisão
+Selecionar assento
+Pagamento
+Confirmação
+Receber o voucher
+
+MODAL DE DETALHES DA VIAGEM NA LOJA PÚBLICA
+
+// components/public/trip-details-modal.tsx
+
+'use client'
+
+import { useState } from 'react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
+import {
+  X,
+  MapPin,
+  Calendar,
+  Clock,
+  Users,
+  CheckCircle2,
+  XCircle,
+  Bus,
+  ChevronLeft,
+  ChevronRight,
+  Star,
+} from 'lucide-react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import { useRouter } from 'next/navigation'
+import Image from 'next/image'
+
+interface TripDetailsModalProps {
+  trip: any
+  open: boolean
+  onClose: () => void
+}
+
+export function TripDetailsModal({ trip, open, onClose }: TripDetailsModalProps) {
+  const router = useRouter()
+  const [currentImageIndex, setCurrentImageIndex] = useState(0)
+
+  const images = trip.images || []
+  const hasImages = images.length > 0
+  const nextItinerary = trip.itineraries?.[0]
+
+  const handleReserve = () => {
+    // Redireciona para o wizard de reserva
+    router.push(`/loja/reservar/${trip.id}?itinerary=${nextItinerary?.id}`)
+    onClose()
+  }
+
+  const nextImage = () => {
+    setCurrentImageIndex((prev) => (prev + 1) % images.length)
+  }
+
+  const prevImage = () => {
+    setCurrentImageIndex((prev) => (prev - 1 + images.length) % images.length)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto p-0">
+        {/* Header com Imagem */}
+        <div className="relative h-80 bg-gradient-to-br from-blue-500 to-purple-600">
+          {hasImages ? (
+            <>
+              <Image
+                src={images[currentImageIndex].url}
+                alt={trip.title}
+                fill
+                className="object-cover"
+              />
+
+              {/* Navegação de Imagens */}
+              {images.length > 1 && (
+                <>
+                  <button
+                    onClick={prevImage}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-all"
+                  >
+                    <ChevronLeft className="h-6 w-6" />
+                  </button>
+                  <button
+                    onClick={nextImage}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-all"
+                  >
+                    <ChevronRight className="h-6 w-6" />
+                  </button>
+
+                  {/* Indicadores */}
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
+                    {images.map((_: any, index: number) => (
+                      <button
+                        key={index}
+                        onClick={() => setCurrentImageIndex(index)}
+                        className={`h-2 rounded-full transition-all ${
+                          index === currentImageIndex
+                            ? 'w-8 bg-white'
+                            : 'w-2 bg-white/50'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <Bus className="h-24 w-24 text-white opacity-50" />
+            </div>
+          )}
+
+          {/* Badge de Categoria */}
+          <div className="absolute top-4 left-4">
+            <Badge className="bg-blue-600 text-white px-3 py-1">
+              {trip.type === 'excursion' ? 'Excursão' : 'Pacote'}
+            </Badge>
+          </div>
+
+          {/* Badge de Destaque */}
+          {trip.is_featured && (
+            <div className="absolute top-4 right-14">
+              <Badge className="bg-yellow-500 text-white px-3 py-1">
+                <Star className="h-3 w-3 mr-1 fill-white" />
+                Destaque
+              </Badge>
+            </div>
+          )}
+
+          {/* Botão Fechar */}
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-all"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Conteúdo */}
+        <div className="p-6 space-y-6">
+          {/* Título e Destino */}
+          <div>
+            <h2 className="text-3xl font-bold mb-2">{trip.title}</h2>
+            <div className="flex items-center gap-2 text-gray-600">
+              <MapPin className="h-5 w-5" />
+              <span className="text-lg">{trip.destination}</span>
+            </div>
+          </div>
+
+          {/* Informações Principais */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Data de Saída */}
+            {nextItinerary && (
+              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg">
+                <Calendar className="h-6 w-6 text-blue-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Data de Saída</p>
+                  <p className="font-semibold">
+                    {format(new Date(nextItinerary.departure_date), "dd 'de' MMMM", {
+                      locale: ptBR,
+                    })}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Duração */}
+            <div className="flex items-center gap-3 p-4 bg-purple-50 rounded-lg">
+              <Clock className="h-6 w-6 text-purple-600" />
+              <div>
+                <p className="text-sm text-gray-600">Duração</p>
+                <p className="font-semibold">
+                  {trip.duration_days} {trip.duration_days === 1 ? 'dia' : 'dias'}
+                </p>
+              </div>
+            </div>
+
+            {/* Vagas Disponíveis */}
+            {nextItinerary && (
+              <div className="flex items-center gap-3 p-4 bg-green-50 rounded-lg">
+                <Users className="h-6 w-6 text-green-600" />
+                <div>
+                  <p className="text-sm text-gray-600">Vagas Disponíveis</p>
+                  <p className="font-semibold">
+                    {nextItinerary.available_seats} lugares
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <Separator />
+
+          {/* Descrição */}
+          {trip.description && (
+            <div>
+              <h3 className="text-xl font-bold mb-3">Sobre a Viagem</h3>
+              <p className="text-gray-700 leading-relaxed whitespace-pre-line">
+                {trip.description}
+              </p>
+            </div>
+          )}
+
+          {/* Itinerário Detalhado */}
+          {trip.detailed_itinerary && (
+            <div>
+              <h3 className="text-xl font-bold mb-3">Roteiro Completo</h3>
+              <div className="bg-gray-50 rounded-lg p-4">
+                <p className="text-gray-700 leading-relaxed whitespace-pre-line">
+                  {trip.detailed_itinerary}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <Separator />
+
+          {/* O que está incluído */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Inclusos */}
+            {trip.included_items && trip.included_items.length > 0 && (
+              <div>
+                <h3 className="text-xl font-bold mb-3 flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-green-600" />
+                  O que está incluído
+                </h3>
+                <div className="space-y-2">
+                  {trip.included_items.map((item: any) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start gap-2 text-gray-700"
+                    >
+                      <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
+                      <span>{item.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Não Inclusos */}
+            {trip.not_included_items && trip.not_included_items.length > 0 && (
+              <div>
+                <h3 className="text-xl font-bold mb-3 flex items-center gap-2">
+                  <XCircle className="h-5 w-5 text-red-600" />
+                  O que NÃO está incluído
+                </h3>
+                <div className="space-y-2">
+                  {trip.not_included_items.map((item: any) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start gap-2 text-gray-700"
+                    >
+                      <XCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+                      <span>{item.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Políticas */}
+          {trip.cancellation_policy && (
+            <>
+              <Separator />
+              <div>
+                <h3 className="text-xl font-bold mb-3">Política de Cancelamento</h3>
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                  <p className="text-gray-700 leading-relaxed whitespace-pre-line">
+                    {trip.cancellation_policy}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Observações */}
+          {trip.observations && (
+            <div>
+              <h3 className="text-xl font-bold mb-3">Observações Importantes</h3>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-gray-700 leading-relaxed whitespace-pre-line">
+                  {trip.observations}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer Fixo com Preço e Ação */}
+        <div className="sticky bottom-0 bg-white border-t p-6 flex items-center justify-between">
+          <div>
+            <p className="text-sm text-gray-600">Preço por pessoa</p>
+            <div className="flex items-baseline gap-2">
+              {trip.promotional_price && trip.promotional_price < trip.price_per_person ? (
+                <>
+                  <span className="text-2xl font-bold text-green-600">
+                    R$ {trip.promotional_price.toFixed(2)}
+                  </span>
+                  <span className="text-lg text-gray-400 line-through">
+                    R$ {trip.price_per_person.toFixed(2)}
+                  </span>
+                </>
+              ) : (
+                <span className="text-2xl font-bold text-green-600">
+                  R$ {trip.price_per_person.toFixed(2)}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <Button
+            size="lg"
+            onClick={handleReserve}
+            disabled={!nextItinerary || nextItinerary.available_seats === 0}
+            className="bg-orange-500 hover:bg-orange-600 text-white px-8"
+          >
+            {!nextItinerary || nextItinerary.available_seats === 0
+              ? 'Esgotado'
+              : 'Reservar Agora'}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+INTEGRAÇÃO NO CARD DA VIAGEM
+// components/public/public-trip-card.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { TripDetailsModal } from './trip-details-modal'
+import {
+  MapPin,
+  Calendar,
+  Users,
+  CheckCircle2,
+  Star,
+} from 'lucide-react'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import Image from 'next/image'
+
+interface PublicTripCardProps {
+  trip: any
+}
+
+export function PublicTripCard({ trip }: PublicTripCardProps) {
+  const [showModal, setShowModal] = useState(false)
+
+  const nextItinerary = trip.itineraries?.[0]
+  const hasImage = trip.images && trip.images.length > 0
+  const occupancyPercentage = nextItinerary
+    ? ((nextItinerary.total_seats - nextItinerary.available_seats) /
+        nextItinerary.total_seats) *
+      100
+    : 0
+
+  const isAlmostFull = nextItinerary && nextItinerary.available_seats <= 10
+
+  return (
+    <>
+      <Card
+        className="overflow-hidden cursor-pointer hover:shadow-xl transition-all duration-300 group"
+        onClick={() => setShowModal(true)}
+      >
+        {/* Imagem */}
+        <div className="relative h-56 bg-gradient-to-br from-blue-500 to-purple-600">
+          {hasImage ? (
+            <Image
+              src={trip.images[0].url}
+              alt={trip.title}
+              fill
+              className="object-cover group-hover:scale-105 transition-transform duration-300"
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <Bus className="h-16 w-16 text-white opacity-50" />
+            </div>
+          )}
+
+          {/* Badges */}
+          <div className="absolute top-3 left-3 flex gap-2">
+            <Badge className="bg-blue-600 text-white">
+              {trip.type === 'excursion' ? 'Excursão' : 'Pacote'}
+            </Badge>
+            {trip.is_featured && (
+              <Badge className="bg-yellow-500 text-white">
+                <Star className="h-3 w-3 mr-1 fill-white" />
+                Destaque
+              </Badge>
+            )}
+          </div>
+
+          {/* Alerta de Últimas Vagas */}
+          {isAlmostFull && (
+            <div className="absolute top-3 right-3">
+              <Badge className="bg-red-600 text-white animate-pulse">
+                🔥 Últimas {nextItinerary.available_seats} vagas!
+              </Badge>
+            </div>
+          )}
+        </div>
+
+        {/* Conteúdo */}
+        <div className="p-4 space-y-3">
+          {/* Título */}
+          <h3 className="font-bold text-lg line-clamp-2 group-hover:text-blue-600 transition-colors">
+            {trip.title}
+          </h3>
+
+          {/* Destino */}
+          <div className="flex items-center gap-2 text-gray-600">
+            <MapPin className="h-4 w-4" />
+            <span className="text-sm">{trip.destination}</span>
+          </div>
+
+          {/* Data */}
+          {nextItinerary && (
+            <div className="flex items-center gap-2 text-gray-600">
+              <Calendar className="h-4 w-4" />
+              <span className="text-sm">
+                {format(new Date(nextItinerary.departure_date), "dd 'de' MMMM", {
+                  locale: ptBR,
+                })}
+              </span>
+            </div>
+          )}
+
+          {/* Vagas */}
+          {nextItinerary && (
+            <div>
+              <div className="flex items-center justify-between text-sm mb-2">
+                <div className="flex items-center gap-2 text-gray-600">
+                  <Users className="h-4 w-4" />
+                  <span>
+                    {nextItinerary.available_seats} vagas disponíveis
+                  </span>
+                </div>
+                <span className="text-gray-500">
+                  {occupancyPercentage.toFixed(0)}% ocupado
+                </span>
+              </div>
+
+              {/* Barra de Ocupação */}
+              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    occupancyPercentage >= 80
+                      ? 'bg-red-500'
+                      : occupancyPercentage >= 50
+                      ? 'bg-yellow-500'
+                      : 'bg-green-500'
+                  }`}
+                  style={{ width: `${occupancyPercentage}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Itens Inclusos (Preview) */}
+          {trip.included_items && trip.included_items.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {trip.included_items.slice(0, 3).map((item: any) => (
+                <Badge key={item.id} variant="outline" className="text-xs">
+                  <CheckCircle2 className="h-3 w-3 mr-1 text-green-600" />
+                  {item.description}
+                </Badge>
+              ))}
+              {trip.included_items.length > 3 && (
+                <Badge variant="outline" className="text-xs">
+                  +{trip.included_items.length - 3} itens
+                </Badge>
+              )}
+            </div>
+          )}
+
+          {/* Preço */}
+          <div className="pt-3 border-t">
+            <p className="text-sm text-gray-600 mb-1">A partir de</p>
+            <div className="flex items-baseline gap-2">
+              {trip.promotional_price &&
+              trip.promotional_price < trip.price_per_person ? (
+                <>
+                  <span className="text-2xl font-bold text-green-600">
+                    R$ {trip.promotional_price.toFixed(2)}
+                  </span>
+                  <span className="text-sm text-gray-400 line-through">
+                    R$ {trip.price_per_person.toFixed(2)}
+                  </span>
+                </>
+              ) : (
+                <span className="text-2xl font-bold text-green-600">
+                  R$ {trip.price_per_person.toFixed(2)}
+                </span>
+              )}
+              <span className="text-sm text-gray-600">/pessoa</span>
+            </div>
+          </div>
+
+          {/* Botão */}
+          <Button
+            className="w-full bg-orange-500 hover:bg-orange-600"
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowModal(true)
+            }}
+          >
+            Ver Detalhes
+          </Button>
+        </div>
+      </Card>
+
+      {/* Modal */}
+      <TripDetailsModal
+        trip={trip}
+        open={showModal}
+        onClose={() => setShowModal(false)}
+      />
+    </>
+  )
+}
+
+PÁGINA DA LOJA COM MODAL
+// app/(public)/loja/page.tsx
+
+import { prisma } from '@/lib/prisma'
+import { PublicTripCard } from '@/components/public/public-trip-card'
+import { SearchBar } from '@/components/public/search-bar'
+import { FilterBar } from '@/components/public/filter-bar'
+
+export default async function LojaPage({
+  searchParams,
+}: {
+  searchParams: { search?: string; type?: string; destination?: string }
+}) {
+  const { search, type, destination } = searchParams
+
+  // Buscar viagens publicadas
+  const trips = await prisma.trip.findMany({
+    where: {
+      is_published: true,
+      status: 'active',
+      ...(search && {
+        OR: [
+          { title: { contains: search, mode: 'insensitive' } },
+          { destination: { contains: search, mode: 'insensitive' } },
+        ],
+      }),
+      ...(type && { type }),
+      ...(destination && { destination }),
+    },
+    include: {
+      images: true,
+      itineraries: {
+        where: {
+          status: 'open',
+          departure_date: { gte: new Date() },
+        },
+        orderBy: { departure_date: 'asc' },
+        take: 1,
+      },
+      included_items: true,
+      not_included_items: true,
+    },
+    orderBy: [
+      { is_featured: 'desc' },
+      { created_at: 'desc' },
+    ],
+  })
+
+  const featuredTrips = trips.filter((t) => t.is_featured)
+  const regularTrips = trips.filter((t) => !t.is_featured)
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold">Chiquinha Turismo</h1>
+            <Button variant="outline">Área do Cliente</Button>
+          </div>
+        </div>
+      </header>
+
+      {/* Filtros */}
+      <div className="bg-white border-b">
+        <div className="container mx-auto px-4 py-4">
+          <SearchBar />
+          <FilterBar />
+        </div>
+      </div>
+
+      {/* Conteúdo */}
+      <div className="container mx-auto px-4 py-8">
+        {/* Viagens em Destaque */}
+        {featuredTrips.length > 0 && (
+          <section className="mb-12">
+            <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
+              <Star className="h-6 w-6 text-yellow-500 fill-yellow-500" />
+              Viagens em Destaque
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {featuredTrips.map((trip) => (
+                <PublicTripCard key={trip.id} trip={trip} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Todas as Viagens */}
+        <section>
+          <h2 className="text-2xl font-bold mb-6">
+            Todas as Viagens
+            <span className="text-gray-500 text-lg ml-2">
+              ({regularTrips.length} {regularTrips.length === 1 ? 'viagem' : 'viagens'})
+            </span>
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {regularTrips.map((trip) => (
+              <PublicTripCard key={trip.id} trip={trip} />
+            ))}
+          </div>
+        </section>
+
+        {/* Empty State */}
+        {trips.length === 0 && (
+          <div className="text-center py-16">
+            <p className="text-gray-500 text-lg">
+              Nenhuma viagem disponível no momento
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+FLUXO
+1. Cliente acessa a Loja Pública
+   ↓
+2. Vê grid de cards de viagens
+   ↓
+3. Clica em um card
+   ↓
+4. Modal abre com TODAS as informações sincronizadas:
+   ├── ✅ Galeria de imagens (navegável)
+   ├── ✅ Título e destino
+   ├── ✅ Data de saída, duração e vagas
+   ├── ✅ Descrição completa
+   ├── ✅ Roteiro detalhado
+   ├── ✅ Itens inclusos
+   ├── ✅ Itens NÃO inclusos
+   ├── ✅ Política de cancelamento
+   ├── ✅ Observações
+   └── ✅ Preço com desconto (se houver)
+   ↓
+5. Cliente clica em "Reservar Agora"
+   ↓
+6. Redirecionado para Wizard de Reserva:
+   ├── Passo 1: Dados pessoais
+   ├── Passo 2: Revisão
+   ├── Passo 3: Seleção de assento
+   ├── Passo 4: Pagamento
+   └── Passo 5: Confirmação + Voucher
+Tudo sincronizado automaticamente do CRM

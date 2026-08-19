@@ -1,0 +1,113 @@
+
+Na pagina Clientes
+
+Na Rota: /clients
+
+Objetivo: Atualizar
+
+Implementar atualização:
+
+Modal "Novo/Editar Cliente" (6 Abas):
+
+Dados Pessoais: Nome, CPF, WhatsApp, Email, Aniversário, Canal de Origem, dropdown: indicação, Instagram, WhatsApp, Google, etc.), etc
+Viagem de Interesse: dropdown: Seleção de viagem (viagem já cadastrada no sistema), poltrona dropdown: Seleção de poltrona relacionada a viagem mencionada, (viagem já cadastrada no sistema), embarque  dropdown: Seleção do embarque relacionada a viagem mencionada, (viagem já cadastrada no sistema),  quarto dropdown: Seleção de quarto relacionada a viagem mencionada, (viagem já cadastrada no sistema).
+Financeiro: Preço: (preço relacionado a viagem mencionada), quantidade: dropdown ( calcular o valor conforme a quantidade de reserva selecionada), forma pagamento, valor pago/pendente: (calcular o valor total - valor pago soma quanto falta pagar) 
+Observações: NPS, comentários
+Follow-up (Marketing): campos com pergunta para Marketing: lugares que gostaria de conhecer, bebida favorita, opção de criar mais campos personalizados. Profissão, bebida favorita, praias visitadas, etc
+
+
+
+🗂️ ABA 1 — PESSOAL
+Dados de identificação e perfil do cliente.
+
+Campo	Tipo	Obrigatório	Detalhes
+Nome Completo	Texto	✅	Validação: exige preenchimento antes de
+CPF	Texto	❌	Rímel:
+WhatsApp	Texto	✅	Máscara: (00)
+E-mail	E-mail	❌	Validação de formato de e-mail
+Instagram	Texto	❌ Não	Espaço reservado:
+Data de aniversário	Dados	❌ Não	Seletor de dados nativo (dd/mm/aaaa)
+Cidade	Texto	❌ Não	Digitação
+Estado Civil	Suspenso	❌ Não	Opções: Solteiro(a) / Casado(a) / Divorciado(a) / Viúvo(a)
+Gênero	Suspenso	❌	Opções: Masculino / Feminino / Outro / Prefiro
+Status: Sem pipeline	Suspenso	❌	Padrão: Interessado .
+💡 O campo Status no Pipelinepermitir
+
+🗂️ ABA
+Vincula o cliente a uma viagem e define detalhes.
+
+Campo	Tipo	Detalhes
+Viagem Para	Suspenso	Lista todas as viagens cadastradas no sistema. Ao selecionar, preencha automaticamenteum
+Motivo da Viagem	Suspenso	Lazer / Aniversário / Família / Romance / Negócios
+Data da Viagem	Dados	Preenchida auto ao selecionar viagem,
+Local de Embarque	Dados do Ponto	Preenchida auto ao selecionar viagem,
+Poltrona	Número	Dados do Número 	Preenchida auto ao selecionar viagem,
+Tipo de Viagem	Suspenso	composição / Bate-volta / Excursão / Trilha / Corporativo
+(	Suspenso	Quarto Casal / Quarto Triplo / Quarto Quádruplo / Quarto Compartilhado / Não
+preocupo Seguro Viagem	Caixa de seleção	Marca se o cliente
+Tem criança menor de 7 anos	Caixa de seleção	Ao marcar, aparece dinamicamenteumNome e CPF da Criança
+🗂️ ABA 3
+Controle do valor da venda e situação de pagamento.
+
+Campo	Tipo	Detalhes
+Preço da Passagem (R$)	Número	Valentia
+Quantidade de Passageiros	Número	: 1.
+Valor Total	Calculado	Preenchido automaticamente: Preço × Quantidade.
+Forma de proteção	Suspenso	Dinheiro / PIX / Cartão Débito / Cartão Crédito /
+Valor Já Pago (R$)	Número	Quanto o cliente já pagou
+Falta Pagar	Calculado	Valor Total − Valor Pago.
+Comissão (R$)	Número	Valor de comissão
+Consultor/Vendedor	Suspenso	Lista dos fornecedores cadastrados no sistema. Ao selecionar, salve também o nomefazer
+💡 Cálculos automáticos em tempo real:ao
+
+🗂️ ABA 4
+Notas internas, avaliação NPS e feedback da empresa ao cliente.
+A empresa avalia o cliente ( se é um cliente bom, estavel ou chapa quente)
+
+Campo	Tipo	Detalhes
+Observações Gerais sobre o cliente	Texto longo	Campo livre para anotações internas sobre
+NPS (0–5)	Número	Net Promoter Score do cliente — nota de satisfação de 0 a 5
+💡 O NPS é usado no DashboardpáraNPS5daRelatórios .
+
+
+🗂️ ABA 5 —
+Dados de perfil comportamental para personalizar o atendimento.
+
+Campo	Tipo	Detalhes
+Área de Atuação Profissional	Texto	Profissão ou setor do cliente. Útil para segmentação
+Preferências Musicais	Texto	Estilos musicais preferidos. Pode ser usado em experiências personalizadas
+Preferências Gastronômicas	Texto	Comidas, dietas ou restrições
+Campos personalisados para inserir imformações quando necessario.
+💡 Esses campos são usados ​​para humanizar o atendimento—
+
+🗂️ ABA 6 —
+Campo	Tipo	Detalhes
+Observações Gerais sobre a Agência	Texto longo	Campo livre para anotações internas sobre
+NPS (0–10)	Número	Net Promoter Score da AgÊncia — nota de satisfação de 0 a 10
+Origem do Cliente	Suspenso	❌	Opções: Indicação / Redes Sociais / Google / WhatsApp / Cliente Antigo / Evento /
+Comentário sobre a Empresa	Texto	Feedback textual do cliente (3 linhas visíveis). Complemento
+💡 O NPS é usado no DashboardpáraNPS0daRelatórios .
+
+⚡ Comportamentos e Validações
+Ao clicar "Criar
+Valida se Nome Completoestá
+Valida se WhatsAppestá
+Calcular automaticamente:
+Valor_Total = Preco_Da_Passagem × Quantidade_De_Passagens
+Falta_Pagar = Valor_Total − Valor_ja_Pago
+Salva o registro com oagency_idda
+Exibe brinde de sucesso "Cliente criado!"
+Data do modal e atualização da listade
+Ao clicar
+Data o modal e descartar todas as alterações
+Reseta omódulos para o
+Edição
+O mesmo modal é reutilizado com o título "Editar Cliente"
+Todos os campos são pré-preenchidos com os
+O botão muda para "Salvar Alterações"
+Ao salvar, fazupdatenão
+Onde o cliente aparece
+Na lista de Clientes(tabela
+Sem gasoduton / D
+Sem painel de controlen / D
+Disponível para seleção em Reservas ,FinanceiroeComunicação

@@ -1,0 +1,135 @@
+2026-06-15T23:26:47Z info: Deployment: 5399a44d-2057-4374-8ef7-3e007858c145
+2026-06-15T23:26:47Z info: Build: f856cc6c-209b-46b4-9b24-5cfe3d3e8b54
+2026-06-15T23:27:06Z info: Running Security Scan
+2026-06-15T23:33:15Z info: Security Scan Complete
+2026-06-15T23:33:16Z info: Installing packages
+--> pnpm install
+
+Scope: all 14 workspace projects
+
+
+   ╭─────────────────────────────────────────╮
+   │                                         │
+   │   Update available! 10.26.1 → 11.7.0.   │
+   │   Changelog: https://pnpm.io/v/11.7.0   │
+   │    To update, run: pnpm add -g pnpm     │
+   │                                         │
+   ╰─────────────────────────────────────────╯
+
+
+Lockfile is up to date, resolution step is skipped
+
+Already up to date
+
+. preinstall$ sh -c 'rm -f package-lock.json yarn.lock; case "$npm_config_user_agent" in pnpm/*) ;; *) echo "Use pnpm instead" >&2; exit 1 ;; esac'
+
+. preinstall: Done
+
+Done in 25s using pnpm v10.26.1
+
+2026-06-15T23:33:45Z info: Starting Build
+
+> @workspace/api-server@0.0.0 build /home/runner/workspace/artifacts/api-server
+> node ./build.mjs
+
+
+
+  dist/index.mjs                      14.6mb ⚠️
+  dist/pino-worker.mjs               153.5kb
+  dist/pino-file.mjs                 142.1kb
+  dist/pino-pretty.mjs               114.6kb
+  dist/thread-stream-worker.mjs        7.4kb
+  dist/index.mjs.map                  33.2mb
+  dist/pino-worker.mjs.map           256.9kb
+  dist/pino-file.mjs.map             229.0kb
+  dist/pino-pretty.mjs.map           203.9kb
+  dist/thread-stream-worker.mjs.map   12.0kb
+
+⚡ Done in 9046ms
+
+
+> @workspace/guide-app@0.0.0 build /home/runner/workspace/artifacts/guide-app
+> node scripts/build.js
+
+
+Building static Expo Go deployment...
+
+Preparing build directories...
+
+Build: 1781566438076-657
+
+Clearing Metro cache...
+Cache cleared
+
+Starting Metro...
+
+Setting EXPO_PUBLIC_DOMAIN=zip-repl--visitecrm23.replit.app
+
+Setting EXPO_PUBLIC_REPL_ID=f856cc6c-209b-46b4-9b24-5cfe3d3e8b54
+
+[Metro] Starting project at /home/runner/workspace/artifacts/guide-app
+
+[Metro] React Compiler enabled
+
+[Metro] Starting Metro Bundler
+
+[Metro Error] The following packages should be updated for best compatibility with the installed expo version:
+  expo-location@18.1.6 - expected version: ~19.0.8
+Your project may not work correctly until you install the expected versions of the packages.
+
+[Metro] Waiting on http://localhost:8081
+
+[Metro] Logs for your project will appear below.
+
+Metro ready
+
+Downloading bundles and manifests...
+This may take several minutes for production builds...
+Fetching ios bundle...
+
+Downloading: http://localhost:8081/artifacts/guide-app/node_modules/expo-router/entry.bundle?platform=ios&dev=false&hot=false&lazy=false&minify=true
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓░░░░░░░░░░░░░ 21.8% ( 9/21)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓░░░░░░░░░░░░░ 22.5% (163/344)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓▓▓░░░░░░░░░░░ 36.2% (389/651)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓▓▓▓▓░░░░░░░░░ 49.2% (589/840)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓░░░░░░ 64.1% ( 839/1048)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓░░░░ 79.9% ( 988/1105)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 89.0% (1164/1255)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 90.2% (1315/1420)
+
+[Metro] iOS node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (1591/1591)
+
+[Metro] iOS Bundled 32770ms node_modules/.pnpm/expo-router@6.0.24_@types+react-dom@19.1.11_@types+react@19.1.17__@types+react@19.1.17__c289c0218f446f5969794daa94e36b65/node_modules/expo-router/entry.js (1591 modules)
+
+ios bundle ready
+Fetching android bundle...
+Downloading: http://localhost:8081/artifacts/guide-app/node_modules/expo-router/entry.bundle?platform=android&dev=false&hot=false&lazy=false&minify=true
+
+[Metro Error] /home/runner/workspace/node_modules/.pnpm/@expo+cli@54.0.25_expo-router@6.0.24_expo@54.0.35_react-native@0.81.5_@babel+core@7.29._92236ced387c245b7b1c87da68a99289/node_modules/@expo/cli/build/src/utils/errors.js:130
+    throw error;
+    ^
+
+TypeError: Cannot read properties of undefined (reading 'addedFiles')
+    at FileMap._handleMultipleFileChanges (/home/runner/workspace/node_modules/.pnpm/metro@0.83.7_patch_hash=1772596c0b547901be741825c696c3fc4bb1c056a310c0239a194ed9341e87be/node_modules/metro/src/DeltaBundler/DeltaCalculator.js:114:53)
+    at FileMap.emit (node:events:520:35)
+    at Timeout.emitChange (/home/runner/workspace/node_modules/.pnpm/metro-file-map@0.83.3/node_modules/metro-file-map/src/index.js:527:12)
+    at listOnTimeout (node:internal/timers:605:17)
+    at processTimers (node:internal/timers:541:7)
+
+Node.js v24.13.0
+
+Download failed: fetch failed
+
+/home/runner/workspace/artifacts/guide-app:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/guide-app@0.0.0 build: `node scripts/build.js`
+Exit status 1

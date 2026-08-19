@@ -1,0 +1,1204 @@
+Implementar FORMATO:
+
+
+FORMATO: 
+Com Prefixo da Agência
+// Exemplo: CHQ-2026-00001 (Chiquinha Turismo) 
+
++ 
+
+Com Mês
+// Exemplo: RES-202604-00001 (Abril/2026)
+
++
+
+Com Tipo de Reserva
+
+// Exemplo: EXC-2026-00001 (Excursão), PCT-2026-00001 (Pacote)
+
+
+
+RESULTADO DO FORMATO IDEAL:
+// Exemplo: CHQ-EXC-202601-00001 (primeira reserva de janeiro de um pacote de excursão através da Agência Chiquinha Turismo)
+
+
+
+Implementar FORMATO COMPLETO:
+┌─────────────────────────────────────────────────────────────────┐
+│              SISTEMA DE NUMERAÇÃO DE RESERVAS                    │
+└─────────────────────────────────────────────────────────────────┘
+
+FORMATO PADRÃO: CHQ-EXC-202601-00001
+                 │   │   │      │
+                 │   │   │      └─── Sequencial (5 dígitos, com zeros à esquerda)
+                 │   │   └─── Mês e Ano (6 dígitos)
+                 │   └───────────── Pacote
+                 │
+                 └──────────── Prefixo da Agência
+
+CARACTERÍSTICAS:
+├── ✅ Único por tenant (agência)
+├── ✅ Sequencial por Mês e ano
+├── ✅ Reinicia a cada ano (00001)
+├── ✅ Formato profissional
+├── ✅ Fácil de digitar e comunicar
+├── ✅ Suporta até 99.999 reservas/ano
+└── ✅ Validação automática
+
+GERAÇÃO:
+├── Busca última reserva do ano
+├── Incrementa +1
+├── Formata com 5 dígitos
+├── Usa transação para evitar duplicação
+└── Retorna número completo
+
+FORMATO PADRÃO:
+├── Com prefixo da agência, Pacote, Mês, Ano e Sequencial  de 5 dígitos: CHQ-EXC-202601-00001
+
+ONDE APARECE:
+├── Voucher (destaque)
+├── Email de confirmação
+├── WhatsApp
+├── Pipeline (card do deal)
+├── Lista de reservas
+├── Relatórios
+└── Busca rápida
+
+
+SISTEMA COMPLETO DE NUMERAÇÃO - FORMATO IDEAL
+📋 FORMATO FINAL IMPLEMENTADO
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    CHQ-EXC-202604-00001                          │
+│                     │   │   │      │                             │
+│                     │   │   │      └─── Sequencial (5 dígitos)  │
+│                     │   │   └────────── Ano/Mês (YYYYMM)        │
+│                     │   └────────────── Tipo (EXC/PCT/BTV)      │
+│                     └────────────────── Prefixo da Agência       │
+└─────────────────────────────────────────────────────────────────┘
+
+Exemplos Reais:
+├── CHQ-EXC-202604-00001  (Chiquinha - Excursão - Abril/2026 - 1ª)
+├── CHQ-EXC-202604-00150  (Chiquinha - Excursão - Abril/2026 - 150ª)
+├── CHQ-PCT-202605-00001  (Chiquinha - Pacote - Maio/2026 - 1ª)
+├── CHQ-BTV-202604-00025  (Chiquinha - Bate-volta - Abril/2026 - 25ª)
+└── VIP-EXC-202612-00500  (VIP Viagens - Excursão - Dez/2026 - 500ª)
+
+ATUALIZAÇÃO DO SCHEMA
+// prisma/schema.prisma
+
+model Tenant {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique
+  
+  // PREFIXO PARA NUMERAÇÃO DE RESERVAS
+  reservation_prefix String  @default("AGE") // CHQ, VIP, TUR, etc.
+  
+  // ... resto do modelo ...
+  
+  @@map("tenants")
+}
+
+model Trip {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // TIPO DA VIAGEM (para numeração)
+  type            String    @default("excursion") // excursion, package, day_trip
+  type_code       String?   // EXC, PCT, BTV (gerado automaticamente)
+  
+  // ... resto do modelo ...
+  
+  @@map("trips")
+}
+
+model Reservation {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // NÚMERO DA RESERVA (formato completo)
+  reservation_number String @unique // CHQ-EXC-202604-00001
+  
+  // COMPONENTES DO NÚMERO (para busca e análise)
+  number_prefix   String    // CHQ
+  number_type     String    // EXC
+  number_yearmonth String   // 202604
+  number_sequence Int       // 1
+  
+  // ... resto do modelo ...
+  
+  @@index([tenant_id, number_yearmonth, number_type])
+  @@index([reservation_number])
+  @@map("reservations")
+}
+
+// Tabela de Sequência por Tipo e Mês
+model ReservationSequence {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  year_month      String    // "202604" (Abril/2026)
+  trip_type       String    // "excursion", "package", "day_trip"
+  type_code       String    // "EXC", "PCT", "BTV"
+  last_number     Int       @default(0) // Último número usado
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, year_month, trip_type])
+  @@index([tenant_id, year_month])
+  @@map("reservation_sequences")
+}
+
+FUNÇÃO PRINCIPAL DE GERAÇÃO
+// lib/reservations/generate-number-complete.ts
+
+import { prisma } from '@/lib/prisma'
+
+/**
+ * Mapeamento de tipos de viagem para códigos
+ */
+const TRIP_TYPE_CODES = {
+  excursion: 'EXC',   // Excursão
+  package: 'PCT',     // Pacote
+  day_trip: 'BTV',    // Bate-volta
+} as const
+
+type TripType = keyof typeof TRIP_TYPE_CODES
+
+/**
+ * Gera número completo de reserva no formato:
+ * [PREFIXO]-[TIPO]-[AAAAMM]-[NNNNN]
+ * 
+ * Exemplo: CHQ-EXC-202604-00001
+ * 
+ * @param tenantId - ID do tenant (agência)
+ * @param tripType - Tipo da viagem (excursion, package, day_trip)
+ * @returns Número único da reserva
+ */
+export async function generateReservationNumber(
+  tenantId: string,
+  tripType: TripType
+): Promise<{
+  full: string
+  prefix: string
+  typeCode: string
+  yearMonth: string
+  sequence: number
+}> {
+  // Buscar tenant para pegar o prefixo
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { reservation_prefix: true, name: true },
+  })
+
+  if (!tenant) {
+    throw new Error('Tenant não encontrado')
+  }
+
+  // Prefixo da agência (padrão: 3 primeiras letras maiúsculas)
+  const prefix = tenant.reservation_prefix || 
+    tenant.name.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, '')
+
+  // Código do tipo de viagem
+  const typeCode = TRIP_TYPE_CODES[tripType]
+
+  // Ano e mês atual (YYYYMM)
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const yearMonth = `${year}${month}` // "202604"
+
+  // Usar transação para garantir unicidade
+  const result = await prisma.$transaction(async (tx) => {
+    // Buscar ou criar sequência
+    const sequence = await tx.reservationSequence.upsert({
+      where: {
+        tenant_id_year_month_trip_type: {
+          tenant_id: tenantId,
+          year_month: yearMonth,
+          trip_type: tripType,
+        },
+      },
+      update: {
+        last_number: {
+          increment: 1,
+        },
+      },
+      create: {
+        tenant_id: tenantId,
+        year_month: yearMonth,
+        trip_type: tripType,
+        type_code: typeCode,
+        last_number: 1,
+      },
+    })
+
+    // Formatar número sequencial com 5 dígitos
+    const formattedSequence = String(sequence.last_number).padStart(5, '0')
+
+    // Montar número completo
+    const fullNumber = `${prefix}-${typeCode}-${yearMonth}-${formattedSequence}`
+
+    // Verificar se já existe (segurança extra)
+    const existing = await tx.reservation.findUnique({
+      where: { reservation_number: fullNumber },
+    })
+
+    if (existing) {
+      // Se existir, incrementar novamente
+      const nextSequence = await tx.reservationSequence.update({
+        where: {
+          tenant_id_year_month_trip_type: {
+            tenant_id: tenantId,
+            year_month: yearMonth,
+            trip_type: tripType,
+          },
+        },
+        data: {
+          last_number: {
+            increment: 1,
+          },
+        },
+      })
+
+      const nextFormattedSequence = String(nextSequence.last_number).padStart(5, '0')
+      const nextFullNumber = `${prefix}-${typeCode}-${yearMonth}-${nextFormattedSequence}`
+
+      return {
+        full: nextFullNumber,
+        prefix,
+        typeCode,
+        yearMonth,
+        sequence: nextSequence.last_number,
+      }
+    }
+
+    return {
+      full: fullNumber,
+      prefix,
+      typeCode,
+      yearMonth,
+      sequence: sequence.last_number,
+    }
+  })
+
+  return result
+}
+
+/**
+ * Valida formato do número de reserva
+ */
+export function isValidReservationNumber(number: string): boolean {
+  // Formato: XXX-XXX-YYYYMM-NNNNN
+  const pattern = /^[A-Z]{3}-[A-Z]{3}-\d{6}-\d{5}$/
+  return pattern.test(number)
+}
+
+/**
+ * Extrai componentes do número de reserva
+ */
+export function parseReservationNumber(number: string) {
+  if (!isValidReservationNumber(number)) {
+    throw new Error('Formato de número inválido')
+  }
+
+  const parts = number.split('-')
+
+  const yearMonth = parts[2]
+  const year = parseInt(yearMonth.substring(0, 4))
+  const month = parseInt(yearMonth.substring(4, 6))
+
+  return {
+    full: number,
+    prefix: parts[0],        // "CHQ"
+    typeCode: parts[1],      // "EXC"
+    yearMonth: parts[2],     // "202604"
+    sequence: parseInt(parts[3]), // 1
+    year,                    // 2026
+    month,                   // 4
+    monthName: getMonthName(month),
+    typeName: getTypeName(parts[1]),
+  }
+}
+
+/**
+ * Retorna nome do mês em português
+ */
+function getMonthName(month: number): string {
+  const months = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  ]
+  return months[month - 1] || 'Desconhecido'
+}
+
+/**
+ * Retorna nome do tipo de viagem
+ */
+function getTypeName(code: string): string {
+  const types: Record<string, string> = {
+    'EXC': 'Excursão',
+    'PCT': 'Pacote',
+    'BTV': 'Bate-volta',
+  }
+  return types[code] || 'Desconhecido'
+}
+
+/**
+ * Gera próximos números (preview)
+ */
+export async function previewNextNumbers(
+  tenantId: string,
+  tripType: TripType,
+  count: number = 5
+): Promise<string[]> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { reservation_prefix: true, name: true },
+  })
+
+  if (!tenant) {
+    throw new Error('Tenant não encontrado')
+  }
+
+  const prefix = tenant.reservation_prefix || 
+    tenant.name.substring(0, 3).toUpperCase().replace(/[^A-Z]/g, '')
+
+  const typeCode = TRIP_TYPE_CODES[tripType]
+
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const yearMonth = `${year}${month}`
+
+  // Buscar última sequência
+  const sequence = await prisma.reservationSequence.findUnique({
+    where: {
+      tenant_id_year_month_trip_type: {
+        tenant_id: tenantId,
+        year_month: yearMonth,
+        trip_type: tripType,
+      },
+    },
+  })
+
+  const lastNumber = sequence?.last_number || 0
+  const preview: string[] = []
+
+  for (let i = 1; i <= count; i++) {
+    const nextNumber = lastNumber + i
+    const formattedNumber = String(nextNumber).padStart(5, '0')
+    preview.push(`${prefix}-${typeCode}-${yearMonth}-${formattedNumber}`)
+  }
+
+  return preview
+}
+
+ATUALIZAÇÃO DA API DE RESERVA
+// app/api/public/reservations/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { generateReservationNumber } from '@/lib/reservations/generate-number-complete'
+import { createDealFromReservation } from '@/lib/deals/create-from-reservation'
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+
+    const {
+      trip_id,
+      itinerary_id,
+      name,
+      cpf,
+      email,
+      phone,
+      birthdate,
+      passengers_count,
+      selected_seats,
+      referral_code,
+      coupon_code,
+      referral_discount,
+      coupon_discount,
+      payment_method,
+      observations,
+    } = body
+
+    // Validações básicas
+    if (!trip_id || !itinerary_id || !name || !cpf || !email || !phone) {
+      return NextResponse.json(
+        { error: 'Campos obrigatórios faltando' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar viagem
+    const trip = await prisma.trip.findUnique({
+      where: { id: trip_id },
+      include: { 
+        itineraries: true,
+        tenant: {
+          select: {
+            id: true,
+            reservation_prefix: true,
+            name: true,
+          },
+        },
+      },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    const itinerary = trip.itineraries.find((it) => it.id === itinerary_id)
+
+    if (!itinerary) {
+      return NextResponse.json(
+        { error: 'Itinerário não encontrado' },
+        { status: 404 }
+      )
+    }
+
+    // Verificar disponibilidade de assentos
+    if (itinerary.available_seats < passengers_count) {
+      return NextResponse.json(
+        { error: 'Vagas insuficientes' },
+        { status: 400 }
+      )
+    }
+
+    // Verificar se assentos estão disponíveis
+    const occupiedSeats = await prisma.reservationSeat.findMany({
+      where: {
+        trip_id,
+        itinerary_id,
+        seat_number: { in: selected_seats },
+        status: { in: ['reserved', 'confirmed', 'checked_in'] },
+      },
+    })
+
+    if (occupiedSeats.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Um ou mais assentos já estão ocupados',
+          occupied: occupiedSeats.map((s) => s.seat_number),
+        },
+        { status: 400 }
+      )
+    }
+
+    // Calcular valores
+    const basePrice = trip.promotional_price || trip.price_per_person
+    const subtotal = basePrice * passengers_count
+    const totalDiscount = (referral_discount || 0) + (coupon_discount || 0)
+    const totalAmount = subtotal - totalDiscount
+
+    // Criar ou atualizar cliente
+    let client = await prisma.client.findFirst({
+      where: {
+        tenant_id: trip.tenant_id,
+        OR: [{ cpf }, { email }],
+      },
+    })
+
+    if (!client) {
+      client = await prisma.client.create({
+        data: {
+          tenant_id: trip.tenant_id,
+          name,
+          cpf,
+          email,
+          phone,
+          birthdate: new Date(birthdate),
+          source: 'website',
+          segment: 'individual',
+          status: 'active',
+        },
+      })
+    } else {
+      client = await prisma.client.update({
+        where: { id: client.id },
+        data: { name, email, phone, birthdate: new Date(birthdate) },
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // GERAR NÚMERO DE RESERVA COMPLETO
+    // ═══════════════════════════════════════════════════════════
+
+    const reservationNumberData = await generateReservationNumber(
+      trip.tenant_id,
+      trip.type as 'excursion' | 'package' | 'day_trip'
+    )
+
+    console.log('📋 Número de reserva gerado:', reservationNumberData.full)
+
+    // Gerar código de voucher
+    const voucherCode = generateVoucherCode()
+
+    // Criar resumo dos assentos
+    const seatsSummary = selected_seats
+      .sort((a: string, b: string) => parseInt(a) - parseInt(b))
+      .join(', ')
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR RESERVA COM NÚMERO COMPLETO
+    // ═══════════════════════════════════════════════════════════
+
+    const reservation = await prisma.reservation.create({
+      data: {
+        tenant_id: trip.tenant_id,
+        
+        // NÚMERO COMPLETO
+        reservation_number: reservationNumberData.full,
+        number_prefix: reservationNumberData.prefix,
+        number_type: reservationNumberData.typeCode,
+        number_yearmonth: reservationNumberData.yearMonth,
+        number_sequence: reservationNumberData.sequence,
+        
+        voucher_code: voucherCode,
+        trip_id,
+        itinerary_id,
+        client_id: client.id,
+        client_name: name,
+        client_cpf: cpf,
+        client_email: email,
+        client_phone: phone,
+        total_passengers: passengers_count,
+        adults_count: passengers_count,
+        subtotal_amount: subtotal,
+        discount_amount: totalDiscount,
+        total_amount: totalAmount,
+        amount_pending: totalAmount,
+        payment_method,
+        payment_status: 'pending',
+        status: 'pending',
+        source: 'website',
+        observations,
+        departure_date: itinerary.departure_date,
+        seats_summary: seatsSummary,
+      },
+    })
+
+    // Criar assentos
+    for (const seatNumber of selected_seats) {
+      await prisma.reservationSeat.create({
+        data: {
+          reservation_id: reservation.id,
+          trip_id,
+          itinerary_id,
+          seat_number: seatNumber,
+          passenger_name: name,
+          passenger_cpf: cpf,
+          status: 'reserved',
+        },
+      })
+    }
+
+    // Processar referral
+    if (referral_code) {
+      const referral = await prisma.referral.findFirst({
+        where: { code: referral_code, status: 'active' },
+      })
+
+      if (referral) {
+        await prisma.reservation.update({
+          where: { id: reservation.id },
+          data: { referral_id: referral.id, referral_code },
+        })
+
+        await applyReferralBenefits({
+          referralCode: referral_code,
+          reservationId: reservation.id,
+          totalAmount,
+          tenantId: trip.tenant_id,
+        })
+      }
+    }
+
+    // Atualizar vagas
+    await prisma.itinerary.update({
+      where: { id: itinerary_id },
+      data: { available_seats: { decrement: passengers_count } },
+    })
+
+    // Criar deal no pipeline
+    const deal = await createDealFromReservation({
+      tenantId: trip.tenant_id,
+      clientId: client.id,
+      reservationId: reservation.id,
+      tripId: trip_id,
+      totalAmount,
+      seatsSummary,
+      tripTitle: trip.title,
+      departureDate: itinerary.departure_date,
+    })
+
+    // Vincular deal à reserva
+    await prisma.reservation.update({
+      where: { id: reservation.id },
+      data: { deal_id: deal.id },
+    })
+
+    // Buscar reserva completa
+    const fullReservation = await prisma.reservation.findUnique({
+      where: { id: reservation.id },
+      include: {
+        seats: true,
+        client: true,
+        deal: true,
+        trip: true,
+        itinerary: true,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      reservation: fullReservation,
+      reservation_number: reservationNumberData.full,
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar reserva:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar reserva' },
+      { status: 500 }
+    )
+  }
+}
+
+function generateVoucherCode(): string {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let code = 'VC-'
+
+  for (let i = 0; i < 6; i++) {
+    code += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+
+  return code
+}
+
+COMPONENTE DE EXIBIÇÃO
+// components/ui/reservation-number-complete.tsx
+
+'use client'
+
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { Copy, Check, Info } from 'lucide-react'
+import { useState } from 'react'
+import { parseReservationNumber } from '@/lib/reservations/generate-number-complete'
+
+interface ReservationNumberCompleteProps {
+  number: string
+  size?: 'sm' | 'md' | 'lg'
+  showCopy?: boolean
+  showDetails?: boolean
+}
+
+export function ReservationNumberComplete({
+  number,
+  size = 'md',
+  showCopy = true,
+  showDetails = false,
+}: ReservationNumberCompleteProps) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(number)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const sizeClasses = {
+    sm: 'text-xs px-2 py-1',
+    md: 'text-sm px-3 py-1.5',
+    lg: 'text-lg px-4 py-2',
+  }
+
+  let details
+  try {
+    details = parseReservationNumber(number)
+  } catch (error) {
+    details = null
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Badge
+        variant="outline"
+        className={`font-mono ${sizeClasses[size]} bg-blue-50 text-blue-700 border-blue-200`}
+      >
+        {number}
+      </Badge>
+
+      {showCopy && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={handleCopy}
+          className="h-6 w-6 p-0"
+        >
+          {copied ? (
+            <Check className="h-3 w-3 text-green-600" />
+          ) : (
+            <Copy className="h-3 w-3" />
+          )}
+        </Button>
+      )}
+
+      {showDetails && details && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0">
+                <Info className="h-3 w-3 text-gray-400" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">
+              <div className="space-y-2 text-sm">
+                <div>
+                  <p className="font-semibold">Detalhes da Numeração</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <p className="text-gray-500">Agência:</p>
+                    <p className="font-medium">{details.prefix}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Tipo:</p>
+                    <p className="font-medium">{details.typeName}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Período:</p>
+                    <p className="font-medium">
+                      {details.monthName}/{details.year}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-500">Sequência:</p>
+                    <p className="font-medium">#{details.sequence}</p>
+                  </div>
+                </div>
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+    </div>
+  )
+}
+
+ESTATÍSTICAS AVANÇADAS
+// lib/reservations/stats-complete.ts
+
+import { prisma } from '@/lib/prisma'
+
+/**
+ * Estatísticas detalhadas por tipo e mês
+ */
+export async function getReservationStatsByTypeAndMonth(
+  tenantId: string,
+  year: number,
+  month: number
+) {
+  const yearMonth = `${year}${String(month).padStart(2, '0')}`
+
+  const sequences = await prisma.reservationSequence.findMany({
+    where: {
+      tenant_id: tenantId,
+      year_month: yearMonth,
+    },
+  })
+
+  const stats = {
+    yearMonth,
+    year,
+    month,
+    byType: {} as Record<string, {
+      code: string
+      name: string
+      count: number
+      lastNumber: number
+      nextNumber: number
+    }>,
+    total: 0,
+  }
+
+  const typeNames: Record<string, string> = {
+    'EXC': 'Excursões',
+    'PCT': 'Pacotes',
+    'BTV': 'Bate-volta',
+  }
+
+  for (const seq of sequences) {
+    stats.byType[seq.type_code] = {
+      code: seq.type_code,
+      name: typeNames[seq.type_code] || seq.type_code,
+      count: seq.last_number,
+      lastNumber: seq.last_number,
+      nextNumber: seq.last_number + 1,
+    }
+    stats.total += seq.last_number
+  }
+
+  return stats
+}
+
+/**
+ * Relatório completo do ano
+ */
+export async function getAnnualReservationReport(
+  tenantId: string,
+  year: number
+) {
+  const sequences = await prisma.reservationSequence.findMany({
+    where: {
+      tenant_id: tenantId,
+      year_month: {
+        startsWith: String(year),
+      },
+    },
+    orderBy: {
+      year_month: 'asc',
+    },
+  })
+
+  const report = {
+    year,
+    totalReservations: 0,
+    byMonth: {} as Record<number, {
+      month: number,
+      monthName: string,
+      total: number,
+      byType: Record<string, number>
+    }>,
+    byType: {
+      EXC: 0,
+      PCT: 0,
+      BTV: 0,
+    },
+  }
+
+  const monthNames = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  ]
+
+  for (const seq of sequences) {
+    const month = parseInt(seq.year_month.substring(4, 6))
+    
+    if (!report.byMonth[month]) {
+      report.byMonth[month] = {
+        month,
+        monthName: monthNames[month - 1],
+        total: 0,
+        byType: {},
+      }
+    }
+
+    report.byMonth[month].total += seq.last_number
+    report.byMonth[month].byType[seq.type_code] = seq.last_number
+    report.byType[seq.type_code as keyof typeof report.byType] += seq.last_number
+    report.totalReservations += seq.last_number
+  }
+
+  return report
+}
+
+DASHBOARD DE ESTATÍSTICAS
+// app/(dashboard)/dashboard/reservas/numeracao/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import {
+  getReservationStatsByTypeAndMonth,
+  getAnnualReservationReport,
+} from '@/lib/reservations/stats-complete'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { previewNextNumbers } from '@/lib/reservations/generate-number-complete'
+
+export default async function ReservationNumberingPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const currentMonth = now.getMonth() + 1
+
+  // Estatísticas do mês atual
+  const monthStats = await getReservationStatsByTypeAndMonth(
+    session.user.tenantId,
+    currentYear,
+    currentMonth
+  )
+
+  // Relatório anual
+  const annualReport = await getAnnualReservationReport(
+    session.user.tenantId,
+    currentYear
+  )
+
+  // Preview dos próximos números
+  const nextExcursions = await previewNextNumbers(
+    session.user.tenantId,
+    'excursion',
+    3
+  )
+  const nextPackages = await previewNextNumbers(
+    session.user.tenantId,
+    'package',
+    3
+  )
+  const nextDayTrips = await previewNextNumbers(
+    session.user.tenantId,
+    'day_trip',
+    3
+  )
+
+  const monthNames = [
+    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  ]
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">
+          Sistema de Numeração de Reservas
+        </h1>
+        <p className="text-gray-600">
+          {monthNames[currentMonth - 1]} de {currentYear}
+        </p>
+      </div>
+
+      {/* Estatísticas do Mês Atual */}
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold mb-4">Mês Atual</h2>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <Card className="p-6">
+            <p className="text-sm text-gray-600 mb-2">Total do Mês</p>
+            <p className="text-3xl font-bold text-blue-600">
+              {monthStats.total}
+            </p>
+          </Card>
+
+          {Object.values(monthStats.byType).map((type) => (
+            <Card key={type.code} className="p-6">
+              <p className="text-sm text-gray-600 mb-2">{type.name}</p>
+              <p className="text-3xl font-bold text-green-600">{type.count}</p>
+              <p className="text-xs text-gray-500 mt-2">
+                Próximo: {String(type.nextNumber).padStart(5, '0')}
+              </p>
+            </Card>
+          ))}
+        </div>
+      </div>
+
+      {/* Preview dos Próximos Números */}
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold mb-4">Próximos Números</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Excursões */}
+          <Card className="p-6">
+            <h3 className="font-bold mb-3 flex items-center gap-2">
+              <Badge className="bg-blue-500">EXC</Badge>
+              Excursões
+            </h3>
+            <div className="space-y-2">
+              {nextExcursions.map((number, index) => (
+                <div
+                  key={number}
+                  className="font-mono text-sm p-2 bg-blue-50 rounded border border-blue-200"
+                >
+                  {number}
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Pacotes */}
+          <Card className="p-6">
+            <h3 className="font-bold mb-3 flex items-center gap-2">
+              <Badge className="bg-purple-500">PCT</Badge>
+              Pacotes
+            </h3>
+            <div className="space-y-2">
+              {nextPackages.map((number, index) => (
+                <div
+                  key={number}
+                  className="font-mono text-sm p-2 bg-purple-50 rounded border border-purple-200"
+                >
+                  {number}
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          {/* Bate-volta */}
+          <Card className="p-6">
+            <h3 className="font-bold mb-3 flex items-center gap-2">
+              <Badge className="bg-orange-500">BTV</Badge>
+              Bate-volta
+            </h3>
+            <div className="space-y-2">
+              {nextDayTrips.map((number, index) => (
+                <div
+                  key={number}
+                  className="font-mono text-sm p-2 bg-orange-50 rounded border border-orange-200"
+                >
+                  {number}
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {/* Relatório Anual */}
+      <div>
+        <h2 className="text-2xl font-bold mb-4">Relatório Anual {currentYear}</h2>
+        <Card className="p-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+            <div className="text-center">
+              <p className="text-sm text-gray-600 mb-1">Total do Ano</p>
+              <p className="text-3xl font-bold">{annualReport.totalReservations}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600 mb-1">Excursões</p>
+              <p className="text-3xl font-bold text-blue-600">
+                {annualReport.byType.EXC}
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600 mb-1">Pacotes</p>
+              <p className="text-3xl font-bold text-purple-600">
+                {annualReport.byType.PCT}
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-sm text-gray-600 mb-1">Bate-volta</p>
+              <p className="text-3xl font-bold text-orange-600">
+                {annualReport.byType.BTV}
+              </p>
+            </div>
+          </div>
+
+          {/* Gráfico por Mês */}
+          <div className="mt-6">
+            <h3 className="font-bold mb-3">Distribuição Mensal</h3>
+            <div className="space-y-2">
+              {Object.values(annualReport.byMonth).map((month) => (
+                <div key={month.month} className="flex items-center gap-4">
+                  <div className="w-24 text-sm text-gray-600">
+                    {month.monthName}
+                  </div>
+                  <div className="flex-1 flex gap-1">
+                    {month.byType.EXC > 0 && (
+                      <div
+                        className="bg-blue-500 h-8 flex items-center justify-center text-white text-xs font-bold rounded"
+                        style={{
+                          width: `${(month.byType.EXC / month.total) * 100}%`,
+                        }}
+                      >
+                        {month.byType.EXC}
+                      </div>
+                    )}
+                    {month.byType.PCT > 0 && (
+                      <div
+                        className="bg-purple-500 h-8 flex items-center justify-center text-white text-xs font-bold rounded"
+                        style={{
+                          width: `${(month.byType.PCT / month.total) * 100}%`,
+                        }}
+                      >
+                        {month.byType.PCT}
+                      </div>
+                    )}
+                    {month.byType.BTV > 0 && (
+                      <div
+                        className="bg-orange-500 h-8 flex items-center justify-center text-white text-xs font-bold rounded"
+                        style={{
+                          width: `${(month.byType.BTV / month.total) * 100}%`,
+                        }}
+                      >
+                        {month.byType.BTV}
+                      </div>
+                    )}
+                  </div>
+                  <div className="w-16 text-right text-sm font-bold">
+                    {month.total}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+ IMPLEMENTAR FORMATO:
+┌─────────────────────────────────────────────────────────────────┐
+│         FORMATO COMPLETO                            │
+└─────────────────────────────────────────────────────────────────┘
+
+FORMATO: CHQ-EXC-202604-00001
+         │   │   │      │
+         │   │   │      └─── Sequencial (5 dígitos, reinicia todo mês)
+         │   │   └────────── Ano/Mês (YYYYMM)
+         │   └────────────── Tipo (EXC/PCT/BTV)
+         └────────────────── Prefixo da Agência (3 letras)
+
+EXEMPLOS REAIS:
+├── CHQ-EXC-202604-00001 (Chiquinha - Excursão - Abril/2026 - 1ª)
+├── CHQ-EXC-202604-00150 (Chiquinha - Excursão - Abril/2026 - 150ª)
+├── CHQ-PCT-202604-00001 (Chiquinha - Pacote - Abril/2026 - 1ª)
+├── CHQ-BTV-202604-00025 (Chiquinha - Bate-volta - Abril/2026 - 25ª)
+├── CHQ-EXC-202605-00001 (Chiquinha - Excursão - Maio/2026 - 1ª)
+└── VIP-EXC-202604-00500 (VIP Viagens - Excursão - Abril/2026 - 500ª)
+
+CARACTERÍSTICAS:
+ Único por agência, tipo e mês
+ Sequencial reinicia todo mês
+ Formato profissional e organizado
+ Fácil identificação visual
+ Suporta até 99.999 reservas/mês/tipo
+ Rastreabilidade completa
+ Busca otimizada por componentes
+
+COMPONENTES DO BANCO:
+├── reservation_number (completo): "CHQ-EXC-202604-00001"
+├── number_prefix: "CHQ"
+├── number_type: "EXC"
+├── number_yearmonth: "202604"
+└── number_sequence: 1
+
+ONDE APARECE:
+ Voucher (destaque principal)
+ Email de confirmação
+ WhatsApp
+ Pipeline (card do deal)
+ Lista de reservas
+ Check-in
+ Relatórios
+ Busca rápida
+ Dashboard de estatísticas

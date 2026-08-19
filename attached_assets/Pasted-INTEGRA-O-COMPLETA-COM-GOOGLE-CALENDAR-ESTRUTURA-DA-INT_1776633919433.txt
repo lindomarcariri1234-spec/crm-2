@@ -1,0 +1,2237 @@
+INTEGRAÇÃO COMPLETA COM GOOGLE CALENDAR
+ESTRUTURA DA INTEGRAÇÃO
+
+┌─────────────────────────────────────────────────────────────────┐
+│           SINCRONIZAÇÃO GOOGLE CALENDAR                          │
+└─────────────────────────────────────────────────────────────────┘
+
+👥 AGÊNCIA (Tenant)
+├── 🚌 Viagens (todas)
+├── 💰 Pagamentos (todos os clientes)
+├── 🎂 Aniversários (todos os clientes)
+└── 📊 Eventos importantes
+
+👤 VENDEDOR (User - Vendedor)
+├── 🚌 Viagens (dos seus clientes)
+├── 💰 Pagamentos (dos seus clientes)
+└── 🎂 Aniversários (dos seus clientes)
+
+🧑 CLIENTE (Customer)
+├── 🚌 Suas viagens
+└── 💰 Seus pagamentos
+
+CONFIGURAÇÃO DO GOOGLE CALENDAR
+
+Variáveis de Ambiente
+
+SCHEMA DO BANCO DE DADOS
+
+// prisma/schema.prisma
+
+// Adicionar ao modelo User
+model User {
+  // ... campos existentes ...
+  
+  // ═══════════════════════════════════════════════════════════
+  // GOOGLE CALENDAR
+  // ═══════════════════════════════════════════════════════════
+  google_calendar_id       String?   // ID do calendário principal
+  google_access_token      String?   @db.Text
+  google_refresh_token     String?   @db.Text
+  google_token_expiry      DateTime?
+  google_calendar_enabled  Boolean   @default(false)
+  
+  calendar_events          CalendarEvent[]
+}
+
+// Adicionar ao modelo Customer
+model Customer {
+  // ... campos existentes ...
+  
+  // ═══════════════════════════════════════════════════════════
+  // GOOGLE CALENDAR
+  // ═══════════════════════════════════════════════════════════
+  google_calendar_id       String?
+  google_access_token      String?   @db.Text
+  google_refresh_token     String?   @db.Text
+  google_token_expiry      DateTime?
+  google_calendar_enabled  Boolean   @default(false)
+  
+  calendar_events          CalendarEvent[]
+}
+
+// Novo modelo para rastrear eventos do calendário
+model CalendarEvent {
+  id                String    @id @default(cuid())
+  tenant_id         String
+  tenant            Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Relacionamentos
+  user_id           String?
+  user              User?     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  
+  customer_id       String?
+  customer          Customer? @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  
+  trip_id           String?
+  trip              Trip?     @relation(fields: [trip_id], references: [id], onDelete: Cascade)
+  
+  revenue_id        String?
+  revenue           Revenue?  @relation(fields: [revenue_id], references: [id], onDelete: Cascade)
+  
+  // Dados do evento
+  google_event_id   String    // ID do evento no Google Calendar
+  calendar_id       String    // ID do calendário onde foi criado
+  event_type        String    // trip, payment, birthday, custom
+  title             String
+  description       String?   @db.Text
+  start_date        DateTime
+  end_date          DateTime?
+  location          String?
+  
+  // Sincronização
+  synced_at         DateTime  @default(now())
+  last_updated      DateTime  @updatedAt
+  
+  created_at        DateTime  @default(now())
+  
+  @@index([tenant_id])
+  @@index([user_id])
+  @@index([customer_id])
+  @@index([trip_id])
+  @@index([google_event_id])
+  @@map("calendar_events")
+}
+
+
+npx prisma migrate dev --name add_google_calendar
+npx prisma generate
+
+
+CONFIGURAÇÃO DO NEXTAUTH COM GOOGLE
+
+// lib/auth.ts
+
+import { NextAuthOptions } from 'next-auth'
+import GoogleProvider from 'next-auth/providers/google'
+import { PrismaAdapter } from '@next-auth/prisma-adapter'
+import { prisma } from './prisma'
+
+export const authOptions: NextAuthOptions = {
+  adapter: PrismaAdapter(prisma),
+  providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      authorization: {
+        params: {
+          scope: [
+            'openid',
+            'email',
+            'profile',
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/calendar.events',
+          ].join(' '),
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      },
+    }),
+    // ... outros providers
+  ],
+  callbacks: {
+    async signIn({ user, account, profile }) {
+      if (account?.provider === 'google' && account.access_token) {
+        // Salvar tokens do Google
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            google_access_token: account.access_token,
+            google_refresh_token: account.refresh_token,
+            google_token_expiry: account.expires_at
+              ? new Date(account.expires_at * 1000)
+              : null,
+            google_calendar_enabled: true,
+          },
+        })
+      }
+      return true
+    },
+    async session({ session, user }) {
+      if (session.user) {
+        session.user.id = user.id
+        session.user.tenantId = user.tenant_id
+        session.user.role = user.role
+        
+        // Adicionar informações do Google Calendar
+        const userData = await prisma.user.findUnique({
+          where: { id: user.id },
+          select: {
+            google_calendar_enabled: true,
+            google_calendar_id: true,
+          },
+        })
+        
+        session.user.googleCalendarEnabled = userData?.google_calendar_enabled || false
+        session.user.googleCalendarId = userData?.google_calendar_id || null
+      }
+      return session
+    },
+  },
+  // ... outras configurações
+}
+
+
+SERVIÇO DO GOOGLE CALENDAR
+
+// lib/google-calendar/calendar-service.ts
+
+import { google } from 'googleapis'
+import { prisma } from '@/lib/prisma'
+
+export class GoogleCalendarService {
+  private calendar
+
+  constructor(accessToken: string) {
+    const auth = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_CALENDAR_REDIRECT_URI
+    )
+
+    auth.setCredentials({
+      access_token: accessToken,
+    })
+
+    this.calendar = google.calendar({ version: 'v3', auth })
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // CRIAR EVENTO
+  // ═══════════════════════════════════════════════════════════
+
+  async createEvent(data: {
+    summary: string
+    description?: string
+    location?: string
+    startDateTime: Date
+    endDateTime?: Date
+    attendees?: string[]
+    reminders?: {
+      useDefault: boolean
+      overrides?: Array<{
+        method: 'email' | 'popup'
+        minutes: number
+      }>
+    }
+  }) {
+    try {
+      const event = {
+        summary: data.summary,
+        description: data.description,
+        location: data.location,
+        start: {
+          dateTime: data.startDateTime.toISOString(),
+          timeZone: 'America/Sao_Paulo',
+        },
+        end: {
+          dateTime: (data.endDateTime || data.startDateTime).toISOString(),
+          timeZone: 'America/Sao_Paulo',
+        },
+        attendees: data.attendees?.map((email) => ({ email })),
+        reminders: data.reminders || {
+          useDefault: false,
+          overrides: [
+            { method: 'email', minutes: 24 * 60 }, // 1 dia antes
+            { method: 'popup', minutes: 30 }, // 30 minutos antes
+          ],
+        },
+        colorId: '9', // Azul
+      }
+
+      const response = await this.calendar.events.insert({
+        calendarId: 'primary',
+        requestBody: event,
+        sendUpdates: 'all',
+      })
+
+      return response.data
+    } catch (error) {
+      console.error('Erro ao criar evento no Google Calendar:', error)
+      throw error
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ATUALIZAR EVENTO
+  // ═══════════════════════════════════════════════════════════
+
+  async updateEvent(
+    eventId: string,
+    data: {
+      summary?: string
+      description?: string
+      location?: string
+      startDateTime?: Date
+      endDateTime?: Date
+      attendees?: string[]
+    }
+  ) {
+    try {
+      const event: any = {}
+
+      if (data.summary) event.summary = data.summary
+      if (data.description) event.description = data.description
+      if (data.location) event.location = data.location
+
+      if (data.startDateTime) {
+        event.start = {
+          dateTime: data.startDateTime.toISOString(),
+          timeZone: 'America/Sao_Paulo',
+        }
+      }
+
+      if (data.endDateTime) {
+        event.end = {
+          dateTime: data.endDateTime.toISOString(),
+          timeZone: 'America/Sao_Paulo',
+        }
+      }
+
+      if (data.attendees) {
+        event.attendees = data.attendees.map((email) => ({ email }))
+      }
+
+      const response = await this.calendar.events.patch({
+        calendarId: 'primary',
+        eventId,
+        requestBody: event,
+        sendUpdates: 'all',
+      })
+
+      return response.data
+    } catch (error) {
+      console.error('Erro ao atualizar evento no Google Calendar:', error)
+      throw error
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // DELETAR EVENTO
+  // ═══════════════════════════════════════════════════════════
+
+  async deleteEvent(eventId: string) {
+    try {
+      await this.calendar.events.delete({
+        calendarId: 'primary',
+        eventId,
+        sendUpdates: 'all',
+      })
+
+      return true
+    } catch (error) {
+      console.error('Erro ao deletar evento no Google Calendar:', error)
+      throw error
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // LISTAR EVENTOS
+  // ═══════════════════════════════════════════════════════════
+
+  async listEvents(startDate?: Date, endDate?: Date) {
+    try {
+      const response = await this.calendar.events.list({
+        calendarId: 'primary',
+        timeMin: startDate?.toISOString(),
+        timeMax: endDate?.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+      })
+
+      return response.data.items || []
+    } catch (error) {
+      console.error('Erro ao listar eventos do Google Calendar:', error)
+      throw error
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // REFRESH TOKEN
+  // ═══════════════════════════════════════════════════════════
+
+  static async refreshAccessToken(userId: string) {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          google_refresh_token: true,
+          google_token_expiry: true,
+        },
+      })
+
+      if (!user?.google_refresh_token) {
+        throw new Error('Refresh token não encontrado')
+      }
+
+      // Verificar se o token ainda é válido
+      if (
+        user.google_token_expiry &&
+        user.google_token_expiry > new Date()
+      ) {
+        return // Token ainda válido
+      }
+
+      const auth = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_CALENDAR_REDIRECT_URI
+      )
+
+      auth.setCredentials({
+        refresh_token: user.google_refresh_token,
+      })
+
+      const { credentials } = await auth.refreshAccessToken()
+
+      // Atualizar tokens no banco
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          google_access_token: credentials.access_token,
+          google_token_expiry: credentials.expiry_date
+            ? new Date(credentials.expiry_date)
+            : null,
+        },
+      })
+
+      return credentials.access_token
+    } catch (error) {
+      console.error('Erro ao renovar access token:', error)
+      throw error
+    }
+  }
+}
+
+
+SERVIÇO DE SINCRONIZAÇÃO
+
+// lib/google-calendar/sync-service.ts
+
+import { GoogleCalendarService } from './calendar-service'
+import { prisma } from '@/lib/prisma'
+import { format, addHours } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export class CalendarSyncService {
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR VIAGEM
+  // ═══════════════════════════════════════════════════════════
+
+  static async syncTrip(tripId: string) {
+    try {
+      const trip = await prisma.trip.findUnique({
+        where: { id: tripId },
+        include: {
+          tenant: true,
+          reservations: {
+            where: { status: 'confirmed' },
+            include: {
+              customer: true,
+            },
+          },
+        },
+      })
+
+      if (!trip) {
+        throw new Error('Viagem não encontrada')
+      }
+
+      // 1. Sincronizar para a AGÊNCIA
+      await this.syncTripForTenant(trip)
+
+      // 2. Sincronizar para VENDEDORES
+      const salesUsers = await prisma.user.findMany({
+        where: {
+          tenant_id: trip.tenant_id,
+          role: 'sales',
+          google_calendar_enabled: true,
+        },
+      })
+
+      for (const user of salesUsers) {
+        // Verificar se o vendedor tem clientes nesta viagem
+        const hasCustomers = trip.reservations.some(
+          (r) => r.customer.assigned_to === user.id
+        )
+
+        if (hasCustomers) {
+          await this.syncTripForUser(trip, user.id)
+        }
+      }
+
+      // 3. Sincronizar para CLIENTES
+      for (const reservation of trip.reservations) {
+        if (reservation.customer.google_calendar_enabled) {
+          await this.syncTripForCustomer(trip, reservation.customer.id)
+        }
+      }
+
+      console.log(`✅ Viagem ${trip.id} sincronizada com sucesso!`)
+    } catch (error) {
+      console.error('Erro ao sincronizar viagem:', error)
+      throw error
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR VIAGEM PARA AGÊNCIA
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncTripForTenant(trip: any) {
+    try {
+      const adminUser = await prisma.user.findFirst({
+        where: {
+          tenant_id: trip.tenant_id,
+          role: 'admin',
+          google_calendar_enabled: true,
+        },
+      })
+
+      if (!adminUser?.google_access_token) {
+        console.log('Admin não tem Google Calendar habilitado')
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(
+        adminUser.google_access_token
+      )
+
+      // Verificar se já existe evento
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          trip_id: trip.id,
+          user_id: adminUser.id,
+          event_type: 'trip',
+        },
+      })
+
+      const eventData = {
+        summary: `🚌 ${trip.name || trip.title}`,
+        description: this.buildTripDescription(trip),
+        location: `${trip.origin_city || ''} → ${trip.destination}`,
+        startDateTime: trip.departure_date || new Date(),
+        endDateTime: trip.return_date || addHours(trip.departure_date || new Date(), 12),
+        attendees: trip.reservations
+          .map((r: any) => r.customer.email)
+          .filter(Boolean),
+      }
+
+      if (existingEvent) {
+        // Atualizar evento existente
+        const googleEvent = await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            end_date: eventData.endDateTime,
+            location: eventData.location,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        // Criar novo evento
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: trip.tenant_id,
+            user_id: adminUser.id,
+            trip_id: trip.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'trip',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            end_date: eventData.endDateTime,
+            location: eventData.location,
+          },
+        })
+      }
+
+      console.log(`✅ Viagem sincronizada para agência`)
+    } catch (error) {
+      console.error('Erro ao sincronizar viagem para agência:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR VIAGEM PARA VENDEDOR
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncTripForUser(trip: any, userId: string) {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+      })
+
+      if (!user?.google_access_token) {
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(user.google_access_token)
+
+      // Buscar clientes do vendedor nesta viagem
+      const userCustomers = trip.reservations.filter(
+        (r: any) => r.customer.assigned_to === userId
+      )
+
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          trip_id: trip.id,
+          user_id: userId,
+          event_type: 'trip',
+        },
+      })
+
+      const eventData = {
+        summary: `🚌 ${trip.name || trip.title}`,
+        description: this.buildTripDescriptionForSales(trip, userCustomers),
+        location: `${trip.origin_city || ''} → ${trip.destination}`,
+        startDateTime: trip.departure_date || new Date(),
+        endDateTime: trip.return_date || addHours(trip.departure_date || new Date(), 12),
+        attendees: userCustomers
+          .map((r: any) => r.customer.email)
+          .filter(Boolean),
+      }
+
+      if (existingEvent) {
+        await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            end_date: eventData.endDateTime,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: trip.tenant_id,
+            user_id: userId,
+            trip_id: trip.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'trip',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            end_date: eventData.endDateTime,
+            location: eventData.location,
+          },
+        })
+      }
+
+      console.log(`✅ Viagem sincronizada para vendedor ${user.name}`)
+    } catch (error) {
+      console.error('Erro ao sincronizar viagem para vendedor:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR VIAGEM PARA CLIENTE
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncTripForCustomer(trip: any, customerId: string) {
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { id: customerId },
+        include: {
+          reservations: {
+            where: {
+              trip_id: trip.id,
+              status: 'confirmed',
+            },
+          },
+        },
+      })
+
+      if (!customer?.google_access_token) {
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(
+        customer.google_access_token
+      )
+
+      const reservation = customer.reservations[0]
+
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          trip_id: trip.id,
+          customer_id: customerId,
+          event_type: 'trip',
+        },
+      })
+
+      const eventData = {
+        summary: `✈️ Viagem: ${trip.destination}`,
+        description: this.buildTripDescriptionForCustomer(trip, reservation),
+        location: `${trip.origin_city || ''} → ${trip.destination}`,
+        startDateTime: trip.departure_date || new Date(),
+        endDateTime: trip.return_date || addHours(trip.departure_date || new Date(), 12),
+      }
+
+      if (existingEvent) {
+        await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            end_date: eventData.endDateTime,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: trip.tenant_id,
+            customer_id: customerId,
+            trip_id: trip.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'trip',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            end_date: eventData.endDateTime,
+            location: eventData.location,
+          },
+        })
+      }
+
+      console.log(`✅ Viagem sincronizada para cliente ${customer.name}`)
+    } catch (error) {
+      console.error('Erro ao sincronizar viagem para cliente:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR PAGAMENTO
+  // ═══════════════════════════════════════════════════════════
+
+  static async syncPayment(revenueId: string) {
+    try {
+      const revenue = await prisma.revenue.findUnique({
+        where: { id: revenueId },
+        include: {
+          customer: true,
+          trip: true,
+        },
+      })
+
+      if (!revenue) {
+        throw new Error('Pagamento não encontrado')
+      }
+
+      // 1. Sincronizar para AGÊNCIA
+      await this.syncPaymentForTenant(revenue)
+
+      // 2. Sincronizar para VENDEDOR (se houver)
+      if (revenue.customer?.assigned_to) {
+        await this.syncPaymentForUser(revenue, revenue.customer.assigned_to)
+      }
+
+      // 3. Sincronizar para CLIENTE
+      if (revenue.customer?.google_calendar_enabled) {
+        await this.syncPaymentForCustomer(revenue, revenue.customer.id)
+      }
+
+      console.log(`✅ Pagamento ${revenue.id} sincronizado com sucesso!`)
+    } catch (error) {
+      console.error('Erro ao sincronizar pagamento:', error)
+      throw error
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR PAGAMENTO PARA AGÊNCIA
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncPaymentForTenant(revenue: any) {
+    try {
+      const adminUser = await prisma.user.findFirst({
+        where: {
+          tenant_id: revenue.tenant_id,
+          role: 'admin',
+          google_calendar_enabled: true,
+        },
+      })
+
+      if (!adminUser?.google_access_token) {
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(
+        adminUser.google_access_token
+      )
+
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          revenue_id: revenue.id,
+          user_id: adminUser.id,
+          event_type: 'payment',
+        },
+      })
+
+      const eventData = {
+        summary: `💰 Pagamento: ${revenue.customer?.name || 'Cliente'}`,
+        description: this.buildPaymentDescription(revenue),
+        startDateTime: revenue.due_date,
+        endDateTime: revenue.due_date,
+        reminders: {
+          useDefault: false,
+          overrides: [
+            { method: 'email' as const, minutes: 24 * 60 }, // 1 dia antes
+            { method: 'popup' as const, minutes: 60 }, // 1 hora antes
+          ],
+        },
+      }
+
+      if (existingEvent) {
+        await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: revenue.tenant_id,
+            user_id: adminUser.id,
+            revenue_id: revenue.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'payment',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+          },
+        })
+      }
+
+      console.log(`✅ Pagamento sincronizado para agência`)
+    } catch (error) {
+      console.error('Erro ao sincronizar pagamento para agência:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR PAGAMENTO PARA VENDEDOR
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncPaymentForUser(revenue: any, userId: string) {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+      })
+
+      if (!user?.google_access_token) {
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(user.google_access_token)
+
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          revenue_id: revenue.id,
+          user_id: userId,
+          event_type: 'payment',
+        },
+      })
+
+      const eventData = {
+        summary: `💰 Pagamento: ${revenue.customer?.name || 'Cliente'}`,
+        description: this.buildPaymentDescription(revenue),
+        startDateTime: revenue.due_date,
+        endDateTime: revenue.due_date,
+      }
+
+      if (existingEvent) {
+        await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: revenue.tenant_id,
+            user_id: userId,
+            revenue_id: revenue.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'payment',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+          },
+        })
+      }
+
+      console.log(`✅ Pagamento sincronizado para vendedor`)
+    } catch (error) {
+      console.error('Erro ao sincronizar pagamento para vendedor:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR PAGAMENTO PARA CLIENTE
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncPaymentForCustomer(revenue: any, customerId: string) {
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { id: customerId },
+      })
+
+      if (!customer?.google_access_token) {
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(
+        customer.google_access_token
+      )
+
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          revenue_id: revenue.id,
+          customer_id: customerId,
+          event_type: 'payment',
+        },
+      })
+
+      const eventData = {
+        summary: `💳 Pagamento da Viagem`,
+        description: this.buildPaymentDescriptionForCustomer(revenue),
+        startDateTime: revenue.due_date,
+        endDateTime: revenue.due_date,
+      }
+
+      if (existingEvent) {
+        await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: revenue.tenant_id,
+            customer_id: customerId,
+            revenue_id: revenue.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'payment',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: eventData.startDateTime,
+          },
+        })
+      }
+
+      console.log(`✅ Pagamento sincronizado para cliente`)
+    } catch (error) {
+      console.error('Erro ao sincronizar pagamento para cliente:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR ANIVERSÁRIO
+  // ═══════════════════════════════════════════════════════════
+
+  static async syncBirthday(customerId: string) {
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { id: customerId },
+      })
+
+      if (!customer?.birth_date) {
+        return
+      }
+
+      // 1. Sincronizar para AGÊNCIA
+      await this.syncBirthdayForTenant(customer)
+
+      // 2. Sincronizar para VENDEDOR (se houver)
+      if (customer.assigned_to) {
+        await this.syncBirthdayForUser(customer, customer.assigned_to)
+      }
+
+      console.log(`✅ Aniversário de ${customer.name} sincronizado!`)
+    } catch (error) {
+      console.error('Erro ao sincronizar aniversário:', error)
+      throw error
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR ANIVERSÁRIO PARA AGÊNCIA
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncBirthdayForTenant(customer: any) {
+    try {
+      const adminUser = await prisma.user.findFirst({
+        where: {
+          tenant_id: customer.tenant_id,
+          role: 'admin',
+          google_calendar_enabled: true,
+        },
+      })
+
+      if (!adminUser?.google_access_token) {
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(
+        adminUser.google_access_token
+      )
+
+      // Criar evento anual recorrente
+      const birthDate = new Date(customer.birth_date)
+      const currentYear = new Date().getFullYear()
+      const nextBirthday = new Date(
+        currentYear,
+        birthDate.getMonth(),
+        birthDate.getDate()
+      )
+
+      // Se já passou este ano, criar para o próximo
+      if (nextBirthday < new Date()) {
+        nextBirthday.setFullYear(currentYear + 1)
+      }
+
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          customer_id: customer.id,
+          user_id: adminUser.id,
+          event_type: 'birthday',
+        },
+      })
+
+      const eventData = {
+        summary: `🎂 Aniversário: ${customer.name}`,
+        description: `Aniversário de ${customer.name}\n\nEnviar mensagem de felicitações!`,
+        startDateTime: nextBirthday,
+        endDateTime: nextBirthday,
+      }
+
+      if (existingEvent) {
+        await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            start_date: nextBirthday,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: customer.tenant_id,
+            user_id: adminUser.id,
+            customer_id: customer.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'birthday',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: nextBirthday,
+          },
+        })
+      }
+
+      console.log(`✅ Aniversário sincronizado para agência`)
+    } catch (error) {
+      console.error('Erro ao sincronizar aniversário para agência:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SINCRONIZAR ANIVERSÁRIO PARA VENDEDOR
+  // ═══════════════════════════════════════════════════════════
+
+  private static async syncBirthdayForUser(customer: any, userId: string) {
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+      })
+
+      if (!user?.google_access_token) {
+        return
+      }
+
+      const calendarService = new GoogleCalendarService(user.google_access_token)
+
+      const birthDate = new Date(customer.birth_date)
+      const currentYear = new Date().getFullYear()
+      const nextBirthday = new Date(
+        currentYear,
+        birthDate.getMonth(),
+        birthDate.getDate()
+      )
+
+      if (nextBirthday < new Date()) {
+        nextBirthday.setFullYear(currentYear + 1)
+      }
+
+      const existingEvent = await prisma.calendarEvent.findFirst({
+        where: {
+          customer_id: customer.id,
+          user_id: userId,
+          event_type: 'birthday',
+        },
+      })
+
+      const eventData = {
+        summary: `🎂 Aniversário: ${customer.name}`,
+        description: `Aniversário de ${customer.name}\n\nLembre-se de enviar felicitações!`,
+        startDateTime: nextBirthday,
+        endDateTime: nextBirthday,
+      }
+
+      if (existingEvent) {
+        await calendarService.updateEvent(
+          existingEvent.google_event_id,
+          eventData
+        )
+
+        await prisma.calendarEvent.update({
+          where: { id: existingEvent.id },
+          data: {
+            start_date: nextBirthday,
+            synced_at: new Date(),
+          },
+        })
+      } else {
+        const googleEvent = await calendarService.createEvent(eventData)
+
+        await prisma.calendarEvent.create({
+          data: {
+            tenant_id: customer.tenant_id,
+            user_id: userId,
+            customer_id: customer.id,
+            google_event_id: googleEvent.id!,
+            calendar_id: 'primary',
+            event_type: 'birthday',
+            title: eventData.summary,
+            description: eventData.description,
+            start_date: nextBirthday,
+          },
+        })
+      }
+
+      console.log(`✅ Aniversário sincronizado para vendedor`)
+    } catch (error) {
+      console.error('Erro ao sincronizar aniversário para vendedor:', error)
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // HELPERS - DESCRIÇÕES DOS EVENTOS
+  // ═══════════════════════════════════════════════════════════
+
+  private static buildTripDescription(trip: any): string {
+    return `
+🚌 VIAGEM: ${trip.name || trip.title}
+
+📍 Origem: ${trip.origin_city || 'Não informado'}
+🎯 Destino: ${trip.destination}
+📅 Saída: ${format(trip.departure_date || new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+${trip.return_date ? `🔙 Retorno: ${format(trip.return_date, "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}` : ''}
+
+👥 Total de Passageiros: ${trip.reservations.length}
+💰 Valor Total: R$ ${trip.reservations.reduce((sum: number, r: any) => sum + (r.total_amount?.toNumber() || 0), 0).toFixed(2)}
+
+${trip.description || ''}
+    `.trim()
+  }
+
+  private static buildTripDescriptionForSales(trip: any, customers: any[]): string {
+    return `
+🚌 VIAGEM: ${trip.name || trip.title}
+
+📍 ${trip.origin_city || ''} → ${trip.destination}
+📅 ${format(trip.departure_date || new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+
+👥 SEUS CLIENTES (${customers.length}):
+${customers.map((r: any) => `• ${r.customer.name}`).join('\n')}
+
+💰 Valor Total: R$ ${customers.reduce((sum: number, r: any) => sum + (r.total_amount?.toNumber() || 0), 0).toFixed(2)}
+    `.trim()
+  }
+
+  private static buildTripDescriptionForCustomer(trip: any, reservation: any): string {
+    return `
+✈️ SUA VIAGEM PARA ${trip.destination}
+
+📅 Saída: ${format(trip.departure_date || new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+${trip.return_date ? `🔙 Retorno: ${format(trip.return_date, "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}` : ''}
+
+💰 Valor: R$ ${reservation.total_amount?.toNumber().toFixed(2) || '0.00'}
+
+📝 Informações:
+${trip.description || 'Aproveite sua viagem!'}
+
+📞 Em caso de dúvidas, entre em contato conosco.
+    `.trim()
+  }
+
+  private static buildPaymentDescription(revenue: any): string {
+    return `
+💰 PAGAMENTO PENDENTE
+
+Cliente: ${revenue.customer?.name || 'Não informado'}
+Valor: R$ ${revenue.amount.toNumber().toFixed(2)}
+Vencimento: ${format(revenue.due_date, 'dd/MM/yyyy', { locale: ptBR })}
+
+${revenue.trip ? `Viagem: ${revenue.trip.name || revenue.trip.title}` : ''}
+${revenue.description || ''}
+
+⚠️ Lembrete: Confirmar recebimento após pagamento
+    `.trim()
+  }
+
+  private static buildPaymentDescriptionForCustomer(revenue: any): string {
+    return `
+💳 PAGAMENTO DA VIAGEM
+
+Valor: R$ ${revenue.amount.toNumber().toFixed(2)}
+Vencimento: ${format(revenue.due_date, 'dd/MM/yyyy', { locale: ptBR })}
+
+${revenue.trip ? `Viagem: ${revenue.trip.destination}` : ''}
+
+📝 Formas de pagamento disponíveis:
+• PIX
+• Cartão de Crédito
+• Boleto Bancário
+
+💡 Realize o pagamento até a data de vencimento para garantir sua reserva.
+    `.trim()
+  }
+}
+
+
+GOOGLE CALENDAR - APIS E INTERFACE
+APIS DE SINCRONIZAÇÃO
+API de Conexão com Google Calendar
+
+// app/api/google-calendar/connect/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { google } from 'googleapis'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_CALENDAR_REDIRECT_URI
+    )
+
+    const scopes = [
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/calendar.events',
+    ]
+
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: scopes,
+      prompt: 'consent',
+      state: session.user.id, // Passar o ID do usuário
+    })
+
+    return NextResponse.json({ url })
+  } catch (error) {
+    console.error('Erro ao gerar URL de autorização:', error)
+    return NextResponse.json(
+      { error: 'Erro ao conectar com Google Calendar' },
+      { status: 500 }
+    )
+  }
+}
+
+
+API de Callback do Google
+
+// app/api/google-calendar/callback/route.ts
+
+import { NextResponse } from 'next/server'
+import { google } from 'googleapis'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const code = searchParams.get('code')
+    const state = searchParams.get('state') // userId
+    const error = searchParams.get('error')
+
+    if (error) {
+      return NextResponse.redirect(
+        `${process.env.NEXTAUTH_URL}/dashboard/settings?error=google_calendar_denied`
+      )
+    }
+
+    if (!code || !state) {
+      return NextResponse.redirect(
+        `${process.env.NEXTAUTH_URL}/dashboard/settings?error=invalid_callback`
+      )
+    }
+
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_CALENDAR_REDIRECT_URI
+    )
+
+    // Trocar código por tokens
+    const { tokens } = await oauth2Client.getToken(code)
+
+    // Salvar tokens no banco
+    await prisma.user.update({
+      where: { id: state },
+      data: {
+        google_access_token: tokens.access_token,
+        google_refresh_token: tokens.refresh_token,
+        google_token_expiry: tokens.expiry_date
+          ? new Date(tokens.expiry_date)
+          : null,
+        google_calendar_enabled: true,
+      },
+    })
+
+    return NextResponse.redirect(
+      `${process.env.NEXTAUTH_URL}/dashboard/settings?success=google_calendar_connected`
+    )
+  } catch (error) {
+    console.error('Erro no callback do Google Calendar:', error)
+    return NextResponse.redirect(
+      `${process.env.NEXTAUTH_URL}/dashboard/settings?error=google_calendar_error`
+    )
+  }
+}
+
+
+API de Desconexão
+// app/api/google-calendar/disconnect/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { google } from 'googleapis'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { google_access_token: true },
+    })
+
+    // Revogar token no Google
+    if (user?.google_access_token) {
+      try {
+        const oauth2Client = new google.auth.OAuth2(
+          process.env.GOOGLE_CLIENT_ID,
+          process.env.GOOGLE_CLIENT_SECRET,
+          process.env.GOOGLE_CALENDAR_REDIRECT_URI
+        )
+
+        await oauth2Client.revokeToken(user.google_access_token)
+      } catch (error) {
+        console.error('Erro ao revogar token:', error)
+      }
+    }
+
+    // Remover tokens do banco
+    await prisma.user.update({
+      where: { id: session.user.id },
+      data: {
+        google_access_token: null,
+        google_refresh_token: null,
+        google_token_expiry: null,
+        google_calendar_enabled: false,
+      },
+    })
+
+    // Deletar eventos sincronizados
+    await prisma.calendarEvent.deleteMany({
+      where: {
+        user_id: session.user.id,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: 'Google Calendar desconectado com sucesso',
+    })
+  } catch (error) {
+    console.error('Erro ao desconectar Google Calendar:', error)
+    return NextResponse.json(
+      { error: 'Erro ao desconectar Google Calendar' },
+      { status: 500 }
+    )
+  }
+}
+
+API de Sincronização Manual
+
+// app/api/google-calendar/sync/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { CalendarSyncService } from '@/lib/google-calendar/sync-service'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const body = await req.json()
+    const { type, id } = body // type: 'trip' | 'payment' | 'birthday' | 'all'
+
+    let synced = 0
+
+    if (type === 'trip' && id) {
+      await CalendarSyncService.syncTrip(id)
+      synced = 1
+    } else if (type === 'payment' && id) {
+      await CalendarSyncService.syncPayment(id)
+      synced = 1
+    } else if (type === 'birthday' && id) {
+      await CalendarSyncService.syncBirthday(id)
+      synced = 1
+    } else if (type === 'all') {
+      // Sincronizar tudo
+      const tenantId = session.user.tenantId
+
+      // 1. Sincronizar todas as viagens ativas
+      const trips = await prisma.trip.findMany({
+        where: {
+          tenant_id: tenantId,
+          status: 'active',
+        },
+      })
+
+      for (const trip of trips) {
+        try {
+          await CalendarSyncService.syncTrip(trip.id)
+          synced++
+        } catch (error) {
+          console.error(`Erro ao sincronizar viagem ${trip.id}:`, error)
+        }
+      }
+
+      // 2. Sincronizar todos os pagamentos pendentes
+      const payments = await prisma.revenue.findMany({
+        where: {
+          tenant_id: tenantId,
+          status: 'pending',
+        },
+      })
+
+      for (const payment of payments) {
+        try {
+          await CalendarSyncService.syncPayment(payment.id)
+          synced++
+        } catch (error) {
+          console.error(`Erro ao sincronizar pagamento ${payment.id}:`, error)
+        }
+      }
+
+      // 3. Sincronizar aniversários
+      const customers = await prisma.customer.findMany({
+        where: {
+          tenant_id: tenantId,
+          birth_date: {
+            not: null,
+          },
+        },
+      })
+
+      for (const customer of customers) {
+        try {
+          await CalendarSyncService.syncBirthday(customer.id)
+          synced++
+        } catch (error) {
+          console.error(`Erro ao sincronizar aniversário ${customer.id}:`, error)
+        }
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `${synced} evento(s) sincronizado(s) com sucesso`,
+      synced,
+    })
+  } catch (error) {
+    console.error('Erro ao sincronizar:', error)
+    return NextResponse.json(
+      { error: 'Erro ao sincronizar eventos' },
+      { status: 500 }
+    )
+  }
+}
+
+
+INTERFACE DE CONFIGURAÇÃO
+Página de Configurações do Google Calendar
+
+// app/(dashboard)/dashboard/settings/google-calendar/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useSession } from 'next-auth/react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
+import {
+  Calendar,
+  CheckCircle,
+  XCircle,
+  RefreshCw,
+  Loader2,
+  AlertCircle,
+  Clock,
+  Link as LinkIcon,
+  Unlink,
+  Info,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import Link from 'next/link'
+
+interface CalendarStatus {
+  connected: boolean
+  tokenValid?: boolean
+  eventsCount?: number
+  lastSync?: Date
+  calendarId?: string
+}
+
+export default function GoogleCalendarSettingsPage() {
+  const { data: session } = useSession()
+  const [status, setStatus] = useState<CalendarStatus | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isConnecting, setIsConnecting] = useState(false)
+  const [isDisconnecting, setIsDisconnecting] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+
+  useEffect(() => {
+    loadStatus()
+  }, [])
+
+  const loadStatus = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/google-calendar/status')
+      const data = await response.json()
+
+      setStatus({
+        ...data,
+        lastSync: data.lastSync ? new Date(data.lastSync) : undefined,
+      })
+    } catch (error) {
+      console.error('Erro ao carregar status:', error)
+      toast.error('Erro ao carregar status do Google Calendar')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleConnect = async () => {
+    try {
+      setIsConnecting(true)
+
+      const response = await fetch('/api/google-calendar/connect')
+      const data = await response.json()
+
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        toast.error('Erro ao conectar com Google Calendar')
+      }
+    } catch (error) {
+      console.error('Erro ao conectar:', error)
+      toast.error('Erro ao conectar com Google Calendar')
+      setIsConnecting(false)
+    }
+  }
+
+  const handleDisconnect = async () => {
+    if (
+      !confirm(
+        'Tem certeza que deseja desconectar o Google Calendar? Todos os eventos sincronizados serão removidos.'
+      )
+    ) {
+      return
+    }
+
+    try {
+      setIsDisconnecting(true)
+
+      const response = await fetch('/api/google-calendar/disconnect', {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success('Google Calendar desconectado com sucesso!')
+        loadStatus()
+      } else {
+        toast.error(data.error || 'Erro ao desconectar')
+      }
+    } catch (error) {
+      console.error('Erro ao desconectar:', error)
+      toast.error('Erro ao desconectar Google Calendar')
+    } finally {
+      setIsDisconnecting(false)
+    }
+  }
+
+  const handleSyncAll = async () => {
+    try {
+      setIsSyncing(true)
+      toast.info('Sincronizando eventos...')
+
+      const response = await fetch('/api/google-calendar/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'all' }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success(data.message)
+        loadStatus()
+      } else {
+        toast.error(data.error || 'Erro ao sincronizar')
+      }
+    } catch (error) {
+      console.error('Erro ao sincronizar:', error)
+      toast.error('Erro ao sincronizar eventos')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto py-8 px-4 max-w-4xl">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4 max-w-4xl">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">📅 Google Calendar</h1>
+        <p className="text-gray-600">
+          Sincronize automaticamente suas viagens, pagamentos e aniversários com o
+          Google Calendar
+        </p>
+      </div>
+
+      {/* Status Card */}
+      <Card className="p-6 mb-6">
+        <div className="flex items-start justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <div
+              className={`p-3 rounded-lg ${
+                status?.connected
+                  ? 'bg-green-100 text-green-600'
+                  : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              <Calendar className="h-6 w-6" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold">Status da Conexão</h3>
+              <p className="text-sm text-gray-600">
+                {status?.connected
+                  ? 'Conectado ao Google Calendar'
+                  : 'Não conectado'}
+              </p>
+            </div>
+          </div>
+
+          <Badge
+            variant={status?.connected ? 'default' : 'secondary'}
+            className={
+              status?.connected
+                ? 'bg-green-600 hover:bg-green-700'
+                : 'bg-gray-600'
+            }
+          >
+            {status?.connected ? (
+              <>
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Conectado
+              </>
+            ) : (
+              <>
+                <XCircle className="h-3 w-3 mr-1" />
+                Desconectado
+              </>
+            )}
+          </Badge>
+        </div>
+
+        {status?.connected ? (
+          <div className="space-y-4">
+            {/* Informações */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                  <span className="text-sm font-semibold">
+                    Token Status
+                  </span>
+                </div>
+                <p className="text-xs text-gray-600">
+                  {status.tokenValid ? 'Válido' : 'Expirado'}
+                </p>
+              </div>
+
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <Calendar className="h-4 w-4 text-blue-600" />
+                  <span className="text-sm font-semibold">
+                    Eventos Sincronizados
+                  </span>
+                </div>
+                <p className="text-2xl font-bold text-blue-600">
+                  {status.eventsCount || 0}
+                </p>
+              </div>
+
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <Clock className="h-4 w-4 text-purple-600" />
+                  <span className="text-sm font-semibold">
+                    Última Sincronização
+                  </span>
+                </div>
+                <p className="text-xs text-gray-600">
+                  {status.lastSync
+                    ? format(status.lastSync, "dd/MM/yyyy 'às' HH:mm", {
+                        locale: ptBR,
+                      })
+                    : 'Nunca'}
+                </p>
+              </div>
+            </div>
+
+            {/* Ações */}
+            <div className="flex items-center gap-3 pt-4 border-t">
+              <Button
+                onClick={handleSyncAll}
+                disabled={isSyncing}
+                variant="outline"
+              >
+                {isSyncing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Sincronizando...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Sincronizar Tudo
+                  </>
+                )}
+              </Button>
+
+              <Button
+                onClick={handleDisconnect}
+                disabled={isDisconnecting}
+                variant="destructive"
+              >
+                {isDisconnecting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Desconectando...
+                  </>
+                ) : (
+                  <>
+                    <Unlink className="h-4 w-4 mr-2" />
+                    Desconectar
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-center py-8">
+            <Calendar className="h-16 w-16 mx-auto mb-4 text-gray-400" />
+            <h3 className="text-lg font-semibold mb-2">
+              Conecte seu Google Calendar
+            </h3>
+            <p className="text-sm text-gray-600 mb-6 max-w-md mx-auto">
+              Sincronize automaticamente suas viagens, pagamentos e aniversários
+              de clientes com seu Google Calendar.
+            </p>
+            <Button
+              onClick={handleConnect}
+              disabled={isConnecting}
+              size="lg"
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {isConnecting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Conectando...
+                </>
+              ) : (
+                <>
+                  <LinkIcon className="h-4 w-4 mr-2" />
+                  Conectar Google Calendar
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </Card>
+
+      {/* O que será sincronizado */}
+      <Card className="p-6 mb-6">
+        <h3 className="text-lg font-bold mb-4">📋 O que será sincronizado?</h3>
+
+        <div className="space-y-4">
+          {/* Agência */}
+          <div className="p-4 border rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <Badge variant="outline">Agência</Badge>
+              <h4 className="font-semibold">Administradores</h4>
+            </div>
+            <ul className="space-y-2 text-sm text-gray-600">
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>🚌 Todas as viagens cadastradas</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>💰 Todos os pagamentos pendentes</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>🎂 Aniversários de todos os clientes</span>
+              </li>
+            </ul>
+          </div>
+
+          {/* Vendedor */}
+          <div className="p-4 border rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <Badge variant="outline">Vendedor</Badge>
+              <h4 className="font-semibold">Equipe de Vendas</h4>
+            </div>
+            <ul className="space-y-2 text-sm text-gray-600">
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>🚌 Viagens dos seus clientes</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>💰 Pagamentos dos seus clientes</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>🎂 Aniversários dos seus clientes</span>
+              </li>
+            </ul>
+          </div>
+
+          {/* Cliente */}
+          <div className="p-4 border rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <Badge variant="outline">Cliente</Badge>
+              <h4 className="font-semibold">Clientes</h4>
+            </div>
+            <ul className="space-y-2 text-sm text-gray-600">
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>🚌 Suas viagens reservadas</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <CheckCircle className="h-4 w-4 text-green-600 mt-0.5" />
+                <span>💰 Seus pagamentos pendentes</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </Card>
+
+      {/* Informações Importantes */}
+      <Card className="p-6 bg-blue-50 border-blue-200">
+        <div className="flex items-start gap-3">
+          <Info className="h-5 w-5 text-blue-600 mt-0.5" />
+          <div>
+            <h4 className="font-semibold text-blue-900 mb-2">
+              ℹ️ Informações Importantes
+            </h4>
+            <ul className="space-y-1 text-sm text-blue-800">
+              <li>
+                • A sincronização é automática quando você cria ou atualiza viagens
+                e pagamentos
+              </li>
+              <li>
+                • Os eventos são criados no seu calendário principal do Google
+              </li>
+              <li>
+                • Você pode desconectar a qualquer momento sem perder dados no
+                sistema
+              </li>
+              <li>
+                • Lembretes são configurados automaticamente (1 dia antes e 30
+                minutos antes)
+              </li>
+              <li>
+                • Clientes também podem conectar seus próprios calendários
+              </li>
+            </ul>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+Componente de Botão de Sincronização Rápida
+
+// components/google-calendar/sync-button.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Calendar, Loader2, CheckCircle } from 'lucide-react'
+import { toast } from 'sonner'
+
+interface SyncButtonProps {
+  type: 'trip' | 'payment' | 'birthday'
+  id: string
+  variant?: 'default' | 'outline' | 'ghost'
+  size?: 'default' | 'sm' | 'lg'
+  showLabel?: boolean
+}
+
+export function GoogleCalendarSyncButton({
+  type,
+  id,
+  variant = 'outline',
+  size = 'sm',
+  showLabel = true,
+}: SyncButtonProps) {
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [synced, setSynced] = useState(false)
+
+  const handleSync = async () => {
+    try {
+      setIsSyncing(true)
+
+      const response = await fetch('/api/google-calendar/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, id }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success('Sincronizado com Google Calendar!')
+        setSynced(true)
+        setTimeout(() => setSynced(false), 3000)
+      } else {
+        toast.error(data.error || 'Erro ao sincronizar')
+      }
+    } catch (error) {
+      console.error('Erro ao sincronizar:', error)
+      toast.error('Erro ao sincronizar com Google Calendar')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  return (
+    <Button
+      onClick={handleSync}
+      disabled={isSyncing || synced}
+      variant={variant}
+      size={size}
+    >
+      {isSyncing ? (
+        <>
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {showLabel && <span className="ml-2">Sincronizando...</span>}
+        </>
+      ) : synced ? (
+        <>
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          {showLabel && <span className="ml-2">Sincronizado!</span>}
+        </>
+      ) : (
+        <>
+          <Calendar className="h-4 w-4" />
+          {showLabel && <span className="ml-2">Sincronizar</span>}
+        </>
+      )}
+    </Button>
+  )
+}
+
+Hook Automático de Sincronização
+
+// hooks/use-google-calendar-sync.ts
+
+import { useEffect } from 'react'
+import { useSession } from 'next-auth/react'
+
+export function useGoogleCalendarSync(
+  type: 'trip' | 'payment' | 'birthday',
+  id: string,
+  enabled: boolean = true
+) {
+  const { data: session } = useSession()
+
+  useEffect(() => {
+    if (!enabled || !session?.user?.googleCalendarEnabled || !id) {
+      return
+    }
+
+    const syncEvent = async () => {
+      try {
+        await fetch('/api/google-calendar/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, id }),
+        })
+      } catch (error) {
+        console.error('Erro ao sincronizar automaticamente:', error)
+      }
+    }
+
+    // Sincronizar após 2 segundos (debounce)
+    const timer = setTimeout(syncEvent, 2000)
+
+    return () => clearTimeout(timer)
+  }, [type, id, enabled, session])
+}
+
+
+Adicionar Sincronização Automática nas Páginas
+
+// Exemplo: app/(dashboard)/dashboard/trips/[id]/page.tsx
+
+'use client'
+
+import { useGoogleCalendarSync } from '@/hooks/use-google-calendar-sync'
+import { GoogleCalendarSyncButton } from '@/components/google-calendar/sync-button'
+
+export default function TripDetailsPage({ params }: { params: { id: string } }) {
+  const tripId = params.id
+
+  // Sincronizar automaticamente quando a página carregar
+  useGoogleCalendarSync('trip', tripId, true)
+
+  return (
+    <div>
+      {/* ... conteúdo da página ... */}
+      
+      {/* Botão de sincronização manual */}
+      <GoogleCalendarSyncButton type="trip" id={tripId} />
+    </div>
+  )
+}
+
+
+WEBHOOKS E SINCRONIZAÇÃO EM TEMPO REAL
+
+// lib/google-calendar/auto-sync.ts
+
+import { CalendarSyncService } from './sync-service'
+import { prisma } from '@/lib/prisma'
+
+export class AutoSyncService {
+  // Sincronizar quando uma viagem for criada/atualizada
+  static async onTripChange(tripId: string) {
+    try {
+      await CalendarSyncService.syncTrip(tripId)
+      console.log(`✅ Viagem ${tripId} sincronizada automaticamente`)
+    } catch (error) {
+      console.error('Erro na sincronização automática:', error)
+    }
+  }
+
+  // Sincronizar quando um pagamento for criado/atualizado
+  static async onPaymentChange(revenueId: string) {
+    try {
+      await CalendarSyncService.syncPayment(revenueId)
+      console.log(`✅ Pagamento ${revenueId} sincronizado automaticamente`)
+    } catch (error) {
+      console.error('Erro na sincronização automática:', error)
+    }
+  }
+
+  // Sincronizar quando um cliente for criado/atualizado
+  static async onCustomerChange(customerId: string) {
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { id: customerId },
+        select: { birth_date: true },
+      })
+
+      if (customer?.birth_date) {
+        await CalendarSyncService.syncBirthday(customerId)
+        console.log(`✅ Aniversário sincronizado automaticamente`)
+      }
+    } catch (error) {
+      console.error('Erro na sincronização automática:', error)
+    }
+  }
+}
+
+
+IMPLEMENTAR - GOOGLE CALENDAR
+
+ INTEGRAÇÃO GOOGLE CALENDAR
+
+ AUTENTICAÇÃO
+├──  OAuth 2.0 configurado
+├──  Refresh token automático
+├──  Conexão/Desconexão
+└──  Verificação de status
+
+ SINCRONIZAÇÃO
+├──  Viagens (Agência/Vendedor/Cliente)
+├──  Pagamentos (Agência/Vendedor/Cliente)
+├──  Aniversários (Agência/Vendedor)
+├──  Sincronização manual
+├──  Sincronização automática
+└──  Sincronização em lote
+
+ INTERFACE
+├──  Página de configurações
+├──  Botão de sincronização rápida
+├──  Status da conexão
+├──  Contador de eventos
+└──  Última sincronização
+
+ APIS
+├──  GET /api/google-calendar/connect
+├──  GET /api/google-calendar/callback
+├──  POST /api/google-calendar/disconnect
+├──  POST /api/google-calendar/sync
+└──  GET /api/google-calendar/status
+
+ EVENTOS CRIADOS
+├──  🚌 Viagens com detalhes
+├──  💰 Pagamentos com lembretes
+├──  🎂 Aniversários recorrentes
+└──  📧 Notificações por email
+
+Sistema completo de integração com Google Calendar.
+

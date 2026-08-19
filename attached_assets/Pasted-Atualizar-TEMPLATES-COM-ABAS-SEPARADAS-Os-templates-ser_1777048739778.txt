@@ -1,0 +1,683 @@
+Atualizar TEMPLATES COM ABAS SEPARADAS
+
+Os templates seram exibidos com abas separadas (Piso Superior / Piso Inferior) mas unificados no sistema de reserva.
+
+COMPONENTE DE PREVIEW COM ABAS
+
+// components/seats/tabbed-seat-preview.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ArrowUp, ArrowDown, Bus } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+interface TabbedSeatPreviewProps {
+  layout: any
+  busType: string
+  totalSeats: number
+  upperDeckSeats?: number
+  lowerDeckSeats?: number
+  compact?: boolean
+}
+
+export function TabbedSeatPreview({
+  layout,
+  busType,
+  totalSeats,
+  upperDeckSeats,
+  lowerDeckSeats,
+  compact = false,
+}: TabbedSeatPreviewProps) {
+  const [currentTab, setCurrentTab] = useState<'upper' | 'lower' | 'single'>('upper')
+  const isDoubleDecker = busType === 'DOUBLE_DECKER'
+
+  const renderSeat = (cell: string, rowIndex: number, colIndex: number) => {
+    if (cell === 'AISLE') {
+      return (
+        <div
+          key={`aisle-${rowIndex}-${colIndex}`}
+          className={cn(
+            'flex items-center justify-center',
+            compact ? 'w-7 h-7' : 'w-9 h-9'
+          )}
+        >
+          <div className="w-0.5 h-full bg-gray-300" />
+        </div>
+      )
+    }
+
+    if (cell === 'X') {
+      return (
+        <div
+          key={`empty-${rowIndex}-${colIndex}`}
+          className={cn(compact ? 'w-7 h-7' : 'w-9 h-9')}
+        />
+      )
+    }
+
+    const seatNumber = cell.replace(/[PS]/g, '')
+    const isPremium = cell.startsWith('P')
+    const isTable = cell.startsWith('S')
+
+    return (
+      <div
+        key={`seat-${rowIndex}-${colIndex}`}
+        className={cn(
+          'rounded flex items-center justify-center font-bold shadow-sm',
+          compact ? 'w-7 h-7 text-[10px]' : 'w-9 h-9 text-xs',
+          isPremium && 'bg-yellow-400 text-yellow-900',
+          isTable && 'bg-cyan-400 text-cyan-900',
+          !isPremium && !isTable && 'bg-gray-200 text-gray-700'
+        )}
+      >
+        {seatNumber}
+      </div>
+    )
+  }
+
+  const renderDeck = (deckLayout: any, deckName: string, deckLabel: string) => {
+    if (!deckLayout) return null
+
+    return (
+      <div className="space-y-3">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-2 bg-gradient-to-r from-gray-700 to-gray-800 text-white rounded-lg">
+          <div className="flex items-center gap-2">
+            {deckName === 'upper' && <ArrowUp className="h-4 w-4" />}
+            {deckName === 'lower' && <ArrowDown className="h-4 w-4" />}
+            {deckName === 'single' && <Bus className="h-4 w-4" />}
+            <span className="font-bold text-sm">{deckLabel}</span>
+          </div>
+          {deckName === 'upper' && upperDeckSeats && (
+            <Badge variant="secondary" className="bg-white/20 text-white text-xs">
+              {upperDeckSeats} lugares
+            </Badge>
+          )}
+          {deckName === 'lower' && lowerDeckSeats && (
+            <Badge variant="secondary" className="bg-white/20 text-white text-xs">
+              {lowerDeckSeats} lugares
+            </Badge>
+          )}
+        </div>
+
+        {/* Grid */}
+        <div className={cn(
+          'p-4 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border-2 border-gray-200',
+          compact && 'p-3'
+        )}>
+          {/* Motorista (apenas superior ou único) */}
+          {(deckName === 'upper' || deckName === 'single') && (
+            <div className="flex justify-end mb-3">
+              <div className="px-3 py-1 bg-gray-800 text-white text-[10px] font-bold rounded">
+                MOTORISTA
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            {deckLayout.layout.map((row: string[], rowIndex: number) => (
+              <div key={rowIndex} className="flex justify-center gap-1.5">
+                {row.map((cell: string, colIndex: number) => renderSeat(cell, rowIndex, colIndex))}
+              </div>
+            ))}
+          </div>
+
+          {/* Entrada (superior ou único) */}
+          {(deckName === 'upper' || deckName === 'single') && (
+            <div className="mt-3 flex justify-center">
+              <div className="px-3 py-1 bg-yellow-400 text-yellow-900 text-[10px] font-bold rounded">
+                ← ENTRADA
+              </div>
+            </div>
+          )}
+
+          {/* Banheiro (inferior) */}
+          {deckName === 'lower' && (
+            <div className="mt-3 flex justify-center">
+              <div className="px-3 py-1 bg-blue-600 text-white text-[10px] font-bold rounded">
+                🚻 BANHEIRO
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (!isDoubleDecker) {
+    // REPARTIÇÃO ÚNICA
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <Badge variant="outline" className="text-xs">
+            {totalSeats} lugares
+          </Badge>
+        </div>
+        {renderDeck(layout.singleDeck, 'single', 'FRENTE DO ÔNIBUS')}
+      </div>
+    )
+  }
+
+  // DOUBLE DECKER COM ABAS
+  return (
+    <div className="space-y-3">
+      {/* Info Total */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className="text-xs">
+            Double Decker
+          </Badge>
+          <span className="text-xs text-gray-600">
+            {totalSeats} lugares total
+          </span>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <Tabs value={currentTab} onValueChange={(v: any) => setCurrentTab(v)}>
+        <TabsList className="grid w-full grid-cols-2 h-11 bg-gray-100">
+          <TabsTrigger
+            value="upper"
+            className="flex items-center gap-2 text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm"
+          >
+            <ArrowUp className="h-4 w-4" />
+            <span>Piso Superior</span>
+            {upperDeckSeats && (
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1.5 py-0">
+                {upperDeckSeats}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger
+            value="lower"
+            className="flex items-center gap-2 text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm"
+          >
+            <ArrowDown className="h-4 w-4" />
+            <span>Piso Inferior</span>
+            {lowerDeckSeats && (
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1.5 py-0">
+                {lowerDeckSeats}
+              </Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="upper" className="mt-3">
+          {renderDeck(layout.upperDeck, 'upper', '🔼 PISO SUPERIOR — FRENTE')}
+        </TabsContent>
+
+        <TabsContent value="lower" className="mt-3">
+          {renderDeck(layout.lowerDeck, 'lower', '🔽 PISO INFERIOR — FRENTE')}
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+CARD DE TEMPLATE ATUALIZADO
+
+// components/bus/template-card-tabbed.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Bus, Users, Layers, Eye, Check } from 'lucide-react'
+import { TabbedSeatPreview } from '@/components/seats/tabbed-seat-preview'
+
+interface TemplateCardTabbedProps {
+  template: any
+  onSelect: (template: any) => void
+}
+
+export function TemplateCardTabbed({ template, onSelect }: TemplateCardTabbedProps) {
+  const [showPreview, setShowPreview] = useState(false)
+
+  const getBusTypeLabel = (type: string) => {
+    const labels: Record<string, string> = {
+      DOUBLE_DECKER: 'Double Decker',
+      CONVENTIONAL: 'Convencional',
+      SEMI_LEITO: 'Semi-Leito',
+      LEITO: 'Leito',
+      EXECUTIVE: 'Executivo',
+    }
+    return labels[type] || type
+  }
+
+  const getBusTypeColor = (type: string) => {
+    const colors: Record<string, string> = {
+      DOUBLE_DECKER: 'bg-purple-100 text-purple-700 border-purple-300',
+      CONVENTIONAL: 'bg-blue-100 text-blue-700 border-blue-300',
+      SEMI_LEITO: 'bg-green-100 text-green-700 border-green-300',
+      LEITO: 'bg-orange-100 text-orange-700 border-orange-300',
+      EXECUTIVE: 'bg-red-100 text-red-700 border-red-300',
+    }
+    return colors[type] || 'bg-gray-100 text-gray-700 border-gray-300'
+  }
+
+  return (
+    <>
+      <Card className="p-5 hover:shadow-xl transition-all duration-300 border-2 hover:border-blue-400 cursor-pointer group">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="p-3 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg shadow-md group-hover:scale-110 transition-transform">
+            <Bus className="h-7 w-7 text-white" />
+          </div>
+          <Badge className={`${getBusTypeColor(template.bus_type)} border text-xs`}>
+            {getBusTypeLabel(template.bus_type)}
+          </Badge>
+        </div>
+
+        {/* Nome */}
+        <h3 className="text-lg font-bold mb-3 text-gray-900 group-hover:text-blue-600 transition-colors">
+          {template.name}
+        </h3>
+
+        {/* Informações */}
+        <div className="space-y-2 mb-4">
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <Users className="h-4 w-4 text-blue-500" />
+            <span className="font-semibold">{template.total_seats} lugares</span>
+          </div>
+
+          {template.has_upper_deck && template.has_lower_deck && (
+            <div className="flex items-center gap-2 text-xs text-gray-600">
+              <Layers className="h-4 w-4 text-purple-500" />
+              <span>
+                Superior: {template.upper_deck_seats} • Inferior: {template.lower_deck_seats}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Preview Compacto com Abas */}
+        <div className="mb-4">
+          <TabbedSeatPreview
+            layout={template.config}
+            busType={template.bus_type}
+            totalSeats={template.total_seats}
+            upperDeckSeats={template.upper_deck_seats}
+            lowerDeckSeats={template.lower_deck_seats}
+            compact={true}
+          />
+        </div>
+
+        {/* Botões */}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1 text-xs"
+            onClick={(e) => {
+              e.stopPropagation()
+              setShowPreview(true)
+            }}
+          >
+            <Eye className="h-3 w-3 mr-1" />
+            Ver Completo
+          </Button>
+          <Button
+            size="sm"
+            className="flex-1 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-xs"
+            onClick={() => onSelect(template)}
+          >
+            <Check className="h-3 w-3 mr-1" />
+            Selecionar
+          </Button>
+        </div>
+      </Card>
+
+      {/* Modal de Preview Completo */}
+      <Dialog open={showPreview} onOpenChange={setShowPreview}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-2xl flex items-center gap-2">
+              <Bus className="h-6 w-6 text-blue-600" />
+              {template.name}
+            </DialogTitle>
+            <DialogDescription>
+              Visualização completa do layout de assentos
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-4">
+            <TabbedSeatPreview
+              layout={template.config}
+              busType={template.bus_type}
+              totalSeats={template.total_seats}
+              upperDeckSeats={template.upper_deck_seats}
+              lowerDeckSeats={template.lower_deck_seats}
+              compact={false}
+            />
+          </div>
+
+          {/* Legenda */}
+          <Card className="p-3 bg-gray-50 border border-gray-200 mt-4">
+            <p className="text-xs font-semibold text-gray-700 mb-2">Legenda:</p>
+            <div className="flex items-center gap-4 text-xs">
+              <div className="flex items-center gap-1.5">
+                <div className="w-6 h-6 bg-gray-200 rounded" />
+                <span className="text-gray-600">Padrão</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-6 h-6 bg-yellow-400 rounded" />
+                <span className="text-gray-600">VIP</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-6 h-6 bg-cyan-400 rounded" />
+                <span className="text-gray-600">Mesa/Sofá</span>
+              </div>
+            </div>
+          </Card>
+
+          <div className="flex justify-end gap-2 mt-6">
+            <Button variant="outline" onClick={() => setShowPreview(false)}>
+              Fechar
+            </Button>
+            <Button
+              className="bg-gradient-to-r from-blue-600 to-blue-700"
+              onClick={() => {
+                setShowPreview(false)
+                onSelect(template)
+              }}
+            >
+              <Check className="h-4 w-4 mr-2" />
+              Selecionar Template
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+PÁGINA DE SELEÇÃO ATUALIZADA
+
+// app/(dashboard)/dashboard/bus-models/new/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Badge } from '@/components/ui/badge'
+import { ArrowLeft, Check, Loader2, Filter } from 'lucide-react'
+import { toast } from 'sonner'
+import { TemplateCardTabbed } from '@/components/bus/template-card-tabbed'
+
+export default function NewBusModelPage() {
+  const router = useRouter()
+  const [templates, setTemplates] = useState<any[]>([])
+  const [filteredTemplates, setFilteredTemplates] = useState<any[]>([])
+  const [selectedTemplate, setSelectedTemplate] = useState<any>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [customName, setCustomName] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(true)
+  const [filterType, setFilterType] = useState<string>('all')
+
+  useEffect(() => {
+    loadTemplates()
+  }, [])
+
+  useEffect(() => {
+    if (filterType === 'all') {
+      setFilteredTemplates(templates)
+    } else {
+      setFilteredTemplates(templates.filter((t) => t.bus_type === filterType))
+    }
+  }, [filterType, templates])
+
+  const loadTemplates = async () => {
+    try {
+      setIsLoadingTemplates(true)
+      const response = await fetch('/api/bus-models/templates')
+      const data = await response.json()
+      setTemplates(data.templates)
+      setFilteredTemplates(data.templates)
+    } catch (error) {
+      console.error('Erro ao carregar templates:', error)
+      toast.error('Erro ao carregar templates')
+    } finally {
+      setIsLoadingTemplates(false)
+    }
+  }
+
+  const handleSelectTemplate = (template: any) => {
+    setSelectedTemplate(template)
+    setCustomName(template.name)
+    setIsModalOpen(true)
+  }
+
+  const handleCreateModel = async () => {
+    if (!customName.trim()) {
+      toast.error('Digite um nome para o modelo')
+      return
+    }
+
+    try {
+      setIsLoading(true)
+
+      const response = await fetch('/api/bus-models/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          templateKey: selectedTemplate.id,
+          customName: customName.trim(),
+        }),
+      })
+
+      if (response.ok) {
+        toast.success('Modelo criado com sucesso!')
+        router.push('/dashboard/bus-models')
+      } else {
+        const data = await response.json()
+        toast.error(data.error || 'Erro ao criar modelo')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao criar modelo')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoadingTemplates) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+        <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
+        <p className="text-gray-600 font-medium">Carregando templates...</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <Button
+          variant="ghost"
+          onClick={() => router.back()}
+          className="mb-2 -ml-2"
+        >
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Voltar
+        </Button>
+        <h1 className="text-3xl font-bold text-gray-900">
+          Criar Modelo de Ônibus
+        </h1>
+        <p className="text-gray-600 mt-1">
+          Escolha um template pré-configurado com visualização em abas
+        </p>
+      </div>
+
+      {/* Filtros e Info */}
+      <div className="flex items-center justify-between gap-4">
+        <Card className="flex-1 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-600 mb-1">Templates Disponíveis</p>
+              <p className="text-2xl font-bold text-blue-600">
+                {filteredTemplates.length}
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-gray-500" />
+          <Select value={filterType} onValueChange={setFilterType}>
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="Filtrar por tipo" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos os tipos</SelectItem>
+              <SelectItem value="DOUBLE_DECKER">Double Decker</SelectItem>
+              <SelectItem value="CONVENTIONAL">Convencional</SelectItem>
+              <SelectItem value="EXECUTIVE">Executivo</SelectItem>
+              <SelectItem value="SEMI_LEITO">Semi-Leito</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* Templates Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {filteredTemplates.map((template) => (
+          <TemplateCardTabbed
+            key={template.id}
+            template={template}
+            onSelect={handleSelectTemplate}
+          />
+        ))}
+      </div>
+
+      {filteredTemplates.length === 0 && (
+        <Card className="p-12 text-center">
+          <p className="text-gray-500">Nenhum template encontrado com este filtro</p>
+        </Card>
+      )}
+
+      {/* Modal de Confirmação */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-2xl">Criar Modelo de Ônibus</DialogTitle>
+            <DialogDescription>
+              Personalize o nome do modelo antes de criar
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedTemplate && (
+            <div className="space-y-4 mt-4">
+              {/* Template Info */}
+              <Card className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-blue-600 rounded-lg">
+                    <Bus className="h-6 w-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-bold text-lg text-gray-900">
+                      {selectedTemplate.name}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      {selectedTemplate.total_seats} lugares •{' '}
+                      {selectedTemplate.has_upper_deck && selectedTemplate.has_lower_deck
+                        ? `Superior: ${selectedTemplate.upper_deck_seats} • Inferior: ${selectedTemplate.lower_deck_seats}`
+                        : 'Andar Único'}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Custom Name */}
+              <div>
+                <Label htmlFor="customName" className="text-base font-semibold">
+                  Nome do Modelo *
+                </Label>
+                <Input
+                  id="customName"
+                  value={customName}
+                  onChange={(e) => setCustomName(e.target.value)}
+                  placeholder="Ex: Ônibus Executivo Turismo"
+                  className="mt-2 text-base"
+                  autoFocus
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Este nome será usado para identificar o modelo no sistema
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="mt-6">
+            <Button
+              variant="outline"
+              onClick={() => setIsModalOpen(false)}
+              disabled={isLoading}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleCreateModel}
+              disabled={isLoading || !customName.trim()}
+              className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Criando...
+                </>
+              ) : (
+                <>
+                  <Check className="h-4 w-4 mr-2" />
+                  Criar Modelo
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+ Abas Separadas - Piso Superior / Piso Inferior
+ Preview Compacto - Direto no card
+ Modal Completo - Com abas também
+ Badges Informativos - Quantidade de assentos por andar
+ Filtros - Por tipo de ônibus
+ Unificado no Sistema - Mesma estrutura de dados
+
+A diferença é que agora a visualização usa TABS (abas) em vez de mostrar os dois andares juntos! 

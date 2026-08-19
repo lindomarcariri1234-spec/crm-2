@@ -1,0 +1,5072 @@
+PAINEL DE SUPERADMINISTRAÇÃO
+
+1. Estrutura de Arquivos
+2. Schema Prisma (Tabelas Necessárias)
+3. API Routes Completas
+4. Páginas do Painel
+5. Componentes Reutilizáveis
+6. Hooks e Utilitários
+7. Segurança e Proteção
+8. Dashboard Principal
+9. Métricas e Analytics
+10. Testes e Deploy
+
+1. ESTRUTURA DE ARQUIVOS
+
+visitecrm/
+├── app/
+│   ├── (super-admin)/
+│   │   ├── layout.tsx                 # Layout do Super Admin
+│   │   └── admin/
+│   │       ├── page.tsx               # Dashboard principal
+│   │       ├── agencies/
+│   │       │   ├── page.tsx           # Lista de agências
+│   │       │   ├── [id]/
+│   │       │   │   ├── page.tsx       # Detalhes da agência
+│   │       │   │   ├── edit/
+│   │       │   │   │   └── page.tsx   # Editar agência
+│   │       │   │   ├── users/
+│   │       │   │   │   └── page.tsx   # Usuários da agência
+│   │       │   │   ├── metrics/
+│   │       │   │   │   └── page.tsx   # Métricas da agência
+│   │       │   │   └── logs/
+│   │       │   │       └── page.tsx   # Logs da agência
+│   │       │   └── new/
+│   │       │       └── page.tsx       # Nova agência
+│   │       ├── plans/
+│   │       │   ├── page.tsx           # Gerenciar planos
+│   │       │   ├── [id]/
+│   │       │   │   └── page.tsx       # Editar plano
+│   │       │   └── new/
+│   │       │       └── page.tsx       # Novo plano
+│   │       ├── billing/
+│   │       │   ├── page.tsx           # Faturamento geral
+│   │       │   ├── invoices/
+│   │       │   │   └── page.tsx       # Faturas
+│   │       │   └── [tenantId]/
+│   │       │       └── page.tsx       # Faturamento por agência
+│   │       ├── metrics/
+│   │       │   ├── page.tsx           # Métricas do SaaS
+│   │       │   ├── revenue/
+│   │       │   │   └── page.tsx       # Receita
+│   │       │   ├── churn/
+│   │       │   │   └── page.tsx       # Taxa de churn
+│   │       │   └── growth/
+│   │       │       └── page.tsx       # Crescimento
+│   │       ├── users/
+│   │       │   ├── page.tsx           # Todos os usuários
+│   │       │   └── [id]/
+│   │       │       └── page.tsx       # Detalhes do usuário
+│   │       ├── logs/
+│   │       │   ├── page.tsx           # Logs de auditoria
+│   │       │   └── [id]/
+│   │       │       └── page.tsx       # Detalhes do log
+│   │       ├── integrations/
+│   │       │   ├── page.tsx           # Integrações globais
+│   │       │   └── [type]/
+│   │       │       └── page.tsx       # Configurar integração
+│   │       ├── settings/
+│   │       │   ├── page.tsx           # Configurações globais
+│   │       │   ├── email/
+│   │       │   │   └── page.tsx       # Config. email
+│   │       │   ├── security/
+│   │       │   │   └── page.tsx       # Config. segurança
+│   │       │   └── features/
+│   │       │       └── page.tsx       # Feature flags
+│   │       └── support/
+│   │           ├── page.tsx           # Tickets de suporte
+│   │           └── [id]/
+│   │               └── page.tsx       # Detalhes do ticket
+│   │
+│   └── api/
+│       └── admin/
+│           ├── agencies/
+│           │   ├── route.ts
+│           │   ├── [id]/
+│           │   │   ├── route.ts
+│           │   │   ├── suspend/
+│           │   │   │   └── route.ts
+│           │   │   ├── activate/
+│           │   │   │   └── route.ts
+│           │   │   └── stats/
+│           │   │       └── route.ts
+│           │   └── stats/
+│           │       └── route.ts
+│           ├── plans/
+│           │   ├── route.ts
+│           │   └── [id]/
+│           │       └── route.ts
+│           ├── billing/
+│           │   ├── route.ts
+│           │   ├── invoices/
+│           │   │   └── route.ts
+│           │   └── [tenantId]/
+│           │       └── route.ts
+│           ├── metrics/
+│           │   ├── overview/
+│           │   │   └── route.ts
+│           │   ├── revenue/
+│           │   │   └── route.ts
+│           │   ├── churn/
+│           │   │   └── route.ts
+│           │   └── mrr/
+│           │       └── route.ts
+│           ├── users/
+│           │   ├── route.ts
+│           │   └── [id]/
+│           │       └── route.ts
+│           └── logs/
+│               ├── route.ts
+│               └── [id]/
+│                   └── route.ts
+│
+├── components/
+│   └── super-admin/
+│       ├── layout/
+│       │   ├── super-admin-header.tsx
+│       │   ├── super-admin-sidebar.tsx
+│       │   └── super-admin-breadcrumb.tsx
+│       ├── dashboard/
+│       │   ├── kpi-cards.tsx
+│       │   ├── revenue-chart.tsx
+│       │   ├── agencies-growth-chart.tsx
+│       │   ├── recent-agencies.tsx
+│       │   └── system-health.tsx
+│       ├── agencies/
+│       │   ├── agency-list.tsx
+│       │   ├── agency-card.tsx
+│       │   ├── agency-form.tsx
+│       │   ├── agency-stats.tsx
+│       │   └── agency-actions.tsx
+│       ├── plans/
+│       │   ├── plan-list.tsx
+│       │   ├── plan-card.tsx
+│       │   └── plan-form.tsx
+│       ├── billing/
+│       │   ├── billing-overview.tsx
+│       │   ├── invoice-list.tsx
+│       │   └── payment-history.tsx
+│       ├── metrics/
+│       │   ├── saas-dashboard.tsx
+│       │   ├── revenue-chart.tsx
+│       │   ├── churn-rate.tsx
+│       │   ├── mrr-chart.tsx
+│       │   └── ltv-chart.tsx
+│       ├── users/
+│       │   ├── user-list.tsx
+│       │   └── user-detail.tsx
+│       └── logs/
+│           ├── audit-log-table.tsx
+│           └── log-detail-modal.tsx
+│
+└── lib/
+    ├── super-admin/
+    │   ├── metrics.ts
+    │   ├── billing.ts
+    │   └── reports.ts
+    └── hooks/
+        ├── use-super-admin.ts
+        └── use-admin-metrics.ts
+
+2. SCHEMA PRISMA (TABELAS NECESSÁRIAS)
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════════
+// TABELAS PARA SUPER ADMIN
+// ═══════════════════════════════════════════════════════════════
+
+model Tenant {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique
+  cnpj            String?   @unique
+  email           String
+  phone           String?
+  logo            String?
+  
+  // Endereço
+  address         String?
+  city            String?
+  state           String?
+  zip_code        String?
+  country         String    @default("BR")
+  
+  // Configurações
+  settings        Json?
+  
+  // Plano e Faturamento
+  plan_id         String?
+  plan            Plan?     @relation(fields: [plan_id], references: [id])
+  plan_expires_at DateTime?
+  billing_cycle   String    @default("monthly") // monthly, yearly
+  
+  // Status
+  status          String    @default("active") // active, suspended, cancelled
+  is_active       Boolean   @default(true)
+  
+  // Métricas
+  total_users     Int       @default(0)
+  total_clients   Int       @default(0)
+  total_revenue   Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // Limites
+  max_users       Int       @default(5)
+  max_clients     Int       @default(100)
+  max_trips       Int       @default(50)
+  
+  // Datas
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  activated_at    DateTime?
+  suspended_at    DateTime?
+  cancelled_at    DateTime?
+  
+  // Relações
+  users           User[]
+  clients         Client[]
+  trips           Trip[]
+  reservations    Reservation[]
+  invoices        Invoice[]
+  subscriptions   Subscription[]
+  
+  @@map("tenants")
+}
+
+model Plan {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique
+  description     String?
+  
+  // Preços
+  price_monthly   Decimal   @db.Decimal(10, 2)
+  price_yearly    Decimal   @db.Decimal(10, 2)
+  
+  // Limites
+  max_users       Int
+  max_clients     Int
+  max_trips       Int
+  max_storage_gb  Int
+  
+  // Features
+  features        Json      // Array de features
+  
+  // Status
+  is_active       Boolean   @default(true)
+  is_featured     Boolean   @default(false)
+  
+  // Ordem de exibição
+  order           Int       @default(0)
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  tenants         Tenant[]
+  subscriptions   Subscription[]
+  
+  @@map("plans")
+}
+
+model Subscription {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  plan_id         String
+  plan            Plan      @relation(fields: [plan_id], references: [id])
+  
+  status          String    // active, cancelled, expired, trial
+  
+  // Datas
+  started_at      DateTime
+  expires_at      DateTime?
+  cancelled_at    DateTime?
+  
+  // Faturamento
+  billing_cycle   String    // monthly, yearly
+  amount          Decimal   @db.Decimal(10, 2)
+  
+  // Trial
+  is_trial        Boolean   @default(false)
+  trial_ends_at   DateTime?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  invoice_number  String    @unique
+  
+  // Valores
+  amount          Decimal   @db.Decimal(10, 2)
+  tax             Decimal   @default(0) @db.Decimal(10, 2)
+  total           Decimal   @db.Decimal(10, 2)
+  
+  // Status
+  status          String    @default("pending") // pending, paid, overdue, cancelled
+  
+  // Datas
+  issue_date      DateTime  @default(now())
+  due_date        DateTime
+  paid_at         DateTime?
+  
+  // Pagamento
+  payment_method  String?
+  payment_id      String?
+  
+  // Dados
+  items           Json      // Array de itens
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@map("invoices")
+}
+
+model SystemMetric {
+  id              String    @id @default(cuid())
+  
+  metric_type     String    // revenue, users, agencies, churn, mrr
+  metric_value    Decimal   @db.Decimal(10, 2)
+  
+  // Período
+  period_type     String    // daily, weekly, monthly, yearly
+  period_date     DateTime
+  
+  // Metadata
+  metadata        Json?
+  
+  created_at      DateTime  @default(now())
+  
+  @@unique([metric_type, period_type, period_date])
+  @@map("system_metrics")
+}
+
+model FeatureFlag {
+  id              String    @id @default(cuid())
+  
+  name            String    @unique
+  description     String?
+  
+  is_enabled      Boolean   @default(false)
+  
+  // Rollout
+  rollout_percentage Int    @default(0) // 0-100
+  
+  // Tenants específicos
+  enabled_tenants String[]  // Array de tenant_ids
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@map("feature_flags")
+}
+
+// Atualizar model User para incluir Super Admin
+model User {
+  // ... campos existentes ...
+  
+  // Super Admin
+  is_super_admin  Boolean   @default(false)
+  
+  // ... resto do model ...
+}
+
+Executar migrations:
+
+npx prisma generate
+npx prisma db push
+
+3. API ROUTES COMPLETAS
+
+// app/api/admin/metrics/overview/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    // 🔒 Verificar se é Super Admin
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json(
+        { error: 'Acesso negado' },
+        { status: 403 }
+      )
+    }
+
+    const now = new Date()
+    const startOfCurrentMonth = startOfMonth(now)
+    const endOfCurrentMonth = endOfMonth(now)
+    const startOfLastMonth = startOfMonth(subMonths(now, 1))
+    const endOfLastMonth = endOfMonth(subMonths(now, 1))
+
+    // Buscar métricas em paralelo
+    const [
+      // Total de agências
+      totalAgencies,
+      activeAgencies,
+      suspendedAgencies,
+      newAgenciesThisMonth,
+      newAgenciesLastMonth,
+      
+      // Total de usuários
+      totalUsers,
+      activeUsers,
+      newUsersThisMonth,
+      
+      // Receita
+      totalRevenue,
+      revenueThisMonth,
+      revenueLastMonth,
+      
+      // MRR (Monthly Recurring Revenue)
+      mrr,
+      
+      // Churn
+      cancelledThisMonth,
+      
+    ] = await Promise.all([
+      // Agências
+      prisma.tenant.count(),
+      prisma.tenant.count({ where: { status: 'active' } }),
+      prisma.tenant.count({ where: { status: 'suspended' } }),
+      prisma.tenant.count({
+        where: {
+          created_at: {
+            gte: startOfCurrentMonth,
+            lte: endOfCurrentMonth,
+          },
+        },
+      }),
+      prisma.tenant.count({
+        where: {
+          created_at: {
+            gte: startOfLastMonth,
+            lte: endOfLastMonth,
+          },
+        },
+      }),
+      
+      // Usuários
+      prisma.user.count(),
+      prisma.user.count({ where: { is_active: true } }),
+      prisma.user.count({
+        where: {
+          created_at: {
+            gte: startOfCurrentMonth,
+            lte: endOfCurrentMonth,
+          },
+        },
+      }),
+      
+      // Receita
+      prisma.invoice.aggregate({
+        where: { status: 'paid' },
+        _sum: { total: true },
+      }),
+      prisma.invoice.aggregate({
+        where: {
+          status: 'paid',
+          paid_at: {
+            gte: startOfCurrentMonth,
+            lte: endOfCurrentMonth,
+          },
+        },
+        _sum: { total: true },
+      }),
+      prisma.invoice.aggregate({
+        where: {
+          status: 'paid',
+          paid_at: {
+            gte: startOfLastMonth,
+            lte: endOfLastMonth,
+          },
+        },
+        _sum: { total: true },
+      }),
+      
+      // MRR
+      prisma.subscription.aggregate({
+        where: {
+          status: 'active',
+          billing_cycle: 'monthly',
+        },
+        _sum: { amount: true },
+      }),
+      
+      // Churn
+      prisma.subscription.count({
+        where: {
+          status: 'cancelled',
+          cancelled_at: {
+            gte: startOfCurrentMonth,
+            lte: endOfCurrentMonth,
+          },
+        },
+      }),
+    ])
+
+    // Calcular crescimento
+    const agencyGrowth = newAgenciesLastMonth > 0
+      ? ((newAgenciesThisMonth - newAgenciesLastMonth) / newAgenciesLastMonth) * 100
+      : 0
+
+    const revenueGrowth = Number(revenueLastMonth._sum.total || 0) > 0
+      ? ((Number(revenueThisMonth._sum.total || 0) - Number(revenueLastMonth._sum.total || 0)) / 
+         Number(revenueLastMonth._sum.total || 0)) * 100
+      : 0
+
+    // Calcular churn rate
+    const churnRate = activeAgencies > 0
+      ? (cancelledThisMonth / activeAgencies) * 100
+      : 0
+
+    return NextResponse.json({
+      agencies: {
+        total: totalAgencies,
+        active: activeAgencies,
+        suspended: suspendedAgencies,
+        new_this_month: newAgenciesThisMonth,
+        growth_percentage: agencyGrowth.toFixed(2),
+      },
+      users: {
+        total: totalUsers,
+        active: activeUsers,
+        new_this_month: newUsersThisMonth,
+      },
+      revenue: {
+        total: Number(totalRevenue._sum.total || 0),
+        this_month: Number(revenueThisMonth._sum.total || 0),
+        last_month: Number(revenueLastMonth._sum.total || 0),
+        growth_percentage: revenueGrowth.toFixed(2),
+      },
+      mrr: {
+        current: Number(mrr._sum.amount || 0),
+      },
+      churn: {
+        rate: churnRate.toFixed(2),
+        cancelled_this_month: cancelledThisMonth,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar métricas:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar métricas' },
+      { status: 500 }
+    )
+  }
+}
+
+API: Agências
+
+// app/api/admin/agencies/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { z } from 'zod'
+
+const agencySchema = z.object({
+  name: z.string().min(3),
+  slug: z.string().optional(),
+  cnpj: z.string().optional(),
+  email: z.string().email(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zip_code: z.string().optional(),
+  plan_id: z.string(),
+  max_users: z.number().default(5),
+  max_clients: z.number().default(100),
+  max_trips: z.number().default(50),
+})
+
+// GET - Listar todas as agências
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '20')
+    const search = searchParams.get('search') || ''
+    const status = searchParams.get('status') || ''
+    const planId = searchParams.get('plan_id') || ''
+
+    const skip = (page - 1) * limit
+
+    const where: any = {}
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { cnpj: { contains: search } },
+      ]
+    }
+
+    if (status) {
+      where.status = status
+    }
+
+    if (planId) {
+      where.plan_id = planId
+    }
+
+    const [agencies, total] = await Promise.all([
+      prisma.tenant.findMany({
+        where,
+        include: {
+          plan: true,
+          _count: {
+            select: {
+              users: true,
+              clients: true,
+              trips: true,
+              reservations: true,
+            },
+          },
+        },
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.tenant.count({ where }),
+    ])
+
+    return NextResponse.json({
+      agencies,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar agências:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar agências' },
+      { status: 500 }
+    )
+  }
+}
+
+// POST - Criar nova agência
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const data = agencySchema.parse(body)
+
+    // Gerar slug se não fornecido
+    let slug = data.slug || data.name
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '')
+
+    // Verificar se slug já existe
+    let counter = 1
+    while (await prisma.tenant.findUnique({ where: { slug } })) {
+      slug = `${slug}-${counter}`
+      counter++
+    }
+
+    // Criar agência
+    const agency = await prisma.tenant.create({
+      data: {
+        ...data,
+        slug,
+        status: 'active',
+        is_active: true,
+        activated_at: new Date(),
+      },
+      include: {
+        plan: true,
+      },
+    })
+
+    // Registrar log
+    await prisma.auditLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'create',
+        resource: 'tenant',
+        resource_id: agency.id,
+        metadata: { agency_name: agency.name },
+      },
+    })
+
+    return NextResponse.json(agency, { status: 201 })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: 'Dados inválidos', details: error.errors },
+        { status: 400 }
+      )
+    }
+
+    console.error('Erro ao criar agência:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar agência' },
+      { status: 500 }
+    )
+  }
+}
+
+// app/api/admin/agencies/[id]/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+// GET - Buscar agência por ID
+export async function GET(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const agency = await prisma.tenant.findUnique({
+      where: { id: params.id },
+      include: {
+        plan: true,
+        users: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+            is_active: true,
+            created_at: true,
+          },
+        },
+        subscriptions: {
+          orderBy: { created_at: 'desc' },
+          take: 5,
+        },
+        invoices: {
+          orderBy: { created_at: 'desc' },
+          take: 10,
+        },
+        _count: {
+          select: {
+            users: true,
+            clients: true,
+            trips: true,
+            reservations: true,
+          },
+        },
+      },
+    })
+
+    if (!agency) {
+      return NextResponse.json(
+        { error: 'Agência não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    // Buscar métricas adicionais
+    const [totalRevenue, activeTrips] = await Promise.all([
+      prisma.reservation.aggregate({
+        where: { tenant_id: params.id },
+        _sum: { total_value: true },
+      }),
+      prisma.trip.count({
+        where: {
+          tenant_id: params.id,
+          status: 'ativa',
+        },
+      }),
+    ])
+
+    return NextResponse.json({
+      ...agency,
+      metrics: {
+        total_revenue: Number(totalRevenue._sum.total_value || 0),
+        active_trips: activeTrips,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar agência:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar agência' },
+      { status: 500 }
+    )
+  }
+}
+
+// PATCH - Atualizar agência
+export async function PATCH(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+
+    const agency = await prisma.tenant.update({
+      where: { id: params.id },
+      data: body,
+      include: {
+        plan: true,
+      },
+    })
+
+    // Registrar log
+    await prisma.auditLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'update',
+        resource: 'tenant',
+        resource_id: agency.id,
+        metadata: { changes: body },
+      },
+    })
+
+    return NextResponse.json(agency)
+  } catch (error) {
+    console.error('Erro ao atualizar agência:', error)
+    return NextResponse.json(
+      { error: 'Erro ao atualizar agência' },
+      { status: 500 }
+    )
+  }
+}
+
+// DELETE - Excluir agência
+export async function DELETE(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    // Verificar se agência existe
+    const agency = await prisma.tenant.findUnique({
+      where: { id: params.id },
+    })
+
+    if (!agency) {
+      return NextResponse.json(
+        { error: 'Agência não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    // Excluir agência (cascade irá excluir todos os dados relacionados)
+    await prisma.tenant.delete({
+      where: { id: params.id },
+    })
+
+    // Registrar log
+    await prisma.auditLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'delete',
+        resource: 'tenant',
+        resource_id: params.id,
+        metadata: { agency_name: agency.name },
+      },
+    })
+
+    return NextResponse.json({ message: 'Agência excluída com sucesso' })
+  } catch (error) {
+    console.error('Erro ao excluir agência:', error)
+    return NextResponse.json(
+      { error: 'Erro ao excluir agência' },
+      { status: 500 }
+    )
+  }
+}
+
+// app/api/admin/agencies/[id]/suspend/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const { reason } = body
+
+    const agency = await prisma.tenant.update({
+      where: { id: params.id },
+      data: {
+        status: 'suspended',
+        is_active: false,
+        suspended_at: new Date(),
+      },
+    })
+
+    // Registrar log
+    await prisma.auditLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'suspend',
+        resource: 'tenant',
+        resource_id: agency.id,
+        metadata: { 
+          agency_name: agency.name,
+          reason,
+        },
+      },
+    })
+
+    // TODO: Enviar email notificando suspensão
+
+    return NextResponse.json({
+      message: 'Agência suspensa com sucesso',
+      agency,
+    })
+  } catch (error) {
+    console.error('Erro ao suspender agência:', error)
+    return NextResponse.json(
+      { error: 'Erro ao suspender agência' },
+      { status: 500 }
+    )
+  }
+}
+
+// app/api/admin/agencies/[id]/activate/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const agency = await prisma.tenant.update({
+      where: { id: params.id },
+      data: {
+        status: 'active',
+        is_active: true,
+        activated_at: new Date(),
+        suspended_at: null,
+      },
+    })
+
+    // Registrar log
+    await prisma.auditLog.create({
+      data: {
+        user_id: session.user.id,
+        action: 'activate',
+        resource: 'tenant',
+        resource_id: agency.id,
+        metadata: { agency_name: agency.name },
+      },
+    })
+
+    // TODO: Enviar email notificando reativação
+
+    return NextResponse.json({
+      message: 'Agência ativada com sucesso',
+      agency,
+    })
+  } catch (error) {
+    console.error('Erro ao ativar agência:', error)
+    return NextResponse.json(
+      { error: 'Erro ao ativar agência' },
+      { status: 500 }
+    )
+  }
+}
+
+4. PÁGINAS DO PAINEL
+// app/(super-admin)/admin/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { KPICards } from '@/components/super-admin/dashboard/kpi-cards'
+import { RevenueChart } from '@/components/super-admin/dashboard/revenue-chart'
+import { AgenciesGrowthChart } from '@/components/super-admin/dashboard/agencies-growth-chart'
+import { RecentAgencies } from '@/components/super-admin/dashboard/recent-agencies'
+import { SystemHealth } from '@/components/super-admin/dashboard/system-health'
+
+export default async function SuperAdminDashboard() {
+  const session = await getServerSession(authOptions)
+  
+  // Verificar se é Super Admin
+  if (session?.user?.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  // Buscar métricas da API
+  const response = await fetch(
+    `${process.env.NEXT_PUBLIC_APP_URL}/api/admin/metrics/overview`,
+    {
+      headers: {
+        Cookie: `next-auth.session-token=${session}`,
+      },
+      cache: 'no-store',
+    }
+  )
+
+  const metrics = await response.json()
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold">Painel de Superadministração</h1>
+        <p className="text-gray-600">
+          Visão geral do sistema VisiteCRM
+        </p>
+      </div>
+
+      {/* KPIs */}
+      <KPICards metrics={metrics} />
+
+      {/* Gráficos */}
+      <div className="grid grid-cols-2 gap-6">
+        <RevenueChart />
+        <AgenciesGrowthChart />
+      </div>
+
+      {/* Tabelas */}
+      <div className="grid grid-cols-2 gap-6">
+        <RecentAgencies />
+        <SystemHealth />
+      </div>
+    </div>
+  )
+}
+
+Lista de Agências
+
+// app/(super-admin)/admin/agencies/page.tsx
+
+import { Suspense } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { AgencyList } from '@/components/super-admin/agencies/agency-list'
+import Link from 'next/link'
+import { Plus, Search, Filter } from 'lucide-react'
+
+export default function AgenciesPage({
+  searchParams,
+}: {
+  searchParams: { page?: string; search?: string; status?: string }
+}) {
+  const page = parseInt(searchParams.page || '1')
+  const search = searchParams.search || ''
+  const status = searchParams.status || ''
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold">Agências</h1>
+          <p className="text-gray-600">
+            Gerencie todas as agências do sistema
+          </p>
+        </div>
+        <Link href="/admin/agencies/new">
+          <Button>
+            <Plus className="h-4 w-4 mr-2" />
+            Nova Agência
+          </Button>
+        </Link>
+      </div>
+
+      {/* Filtros */}
+      <div className="flex gap-4">
+        <div className="flex-1 relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Input
+            placeholder="Buscar por nome, email ou CNPJ..."
+            className="pl-10"
+            defaultValue={search}
+          />
+        </div>
+        <Select defaultValue={status}>
+          <SelectTrigger className="w-[200px]">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Todos</SelectItem>
+            <SelectItem value="active">Ativas</SelectItem>
+            <SelectItem value="suspended">Suspensas</SelectItem>
+            <SelectItem value="cancelled">Canceladas</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button variant="outline">
+          <Filter className="h-4 w-4 mr-2" />
+          Filtros
+        </Button>
+      </div>
+
+      {/* Lista */}
+      <Suspense fallback={<div>Carregando...</div>}>
+        <AgencyList page={page} search={search} status={status} />
+      </Suspense>
+    </div>
+  )
+}
+
+Detalhes da Agência
+
+// app/(super-admin)/admin/agencies/[id]/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect, notFound } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { AgencyOverview } from '@/components/super-admin/agencies/agency-overview'
+import { AgencyUsers } from '@/components/super-admin/agencies/agency-users'
+import { AgencyMetrics } from '@/components/super-admin/agencies/agency-metrics'
+import { AgencyBilling } from '@/components/super-admin/agencies/agency-billing'
+import { AgencyLogs } from '@/components/super-admin/agencies/agency-logs'
+import { AgencyActions } from '@/components/super-admin/agencies/agency-actions'
+import Link from 'next/link'
+import { ArrowLeft, Edit, MoreVertical } from 'lucide-react'
+
+export default async function AgencyDetailPage({
+  params,
+}: {
+  params: { id: string }
+}) {
+  const session = await getServerSession(authOptions)
+  
+  if (session?.user?.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  // Buscar agência
+  const agency = await prisma.tenant.findUnique({
+    where: { id: params.id },
+    include: {
+      plan: true,
+      users: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          is_active: true,
+          created_at: true,
+          last_login: true,
+        },
+        orderBy: { created_at: 'desc' },
+      },
+      subscriptions: {
+        orderBy: { created_at: 'desc' },
+        take: 1,
+      },
+      invoices: {
+        orderBy: { created_at: 'desc' },
+        take: 10,
+      },
+      _count: {
+        select: {
+          users: true,
+          clients: true,
+          trips: true,
+          reservations: true,
+        },
+      },
+    },
+  })
+
+  if (!agency) {
+    notFound()
+  }
+
+  // Buscar métricas adicionais
+  const [totalRevenue, activeTrips, lastMonthRevenue] = await Promise.all([
+    prisma.reservation.aggregate({
+      where: { tenant_id: params.id },
+      _sum: { total_value: true },
+    }),
+    prisma.trip.count({
+      where: {
+        tenant_id: params.id,
+        status: 'ativa',
+      },
+    }),
+    prisma.reservation.aggregate({
+      where: {
+        tenant_id: params.id,
+        created_at: {
+          gte: new Date(new Date().setMonth(new Date().getMonth() - 1)),
+        },
+      },
+      _sum: { total_value: true },
+    }),
+  ])
+
+  const statusColors = {
+    active: 'bg-green-100 text-green-800',
+    suspended: 'bg-red-100 text-red-800',
+    cancelled: 'bg-gray-100 text-gray-800',
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <Link href="/admin/agencies">
+            <Button variant="ghost" size="icon">
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+          </Link>
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold">{agency.name}</h1>
+              <Badge className={statusColors[agency.status as keyof typeof statusColors]}>
+                {agency.status === 'active' ? 'Ativa' : 
+                 agency.status === 'suspended' ? 'Suspensa' : 'Cancelada'}
+              </Badge>
+            </div>
+            <p className="text-gray-600">{agency.email}</p>
+          </div>
+        </div>
+        
+        <div className="flex gap-2">
+          <Link href={`/admin/agencies/${agency.id}/edit`}>
+            <Button variant="outline">
+              <Edit className="h-4 w-4 mr-2" />
+              Editar
+            </Button>
+          </Link>
+          <AgencyActions agency={agency} />
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Usuários</div>
+          <div className="text-3xl font-bold">{agency._count.users}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Limite: {agency.max_users}
+          </div>
+        </div>
+        
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Clientes</div>
+          <div className="text-3xl font-bold">{agency._count.clients}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Limite: {agency.max_clients}
+          </div>
+        </div>
+        
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Viagens Ativas</div>
+          <div className="text-3xl font-bold">{activeTrips}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Total: {agency._count.trips}
+          </div>
+        </div>
+        
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Receita Total</div>
+          <div className="text-3xl font-bold">
+            R$ {Number(totalRevenue._sum.total_value || 0).toLocaleString('pt-BR')}
+          </div>
+          <div className="text-xs text-green-600 mt-1">
+            +R$ {Number(lastMonthRevenue._sum.total_value || 0).toLocaleString('pt-BR')} (último mês)
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <Tabs defaultValue="overview" className="w-full">
+        <TabsList>
+          <TabsTrigger value="overview">Visão Geral</TabsTrigger>
+          <TabsTrigger value="users">Usuários ({agency._count.users})</TabsTrigger>
+          <TabsTrigger value="metrics">Métricas</TabsTrigger>
+          <TabsTrigger value="billing">Faturamento</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="mt-6">
+          <AgencyOverview agency={agency} />
+        </TabsContent>
+
+        <TabsContent value="users" className="mt-6">
+          <AgencyUsers users={agency.users} tenantId={agency.id} />
+        </TabsContent>
+
+        <TabsContent value="metrics" className="mt-6">
+          <AgencyMetrics tenantId={agency.id} />
+        </TabsContent>
+
+        <TabsContent value="billing" className="mt-6">
+          <AgencyBilling 
+            agency={agency} 
+            invoices={agency.invoices}
+            subscription={agency.subscriptions[0]}
+          />
+        </TabsContent>
+
+        <TabsContent value="logs" className="mt-6">
+          <AgencyLogs tenantId={agency.id} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+➕ Nova Agência
+
+// app/(super-admin)/admin/agencies/new/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { AgencyForm } from '@/components/super-admin/agencies/agency-form'
+import { Button } from '@/components/ui/button'
+import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
+
+export default async function NewAgencyPage() {
+  const session = await getServerSession(authOptions)
+  
+  if (session?.user?.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  // Buscar planos disponíveis
+  const plans = await prisma.plan.findMany({
+    where: { is_active: true },
+    orderBy: { order: 'asc' },
+  })
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex items-center gap-4">
+        <Link href="/admin/agencies">
+          <Button variant="ghost" size="icon">
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+        </Link>
+        <div>
+          <h1 className="text-3xl font-bold">Nova Agência</h1>
+          <p className="text-gray-600">
+            Cadastre uma nova agência no sistema
+          </p>
+        </div>
+      </div>
+
+      {/* Form */}
+      <div className="max-w-3xl">
+        <AgencyForm plans={plans} />
+      </div>
+    </div>
+  )
+}
+
+📊 Planos
+// app/(super-admin)/admin/plans/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { Button } from '@/components/ui/button'
+import { PlanList } from '@/components/super-admin/plans/plan-list'
+import Link from 'next/link'
+import { Plus } from 'lucide-react'
+
+export default async function PlansPage() {
+  const session = await getServerSession(authOptions)
+  
+  if (session?.user?.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  const plans = await prisma.plan.findMany({
+    include: {
+      _count: {
+        select: {
+          tenants: true,
+          subscriptions: true,
+        },
+      },
+    },
+    orderBy: { order: 'asc' },
+  })
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold">Planos</h1>
+          <p className="text-gray-600">
+            Gerencie os planos de assinatura
+          </p>
+        </div>
+        <Link href="/admin/plans/new">
+          <Button>
+            <Plus className="h-4 w-4 mr-2" />
+            Novo Plano
+          </Button>
+        </Link>
+      </div>
+
+      {/* Lista de Planos */}
+      <PlanList plans={plans} />
+    </div>
+  )
+}
+
+💰 Faturamento
+// app/(super-admin)/admin/billing/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { BillingOverview } from '@/components/super-admin/billing/billing-overview'
+import { InvoiceList } from '@/components/super-admin/billing/invoice-list'
+import { RevenueChart } from '@/components/super-admin/billing/revenue-chart'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { startOfMonth, endOfMonth, subMonths } from 'date-fns'
+
+export default async function BillingPage() {
+  const session = await getServerSession(authOptions)
+  
+  if (session?.user?.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  const now = new Date()
+  const startOfCurrentMonth = startOfMonth(now)
+  const endOfCurrentMonth = endOfMonth(now)
+
+  // Buscar dados de faturamento
+  const [
+    totalRevenue,
+    revenueThisMonth,
+    pendingInvoices,
+    overdueInvoices,
+    recentInvoices,
+  ] = await Promise.all([
+    prisma.invoice.aggregate({
+      where: { status: 'paid' },
+      _sum: { total: true },
+    }),
+    prisma.invoice.aggregate({
+      where: {
+        status: 'paid',
+        paid_at: {
+          gte: startOfCurrentMonth,
+          lte: endOfCurrentMonth,
+        },
+      },
+      _sum: { total: true },
+    }),
+    prisma.invoice.count({
+      where: { status: 'pending' },
+    }),
+    prisma.invoice.count({
+      where: {
+        status: 'pending',
+        due_date: { lt: now },
+      },
+    }),
+    prisma.invoice.findMany({
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+      take: 20,
+    }),
+  ])
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold">Faturamento</h1>
+        <p className="text-gray-600">
+          Gerencie o faturamento de todas as agências
+        </p>
+      </div>
+
+      {/* Overview Cards */}
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Receita Total</div>
+          <div className="text-3xl font-bold">
+            R$ {Number(totalRevenue._sum.total || 0).toLocaleString('pt-BR')}
+          </div>
+        </div>
+        
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Este Mês</div>
+          <div className="text-3xl font-bold text-green-600">
+            R$ {Number(revenueThisMonth._sum.total || 0).toLocaleString('pt-BR')}
+          </div>
+        </div>
+        
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Faturas Pendentes</div>
+          <div className="text-3xl font-bold text-orange-600">
+            {pendingInvoices}
+          </div>
+        </div>
+        
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-sm text-gray-600 mb-1">Faturas Vencidas</div>
+          <div className="text-3xl font-bold text-red-600">
+            {overdueInvoices}
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <Tabs defaultValue="invoices" className="w-full">
+        <TabsList>
+          <TabsTrigger value="invoices">Faturas</TabsTrigger>
+          <TabsTrigger value="revenue">Receita</TabsTrigger>
+          <TabsTrigger value="agencies">Por Agência</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="invoices" className="mt-6">
+          <InvoiceList invoices={recentInvoices} />
+        </TabsContent>
+
+        <TabsContent value="revenue" className="mt-6">
+          <RevenueChart />
+        </TabsContent>
+
+        <TabsContent value="agencies" className="mt-6">
+          <BillingOverview />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+Métricas
+
+// app/(super-admin)/admin/metrics/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { SaaSDashboard } from '@/components/super-admin/metrics/saas-dashboard'
+import { RevenueChart } from '@/components/super-admin/metrics/revenue-chart'
+import { ChurnRate } from '@/components/super-admin/metrics/churn-rate'
+import { MRRChart } from '@/components/super-admin/metrics/mrr-chart'
+import { LTVChart } from '@/components/super-admin/metrics/ltv-chart'
+import { GrowthMetrics } from '@/components/super-admin/metrics/growth-metrics'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
+export default async function MetricsPage() {
+  const session = await getServerSession(authOptions)
+  
+  if (session?.user?.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold">Métricas do SaaS</h1>
+        <p className="text-gray-600">
+          Análise detalhada do desempenho do sistema
+        </p>
+      </div>
+
+      {/* Dashboard Principal */}
+      <SaaSDashboard />
+
+      {/* Tabs com Métricas Específicas */}
+      <Tabs defaultValue="revenue" className="w-full">
+        <TabsList>
+          <TabsTrigger value="revenue">Receita</TabsTrigger>
+          <TabsTrigger value="mrr">MRR</TabsTrigger>
+          <TabsTrigger value="churn">Churn</TabsTrigger>
+          <TabsTrigger value="ltv">LTV</TabsTrigger>
+          <TabsTrigger value="growth">Crescimento</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="revenue" className="mt-6">
+          <RevenueChart />
+        </TabsContent>
+
+        <TabsContent value="mrr" className="mt-6">
+          <MRRChart />
+        </TabsContent>
+
+        <TabsContent value="churn" className="mt-6">
+          <ChurnRate />
+        </TabsContent>
+
+        <TabsContent value="ltv" className="mt-6">
+          <LTVChart />
+        </TabsContent>
+
+        <TabsContent value="growth" className="mt-6">
+          <GrowthMetrics />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+
+Logs de Auditoria
+
+// app/(super-admin)/admin/logs/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { AuditLogTable } from '@/components/super-admin/logs/audit-log-table'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Search, Filter, Download } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+
+export default async function LogsPage({
+  searchParams,
+}: {
+  searchParams: { 
+    page?: string
+    action?: string
+    resource?: string
+    user_id?: string
+  }
+}) {
+  const session = await getServerSession(authOptions)
+  
+  if (session?.user?.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  const page = parseInt(searchParams.page || '1')
+  const limit = 50
+  const skip = (page - 1) * limit
+
+  const where: any = {}
+
+  if (searchParams.action) {
+    where.action = searchParams.action
+  }
+
+  if (searchParams.resource) {
+    where.resource = searchParams.resource
+  }
+
+  if (searchParams.user_id) {
+    where.user_id = searchParams.user_id
+  }
+
+  const [logs, total] = await Promise.all([
+    prisma.auditLog.findMany({
+      where,
+      orderBy: { created_at: 'desc' },
+      skip,
+      take: limit,
+    }),
+    prisma.auditLog.count({ where }),
+  ])
+
+  return (
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold">Logs de Auditoria</h1>
+          <p className="text-gray-600">
+            Histórico completo de ações no sistema
+          </p>
+        </div>
+        <Button variant="outline">
+          <Download className="h-4 w-4 mr-2" />
+          Exportar
+        </Button>
+      </div>
+
+      {/* Filtros */}
+      <div className="flex gap-4">
+        <div className="flex-1 relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Input
+            placeholder="Buscar nos logs..."
+            className="pl-10"
+          />
+        </div>
+        
+        <Select defaultValue={searchParams.action || ''}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="Ação" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Todas</SelectItem>
+            <SelectItem value="create">Criar</SelectItem>
+            <SelectItem value="update">Atualizar</SelectItem>
+            <SelectItem value="delete">Excluir</SelectItem>
+            <SelectItem value="login">Login</SelectItem>
+            <SelectItem value="suspend">Suspender</SelectItem>
+            <SelectItem value="activate">Ativar</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select defaultValue={searchParams.resource || ''}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="Recurso" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Todos</SelectItem>
+            <SelectItem value="tenant">Agência</SelectItem>
+            <SelectItem value="user">Usuário</SelectItem>
+            <SelectItem value="client">Cliente</SelectItem>
+            <SelectItem value="trip">Viagem</SelectItem>
+            <SelectItem value="reservation">Reserva</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Button variant="outline">
+          <Filter className="h-4 w-4 mr-2" />
+          Mais Filtros
+        </Button>
+      </div>
+
+      {/* Tabela de Logs */}
+      <AuditLogTable 
+        logs={logs} 
+        total={total}
+        page={page}
+        limit={limit}
+      />
+    </div>
+  )
+}
+
+🎨 5. COMPONENTES REUTILIZÁVEIS
+📊 KPI Cards
+
+// components/super-admin/dashboard/kpi-cards.tsx
+
+'use client'
+
+import { Card, CardContent } from '@/components/ui/card'
+import { TrendingUp, TrendingDown, Building2, Users, DollarSign, AlertCircle } from 'lucide-react'
+
+interface KPICardsProps {
+  metrics: {
+    agencies: {
+      total: number
+      active: number
+      suspended: number
+      new_this_month: number
+      growth_percentage: string
+    }
+    users: {
+      total: number
+      active: number
+      new_this_month: number
+    }
+    revenue: {
+      total: number
+      this_month: number
+      last_month: number
+      growth_percentage: string
+    }
+    mrr: {
+      current: number
+    }
+    churn: {
+      rate: string
+      cancelled_this_month: number
+    }
+  }
+}
+
+export function KPICards({ metrics }: KPICardsProps) {
+  const cards = [
+    {
+      title: 'Total de Agências',
+      value: metrics.agencies.total,
+      subtitle: `${metrics.agencies.active} ativas`,
+      icon: Building2,
+      trend: parseFloat(metrics.agencies.growth_percentage),
+      trendLabel: `${metrics.agencies.new_this_month} novas este mês`,
+      color: 'text-blue-600',
+      bgColor: 'bg-blue-100',
+    },
+    {
+      title: 'Total de Usuários',
+      value: metrics.users.total,
+      subtitle: `${metrics.users.active} ativos`,
+      icon: Users,
+      trend: 0,
+      trendLabel: `${metrics.users.new_this_month} novos este mês`,
+      color: 'text-green-600',
+      bgColor: 'bg-green-100',
+    },
+    {
+      title: 'Receita Total',
+      value: `R$ ${metrics.revenue.total.toLocaleString('pt-BR')}`,
+      subtitle: `R$ ${metrics.revenue.this_month.toLocaleString('pt-BR')} este mês`,
+      icon: DollarSign,
+      trend: parseFloat(metrics.revenue.growth_percentage),
+      trendLabel: `${metrics.revenue.growth_percentage}% vs mês anterior`,
+      color: 'text-emerald-600',
+      bgColor: 'bg-emerald-100',
+    },
+    {
+      title: 'MRR',
+      value: `R$ ${metrics.mrr.current.toLocaleString('pt-BR')}`,
+      subtitle: 'Receita Recorrente Mensal',
+      icon: TrendingUp,
+      trend: 0,
+      trendLabel: 'Estável',
+      color: 'text-purple-600',
+      bgColor: 'bg-purple-100',
+    },
+    {
+      title: 'Taxa de Churn',
+      value: `${metrics.churn.rate}%`,
+      subtitle: `${metrics.churn.cancelled_this_month} cancelamentos`,
+      icon: AlertCircle,
+      trend: -parseFloat(metrics.churn.rate),
+      trendLabel: 'Este mês',
+      color: 'text-red-600',
+      bgColor: 'bg-red-100',
+    },
+  ]
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      {cards.map((card, index) => {
+        const Icon = card.icon
+        const isPositive = card.trend >= 0
+        const TrendIcon = isPositive ? TrendingUp : TrendingDown
+
+        return (
+          <Card key={index}>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className={`p-3 rounded-lg ${card.bgColor}`}>
+                  <Icon className={`h-6 w-6 ${card.color}`} />
+                </div>
+                {card.trend !== 0 && (
+                  <div className={`flex items-center gap-1 text-sm ${
+                    isPositive ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    <TrendIcon className="h-4 w-4" />
+                    <span>{Math.abs(card.trend).toFixed(1)}%</span>
+                  </div>
+                )}
+              </div>
+              
+              <div className="space-y-1">
+                <p className="text-sm text-gray-600">{card.title}</p>
+                <p className="text-2xl font-bold">{card.value}</p>
+                <p className="text-xs text-gray-500">{card.subtitle}</p>
+                <p className="text-xs text-gray-400 mt-2">{card.trendLabel}</p>
+              </div>
+            </CardContent>
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
+Lista de Agências
+// components/super-admin/agencies/agency-list.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { MoreVertical, Eye, Edit, Ban, CheckCircle, Trash2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import { useToast } from '@/components/ui/use-toast'
+
+interface Agency {
+  id: string
+  name: string
+  slug: string
+  email: string
+  logo: string | null
+  status: string
+  plan: {
+    name: string
+  }
+  created_at: Date
+  _count: {
+    users: number
+    clients: number
+    trips: number
+    reservations: number
+  }
+}
+
+interface AgencyListProps {
+  page: number
+  search: string
+  status: string
+}
+
+export function AgencyList({ page, search, status }: AgencyListProps) {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [agencies, setAgencies] = useState<Agency[]>([])
+  const [total, setTotal] = useState(0)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadAgencies()
+  }, [page, search, status])
+
+  async function loadAgencies() {
+    try {
+      setIsLoading(true)
+      const params = new URLSearchParams({
+        page: page.toString(),
+        search,
+        status,
+      })
+
+      const res = await fetch(`/api/admin/agencies?${params}`)
+      const data = await res.json()
+
+      setAgencies(data.agencies)
+      setTotal(data.pagination.total)
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao carregar agências',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  async function handleSuspend(id: string) {
+    if (!confirm('Tem certeza que deseja suspender esta agência?')) return
+
+    try {
+      const res = await fetch(`/api/admin/agencies/${id}/suspend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reason: 'Suspensão manual pelo administrador',
+        }),
+      })
+
+      if (!res.ok) throw new Error()
+
+      toast({
+        title: 'Sucesso',
+        description: 'Agência suspensa com sucesso',
+      })
+
+      loadAgencies()
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao suspender agência',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  async function handleActivate(id: string) {
+    try {
+      const res = await fetch(`/api/admin/agencies/${id}/activate`, {
+        method: 'POST',
+      })
+
+      if (!res.ok) throw new Error()
+
+      toast({
+        title: 'Sucesso',
+        description: 'Agência ativada com sucesso',
+      })
+
+      loadAgencies()
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao ativar agência',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm('ATENÇÃO: Esta ação irá excluir permanentemente a agência e TODOS os seus dados. Deseja continuar?')) return
+
+    try {
+      const res = await fetch(`/api/admin/agencies/${id}`, {
+        method: 'DELETE',
+      })
+
+      if (!res.ok) throw new Error()
+
+      toast({
+        title: 'Sucesso',
+        description: 'Agência excluída com sucesso',
+      })
+
+      loadAgencies()
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao excluir agência',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const statusColors = {
+    active: 'bg-green-100 text-green-800',
+    suspended: 'bg-red-100 text-red-800',
+    cancelled: 'bg-gray-100 text-gray-800',
+  }
+
+  const statusLabels = {
+    active: 'Ativa',
+    suspended: 'Suspensa',
+    cancelled: 'Cancelada',
+  }
+
+  if (isLoading) {
+    return <div className="text-center py-12">Carregando...</div>
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg shadow">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Agência</TableHead>
+              <TableHead>Plano</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Usuários</TableHead>
+              <TableHead className="text-right">Clientes</TableHead>
+              <TableHead className="text-right">Viagens</TableHead>
+              <TableHead>Criada em</TableHead>
+              <TableHead className="w-[50px]"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {agencies.map((agency) => (
+              <TableRow key={agency.id}>
+                <TableCell>
+                  <div className="flex items-center gap-3">
+                    <Avatar>
+                      <AvatarImage src={agency.logo || ''} />
+                      <AvatarFallback>
+                        {agency.name.substring(0, 2).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <div className="font-medium">{agency.name}</div>
+                      <div className="text-sm text-gray-500">{agency.email}</div>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline">{agency.plan.name}</Badge>
+                </TableCell>
+                <TableCell>
+                  <Badge className={statusColors[agency.status as keyof typeof statusColors]}>
+                    {statusLabels[agency.status as keyof typeof statusLabels]}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right">{agency._count.users}</TableCell>
+                <TableCell className="text-right">{agency._count.clients}</TableCell>
+                <TableCell className="text-right">{agency._count.trips}</TableCell>
+                <TableCell>
+                  {format(new Date(agency.created_at), 'dd/MM/yyyy', { locale: ptBR })}
+                </TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon">
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Ações</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => router.push(`/admin/agencies/${agency.id}`)}
+                      >
+                        <Eye className="h-4 w-4 mr-2" />
+                        Ver Detalhes
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => router.push(`/admin/agencies/${agency.id}/edit`)}
+                      >
+                        <Edit className="h-4 w-4 mr-2" />
+                        Editar
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      {agency.status === 'active' ? (
+                        <DropdownMenuItem
+                          onClick={() => handleSuspend(agency.id)}
+                          className="text-red-600"
+                        >
+                          <Ban className="h-4 w-4 mr-2" />
+                          Suspender
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem
+                          onClick={() => handleActivate(agency.id)}
+                          className="text-green-600"
+                        >
+                          <CheckCircle className="h-4 w-4 mr-2" />
+                          Ativar
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        onClick={() => handleDelete(agency.id)}
+                        className="text-red-600"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Excluir
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Paginação */}
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-600">
+          Mostrando {agencies.length} de {total} agências
+        </p>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            disabled={page === 1}
+            onClick={() => router.push(`?page=${page - 1}`)}
+          >
+            Anterior
+          </Button>
+          <Button
+            variant="outline"
+            disabled={agencies.length < 20}
+            onClick={() => router.push(`?page=${page + 1}`)}
+          >
+            Próxima
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+Formulário de Agência
+// components/super-admin/agencies/agency-form.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { Button } from '@/components/ui/button'
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { useToast } from '@/components/ui/use-toast'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+
+const formSchema = z.object({
+  name: z.string().min(3, 'Nome deve ter no mínimo 3 caracteres'),
+  email: z.string().email('Email inválido'),
+  cnpj: z.string().optional(),
+  phone: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zip_code: z.string().optional(),
+  plan_id: z.string().min(1, 'Selecione um plano'),
+  max_users: z.number().min(1).default(5),
+  max_clients: z.number().min(1).default(100),
+  max_trips: z.number().min(1).default(50),
+})
+
+interface Plan {
+  id: string
+  name: string
+  max_users: number
+  max_clients: number
+  max_trips: number
+}
+
+interface AgencyFormProps {
+  plans: Plan[]
+  initialData?: any
+}
+
+export function AgencyForm({ plans, initialData }: AgencyFormProps) {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [isLoading, setIsLoading] = useState(false)
+
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: initialData || {
+      name: '',
+      email: '',
+      cnpj: '',
+      phone: '',
+      address: '',
+      city: '',
+      state: '',
+      zip_code: '',
+      plan_id: '',
+      max_users: 5,
+      max_clients: 100,
+      max_trips: 50,
+    },
+  })
+
+  async function onSubmit(values: z.infer<typeof formSchema>) {
+    try {
+      setIsLoading(true)
+
+      const url = initialData
+        ? `/api/admin/agencies/${initialData.id}`
+        : '/api/admin/agencies'
+
+      const method = initialData ? 'PATCH' : 'POST'
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      })
+
+      if (!res.ok) {
+        const error = await res.json()
+        throw new Error(error.error)
+      }
+
+      const agency = await res.json()
+
+      toast({
+        title: 'Sucesso!',
+        description: initialData
+          ? 'Agência atualizada com sucesso'
+          : 'Agência criada com sucesso',
+      })
+
+      router.push(`/admin/agencies/${agency.id}`)
+      router.refresh()
+    } catch (error: any) {
+      toast({
+        title: 'Erro',
+        description: error.message || 'Erro ao salvar agência',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Atualizar limites quando plano mudar
+  function handlePlanChange(planId: string) {
+    const plan = plans.find(p => p.id === planId)
+    if (plan) {
+      form.setValue('max_users', plan.max_users)
+      form.setValue('max_clients', plan.max_clients)
+      form.setValue('max_trips', plan.max_trips)
+    }
+  }
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        {/* Informações Básicas */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Informações Básicas</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Nome da Agência *</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Visite Turismo" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email *</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="email"
+                        placeholder="contato@agencia.com"
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="phone"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Telefone</FormLabel>
+                    <FormControl>
+                      <Input placeholder="(11) 99999-9999" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name="cnpj"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>CNPJ</FormLabel>
+                  <FormControl>
+                    <Input placeholder="00.000.000/0000-00" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Endereço */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Endereço</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <FormField
+              control={form.control}
+              name="address"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Endereço</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Rua, número" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className="grid grid-cols-3 gap-4">
+              <FormField
+                control={form.control}
+                name="city"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Cidade</FormLabel>
+                    <FormControl>
+                      <Input placeholder="São Paulo" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="state"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Estado</FormLabel>
+                    <FormControl>
+                      <Input placeholder="SP" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="zip_code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>CEP</FormLabel>
+                    <FormControl>
+                      <Input placeholder="00000-000" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Plano e Limites */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Plano e Limites</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <FormField
+              control={form.control}
+              name="plan_id"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Plano *</FormLabel>
+                  <Select
+                    onValueChange={(value) => {
+                      field.onChange(value)
+                      handlePlanChange(value)
+                    }}
+                    defaultValue={field.value}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione um plano" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {plans.map((plan) => (
+                        <SelectItem key={plan.id} value={plan.id}>
+                          {plan.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className="grid grid-cols-3 gap-4">
+              <FormField
+                control={form.control}
+                name="max_users"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Máx. Usuários</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        {...field}
+                        onChange={(e) => field.onChange(parseInt(e.target.value))}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Limite de usuários
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="max_clients"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Máx. Clientes</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        {...field}
+                        onChange={(e) => field.onChange(parseInt(e.target.value))}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Limite de clientes
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="max_trips"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Máx. Viagens</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        {...field}
+                        onChange={(e) => field.onChange(parseInt(e.target.value))}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Limite de viagens
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Botões */}
+        <div className="flex gap-4">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => router.back()}
+            disabled={isLoading}
+          >
+            Cancelar
+          </Button>
+          <Button type="submit" disabled={isLoading}>
+            {isLoading ? 'Salvando...' : initialData ? 'Atualizar' : 'Criar Agência'}
+          </Button>
+        </div>
+      </form>
+    </Form>
+  )
+}
+
+Gráfico de Receita
+// components/super-admin/dashboard/revenue-chart.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Legend,
+} from 'recharts'
+import { format, subMonths, startOfMonth } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export function RevenueChart() {
+  const [data, setData] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  async function loadData() {
+    try {
+      const res = await fetch('/api/admin/metrics/revenue?months=12')
+      const result = await res.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Receita (Últimos 12 meses)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="h-[400px] flex items-center justify-center">
+            Carregando...
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Receita (Últimos 12 meses)</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={400}>
+          <LineChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis
+              dataKey="month"
+              tick={{ fontSize: 12 }}
+            />
+            <YAxis
+              tick={{ fontSize: 12 }}
+              tickFormatter={(value) => `R$ ${value.toLocaleString('pt-BR')}`}
+            />
+            <Tooltip
+              formatter={(value: any) => [
+                `R$ ${value.toLocaleString('pt-BR')}`,
+                'Receita',
+              ]}
+              labelStyle={{ color: '#000' }}
+            />
+            <Legend />
+            <Line
+              type="monotone"
+              dataKey="revenue"
+              stroke="#10b981"
+              strokeWidth={2}
+              dot={{ fill: '#10b981', r: 4 }}
+              name="Receita"
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  )
+}
+
+Gráfico de Crescimento de Agências
+
+// components/super-admin/dashboard/agencies-growth-chart.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Area,
+  AreaChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from 'recharts'
+
+export function AgenciesGrowthChart() {
+  const [data, setData] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  async function loadData() {
+    try {
+      const res = await fetch('/api/admin/metrics/agencies-growth?months=12')
+      const result = await res.json()
+      setData(result)
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Crescimento de Agências</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="h-[400px] flex items-center justify-center">
+            Carregando...
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Crescimento de Agências</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={400}>
+          <AreaChart data={data}>
+            <defs>
+              <linearGradient id="colorAgencies" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
+                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+            <YAxis tick={{ fontSize: 12 }} />
+            <Tooltip />
+            <Area
+              type="monotone"
+              dataKey="total"
+              stroke="#3b82f6"
+              fillOpacity={1}
+              fill="url(#colorAgencies)"
+              name="Total de Agências"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  )
+}
+
+Agências Recentes
+// components/super-admin/dashboard/recent-agencies.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { ArrowRight } from 'lucide-react'
+import Link from 'next/link'
+import { formatDistanceToNow } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+interface Agency {
+  id: string
+  name: string
+  email: string
+  logo: string | null
+  status: string
+  plan: {
+    name: string
+  }
+  created_at: Date
+}
+
+export function RecentAgencies() {
+  const [agencies, setAgencies] = useState<Agency[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadAgencies()
+  }, [])
+
+  async function loadAgencies() {
+    try {
+      const res = await fetch('/api/admin/agencies?limit=5')
+      const data = await res.json()
+      setAgencies(data.agencies)
+    } catch (error) {
+      console.error('Erro ao carregar agências:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>Agências Recentes</CardTitle>
+        <Link href="/admin/agencies">
+          <Button variant="ghost" size="sm">
+            Ver todas
+            <ArrowRight className="h-4 w-4 ml-2" />
+          </Button>
+        </Link>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="text-center py-8">Carregando...</div>
+        ) : (
+          <div className="space-y-4">
+            {agencies.map((agency) => (
+              <Link
+                key={agency.id}
+                href={`/admin/agencies/${agency.id}`}
+                className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <Avatar>
+                    <AvatarImage src={agency.logo || ''} />
+                    <AvatarFallback>
+                      {agency.name.substring(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <div className="font-medium">{agency.name}</div>
+                    <div className="text-sm text-gray-500">{agency.email}</div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <Badge variant="outline" className="mb-1">
+                    {agency.plan.name}
+                  </Badge>
+                  <div className="text-xs text-gray-500">
+                    {formatDistanceToNow(new Date(agency.created_at), {
+                      addSuffix: true,
+                      locale: ptBR,
+                    })}
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+Saúde do Sistema
+// components/super-admin/dashboard/system-health.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Progress } from '@/components/ui/progress'
+import {
+  CheckCircle2,
+  AlertCircle,
+  XCircle,
+  Database,
+  Server,
+  Zap,
+  HardDrive,
+} from 'lucide-react'
+
+interface SystemHealth {
+  database: {
+    status: 'healthy' | 'warning' | 'error'
+    responseTime: number
+    connections: number
+  }
+  api: {
+    status: 'healthy' | 'warning' | 'error'
+    uptime: number
+    requestsPerMinute: number
+  }
+  storage: {
+    status: 'healthy' | 'warning' | 'error'
+    used: number
+    total: number
+    percentage: number
+  }
+  cache: {
+    status: 'healthy' | 'warning' | 'error'
+    hitRate: number
+  }
+}
+
+export function SystemHealth() {
+  const [health, setHealth] = useState<SystemHealth | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadHealth()
+    const interval = setInterval(loadHealth, 30000) // Atualizar a cada 30s
+    return () => clearInterval(interval)
+  }, [])
+
+  async function loadHealth() {
+    try {
+      const res = await fetch('/api/admin/system/health')
+      const data = await res.json()
+      setHealth(data)
+    } catch (error) {
+      console.error('Erro ao carregar saúde do sistema:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'healthy':
+        return <CheckCircle2 className="h-5 w-5 text-green-600" />
+      case 'warning':
+        return <AlertCircle className="h-5 w-5 text-yellow-600" />
+      case 'error':
+        return <XCircle className="h-5 w-5 text-red-600" />
+      default:
+        return null
+    }
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'healthy':
+        return 'bg-green-100 text-green-800'
+      case 'warning':
+        return 'bg-yellow-100 text-yellow-800'
+      case 'error':
+        return 'bg-red-100 text-red-800'
+      default:
+        return 'bg-gray-100 text-gray-800'
+    }
+  }
+
+  if (isLoading || !health) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Saúde do Sistema</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center py-8">Carregando...</div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Saúde do Sistema</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-4">
+          {/* Database */}
+          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+            <div className="flex items-center gap-3">
+              <Database className="h-5 w-5 text-gray-600" />
+              <div>
+                <div className="font-medium">Banco de Dados</div>
+                <div className="text-sm text-gray-500">
+                  {health.database.responseTime}ms • {health.database.connections} conexões
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {getStatusIcon(health.database.status)}
+              <Badge className={getStatusColor(health.database.status)}>
+                {health.database.status === 'healthy' ? 'Saudável' : 
+                 health.database.status === 'warning' ? 'Atenção' : 'Erro'}
+              </Badge>
+            </div>
+          </div>
+
+          {/* API */}
+          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+            <div className="flex items-center gap-3">
+              <Server className="h-5 w-5 text-gray-600" />
+              <div>
+                <div className="font-medium">API</div>
+                <div className="text-sm text-gray-500">
+                  {health.api.uptime}% uptime • {health.api.requestsPerMinute} req/min
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {getStatusIcon(health.api.status)}
+              <Badge className={getStatusColor(health.api.status)}>
+                {health.api.status === 'healthy' ? 'Saudável' : 
+                 health.api.status === 'warning' ? 'Atenção' : 'Erro'}
+              </Badge>
+            </div>
+          </div>
+
+          {/* Storage */}
+          <div className="p-3 rounded-lg bg-gray-50">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-3">
+                <HardDrive className="h-5 w-5 text-gray-600" />
+                <div>
+                  <div className="font-medium">Armazenamento</div>
+                  <div className="text-sm text-gray-500">
+                    {health.storage.used}GB / {health.storage.total}GB
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {getStatusIcon(health.storage.status)}
+                <Badge className={getStatusColor(health.storage.status)}>
+                  {health.storage.percentage}%
+                </Badge>
+              </div>
+            </div>
+            <Progress value={health.storage.percentage} className="h-2" />
+          </div>
+
+          {/* Cache */}
+          <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+            <div className="flex items-center gap-3">
+              <Zap className="h-5 w-5 text-gray-600" />
+              <div>
+                <div className="font-medium">Cache</div>
+                <div className="text-sm text-gray-500">
+                  {health.cache.hitRate}% hit rate
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {getStatusIcon(health.cache.status)}
+              <Badge className={getStatusColor(health.cache.status)}>
+                {health.cache.status === 'healthy' ? 'Saudável' : 
+                 health.cache.status === 'warning' ? 'Atenção' : 'Erro'}
+              </Badge>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+Dashboard SaaS Completo
+
+// components/super-admin/metrics/saas-dashboard.tsx
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts'
+
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+
+export function SaaSDashboard() {
+  const [period, setPeriod] = useState('30d')
+  const [metrics, setMetrics] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadMetrics()
+  }, [period])
+
+  async function loadMetrics() {
+    try {
+      setIsLoading(true)
+      const res = await fetch(`/api/admin/metrics/saas-dashboard?period=${period}`)
+      const data = await res.json()
+      setMetrics(data)
+    } catch (error) {
+      console.error('Erro ao carregar métricas:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  if (isLoading || !metrics) {
+    return <div className="text-center py-12">Carregando...</div>
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Filtro de Período */}
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">Visão Geral</h2>
+        <Select value={period} onValueChange={setPeriod}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7d">Últimos 7 dias</SelectItem>
+            <SelectItem value="30d">Últimos 30 dias</SelectItem>
+            <SelectItem value="90d">Últimos 90 dias</SelectItem>
+            <SelectItem value="1y">Último ano</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* KPIs Principais */}
+      <div className="grid grid-cols-4 gap-4">
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-gray-600 mb-1">ARR</div>
+            <div className="text-3xl font-bold">
+              R$ {metrics.arr.toLocaleString('pt-BR')}
+            </div>
+            <div className="text-sm text-green-600 mt-1">
+              +{metrics.arr_growth}% vs período anterior
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-gray-600 mb-1">MRR</div>
+            <div className="text-3xl font-bold">
+              R$ {metrics.mrr.toLocaleString('pt-BR')}
+            </div>
+            <div className="text-sm text-green-600 mt-1">
+              +{metrics.mrr_growth}% vs mês anterior
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-gray-600 mb-1">CAC</div>
+            <div className="text-3xl font-bold">
+              R$ {metrics.cac.toLocaleString('pt-BR')}
+            </div>
+            <div className="text-sm text-gray-500 mt-1">
+              Custo de Aquisição
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-sm text-gray-600 mb-1">LTV</div>
+            <div className="text-3xl font-bold">
+              R$ {metrics.ltv.toLocaleString('pt-BR')}
+            </div>
+            <div className="text-sm text-gray-500 mt-1">
+              Lifetime Value
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Gráficos */}
+      <div className="grid grid-cols-2 gap-6">
+        {/* Agências por Plano */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Agências por Plano</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={metrics.agencies_by_plan}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) =>
+                    `${name}: ${(percent * 100).toFixed(0)}%`
+                  }
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {metrics.agencies_by_plan.map((entry: any, index: number) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Receita por Plano */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Receita por Plano</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={metrics.revenue_by_plan}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis tickFormatter={(value) => `R$ ${value}`} />
+                <Tooltip
+                  formatter={(value: any) => [`R$ ${value.toLocaleString('pt-BR')}`, 'Receita']}
+                />
+                <Bar dataKey="revenue" fill="#3b82f6" />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Métricas de Crescimento */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Crescimento Mensal</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={metrics.monthly_growth}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="month" />
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="new_agencies" fill="#10b981" name="Novas Agências" />
+              <Bar dataKey="cancelled" fill="#ef4444" name="Cancelamentos" />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+Layout do Super Admin
+// app/(super-admin)/layout.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { redirect } from 'next/navigation'
+import { SuperAdminHeader } from '@/components/super-admin/layout/super-admin-header'
+import { SuperAdminSidebar } from '@/components/super-admin/layout/super-admin-sidebar'
+
+export default async function SuperAdminLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  const session = await getServerSession(authOptions)
+
+  // Verificar se é Super Admin
+  if (!session?.user || session.user.role !== 'superadmin') {
+    redirect('/dashboard')
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <SuperAdminHeader user={session.user} />
+      <div className="flex">
+        <SuperAdminSidebar />
+        <main className="flex-1 overflow-y-auto">
+          {children}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+Header do Super Admin
+// components/super-admin/layout/super-admin-header.tsx
+
+'use client'
+
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Bell, Search, Settings, LogOut, User } from 'lucide-react'
+import { signOut } from 'next-auth/react'
+import Link from 'next/link'
+
+interface SuperAdminHeaderProps {
+  user: {
+    name: string
+    email: string
+    avatar?: string
+  }
+}
+
+export function SuperAdminHeader({ user }: SuperAdminHeaderProps) {
+  return (
+    <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <div className="flex items-center justify-between px-6 py-4">
+        {/* Logo */}
+        <div className="flex items-center gap-4">
+          <Link href="/admin" className="flex items-center gap-2">
+            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-lg flex items-center justify-center">
+              <span className="text-white font-bold text-xl">V</span>
+            </div>
+            <div>
+              <div className="font-bold text-lg">VisiteCRM</div>
+              <div className="text-xs text-gray-500">Super Admin</div>
+            </div>
+          </Link>
+        </div>
+
+        {/* Search */}
+        <div className="flex-1 max-w-2xl mx-8">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Buscar agências, usuários..."
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-4">
+          {/* Notifications */}
+          <Button variant="ghost" size="icon" className="relative">
+            <Bell className="h-5 w-5" />
+            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+          </Button>
+
+          {/* Settings */}
+          <Link href="/admin/settings">
+            <Button variant="ghost" size="icon">
+              <Settings className="h-5 w-5" />
+            </Button>
+          </Link>
+
+          {/* User Menu */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="flex items-center gap-2">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={user.avatar} />
+                  <AvatarFallback>
+                    {user.name.substring(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="text-left">
+                  <div className="text-sm font-medium">{user.name}</div>
+                  <div className="text-xs text-gray-500">Super Admin</div>
+                </div>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel>Minha Conta</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <User className="h-4 w-4 mr-2" />
+                Perfil
+              </DropdownMenuItem>
+              <DropdownMenuItem>
+                <Settings className="h-4 w-4 mr-2" />
+                Configurações
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => signOut({ callbackUrl: '/login' })}
+                className="text-red-600"
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                Sair
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    </header>
+  )
+}
+
+Sidebar do Super Admin
+// components/super-admin/layout/super-admin-sidebar.tsx
+
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { cn } from '@/lib/utils'
+import {
+  LayoutDashboard,
+  Building2,
+  CreditCard,
+  BarChart3,
+  Users,
+  FileText,
+  Settings,
+  Puzzle,
+  LifeBuoy,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react'
+
+interface MenuItem {
+  title: string
+  href: string
+  icon: any
+  children?: MenuItem[]
+}
+
+const menuItems: MenuItem[] = [
+  {
+    title: 'Dashboard',
+    href: '/admin',
+    icon: LayoutDashboard,
+  },
+  {
+    title: 'Agências',
+    href: '/admin/agencies',
+    icon: Building2,
+  },
+  {
+    title: 'Planos',
+    href: '/admin/plans',
+    icon: CreditCard,
+  },
+  {
+    title: 'Faturamento',
+    href: '/admin/billing',
+    icon: CreditCard,
+    children: [
+      { title: 'Visão Geral', href: '/admin/billing', icon: null },
+      { title: 'Faturas', href: '/admin/billing/invoices', icon: null },
+    ],
+  },
+  {
+    title: 'Métricas',
+    href: '/admin/metrics',
+    icon: BarChart3,
+    children: [
+      { title: 'Visão Geral', href: '/admin/metrics', icon: null },
+      { title: 'Receita', href: '/admin/metrics/revenue', icon: null },
+      { title: 'Churn', href: '/admin/metrics/churn', icon: null },
+      { title: 'Crescimento', href: '/admin/metrics/growth', icon: null },
+    ],
+  },
+  {
+    title: 'Usuários',
+    href: '/admin/users',
+    icon: Users,
+  },
+  {
+    title: 'Logs',
+    href: '/admin/logs',
+    icon: FileText,
+  },
+  {
+    title: 'Integrações',
+    href: '/admin/integrations',
+    icon: Puzzle,
+  },
+  {
+    title: 'Suporte',
+    href: '/admin/support',
+    icon: LifeBuoy,
+  },
+  {
+    title: 'Configurações',
+    href: '/admin/settings',
+    icon: Settings,
+    children: [
+      { title: 'Geral', href: '/admin/settings', icon: null },
+      { title: 'Email', href: '/admin/settings/email', icon: null },
+      { title: 'Segurança', href: '/admin/settings/security', icon: null },
+      { title: 'Features', href: '/admin/settings/features', icon: null },
+    ],
+  },
+]
+
+export function SuperAdminSidebar() {
+  const pathname = usePathname()
+  const [expandedItems, setExpandedItems] = useState<string[]>([])
+
+  const toggleExpand = (title: string) => {
+    setExpandedItems((prev) =>
+      prev.includes(title)
+        ? prev.filter((item) => item !== title)
+        : [...prev, title]
+    )
+  }
+
+  const isActive = (href: string) => {
+    if (href === '/admin') {
+      return pathname === href
+    }
+    return pathname.startsWith(href)
+  }
+
+  return (
+    <aside className="w-64 bg-white border-r border-gray-200 min-h-screen sticky top-16">
+      <nav className="p-4 space-y-1">
+        {menuItems.map((item) => {
+          const Icon = item.icon
+          const hasChildren = item.children && item.children.length > 0
+          const isExpanded = expandedItems.includes(item.title)
+          const active = isActive(item.href)
+
+          return (
+            <div key={item.title}>
+              {hasChildren ? (
+                <button
+                  onClick={() => toggleExpand(item.title)}
+                  className={cn(
+                    'w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                    active
+                      ? 'bg-blue-50 text-blue-600'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <Icon className="h-5 w-5" />
+                    <span>{item.title}</span>
+                  </div>
+                  {isExpanded ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                </button>
+              ) : (
+                <Link
+                  href={item.href}
+                  className={cn(
+                    'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                    active
+                      ? 'bg-blue-50 text-blue-600'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  )}
+                >
+                  <Icon className="h-5 w-5" />
+                  <span>{item.title}</span>
+                </Link>
+              )}
+
+              {/* Submenu */}
+              {hasChildren && isExpanded && (
+                <div className="ml-8 mt-1 space-y-1">
+                  {item.children!.map((child) => (
+                    <Link
+                      key={child.href}
+                      href={child.href}
+                      className={cn(
+                        'block px-3 py-2 rounded-lg text-sm transition-colors',
+                        isActive(child.href)
+                          ? 'bg-blue-50 text-blue-600 font-medium'
+                          : 'text-gray-600 hover:bg-gray-100'
+                      )}
+                    >
+                      {child.title}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </nav>
+    </aside>
+  )
+}
+
+API: Métricas de Receita
+
+// app/api/admin/metrics/revenue/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const months = parseInt(searchParams.get('months') || '12')
+
+    const data = []
+
+    for (let i = months - 1; i >= 0; i--) {
+      const date = subMonths(new Date(), i)
+      const start = startOfMonth(date)
+      const end = endOfMonth(date)
+
+      const [invoices, subscriptions] = await Promise.all([
+        prisma.invoice.aggregate({
+          where: {
+            status: 'paid',
+            paid_at: {
+              gte: start,
+              lte: end,
+            },
+          },
+          _sum: { total: true },
+          _count: true,
+        }),
+        prisma.subscription.count({
+          where: {
+            status: 'active',
+            started_at: {
+              lte: end,
+            },
+          },
+        }),
+      ])
+
+      data.push({
+        month: format(date, 'MMM/yy', { locale: ptBR }),
+        revenue: Number(invoices._sum.total || 0),
+        invoices_count: invoices._count,
+        active_subscriptions: subscriptions,
+      })
+    }
+
+    return NextResponse.json(data)
+  } catch (error) {
+    console.error('Erro ao buscar receita:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar receita' },
+      { status: 500 }
+    )
+  }
+}
+
+API: Crescimento de Agências
+// app/api/admin/metrics/agencies-growth/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const months = parseInt(searchParams.get('months') || '12')
+
+    const data = []
+    let cumulativeTotal = 0
+
+    for (let i = months - 1; i >= 0; i--) {
+      const date = subMonths(new Date(), i)
+      const start = startOfMonth(date)
+      const end = endOfMonth(date)
+
+      const [newAgencies, cancelledAgencies, totalUntilNow] = await Promise.all([
+        prisma.tenant.count({
+          where: {
+            created_at: {
+              gte: start,
+              lte: end,
+            },
+          },
+        }),
+        prisma.tenant.count({
+          where: {
+            status: 'cancelled',
+            cancelled_at: {
+              gte: start,
+              lte: end,
+            },
+          },
+        }),
+        prisma.tenant.count({
+          where: {
+            created_at: {
+              lte: end,
+            },
+          },
+        }),
+      ])
+
+      data.push({
+        month: format(date, 'MMM/yy', { locale: ptBR }),
+        new: newAgencies,
+        cancelled: cancelledAgencies,
+        total: totalUntilNow,
+        net_growth: newAgencies - cancelledAgencies,
+      })
+    }
+
+    return NextResponse.json(data)
+  } catch (error) {
+    console.error('Erro ao buscar crescimento:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar crescimento' },
+      { status: 500 }
+    )
+  }
+}
+
+API: MRR (Monthly Recurring Revenue)
+// app/api/admin/metrics/mrr/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const months = parseInt(searchParams.get('months') || '12')
+
+    const data = []
+
+    for (let i = months - 1; i >= 0; i--) {
+      const date = subMonths(new Date(), i)
+      const start = startOfMonth(date)
+      const end = endOfMonth(date)
+
+      // Buscar assinaturas ativas no período
+      const subscriptions = await prisma.subscription.findMany({
+        where: {
+          status: 'active',
+          started_at: {
+            lte: end,
+          },
+          OR: [
+            { expires_at: null },
+            { expires_at: { gte: start } },
+          ],
+        },
+        include: {
+          plan: true,
+        },
+      })
+
+      // Calcular MRR
+      let mrr = 0
+      let newMRR = 0
+      let churnedMRR = 0
+      let expansionMRR = 0
+
+      subscriptions.forEach((sub) => {
+        const amount = Number(sub.amount)
+        
+        // Normalizar para mensal
+        const monthlyAmount = sub.billing_cycle === 'yearly' 
+          ? amount / 12 
+          : amount
+
+        mrr += monthlyAmount
+
+        // New MRR (assinaturas iniciadas neste mês)
+        if (sub.started_at >= start && sub.started_at <= end) {
+          newMRR += monthlyAmount
+        }
+      })
+
+      // Churn MRR (assinaturas canceladas neste mês)
+      const cancelledSubs = await prisma.subscription.findMany({
+        where: {
+          status: 'cancelled',
+          cancelled_at: {
+            gte: start,
+            lte: end,
+          },
+        },
+      })
+
+      cancelledSubs.forEach((sub) => {
+        const amount = Number(sub.amount)
+        const monthlyAmount = sub.billing_cycle === 'yearly' 
+          ? amount / 12 
+          : amount
+        churnedMRR += monthlyAmount
+      })
+
+      data.push({
+        month: format(date, 'MMM/yy', { locale: ptBR }),
+        mrr: Math.round(mrr),
+        new_mrr: Math.round(newMRR),
+        churned_mrr: Math.round(churnedMRR),
+        expansion_mrr: Math.round(expansionMRR),
+        net_mrr: Math.round(newMRR + expansionMRR - churnedMRR),
+      })
+    }
+
+    return NextResponse.json(data)
+  } catch (error) {
+    console.error('Erro ao calcular MRR:', error)
+    return NextResponse.json(
+      { error: 'Erro ao calcular MRR' },
+      { status: 500 }
+    )
+  }
+}
+
+API: Taxa de Churn
+// app/api/admin/metrics/churn/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const months = parseInt(searchParams.get('months') || '12')
+
+    const data = []
+
+    for (let i = months - 1; i >= 0; i--) {
+      const date = subMonths(new Date(), i)
+      const start = startOfMonth(date)
+      const end = endOfMonth(date)
+
+      // Agências ativas no início do mês
+      const activeAtStart = await prisma.tenant.count({
+        where: {
+          created_at: { lt: start },
+          OR: [
+            { cancelled_at: null },
+            { cancelled_at: { gte: start } },
+          ],
+        },
+      })
+
+      // Agências canceladas durante o mês
+      const cancelled = await prisma.tenant.count({
+        where: {
+          status: 'cancelled',
+          cancelled_at: {
+            gte: start,
+            lte: end,
+          },
+        },
+      })
+
+      // Calcular churn rate
+      const churnRate = activeAtStart > 0 
+        ? (cancelled / activeAtStart) * 100 
+        : 0
+
+      // Revenue Churn
+      const [cancelledRevenue, totalRevenue] = await Promise.all([
+        prisma.subscription.aggregate({
+          where: {
+            status: 'cancelled',
+            cancelled_at: {
+              gte: start,
+              lte: end,
+            },
+          },
+          _sum: { amount: true },
+        }),
+        prisma.subscription.aggregate({
+          where: {
+            status: 'active',
+            started_at: { lte: start },
+          },
+          _sum: { amount: true },
+        }),
+      ])
+
+      const revenueChurnRate = Number(totalRevenue._sum.amount || 0) > 0
+        ? (Number(cancelledRevenue._sum.amount || 0) / Number(totalRevenue._sum.amount || 0)) * 100
+        : 0
+
+      data.push({
+        month: format(date, 'MMM/yy', { locale: ptBR }),
+        customer_churn_rate: Number(churnRate.toFixed(2)),
+        revenue_churn_rate: Number(revenueChurnRate.toFixed(2)),
+        cancelled_count: cancelled,
+        active_count: activeAtStart,
+      })
+    }
+
+    return NextResponse.json(data)
+  } catch (error) {
+    console.error('Erro ao calcular churn:', error)
+    return NextResponse.json(
+      { error: 'Erro ao calcular churn' },
+      { status: 500 }
+    )
+  }
+}
+
+API: Saúde do Sistema
+// app/api/admin/system/health/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import os from 'os'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    // Testar conexão com banco de dados
+    const dbStart = Date.now()
+    await prisma.$queryRaw`SELECT 1`
+    const dbResponseTime = Date.now() - dbStart
+
+    // Verificar conexões ativas
+    const dbConnections = await prisma.$queryRaw<any[]>`
+      SELECT count(*) as count 
+      FROM pg_stat_activity 
+      WHERE datname = current_database()
+    `
+
+    // Status do banco
+    const databaseStatus = {
+      status: dbResponseTime < 100 ? 'healthy' : dbResponseTime < 500 ? 'warning' : 'error',
+      responseTime: dbResponseTime,
+      connections: parseInt(dbConnections[0]?.count || '0'),
+    }
+
+    // Status da API
+    const uptime = process.uptime()
+    const uptimePercentage = 99.9 // Buscar de um serviço de monitoramento
+
+    const apiStatus = {
+      status: uptimePercentage > 99 ? 'healthy' : uptimePercentage > 95 ? 'warning' : 'error',
+      uptime: Number(uptimePercentage.toFixed(2)),
+      requestsPerMinute: 0, // Implementar contador
+    }
+
+    // Status do armazenamento
+    const totalStorage = 100 // GB - Buscar do provider
+    const usedStorage = 45 // GB - Buscar do provider
+    const storagePercentage = (usedStorage / totalStorage) * 100
+
+    const storageStatus = {
+      status: storagePercentage < 70 ? 'healthy' : storagePercentage < 90 ? 'warning' : 'error',
+      used: usedStorage,
+      total: totalStorage,
+      percentage: Number(storagePercentage.toFixed(2)),
+    }
+
+    // Status do cache (Redis, etc)
+    const cacheStatus = {
+      status: 'healthy',
+      hitRate: 85, // Buscar do Redis
+    }
+
+    // Informações do servidor
+    const serverInfo = {
+      platform: os.platform(),
+      cpus: os.cpus().length,
+      totalMemory: Math.round(os.totalmem() / 1024 / 1024 / 1024), // GB
+      freeMemory: Math.round(os.freemem() / 1024 / 1024 / 1024), // GB
+      uptime: Math.round(os.uptime() / 60 / 60), // horas
+    }
+
+    return NextResponse.json({
+      database: databaseStatus,
+      api: apiStatus,
+      storage: storageStatus,
+      cache: cacheStatus,
+      server: serverInfo,
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error('Erro ao verificar saúde do sistema:', error)
+    return NextResponse.json(
+      { error: 'Erro ao verificar saúde do sistema' },
+      { status: 500 }
+    )
+  }
+}
+
+API: Dashboard SaaS
+// app/api/admin/metrics/saas-dashboard/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths } from 'date-fns'
+
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const period = searchParams.get('period') || '30d'
+
+    // Calcular datas
+    const now = new Date()
+    const daysAgo = period === '7d' ? 7 : period === '30d' ? 30 : period === '90d' ? 90 : 365
+    const startDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000)
+
+    // ARR (Annual Recurring Revenue)
+    const activeSubscriptions = await prisma.subscription.findMany({
+      where: { status: 'active' },
+      include: { plan: true },
+    })
+
+    let arr = 0
+    let mrr = 0
+
+    activeSubscriptions.forEach((sub) => {
+      const amount = Number(sub.amount)
+      if (sub.billing_cycle === 'yearly') {
+        arr += amount
+        mrr += amount / 12
+      } else {
+        arr += amount * 12
+        mrr += amount
+      }
+    })
+
+    // CAC (Customer Acquisition Cost)
+    // Simplificado - em produção, buscar custos de marketing
+    const newAgenciesCount = await prisma.tenant.count({
+      where: {
+        created_at: { gte: startDate },
+      },
+    })
+
+    const marketingCosts = 10000 // Exemplo: R$ 10.000
+    const cac = newAgenciesCount > 0 ? marketingCosts / newAgenciesCount : 0
+
+    // LTV (Lifetime Value)
+    const avgSubscriptionValue = mrr / activeSubscriptions.length
+    const avgLifetimeMonths = 24 // Média de 24 meses
+    const ltv = avgSubscriptionValue * avgLifetimeMonths
+
+    // Agências por plano
+    const agenciesByPlan = await prisma.tenant.groupBy({
+      by: ['plan_id'],
+      where: { status: 'active' },
+      _count: true,
+    })
+
+    const plansData = await Promise.all(
+      agenciesByPlan.map(async (item) => {
+        const plan = await prisma.plan.findUnique({
+          where: { id: item.plan_id || '' },
+        })
+        return {
+          name: plan?.name || 'Sem plano',
+          value: item._count,
+        }
+      })
+    )
+
+    // Receita por plano
+    const revenueByPlan = await Promise.all(
+      agenciesByPlan.map(async (item) => {
+        const plan = await prisma.plan.findUnique({
+          where: { id: item.plan_id || '' },
+        })
+        
+        const subs = await prisma.subscription.aggregate({
+          where: {
+            plan_id: item.plan_id || '',
+            status: 'active',
+          },
+          _sum: { amount: true },
+        })
+
+        return {
+          name: plan?.name || 'Sem plano',
+          revenue: Number(subs._sum.amount || 0),
+        }
+      })
+    )
+
+    // Crescimento mensal
+    const monthlyGrowth = []
+    for (let i = 5; i >= 0; i--) {
+      const date = subMonths(now, i)
+      const start = startOfMonth(date)
+      const end = endOfMonth(date)
+
+      const [newAgencies, cancelled] = await Promise.all([
+        prisma.tenant.count({
+          where: {
+            created_at: { gte: start, lte: end },
+          },
+        }),
+        prisma.tenant.count({
+          where: {
+            status: 'cancelled',
+            cancelled_at: { gte: start, lte: end },
+          },
+        }),
+      ])
+
+      monthlyGrowth.push({
+        month: start.toLocaleDateString('pt-BR', { month: 'short' }),
+        new_agencies: newAgencies,
+        cancelled,
+      })
+    }
+
+    return NextResponse.json({
+      arr: Math.round(arr),
+      arr_growth: 15, // Calcular vs período anterior
+      mrr: Math.round(mrr),
+      mrr_growth: 12,
+      cac: Math.round(cac),
+      ltv: Math.round(ltv),
+      ltv_cac_ratio: cac > 0 ? Number((ltv / cac).toFixed(2)) : 0,
+      agencies_by_plan: plansData,
+      revenue_by_plan: revenueByPlan,
+      monthly_growth: monthlyGrowth,
+    })
+  } catch (error) {
+    console.error('Erro ao buscar dashboard SaaS:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar dashboard SaaS' },
+      { status: 500 }
+    )
+  }
+}
+
+API: Estatísticas da Agência
+// app/api/admin/agencies/[id]/stats/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { startOfMonth, endOfMonth, subMonths } from 'date-fns'
+
+export async function GET(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (session?.user?.role !== 'superadmin') {
+      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 })
+    }
+
+    const tenantId = params.id
+
+    // Buscar dados dos últimos 6 meses
+    const data = []
+    for (let i = 5; i >= 0; i--) {
+      const date = subMonths(new Date(), i)
+      const start = startOfMonth(date)
+      const end = endOfMonth(date)
+
+      const [
+        newClients,
+        newReservations,
+        revenue,
+        activeUsers,
+      ] = await Promise.all([
+        prisma.client.count({
+          where: {
+            tenant_id: tenantId,
+            created_at: { gte: start, lte: end },
+          },
+        }),
+        prisma.reservation.count({
+          where: {
+            tenant_id: tenantId,
+            created_at: { gte: start, lte: end },
+          },
+        }),
+        prisma.reservation.aggregate({
+          where: {
+            tenant_id: tenantId,
+            created_at: { gte: start, lte: end },
+          },
+          _sum: { total_value: true },
+        }),
+        prisma.user.count({
+          where: {
+            tenant_id: tenantId,
+            is_active: true,
+            last_login: { gte: start, lte: end },
+          },
+        }),
+      ])
+
+      data.push({
+        month: start.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
+        new_clients: newClients,
+        new_reservations: newReservations,
+        revenue: Number(revenue._sum.total_value || 0),
+        active_users: activeUsers,
+      })
+    }
+
+    // Totais gerais
+    const [
+      totalClients,
+      totalReservations,
+      totalRevenue,
+      totalUsers,
+      activeTrips,
+    ] = await Promise.all([
+      prisma.client.count({ where: { tenant_id: tenantId } }),
+      prisma.reservation.count({ where: { tenant_id: tenantId } }),
+      prisma.reservation.aggregate({
+        where: { tenant_id: tenantId },
+        _sum: { total_value: true },
+      }),
+      prisma.user.count({ where: { tenant_id: tenantId } }),
+      prisma.trip.count({
+        where: {
+          tenant_id: tenantId,
+          status: 'ativa',
+        },
+      }),
+    ])
+
+    return NextResponse.json({
+      monthly_data: data,
+      totals: {
+        clients: totalClients,
+        reservations: totalReservations,
+        revenue: Number(totalRevenue._sum.total_value || 0),
+        users: totalUsers,
+        active_trips: activeTrips,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar estatísticas:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar estatísticas' },
+      { status: 500 }
+    )
+  }
+}
+
+Hook: useAuth (Super Admin)
+// lib/hooks/use-super-admin.ts
+
+'use client'
+
+import { useSession } from 'next-auth/react'
+import { useRouter } from 'next/navigation'
+import { useEffect } from 'react'
+
+export function useSuperAdmin() {
+  const { data: session, status } = useSession()
+  const router = useRouter()
+
+  const isSuperAdmin = session?.user?.role === 'superadmin'
+  const isLoading = status === 'loading'
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/login')
+    } else if (status === 'authenticated' && !isSuperAdmin) {
+      router.push('/dashboard')
+    }
+  }, [status, isSuperAdmin, router])
+
+  return {
+    user: session?.user,
+    isSuperAdmin,
+    isLoading,
+    isAuthenticated: status === 'authenticated',
+  }
+}
+
+Hook: useAdminMetrics
+// lib/hooks/use-admin-metrics.ts
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useToast } from '@/components/ui/use-toast'
+
+interface Metrics {
+  agencies: {
+    total: number
+    active: number
+    suspended: number
+    new_this_month: number
+    growth_percentage: string
+  }
+  users: {
+    total: number
+    active: number
+    new_this_month: number
+  }
+  revenue: {
+    total: number
+    this_month: number
+    last_month: number
+    growth_percentage: string
+  }
+  mrr: {
+    current: number
+  }
+  churn: {
+    rate: string
+    cancelled_this_month: number
+  }
+}
+
+export function useAdminMetrics() {
+  const { toast } = useToast()
+  const [metrics, setMetrics] = useState<Metrics | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    loadMetrics()
+  }, [])
+
+  async function loadMetrics() {
+    try {
+      setIsLoading(true)
+      setError(null)
+
+      const res = await fetch('/api/admin/metrics/overview')
+      
+      if (!res.ok) {
+        throw new Error('Erro ao carregar métricas')
+      }
+
+      const data = await res.json()
+      setMetrics(data)
+    } catch (err: any) {
+      setError(err.message)
+      toast({
+        title: 'Erro',
+        description: 'Erro ao carregar métricas',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  function refresh() {
+    loadMetrics()
+  }
+
+  return {
+    metrics,
+    isLoading,
+    error,
+    refresh,
+  }
+}
+
+Hook: useAgencies
+// lib/hooks/use-agencies.ts
+
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useToast } from '@/components/ui/use-toast'
+
+interface Agency {
+  id: string
+  name: string
+  slug: string
+  email: string
+  logo: string | null
+  status: string
+  plan: {
+    name: string
+  }
+  created_at: Date
+  _count: {
+    users: number
+    clients: number
+    trips: number
+    reservations: number
+  }
+}
+
+interface UseAgenciesOptions {
+  page?: number
+  limit?: number
+  search?: string
+  status?: string
+  planId?: string
+}
+
+export function useAgencies(options: UseAgenciesOptions = {}) {
+  const { toast } = useToast()
+  const [agencies, setAgencies] = useState<Agency[]>([])
+  const [total, setTotal] = useState(0)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    loadAgencies()
+  }, [options.page, options.search, options.status, options.planId])
+
+  async function loadAgencies() {
+    try {
+      setIsLoading(true)
+
+      const params = new URLSearchParams({
+        page: (options.page || 1).toString(),
+        limit: (options.limit || 20).toString(),
+        ...(options.search && { search: options.search }),
+        ...(options.status && { status: options.status }),
+        ...(options.planId && { plan_id: options.planId }),
+      })
+
+      const res = await fetch(`/api/admin/agencies?${params}`)
+      
+      if (!res.ok) {
+        throw new Error('Erro ao carregar agências')
+      }
+
+      const data = await res.json()
+      setAgencies(data.agencies)
+      setTotal(data.pagination.total)
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao carregar agências',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  async function suspendAgency(id: string, reason: string) {
+    try {
+      const res = await fetch(`/api/admin/agencies/${id}/suspend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      })
+
+      if (!res.ok) throw new Error()
+
+      toast({
+        title: 'Sucesso',
+        description: 'Agência suspensa com sucesso',
+      })
+
+      loadAgencies()
+      return true
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao suspender agência',
+        variant: 'destructive',
+      })
+      return false
+    }
+  }
+
+  async function activateAgency(id: string) {
+    try {
+      const res = await fetch(`/api/admin/agencies/${id}/activate`, {
+        method: 'POST',
+      })
+
+      if (!res.ok) throw new Error()
+
+      toast({
+        title: 'Sucesso',
+        description: 'Agência ativada com sucesso',
+      })
+
+      loadAgencies()
+      return true
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao ativar agência',
+        variant: 'destructive',
+      })
+      return false
+    }
+  }
+
+  async function deleteAgency(id: string) {
+    try {
+      const res = await fetch(`/api/admin/agencies/${id}`, {
+        method: 'DELETE',
+      })
+
+      if (!res.ok) throw new Error()
+
+      toast({
+        title: 'Sucesso',
+        description: 'Agência excluída com sucesso',
+      })
+
+      loadAgencies()
+      return true
+    } catch (error) {
+      toast({
+        title: 'Erro',
+        description: 'Erro ao excluir agência',
+        variant: 'destructive',
+      })
+      return false
+    }
+  }
+
+  return {
+    agencies,
+    total,
+    isLoading,
+    refresh: loadAgencies,
+    suspendAgency,
+    activateAgency,
+    deleteAgency,
+  }
+}
+
+Hook: useChartData
+// lib/hooks/use-chart-data.ts
+
+'use client'
+
+import { useEffect, useState } from 'react'
+
+interface ChartDataOptions {
+  endpoint: string
+  params?: Record<string, string>
+  refreshInterval?: number // em ms
+}
+
+export function useChartData<T = any>(options: ChartDataOptions) {
+  const [data, setData] = useState<T | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    loadData()
+
+    // Auto-refresh se configurado
+    if (options.refreshInterval) {
+      const interval = setInterval(loadData, options.refreshInterval)
+      return () => clearInterval(interval)
+    }
+  }, [options.endpoint, JSON.stringify(options.params)])
+
+  async function loadData() {
+    try {
+      setIsLoading(true)
+      setError(null)
+
+      const params = new URLSearchParams(options.params || {})
+      const url = `${options.endpoint}?${params}`
+
+      const res = await fetch(url)
+      
+      if (!res.ok) {
+        throw new Error('Erro ao carregar dados')
+      }
+
+      const result = await res.json()
+      setData(result)
+    } catch (err: any) {
+      setError(err.message)
+      console.error('Erro ao carregar dados do gráfico:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return {
+    data,
+    isLoading,
+    error,
+    refresh: loadData,
+  }
+}
+
+// Uso:
+// const { data, isLoading } = useChartData({
+//   endpoint: '/api/admin/metrics/revenue',
+//   params: { months: '12' },
+//   refreshInterval: 60000, // Atualizar a cada 1 minuto
+// })
+
+CONFIGURAÇÕES DE SEGURANÇA
+🛡️ Middleware Avançado
+// middleware.ts
+
+import { withAuth } from 'next-auth/middleware'
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+
+// Rate limiting simples (em produção usar Redis)
+const rateLimit = new Map<string, { count: number; resetTime: number }>()
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now()
+  const limit = rateLimit.get(ip)
+
+  if (!limit || now > limit.resetTime) {
+    rateLimit.set(ip, {
+      count: 1,
+      resetTime: now + 60000, // 1 minuto
+    })
+    return true
+  }
+
+  if (limit.count >= 100) { // 100 requests por minuto
+    return false
+  }
+
+  limit.count++
+  return true
+}
+
+export default withAuth(
+  function middleware(req) {
+    const token = req.nextauth.token
+    const pathname = req.nextUrl.pathname
+
+    // Rate limiting
+    const ip = req.ip || req.headers.get('x-forwarded-for') || 'unknown'
+    if (!checkRateLimit(ip)) {
+      return new NextResponse('Too Many Requests', { status: 429 })
+    }
+
+    // Verificar autenticação
+    if (!token) {
+      return NextResponse.redirect(new URL('/login', req.url))
+    }
+
+    // Proteção Super Admin
+    if (pathname.startsWith('/admin')) {
+      if (token.role !== 'superadmin') {
+        return NextResponse.redirect(new URL('/unauthorized', req.url))
+      }
+    }
+
+    // Proteção Dashboard (Agência/Vendedor)
+    if (pathname.startsWith('/dashboard')) {
+      if (!['superadmin', 'agencia', 'vendedor'].includes(token.role as string)) {
+        return NextResponse.redirect(new URL('/unauthorized', req.url))
+      }
+    }
+
+    // Proteção Portal (Cliente)
+    if (pathname.startsWith('/portal')) {
+      if (token.role !== 'cliente') {
+        return NextResponse.redirect(new URL('/unauthorized', req.url))
+      }
+    }
+
+    // Logs de auditoria para ações sensíveis
+    if (pathname.includes('/suspend') || pathname.includes('/delete')) {
+      // Registrar log assíncrono
+      fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/audit/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: token.id,
+          action: pathname.split('/').pop(),
+          path: pathname,
+          ip,
+          timestamp: new Date().toISOString(),
+        }),
+      }).catch(console.error)
+    }
+
+    return NextResponse.next()
+  },
+  {
+    callbacks: {
+      authorized: ({ token }) => !!token,
+    },
+  }
+)
+
+export const config = {
+  matcher: [
+    '/admin/:path*',
+    '/dashboard/:path*',
+    '/portal/:path*',
+    '/api/admin/:path*',
+    '/api/clients/:path*',
+    '/api/trips/:path*',
+    '/api/reservations/:path*',
+  ],
+}
+
+Validação de Permissões (API)
+// lib/api-middleware.ts
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from './auth'
+import { NextResponse } from 'next/server'
+import { hasPermission } from './rbac'
+
+export async function withAuth(
+  handler: (req: Request, context: any) => Promise<Response>,
+  options?: {
+    requiredRole?: string[]
+    requiredPermission?: string
+  }
+) {
+  return async (req: Request, context: any) => {
+    const session = await getServerSession(authOptions)
+
+    // Verificar autenticação
+    if (!session?.user) {
+      return NextResponse.json(
+        { error: 'Não autenticado' },
+        { status: 401 }
+      )
+    }
+
+    // Verificar role
+    if (options?.requiredRole) {
+      if (!options.requiredRole.includes(session.user.role)) {
+        return NextResponse.json(
+          { error: 'Acesso negado' },
+          { status: 403 }
+        )
+      }
+    }
+
+    // Verificar permissão
+    if (options?.requiredPermission) {
+      if (!hasPermission(session.user.role, options.requiredPermission)) {
+        return NextResponse.json(
+          { error: 'Sem permissão' },
+          { status: 403 }
+        )
+      }
+    }
+
+    // Executar handler
+    return handler(req, context)
+  }
+}
+
+// Uso:
+// export const GET = withAuth(
+//   async (req, context) => {
+//     // Sua lógica aqui
+//   },
+//   {
+//     requiredRole: ['superadmin'],
+//     requiredPermission: 'agencies:read',
+//   }
+// )
+
+Sanitização de Dados
+// lib/sanitize.ts
+
+import DOMPurify from 'isomorphic-dompurify'
+
+/**
+ * Sanitizar HTML para prevenir XSS
+ */
+export function sanitizeHtml(dirty: string): string {
+  return DOMPurify.sanitize(dirty, {
+    ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'br'],
+    ALLOWED_ATTR: ['href', 'target'],
+  })
+}
+
+/**
+ * Escapar SQL para prevenir SQL Injection
+ * (Prisma já faz isso automaticamente, mas útil para queries raw)
+ */
+export function escapeSql(value: string): string {
+  return value.replace(/'/g, "''")
+}
+
+/**
+ * Validar e sanitizar CPF
+ */
+export function sanitizeCPF(cpf: string): string {
+  return cpf.replace(/\D/g, '')
+}
+
+/**
+ * Validar e sanitizar CNPJ
+ */
+export function sanitizeCNPJ(cnpj: string): string {
+  return cnpj.replace(/\D/g, '')
+}
+
+/**
+ * Validar e sanitizar telefone
+ */
+export function sanitizePhone(phone: string): string {
+  return phone.replace(/\D/g, '')
+}
+
+/**
+ * Validar e sanitizar email
+ */
+export function sanitizeEmail(email: string): string {
+  return email.toLowerCase().trim()
+}
+
+/**
+ * Remover caracteres perigosos de nomes de arquivo
+ */
+export function sanitizeFilename(filename: string): string {
+  return filename.replace(/[^a-zA-Z0-9.-]/g, '_')
+}
+
+Criptografia de Dados Sensíveis
+// lib/encryption.ts
+
+import crypto from 'crypto'
+
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY! // 32 bytes
+const IV_LENGTH = 16
+
+/**
+ * Criptografar dados sensíveis
+ */
+export function encrypt(text: string): string {
+  const iv = crypto.randomBytes(IV_LENGTH)
+  const cipher = crypto.createCipheriv(
+    'aes-256-cbc',
+    Buffer.from(ENCRYPTION_KEY),
+    iv
+  )
+
+  let encrypted = cipher.update(text)
+  encrypted = Buffer.concat([encrypted, cipher.final()])
+
+  return iv.toString('hex') + ':' + encrypted.toString('hex')
+}
+
+/**
+ * Descriptografar dados
+ */
+export function decrypt(text: string): string {
+  const parts = text.split(':')
+  const iv = Buffer.from(parts.shift()!, 'hex')
+  const encryptedText = Buffer.from(parts.join(':'), 'hex')
+
+  const decipher = crypto.createDecipheriv(
+    'aes-256-cbc',
+    Buffer.from(ENCRYPTION_KEY),
+    iv
+  )
+
+  let decrypted = decipher.update(encryptedText)
+  decrypted = Buffer.concat([decrypted, decipher.final()])
+
+  return decrypted.toString()
+}
+
+/**
+ * Hash de senha (usar bcrypt na prática)
+ */
+export function hashPassword(password: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(password + process.env.PASSWORD_SALT)
+    .digest('hex')
+}
+
+Logger de Auditoria
+// lib/audit-logger.ts
+
+import { prisma } from './prisma'
+
+interface AuditLogData {
+  user_id?: string
+  action: string
+  resource: string
+  resource_id?: string
+  metadata?: any
+  ip_address?: string
+  user_agent?: string
+}
+
+export async function logAudit(data: AuditLogData) {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        ...data,
+        metadata: data.metadata ? JSON.stringify(data.metadata) : null,
+        created_at: new Date(),
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao registrar log de auditoria:', error)
+  }
+}
+
+// Uso:
+// await logAudit({
+//   user_id: session.user.id,
+//   action: 'suspend',
+//   resource: 'tenant',
+//   resource_id: tenantId,
+//   metadata: { reason: 'Pagamento atrasado' },
+//   ip_address: req.ip,
+// })
+
+
+
+
+
+
+
+

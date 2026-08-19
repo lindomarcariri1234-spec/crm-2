@@ -1,0 +1,598 @@
+ATUALIZAR O SISTEMA DE LAYOUT DE ASSENTOS - IMPLEMENTAR
+
+📋 VISÃO GERAL DO SISTEMA
+Objetivo:
+Implementar um sistema completo de layout de assentos que suporte:
+
+Ônibus de Repartição Única - Layout simples (Convencional, Executivo, Semi-Leito)
+Ônibus Double Decker - Layout com 2 andares (Piso Superior + Piso Inferior)
+Comportamento:
+
+Criação: Layouts separados por andar (quando Double Decker)
+Apresentação: Visualização unificada com tabs (Superior/Inferior)
+Disponível em: Sistema interno (agência/vendedor) + Loja pública (vitrine)
+
+Mantenha os Layouts já criado no sistema: Micro-ônibus (2x1), Van 15 (1+2) e Ônibus 46 (2x2)
+
+SCHEMA PRISMA
+
+// prisma/schema.prisma
+
+enum BusType {
+  CONVENTIONAL    // Convencional (2x2 - 50 lugares)
+  EXECUTIVE       // Executivo (2x2 - 46 lugares)
+  SEMI_LEITO      // Semi-Leito (2x2 amplo - 44 lugares)
+  LEITO           // Leito (2x1 - 28 lugares)
+  DOUBLE_DECKER   // Double Decker (2 andares - 55/56 lugares)
+}
+
+model BusModel {
+  id              String   @id @default(cuid())
+  tenant_id       String
+  
+  name            String   // Ex: "Ônibus Executivo Turismo"
+  bus_type        BusType
+  total_seats     Int
+  
+  // Configuração de andares (apenas para Double Decker)
+  has_upper_deck  Boolean  @default(false)
+  has_lower_deck  Boolean  @default(false)
+  upper_deck_seats Int?    // Ex: 46 assentos
+  lower_deck_seats Int?    // Ex: 10 assentos
+  
+  // Layout visual (JSON com matriz de assentos)
+  config          Json     @db.JsonB
+  
+  is_active       Boolean  @default(true)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  trips  Trip[]
+
+  @@index([tenant_id])
+  @@index([bus_type])
+  @@map("bus_models")
+}
+
+model SeatLayout {
+  id              String   @id @default(cuid())
+  trip_id         String
+  bus_model_id    String?
+  
+  // Identificação do assento
+  deck            String   // 'upper' (andar de cima), 'lower' (andar de baixo), 'single' (único)
+  seat_number     String   // Número do assento (1, 2, 3...)
+  row             Int      // Linha no grid
+  column          Int      // Coluna no grid
+  
+  // Tipo e características
+  seat_type       String   @default("standard") // 'standard', 'premium', 'table', 'accessible'
+  is_available    Boolean  @default(true)
+  is_blocked      Boolean  @default(false)
+  
+  // Modificador de preço (ex: +10% para VIP, +5% para mesa)
+  price_modifier  Decimal? @db.Decimal(5, 2)
+  
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  trip            Trip     @relation(fields: [trip_id], references: [id], onDelete: Cascade)
+  reservations    SeatReservation[]
+
+  @@unique([trip_id, deck, seat_number])
+  @@index([trip_id])
+  @@index([deck])
+  @@map("seat_layouts")
+}
+
+model SeatReservation {
+  id              String   @id @default(cuid())
+  reservation_id  String
+  seat_layout_id  String
+  
+  passenger_name  String
+  passenger_cpf   String?
+  passenger_age   Int?
+  
+  created_at      DateTime @default(now())
+
+  reservation Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  seat_layout SeatLayout  @relation(fields: [seat_layout_id], references: [id], onDelete: Cascade)
+
+  @@index([reservation_id])
+  @@index([seat_layout_id])
+  @@map("seat_reservations")
+}
+
+// ATUALIZAR MODEL TRIP
+model Trip {
+  // ... campos existentes ...
+  
+  bus_model_id    String?
+  
+  bus_model       BusModel?     @relation(fields: [bus_model_id], references: [id], onDelete: SetNull)
+  seat_layouts    SeatLayout[]
+}
+
+// ATUALIZAR MODEL RESERVATION
+model Reservation {
+  // ... campos existentes ...
+  
+  seat_reservations SeatReservation[]
+}
+
+TEMPLATES DE LAYOUTS
+1️⃣ ÔNIBUS DE REPARTIÇÃO ÚNICA
+
+// lib/bus-templates.ts
+
+export const SINGLE_DECK_TEMPLATES = {
+  // ═══════════════════════════════════════════════════════════
+  // CONVENCIONAL 50 LUGARES (2x2)
+  // ═══════════════════════════════════════════════════════════
+  CONVENTIONAL_50: {
+    name: 'Convencional 50 Lugares',
+    bus_type: 'CONVENTIONAL',
+    total_seats: 50,
+    has_upper_deck: false,
+    has_lower_deck: false,
+    config: {
+      singleDeck: {
+        rows: 13,
+        columns: 5, // 2 assentos + CORREDOR + 2 assentos
+        layout: [
+          ['1', '2', 'AISLE', '3', '4'],
+          ['5', '6', 'AISLE', '7', '8'],
+          ['9', '10', 'AISLE', '11', '12'],
+          ['13', '14', 'AISLE', '15', '16'],
+          ['17', '18', 'AISLE', '19', '20'],
+          ['21', '22', 'AISLE', '23', '24'],
+          ['25', '26', 'AISLE', '27', '28'],
+          ['29', '30', 'AISLE', '31', '32'],
+          ['33', '34', 'AISLE', '35', '36'],
+          ['37', '38', 'AISLE', '39', '40'],
+          ['41', '42', 'AISLE', '43', '44'],
+          ['45', '46', 'AISLE', '47', '48'],
+          ['X', 'X', 'AISLE', '49', '50'], // Banheiro
+        ],
+      },
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // EXECUTIVO 46 LUGARES (2x2)
+  // ═══════════════════════════════════════════════════════════
+  EXECUTIVE_46: {
+    name: 'Executivo 46 Lugares',
+    bus_type: 'EXECUTIVE',
+    total_seats: 46,
+    has_upper_deck: false,
+    has_lower_deck: false,
+    config: {
+      singleDeck: {
+        rows: 12,
+        columns: 5,
+        layout: [
+          ['P1', 'P2', 'AISLE', 'P3', 'P4'], // P = Premium (VIP)
+          ['5', '6', 'AISLE', '7', '8'],
+          ['9', '10', 'AISLE', '11', '12'],
+          ['13', '14', 'AISLE', '15', '16'],
+          ['17', '18', 'AISLE', '19', '20'],
+          ['21', '22', 'AISLE', '23', '24'],
+          ['25', '26', 'AISLE', '27', '28'],
+          ['29', '30', 'AISLE', '31', '32'],
+          ['33', '34', 'AISLE', '35', '36'],
+          ['37', '38', 'AISLE', '39', '40'],
+          ['41', '42', 'AISLE', '43', '44'],
+          ['X', 'X', 'AISLE', '45', '46'], // Banheiro
+        ],
+      },
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // SEMI-LEITO 44 LUGARES (2x2 amplo)
+  // ═══════════════════════════════════════════════════════════
+  SEMI_LEITO_44: {
+    name: 'Semi-Leito 44 Lugares',
+    bus_type: 'SEMI_LEITO',
+    total_seats: 44,
+    has_upper_deck: false,
+    has_lower_deck: false,
+    config: {
+      singleDeck: {
+        rows: 11,
+        columns: 5,
+        layout: [
+          ['1', '2', 'AISLE', '3', '4'],
+          ['5', '6', 'AISLE', '7', '8'],
+          ['9', '10', 'AISLE', '11', '12'],
+          ['13', '14', 'AISLE', '15', '16'],
+          ['17', '18', 'AISLE', '19', '20'],
+          ['21', '22', 'AISLE', '23', '24'],
+          ['25', '26', 'AISLE', '27', '28'],
+          ['29', '30', 'AISLE', '31', '32'],
+          ['33', '34', 'AISLE', '35', '36'],
+          ['37', '38', 'AISLE', '39', '40'],
+          ['41', '42', 'AISLE', '43', '44'],
+        ],
+      },
+    },
+  },
+}
+
+2️⃣ ÔNIBUS DOUBLE DECKER
+
+// lib/bus-templates.ts (continuação)
+
+export const DOUBLE_DECKER_TEMPLATES = {
+  // ═══════════════════════════════════════════════════════════
+  // DD SEMI-LEITO + LEITO (56 LUGARES)
+  // Piso Superior: Semi-leito (2x2) - 46 lugares
+  // Piso Inferior: Leito (sofás) - 10 lugares
+  // ═══════════════════════════════════════════════════════════
+  DD_SEMI_LEITO_56: {
+    name: 'Double Decker Semi-Leito 56 Lugares',
+    bus_type: 'DOUBLE_DECKER',
+    total_seats: 56,
+    has_upper_deck: true,
+    has_lower_deck: true,
+    upper_deck_seats: 46,
+    lower_deck_seats: 10,
+    config: {
+      // PISO SUPERIOR (46 assentos)
+      upperDeck: {
+        rows: 12,
+        columns: 5,
+        layout: [
+          ['1', '2', 'AISLE', '3', '4'],
+          ['5', '6', 'AISLE', '7', '8'],
+          ['9', '10', 'AISLE', '11', '12'],
+          ['13', '14', 'AISLE', 'X', 'X'], // Entrada/Escada
+          ['15', '16', 'AISLE', '17', '18'],
+          ['19', '20', 'AISLE', '21', '22'],
+          ['23', '24', 'AISLE', '25', '26'],
+          ['27', '28', 'AISLE', '29', '30'],
+          ['31', '32', 'AISLE', '33', '34'],
+          ['35', '36', 'AISLE', '37', '38'],
+          ['39', '40', 'AISLE', '41', '42'],
+          ['43', '44', 'AISLE', '45', '46'],
+        ],
+      },
+      // PISO INFERIOR (10 assentos - sofás)
+      lowerDeck: {
+        rows: 4,
+        columns: 4,
+        layout: [
+          ['47', '48', 'AISLE', 'S49'], // S = Sofá/Mesa
+          ['50', '51', 'AISLE', 'S52'],
+          ['53', '54', 'AISLE', 'S55'],
+          ['X', 'X', 'AISLE', '56'], // Banheiro
+        ],
+      },
+    },
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // DD EXECUTIVO + SEMI-LEITO (60 LUGARES)
+  // Piso Superior: Executivo (2x2) - 46 lugares
+  // Piso Inferior: Semi-leito - 14 lugares
+  // ═══════════════════════════════════════════════════════════
+  DD_EXECUTIVE_60: {
+    name: 'Double Decker Executivo 60 Lugares',
+    bus_type: 'DOUBLE_DECKER',
+    total_seats: 60,
+    has_upper_deck: true,
+    has_lower_deck: true,
+    upper_deck_seats: 46,
+    lower_deck_seats: 14,
+    config: {
+      upperDeck: {
+        rows: 12,
+        columns: 5,
+        layout: [
+          ['P1', 'P2', 'AISLE', 'P3', 'P4'], // Premium
+          ['5', '6', 'AISLE', '7', '8'],
+          ['9', '10', 'AISLE', '11', '12'],
+          ['13', '14', 'AISLE', 'X', 'X'],
+          ['15', '16', 'AISLE', '17', '18'],
+          ['19', '20', 'AISLE', '21', '22'],
+          ['23', '24', 'AISLE', '25', '26'],
+          ['27', '28', 'AISLE', '29', '30'],
+          ['31', '32', 'AISLE', '33', '34'],
+          ['35', '36', 'AISLE', '37', '38'],
+          ['39', '40', 'AISLE', '41', '42'],
+          ['43', '44', 'AISLE', '45', '46'],
+          ['47', '48', 'AISLE', '49', '50'],
+          ['51',
+        ],
+      },
+      lowerDeck: {
+        rows: 5,
+        columns: 4,
+        layout: 
+          ['52', 'AISLE', '53', '54'],
+          ['55', '56', 'AISLE', '57'],
+          ['58', '59', 'AISLE', '60'], // Banheiro
+        ],
+      },
+    },
+  },
+}
+
+// Exportar todos os templates
+export const BUS_TEMPLATES = {
+  ...SINGLE_DECK_TEMPLATES,
+  ...DOUBLE_DECKER_TEMPLATES,
+}
+
+API - GERAÇÃO AUTOMÁTICA DE LAYOUTS
+// app/api/trips/[tripId]/generate-seats/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { tripId: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const { busModelId } = await req.json()
+
+    const trip = await prisma.trip.findUnique({
+      where: { id: params.tripId },
+    })
+
+    if (!trip) {
+      return NextResponse.json({ error: 'Viagem não encontrada' }, { status: 404 })
+    }
+
+    const busModel = await prisma.busModel.findUnique({
+      where: { id: busModelId },
+    })
+
+    if (!busModel) {
+      return NextResponse.json({ error: 'Modelo não encontrado' }, { status: 404 })
+    }
+
+    // Deletar layouts existentes
+    await prisma.seatLayout.deleteMany({
+      where: { trip_id: params.tripId },
+    })
+
+    const config = busModel.config as any
+    const seatsToCreate: any[] = []
+
+    // ═══════════════════════════════════════════════════════════
+    // DOUBLE DECKER (2 ANDARES)
+    // ═══════════════════════════════════════════════════════════
+    if (busModel.bus_type === 'DOUBLE_DECKER') {
+      // PISO SUPERIOR
+      if (config.upperDeck) {
+        const upperLayout = config.upperDeck.layout
+
+        upperLayout.forEach((row: string[], rowIndex: number) => {
+          row.forEach((cell: string, colIndex: number) => {
+            if (cell && cell !== 'X' && cell !== 'AISLE') {
+              const seatNumber = cell.replace(/[PS]/g, '')
+              const seatType = cell.startsWith('P')
+                ? 'premium'
+                : cell.startsWith('S')
+                ? 'table'
+                : 'standard'
+
+              seatsToCreate.push({
+                trip_id: params.tripId,
+                bus_model_id: busModelId,
+                deck: 'upper',
+                seat_number: seatNumber,
+                row: rowIndex,
+                column: colIndex,
+                seat_type: seatType,
+                is_available: true,
+                is_blocked: false,
+                price_modifier: seatType === 'premium' ? 10 : seatType === 'table' ? 5 : 0,
+              })
+            }
+          })
+        })
+      }
+
+      // PISO INFERIOR
+      if (config.lowerDeck) {
+        const lowerLayout = config.lowerDeck.layout
+
+        lowerLayout.forEach((row: string[], rowIndex: number) => {
+          row.forEach((cell: string, colIndex: number) => {
+            if (cell && cell !== 'X' && cell !== 'AISLE') {
+              const seatNumber = cell.replace(/[PS]/g, '')
+              const seatType = cell.startsWith('S') ? 'table' : 'standard'
+
+              seatsToCreate.push({
+                trip_id: params.tripId,
+                bus_model_id: busModelId,
+                deck: 'lower',
+                seat_number: seatNumber,
+                row: rowIndex,
+                column: colIndex,
+                seat_type: seatType,
+                is_available: true,
+                is_blocked: false,
+                price_modifier: seatType === 'table' ? 5 : 0,
+              })
+            }
+          })
+        })
+      }
+    } else {
+      // ═══════════════════════════════════════════════════════════
+      // REPARTIÇÃO ÚNICA
+      // ═══════════════════════════════════════════════════════════
+      const layout = config.singleDeck?.layout
+
+      if (layout) {
+        layout.forEach((row: string[], rowIndex: number) => {
+          row.forEach((cell: string, colIndex: number) => {
+            if (cell && cell !== 'X' && cell !== 'AISLE') {
+              const seatNumber = cell.replace(/[P]/g, '')
+              const seatType = cell.startsWith('P') ? 'premium' : 'standard'
+
+              seatsToCreate.push({
+                trip_id: params.tripId,
+                bus_model_id: busModelId,
+                deck: 'single',
+                seat_number: seatNumber,
+                row: rowIndex,
+                column: colIndex,
+                seat_type: seatType,
+                is_available: true,
+                is_blocked: false,
+                price_modifier: seatType === 'premium' ? 10 : 0,
+              })
+            }
+          })
+        })
+      }
+    }
+
+    // Criar todos os assentos
+    await prisma.seatLayout.createMany({
+      data: seatsToCreate,
+    })
+
+    // Atualizar viagem
+    await prisma.trip.update({
+      where: { id: params.tripId },
+      data: {
+        bus_model_id: busModelId,
+        total_seats: seatsToCreate.length,
+        available_seats: seatsToCreate.length,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      seatsCreated: seatsToCreate.length,
+      breakdown: {
+        upperDeck: seatsToCreate.filter((s) => s.deck === 'upper').length,
+        lowerDeck: seatsToCreate.filter((s) => s.deck === 'lower').length,
+        singleDeck: seatsToCreate.filter((s) => s.deck === 'single').length,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao gerar layout:', error)
+    return NextResponse.json(
+      { error: 'Erro ao gerar layout' },
+      { status: 500 }
+    )
+  }
+}
+
+
+
+ESTRUTURA
+📐 Layouts Disponíveis:
+Repartição Única:
+ Convencional 50 lugares (2x2)
+ Executivo 46 lugares (2x2)
+ Semi-Leito 44 lugares (2x2 amplo)
+
+Double Decker (2 Andares):
+ DD Semi-Leito 56 lugares (Superior 46 + Inferior 9)
+ DD Executivo 51 lugares (Superior 46 + Inferior 9)
+
+ Comportamento:
+Criação: Layouts separados por deck (upper, lower, single)
+Apresentação: Tabs unificadas (Piso Superior / Piso Inferior)
+Disponível: Sistema interno + Loja pública
+
+ Features:
+ Assentos Premium (VIP) com +10% no preço
+ Assentos com Mesa/Sofá com +5% no preço
+ Visualização em tempo real da ocupação
+ Seleção interativa com feedback visual
+ Responsivo para mobile
+
+As numerações, escadas, bainheiros e frigobar são flexíveis a mudar de posição na criação do Layout.
+
+IMPLEMENTAÇÃO COMPLETA DOS COMPONENTES VISUAIS
+
+COMPONENTE UNIVERSAL - SELETOR DE ASSENTOS
+
+ Visual Moderno - Gradientes, sombras, animações
+ Responsivo - Mobile-first design
+ Interativo - Tooltips, hover effects
+ Informativo - Estatísticas, legendas, dicas
+ Flexível - Suporta Single Deck e Double Decker
+ Dual Mode - Admin e Public
+
+ Gerenciamento de Modelos
+ Wizard de Reserva (Sistema Interno)
+ Integração na Loja Pública
+ APIs Restantes
+
+IMPLEMENTAÇÃO DO SISTEMA DE ASSENTOS
+
+Ônibus de repartição única (Convencional, Executivo, Semi-Leito)
+Ônibus Double Decker (2 andares com layouts separados)
+
+BACKEND - APIs
+
+API de Layouts de Assentos
+API de Reservas com Assentos
+
+FRONTEND - ADMIN (Sistema Interno)
+
+Gerenciamento de Modelos
+
+Funcionalidades
+Componentes
+
+Wizard de Reserva
+Seleção de Assentos
+Dados dos Passageiros
+Pagamento e Confirmação
+Detalhes da Reserva
+
+FRONTEND - PÚBLICO (Loja/Vitrine)
+
+Detalhes do Pacote
+Wizard de Reserva Público
+Revisão e Cupons
+
+BANCO DE DADOS
+Schema Prisma
+
+COMPONENTES COMPARTILHADOS
+UniversalSeatSelector
+
+SeatButton
+
+UTILITÁRIOS
+Bus Templates
+Seat Utils
+
+Validações de UX
+
+INTEGRAÇÕES
+Sistema de Pagamentos
+Sistema de Notificações
+Sistema de Relatórios
+
+MÉTRICAS DE SUCESSO
+
+
+
+
+
+
+

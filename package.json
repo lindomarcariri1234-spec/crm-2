@@ -1,0 +1,67 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
+  "scripts": {
+    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "schema:check": "pnpm --filter @workspace/db check",
+    "superadmin:set": "pnpm --filter @workspace/scripts superadmin:set",
+    "test": "pnpm -r --if-present run test"
+  },
+  "private": true,
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "@clerk/shared": "4.9.0",
+      "@clerk/clerk-expo": "2.19.36",
+      "@clerk/clerk-react": "5.61.6",
+      "http-proxy-middleware": "3.0.7",
+      "undici@6": "6.27.0",
+      "undici@8": "8.5.0",
+      "effect": "3.20.0",
+      "esbuild": "0.28.1",
+      "vite": "7.3.5",
+      "markdown-it": "14.2.0",
+      "dompurify": "3.4.11",
+      "form-data": "4.0.6",
+      "js-yaml": "4.2.0",
+      "@babel/core": "7.29.7",
+      "yaml": "2.8.3",
+      "brace-expansion@2": "2.1.0",
+      "postcss": "8.5.12",
+      "follow-redirects": "1.16.0",
+      "uuid": "14.0.0",
+      "fast-uri": "3.1.2",
+      "ip-address": "10.2.0",
+      "js-cookie": "3.0.8",
+      "tmp": "0.2.7",
+      "ws": "8.21.0",
+      "qs": "6.15.2",
+      "metro": "0.83.7",
+      "metro-babel-transformer": "0.83.7",
+      "metro-cache": "0.83.7",
+      "metro-cache-key": "0.83.7",
+      "metro-config": "0.83.7",
+      "metro-core": "0.83.7",
+      "metro-file-map": "0.83.3",
+      "metro-minify-terser": "0.83.7",
+      "metro-resolver": "0.83.7",
+      "metro-runtime": "0.83.7",
+      "metro-source-map": "0.83.7",
+      "metro-symbolicate": "0.83.7",
+      "metro-transform-plugins": "0.83.7",
+      "metro-transform-worker": "0.83.7",
+      "@types/react": "19.1.10",
+      "@types/react-dom": "19.1.7"
+    },
+    "patchedDependencies": {
+      "metro@0.83.7": "patches/metro@0.83.7.patch"
+    }
+  }
+}

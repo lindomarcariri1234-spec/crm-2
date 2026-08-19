@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "04_YbCz-6UmHxn51jksGK"
+uri = "file://artifacts/guide-app/assets/images/icon.png"
+type = "image"
+title = "generated_image"

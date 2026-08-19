@@ -1,0 +1,233 @@
+IMPLEMENTAR
+
+ÁREA DO CLIENTE (Minha Indicação)
+O que é: Página onde o cliente vê seu código, compartilha e acompanha ganhos.
+
+Recursos:
+
+Card com código personalizado (ex: MARIA2026)
+Link de compartilhamento
+QR Code para download
+Botões de compartilhamento (WhatsApp, Email, Facebook, Instagram)
+Estatísticas pessoais (quantas indicações, quanto ganhou)
+Histórico de indicações
+Saldo de créditos disponíveis
+
+
+NOTIFICAÇÕES EM TEMPO REAL (SSE)
+O que é: Avisos instantâneos quando algo acontece.
+
+Recursos:
+
+Cliente recebe notificação quando alguém usa seu código
+Notificação quando indicação vira venda
+Notificação quando bônus é pago
+Badge com contador de notificações não lidas
+Som/vibração no celular
+
+
+EMAILS AUTOMÁTICOS
+O que é: Emails bonitos enviados automaticamente.
+
+Tipos de email:
+
+Boas-vindas: "Seu código MARIA2026 está pronto!"
+Nova indicação: "Alguém clicou no seu link!"
+Conversão: "Parabéns! Você ganhou R$ 10!"
+Bônus pago: "Seu bônus foi creditado!"
+Lembrete: "Você tem R$ 50 em créditos para usar!"
+
+
+SISTEMA DE CRÉDITOS
+O que é: Gerenciar bônus como créditos na conta.
+
+Recursos:
+
+Saldo de créditos disponíveis
+Histórico de créditos ganhos/usados
+Aplicação automática no checkout
+Validade dos créditos (ex: 1 ano)
+
+
+NÍVEIS/GAMIFICAÇÃO
+O que é: Sistema de níveis como em jogos.
+
+Níveis:
+
+🥉 Bronze (0-5 indicações): Bônus normal
+🥈 Prata (6-15 indicações): Bônus +20%
+🥇 Ouro (16-30 indicações): Bônus +50%
+💎 Diamante (31+ indicações): Bônus +100%
+Benefícios extras:
+
+Desconto adicional para indicados
+Atendimento prioritário
+Ofertas exclusivas
+Badge no perfil
+
+
+ANALYTICS AVANÇADO
+O que é: Gráficos e relatórios detalhados.
+
+Recursos:
+
+Gráfico de evolução mensal
+Taxa de conversão por canal (WhatsApp, Instagram, etc)
+Dispositivos mais usados (mobile, desktop)
+Mapa de calor de horários
+ROI do programa
+Comparação entre períodos
+
+
+PREVENÇÃO DE FRAUDES
+O que é: Regras para evitar trapaças.
+
+Proteções:
+
+Bloquear auto-indicação (usar próprio código)
+Limitar indicações por IP/dispositivo
+Detectar emails descartáveis
+Bloquear indicações em massa
+Verificar CPF duplicado
+Análise de padrões suspeitos
+
+
+COMPARTILHAMENTO SOCIAL
+O que é: Integração nativa com redes sociais.
+
+Recursos:
+
+Botão "Compartilhar no WhatsApp" (abre app)
+Botão "Compartilhar no Instagram Stories"
+Botão "Compartilhar no Facebook"
+Preview bonito do link (Open Graph)
+Mensagem pré-pronta personalizável
+Tracking de qual rede trouxe mais conversões
+
+
+CAMPANHAS TEMPORÁRIAS
+O que é: Promoções especiais de indicação.
+
+Exemplos:
+
+"Indique 3 amigos em maio e ganhe R$ 50 extra"
+"Dobro de bônus neste fim de semana"
+"Primeiro indicador do mês ganha viagem grátis"
+Recursos:
+
+Criar campanha com data início/fim
+Definir bônus especial
+Banner na área do cliente
+Countdown timer
+Relatório de performance
+
+
+PAGAMENTO DE BÔNUS
+O que é: Sistema para pagar bônus em dinheiro (opcional).
+Os bônus ganhados são creditados ao realizar reserva - indicador.
+
+Opções:
+
+Crédito na conta (usar em próxima compra)
+PIX automático
+Transferência bancária
+Vale-presente
+Cashback
+Recursos:
+
+Saldo mínimo para saque (ex: R$ 50)
+Histórico de pagamentos
+Comprovante em PDF
+Integração com Mercado Pago/Stripe
+
+
+INTEGRAÇÃO WHATSAPP
+O que é: Enviar mensagens automáticas via WhatsApp.
+
+Mensagens:
+
+"Olá! Alguém usou seu código MARIA2026!"
+"Parabéns! Você ganhou R$ 10 de bônus!"
+"Você tem R$ 50 em créditos expirando em 7 dias"
+Recursos:
+
+Usar WhatsApp Business API
+API Evolution
+Templates aprovados pelo Meta
+Botões interativos
+Status de entrega
+
+
+SINCRONIZAÇÃO COM CRM
+O que é: Integrar indicações com pipeline de vendas.
+
+Recursos:
+
+Criar lead automático quando alguém clica no link
+Marcar origem como "Indicação - MARIA2026"
+Atribuir vendedor automaticamente
+Adicionar tags personalizadas
+Criar tarefa de follow-up
+
+
+RELATÓRIOS EXPORTÁVEIS
+O que é: Baixar dados em Excel/PDF.
+
+Relatórios:
+
+Lista de todas indicações (Excel)
+Ranking de indicadores (PDF)
+Relatório financeiro (quanto foi pago)
+Relatório de ROI (quanto economizou em marketing)
+Relatório por período
+
+
+CONFIGURAÇÕES AVANÇADAS
+O que é: Painel para agência personalizar programa.
+
+Configurações:
+
+Valor do desconto (5%, 10%, R$ 20)
+Valor do bônus (R$ 10, R$ 20, %)
+Validade do código (30, 60, 90 dias)
+Limite de indicações por cliente
+Ativar/desativar programa
+Personalizar mensagens
+Definir regras de elegibilidade
+
+
+RECOMPENSAS ESPECIAIS
+O que é: Prêmios além de dinheiro.
+
+Exemplos:
+
+10 indicações = Ganha uma caneca grátis
+20 indicações = 1 Camisa grátis
+50 indicações = 1 viagem grátis
+Top 3 do mês = Ganha uma Kit especial
+Recursos:
+
+Criar metas de recompensa
+Progresso visual (barra)
+Notificação quando atingir meta
+Catálogo de recompensas
+
+
+ RESUMO DE PRIORIDADES
+ PRIORIDADE ALTA (Essencial)
+ Área do Cliente (Minha Indicação)
+ Sistema de Créditos
+ Emails Automáticos
+ Prevenção de Fraudes
+ PRIORIDADE MÉDIA (Importante)
+ Notificações em Tempo Real
+ Compartilhamento Social
+ Analytics Avançado
+ Configurações Avançadas
+ PRIORIDADE BAIXA (Diferencial)
+ Níveis/Gamificação
+ Campanhas Temporárias
+ Integração WhatsApp
+ Recompensas Especiais
+ Relatórios Exportáveis
+ Sincronização com CRM

@@ -1,0 +1,1737 @@
+O sistema deverá identificar automaticamente quem é o usuário que está navegando.
+
+Se é um usuário SuperAdmin
+Se é um usuário Agência
+Se é um usuário Vendedor
+Se é um usuário Cliente
+
+Para cada usuário dar-se permissões diferentes
+
+Cada perfil de usuário tem acesso diferente na plataforma. Portanto separe por ROLE cada perfil.
+
+O Usuário Cliente tem permissão de usuário cliente (cliente ou user_client)
+
+Crie ROLE para o usuário cliente que realiza o cadastro no sistema através da Loja/Vitrine.
+
+SISTEMA COMPLETO DE ROLES E PERMISSÕES
+Implementar um sistema robusto de identificação automática de usuários com permissões granulares por ROLE.
+
+ATUALIZAÇÃO DO SCHEMA PRISMA
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════
+// ENUMS DE ROLES
+// ═══════════════════════════════════════════════════════════
+
+enum UserRole {
+  SUPER_ADMIN      // Acesso total ao sistema
+  AGENCY_ADMIN     // Administrador da agência
+  AGENCY_MANAGER   // Gerente da agência
+  SALES            // Vendedor
+  SUPPORT          // Suporte
+  CLIENT           // Cliente final (cadastro via loja)
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODEL USER
+// ═══════════════════════════════════════════════════════════
+
+model User {
+  id              String      @id @default(cuid())
+  tenant_id       String?     // NULL para SUPER_ADMIN
+  
+  // Dados pessoais
+  name            String
+  email           String      @unique
+  password        String?     // NULL para OAuth
+  phone           String?
+  avatar_url      String?
+  
+  // Role e Status
+  role            UserRole    @default(CLIENT)
+  is_active       Boolean     @default(true)
+  is_verified     Boolean     @default(false)
+  
+  // OAuth
+  oauth_provider  String?     // google, facebook, etc
+  oauth_id        String?
+  
+  // Segurança
+  last_login_at   DateTime?
+  last_login_ip   String?
+  failed_login_attempts Int   @default(0)
+  locked_until    DateTime?
+  
+  // Metadados
+  metadata        Json?       @db.JsonB
+  created_at      DateTime    @default(now())
+  updated_at      DateTime    @updatedAt
+
+  // Relações
+  tenant          Tenant?     @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Cliente (quando role = CLIENT)
+  customer        Customer?
+  
+  // Atividades
+  reservations_created Reservation[] @relation("CreatedByUser")
+  system_logs     SystemLog[]
+  
+  @@index([tenant_id])
+  @@index([email])
+  @@index([role])
+  @@index([is_active])
+  @@map("users")
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODEL CUSTOMER (Dados adicionais do cliente)
+// ═══════════════════════════════════════════════════════════
+
+model Customer {
+  id              String      @id @default(cuid())
+  tenant_id       String
+  user_id         String?     @unique // Vinculado ao User quando tem conta
+  
+  // Dados pessoais
+  name            String
+  email           String
+  phone           String
+  document        String?     // CPF/RG
+  birth_date      Date?
+  
+  // Endereço
+  address         String?
+  city            String?
+  state           String?
+  zipcode         String?
+  country         String      @default("Brasil")
+  
+  // Preferências
+  preferences     Json?       @db.JsonB
+  tags            String[]    // ["vip", "frequente", etc]
+  
+  // Marketing
+  accepts_marketing Boolean   @default(true)
+  newsletter      Boolean     @default(false)
+  
+  // Metadados
+  notes           String?
+  created_at      DateTime    @default(now())
+  updated_at      DateTime    @updatedAt
+
+  // Relações
+  tenant          Tenant      @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  user            User?       @relation(fields: [user_id], references: [id])
+  reservations    Reservation[]
+
+  @@index([tenant_id])
+  @@index([user_id])
+  @@index([email])
+  @@map("customers")
+}
+
+// ═══════════════════════════════════════════════════════════
+// MODEL PERMISSION (Permissões granulares)
+// ═══════════════════════════════════════════════════════════
+
+model Permission {
+  id              String      @id @default(cuid())
+  
+  role            UserRole
+  resource        String      // trips, reservations, customers, etc
+  action          String      // create, read, update, delete, list
+  
+  conditions      Json?       @db.JsonB // Condições adicionais
+  
+  created_at      DateTime    @default(now())
+
+  @@unique([role, resource, action])
+  @@index([role])
+  @@map("permissions")
+}
+
+# Executar migração
+npx prisma migrate dev --name add_roles_and_permissions
+npx prisma generate
+
+DEFINIÇÃO DE PERMISSÕES POR ROLE
+// lib/permissions.ts
+
+export enum UserRole {
+  SUPER_ADMIN = 'SUPER_ADMIN',
+  AGENCY_ADMIN = 'AGENCY_ADMIN',
+  AGENCY_MANAGER = 'AGENCY_MANAGER',
+  SALES = 'SALES',
+  SUPPORT = 'SUPPORT',
+  CLIENT = 'CLIENT',
+}
+
+export enum Resource {
+  // Gestão
+  TENANTS = 'tenants',
+  USERS = 'users',
+  SETTINGS = 'settings',
+  
+  // Operacional
+  DESTINATIONS = 'destinations',
+  TRIPS = 'trips',
+  VEHICLES = 'vehicles',
+  BUS_MODELS = 'bus_models',
+  
+  // Vendas
+  RESERVATIONS = 'reservations',
+  CUSTOMERS = 'customers',
+  PAYMENTS = 'payments',
+  
+  // Financeiro
+  REVENUES = 'revenues',
+  EXPENSES = 'expenses',
+  REPORTS = 'reports',
+  
+  // Sistema
+  LOGS = 'logs',
+  ANALYTICS = 'analytics',
+}
+
+export enum Action {
+  CREATE = 'create',
+  READ = 'read',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  EXPORT = 'export',
+  MANAGE = 'manage', // Todas as ações
+}
+
+// ═══════════════════════════════════════════════════════════
+// MATRIZ DE PERMISSÕES
+// ═══════════════════════════════════════════════════════════
+
+export const PERMISSIONS_MATRIX: Record<
+  UserRole,
+  Partial<Record<Resource, Action[]>>
+> = {
+  // ─────────────────────────────────────────────────────────
+  // SUPER_ADMIN - Acesso total ao sistema
+  // ─────────────────────────────────────────────────────────
+  [UserRole.SUPER_ADMIN]: {
+    [Resource.TENANTS]: [Action.MANAGE],
+    [Resource.USERS]: [Action.MANAGE],
+    [Resource.SETTINGS]: [Action.MANAGE],
+    [Resource.DESTINATIONS]: [Action.MANAGE],
+    [Resource.TRIPS]: [Action.MANAGE],
+    [Resource.VEHICLES]: [Action.MANAGE],
+    [Resource.BUS_MODELS]: [Action.MANAGE],
+    [Resource.RESERVATIONS]: [Action.MANAGE],
+    [Resource.CUSTOMERS]: [Action.MANAGE],
+    [Resource.PAYMENTS]: [Action.MANAGE],
+    [Resource.REVENUES]: [Action.MANAGE],
+    [Resource.EXPENSES]: [Action.MANAGE],
+    [Resource.REPORTS]: [Action.MANAGE],
+    [Resource.LOGS]: [Action.MANAGE],
+    [Resource.ANALYTICS]: [Action.MANAGE],
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // AGENCY_ADMIN - Administrador da agência
+  // ─────────────────────────────────────────────────────────
+  [UserRole.AGENCY_ADMIN]: {
+    [Resource.USERS]: [Action.CREATE, Action.READ, Action.UPDATE, Action.DELETE, Action.LIST],
+    [Resource.SETTINGS]: [Action.READ, Action.UPDATE],
+    [Resource.DESTINATIONS]: [Action.MANAGE],
+    [Resource.TRIPS]: [Action.MANAGE],
+    [Resource.VEHICLES]: [Action.MANAGE],
+    [Resource.BUS_MODELS]: [Action.MANAGE],
+    [Resource.RESERVATIONS]: [Action.MANAGE],
+    [Resource.CUSTOMERS]: [Action.MANAGE],
+    [Resource.PAYMENTS]: [Action.MANAGE],
+    [Resource.REVENUES]: [Action.MANAGE],
+    [Resource.EXPENSES]: [Action.MANAGE],
+    [Resource.REPORTS]: [Action.READ, Action.LIST, Action.EXPORT],
+    [Resource.LOGS]: [Action.READ, Action.LIST],
+    [Resource.ANALYTICS]: [Action.READ],
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // AGENCY_MANAGER - Gerente da agência
+  // ─────────────────────────────────────────────────────────
+  [UserRole.AGENCY_MANAGER]: {
+    [Resource.USERS]: [Action.READ, Action.LIST],
+    [Resource.SETTINGS]: [Action.READ],
+    [Resource.DESTINATIONS]: [Action.READ, Action.LIST],
+    [Resource.TRIPS]: [Action.CREATE, Action.READ, Action.UPDATE, Action.LIST],
+    [Resource.VEHICLES]: [Action.READ, Action.LIST],
+    [Resource.BUS_MODELS]: [Action.READ, Action.LIST],
+    [Resource.RESERVATIONS]: [Action.MANAGE],
+    [Resource.CUSTOMERS]: [Action.MANAGE],
+    [Resource.PAYMENTS]: [Action.READ, Action.UPDATE, Action.LIST],
+    [Resource.REVENUES]: [Action.READ, Action.LIST],
+    [Resource.EXPENSES]: [Action.CREATE, Action.READ, Action.UPDATE, Action.LIST],
+    [Resource.REPORTS]: [Action.READ, Action.LIST, Action.EXPORT],
+    [Resource.LOGS]: [Action.READ, Action.LIST],
+    [Resource.ANALYTICS]: [Action.READ],
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // SALES - Vendedor
+  // ─────────────────────────────────────────────────────────
+  [UserRole.SALES]: {
+    [Resource.DESTINATIONS]: [Action.READ, Action.LIST],
+    [Resource.TRIPS]: [Action.READ, Action.LIST],
+    [Resource.VEHICLES]: [Action.READ, Action.LIST],
+    [Resource.RESERVATIONS]: [Action.CREATE, Action.READ, Action.UPDATE, Action.LIST],
+    [Resource.CUSTOMERS]: [Action.CREATE, Action.READ, Action.UPDATE, Action.LIST],
+    [Resource.PAYMENTS]: [Action.READ, Action.LIST],
+    [Resource.REPORTS]: [Action.READ, Action.LIST],
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // SUPPORT - Suporte
+  // ─────────────────────────────────────────────────────────
+  [UserRole.SUPPORT]: {
+    [Resource.DESTINATIONS]: [Action.READ, Action.LIST],
+    [Resource.TRIPS]: [Action.READ, Action.LIST],
+    [Resource.RESERVATIONS]: [Action.READ, Action.UPDATE, Action.LIST],
+    [Resource.CUSTOMERS]: [Action.READ, Action.UPDATE, Action.LIST],
+    [Resource.PAYMENTS]: [Action.READ, Action.LIST],
+    [Resource.LOGS]: [Action.READ, Action.LIST],
+  },
+
+  // ─────────────────────────────────────────────────────────
+  // CLIENT - Cliente final (cadastro via loja)
+  // ─────────────────────────────────────────────────────────
+  [UserRole.CLIENT]: {
+    [Resource.DESTINATIONS]: [Action.READ, Action.LIST],
+    [Resource.TRIPS]: [Action.READ, Action.LIST],
+    [Resource.RESERVATIONS]: [Action.CREATE, Action.READ, Action.LIST], // Apenas suas próprias
+    [Resource.CUSTOMERS]: [Action.READ, Action.UPDATE], // Apenas seus próprios dados
+  },
+}
+
+// ═══════════════════════════════════════════════════════════
+// FUNÇÕES DE VERIFICAÇÃO DE PERMISSÃO
+// ═══════════════════════════════════════════════════════════
+
+export function hasPermission(
+  userRole: UserRole,
+  resource: Resource,
+  action: Action
+): boolean {
+  const rolePermissions = PERMISSIONS_MATRIX[userRole]
+  
+  if (!rolePermissions) return false
+  
+  const resourceActions = rolePermissions[resource]
+  
+  if (!resourceActions) return false
+  
+  // Se tem MANAGE, tem todas as permissões
+  if (resourceActions.includes(Action.MANAGE)) return true
+  
+  return resourceActions.includes(action)
+}
+
+export function canAccessDashboard(userRole: UserRole): boolean {
+  return [
+    UserRole.SUPER_ADMIN,
+    UserRole.AGENCY_ADMIN,
+    UserRole.AGENCY_MANAGER,
+    UserRole.SALES,
+    UserRole.SUPPORT,
+  ].includes(userRole)
+}
+
+export function canAccessPublicStore(userRole: UserRole): boolean {
+  return true // Todos podem acessar a loja
+}
+
+export function getRoleLabel(role: UserRole): string {
+  const labels: Record<UserRole, string> = {
+    [UserRole.SUPER_ADMIN]: 'Super Administrador',
+    [UserRole.AGENCY_ADMIN]: 'Administrador da Agência',
+    [UserRole.AGENCY_MANAGER]: 'Gerente',
+    [UserRole.SALES]: 'Vendedor',
+    [UserRole.SUPPORT]: 'Suporte',
+    [UserRole.CLIENT]: 'Cliente',
+  }
+  
+  return labels[role] || role
+}
+
+export function getRoleBadgeColor(role: UserRole): string {
+  const colors: Record<UserRole, string> = {
+    [UserRole.SUPER_ADMIN]: 'bg-red-100 text-red-700 border-red-300',
+    [UserRole.AGENCY_ADMIN]: 'bg-purple-100 text-purple-700 border-purple-300',
+    [UserRole.AGENCY_MANAGER]: 'bg-blue-100 text-blue-700 border-blue-300',
+    [UserRole.SALES]: 'bg-green-100 text-green-700 border-green-300',
+    [UserRole.SUPPORT]: 'bg-yellow-100 text-yellow-700 border-yellow-300',
+    [UserRole.CLIENT]: 'bg-gray-100 text-gray-700 border-gray-300',
+  }
+  
+  return colors[role] || 'bg-gray-100 text-gray-700'
+}
+
+MIDDLEWARE DE AUTENTICAÇÃO E AUTORIZAÇÃO
+// middleware.ts
+
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+import { getToken } from 'next-auth/jwt'
+import { UserRole, canAccessDashboard } from '@/lib/permissions'
+
+export async function middleware(request: NextRequest) {
+  const token = await getToken({
+    req: request,
+    secret: process.env.NEXTAUTH_SECRET,
+  })
+
+  const path = request.nextUrl.pathname
+
+  // ═══════════════════════════════════════════════════════════
+  // ROTAS PÚBLICAS (sem autenticação)
+  // ═══════════════════════════════════════════════════════════
+  const publicPaths = [
+    '/',
+    '/auth/login',
+    '/auth/register',
+    '/auth/forgot-password',
+    '/loja',
+  ]
+
+  const isPublicPath = publicPaths.some((publicPath) =>
+    path.startsWith(publicPath)
+  )
+
+  const isPublicApi = path.startsWith('/api/public')
+  const isAuthApi = path.startsWith('/api/auth')
+
+  if (isPublicPath || isPublicApi || isAuthApi) {
+    return NextResponse.next()
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // VERIFICAR AUTENTICAÇÃO
+  // ═══════════════════════════════════════════════════════════
+  if (!token) {
+    const loginUrl = new URL('/auth/login', request.url)
+    loginUrl.searchParams.set('callbackUrl', path)
+    return NextResponse.redirect(loginUrl)
+  }
+
+  const userRole = token.role as UserRole
+
+  // ═══════════════════════════════════════════════════════════
+  // DASHBOARD - Apenas usuários internos
+  // ═══════════════════════════════════════════════════════════
+  if (path.startsWith('/dashboard')) {
+    if (!canAccessDashboard(userRole)) {
+      // Cliente tentando acessar dashboard → redirecionar para área do cliente
+      return NextResponse.redirect(new URL('/minha-conta', request.url))
+    }
+
+    // Verificar onboarding (apenas para AGENCY_ADMIN)
+    if (userRole === UserRole.AGENCY_ADMIN && path !== '/onboarding') {
+      // Verificar se completou onboarding
+      // (implementar verificação no banco)
+    }
+
+    return NextResponse.next()
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ÁREA DO CLIENTE - Apenas CLIENT
+  // ═══════════════════════════════════════════════════════════
+  if (path.startsWith('/minha-conta')) {
+    if (userRole !== UserRole.CLIENT) {
+      // Usuário interno tentando acessar área do cliente
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+
+    return NextResponse.next()
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // SUPER ADMIN - Acesso total
+  // ═══════════════════════════════════════════════════════════
+  if (path.startsWith('/admin')) {
+    if (userRole !== UserRole.SUPER_ADMIN) {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+
+    return NextResponse.next()
+  }
+
+  return NextResponse.next()
+}
+
+export const config = {
+  matcher: [
+    '/dashboard/:path*',
+    '/minha-conta/:path*',
+    '/admin/:path*',
+    '/onboarding',
+    '/api/trips/:path*',
+    '/api/reservations/:path*',
+    '/api/customers/:path*',
+    '/api/users/:path*',
+  ],
+}
+
+HOOK DE PERMISSÕES
+// hooks/use-permissions.ts
+
+'use client'
+
+import { useSession } from 'next-auth/react'
+import {
+  UserRole,
+  Resource,
+  Action,
+  hasPermission,
+  canAccessDashboard,
+  getRoleLabel,
+  getRoleBadgeColor,
+} from '@/lib/permissions'
+
+export function usePermissions() {
+  const { data: session } = useSession()
+
+  const userRole = (session?.user?.role as UserRole) || UserRole.CLIENT
+
+  return {
+    // Informações do usuário
+    user: session?.user,
+    role: userRole,
+    roleLabel: getRoleLabel(userRole),
+    roleBadgeColor: getRoleBadgeColor(userRole),
+    tenantId: session?.user?.tenantId,
+
+    // Verificações de acesso
+    canAccessDashboard: canAccessDashboard(userRole),
+    isSuperAdmin: userRole === UserRole.SUPER_ADMIN,
+    isAgencyAdmin: userRole === UserRole.AGENCY_ADMIN,
+    isAgencyManager: userRole === UserRole.AGENCY_MANAGER,
+    isSales: userRole === UserRole.SALES,
+    isSupport: userRole === UserRole.SUPPORT,
+    isClient: userRole === UserRole.CLIENT,
+
+    // Função de verificação de permissão
+    can: (resource: Resource, action: Action) => {
+      return hasPermission(userRole, resource, action)
+    },
+
+    // Verificações específicas
+    canCreateTrips: hasPermission(userRole, Resource.TRIPS, Action.CREATE),
+    canManageUsers: hasPermission(userRole, Resource.USERS, Action.MANAGE),
+    canViewReports: hasPermission(userRole, Resource.REPORTS, Action.READ),
+    canManageReservations: hasPermission(
+      userRole,
+      Resource.RESERVATIONS,
+      Action.MANAGE
+    ),
+  }
+}
+
+COMPONENTE DE PROTEÇÃO
+// components/auth/protected.tsx
+
+'use client'
+
+import { ReactNode } from 'react'
+import { usePermissions } from '@/hooks/use-permissions'
+import { Resource, Action } from '@/lib/permissions'
+import { Card } from '@/components/ui/card'
+import { ShieldAlert } from 'lucide-react'
+
+interface ProtectedProps {
+  children: ReactNode
+  resource: Resource
+  action: Action
+  fallback?: ReactNode
+}
+
+export function Protected({
+  children,
+  resource,
+  action,
+  fallback,
+}: ProtectedProps) {
+  const { can } = usePermissions()
+
+  if (!can(resource, action)) {
+    if (fallback) {
+      return <>{fallback}</>
+    }
+
+    return (
+      <Card className="p-8 text-center">
+        <ShieldAlert className="h-16 w-16 text-red-500 mx-auto mb-4" />
+        <h3 className="text-xl font-bold text-gray-900 mb-2">
+          Acesso Negado
+        </h3>
+        <p className="text-gray-600">
+          Você não tem permissão para acessar este recurso.
+        </p>
+      </Card>
+    )
+  }
+
+  return <>{children}</>
+}
+
+API DE CADASTRO DE CLIENTE (LOJA)
+// app/api/auth/register-client/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import bcrypt from 'bcryptjs'
+import { z } from 'zod'
+
+const registerSchema = z.object({
+  name: z.string().min(3),
+  email: z.string().email(),
+  password: z.string().min(6),
+  phone: z.string().min(10),
+  tenantSlug: z.string(),
+})
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+    const validatedData = registerSchema.parse(body)
+
+    // Buscar tenant
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: validatedData.tenantSlug },
+    })
+
+    if (!tenant) {
+      return NextResponse.json(
+        { error: 'Agência não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    // Verificar se email já existe
+    const existingUser = await prisma.user.findUnique({
+      where: { email: validatedData.email },
+    })
+
+    if (existingUser) {
+      return NextResponse.json(
+        { error: 'Email já cadastrado' },
+        { status: 400 }
+      )
+    }
+
+    // Hash da senha
+    const hashedPassword = await bcrypt.hash(validatedData.password, 10)
+
+    // Criar usuário e customer em transação
+    const result = await prisma.$transaction(async (tx) => {
+      // Criar usuário com role CLIENT
+      const user = await tx.user.create({
+        data: {
+          tenant_id: tenant.id,
+          name: validatedData.name,
+          email: validatedData.email,
+          password: hashedPassword,
+          phone: validatedData.phone,
+          role: 'CLIENT', // ← ROLE DE CLIENTE
+          is_active: true,
+          is_verified: false,
+        },
+      })
+
+      // Criar customer vinculado ao user
+      const customer = await tx.customer.create({
+        data: {
+          tenant_id: tenant.id,
+          user_id: user.id,
+          name: validatedData.name,
+          email: validatedData.email,
+          phone: validatedData.phone,
+        },
+      })
+
+      // Log
+      await tx.systemLog.create({
+        data: {
+          tenant_id: tenant.id,
+          user_id: user.id,
+          category: 'auth',
+          action: 'client_registered',
+          severity: 'info',
+          description: 'Cliente cadastrado via loja',
+          metadata: { email: user.email },
+        },
+      })
+
+      return { user, customer }
+    })
+
+    return NextResponse.json({
+      message: 'Cadastro realizado com sucesso!',
+      user: {
+        id: result.user.id,
+        name: result.user.name,
+        email: result.user.email,
+        role: result.user.role,
+      },
+    })
+  } catch (error) {
+    console.error('Erro no cadastro:', error)
+
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: error.errors[0].message },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json(
+      { error: 'Erro ao realizar cadastro' },
+      { status: 500 }
+    )
+  }
+}
+
+PÁGINAS DE CADASTRO SEPARADAS POR TIPO DE USUÁRIO
+Criar páginas de cadastro específicas para cada tipo de usuário com fluxos otimizados.
+
+📁 ESTRUTURA DE ROTAS
+app/
+├── auth/
+│   ├── register/
+│   │   ├── cliente/page.tsx          ← Cadastro de Cliente (Loja)
+│   │   ├── agencia/page.tsx          ← Cadastro de Agência
+│   │   └── vendedor/page.tsx         ← Cadastro de Vendedor (interno)
+│   ├── login/page.tsx
+│   └── layout.tsx
+
+LAYOUT DE AUTENTICAÇÃO
+// app/auth/layout.tsx
+
+import { Metadata } from 'next'
+import Link from 'next/link'
+import { Bus } from 'lucide-react'
+
+export const metadata: Metadata = {
+  title: 'Autenticação | Sistema de Turismo',
+  description: 'Faça login ou cadastre-se',
+}
+
+export default function AuthLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
+      {/* Header */}
+      <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+            <div className="p-2 bg-gradient-to-br from-blue-600 to-blue-700 rounded-xl">
+              <Bus className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">TurismoBus</h1>
+              <p className="text-xs text-gray-600">Sistema de Gestão</p>
+            </div>
+          </Link>
+        </div>
+      </header>
+
+      {/* Content */}
+      <main className="flex items-center justify-center px-4 py-12">
+        {children}
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t bg-white/80 backdrop-blur-sm mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center text-sm text-gray-600">
+          <p>© 2026 TurismoBus. Todos os direitos reservados.</p>
+        </div>
+      </footer>
+    </div>
+  )
+}
+
+CADASTRO DE CLIENTE (LOJA)
+// app/auth/register/cliente/page.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  User,
+  Mail,
+  Lock,
+  Phone,
+  ArrowRight,
+  Loader2,
+  ShoppingBag,
+  CheckCircle2,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { signIn } from 'next-auth/react'
+
+export default function RegisterClientPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const tenantSlug = searchParams.get('tenant') || 'default'
+  const callbackUrl = searchParams.get('callbackUrl') || `/loja/${tenantSlug}`
+
+  const [isLoading, setIsLoading] = useState(false)
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+    phone: '',
+    acceptTerms: false,
+    acceptMarketing: true,
+  })
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    // Validações
+    if (formData.password !== formData.confirmPassword) {
+      toast.error('As senhas não coincidem')
+      return
+    }
+
+    if (!formData.acceptTerms) {
+      toast.error('Você precisa aceitar os termos de uso')
+      return
+    }
+
+    try {
+      setIsLoading(true)
+
+      // Registrar cliente
+      const response = await fetch('/api/auth/register-client', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
+          phone: formData.phone,
+          tenantSlug,
+          acceptsMarketing: formData.acceptMarketing,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erro ao realizar cadastro')
+      }
+
+      toast.success('Cadastro realizado com sucesso!')
+
+      // Fazer login automaticamente
+      const signInResult = await signIn('credentials', {
+        email: formData.email,
+        password: formData.password,
+        redirect: false,
+      })
+
+      if (signInResult?.ok) {
+        router.push(callbackUrl)
+      } else {
+        router.push('/auth/login')
+      }
+    } catch (error: any) {
+      console.error('Erro:', error)
+      toast.error(error.message || 'Erro ao realizar cadastro')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="w-full max-w-6xl mx-auto">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+        {/* Coluna Esquerda - Informações */}
+        <div className="hidden lg:block space-y-8">
+          <div>
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-full mb-6">
+              <ShoppingBag className="h-4 w-4" />
+              <span className="text-sm font-semibold">Cadastro de Cliente</span>
+            </div>
+            
+            <h1 className="text-5xl font-bold text-gray-900 mb-4">
+              Crie sua conta e comece a viajar!
+            </h1>
+            <p className="text-xl text-gray-600">
+              Cadastre-se gratuitamente e tenha acesso a ofertas exclusivas de viagens.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            {[
+              {
+                icon: CheckCircle2,
+                title: 'Reservas Rápidas',
+                description: 'Faça suas reservas em poucos cliques',
+              },
+              {
+                icon: CheckCircle2,
+                title: 'Ofertas Exclusivas',
+                description: 'Receba promoções especiais por email',
+              },
+              {
+                icon: CheckCircle2,
+                title: 'Histórico de Viagens',
+                description: 'Acompanhe todas as suas viagens',
+              },
+              {
+                icon: CheckCircle2,
+                title: 'Suporte Dedicado',
+                description: 'Atendimento personalizado quando precisar',
+              },
+            ].map((benefit, index) => (
+              <div key={index} className="flex items-start gap-4">
+                <div className="p-2 bg-green-100 rounded-lg">
+                  <benefit.icon className="h-5 w-5 text-green-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">{benefit.title}</h3>
+                  <p className="text-sm text-gray-600">{benefit.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Coluna Direita - Formulário */}
+        <Card className="p-8 shadow-2xl">
+          <div className="mb-8">
+            <h2 className="text-3xl font-bold text-gray-900 mb-2">
+              Criar Conta
+            </h2>
+            <p className="text-gray-600">
+              Preencha seus dados para começar
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {/* Nome Completo */}
+            <div>
+              <Label htmlFor="name">Nome Completo *</Label>
+              <div className="relative">
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  id="name"
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  placeholder="João da Silva"
+                  className="pl-10"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Email */}
+            <div>
+              <Label htmlFor="email">Email *</Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) =>
+                    setFormData({ ...formData, email: e.target.value })
+                  }
+                  placeholder="seu@email.com"
+                  className="pl-10"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Telefone */}
+            <div>
+              <Label htmlFor="phone">Telefone/WhatsApp *</Label>
+              <div className="relative">
+                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  id="phone"
+                  type="tel"
+                  value={formData.phone}
+                  onChange={(e) =>
+                    setFormData({ ...formData, phone: e.target.value })
+                  }
+                  placeholder="(11) 99999-9999"
+                  className="pl-10"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Senha */}
+            <div>
+              <Label htmlFor="password">Senha *</Label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  id="password"
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) =>
+                    setFormData({ ...formData, password: e.target.value })
+                  }
+                  placeholder="Mínimo 6 caracteres"
+                  className="pl-10"
+                  required
+                  minLength={6}
+                />
+              </div>
+            </div>
+
+            {/* Confirmar Senha */}
+            <div>
+              <Label htmlFor="confirmPassword">Confirmar Senha *</Label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                <Input
+                  id="confirmPassword"
+                  type="password"
+                  value={formData.confirmPassword}
+                  onChange={(e) =>
+                    setFormData({ ...formData, confirmPassword: e.target.value })
+                  }
+                  placeholder="Repita sua senha"
+                  className="pl-10"
+                  required
+                  minLength={6}
+                />
+              </div>
+            </div>
+
+            {/* Termos */}
+            <div className="space-y-3">
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  id="acceptTerms"
+                  checked={formData.acceptTerms}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, acceptTerms: checked as boolean })
+                  }
+                />
+                <Label
+                  htmlFor="acceptTerms"
+                  className="text-sm font-normal cursor-pointer"
+                >
+                  Eu aceito os{' '}
+                  <Link href="/termos" className="text-blue-600 hover:underline">
+                    Termos de Uso
+                  </Link>{' '}
+                  e a{' '}
+                  <Link href="/privacidade" className="text-blue-600 hover:underline">
+                    Política de Privacidade
+                  </Link>
+                </Label>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  id="acceptMarketing"
+                  checked={formData.acceptMarketing}
+                  onCheckedChange={(checked) =>
+                    setFormData({
+                      ...formData,
+                      acceptMarketing: checked as boolean,
+                    })
+                  }
+                />
+                <Label
+                  htmlFor="acceptMarketing"
+                  className="text-sm font-normal cursor-pointer"
+                >
+                  Quero receber ofertas e novidades por email
+                </Label>
+              </div>
+            </div>
+
+            {/* Botão */}
+            <Button
+              type="submit"
+              size="lg"
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800"
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                  Criando conta...
+                </>
+              ) : (
+                <>
+                  Criar Conta
+                  <ArrowRight className="h-5 w-5 ml-2" />
+                </>
+              )}
+            </Button>
+          </form>
+
+          {/* Link para Login */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-600">
+              Já tem uma conta?{' '}
+              <Link
+                href={`/auth/login?callbackUrl=${encodeURIComponent(callbackUrl)}`}
+                className="text-blue-600 hover:underline font-semibold"
+              >
+                Fazer Login
+              </Link>
+            </p>
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+CADASTRO DE AGÊNCIA
+// app/auth/register/agencia/page.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Building2,
+  User,
+  Mail,
+  Lock,
+  Phone,
+  FileText,
+  MapPin,
+  ArrowRight,
+  Loader2,
+  CheckCircle2,
+  Briefcase,
+} from 'lucide-react'
+import { toast } from 'sonner'
+
+export default function RegisterAgencyPage() {
+  const router = useRouter()
+  const [isLoading, setIsLoading] = useState(false)
+  const [step, setStep] = useState(1)
+
+  const [formData, setFormData] = useState({
+    // Dados da Agência
+    agencyName: '',
+    cnpj: '',
+    phone: '',
+    email: '',
+    
+    // Endereço
+    address: '',
+    city: '',
+    state: '',
+    zipcode: '',
+    
+    // Dados do Administrador
+    adminName: '',
+    adminEmail: '',
+    adminPhone: '',
+    password: '',
+    confirmPassword: '',
+    
+    // Plano
+    plan: 'starter',
+    
+    // Termos
+    acceptTerms: false,
+  })
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (formData.password !== formData.confirmPassword) {
+      toast.error('As senhas não coincidem')
+      return
+    }
+
+    if (!formData.acceptTerms) {
+      toast.error('Você precisa aceitar os termos de uso')
+      return
+    }
+
+    try {
+      setIsLoading(true)
+
+      const response = await fetch('/api/auth/register-agency', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erro ao realizar cadastro')
+      }
+
+      toast.success('Agência cadastrada com sucesso!')
+      
+      // Redirecionar para onboarding
+      router.push(`/onboarding?tenant=${data.tenant.slug}`)
+    } catch (error: any) {
+      console.error('Erro:', error)
+      toast.error(error.message || 'Erro ao realizar cadastro')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="w-full max-w-6xl mx-auto">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+        {/* Coluna Esquerda - Informações */}
+        <div className="hidden lg:block space-y-8 sticky top-8">
+          <div>
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-purple-100 text-purple-700 rounded-full mb-6">
+              <Building2 className="h-4 w-4" />
+              <span className="text-sm font-semibold">Cadastro de Agência</span>
+            </div>
+            
+            <h1 className="text-5xl font-bold text-gray-900 mb-4">
+              Comece a vender viagens hoje!
+            </h1>
+            <p className="text-xl text-gray-600">
+              Cadastre sua agência e tenha acesso a uma plataforma completa de gestão.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            {[
+              {
+                icon: CheckCircle2,
+                title: 'Gestão Completa',
+                description: 'Controle total de viagens, reservas e clientes',
+              },
+              {
+                icon: CheckCircle2,
+                title: 'Loja Online',
+                description: 'Sua própria vitrine de pacotes personalizada',
+              },
+              {
+                icon: CheckCircle2,
+                title: 'Relatórios Financeiros',
+                description: 'Acompanhe receitas e despesas em tempo real',
+              },
+              {
+                icon: CheckCircle2,
+                title: 'Suporte Dedicado',
+                description: 'Equipe pronta para ajudar seu negócio crescer',
+              },
+            ].map((benefit, index) => (
+              <div key={index} className="flex items-start gap-4">
+                <div className="p-2 bg-green-100 rounded-lg">
+                  <benefit.icon className="h-5 w-5 text-green-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">{benefit.title}</h3>
+                  <p className="text-sm text-gray-600">{benefit.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Planos */}
+          <Card className="p-6 bg-gradient-to-br from-purple-50 to-indigo-50 border-2 border-purple-200">
+            <h3 className="font-bold text-lg mb-3">📊 Planos Disponíveis</h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-700">Starter</span>
+                <span className="font-bold text-purple-700">Grátis</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-700">Professional</span>
+                <span className="font-bold text-purple-700">R$ 199/mês</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-700">Enterprise</span>
+                <span className="font-bold text-purple-700">R$ 499/mês</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Coluna Direita - Formulário */}
+        <Card className="p-8 shadow-2xl">
+          <div className="mb-8">
+            <h2 className="text-3xl font-bold text-gray-900 mb-2">
+              Cadastrar Agência
+            </h2>
+            <p className="text-gray-600">
+              Etapa {step} de 3 - {step === 1 ? 'Dados da Agência' : step === 2 ? 'Endereço' : 'Administrador'}
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* ETAPA 1: Dados da Agência */}
+            {step === 1 && (
+              <div className="space-y-5">
+                <div>
+                  <Label htmlFor="agencyName">Nome da Agência *</Label>
+                  <div className="relative">
+                    <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="agencyName"
+                      value={formData.agencyName}
+                      onChange={(e) =>
+                        setFormData({ ...formData, agencyName: e.target.value })
+                      }
+                      placeholder="Viagens & Turismo Ltda"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="cnpj">CNPJ *</Label>
+                  <div className="relative">
+                    <FileText className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="cnpj"
+                      value={formData.cnpj}
+                      onChange={(e) =>
+                        setFormData({ ...formData, cnpj: e.target.value })
+                      }
+                      placeholder="00.000.000/0000-00"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="email">Email da Agência *</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) =>
+                        setFormData({ ...formData, email: e.target.value })
+                      }
+                      placeholder="contato@agencia.com"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="phone">Telefone *</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="phone"
+                      type="tel"
+                      value={formData.phone}
+                      onChange={(e) =>
+                        setFormData({ ...formData, phone: e.target.value })
+                      }
+                      placeholder="(11) 3000-0000"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <Button
+                  type="button"
+                  size="lg"
+                  className="w-full"
+                  onClick={() => setStep(2)}
+                >
+                  Próxima Etapa
+                  <ArrowRight className="h-5 w-5 ml-2" />
+                </Button>
+              </div>
+            )}
+
+            {/* ETAPA 2: Endereço */}
+            {step === 2 && (
+              <div className="space-y-5">
+                <div>
+                  <Label htmlFor="zipcode">CEP *</Label>
+                  <div className="relative">
+                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="zipcode"
+                      value={formData.zipcode}
+                      onChange={(e) =>
+                        setFormData({ ...formData, zipcode: e.target.value })
+                      }
+                      placeholder="00000-000"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="address">Endereço Completo *</Label>
+                  <Input
+                    id="address"
+                    value={formData.address}
+                    onChange={(e) =>
+                      setFormData({ ...formData, address: e.target.value })
+                    }
+                    placeholder="Rua, número, complemento"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="city">Cidade *</Label>
+                    <Input
+                      id="city"
+                      value={formData.city}
+                      onChange={(e) =>
+                        setFormData({ ...formData, city: e.target.value })
+                      }
+                      placeholder="São Paulo"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="state">Estado *</Label>
+                    <Select
+                      value={formData.state}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, state: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[
+                          'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO',
+                          'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI',
+                          'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
+                        ].map((state) => (
+                          <SelectItem key={state} value={state}>
+                            {state}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    className="w-full"
+                    onClick={() => setStep(1)}
+                  >
+                    Voltar
+                  </Button>
+                  <Button
+                    type="button"
+                    size="lg"
+                    className="w-full"
+                    onClick={() => setStep(3)}
+                  >
+                    Próxima Etapa
+                    <ArrowRight className="h-5 w-5 ml-2" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* ETAPA 3: Administrador */}
+            {step === 3 && (
+              <div className="space-y-5">
+                <div>
+                  <Label htmlFor="adminName">Nome do Administrador *</Label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="adminName"
+                      value={formData.adminName}
+                      onChange={(e) =>
+                        setFormData({ ...formData, adminName: e.target.value })
+                      }
+                      placeholder="João da Silva"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="adminEmail">Email do Administrador *</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="adminEmail"
+                      type="email"
+                      value={formData.adminEmail}
+                      onChange={(e) =>
+                        setFormData({ ...formData, adminEmail: e.target.value })
+                      }
+                      placeholder="admin@agencia.com"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="adminPhone">Telefone do Administrador *</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="adminPhone"
+                      type="tel"
+                      value={formData.adminPhone}
+                      onChange={(e) =>
+                        setFormData({ ...formData, adminPhone: e.target.value })
+                      }
+                      placeholder="(11) 99999-9999"
+                      className="pl-10"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="password">Senha *</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="password"
+                      type="password"
+                      value={formData.password}
+                      onChange={(e) =>
+                        setFormData({ ...formData, password: e.target.value })
+                      }
+                      placeholder="Mínimo 6 caracteres"
+                      className="pl-10"
+                      required
+                      minLength={6}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="confirmPassword">Confirmar Senha *</Label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                    <Input
+                      id="confirmPassword"
+                      type="password"
+                      value={formData.confirmPassword}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          confirmPassword: e.target.value,
+                        })
+                      }
+                      placeholder="Repita sua senha"
+                      className="pl-10"
+                      required
+                      minLength={6}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="plan">Plano *</Label>
+                  <Select
+                    value={formData.plan}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, plan: value })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="starter">
+                        <div className="flex items-center gap-2">
+                          <Briefcase className="h-4 w-4" />
+                          <div>
+                            <p className="font-semibold">Starter</p>
+                            <p className="text-xs text-gray-600">Grátis</p>
+                          </div>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="professional">
+                        <div className="flex items-center gap-2">
+                          <Briefcase className="h-4 w-4" />
+                          <div>
+                            <p className="font-semibold">Professional</p>
+                            <p className="text-xs text-gray-600">R$ 199/mês</p>
+                          </div>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="enterprise">
+                        <div className="flex items-center gap-2">
+                          <Briefcase className="h-4 w-4" />
+                          <div>
+                            <p className="font-semibold">Enterprise</p>
+                            <p className="text-xs text-gray-600">R$ 499/mês</p>
+                          </div>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    id="acceptTerms"
+                    checked={formData.acceptTerms}
+                    onCheckedChange={(checked) =>
+                      setFormData({
+                        ...formData,
+                        acceptTerms: checked as boolean,
+                      })
+                    }
+                  />
+                  <Label
+                    htmlFor="acceptTerms"
+                    className="text-sm font-normal cursor-pointer"
+                  >
+                    Eu aceito os{' '}
+                    <Link href="/termos" className="text-blue-600 hover:underline">
+                      Termos de Uso
+                    </Link>{' '}
+                    e a{' '}
+                    <Link
+                      href="/privacidade"
+                      className="text-blue-600 hover:underline"
+                    >
+                      Política de Privacidade
+                    </Link>
+                  </Label>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    className="w-full"
+                    onClick={() => setStep(2)}
+                  >
+                    Voltar
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="lg"
+                    className="w-full bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                        Cadastrando...
+                      </>
+                    ) : (
+                      <>
+                        Finalizar Cadastro
+                        <ArrowRight className="h-5 w-5 ml-2" />
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </form>
+
+          {/* Link para Login */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-600">
+              Já tem uma conta?{' '}
+              <Link
+                href="/auth/login"
+                className="text-blue-600 hover:underline font-semibold"
+              >
+                Fazer Login
+              </Link>
+            </p>
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+👨‍💼 Cadastro de Vendedor (interno)
+🔐 APIs de registro
+🎯 Página de seleção de tipo de cadastro
+
+PÁGINA DE LOGIN UNIVERSAL
+COMPONENTE DE REDIRECIONAMENTO AUTOMÁTICO
+
+Implementar Roles:
+SUPERADMIN → Acesso total (todas as agências)
+ADMIN → Dono da agência
+MANAGER → Gerente da agência
+SALES → Vendedor
+CLIENT → Cliente (Loja/Vitrine)
+ Funcionalidades:
+ Identificação automática de usuário
+ Redirecionamento baseado em role
+ Middleware de proteção de rotas
+ Sistema de permissões granular
+ Hook personalizado usePermissions()
+ Componente <Protected> para UI
+ Hierarquia de roles
+ Login universal (Agência + Cliente)
+Fluxo de Autenticação:
+
+Usuário faz login
+Sistema identifica o role
+Middleware redireciona automaticamente:
+SuperAdmin → /superadmin
+Admin/Manager/Sales/ → /dashboard
+Client → /meu-perfil
+Rotas protegidas por permissões
+UI adaptada ao role do usuário

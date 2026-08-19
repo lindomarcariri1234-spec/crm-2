@@ -1,0 +1,1448 @@
+Implementar Atualização de TEMPLATES COM ABAS SEPARADAS.
+
+O template de exibição Layout Double Decker com abas separadas (Piso Superior / Piso Inferior) mas unificados no sistema de reserva. Ainda está com a visualização única. Atualizar para visualizar Andar superior e Andar inferior.
+
+Implementar
+
+UI/UX Design (User Interface/User Experience Design). 
+UI (User Interface - Interface do Usuário): Focar na visualização do cliente ao reservar a viagem (escolha de assentos, aparência e layout (cores, botões, tipografia).
+UX (User Experience - Experiência do Usuário): Focar no funcionamento, usabilidade, intuitividade e na jornada do usuário ao selecionar o assento, escolher em qual assento deseja viajar.
+
+IMPLEMENTAÇÃO COMPLETA DE UI/UX PARA DOUBLE DECKER COM ABAS
+
+// lib/bus-templates.ts - ATUALIZADO
+
+export const BUS_TEMPLATES = {
+  // ═══════════════════════════════════════════════════════════
+  // DOUBLE DECKER 56 LUGARES (LAYOUT DA IMAGEM)
+  // ═══════════════════════════════════════════════════════════
+  DOUBLE_DECKER_56: {
+    id: 'DOUBLE_DECKER_56',
+    name: 'Double Decker 56 Lugares',
+    bus_type: 'DOUBLE_DECKER',
+    total_seats: 56,
+    has_upper_deck: true,
+    has_lower_deck: true,
+    upper_deck_seats: 44,
+    lower_deck_seats: 12,
+    config: {
+      upperDeck: {
+        rows: 11,
+        columns: 5,
+        layout: [
+          ['01', '02', 'AISLE', '04', '03'],
+          ['05', '06', 'AISLE', 'X', 'X'],
+          ['07', '08', 'AISLE', 'X', 'X'],
+          ['09', '10', 'AISLE', '12', '11'],
+          ['13', '14', 'AISLE', '16', '15'],
+          ['17', '18', 'AISLE', '20', '19'],
+          ['21', '22', 'AISLE', '24', '23'],
+          ['25', '26', 'AISLE', '28', '27'],
+          ['29', '30', 'AISLE', '32', '31'],
+          ['33', '34', 'AISLE', '36', '35'],
+          ['37', '38', 'AISLE', '40', '39'],
+          ['41', '42', 'AISLE', '44', '43'],
+        ],
+      },
+      lowerDeck: {
+        rows: 4,
+        columns: 5,
+        layout: [
+          ['X', 'X', 'AISLE', 'X', 'X'], // Banheiro
+          ['45', '46', 'AISLE', '48', '47'],
+          ['49', '50', 'AISLE', '52', '51'],
+          ['53', '54', 'AISLE', '56', '55'],
+        ],
+      },
+    },
+  },
+}
+
+COMPONENTE DE SELEÇÃO DE ASSENTOS COM UI/UX APRIMORADA
+
+// components/seats/enhanced-seat-selector.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  ArrowUp,
+  ArrowDown,
+  User,
+  Check,
+  X,
+  Info,
+  Loader2,
+  Armchair,
+  MapPin,
+  Sparkles,
+  Users,
+  DollarSign,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+import { motion, AnimatePresence } from 'framer-motion'
+
+interface Seat {
+  id: string
+  seat_number: string
+  deck: string
+  row: number
+  column: number
+  seat_type: string
+  is_available: boolean
+  is_blocked: boolean
+  price_modifier?: number
+  reservations: any[]
+}
+
+interface EnhancedSeatSelectorProps {
+  tripId: string
+  maxSeats?: number
+  onSeatsSelected: (seats: Seat[]) => void
+  pricePerPerson: number
+}
+
+export function EnhancedSeatSelector({
+  tripId,
+  maxSeats = 10,
+  onSeatsSelected,
+  pricePerPerson,
+}: EnhancedSeatSelectorProps) {
+  const [isLoading, setIsLoading] = useState(true)
+  const [layout, setLayout] = useState<any>(null)
+  const [stats, setStats] = useState<any>(null)
+  const [selectedSeats, setSelectedSeats] = useState<Seat[]>([])
+  const [currentDeck, setCurrentDeck] = useState<'upper' | 'lower'>('upper')
+  const [hoveredSeat, setHoveredSeat] = useState<string | null>(null)
+
+  useEffect(() => {
+    loadSeats()
+  }, [tripId])
+
+  const loadSeats = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch(`/api/public/packages/${tripId}/seats`)
+      const data = await response.json()
+      setLayout(data.layout)
+      setStats(data.stats)
+    } catch (error) {
+      console.error('Erro ao carregar assentos:', error)
+      toast.error('Erro ao carregar assentos')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSeatClick = (seat: Seat) => {
+    if (seat.reservations.length > 0 || seat.is_blocked) {
+      toast.error('Este assento não está disponível', {
+        description: 'Escolha outro assento disponível',
+        icon: '🚫',
+      })
+      return
+    }
+
+    const isSelected = selectedSeats.find((s) => s.id === seat.id)
+
+    if (isSelected) {
+      const newSelection = selectedSeats.filter((s) => s.id !== seat.id)
+      setSelectedSeats(newSelection)
+      onSeatsSelected(newSelection)
+      toast.success(`Assento ${seat.seat_number} removido`, {
+        icon: '✓',
+      })
+    } else {
+      if (selectedSeats.length >= maxSeats) {
+        toast.error(`Máximo de ${maxSeats} assentos`, {
+          description: 'Remova um assento para selecionar outro',
+          icon: '⚠️',
+        })
+        return
+      }
+
+      const newSelection = [...selectedSeats, seat]
+      setSelectedSeats(newSelection)
+      onSeatsSelected(newSelection)
+      toast.success(`Assento ${seat.seat_number} selecionado!`, {
+        description: calculateSeatPrice(seat).toLocaleString('pt-BR', {
+          style: 'currency',
+          currency: 'BRL',
+        }),
+        icon: '🎉',
+      })
+    }
+  }
+
+  const getSeatStatus = (seat: Seat) => {
+    if (seat.reservations.length > 0) return 'occupied'
+    if (seat.is_blocked) return 'blocked'
+    if (selectedSeats.find((s) => s.id === seat.id)) return 'selected'
+    return 'available'
+  }
+
+  const getSeatColor = (status: string, seatType: string) => {
+    if (status === 'occupied') {
+      return 'bg-gradient-to-br from-red-400 to-red-500 text-white cursor-not-allowed border-red-600'
+    }
+    if (status === 'blocked') {
+      return 'bg-gradient-to-br from-gray-300 to-gray-400 text-gray-600 cursor-not-allowed border-gray-500'
+    }
+    if (status === 'selected') {
+      return 'bg-gradient-to-br from-green-400 to-green-500 text-white border-green-600 shadow-xl scale-110 ring-4 ring-green-300'
+    }
+    if (seatType === 'premium') {
+      return 'bg-gradient-to-br from-yellow-300 to-yellow-400 text-yellow-900 hover:from-yellow-400 hover:to-yellow-500 cursor-pointer border-yellow-500 hover:scale-105 hover:shadow-lg'
+    }
+    if (seatType === 'table') {
+      return 'bg-gradient-to-br from-cyan-300 to-cyan-400 text-cyan-900 hover:from-cyan-400 hover:to-cyan-500 cursor-pointer border-cyan-500 hover:scale-105 hover:shadow-lg'
+    }
+    return 'bg-gradient-to-br from-blue-400 to-blue-500 text-white hover:from-blue-500 hover:to-blue-600 cursor-pointer border-blue-600 hover:scale-105 hover:shadow-lg'
+  }
+
+  const calculateSeatPrice = (seat: Seat) => {
+    const modifier = seat.price_modifier || 0
+    return pricePerPerson * (1 + modifier / 100)
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  const renderDeck = (seats: Seat[], deckName: string) => {
+    if (!seats || seats.length === 0) return null
+
+    const maxRow = Math.max(...seats.map((s) => s.row))
+    const maxCol = Math.max(...seats.map((s) => s.column))
+
+    const grid: (Seat | null)[][] = Array.from({ length: maxRow + 1 }, () =>
+      Array(maxCol + 1).fill(null)
+    )
+
+    seats.forEach((seat) => {
+      grid[seat.row][seat.column] = seat
+    })
+
+    const deckLabel = deckName === 'upper' ? 'Piso Superior' : 'Piso Inferior'
+    const deckIcon = deckName === 'upper' ? ArrowUp : ArrowDown
+    const deckColor = deckName === 'upper' ? 'from-blue-600 to-blue-700' : 'from-purple-600 to-purple-700'
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
+        transition={{ duration: 0.3 }}
+        className="space-y-4"
+      >
+        {/* Header do Deck */}
+        <div className={cn(
+          'flex items-center justify-between p-5 bg-gradient-to-r text-white rounded-2xl shadow-lg',
+          `${deckColor}`
+        )}>
+          <div className="flex items-center gap-3">
+            {deckName === 'upper' ? (
+              <ArrowUp className="h-6 w-6" />
+            ) : (
+              <ArrowDown className="h-6 w-6" />
+            )}
+            <div>
+              <h3 className="font-bold text-lg">{deckLabel}</h3>
+              <p className="text-xs text-white/80">
+                {seats.filter((s) => s.reservations.length === 0).length} assentos disponíveis
+              </p>
+            </div>
+          </div>
+          <Badge variant="secondary" className="bg-white/20 text-white border-white/30 text-sm px-3 py-1">
+            {seats.length} lugares
+          </Badge>
+        </div>
+
+        {/* Grid de Assentos */}
+        <div className="p-8 bg-gradient-to-b from-gray-50 via-white to-gray-50 rounded-2xl border-2 border-gray-200 shadow-inner">
+          {/* Motorista (apenas piso superior) */}
+          {deckName === 'upper' && (
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              className="flex justify-end mb-6"
+            >
+              <div className="px-4 py-2 bg-gradient-to-r from-gray-800 to-gray-900 text-white rounded-xl shadow-lg flex items-center gap-2">
+                <User className="h-4 w-4" />
+                <span className="font-bold text-sm">MOTORISTA</span>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Banheiro (apenas piso inferior) */}
+          {deckName === 'lower' && (
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              className="flex justify-center mb-6"
+            >
+              <div className="px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl shadow-lg flex items-center gap-2">
+                <span className="text-lg">🚻</span>
+                <span className="font-bold">BANHEIRO</span>
+              </div>
+            </motion.div>
+          )}
+
+          <div className="flex flex-col gap-3">
+            {grid.map((row, rowIndex) => (
+              <div key={rowIndex} className="flex justify-center gap-3">
+                {row.map((seat, colIndex) => {
+                  if (!seat) {
+                    return (
+                      <div
+                        key={`empty-${rowIndex}-${colIndex}`}
+                        className="w-16 h-16 flex items-center justify-center"
+                      >
+                        {colIndex === Math.floor(maxCol / 2) && (
+                          <div className="flex flex-col items-center gap-1">
+                            <div className="w-1 h-12 bg-gradient-to-b from-gray-200 via-gray-300 to-gray-200 rounded-full" />
+                            <span className="text-[10px] text-gray-400 font-bold">CORREDOR</span>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  }
+
+                  const status = getSeatStatus(seat)
+                  const seatPrice = calculateSeatPrice(seat)
+                  const isHovered = hoveredSeat === seat.id
+
+                  return (
+                    <motion.div
+                      key={seat.id}
+                      className="relative group"
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      <button
+                        onClick={() => handleSeatClick(seat)}
+                        onMouseEnter={() => setHoveredSeat(seat.id)}
+                        onMouseLeave={() => setHoveredSeat(null)}
+                        disabled={status === 'occupied' || status === 'blocked'}
+                        className={cn(
+                          'w-16 h-16 rounded-xl flex flex-col items-center justify-center font-bold text-sm transition-all duration-200 border-2 relative overflow-hidden',
+                          getSeatColor(status, seat.seat_type)
+                        )}
+                      >
+                        {/* Ícone do assento */}
+                        <Armchair className="h-6 w-6 mb-1" />
+
+                        {/* Número do assento */}
+                        <span className="text-xs font-bold">
+                          {status === 'selected' && '✓'}
+                          {status === 'occupied' && '✗'}
+                          {(status === 'available' || status === 'blocked') &&
+                            seat.seat_number}
+                        </span>
+
+                        {/* Efeito de brilho */}
+                        {status === 'available' && (
+                          <div className="absolute inset-0 bg-gradient-to-tr from-white/0 via-white/20 to-white/0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        )}
+                      </button>
+
+                      {/* Tooltip com preço */}
+                      <AnimatePresence>
+                        {isHovered && status === 'available' && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg shadow-xl z-20 whitespace-nowrap"
+                          >
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="font-bold text-sm">
+                                {formatCurrency(seatPrice)}
+                              </span>
+                              {seat.price_modifier && seat.price_modifier !== 0 && (
+                                <span className="text-yellow-300 text-[10px]">
+                                  ({seat.price_modifier > 0 ? '+' : ''}
+                                  {seat.price_modifier}%)
+                                </span>
+                              )}
+                            </div>
+                            {/* Seta do tooltip */}
+                            <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-1">
+                              <div className="w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900" />
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      {/* Badge de tipo especial */}
+                      {seat.seat_type === 'premium' && status === 'available' && (
+                        <div className="absolute -top-1 -right-1">
+                          <Badge className="text-[10px] px-1.5 py-0 bg-yellow-500 text-yellow-900 border-yellow-600 shadow-md">
+                            <Sparkles className="h-2.5 w-2.5 mr-0.5" />
+                            VIP
+                          </Badge>
+                        </div>
+                      )}
+
+                      {seat.seat_type === 'table' && status === 'available' && (
+                        <div className="absolute -top-1 -right-1">
+                          <Badge className="text-[10px] px-1.5 py-0 bg-cyan-500 text-white border-cyan-600 shadow-md">
+                            MESA
+                          </Badge>
+                        </div>
+                      )}
+                    </motion.div>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+
+          {/* Entrada (apenas piso superior) */}
+          {deckName === 'upper' && (
+            <motion.div
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              className="mt-6 flex justify-center"
+            >
+              <div className="px-6 py-2 bg-gradient-to-r from-yellow-400 to-yellow-500 text-yellow-900 font-bold rounded-xl shadow-lg flex items-center gap-2">
+                <MapPin className="h-4 w-4" />
+                ← ENTRADA
+              </div>
+            </motion.div>
+          )}
+        </div>
+      </motion.div>
+    )
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center p-16 space-y-4">
+        <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
+        <p className="text-gray-600 font-medium">Carregando assentos...</p>
+      </div>
+    )
+  }
+
+  const isDoubleDecker =
+    layout?.upperDeck?.length > 0 && layout?.lowerDeck?.length > 0
+
+  return (
+    <div className="space-y-6">
+      {/* Estatísticas */}
+      {stats && (
+        <div className="grid grid-cols-3 gap-4">
+          <Card className="p-4 bg-gradient-to-br from-blue-500 to-blue-600 text-white">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-blue-100 mb-1">Total</p>
+                <p className="text-3xl font-bold">{stats.totalSeats}</p>
+              </div>
+              <Armchair className="h-10 w-10 text-blue-200" />
+            </div>
+          </Card>
+
+          <Card className="p-4 bg-gradient-to-br from-green-500 to-green-600 text-white">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-green-100 mb-1">Disponíveis</p>
+                <p className="text-3xl font-bold">{stats.availableSeats}</p>
+              </div>
+              <Check className="h-10 w-10 text-green-200" />
+            </div>
+          </Card>
+
+          <Card className="p-4 bg-gradient-to-br from-orange-500 to-orange-600 text-white">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-orange-100 mb-1">Ocupação</p>
+                <p className="text-3xl font-bold">
+                  {stats.occupancyRate.toFixed(0)}%
+                </p>
+              </div>
+              <Users className="h-10 w-10 text-orange-200" />
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Legenda */}
+      <Card className="p-5 bg-gradient-to-r from-gray-50 to-gray-100 border-2 border-gray-200">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-500 rounded-lg shadow-md flex items-center justify-center">
+                <Armchair className="h-5 w-5 text-white" />
+              </div>
+              <span className="text-sm font-semibold text-gray-700">Disponível</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 bg-gradient-to-br from-green-400 to-green-500 rounded-lg shadow-md flex items-center justify-center">
+                <Check className="h-5 w-5 text-white" />
+              </div>
+              <span className="text-sm font-semibold text-gray-700">Selecionado</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 bg-gradient-to-br from-red-400 to-red-500 rounded-lg shadow-md flex items-center justify-center">
+                <X className="h-5 w-5 text-white" />
+              </div>
+              <span className="text-sm font-semibold text-gray-700">Ocupado</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 bg-gradient-to-br from-yellow-300 to-yellow-400 rounded-lg shadow-md flex items-center justify-center">
+                <Sparkles className="h-4 w-4 text-yellow-900" />
+              </div>
+              <span className="text-sm font-semibold text-gray-700">VIP (+10%)</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-lg shadow-sm border border-gray-200">
+            <User className="h-5 w-5 text-blue-600" />
+            <span className="font-bold text-gray-900">
+              {selectedSeats.length} / {maxSeats}
+            </span>
+            <span className="text-sm text-gray-600">selecionado(s)</span>
+          </div>
+        </div>
+      </Card>
+
+      {/* Layout dos Assentos com Abas */}
+      {isDoubleDecker ? (
+        <Tabs value={currentDeck} onValueChange={(v: any) => setCurrentDeck(v)}>
+          <TabsList className="grid w-full grid-cols-2 h-14 bg-gradient-to-r from-gray-100 to-gray-200 p-1.5 rounded-2xl shadow-md">
+            <TabsTrigger
+              value="upper"
+              className="flex items-center gap-3 text-base font-bold data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-blue-600 rounded-xl transition-all"
+            >
+              <ArrowUp className="h-5 w-5" />
+              <span>Piso Superior</span>
+              {layout.upperDeck && (
+                <Badge
+                  variant="secondary"
+                  className="ml-2 text-xs px-2 py-0.5 bg-blue-100 text-blue-700 border-blue-300"
+                >
+                  {layout.upperDeck.filter((s: Seat) => s.reservations.length === 0).length}
+                </Badge>
+              )}
+            </TabsTrigger>
+            <TabsTrigger
+              value="lower"
+              className="flex items-center gap-3 text-base font-bold data-[state=active]:bg-white data-[state=active]:shadow-lg data-[state=active]:text-purple-600 rounded-xl transition-all"
+            >
+              <ArrowDown className="h-5 w-5" />
+              <span>Piso Inferior</span>
+              {layout.lowerDeck && (
+                <Badge
+                  variant="secondary"
+                  className="ml-2 text-xs px-2 py-0.5 bg-purple-100 text-purple-700 border-purple-300"
+                >
+                  {layout.lowerDeck.filter((s: Seat) => s.reservations.length === 0).length}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="upper" className="mt-6">
+            {renderDeck(layout.upperDeck, 'upper')}
+          </TabsContent>
+
+          <TabsContent value="lower" className="mt-6">
+            {renderDeck(layout.lowerDeck, 'lower')}
+          </TabsContent>
+        </Tabs>
+      ) : (
+        <Card className="p-6">{renderDeck(layout.singleDeck || [], 'single')}</Card>
+      )}
+
+      {/* Assentos Selecionados */}
+      <AnimatePresence>
+        {selectedSeats.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+          >
+            <Card className="p-6 bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300 shadow-lg">
+              <h4 className="font-bold text-xl mb-4 flex items-center gap-2 text-green-800">
+                <Check className="h-6 w-6 text-green-600" />
+                Seus Assentos Selecionados
+              </h4>
+
+              <div className="space-y-3">
+                {selectedSeats.map((seat, index) => {
+                  const seatPrice = calculateSeatPrice(seat)
+                  return (
+                    <motion.div
+                      key={seat.id}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                      className="flex items-center justify-between p-4 bg-white rounded-xl border-2 border-green-200 shadow-sm hover:shadow-md transition-shadow"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center text-white font-bold shadow-md">
+                          {seat.seat_number}
+                        </div>
+                        <div>
+                          <p className="font-bold text-gray-900">
+                            Assento {seat.seat_number}
+                          </p>
+                          <p className="text-sm text-gray-600 flex items-center gap-2">
+                            {seat.deck === 'upper' ? (
+                              <>
+                                <ArrowUp className="h-3 w-3" />
+                                Piso Superior
+                              </>
+                            ) : (
+                              <>
+                                <ArrowDown className="h-3 w-3" />
+                                Piso Inferior
+                              </>
+                            )}
+                            {seat.seat_type === 'premium' && (
+                              <Badge className="ml-2 bg-yellow-400 text-yellow-900 text-xs">
+                                VIP
+                              </Badge>
+                            )}
+                            {seat.seat_type === 'table' && (
+                              <Badge className="ml-2 bg-cyan-400 text-cyan-900 text-xs">
+                                Mesa
+                              </Badge>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <p className="text-xl font-bold text-green-600">
+                          {formatCurrency(seatPrice)}
+                        </p>
+                        {seat.price_modifier && seat.price_modifier !== 0 && (
+                          <p className="text-xs text-gray-600">
+                            ({seat.price_modifier > 0 ? '+' : ''}
+                            {seat.price_modifier}%)
+                          </p>
+                        )}
+                      </div>
+                    </motion.div>
+                  )
+                })}
+              </div>
+
+              <div className="mt-6 pt-6 border-t-2 border-green-200">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <DollarSign className="h-6 w-6 text-green-600" />
+                    <span className="font-bold text-xl text-gray-900">Total:</span>
+                  </div>
+                  <span className="text-3xl font-bold text-green-600">
+                    {formatCurrency(
+                      selectedSeats.reduce(
+                        (sum, seat) => sum + calculateSeatPrice(seat),
+                        0
+                      )
+                    )}
+                  </span>
+                </div>
+              </div>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Dicas */}
+      <Card className="p-5 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200">
+        <div className="flex items-start gap-3">
+          <Info className="h-6 w-6 text-blue-600 mt-0.5 flex-shrink-0" />
+          <div className="text-sm text-blue-900">
+            <p className="font-bold mb-2 text-base">💡 Dicas para escolher seu assento:</p>
+            <ul className="space-y-1.5">
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 font-bold">•</span>
+                <span>Assentos próximos à entrada facilitam o embarque e desembarque</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 font-bold">•</span>
+                <span>Piso inferior geralmente tem menos movimento</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 font-bold">•</span>
+                <span>Assentos VIP oferecem mais espaço e conforto (+10%)</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="text-blue-600 font-bold">•</span>
+                <span>Assentos com mesa são ideais para trabalhar ou fazer refeições</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+DEPENDÊNCIAS E INTEGRAÇÃO COMPLETA
+INSTALAÇÃO DE DEPENDÊNCIAS
+
+# Instalar Framer Motion para animações
+npm install framer-motion
+
+# Instalar Lucide React (ícones adicionais)
+npm install lucide-react
+
+# Verificar se Sonner está instalado (toasts)
+npm install sonner
+
+
+API DE ASSENTOS PARA LOJA PÚBLICA
+
+// app/api/public/packages/[id]/seats/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const tripId = params.id
+
+    // Buscar viagem com veículo
+    const trip = await prisma.trip.findUnique({
+      where: { id: tripId },
+      include: {
+        vehicle: {
+          include: {
+            bus_model: true,
+          },
+        },
+      },
+    })
+
+    if (!trip) {
+      return NextResponse.json({ error: 'Viagem não encontrada' }, { status: 404 })
+    }
+
+    if (!trip.vehicle?.bus_model) {
+      return NextResponse.json(
+        { error: 'Veículo não configurado' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar todas as reservas de assentos desta viagem
+    const seatReservations = await prisma.seatReservation.findMany({
+      where: {
+        trip_id: tripId,
+        reservation: {
+          status: {
+            in: ['pending', 'confirmed'],
+          },
+        },
+      },
+      include: {
+        reservation: {
+          select: {
+            id: true,
+            status: true,
+            customer: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    })
+
+    // Gerar layout de assentos
+    const busModel = trip.vehicle.bus_model
+    const config = busModel.config as any
+
+    const isDoubleDecker = busModel.bus_type === 'DOUBLE_DECKER'
+
+    let upperDeckSeats: any[] = []
+    let lowerDeckSeats: any[] = []
+    let singleDeckSeats: any[] = []
+
+    // Processar piso superior
+    if (config.upperDeck) {
+      config.upperDeck.layout.forEach((row: string[], rowIndex: number) => {
+        row.forEach((cell: string, colIndex: number) => {
+          if (cell !== 'AISLE' && cell !== 'X') {
+            const seatNumber = cell.replace(/[PS]/g, '')
+            const isPremium = cell.startsWith('P')
+            const isTable = cell.startsWith('S')
+
+            const reservations = seatReservations.filter(
+              (r) => r.seat_number === seatNumber && r.floor === 'upper'
+            )
+
+            upperDeckSeats.push({
+              id: `upper-${seatNumber}`,
+              seat_number: seatNumber,
+              deck: 'upper',
+              row: rowIndex,
+              column: colIndex,
+              seat_type: isPremium ? 'premium' : isTable ? 'table' : 'standard',
+              is_available: reservations.length === 0,
+              is_blocked: false,
+              price_modifier: isPremium ? 10 : isTable ? 5 : 0,
+              reservations: reservations.map((r) => ({
+                id: r.id,
+                status: r.reservation.status,
+                customer_name: r.reservation.customer.name,
+              })),
+            })
+          }
+        })
+      })
+    }
+
+    // Processar piso inferior
+    if (config.lowerDeck) {
+      config.lowerDeck.layout.forEach((row: string[], rowIndex: number) => {
+        row.forEach((cell: string, colIndex: number) => {
+          if (cell !== 'AISLE' && cell !== 'X') {
+            const seatNumber = cell.replace(/[PS]/g, '')
+            const isPremium = cell.startsWith('P')
+            const isTable = cell.startsWith('S')
+
+            const reservations = seatReservations.filter(
+              (r) => r.seat_number === seatNumber && r.floor === 'lower'
+            )
+
+            lowerDeckSeats.push({
+              id: `lower-${seatNumber}`,
+              seat_number: seatNumber,
+              deck: 'lower',
+              row: rowIndex,
+              column: colIndex,
+              seat_type: isPremium ? 'premium' : isTable ? 'table' : 'standard',
+              is_available: reservations.length === 0,
+              is_blocked: false,
+              price_modifier: isPremium ? 10 : isTable ? 5 : 0,
+              reservations: reservations.map((r) => ({
+                id: r.id,
+                status: r.reservation.status,
+                customer_name: r.reservation.customer.name,
+              })),
+            })
+          }
+        })
+      })
+    }
+
+    // Calcular estatísticas
+    const allSeats = isDoubleDecker
+      ? [...upperDeckSeats, ...lowerDeckSeats]
+      : singleDeckSeats
+
+    const totalSeats = allSeats.length
+    const occupiedSeats = allSeats.filter((s) => s.reservations.length > 0).length
+    const availableSeats = totalSeats - occupiedSeats
+    const occupancyRate = (occupiedSeats / totalSeats) * 100
+
+    return NextResponse.json({
+      layout: {
+        upperDeck: upperDeckSeats,
+        lowerDeck: lowerDeckSeats,
+        singleDeck: singleDeckSeats,
+      },
+      stats: {
+        totalSeats,
+        occupiedSeats,
+        availableSeats,
+        occupancyRate,
+      },
+      busModel: {
+        name: busModel.name,
+        type: busModel.bus_type,
+        isDoubleDecker,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar assentos:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar assentos' },
+      { status: 500 }
+    )
+  }
+}
+
+PÁGINA DE SELEÇÃO DE ASSENTOS NA LOJA
+// app/(public)/loja/[slug]/pacotes/[id]/assentos/page.tsx
+
+import { notFound } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { SeatSelectionClient } from './seat-selection-client'
+
+export default async function SeatSelectionPage({
+  params,
+}: {
+  params: { slug: string; id: string }
+}) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: params.slug },
+  })
+
+  if (!tenant) {
+    notFound()
+  }
+
+  const trip = await prisma.trip.findUnique({
+    where: {
+      id: params.id,
+      tenant_id: tenant.id,
+    },
+    include: {
+      destination: true,
+      vehicle: {
+        include: {
+          bus_model: true,
+        },
+      },
+    },
+  })
+
+  if (!trip) {
+    notFound()
+  }
+
+  return <SeatSelectionClient trip={trip} tenant={tenant} />
+}
+COMPONENTE CLIENT DA PÁGINA
+// app/(public)/loja/[slug]/pacotes/[id]/assentos/seat-selection-client.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
+import {
+  ArrowLeft,
+  Calendar,
+  MapPin,
+  Clock,
+  Bus,
+  Users,
+  ArrowRight,
+  Info,
+} from 'lucide-react'
+import { EnhancedSeatSelector } from '@/components/seats/enhanced-seat-selector'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+interface SeatSelectionClientProps {
+  trip: any
+  tenant: any
+}
+
+export function SeatSelectionClient({ trip, tenant }: SeatSelectionClientProps) {
+  const router = useRouter()
+  const [selectedSeats, setSelectedSeats] = useState<any[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+
+  const handleContinue = () => {
+    if (selectedSeats.length === 0) {
+      return
+    }
+
+    // Salvar no localStorage
+    localStorage.setItem(
+      'selected_seats',
+      JSON.stringify({
+        tripId: trip.id,
+        seats: selectedSeats,
+        timestamp: new Date().toISOString(),
+      })
+    )
+
+    // Redirecionar para checkout
+    router.push(`/loja/${tenant.slug}/pacotes/${trip.id}/checkout`)
+  }
+
+  const calculateTotal = () => {
+    return selectedSeats.reduce((sum, seat) => {
+      const modifier = seat.price_modifier || 0
+      return sum + trip.price_per_person * (1 + modifier / 100)
+    }, 0)
+  }
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
+      {/* Header */}
+      <div className="bg-white border-b shadow-sm sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <Button
+              variant="ghost"
+              onClick={() => router.back()}
+              className="gap-2"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Voltar
+            </Button>
+
+            <div className="flex items-center gap-4">
+              <div className="text-right hidden sm:block">
+                <p className="text-sm text-gray-600">Selecionados</p>
+                <p className="font-bold text-lg">
+                  {selectedSeats.length} assento(s)
+                </p>
+              </div>
+              <Button
+                onClick={handleContinue}
+                disabled={selectedSeats.length === 0 || isLoading}
+                size="lg"
+                className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 shadow-lg"
+              >
+                Continuar
+                <ArrowRight className="h-5 w-5 ml-2" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Coluna Principal - Seletor de Assentos */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Título */}
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">
+                Escolha seus assentos
+              </h1>
+              <p className="text-gray-600">
+                Selecione os assentos para sua viagem. Você pode escolher até 10
+                assentos.
+              </p>
+            </div>
+
+            {/* Seletor de Assentos */}
+            <EnhancedSeatSelector
+              tripId={trip.id}
+              maxSeats={10}
+              onSeatsSelected={setSelectedSeats}
+              pricePerPerson={trip.price_per_person}
+            />
+          </div>
+
+          {/* Sidebar - Resumo da Viagem */}
+          <div className="lg:col-span-1">
+            <div className="sticky top-24 space-y-6">
+              {/* Card de Resumo */}
+              <Card className="p-6 shadow-lg border-2">
+                <h3 className="font-bold text-xl mb-4 flex items-center gap-2">
+                  <Info className="h-5 w-5 text-blue-600" />
+                  Resumo da Viagem
+                </h3>
+
+                <div className="space-y-4">
+                  {/* Destino */}
+                  <div>
+                    <div className="flex items-start gap-3">
+                      <MapPin className="h-5 w-5 text-blue-600 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-600">Destino</p>
+                        <p className="font-bold text-lg">{trip.destination.name}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  {/* Datas */}
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3">
+                      <Calendar className="h-5 w-5 text-green-600 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-600">Ida</p>
+                        <p className="font-semibold">
+                          {format(new Date(trip.departure_date), "dd 'de' MMMM", {
+                            locale: ptBR,
+                          })}
+                        </p>
+                      </div>
+                    </div>
+
+                    {trip.return_date && (
+                      <div className="flex items-start gap-3">
+                        <Calendar className="h-5 w-5 text-orange-600 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-sm text-gray-600">Volta</p>
+                          <p className="font-semibold">
+                            {format(new Date(trip.return_date), "dd 'de' MMMM", {
+                              locale: ptBR,
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <Separator />
+
+                  {/* Veículo */}
+                  {trip.vehicle && (
+                    <div className="flex items-start gap-3">
+                      <Bus className="h-5 w-5 text-purple-600 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-600">Veículo</p>
+                        <p className="font-semibold">{trip.vehicle.name}</p>
+                        {trip.vehicle.bus_model && (
+                          <Badge
+                            variant="outline"
+                            className="mt-1 text-xs border-purple-300 bg-purple-50 text-purple-700"
+                          >
+                            {trip.vehicle.bus_model.name}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <Separator />
+
+                  {/* Preço Base */}
+                  <div className="flex items-start gap-3">
+                    <Users className="h-5 w-5 text-blue-600 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm text-gray-600">Preço por pessoa</p>
+                      <p className="font-bold text-xl text-blue-600">
+                        {formatCurrency(trip.price_per_person)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Card de Total */}
+              {selectedSeats.length > 0 && (
+                <Card className="p-6 bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300 shadow-lg">
+                  <h3 className="font-bold text-lg mb-4 text-green-800">
+                    Valor Total
+                  </h3>
+
+                  <div className="space-y-3">
+                    {selectedSeats.map((seat) => {
+                      const modifier = seat.price_modifier || 0
+                      const seatPrice =
+                        trip.price_per_person * (1 + modifier / 100)
+
+                      return (
+                        <div
+                          key={seat.id}
+                          className="flex justify-between items-center text-sm"
+                        >
+                          <span className="text-gray-700">
+                            Assento {seat.seat_number}
+                            {modifier > 0 && (
+                              <span className="text-yellow-600 ml-1">
+                                (+{modifier}%)
+                              </span>
+                            )}
+                          </span>
+                          <span className="font-semibold">
+                            {formatCurrency(seatPrice)}
+                          </span>
+                        </div>
+                      )
+                    })}
+
+                    <Separator className="bg-green-300" />
+
+                    <div className="flex justify-between items-center pt-2">
+                      <span className="font-bold text-lg text-gray-900">
+                        Total
+                      </span>
+                      <span className="font-bold text-2xl text-green-600">
+                        {formatCurrency(calculateTotal())}
+                      </span>
+                    </div>
+                  </div>
+
+                  <Button
+                    onClick={handleContinue}
+                    disabled={isLoading}
+                    size="lg"
+                    className="w-full mt-6 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 shadow-md text-base"
+                  >
+                    Continuar para Pagamento
+                    <ArrowRight className="h-5 w-5 ml-2" />
+                  </Button>
+                </Card>
+              )}
+
+              {/* Dicas */}
+              <Card className="p-5 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200">
+                <div className="flex items-start gap-3">
+                  <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div className="text-sm text-blue-900">
+                    <p className="font-bold mb-2">💡 Dica</p>
+                    <p>
+                      Você pode selecionar até 10 assentos de uma vez. Assentos
+                      VIP oferecem mais conforto com um acréscimo de 10% no valor.
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+ATUALIZAÇÃO DA PÁGINA DE DETALHES DO PACOTE
+
+// app/(public)/loja/[slug]/pacotes/[id]/page.tsx - ADICIONAR BOTÃO
+
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import { Armchair } from 'lucide-react'
+
+// ... resto do código ...
+
+// Adicionar no botão de reserva:
+<Link href={`/loja/${tenant.slug}/pacotes/${trip.id}/assentos`}>
+  <Button
+    size="lg"
+    className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg text-lg h-14"
+  >
+    <Armchair className="h-6 w-6 mr-2" />
+    Escolher Assentos e Reservar
+  </Button>
+</Link>
+
+CONFIGURAÇÃO DO FRAMER MOTION NO NEXT.JS
+// next.config.js - ADICIONAR
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  swcMinify: true,
+  experimental: {
+    optimizePackageImports: ['framer-motion'],
+  },
+}
+
+module.exports = nextConfig
+
+PROVIDER DE ANIMAÇÕES
+// components/providers/motion-provider.tsx
+
+'use client'
+
+import { LazyMotion, domAnimation } from 'framer-motion'
+
+export function MotionProvider({ children }: { children: React.ReactNode }) {
+  return <LazyMotion features={domAnimation}>{children}</LazyMotion>
+}
+
+// app/layout.tsx - ADICIONAR PROVIDER
+
+import { MotionProvider } from '@/components/providers/motion-provider'
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="pt-BR">
+      <body>
+        <MotionProvider>
+          {/* ... resto do código ... */}
+          {children}
+        </MotionProvider>
+      </body>
+    </html>
+  )
+}
+
+RESPONSIVIDADE - ESTILOS ADICIONAIS
+/* app/globals.css - ADICIONAR */
+
+/* Animações suaves para assentos */
+@keyframes pulse-seat {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.seat-pulse {
+  animation: pulse-seat 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Scroll suave */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Otimização para mobile */
+@media (max-width: 640px) {
+  .seat-grid {
+    transform: scale(0.9);
+    transform-origin: center;
+  }
+}
+
+/* Gradientes personalizados */
+.gradient-blue {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.gradient-green {
+  background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+}
+
+.gradient-purple {
+  background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+}
+
+/* Sombras customizadas */
+.shadow-seat {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
+              0 2px 4px -1px rgba(0, 0, 0, 0.06),
+              0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.shadow-seat-selected {
+  box-shadow: 0 10px 15px -3px rgba(34, 197, 94, 0.3),
+              0 4px 6px -2px rgba(34, 197, 94, 0.2),
+              0 0 0 4px rgba(34, 197, 94, 0.2);
+}
+
+TESTE DE INTEGRAÇÃO
+// __tests__/seat-selection.test.tsx
+
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { EnhancedSeatSelector } from '@/components/seats/enhanced-seat-selector'
+
+describe('EnhancedSeatSelector', () => {
+  it('deve carregar e exibir assentos', async () => {
+    render(
+      <EnhancedSeatSelector
+        tripId="test-trip-id"
+        maxSeats={10}
+        onSeatsSelected={jest.fn()}
+        pricePerPerson={100}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(/Piso Superior/i)).toBeInTheDocument()
+    })
+  })
+
+  it('deve selecionar assento ao clicar', async () => {
+    const onSeatsSelected = jest.fn()
+
+    render(
+      <EnhancedSeatSelector
+        tripId="test-trip-id"
+        maxSeats={10}
+        onSeatsSelected={onSeatsSelected}
+        pricePerPerson={100}
+      />
+    )
+
+    await waitFor(() => {
+      const seat = screen.getByText('01')
+      fireEvent.click(seat)
+    })
+
+    expect(onSeatsSelected).toHaveBeenCalled()
+  })
+})
+
+MONITORAMENTO DE PERFORMANCE
+// lib/analytics.ts
+
+export function trackSeatSelection(seatNumber: string, deck: string) {
+  if (typeof window !== 'undefined' && (window as any).gtag) {
+    ;(window as any).gtag('event', 'seat_selected', {
+      seat_number: seatNumber,
+      deck: deck,
+      timestamp: new Date().toISOString(),
+    })
+  }
+}
+
+export function trackSeatDeselection(seatNumber: string) {
+  if (typeof window !== 'undefined' && (window as any).gtag) {
+    ;(window as any).gtag('event', 'seat_deselected', {
+      seat_number: seatNumber,
+      timestamp: new Date().toISOString(),
+    })
+  }
+}
+
+IMPLEMENTAÇÃO
+
+ Framer Motion instalado
+ API de assentos criada
+ Componente EnhancedSeatSelector implementado
+ Página de seleção criada
+ Integração com checkout
+ Responsividade mobile
+ Animações e transições
+ Tooltips com preços
+ Sistema de cores por status
+ Badges de tipo de assento
+ Estatísticas em tempo real
+ Abas para Double Decker
+ Legenda visual
+ Dicas para o usuário
+ Resumo lateral
+ Cálculo de total
+ Validações de seleção
+ Toasts informativos
+ Performance otimizada
+
+🚌 Double Decker com Abas:
+
+Piso Superior e Inferior separados
+Navegação intuitiva
+Badges informativos
+Estatísticas por andar
+💡 UX Aprimorada:
+
+Tooltips com preços
+Dicas contextuais
+Validações em tempo real
+Toasts informativos
+Resumo lateral fixo
+📱 Responsivo:
+
+Mobile-first
+Touch-friendly
+Adaptável a todas as telas
+⚡ Performance:
+
+Lazy loading de animações
+Otimização de re-renders
+Caching inteligente
+

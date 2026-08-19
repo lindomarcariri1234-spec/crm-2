@@ -1,0 +1,1121 @@
+# ═══════════════════════════════════════════════════════════════
+# VISITECRM — SISTEMA SAAS CRM COMPLETO PARA AGÊNCIAS DE TURISMO
+# ═══════════════════════════════════════════════════════════════
+
+## PAPEL DA IA
+Você é um Arquiteto de Software Sênior especializado em sistemas SaaS
+multi-tenant escaláveis e Marketing e vendas.
+
+## MISSÃO
+Desenvolva o **VisiteCRM**, um Sistema SaaS CRM COMPLETO, ROBUSTO e ESCALÁVEL
+para agências de turismo especializadas em excursões.
+
+## OBJETIVO
+- Desenvolva um sistema multiligado onde funcionará o CRM para gerir todos os contatos, e a Loja da Agência onde será disponibilizado e vendido as viagens.
+
+## REGRA FUNDAMENTAL
+- Este é um projeto completo para Agência de Turismo.
+- Implemente TODAS as funcionalidades de um Saas, CRM, Loja e Indicação.
+- Crie a estrutura completa do projeto: banco de dados, API, UI e integrações.
+- Nenhuma funcionalidade deve ser deixada como placeholder ou "TODO" — tudo deve ser funcional.
+
+Site Público — Descrição Completa
+O site público é composto por duas páginas distintas: a Landing Page (VisiteCRM) voltada para captação de novas agências, e a Loja (Loja das Agência) voltado para os clientes finais da agência.
+
+🌐 Página 1 — Landing Page (VisiteCRM)
+Rota: /Landing
+
+Página institucional da plataforma para atrair novas agências de turismo como clientes do sistema.
+
+🔝 Navegação (Header fixo)
+Elemento	Função
+Logo VisiteCRM	Identidade da plataforma
+Links de Âncora	Funcionalidades / Preços / Contato — rola suavemente para a seção
+Botão "Entrar"	Redireciona para o Dashboard (área logada)
+Botão "Começar Grátis"	Call-to-action principal de conversão
+🎯 Seção Hero
+Headline principal com destaque em gradiente: "CRM completo para turismo"
+Subtítulo explicativo do valor da plataforma
+Botão "Começar Teste Grátis" → CTA primário
+Botão "Ver Demonstração" → CTA secundário
+Garantias visuais: ✓ 14 dias grátis · ✓ Sem cartão de crédito · ✓ Cancele quando quiser
+Preview animado com métricas fictícias (1.247 clientes, 86 viagens, NPS 9.4, R$523k receita)
+⚡ Seção Funcionalidades
+6 cards com os principais recursos da plataforma:
+
+Funcionalidade	Descrição
+CRM Completo	Clientes, leads e pipeline em um só lugar
+Gestão de Viagens	Excursões, roteiros, controle de ocupação
+Calendário Integrado	Sincronização com Google Calendar
+WhatsApp Automatizado	Mensagens automáticas e chatbot
+Relatórios Detalhados	Vendas, comissões e desempenho por vendedor
+Automações	Tarefas repetitivas automatizadas
+🏗️ Seção Módulos
+4 módulos visuais do ecossistema:
+
+Agências · Transportes · Hospedagens · Destinos
+💰 Seção de Preços
+3 planos apresentados em cards comparativos:
+
+Plano	Preço	Público
+Basic	R$ 99/mês	Pequenas agências — até 500 clientes, 1 usuário
+Pro ⭐ Mais Popular	R$ 199/mês	Em crescimento — clientes ilimitados, 5 usuários, WhatsApp, automações
+Premium	R$ 399/mês	Grandes operações — usuários ilimitados, multi-filiais, API, suporte prioritário
+Cada plano tem botão "Começar Agora".
+
+📣 Seção CTA Final
+Headline de conversão + botão "Começar Teste Grátis de 14 Dias"
+🦶 Footer
+Logo + copyright TurisCRM
+🛒 Página 2 — Marketplace da Agência (Chiquinha Turismo)
+Rota: /Marketplace
+
+Vitrine pública de viagens disponíveis para venda ao cliente final. Exibe apenas viagens com is_public: true e status: 'aberta'.
+
+🔝 Header (fixo com scroll)
+Elemento	Função
+Logo + Nome da Agência	"Chiquinha Turismo" — identidade da agência
+Botão "Área do Cliente"	Redireciona para o Dashboard (área autenticada)
+🔍 Barra de Filtros
+Filtro	Função
+Campo de Busca	Filtra por título ou destino em tempo real
+Tipo	Todos / Excursão / Bate-volta
+Destino	Lista dinâmica com destinos ativos do banco de dados
+⭐ Seção "Viagens em Destaque"
+Exibe apenas viagens marcadas como featured: true. Cada card tem badge dourado "Destaque".
+
+✈️ Seção "Todas as Viagens"
+Grid responsivo com todas as viagens públicas e abertas.
+
+🃏 Card de Viagem (ambas as seções)
+Cada card exibe:
+
+Elemento	Descrição
+Foto de Capa	Imagem da viagem ou placeholder em gradiente
+Badge de Destaque	⭐ Destaque (se featured)
+Badge de Tipo	Excursão / Bate-volta
+Badge "Últimas vagas!"	Aparece automaticamente quando restam ≤ 10 vagas
+Título	Nome da viagem
+Destino	📍 Cidade/Estado
+Data de Saída	📅 Data formatada em português
+Vagas Disponíveis	👥 Total − ocupados
+Barra de Ocupação	Visual de % ocupado com gradiente
+O que está incluso	Até 3 badges de itens inclusos + contador dos demais
+Preço	Valor "a partir de R$ X por pessoa"
+Botão "Reservar"	CTA principal de conversão
+Botão "WhatsApp"	Abre conversa direta no WhatsApp com mensagem pré-preenchida mencionando a viagem
+🦶 Footer da Agência
+Coluna 1: Logo + slogan da agência
+Coluna 2: Contato — telefone, e-mail, cidade
+Coluna 3: Redes sociais — link para Instagram @chiquinhaturismo
+🔄 Fluxo do Visitante
+Acessa a Loja →
+busca/filtra viagens →
+encontra a viagem desejada →
+clica em "Reservar" ou "WhatsApp" →
+entra em contato com a agência →
+agência registra no sistema interno (Dashboard)
+🌐 Loja (/loja)
+Catálogo público de viagens da Chiquinha Turismo. Contém:
+
+Header com barra de busca e filtros por tipo de viagem (Excursão / Bate-volta) e por destino
+Viagens em Destaque — seção especial para viagens marcadas como featured
+Todas as Viagens — grid com cards de cada viagem mostrando:
+Foto de capa (ou imagem padrão)
+Destino, data de partida, vagas disponíveis
+Barra de ocupação (% reservado)
+Itens inclusos (até 3 exibidos)
+Preço por pessoa
+Botão "Reservar" e botão "WhatsApp" (abre conversa com (88) 98163-4178)
+Badge de alerta "Últimas X vagas!" quando restam ≤10 lugares
+Rodapé com contato, email, cidade e Instagram da agência
+Em resumo: a Landing Page vende o software TurisCRM, enquanto a loja é a vitrine pública das viagens da Agência de viagem para os clientes finais.
+
+O site público é uma loja de viagens voltado para clientes finais (não para a agência). Com base na imagem e no código existente, ele oferece:
+
+🏠 Hero / Cabeçalho
+Banner principal com fundo gradiente azul/roxo (imagem de ônibus)
+Título impactante: "Descubra Destinos Incríveis"
+Subtítulo: "Excursões, pacotes e experiências únicas com os melhores preços"
+Barra de busca: campo "Para onde você quer ir?" + botão "Buscar" — filtra viagens por destino
+🧭 Navegação
+Destinos — ancora para a seção de viagens
+Sobre — informações da agência
+Contato — formulário ou dados de contato
+Entrar — botão de login para área do cliente
+✈️ Viagens em Destaque
+Grid de cards com as viagens mais procuradas
+Cada card exibe:
+Badge de categoria (Pacote, Aventura, Excursão...)
+Imagem da viagem
+Botão de favoritar (♡)
+Botão de compartilhar (↗)
+Nome do destino, data, preço
+Botão "Ver todas" para listar todas as viagens
+📦 Funcionalidades Completas (no código)
+Função	Descrição
+Busca por destino	Filtra viagens em tempo real
+Filtro por categoria	Excursão, Pacote, Internacional...
+Card de viagem	Foto, preço, data, vagas disponíveis
+Reservar / Comprar	Botão que leva ao fluxo de reserva
+Sistema de indicação	Campo para inserir código de indicador e ganhar 5% de desconto
+Cupons de desconto	Campo para aplicar cupom na compra
+Área do cliente	Login → ver reservas, baixar voucher, fazer check-in online
+🎯 Objetivo
+É o canal de vendas online da agência — clientes acessam, escolhem uma viagem, se cadastram e fazem a reserva diretamente, sem precisar ligar ou ir presencialmente.
+
+
+O Site Público é a vitrine digital da sua agência de turismo, acessível por qualquer pessoa sem necessidade de login. É onde seus clientes descobrem, exploram e solicitam reservas de viagens.
+
+📄 Páginas Disponíveis
+Página	Rota	Função
+Página Inicial	/PublicHome	Landing page com hero, categorias, viagens em destaque e CTA
+Lista de Viagens	/PublicTrips	Catálogo completo com busca, filtros e ordenação
+Detalhes da Viagem	/PublicTripDetails?id=...	Página completa de um pacote específico
+⚙️ Funcionalidades por Página
+🏠 Página Inicial (PublicHome)
+Hero animado com imagem de fundo, título e call-to-action
+4 categorias (Viagens, Hospedagens, Transportes, Produtos) com contador de opções
+Viagens em destaque (produtos com is_featured = true)
+Próximas viagens (grid de produtos publicados)
+Seção de CTA com botões para WhatsApp e telefone
+Rodapé com links, contato e redes sociais
+Botão "Entrar" para colaboradores acessarem o painel
+🗺️ Lista de Viagens (PublicTrips)
+Busca por destino em tempo real
+Filtro por categoria (Todas, Praia, Aventura, Cultural, etc.)
+Ordenação por mais recentes ou menor preço
+Cards com imagem, localização, preço (com desconto se houver), próxima data e duração
+Contador de resultados encontrados
+📋 Detalhes da Viagem (PublicTripDetails)
+Galeria de imagens / hero da viagem
+Descrição completa do pacote
+Lista de itens inclusos
+Seletor de itinerário (datas disponíveis com vagas e preço)
+Seletor de quantidade de passageiros
+Cálculo automático do valor total
+Modal de reserva com formulário de dados do hóspede
+Botão de contato via WhatsApp
+🔗 Integração com o CRM
+Exibe apenas produtos com is_published = true
+Exibe apenas itinerários com status = "open"
+Reservas feitas pelo site entram automaticamente no módulo de Reservas do painel
+A origem da reserva é registrada como "website"
+🛠️ O que você configura na página "Site Público" (painel)
+Na página Gestão → Site Público do painel administrativo, você pode ajustar:
+
+Nome, slogan e descrição da agência
+Imagem do logo e imagem hero
+Telefone, WhatsApp, email, Instagram e endereço
+Exibir ou ocultar preços, disponibilidade
+Habilitar ou desabilitar reservas online
+
+
+1. Pedido Pago na Loja
+   ↓
+2. Cliente Criado/Atualizado
+   ↓
+3. Reserva Gerada Automaticamente
+   ↓
+4. Passageiros Criados
+   ↓
+5. Assentos Reservados
+   ↓
+6. Voucher Enviado
+   ↓
+7. Deal Criado e Ganho
+
+1. Cliente Usa Código de Indicação
+   ↓
+2. Indicação Registrada
+   ↓
+3. Reserva Criada
+   ↓
+4. Reserva Confirmada
+   ↓
+5. Indicação Marcada como Completa
+   ↓
+6. Bônus Calculado
+   ↓
+7. Indicador Notificado
+
+// CLIENTES
+'client.created'
+'client.updated'
+'client.deleted'
+'client.stage_changed'
+
+// VIAGENS
+'trip.created'
+'trip.updated'
+'trip.published'
+'trip.cancelled'
+'trip.completed'
+
+// RESERVAS
+'reservation.created'
+'reservation.updated'
+'reservation.confirmed'
+'reservation.cancelled'
+'reservation.checked_in'
+'reservation.completed'
+
+// PAGAMENTOS
+'payment.received'
+'payment.pending'
+'payment.failed'
+'payment.refunded'
+
+// DEALS
+'deal.created'
+'deal.updated'
+'deal.stage_changed'
+'deal.won'
+'deal.lost'
+
+// POLTRONAS
+'seat.reserved'
+'seat.released'
+'seat.confirmed'
+
+// EMBARQUE
+'boarding.checked_in'
+'boarding.completed'
+
+// LOJA
+'store.order_created'
+'store.order_paid'
+
+// INDICAÇÃO
+'referral.created'
+'referral.completed'
+'referral.bonus_paid'
+
+Hooks Automáticos Ativos:
+Evento	Ação Automática
+client.created	• Adiciona ao pipeline
+• Cria deal inicial
+• Calcula lead score
+• Envia boas-vindas
+reservation.created	• Atualiza estatísticas cliente
+• Reserva assentos
+• Atualiza vagas viagem
+• Registra atividade
+• Processa indicação
+payment.received	• Atualiza valores reserva
+• Confirma se pago total
+• Calcula comissão
+• Atualiza lead score
+• Envia confirmação
+reservation.confirmed	• Move deal para ganho
+• Confirma assentos
+• Completa indicação
+• Dispara automações
+deal.won	• Cria reserva (se tiver viagem)
+• Notifica vendedor
+• Registra atividade
+store.order_paid	• Cria reserva
+• Vincula cliente
+• Gera voucher
+📊 5. CAMPOS CALCULADOS AUTOMATICAMENTE
+Cliente:
+total_trips → Conta reservas confirmadas
+total_spent → Soma valores pagos
+lead_score → Baseado em ações (+10 cadastro, +50 reserva, +30 pagamento)
+engagement_level → cold/warm/hot (baseado no score)
+is_first_purchase → false após primeira reserva
+last_purchase_date → Data da última reserva
+Viagem:
+available_seats → total_seats - assentos reservados/confirmados
+status → 'full' se available_seats = 0
+Reserva:
+amount_paid → Soma de pagamentos
+amount_pending → total_amount - amount_paid
+payment_status → pending/partial/paid
+commission_amount → Baseado em % configurada
+Deal:
+probability → Baseado no estágio
+expected_close_date → Calculado por estágio
+days_in_stage → Diferença de datas
+🔄 6. SINCRONIZAÇÃO EM TEMPO REAL
+Atualizações Bidirecionais:
+Cliente ←→ Deal
+├── Nome, Email, Telefone
+├── Segmento
+└── Tags
+
+Deal ←→ Reserva
+├── Valor
+├── Cliente
+├── Viagem
+└── Status
+
+Reserva ←→ Pagamento
+├── Valores
+├── Status de Pagamento
+└── Confirmação
+
+Viagem ←→ Assentos
+├── Disponibilidade
+├── Status
+└── Lotação
+
+REGRAS DE NEGÓCIO IMPLEMENTADAS
+Validações Automáticas:
+✅ Reserva:
+
+Não permite reservar se viagem lotada
+Não permite assentos duplicados
+Valida CPF único por viagem
+Verifica idade mínima/máxima
+✅ Pagamento:
+
+Não permite pagar mais que o pendente
+Valida método de pagamento
+Registra comprovante obrigatório
+✅ Deal:
+
+Não permite valor negativo
+Valida probabilidade por estágio
+Requer cliente vinculado
+✅ Check-in:
+
+Só permite se reserva confirmada
+Valida pagamento completo
+Confirma documento do passageiro
+MÉTRICAS E RELATÓRIOS SINCRONIZADOS
+Dashboard Unificado:
+// Métricas calculadas em tempo real:
+
+- Total de Clientes
+- Clientes Ativos (com reservas)
+- Taxa de Conversão (Leads → Clientes → Vendas)
+- Ticket Médio
+- Receita Total
+- Receita Pendente
+- Taxa de Ocupação das Viagens
+- Performance por Vendedor
+- Taxa de Indicação
+- LTV (Lifetime Value) por Cliente
+- Churn Rate
+- Net Promoter Score (NPS)
+
+SEGURANÇA E ISOLAMENTO
+Multi-tenancy:
+// Todos os dados isolados por tenant_id
+
+✅ Cliente só vê seus dados
+✅ Usuário só acessa seu tenant
+✅ Automações só disparam no tenant correto
+✅ Webhooks isolados por tenant
+✅ Relatórios filtrados por tenant
+
+PERFORMANCE E OTIMIZAÇÃO
+Estratégias Implementadas:
+✅ Índices no Banco:
+
+tenant_id em todas as tabelas
+Campos de busca frequente
+Foreign keys otimizadas
+✅ Cache:
+
+Automações carregadas em memória
+Pipelines e estágios cacheados
+Configurações do tenant
+✅ Processamento Assíncrono:
+
+Eventos processados em background
+Webhooks com retry automático
+Emails em fila
+✅ Paginação:
+
+Todas as listagens paginadas
+Lazy loading de relacionamentos
+Queries otimizadas
+O VisitéCRM é um sistema totalmente integrado onde:
+
+Tudo começa no Cliente → Centro do sistema
+Pipeline gerencia o funil → Leads até venda
+Reservas são o objetivo → Conversão
+Pagamentos confirmam → Fechamento
+Eventos sincronizam tudo → Tempo real
+Automações executam ações → Sem intervenção
+Webhooks integram externos → Extensibilidade
+Métricas mostram resultado → Visibilidade
+Fluxo Completo Ideal:
+Lead → Cliente → Pipeline → Deal → Reserva → Pagamento → Confirmação → Check-in → Viagem → Feedback
+  ↓       ↓         ↓        ↓        ↓          ↓            ↓           ↓         ↓         ↓
+ Tag   Score   Automação  Notif   Voucher   Comissão    WhatsApp     Embarque  Avaliação  NPS
+
+Tudo sincronizado, automatizado e rastreável!
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         VISITÉCRM ECOSYSTEM                          │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+   ┌────▼────┐              ┌────▼────┐              ┌────▼────┐
+   │ LANDING │              │   CRM   │              │  LOJA   │
+   │  PAGE   │              │ SISTEMA │              │ PÚBLICA │
+   └────┬────┘              └────┬────┘              └────┬────┘
+        │                         │                         │
+        │                         │                         │
+   Captação de              Gestão Completa           Vendas Online
+   Agências                 Multi-tenant              para Clientes
+
+LANDING PAGE (VisitéCRM) - /
+Objetivo: Captar novas agências como clientes do SaaS
+// Estrutura da Landing Page
+
+Header (Fixo)
+├── Logo VisitéCRM
+├── Links de Navegação (Funcionalidades, Preços, Contato)
+├── Botão "Entrar" → /login
+└── Botão "Começar Grátis" → /register
+
+Hero Section
+├── Headline: "CRM Completo para Turismo"
+├── Subtítulo com proposta de valor
+├── CTA Primário: "Começar Teste Grátis"
+├── CTA Secundário: "Ver Demonstração"
+├── Garantias: 14 dias grátis, sem cartão, cancele quando quiser
+└── Preview Animado com Métricas (Dashboard fictício)
+
+Funcionalidades (6 Cards)
+├── CRM Completo
+├── Gestão de Viagens
+├── Calendário Integrado
+├── WhatsApp Automatizado
+├── Relatórios Detalhados
+└── Automações
+
+Módulos do Ecossistema
+├── Agências
+├── Transportes
+├── Hospedagens
+└── Destinos
+
+Preços (3 Planos)
+├── Basic: R$ 99/mês
+│   └── Até 500 clientes, 1 usuário
+├── Pro: R$ 199/mês ⭐ POPULAR
+│   └── Clientes ilimitados, 5 usuários, WhatsApp, automações
+└── Premium: R$ 399/mês
+    └── Usuários ilimitados, multi-filiais, API, suporte prioritário
+
+CTA Final
+└── "Começar Teste Grátis de 14 Dias"
+
+Footer
+├── Logo + Copyright
+├── Links úteis
+└── Redes sociais
+SISTEMA CRM (Dashboard) - /dashboard
+Objetivo: Gestão completa multi-tenant para agências
+// Estrutura do Dashboard CRM
+
+Autenticação Multi-tenant
+├── Login por subdomínio (agencia.visitecrm.com)
+├── Registro de nova agência
+├── Recuperação de senha
+└── Verificação de email
+
+Sidebar de Navegação
+├── 📊 Dashboard (Métricas e KPIs)
+├── 👥 Clientes (CRM)
+│   ├── Lista de clientes
+│   ├── Perfil do cliente
+│   ├── Segmentação
+│   └── Importação/Exportação
+├── 🎯 Pipeline (Funil de Vendas)
+│   ├── Kanban de deals
+│   ├── Estágios customizáveis
+│   ├── Probabilidade de fechamento
+│   └── Previsão de receita
+├── ✈️ Viagens (Produtos)
+│   ├── Cadastro de viagens
+│   ├── Itinerários
+│   ├── Gestão de poltronas
+│   ├── Preços e descontos
+│   └── Publicação na loja
+├── 📋 Reservas
+│   ├── Nova reserva (Wizard completo)
+│   ├── Lista de reservas
+│   ├── Detalhes da reserva
+│   ├── Gestão de passageiros
+│   ├── Controle de pagamentos
+│   └── Emissão de voucher
+├── 💰 Financeiro
+│   ├── Contas a receber
+│   ├── Contas a pagar
+│   ├── Fluxo de caixa
+│   ├── Comissões
+│   └── Relatórios financeiros
+├── 🎫 Embarque (Check-in)
+│   ├── Lista de viagens
+│   ├── Check-in de passageiros
+│   ├── Lista de embarque
+│   └── Relatórios
+├── 🎁 Indicações (Referral)
+│   ├── Programa de indicações
+│   ├── Códigos personalizados
+│   ├── Bônus e descontos
+│   └── Relatório de indicações
+├── 🛒 Loja Online
+│   ├── Configurações da loja
+│   ├── Pedidos recebidos
+│   ├── Carrinhos abandonados
+│   └── Personalização visual
+├── 📅 Calendário
+│   ├── Agenda de viagens
+│   ├── Tarefas e follow-ups
+│   ├── Sincronização Google Calendar
+│   └── Lembretes automáticos
+├── 📊 Relatórios
+│   ├── Vendas por período
+│   ├── Performance por vendedor
+│   ├── Taxa de conversão
+│   ├── Ocupação de viagens
+│   └── Relatórios customizados
+├── 🤖 Automações
+│   ├── Builder visual
+│   ├── Templates prontos
+│   ├── Triggers e ações
+│   ├── Logs de execução
+│   └── Webhooks
+├── 💬 WhatsApp
+│   ├── Integração via API
+│   ├── Templates de mensagens
+│   ├── Envio em massa
+│   └── Chatbot (futuro)
+├── ⚙️ Configurações
+│   ├── Dados da agência
+│   ├── Usuários e permissões
+│   ├── Personalização
+│   ├── Integrações
+│   └── Assinatura e pagamento
+└── 🔔 Notificações
+    ├── Em tempo real
+    ├── Centro de notificações
+    └── Preferências
+LOJA PÚBLICA (Marketplace) - /loja
+Objetivo: Vitrine online para clientes finais comprarem viagens
+// Estrutura da Loja Pública
+
+Header (Fixo)
+├── Logo + Nome da Agência (Ex: "Chiquinha Turismo")
+├── Barra de Busca (busca por destino/título)
+├── Filtros
+│   ├── Tipo (Excursão, Bate-volta, Pacote)
+│   ├── Destino (lista dinâmica do banco)
+│   ├── Faixa de preço
+│   └── Data de saída
+└── Botão "Área do Cliente" → /login
+
+Hero Section
+├── Banner principal com imagem
+├── Headline da agência
+└── CTA de busca rápida
+
+Viagens em Destaque
+├── Filtro: featured = true
+├── Badge "⭐ Destaque"
+└── Grid de cards destacados
+
+Todas as Viagens
+├── Filtro: is_public = true AND status = 'aberta'
+├── Grid responsivo
+└── Paginação
+
+Card de Viagem
+├── Imagem de capa (ou placeholder gradiente)
+├── Badges
+│   ├── ⭐ Destaque (se featured)
+│   ├── 🏷️ Tipo (Excursão/Bate-volta)
+│   └── 🔥 Últimas vagas! (se ≤10 vagas)
+├── Informações
+│   ├── Título da viagem
+│   ├── 📍 Destino
+│   ├── 📅 Data de saída
+│   ├── 👥 Vagas disponíveis
+│   ├── Barra de ocupação (visual %)
+│   ├── ✅ Itens inclusos (até 3 + contador)
+│   └── 💰 Preço "a partir de R$ X/pessoa"
+└── Ações
+    ├── Botão "Reservar" → Modal de reserva
+    └── Botão "WhatsApp" → Abre conversa pré-preenchida
+
+Modal de Reserva (Cliente Final)
+├── Seleção de Itinerário (datas disponíveis)
+├── Quantidade de passageiros
+├── Cálculo automático do total
+├── Formulário de dados
+│   ├── Nome completo
+│   ├── CPF
+│   ├── Email
+│   ├── Telefone/WhatsApp
+│   ├── Data de nascimento
+│   └── Observações
+├── Campo de código de indicação (5% desconto)
+├── Campo de cupom de desconto
+└── Botões
+    ├── "Finalizar Reserva" → Cria no sistema
+    └── "Continuar no WhatsApp" → Envia dados
+
+Detalhes da Viagem (Página Individual)
+├── Galeria de imagens
+├── Descrição completa
+├── Itinerário detalhado
+├── Itens inclusos e não inclusos
+├── Políticas de cancelamento
+├── Datas disponíveis com preços
+├── Seletor de passageiros
+├── Formulário de reserva
+└── Botões de ação
+
+Footer da Agência
+├── Logo + Slogan
+├── Contato
+│   ├── 📞 Telefone
+│   ├── 📱 WhatsApp
+│   ├── 📧 Email
+│   └── 📍 Endereço
+├── Redes Sociais
+│   └── Instagram @chiquinhaturismo
+└── Copyright
+FLUXO COMPLETO DE INTEGRAÇÃO
+FLUXO 1: Captação de Agência (Landing → CRM)
+1. Visitante acessa Landing Page (/)
+   ↓
+2. Navega pelas funcionalidades e preços
+   ↓
+3. Clica em "Começar Grátis"
+   ↓
+4. Preenche formulário de registro
+   ├── Nome da agência
+   ├── Nome do responsável
+   ├── Email
+   ├── Telefone
+   ├── Senha
+   └── Plano escolhido
+   ↓
+5. Sistema cria:
+   ├── Tenant (agência)
+   ├── Usuário admin
+   ├── Configurações padrão
+   ├── Pipeline padrão
+   └── Período de trial (14 dias)
+   ↓
+6. Email de boas-vindas enviado
+   ↓
+7. Redirecionado para Dashboard
+   ↓
+8. Onboarding guiado
+   ├── Completar perfil da agência
+   ├── Adicionar logo
+   ├── Configurar loja pública
+   ├── Criar primeira viagem
+   └── Convidar equipe
+FLUXO 2: Gestão no CRM (Dashboard)
+1. Agência faz login (agencia.visitecrm.com)
+   ↓
+2. Dashboard com métricas em tempo real
+   ├── Total de clientes
+   ├── Reservas do mês
+   ├── Receita
+   ├── Taxa de conversão
+   └── Próximas viagens
+   ↓
+3. Cadastra viagens
+   ├── Informações básicas
+   ├── Itinerário
+   ├── Preços
+   ├── Poltronas
+   ├── Fotos
+   └── Marca como pública (is_public = true)
+   ↓
+4. Viagem aparece automaticamente na Loja
+   ↓
+5. Cliente entra em contato (WhatsApp ou Loja)
+   ↓
+6. Vendedor cria cliente no CRM
+   ├── Dados pessoais
+   ├── Segmento
+   ├── Tags
+   └── Origem (WhatsApp, Loja, Indicação)
+   ↓
+7. Cliente adicionado ao Pipeline
+   ├── Estágio: "Novo Lead"
+   ├── Deal criado automaticamente
+   └── Atividades registradas
+   ↓
+8. Vendedor move deal pelo funil
+   ├── Contato feito
+   ├── Proposta enviada
+   ├── Negociação
+   └── Fechamento
+   ↓
+9. Ao ganhar deal → Cria reserva
+   ├── Wizard completo
+   ├── Dados dos passageiros
+   ├── Seleção de assentos
+   ├── Valores e descontos
+   └── Forma de pagamento
+   ↓
+10. Reserva criada
+    ├── Número de reserva gerado
+    ├── Voucher criado
+    ├── Assentos reservados
+    ├── Cliente notificado (email + WhatsApp)
+    ├── Estatísticas atualizadas
+    └── Comissão calculada
+    ↓
+11. Pagamentos registrados
+    ├── Parcial ou total
+    ├── Atualiza status
+    ├── Confirma reserva (se pago total)
+    └── Emite recibo
+    ↓
+12. Check-in no dia da viagem
+    ├── Valida documento
+    ├── Confirma assento
+    ├── Marca como embarcado
+    └── Gera lista de embarque
+    ↓
+13. Pós-venda
+    ├── Solicita avaliação (automação)
+    ├── Registra NPS
+    └── Follow-up para próxima viagem
+FLUXO 3: Venda pela Loja (Cliente Final)
+1. Cliente acessa loja pública
+   (chiquinhaturismo.visitecrm.com/loja)
+   ↓
+2. Navega pelas viagens
+   ├── Busca por destino
+   ├── Filtra por tipo
+   ├── Ordena por preço/data
+   └── Vê viagens em destaque
+   ↓
+3. Clica em uma viagem
+   ↓
+4. Página de detalhes
+   ├── Galeria de fotos
+   ├── Descrição completa
+   ├── Itinerário
+   ├── Itens inclusos
+   ├── Datas disponíveis
+   └── Preço por pessoa
+   ↓
+5. Seleciona opções
+   ├── Data de saída
+   ├── Quantidade de passageiros
+   └── Vê cálculo do total
+   ↓
+6. Clica em "Reservar"
+   ↓
+7. Modal de reserva abre
+   ↓
+8. Preenche dados
+   ├── Nome completo
+   ├── CPF
+   ├── Email
+   ├── Telefone
+   ├── Data de nascimento
+   ├── Código de indicação (opcional)
+   └── Cupom de desconto (opcional)
+   ↓
+9. Sistema valida
+   ├── CPF único na viagem
+   ├── Vagas disponíveis
+   ├── Código de indicação válido
+   └── Cupom válido
+   ↓
+10. Cliente escolhe:
+    
+    OPÇÃO A: Finalizar Reserva Online
+    ├── Reserva criada automaticamente
+    ├── Status: "Pendente de Pagamento"
+    ├── Cliente criado no CRM (se novo)
+    ├── Deal criado e movido para "Negociação"
+    ├── Email de confirmação enviado
+    ├── WhatsApp com link de pagamento
+    └── Voucher provisório gerado
+    
+    OPÇÃO B: Continuar no WhatsApp
+    ├── Abre conversa com agência
+    ├── Mensagem pré-preenchida com:
+    │   ├── Nome da viagem
+    │   ├── Data escolhida
+    │   ├── Quantidade de passageiros
+    │   └── Dados do cliente
+    └── Vendedor finaliza manualmente no CRM
+    ↓
+11. Cliente recebe:
+    ├── Email com detalhes da reserva
+    ├── WhatsApp com voucher provisório
+    ├── Link para área do cliente
+    └── Instruções de pagamento
+    ↓
+12. Cliente acessa Área do Cliente
+    ├── Login com email/CPF
+    ├── Vê suas reservas
+    ├── Baixa voucher
+    ├── Acompanha pagamentos
+    ├── Faz check-in online (48h antes)
+    └── Avalia viagem (pós-viagem)
+
+FLUXO 4: Indicação (Referral)
+1. Cliente satisfeito recebe código único
+   (Ex: MARIA2024)
+   ↓
+2. Compartilha com amigos
+   ├── WhatsApp
+   ├── Instagram
+   └── Boca a boca
+   ↓
+3. Amigo acessa loja e usa código
+   ↓
+4. Sistema valida código
+   ├── Código existe
+   ├── Indicador está ativo
+   └── Não é auto-indicação
+   ↓
+5. Desconto aplicado (5%)
+   ↓
+6. Reserva criada com referral_id
+   ↓
+7. Ao confirmar pagamento:
+   ├── Indicação marcada como "completa"
+   ├── Bônus calculado para indicador
+   ├── Indicador notificado
+   └── Crédito disponível para próxima compra
+   ↓
+8. Indicador usa crédito
+   ├── Desconto automático na próxima reserva
+   └── Ou saque (se configurado)
+BANCO DE DADOS - RELACIONAMENTOS PRINCIPAIS
+// Relacionamentos Chave
+
+Tenant (Agência)
+├── Users (Equipe)
+├── Clients (Clientes/Leads)
+├── Trips (Viagens)
+├── Reservations (Reservas)
+├── Deals (Oportunidades)
+├── Pipelines (Funis)
+├── Automations (Automações)
+├── Webhooks
+├── StoreOrders (Pedidos da Loja)
+└── Settings (Configurações)
+
+Client
+├── Deals
+├── Reservations
+├── Activities (Timeline)
+├── Tasks
+├── Documents
+├── Referrals (Como indicador)
+├── ReferredBy (Como indicado)
+└── PipelineStage
+
+Trip
+├── Itineraries (Datas/Saídas)
+├── Seats (Poltronas)
+├── Reservations
+├── Deals
+└── StoreOrders
+
+Reservation
+├── Client
+├── Trip
+├── Itinerary
+├── Deal (Origem)
+├── Passengers
+├── Seats (Poltronas reservadas)
+├── Payments
+├── Referral (Se houver indicação)
+└── StoreOrder (Se veio da loja)
+
+Deal
+├── Client
+├── Pipeline
+├── Stage
+├── Trip (Opcional)
+├── Reservation (Quando ganho)
+├── Activities
+└── Owner (Vendedor)
+
+StoreOrder (Pedido da Loja)
+├── Client
+├── Trip
+├── Items (Passageiros)
+├── Reservation (Criada após pagamento)
+└── Referral (Se usou código)
+
+Referral
+├── Referrer (Indicador)
+├── Referred (Indicado)
+├── Reservation (Quando completa)
+└── Bonus (Valor ganho)
+CONFIGURAÇÕES DA LOJA (Personalizável)
+// Configurações que a agência pode ajustar
+
+StoreSettings
+├── Informações Básicas
+│   ├── Nome da agência
+│   ├── Slogan
+│   ├── Descrição
+│   ├── Logo
+│   └── Imagem hero
+├── Contato
+│   ├── Telefone
+│   ├── WhatsApp
+│   ├── Email
+│   ├── Instagram
+│   └── Endereço
+├── Personalização Visual
+│   ├── Cor primária
+│   ├── Cor secundária
+│   ├── Fonte
+│   └── Tema (claro/escuro)
+├── Funcionalidades
+│   ├── Exibir preços (sim/não)
+│   ├── Exibir disponibilidade (sim/não)
+│   ├── Permitir reservas online (sim/não)
+│   ├── Exigir login para reservar (sim/não)
+│   ├── Habilitar indicações (sim/não)
+│   ├── Habilitar cupons (sim/não)
+│   └── Habilitar check-in online (sim/não)
+├── Pagamentos
+│   ├── Métodos aceitos
+│   ├── Parcelas máximas
+│   ├── Desconto à vista
+│   └── Integração de pagamento (Pix, cartão)
+└── SEO
+    ├── Meta title
+    ├── Meta description
+    ├── Keywords
+    └── Favicon
+
+PERSONALIZAÇÃO POR AGÊNCIA
+Cada agência tem sua própria identidade:
+Exemplo 1: Chiquinha Turismo
+├── URL: chiquinhaturismo.visitecrm.com
+├── Logo: chiquinha-logo.png
+├── Cores: Azul e Laranja
+├── WhatsApp: (88) 98163-4178
+└── Instagram: @chiquinhaturismo
+
+Exemplo 2: Viagens Premium
+├── URL: viagenspremium.visitecrm.com
+├── Logo: premium-logo.png
+├── Cores: Dourado e Preto
+├── WhatsApp: (11) 99999-9999
+└── Instagram: @viagenspremium
+
+TECNOLOGIAS E STACK
+Frontend
+├── Next.js 14 (App Router)
+├── TypeScript
+├── Tailwind CSS
+├── Shadcn/ui
+├── React Hook Form
+├── Zod (Validação)
+├── Tanstack Query
+└── Framer Motion (Animações)
+
+Backend
+├── Next.js API Routes
+├── Prisma ORM
+├── PostgreSQL
+├── NextAuth.js (Autenticação)
+└── Node.js
+
+Integrações
+├── WhatsApp Business API
+├── Google Calendar API
+├── Stripe/Pagar.me (Pagamentos)
+├── AWS S3 (Armazenamento)
+├── SendGrid (Emails)
+└── Webhooks customizados
+
+DevOps
+├── Vercel (Deploy)
+├── GitHub Actions (CI/CD)
+├── Sentry (Monitoramento)
+└── Cloudflare (CDN)
+
+MÉTRICAS E KPIs RASTREADOS
+Dashboard Principal
+├── Total de Clientes
+├── Novos Clientes (mês)
+├── Total de Reservas
+├── Reservas Confirmadas
+├── Receita Total
+├── Receita do Mês
+├── Ticket Médio
+├── Taxa de Conversão (Lead → Cliente → Venda)
+├── Ocupação Média das Viagens
+├── NPS (Net Promoter Score)
+├── Taxa de Indicação
+├── Comissões Geradas
+└── LTV (Lifetime Value)
+
+Por Vendedor
+├── Deals abertos
+├── Deals ganhos
+├── Taxa de conversão
+├── Receita gerada
+├── Comissões
+└── Tempo médio de fechamento
+
+Por Viagem
+├── Vagas totais
+├── Vagas ocupadas
+├── Taxa de ocupação
+├── Receita gerada
+├── Ticket médio
+└── Avaliação média
+
+SEGURANÇA E PERMISSÕES
+Níveis de Acesso
+├── Super Admin (VisitéCRM)
+│   └── Gerencia todas as agências
+├── Admin (Agência)
+│   └── Acesso total ao tenant
+├── Manager (Gerente)
+│   └── Acesso a relatórios e configurações
+├── Vendedor
+│   └── Acesso a clientes, deals e reservas
+└── Operacional
+    └── Acesso a check-in e embarque
+
+Isolamento Multi-tenant
+├── Todos os dados filtrados por tenant_id
+├── Queries automáticas com tenant_id
+├── Middleware de validação
+└── Logs de auditoria por tenant
+
+RESUMO EXECUTIVO
+O VisitéCRM é um ecossistema completo composto por 3 plataformas integradas:
+
+1. Landing Page (Captação B2B)
+Vende o software para agências
+Planos e preços
+Trial gratuito de 14 dias
+Onboarding guiado
+2. CRM Dashboard (Gestão B2B)
+Sistema completo multi-tenant
+Gestão de clientes, vendas e viagens
+Pipeline customizável
+Automações e integrações
+Relatórios e métricas
+3. Loja Pública (Vendas B2C)
+Vitrine online personalizada por agência
+Catálogo de viagens
+Reservas online
+Sistema de indicações
+Área do cliente
+Tudo sincronizado em tempo real, com automações inteligentes e total personalização por agência! 
+

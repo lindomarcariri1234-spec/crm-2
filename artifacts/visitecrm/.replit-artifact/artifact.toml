@@ -1,0 +1,26 @@
+kind = "web"
+previewPath = "/"
+title = "VisiteCRM"
+version = "1.0.0"
+id = "artifacts/visitecrm"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19951
+
+[services.development]
+run = "pnpm --filter @workspace/visitecrm run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/visitecrm", "run", "build" ]
+run = "node artifacts/visitecrm/serve-static.mjs"
+
+[services.env]
+PORT = "19951"
+BASE_PATH = "/"

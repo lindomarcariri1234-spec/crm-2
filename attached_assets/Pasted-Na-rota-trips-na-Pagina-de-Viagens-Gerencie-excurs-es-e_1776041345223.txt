@@ -1,0 +1,794 @@
+Na rota /trips na Pagina de Viagens
+Gerencie excursões e pacotes da agência.
+
+Na opção (Publicar na Loja), ao clicar deverá puxar automaticamente todas as informações da viagem já cadastrada.
+
+Ao puxar as informações, publicar na loja todas as informações da viagem.
+
+
+implementar Sincronização no botão "Publicar na Loja" que:
+
+ Puxa automaticamente todas as informações da viagem cadastrada no CRM
+ Publica a viagem na loja pública (loja da Agência)
+ Torna a viagem visível para clientes finais
+ Sincroniza dados em tempo real
+
+
+ATUALIZAÇÃO DO SCHEMA PRISMA
+
+// prisma/schema.prisma
+
+model Trip {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ... campos existentes ...
+  
+  // PUBLICAÇÃO NA LOJA
+  is_published    Boolean   @default(false)  // Se está publicado na loja
+  published_at    DateTime? // Data de publicação
+  published_by    String?   // Usuário que publicou
+  publisher       User?     @relation("TripPublisher", fields: [published_by], references: [id])
+  
+  is_featured     Boolean   @default(false)  // Destaque na loja
+  store_title     String?   // Título customizado para loja (opcional)
+  store_description String? @db.Text // Descrição customizada (opcional)
+  seo_keywords    String[]  // Keywords para SEO
+  
+  // VISIBILIDADE
+  show_price      Boolean   @default(true)   // Mostrar preço na loja
+  show_availability Boolean @default(true)   // Mostrar disponibilidade
+  allow_online_booking Boolean @default(true) // Permitir reserva online
+  
+  // ... resto do modelo ...
+  
+  @@index([tenant_id, is_published])
+  @@index([is_published, status])
+  @@map("trips")
+}
+API DE PUBLICAÇÃO
+// app/api/dashboard/trips/[id]/publish/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/events/event-emitter'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const tripId = params.id
+
+    // Buscar viagem com todas as informações
+    const trip = await prisma.trip.findUnique({
+      where: { id: tripId },
+      include: {
+        itineraries: true,
+        seats: true,
+        images: true,
+        included_items: true,
+        not_included_items: true,
+      },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    // Verificar se pertence ao tenant
+    if (trip.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    }
+
+    // Validações antes de publicar
+    const validationErrors = validateTripForPublication(trip)
+    if (validationErrors.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Viagem não pode ser publicada',
+          validation_errors: validationErrors,
+        },
+        { status: 400 }
+      )
+    }
+
+    // Publicar viagem
+    const updatedTrip = await prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        is_published: true,
+        published_at: new Date(),
+        published_by: session.user.id,
+        status: 'active', // Garante que está ativa
+      },
+      include: {
+        itineraries: true,
+        images: true,
+        included_items: true,
+      },
+    })
+
+    // Emitir evento
+    eventEmitter.emitEvent('trip.published', {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      timestamp: new Date(),
+      data: updatedTrip,
+    })
+
+    // Log de auditoria
+    await prisma.auditLog.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        user_id: session.user.id,
+        action: 'publish',
+        resource: 'trip',
+        resource_id: tripId,
+        metadata: {
+          title: trip.title,
+          destination: trip.destination,
+        },
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: 'Viagem publicada na loja com sucesso!',
+      trip: updatedTrip,
+    })
+  } catch (error: any) {
+    console.error('Erro ao publicar viagem:', error)
+    return NextResponse.json(
+      { error: 'Erro ao publicar viagem' },
+      { status: 500 }
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VALIDAÇÕES
+// ═══════════════════════════════════════════════════════════════
+
+function validateTripForPublication(trip: any): string[] {
+  const errors: string[] = []
+
+  // Informações básicas
+  if (!trip.title || trip.title.trim() === '') {
+    errors.push('Título é obrigatório')
+  }
+
+  if (!trip.description || trip.description.trim() === '') {
+    errors.push('Descrição é obrigatória')
+  }
+
+  if (!trip.destination || trip.destination.trim() === '') {
+    errors.push('Destino é obrigatório')
+  }
+
+  // Preços
+  if (!trip.price_per_person || trip.price_per_person <= 0) {
+    errors.push('Preço por pessoa deve ser maior que zero')
+  }
+
+  // Itinerários
+  if (!trip.itineraries || trip.itineraries.length === 0) {
+    errors.push('É necessário ter pelo menos um itinerário cadastrado')
+  }
+
+  // Itinerários válidos (com vagas e datas futuras)
+  const validItineraries = trip.itineraries?.filter((it: any) => {
+    return (
+      it.status === 'open' &&
+      it.available_seats > 0 &&
+      new Date(it.departure_date) > new Date()
+    )
+  })
+
+  if (!validItineraries || validItineraries.length === 0) {
+    errors.push('É necessário ter pelo menos um itinerário aberto com vagas disponíveis')
+  }
+
+  // Imagens
+  if (!trip.images || trip.images.length === 0) {
+    errors.push('É necessário ter pelo menos uma imagem da viagem')
+  }
+
+  // Assentos
+  if (!trip.total_seats || trip.total_seats <= 0) {
+    errors.push('Total de assentos deve ser maior que zero')
+  }
+
+  // Duração
+  if (!trip.duration_days || trip.duration_days <= 0) {
+    errors.push('Duração da viagem é obrigatória')
+  }
+
+  return errors
+}
+
+API DE DESPUBLICAR
+// app/api/dashboard/trips/[id]/unpublish/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { eventEmitter } from '@/lib/events/event-emitter'
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    const tripId = params.id
+
+    const trip = await prisma.trip.findUnique({
+      where: { id: tripId },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    if (trip.tenant_id !== session.user.tenantId) {
+      return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
+    }
+
+    // Despublicar
+    const updatedTrip = await prisma.trip.update({
+      where: { id: tripId },
+      data: {
+        is_published: false,
+      },
+    })
+
+    // Emitir evento
+    eventEmitter.emitEvent('trip.unpublished', {
+      tenant_id: session.user.tenantId,
+      user_id: session.user.id,
+      timestamp: new Date(),
+      data: updatedTrip,
+    })
+
+    // Log de auditoria
+    await prisma.auditLog.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        user_id: session.user.id,
+        action: 'unpublish',
+        resource: 'trip',
+        resource_id: tripId,
+        metadata: {
+          title: trip.title,
+        },
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      message: 'Viagem removida da loja',
+      trip: updatedTrip,
+    })
+  } catch (error: any) {
+    console.error('Erro ao despublicar viagem:', error)
+    return NextResponse.json(
+      { error: 'Erro ao despublicar viagem' },
+      { status: 500 }
+    )
+  }
+}
+
+COMPONENTE DO BOTÃO DE PUBLICAÇÃO
+// components/dashboard/trips/publish-trip-button.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { useToast } from '@/components/ui/use-toast'
+import { useRouter } from 'next/navigation'
+import { 
+  Globe, 
+  GlobeOff, 
+  CheckCircle2, 
+  AlertCircle,
+  Loader2 
+} from 'lucide-react'
+
+interface PublishTripButtonProps {
+  trip: any
+  onPublishSuccess?: () => void
+}
+
+export function PublishTripButton({ 
+  trip, 
+  onPublishSuccess 
+}: PublishTripButtonProps) {
+  const router = useRouter()
+  const { toast } = useToast()
+  const [loading, setLoading] = useState(false)
+  const [showDialog, setShowDialog] = useState(false)
+  const [validationErrors, setValidationErrors] = useState<string[]>([])
+
+  const isPublished = trip.is_published
+
+  const handlePublish = async () => {
+    setLoading(true)
+    setValidationErrors([])
+
+    try {
+      const response = await fetch(`/api/dashboard/trips/${trip.id}/publish`, {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        if (data.validation_errors) {
+          setValidationErrors(data.validation_errors)
+          return
+        }
+        throw new Error(data.error || 'Erro ao publicar viagem')
+      }
+
+      toast({
+        title: '✅ Viagem publicada!',
+        description: 'A viagem está agora visível na sua loja pública',
+      })
+
+      setShowDialog(false)
+      onPublishSuccess?.()
+      router.refresh()
+    } catch (error: any) {
+      toast({
+        title: 'Erro ao publicar viagem',
+        description: error.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleUnpublish = async () => {
+    setLoading(true)
+
+    try {
+      const response = await fetch(`/api/dashboard/trips/${trip.id}/unpublish`, {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erro ao despublicar viagem')
+      }
+
+      toast({
+        title: 'Viagem removida da loja',
+        description: 'A viagem não está mais visível publicamente',
+      })
+
+      setShowDialog(false)
+      onPublishSuccess?.()
+      router.refresh()
+    } catch (error: any) {
+      toast({
+        title: 'Erro ao despublicar viagem',
+        description: error.message,
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <>
+      <Button
+        variant={isPublished ? 'outline' : 'default'}
+        onClick={() => setShowDialog(true)}
+        disabled={loading}
+      >
+        {loading ? (
+          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+        ) : isPublished ? (
+          <GlobeOff className="h-4 w-4 mr-2" />
+        ) : (
+          <Globe className="h-4 w-4 mr-2" />
+        )}
+        {isPublished ? 'Remover da Loja' : 'Publicar na Loja'}
+      </Button>
+
+      <Dialog open={showDialog} onOpenChange={setShowDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {isPublished ? 'Remover da Loja?' : 'Publicar na Loja?'}
+            </DialogTitle>
+            <DialogDescription>
+              {isPublished
+                ? 'A viagem não ficará mais visível para clientes na loja pública.'
+                : 'A viagem ficará visível para todos os clientes na sua loja pública.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Erros de Validação */}
+          {validationErrors.length > 0 && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                <p className="font-semibold mb-2">
+                  Corrija os seguintes problemas antes de publicar:
+                </p>
+                <ul className="list-disc list-inside space-y-1">
+                  {validationErrors.map((error, index) => (
+                    <li key={index} className="text-sm">
+                      {error}
+                    </li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Preview das Informações */}
+          {!isPublished && validationErrors.length === 0 && (
+            <div className="space-y-3 py-4">
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5" />
+                <div>
+                  <p className="font-medium">{trip.title}</p>
+                  <p className="text-sm text-gray-600">{trip.destination}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-gray-600">Preço</p>
+                  <p className="font-medium">
+                    R$ {trip.price_per_person?.toFixed(2)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Duração</p>
+                  <p className="font-medium">{trip.duration_days} dias</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Assentos</p>
+                  <p className="font-medium">{trip.total_seats} lugares</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Imagens</p>
+                  <p className="font-medium">{trip.images?.length || 0}</p>
+                </div>
+              </div>
+
+              <Alert>
+                <AlertDescription className="text-sm">
+                  ✅ Todas as informações serão publicadas automaticamente
+                </AlertDescription>
+              </Alert>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowDialog(false)}
+              disabled={loading}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant={isPublished ? 'destructive' : 'default'}
+              onClick={isPublished ? handleUnpublish : handlePublish}
+              disabled={loading || validationErrors.length > 0}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Processando...
+                </>
+              ) : isPublished ? (
+                'Remover da Loja'
+              ) : (
+                'Publicar Agora'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+INTEGRAÇÃO NA PÁGINA DE VIAGENS
+// app/(dashboard)/dashboard/trips/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { TripsList } from '@/components/dashboard/trips/trips-list'
+import { PublishTripButton } from '@/components/dashboard/trips/publish-trip-button'
+
+export default async function TripsPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  const trips = await prisma.trip.findMany({
+    where: { tenant_id: session.user.tenantId },
+    include: {
+      itineraries: {
+        where: { status: 'open' },
+        orderBy: { departure_date: 'asc' },
+      },
+      images: true,
+      _count: {
+        select: {
+          reservations: true,
+          seats: true,
+        },
+      },
+    },
+    orderBy: { created_at: 'desc' },
+  })
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Viagens</h1>
+          <p className="text-gray-600">
+            Gerencie excursões e pacotes da agência
+          </p>
+        </div>
+        <Button onClick={() => router.push('/dashboard/trips/new')}>
+          <Plus className="h-4 w-4 mr-2" />
+          Nova Viagem
+        </Button>
+      </div>
+
+      {/* Cards de Estatísticas */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <MapPin className="h-4 w-4 text-blue-600" />
+            <p className="text-sm text-gray-600">Total de Viagens</p>
+          </div>
+          <p className="text-2xl font-bold">{trips.length}</p>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <Globe className="h-4 w-4 text-green-600" />
+            <p className="text-sm text-gray-600">Viagens Ativas</p>
+          </div>
+          <p className="text-2xl font-bold">
+            {trips.filter((t) => t.is_published).length}
+          </p>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <Users className="h-4 w-4 text-purple-600" />
+            <p className="text-sm text-gray-600">Taxa de Ocupação</p>
+          </div>
+          <p className="text-2xl font-bold">5%</p>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <DollarSign className="h-4 w-4 text-emerald-600" />
+            <p className="text-sm text-gray-600">Receita Estimada</p>
+          </div>
+          <p className="text-2xl font-bold">R$ 2.460,00</p>
+        </Card>
+      </div>
+
+      {/* Lista de Viagens */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {trips.map((trip) => (
+          <Card key={trip.id} className="overflow-hidden">
+            {/* Imagem */}
+            <div className="relative h-48 bg-gradient-to-br from-blue-500 to-purple-600">
+              {trip.images?.[0] ? (
+                <img
+                  src={trip.images[0].url}
+                  alt={trip.title}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <MapPin className="h-12 w-12 text-white opacity-50" />
+                </div>
+              )}
+
+              {/* Badge de Status */}
+              {trip.is_published && (
+                <Badge className="absolute top-2 right-2 bg-green-600">
+                  <Globe className="h-3 w-3 mr-1" />
+                  Ativa
+                </Badge>
+              )}
+            </div>
+
+            {/* Conteúdo */}
+            <div className="p-4">
+              <h3 className="font-bold text-lg mb-2">{trip.title}</h3>
+              <p className="text-sm text-gray-600 mb-3">
+                📍 {trip.destination}
+              </p>
+
+              <div className="flex items-center justify-between text-sm mb-4">
+                <span className="text-gray-600">
+                  {trip.itineraries?.[0]?.departure_date
+                    ? format(
+                        new Date(trip.itineraries[0].departure_date),
+                        'dd/MM/yyyy'
+                      )
+                    : 'Sem data'}
+                </span>
+                <span className="font-semibold text-green-600">
+                  R$ {trip.price_per_person?.toFixed(2)}
+                </span>
+              </div>
+
+              {/* Ações */}
+              <div className="flex gap-2">
+                <PublishTripButton trip={trip} />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => router.push(`/dashboard/trips/${trip.id}`)}
+                >
+                  Ver Detalhes
+                </Button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+QUERY DA LOJA PÚBLICA (Filtragem)
+// app/(public)/loja/page.tsx
+
+import { prisma } from '@/lib/prisma'
+import { PublicTripCard } from '@/components/public/public-trip-card'
+
+export default async function PublicStorePage({
+  searchParams,
+}: {
+  searchParams: { search?: string; type?: string; destination?: string }
+}) {
+  const { search, type, destination } = searchParams
+
+  // Buscar apenas viagens publicadas
+  const trips = await prisma.trip.findMany({
+    where: {
+      is_published: true, // ✅ FILTRO PRINCIPAL
+      status: 'active',
+      ...(search && {
+        OR: [
+          { title: { contains: search, mode: 'insensitive' } },
+          { destination: { contains: search, mode: 'insensitive' } },
+        ],
+      }),
+      ...(type && { type }),
+      ...(destination && { destination }),
+    },
+    include: {
+      images: true,
+      itineraries: {
+        where: {
+          status: 'open',
+          departure_date: { gte: new Date() },
+        },
+        orderBy: { departure_date: 'asc' },
+        take: 1,
+      },
+      included_items: true,
+    },
+    orderBy: [
+      { is_featured: 'desc' }, // Destaques primeiro
+      { created_at: 'desc' },
+    ],
+  })
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <h1 className="text-3xl font-bold mb-6">Nossas Viagens</h1>
+
+      {/* Viagens em Destaque */}
+      {trips.filter((t) => t.is_featured).length > 0 && (
+        <section className="mb-12">
+          <h2 className="text-2xl font-bold mb-4">⭐ Em Destaque</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {trips
+              .filter((t) => t.is_featured)
+              .map((trip) => (
+                <PublicTripCard key={trip.id} trip={trip} />
+              ))}
+          </div>
+        </section>
+      )}
+
+      {/* Todas as Viagens */}
+      <section>
+        <h2 className="text-2xl font-bold mb-4">Todas as Viagens</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {trips.map((trip) => (
+            <PublicTripCard key={trip.id} trip={trip} />
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+FLUXO
+1. Agência cadastra viagem no CRM
+   ├── Preenche todas as informações
+   ├── Adiciona imagens
+   ├── Cria itinerários
+   └── Configura preços
+   ↓
+2. Clica em "Publicar na Loja"
+   ↓
+3. Sistema valida:
+   ✅ Título preenchido
+   ✅ Descrição preenchida
+   ✅ Destino preenchido
+   ✅ Preço configurado
+   ✅ Pelo menos 1 itinerário aberto
+   ✅ Pelo menos 1 imagem
+   ✅ Assentos configurados
+   ↓
+4. Se válido:
+   ├── is_published = true
+   ├── published_at = agora
+   ├── published_by = usuário atual
+   └── Evento "trip.published" disparado
+   ↓
+5. Viagem aparece automaticamente na Loja Pública
+   ├── Visível para todos os clientes
+   ├── Com todas as informações sincronizadas
+   └── Pronta para receber reservas
+

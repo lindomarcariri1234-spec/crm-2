@@ -1,0 +1,55 @@
+Após Análise completa de erros e falhas críticos encontrados no projeto
+
+Crie tarefas para corrigir esses problemas encontrados
+
+Vamos corrigir os Erros e Falhas Críticos — VisiteCRM
+🔴 CRÍTICO — Pode causar perda de dados ou indisponibilidade
+1. Servidor sem proteção contra crash por erros inesperados
+O processo Node.js não tem handlers para unhandledRejection nem uncaughtException. Qualquer promessa rejeitada fora de um try/catch em qualquer rota nova ou worker pode derrubar o servidor inteiro silenciosamente, sem log adequado - CORRIGIR.
+
+Arquivo: artifacts/api-server/src/index.ts
+2. Ataque de "Ghost Reservation" — vagas bloqueadas indefinidamente
+Quando um cliente cria um pedido na loja pública, a reserva é imediatamente criada com status: "pending" e as vagas da viagem são decrementadas. Não existe nenhum mecanismo de expiração (TTL) ou worker que cancele reservas pendentes não pagas após um prazo. Um bot pode preencher todas as vagas de uma viagem sem pagar nada - Implementar mecanismo de expiração (TTL).
+
+Arquivo: artifacts/api-server/src/routes/store-public.ts (linha ~938)
+3. Criação de cliente fora da transação na loja pública
+No fluxo de pedido da vitrine, o registro do cliente (clientsTable) é inserido antes do bloco db.transaction. Se a transação principal falhar depois (ex: estoque esgotado), o cliente já foi criado no banco e não é revertido — gerando registros órfãos no CRM - CORRIGIR.
+
+Arquivo: artifacts/api-server/src/routes/store-public.ts (linha ~762 vs bloco de transação na ~815)
+4. Sem rate limiting na API pública
+O endpoint POST /public/store/:slug/orders não tem nenhum controle de taxa de requisições. Está vulnerável a flooding de pedidos, podendo esgotar conexões de banco, consumir IDs e executar DoS em viagens específicas. Nenhum middleware de rate limiting foi encontrado em app.ts - Implementar middleware de rate limiting.
+
+🟠 ALTO — Inconsistência de dados e risco financeiro
+5. Comissão calculada fora da transação (fire-and-forget)
+syncReservationCommission é chamada com .catch() após o commit da transação principal, tanto na criação quanto na atualização de reservas. Se falhar silenciosamente, a reserva existe confirmada no banco mas sem registro de comissão — o vendedor perde a comissão e ninguém percebe - Adicionar/Implementar correção.
+
+Arquivo: artifacts/api-server/src/routes/reservations.ts (linhas ~635 e ~1041)
+6. Bug de reconciliação de passageiros ao alterar vagas
+O endpoint PATCH /reservations/:id atualiza o número de assento apenas do passageiro primário. Se o número de vagas aumentar ou diminuir, os registros extras na tabela passengers não são criados nem deletados. Resultado: reservation.seats.length fica diferente do número real de registros de passageiros — manifesto de passageiros fica incorreto - CORRIGIR.
+
+Arquivo: artifacts/api-server/src/routes/reservations.ts (linhas ~984–1025)
+7. Somatórios financeiros com aritmética de ponto flutuante sem arredondamento
+Os relatórios financeiros (dashboard, pagamentos, viagens) acumulam valores monetários com adição JavaScript nativa (+=, .reduce()) sem usar roundMoney. Isso pode gerar centavos de diferença em totais — por exemplo, R$1.000,00 virando R$999,9999999999. O projeto já tem uma função roundMoney centralizada mas ela é ignorada nesses cálculos - Adicionar a função roundMoney para ser aceita, execultada.
+
+Arquivos: artifacts/api-server/src/routes/payments.ts (linhas ~291, ~362), artifacts/api-server/src/routes/dashboard.ts (linhas ~97, ~236–271)
+🟡 MÉDIO — Qualidade e confiabilidade
+8. roundMoney não é usada consistentemente
+Além dos relatórios citados acima, há instâncias de Math.round(val * 100) / 100 manual em reservations.ts, commissions.ts, loyalty.ts e até no frontend (NewReservationWizard.tsx, reservationPricing.ts). Se a lógica de arredondamento precisar mudar, haverá divergência entre as partes do sistema - Mudar, mas encontrar solução de deixe o sistema rodando perfeitamente.
+
+9. Migrações de banco embutidas no index.ts do servidor
+O arquivo index.ts contém centenas de linhas de SQL de migração que rodam a cada startup. Isso é um padrão de risco: uma migração mal escrita pode travar o boot do servidor, e não há como aplicar migrações independentemente do processo. O projeto usa Drizzle ORM que tem sistema próprio de migrations - IMPLEMENTAR CORREÇÃO.
+
+Arquivo: artifacts/api-server/src/index.ts
+10. BullMQ desabilitado sem Redis — e-mails síncronos bloqueiam requisições
+Conforme o log atual: "REDIS_URL not set — BullMQ workers not started, emails sent synchronously". Em produção, sem Redis, cada e-mail enviado bloqueia o event loop do servidor enquanto aguarda resposta do Resend/SMTP. Isso pode causar timeouts em rotas que disparam e-mails - Adicionar Redis.
+
+Arquivo: artifacts/api-server/src/index.ts (linha ~startup), variável de ambiente REDIS_URL ausente
+11. Race condition na geração de código de indicação
+A geração do referral_code do cliente usa um loop "check-then-insert" fora de uma transação serializável. Duas requisições simultâneas para o mesmo cliente podem gerar o mesmo código antes que uma delas faça o commit — embora o índice único no banco barre a duplicata, a segunda requisição retorna erro 500 em vez de tentar novamente - Corrigir falha.
+
+Arquivo: artifacts/api-server/src/routes/clients.ts (linhas ~541–551)
+Implementar correção por prioridade
+Prioridade	Qtd	Exemplos
+🔴 Crítico	4	Crash do servidor, ghost reservations, cliente órfão, sem rate limit
+🟠 Alto	3	Comissão fire-and-forget, bug de passageiros, floating point financeiro
+🟡 Médio	4	roundMoney inconsistente, migrations no index, Redis ausente, race condition referral

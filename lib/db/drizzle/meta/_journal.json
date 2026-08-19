@@ -1,0 +1,307 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1745010000000,
+      "tag": "0000_squash_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1800000000000,
+      "tag": "0001_referrals_crm_check",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1800100000000,
+      "tag": "0002_left_fantastic_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1800200000000,
+      "tag": "0003_price_alert_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1800300000000,
+      "tag": "0004_referral_code_enhancements",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1800400000000,
+      "tag": "0005_referral_settings_fixup",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1800500000000,
+      "tag": "0006_referral_suspended_attempt",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1800600000000,
+      "tag": "0007_defer_referral_effects",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1800700000000,
+      "tag": "0008_referral_suspended_attempt_count",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1800800000000,
+      "tag": "0009_referral_attempt_logs",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1800900000000,
+      "tag": "0010_pipeline_default_unique_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1801000000000,
+      "tag": "0011_pipeline_stages_unique_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1801100000000,
+      "tag": "0012_prefix_locked",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1801200000000,
+      "tag": "0013_grace_period_reversal",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1801300000000,
+      "tag": "0014_referral_bonus_validity_days",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1801400000000,
+      "tag": "0015_perf_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1801500000000,
+      "tag": "0016_campaign_trigger_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1801600000000,
+      "tag": "0017_campaigns_auto_enabled",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1801700000000,
+      "tag": "0018_reversal_warning_acknowledged_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1801800000000,
+      "tag": "0019_fix_referral_code_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1801900000000,
+      "tag": "0020_catch_all_baseline_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1802000000000,
+      "tag": "0021_production_missing_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1802100000000,
+      "tag": "0022_client_scores",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1802200000000,
+      "tag": "0023_referrals_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1802300000000,
+      "tag": "0024_referral_reversal_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1802400000000,
+      "tag": "0025_missing_pre_squash_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1802500000000,
+      "tag": "0026_deal_follow_up_note",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1802600000000,
+      "tag": "0027_favorite_low_availability_notified_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1802700000000,
+      "tag": "0028_loyalty_points_email_enabled",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1802800000000,
+      "tag": "0029_insights_chat_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1802900000000,
+      "tag": "0030_fix_trip_dates_timezone",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1803000000000,
+      "tag": "0031_store_order_birthdate",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1803200000000,
+      "tag": "0032_store_order_seats_boarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1803300000000,
+      "tag": "0033_store_order_co_passengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1803400000000,
+      "tag": "0034_store_order_idempotency_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1803500000000,
+      "tag": "0035_fix_available_seats_free_passengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1803600000000,
+      "tag": "0036_brave_klaw",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1803700000000,
+      "tag": "0037_careless_spot",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1803800000000,
+      "tag": "0038_swift_la_nuit",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1803900000000,
+      "tag": "0039_serious_reaper",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1804000000000,
+      "tag": "0040_deals_partial_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1805000000001,
+      "tag": "0041_add_is_gratuidade",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1805100000000,
+      "tag": "0042_reservations_active_client_trip_unique",
+      "breakpoints": true
+    }
+  ]
+}

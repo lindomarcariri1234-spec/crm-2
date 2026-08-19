@@ -1,0 +1,889 @@
+Na rota /trips/new
+Em Aba Transporte e Hospedagem
+Na opção Guia Turístico: O campo Guia Turístico deve ser um campo editável para inserir o nome do Guia de Turismo da viagem.
+
+Acrescentar mais um campo com a opção de inserir o nome do responsável da viagem/organizador da viagem.
+
+ATUALIZAR ABA "TRANSPORTE E HOSPEDAGEM"
+ALTERAÇÕES SOLICITADAS
+
+┌─────────────────────────────────────────────────────────────────┐
+│              ANTES → DEPOIS                                      │
+└─────────────────────────────────────────────────────────────────┘
+
+❌ ANTES:
+├── Guia Turístico: Campo desabilitado (placeholder "Maria Costa")
+└── Mensagem: "Cadastro de guias disponível em módulo futuro"
+
+✅ DEPOIS:
+├── Guia Turístico: Campo editável (Input text)
+└── Responsável da Viagem: Novo campo editável (Input text)
+
+ATUALIZAR SCHEMA DO BANCO
+
+// prisma/schema.prisma
+
+model Trip {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // Dados básicos
+  title           String
+  destination     String
+  description     String?   @db.Text
+  
+  // Imagens
+  image_url       String?   @db.Text
+  image_key       String?
+  gallery_images  Json?     @default("[]")
+  
+  // Preços
+  price_per_person  Decimal   @db.Decimal(10, 2)
+  promotional_price Decimal?  @db.Decimal(10, 2)
+  
+  // Datas
+  departure_date  DateTime?
+  return_date     DateTime?
+  duration_days   Int?
+  
+  // ═══════════════════════════════════════════════════════════
+  // TRANSPORTE E HOSPEDAGEM
+  // ═══════════════════════════════════════════════════════════
+  
+  // Veículo
+  vehicle_type    String?   // Tipo de veículo
+  vehicle_plate   String?   // Placa do veículo
+  driver_name     String?   // Nome do motorista
+  
+  // Guia e Responsável
+  tour_guide      String?   // Nome do guia turístico
+  trip_organizer  String?   // Nome do responsável/organizador da viagem
+  
+  // Hospedagem (futuro)
+  accommodation   Json?     // Dados de hospedagem
+  
+  // Detalhes
+  max_passengers  Int?
+  
+  // Status
+  status          String    @default("active")
+  
+  // Auditoria
+  created_by      String
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  // Relacionamentos
+  reservations    Reservation[]
+  
+  @@index([tenant_id])
+  @@index([tenant_id, status])
+  @@map("trips")
+}
+
+
+# Aplicar mudanças
+npx prisma migrate dev --name add_tour_guide_and_organizer
+npx prisma generate
+
+
+ATUALIZAR FORMULÁRIO DE NOVA VIAGEM
+
+// app/(dashboard)/dashboard/trips/nova/page.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { CoverImageUploadWithPreview } from '@/components/dashboard/trips/cover-image-upload-with-preview'
+import { GalleryUploadComplete } from '@/components/dashboard/trips/gallery-upload-complete'
+import { Save, X, Loader2, ArrowLeft } from 'lucide-react'
+import { toast } from 'sonner'
+import Link from 'next/link'
+
+interface GalleryImage {
+  url: string
+  key: string
+  order: number
+  name?: string
+}
+
+export default function NewTripPage() {
+  const router = useRouter()
+  const [isSaving, setIsSaving] = useState(false)
+  const [activeTab, setActiveTab] = useState('basico')
+
+  const [formData, setFormData] = useState({
+    // Dados básicos
+    title: '',
+    destination: '',
+    description: '',
+    
+    // IMAGENS
+    image_url: '',
+    image_key: '',
+    gallery_images: [] as GalleryImage[],
+    
+    // Preços
+    price_per_person: '',
+    promotional_price: '',
+    
+    // Datas
+    departure_date: '',
+    return_date: '',
+    duration_days: '',
+    
+    // TRANSPORTE E HOSPEDAGEM
+    vehicle_type: '',
+    vehicle_plate: '',
+    driver_name: '',
+    tour_guide: '',
+    trip_organizer: '',
+    
+    // Outros
+    max_passengers: '',
+  })
+
+  const validateForm = () => {
+    if (!formData.title) {
+      toast.error('Título é obrigatório')
+      setActiveTab('basico')
+      return false
+    }
+
+    if (!formData.destination) {
+      toast.error('Destino é obrigatório')
+      setActiveTab('basico')
+      return false
+    }
+
+    if (!formData.image_url) {
+      toast.error('Imagem de capa é obrigatória')
+      setActiveTab('basico')
+      return false
+    }
+
+    if (!formData.price_per_person) {
+      toast.error('Preço por pessoa é obrigatório')
+      setActiveTab('precos')
+      return false
+    }
+
+    return true
+  }
+
+  const handleSubmit = async () => {
+    if (!validateForm()) {
+      return
+    }
+
+    try {
+      setIsSaving(true)
+
+      console.log('📤 Enviando dados:', formData)
+
+      const response = await fetch('/api/dashboard/trips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        console.log('✅ Viagem criada:', data.trip)
+        toast.success('Viagem criada com sucesso!')
+        router.push(`/dashboard/trips/${data.trip.id}`)
+      } else {
+        console.error('❌ Erro:', data)
+        toast.error(data.error || 'Erro ao criar viagem')
+      }
+    } catch (error) {
+      console.error('❌ Erro ao criar viagem:', error)
+      toast.error('Erro ao criar viagem')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4 max-w-5xl">
+      {/* Header */}
+      <div className="mb-8">
+        <Button variant="ghost" asChild className="mb-4">
+          <Link href="/dashboard/trips">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Voltar para Viagens
+          </Link>
+        </Button>
+
+        <h1 className="text-3xl font-bold mb-2">✈️ Nova Viagem</h1>
+        <p className="text-gray-600">
+          Preencha as informações para criar uma nova viagem
+        </p>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <TabsList className="grid w-full grid-cols-6">
+          <TabsTrigger value="basico">Informações Básicas</TabsTrigger>
+          <TabsTrigger value="precos">Preços</TabsTrigger>
+          <TabsTrigger value="pontos">Pontos de Embarque</TabsTrigger>
+          <TabsTrigger value="roteiro">Roteiro</TabsTrigger>
+          <TabsTrigger value="inclusoes">Inclusões / Exclusões</TabsTrigger>
+          <TabsTrigger value="transporte">Transporte e Hospedagem</TabsTrigger>
+          <TabsTrigger value="midia">Mídia</TabsTrigger>
+        </TabsList>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: INFORMAÇÕES BÁSICAS */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="basico" className="space-y-6">
+          <Card className="p-6">
+            <div className="space-y-6">
+              {/* Título */}
+              <div>
+                <Label htmlFor="title">
+                  Título da Viagem <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="title"
+                  value={formData.title}
+                  onChange={(e) =>
+                    setFormData({ ...formData, title: e.target.value })
+                  }
+                  placeholder="Ex: Excursão para Gramado - 5 dias"
+                  required
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Destino */}
+              <div>
+                <Label htmlFor="destination">
+                  Destino <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="destination"
+                  value={formData.destination}
+                  onChange={(e) =>
+                    setFormData({ ...formData, destination: e.target.value })
+                  }
+                  placeholder="Ex: Gramado - RS"
+                  required
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Descrição */}
+              <div>
+                <Label htmlFor="description">Descrição</Label>
+                <Textarea
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) =>
+                    setFormData({ ...formData, description: e.target.value })
+                  }
+                  placeholder="Descreva a viagem, principais atrações, o que está incluído..."
+                  rows={5}
+                  disabled={isSaving}
+                  className="mt-2"
+                />
+              </div>
+
+              {/* Datas */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <Label htmlFor="departure_date">Data de Partida</Label>
+                  <Input
+                    id="departure_date"
+                    type="date"
+                    value={formData.departure_date}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        departure_date: e.target.value,
+                      })
+                    }
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="return_date">Data de Retorno</Label>
+                  <Input
+                    id="return_date"
+                    type="date"
+                    value={formData.return_date}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        return_date: e.target.value,
+                      })
+                    }
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="duration_days">Duração (dias)</Label>
+                  <Input
+                    id="duration_days"
+                    type="number"
+                    value={formData.duration_days}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        duration_days: e.target.value,
+                      })
+                    }
+                    placeholder="Ex: 5"
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: PREÇOS */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="precos">
+          <Card className="p-6">
+            <div className="space-y-6">
+              <h3 className="text-lg font-bold mb-4">💰 Preços</h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <Label htmlFor="price_per_person">
+                    Preço por Pessoa <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    id="price_per_person"
+                    type="number"
+                    step="0.01"
+                    value={formData.price_per_person}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        price_per_person: e.target.value,
+                      })
+                    }
+                    placeholder="0.00"
+                    required
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="promotional_price">
+                    Preço Promocional (opcional)
+                  </Label>
+                  <Input
+                    id="promotional_price"
+                    type="number"
+                    step="0.01"
+                    value={formData.promotional_price}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        promotional_price: e.target.value,
+                      })
+                    }
+                    placeholder="0.00"
+                    disabled={isSaving}
+                    className="mt-2"
+                  />
+                </div>
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: TRANSPORTE E HOSPEDAGEM */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="transporte">
+          <Card className="p-6">
+            <div className="space-y-8">
+              {/* Veículo e Motorista */}
+              <div>
+                <h3 className="text-lg font-bold mb-4">🚌 Veículo e Motorista</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Tipo de Veículo */}
+                  <div>
+                    <Label htmlFor="vehicle_type">Tipo de Veículo</Label>
+                    <Select
+                      value={formData.vehicle_type}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, vehicle_type: value })
+                      }
+                      disabled={isSaving}
+                    >
+                      <SelectTrigger className="mt-2">
+                        <SelectValue placeholder="Não definido" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="onibus">Ônibus</SelectItem>
+                        <SelectItem value="micro-onibus">Micro-ônibus</SelectItem>
+                        <SelectItem value="van">Van</SelectItem>
+                        <SelectItem value="carro">Carro</SelectItem>
+                        <SelectItem value="outro">Outro</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Placa do Veículo */}
+                  <div>
+                    <Label htmlFor="vehicle_plate">Placa do Veículo</Label>
+                    <Input
+                      id="vehicle_plate"
+                      value={formData.vehicle_plate}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          vehicle_plate: e.target.value.toUpperCase(),
+                        })
+                      }
+                      placeholder="ABC-1234"
+                      disabled={isSaving}
+                      className="mt-2"
+                      maxLength={8}
+                    />
+                  </div>
+
+                  {/* Nome do Motorista */}
+                  <div className="md:col-span-2">
+                    <Label htmlFor="driver_name">Nome do Motorista</Label>
+                    <Input
+                      id="driver_name"
+                      value={formData.driver_name}
+                      onChange={(e) =>
+                        setFormData({ ...formData, driver_name: e.target.value })
+                      }
+                      placeholder="Ex: João da Silva"
+                      disabled={isSaving}
+                      className="mt-2"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Guia e Responsável */}
+              <div className="border-t pt-6">
+                <h3 className="text-lg font-bold mb-4">👥 Guia e Responsável</h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Guia Turístico */}
+                  <div>
+                    <Label htmlFor="tour_guide">Guia Turístico</Label>
+                    <Input
+                      id="tour_guide"
+                      value={formData.tour_guide}
+                      onChange={(e) =>
+                        setFormData({ ...formData, tour_guide: e.target.value })
+                      }
+                      placeholder="Ex: Maria Costa"
+                      disabled={isSaving}
+                      className="mt-2"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Nome do guia de turismo que acompanhará a viagem
+                    </p>
+                  </div>
+
+                  {/* Responsável da Viagem */}
+                  <div>
+                    <Label htmlFor="trip_organizer">
+                      Responsável da Viagem / Organizador
+                    </Label>
+                    <Input
+                      id="trip_organizer"
+                      value={formData.trip_organizer}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          trip_organizer: e.target.value,
+                        })
+                      }
+                      placeholder="Ex: Carlos Santos"
+                      disabled={isSaving}
+                      className="mt-2"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Nome do responsável/organizador da viagem
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Hospedagem */}
+              <div className="border-t pt-6">
+                <h3 className="text-lg font-bold mb-4">🏨 Hospedagem</h3>
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-700">
+                    ℹ️ Integração com cadastro de hospedagens disponível em módulo
+                    futuro.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: MÍDIA */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="midia" className="space-y-6">
+          <Card className="p-6">
+            <div className="space-y-6">
+              <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                📸 Imagens da Viagem
+              </h3>
+
+              {/* IMAGEM DE CAPA */}
+              <CoverImageUploadWithPreview
+                value={formData.image_url}
+                valueKey={formData.image_key}
+                onChange={(url, key) =>
+                  setFormData({
+                    ...formData,
+                    image_url: url,
+                    image_key: key,
+                  })
+                }
+                disabled={isSaving}
+              />
+
+              <div className="my-8 border-t" />
+
+              {/* GALERIA */}
+              <GalleryUploadComplete
+                value={formData.gallery_images}
+                onChange={(images) =>
+                  setFormData({ ...formData, gallery_images: images })
+                }
+                disabled={isSaving}
+                maxImages={3}
+              />
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* Outras tabs (pontos, roteiro, inclusoes) */}
+        <TabsContent value="pontos">
+          <Card className="p-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p className="text-sm text-blue-700">
+                ℹ️ Módulo de Pontos de Embarque em desenvolvimento
+              </p>
+            </div>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="roteiro">
+          <Card className="p-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p className="text-sm text-blue-700">
+                ℹ️ Módulo de Roteiro em desenvolvimento
+              </p>
+            </div>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="inclusoes">
+          <Card className="p-6">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p className="text-sm text-blue-700">
+                ℹ️ Módulo de Inclusões/Exclusões em desenvolvimento
+              </p>
+            </div>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Botões de Ação */}
+      <div className="flex justify-end gap-3 mt-8 pt-6 border-t sticky bottom-0 bg-white py-4">
+        <Button
+          variant="outline"
+          onClick={() => router.back()}
+          disabled={isSaving}
+          size="lg"
+        >
+          <X className="h-4 w-4 mr-2" />
+          Cancelar
+        </Button>
+
+        <Button
+          onClick={handleSubmit}
+          disabled={isSaving || !formData.title || !formData.image_url}
+          className="bg-blue-600 hover:bg-blue-700"
+          size="lg"
+        >
+          {isSaving ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Salvando...
+            </>
+          ) : (
+            <>
+              <Save className="h-4 w-4 mr-2" />
+              Publicar Viagem
+            </>
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+ATUALIZAR API DE CRIAÇÃO
+
+// app/api/dashboard/trips/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { hasPermission } from '@/lib/permissions/check-permissions'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
+    }
+
+    if (!hasPermission(session.user.role as any, 'trips.create')) {
+      return NextResponse.json(
+        { error: 'Sem permissão para criar viagens' },
+        { status: 403 }
+      )
+    }
+
+    const body = await req.json()
+
+    console.log('📥 Dados recebidos:', body)
+
+    // Validações
+    if (!body.title || !body.destination) {
+      return NextResponse.json(
+        { error: 'Título e destino são obrigatórios' },
+        { status: 400 }
+      )
+    }
+
+    if (!body.image_url) {
+      return NextResponse.json(
+        { error: 'Imagem de capa é obrigatória' },
+        { status: 400 }
+      )
+    }
+
+    if (!body.price_per_person) {
+      return NextResponse.json(
+        { error: 'Preço por pessoa é obrigatório' },
+        { status: 400 }
+      )
+    }
+
+    const trip = await prisma.trip.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        created_by: session.user.id,
+        
+        // Dados básicos
+        title: body.title,
+        destination: body.destination,
+        description: body.description || null,
+        
+        // IMAGENS
+        image_url: body.image_url,
+        image_key: body.image_key || null,
+        gallery_images: body.gallery_images || [],
+        
+        // Preços
+        price_per_person: parseFloat(body.price_per_person),
+        promotional_price: body.promotional_price
+          ? parseFloat(body.promotional_price)
+          : null,
+        
+        // Datas
+        departure_date: body.departure_date
+          ? new Date(body.departure_date)
+          : null,
+        return_date: body.return_date ? new Date(body.return_date) : null,
+        duration_days: body.duration_days
+          ? parseInt(body.duration_days)
+          : null,
+        
+        // TRANSPORTE E HOSPEDAGEM
+        vehicle_type: body.vehicle_type || null,
+        vehicle_plate: body.vehicle_plate || null,
+        driver_name: body.driver_name || null,
+        tour_guide: body.tour_guide || null,
+        trip_organizer: body.trip_organizer || null,
+        
+        // Detalhes
+        max_passengers: body.max_passengers
+          ? parseInt(body.max_passengers)
+          : null,
+        
+        // Status
+        status: 'active',
+      },
+    })
+
+    console.log('✅ Viagem criada:', trip)
+
+    return NextResponse.json({
+      success: true,
+      trip,
+      message: 'Viagem criada com sucesso!',
+    })
+  } catch (error: any) {
+    console.error('❌ Erro ao criar viagem:', error)
+    return NextResponse.json(
+      { error: error.message || 'Erro ao criar viagem' },
+      { status: 500 }
+    )
+  }
+}
+
+
+ATUALIZAR PÁGINA DE VISUALIZAÇÃO
+
+// components/dashboard/trips/trip-view-client.tsx
+
+// ... (código anterior)
+
+{/* Transporte e Hospedagem */}
+{(trip.vehicle_type ||
+  trip.driver_name ||
+  trip.tour_guide ||
+  trip.trip_organizer) && (
+  <Card className="p-6">
+    <h2 className="text-xl font-bold mb-4">🚌 Transporte e Hospedagem</h2>
+
+    <div className="space-y-4">
+      {/* Veículo */}
+      {trip.vehicle_type && (
+        <div>
+          <p className="text-sm text-gray-600">Tipo de Veículo</p>
+          <p className="font-semibold capitalize">{trip.vehicle_type}</p>
+        </div>
+      )}
+
+      {trip.vehicle_plate && (
+        <div>
+          <p className="text-sm text-gray-600">Placa do Veículo</p>
+          <p className="font-semibold">{trip.vehicle_plate}</p>
+        </div>
+      )}
+
+      {trip.driver_name && (
+        <div>
+          <p className="text-sm text-gray-600">Motorista</p>
+          <p className="font-semibold">{trip.driver_name}</p>
+        </div>
+      )}
+
+      {/* Guia e Responsável */}
+      {(trip.tour_guide || trip.trip_organizer) && (
+        <div className="pt-3 border-t">
+          {trip.tour_guide && (
+            <div className="mb-3">
+              <p className="text-sm text-gray-600">Guia Turístico</p>
+              <p className="font-semibold">{trip.tour_guide}</p>
+            </div>
+          )}
+
+          {trip.trip_organizer && (
+            <div>
+              <p className="text-sm text-gray-600">
+                Responsável / Organizador
+              </p>
+              <p className="font-semibold">{trip.trip_organizer}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  </Card>
+)}
+
+
+CHECKLIST FINAL
+
+ALTERAÇÕES
+
+├── [x] Schema do banco
+│   ├── tour_guide (Guia Turístico)
+│   └── trip_organizer (Responsável/Organizador)
+│
+├── [x] Formulário de Nova Viagem
+│   ├── Aba "Transporte e Hospedagem" 
+│   ├── Campo "Guia Turístico" editável
+│   └── Campo "Responsável da Viagem" editável
+│
+├── [x] API de Criação
+│   └── Salvar tour_guide e trip_organizer
+│
+└── [x] Página de Visualização
+    └── Exibir guia e responsável
+
+TESTE COMPLETO
+Aplicar migration
+
+npx prisma migrate dev --name add_tour_guide_and_organizer
+npx prisma generate
+
+Reiniciar servidor
+npm run dev
+
+Acessar formulário
+http://localhost:3000/dashboard/trips/nova
+
+Ir para aba "Transporte e Hospedagem"
+Preencher Tipo de Veículo 
+Preencher Placa 
+Preencher Motorista 
+Preencher Guia Turístico 
+Preencher Responsável da Viagem 
+Salvar viagem
+Dados salvos no banco 
+Exibidos na visualização 
+
+terá:
+
+ Campo "Guia Turístico" editável
+ Campo "Responsável da Viagem" adicionado
+ Aba "Transporte e Hospedagem" completa
+ Dados salvos no banco
+ Visualização atualizada
