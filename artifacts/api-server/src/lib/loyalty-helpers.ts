@@ -4,6 +4,7 @@ import { generateId } from "./id";
 import { logger } from "./logger";
 import { sendTenantWhatsAppMessage } from "./whatsapp";
 import { insertClientNotification } from "./client-notifications";
+import { sendLoyaltyTierUpgradeEmail } from "@workspace/email";
 
 export function calculateTier(totalPoints: number): string {
   if (totalPoints >= 5000) return "diamond";
@@ -44,8 +45,10 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
   const [client] = await db
     .select({
       name: clientsTable.name,
+      email: clientsTable.email,
       whatsapp: clientsTable.whatsapp,
       whatsappOptIn: clientsTable.whatsappOptIn,
+      emailOptIn: clientsTable.emailOptIn,
     })
     .from(clientsTable)
     .where(and(eq(clientsTable.id, clientId), eq(clientsTable.tenantId, tenantId)))
@@ -64,9 +67,34 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
   const newTierLabel = TIER_LABELS_PT[newTier] ?? newTier;
   const nextTierLabel = TIER_NEXT_LABEL[newTier] ?? null;
   const nextTierMin = TIER_NEXT_MIN[newTier] ?? null;
+  const pointsToNext = nextTierMin !== null ? Math.max(0, nextTierMin - totalPoints) : null;
+
+  const sendEmailFallback = () => {
+    if (client.emailOptIn === false || !client.email) return;
+
+    sendLoyaltyTierUpgradeEmail({
+      clientName: client.name,
+      clientEmail: client.email,
+      newTierLabel,
+      totalPoints,
+      nextTierLabel,
+      pointsToNext,
+      agencyName,
+    })
+      .then((result) => {
+        if (!result.success) {
+          logger.warn(
+            { clientId, tenantId, error: result.error },
+            "[loyalty] Email tier-upgrade send failed",
+          );
+        }
+      })
+      .catch((err) =>
+        logger.warn({ err, clientId, tenantId }, "[loyalty] Email tier-upgrade send failed"),
+      );
+  };
 
   if (client.whatsappOptIn !== false && client.whatsapp) {
-    const pointsToNext = nextTierMin !== null ? nextTierMin - totalPoints : null;
     const nextLine =
       pointsToNext !== null && nextTierLabel
         ? `\n\n📈 Próximo nível: *${nextTierLabel}* — faltam *${pointsToNext.toLocaleString("pt-BR")} pts*`
@@ -76,9 +104,17 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
       `🎉 Parabéns, ${firstName}! Você subiu para o nível *${newTierLabel}* no programa de fidelidade da ${agencyName}!\n\n` +
       `💎 Pontos acumulados: *${totalPoints.toLocaleString("pt-BR")} pts*${nextLine}`;
 
-    sendTenantWhatsAppMessage(tenantId, client.whatsapp, message).catch((err) =>
-      logger.warn({ err, clientId, tenantId }, "[loyalty] WhatsApp tier-upgrade send failed"),
-    );
+    sendTenantWhatsAppMessage(tenantId, client.whatsapp, message)
+      .then((result) => {
+        if (!result.success && result.error === "credentials_not_configured") {
+          sendEmailFallback();
+        }
+      })
+      .catch((err) =>
+        logger.warn({ err, clientId, tenantId }, "[loyalty] WhatsApp tier-upgrade send failed"),
+      );
+  } else {
+    sendEmailFallback();
   }
 
   await insertClientNotification(clientId, tenantId, "loyalty_tier_upgraded", {

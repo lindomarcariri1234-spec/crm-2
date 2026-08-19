@@ -13,6 +13,7 @@ import { ReferralBonusReleasedEmail, type ReferralBonusReleasedEmailProps } from
 import { ReferralWelcomeEmail, type ReferralWelcomeEmailProps } from './templates/referral-welcome';
 import { ReferralTierUpgradeEmail, type ReferralTierUpgradeEmailProps } from './templates/referral-tier-upgrade';
 import { ReferralLoyaltyPointsEmail, type ReferralLoyaltyPointsEmailProps } from './templates/referral-loyalty-points';
+import { LoyaltyTierUpgradeEmail, type LoyaltyTierUpgradeEmailProps } from './templates/loyalty-tier-upgrade';
 import { NpsSurveyEmail, type NpsSurveyEmailProps } from './templates/nps-survey';
 import { AgencySuspendedEmail, type AgencySuspendedEmailProps } from './templates/agency-suspended';
 import { AgencyReactivatedEmail, type AgencyReactivatedEmailProps } from './templates/agency-reactivated';
@@ -22,6 +23,7 @@ export type { ReferralWelcomeEmailProps };
 export type { AgencySuspendedEmailProps, AgencyReactivatedEmailProps };
 export type { ReferralTierUpgradeEmailProps };
 export type { ReferralLoyaltyPointsEmailProps };
+export type { LoyaltyTierUpgradeEmailProps };
 
 export type { ReservationCancellationEmailProps };
 
@@ -200,6 +202,35 @@ export async function sendBirthdayEmail(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[email] Unexpected error sending birthday email:', message);
+    return { success: false, error: message };
+  }
+}
+
+export async function sendLoyaltyTierUpgradeEmail(
+  props: LoyaltyTierUpgradeEmailProps
+): Promise<SendEmailResult> {
+  try {
+    const resend = getResend();
+    if (!resend) {
+      return { success: false, error: 'RESEND_API_KEY not configured' };
+    }
+
+    const { data, error } = await resend.emails.send({
+      from: `${props.agencyName} <reservas@resend.visitecrm.com>`,
+      to: [props.clientEmail],
+      subject: `🎉 Você subiu para o nível ${props.newTierLabel}! — ${props.agencyName}`,
+      react: React.createElement(LoyaltyTierUpgradeEmail, props),
+    });
+
+    if (error) {
+      console.error('[email] Failed to send loyalty tier upgrade email:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, messageId: data?.id };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[email] Unexpected error sending loyalty tier upgrade email:', message);
     return { success: false, error: message };
   }
 }
