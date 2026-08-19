@@ -65,7 +65,7 @@ export default function PerfilScreen() {
   // to the home tab where the NPS survey modal auto-appears for eligible trips.
   useEffect(() => {
     if (params.openNps === "1") {
-      router.replace("/(tabs)/");
+      router.replace("/");
     }
   }, [params.openNps]);
 
