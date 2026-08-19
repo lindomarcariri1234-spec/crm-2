@@ -304,8 +304,8 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
       // somehow accumulates more than one exhaustion cycle correctly.
       const exhaustionByReservation = new Map<string, Date>();
       for (const log of exhaustedEmailLogs) {
-          const rid = resend.reservationId!;
-          const exhaustedAt = exhaustionByReservation.get(rid)!;
+        const rid = log.reservationId!;
+        const exhaustedAt = log.retriesExhaustedAt!;
         const existing = exhaustionByReservation.get(rid);
         if (!existing || exhaustedAt > existing) {
           exhaustionByReservation.set(rid, exhaustedAt);
@@ -360,7 +360,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
 
       if (exhaustedCount > 0) {
         // Fetch reservation details to include in the alert description
-        const description = shown.join("; ") + (remainder > 0 ? ` e mais ${remainder}` : "");
+        let description = "Intervenção manual necessária — acesse o Log de E-mails";
         try {
           const details = await db
             .select({
@@ -374,14 +374,13 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
             .where(inArray(reservationsTable.id, exhaustedReservationIds));
 
           if (details.length > 0) {
-        const MAX_SHOWN = 3;
-        const shown = gaps.slice(0, MAX_SHOWN).map((g) => {
-          const resRef = g.reservation_number ?? g.reservation_id;
-          const referrer = g.referrer_name ?? "indicador desconhecido";
-          return `#${resRef} (cód. ${g.referral_code}, ${referrer})`;
-        });
-        const remainder = totalGaps - shown.length;
-            description = shown.join(", ") + (remainder > 0 ? ` e mais ${remainder}` : "");
+            const MAX_SHOWN = 3;
+            const shown = details.slice(0, MAX_SHOWN).map((detail) => {
+              const reference = detail.reservationNumber ?? detail.voucherCode ?? detail.reservationId;
+              return `#${reference} (${detail.clientEmail ?? "sem e-mail"})`;
+            });
+            const remainder = exhaustedCount - shown.length;
+            description = shown.join("; ") + (remainder > 0 ? ` e mais ${remainder}` : "");
           }
         } catch {
           // Non-fatal — fall back to generic description

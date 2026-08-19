@@ -1,12 +1,10 @@
 import { Router, type NextFunction } from "express";
 import { requireAuth } from "../lib/tenant";
-import { ForbiddenError } from "../lib/errors";
+import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { getRedisStatus, fetchUpstashDailyStats, areWorkersEnabled } from "../lib/redis";
 import { getWebhookAuditStatus, recheckWebhookAudit } from "../lib/stripeSync";
 import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount, cleanupOrphanDeals, repairSeatDriftOnly } from "../lib/seat-reconciliation";
 import { ROLES } from "@workspace/permissions";
-import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount } from "../lib/seat-reconciliation";
 
 const router = Router();
 
@@ -14,7 +12,6 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
 
-    const redisStatus = getRedisStatus();
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;

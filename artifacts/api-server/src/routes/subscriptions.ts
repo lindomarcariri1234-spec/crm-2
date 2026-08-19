@@ -466,7 +466,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
     const pixName = process.env["PIX_NAME"] ?? "VisiteCRM";
     const pixCity = process.env["PIX_CITY"] ?? "SAO PAULO";
 
-    const pixCode = generatePixEMV({
+    let pixCode = generatePixEMV({
       key: pixKey,
       name: pixName,
       city: pixCity,
@@ -474,7 +474,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
       txid: invoice.id.slice(0, 25),
       description: invoice.description?.slice(0, 40) ?? "Assinatura VisiteCRM",
     });
-    const pixQrCodeUrl = generatePixQrCodeUrl(pixCode);
+    let pixQrCodeUrl = generatePixQrCodeUrl(pixCode);
     const pixExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     if (pixKey) {
