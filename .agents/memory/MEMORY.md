@@ -59,3 +59,4 @@
 - [Test suite batching](test-suite-batching.md) — 76 backend + 16 frontend test files; full run exceeds 120s bash limit; run backend in batches of ~20 files (a-c/d-l/m-r/s-z+workers); frontend in batches of 8 files.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
+- [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
