@@ -1,0 +1,46 @@
+Implementar a sincronização ao cadastra novo cliente e na Edição do cliente, assim como no Pipeline de Vendas na opção Editar cliente:
+
+Ao selecionar uma Viagem, o sistema carrega automaticamente do banco:
+
+Nome, destino e data de partida da excursão
+Preço base por pessoa (adulto) — já pré-calcula o total com base no número de assentos
+Assentos disponíveis para escolha no mapa de poltronas
+Pontos de embarque cadastrados na viagem
+Segue para o Financeiro, o sistema carrega automaticamente do banco:
+
+
+Valor Total é preenchido automaticamente com base nos dados da viagem já selecionada na aba 1 (Pessoal):
+
+Exemplo exibido: "Preço base: R$ 500,00/pessoa × 1 assento(s)"
+O campo é editável caso seja necessário ajuste manual
+Valor Pago começa zerado — representa o valor já recebido no ato (entrada). É preenchido manualmente pelo operador.
+
+Descontos e Benefícios é sincronizado com o programa de fidelidade do cliente:
+
+Se o cliente for membro do programa, seus pontos acumulados ficam disponíveis para resgate como desconto
+Cupons e promoções cadastrados no sistema também aparecem nesta seção
+Seguro de viagem é uma opção adicional que, se marcada, soma o valor do seguro ao total
+
+Após confirmar na aba 2 (financeiro), o sistema cria automaticamente:
+
+Um registro de pagamento com o valor total, a forma de pagamento e o número de parcelas informados
+O saldo devedor do cliente (outstandingBalance) é atualizado com base no que ainda não foi pago
+Em resumo: o operador não precisa pesquisar o preço da viagem — o sistema já traz o valor correto pré-calculado e só pede as informações específicas desta reserva (entrada, forma de pagamento e parcelas).
+Na aba 4 (Obs.), concentra informações internas da agência sobre o cliente — informações que o próprio cliente não vê, mas que a equipe usa para qualificar o atendimento:
+
+A aba Obs. é o espaço privado da equipe para qualificar, alertar e registrar percepções sobre o cliente que não cabem nos campos estruturados das outras abas.
+
+
+Na aba 5 Follow-up reúne informações de perfil de estilo de vida e preferências pessoais do cliente — dados que a equipe coleta ao longo do relacionamento para personalizar ofertas e abordagens comerciais:
+A aba 6 Agência registra como o cliente avalia e se relaciona com a própria agência:
+
+A aba Agência mede a percepção do cliente sobre a agência e de onde ele veio — insumo direto para gestão de satisfação, fidelização e estratégia de marketing.
+Ao finalizar as Edições ou Ciação do novo cliente:
+
+Os Dados cadastrais: nome, e-mail, WhatsApp, CPF
+Status no programa de fidelidade (pontos acumulados e tier — Bronze/Prata/Ouro/Diamante), caso o cliente seja membro
+São inserido  no sistema automaticamente, são convertidos e preencidos automaticamente a reserva e as demais informações no sistema,
+O cálculo de valor total é recalculado em tempo real sempre que há mudança, assim como todas as informações volateis são atualizadas.
+
+
+

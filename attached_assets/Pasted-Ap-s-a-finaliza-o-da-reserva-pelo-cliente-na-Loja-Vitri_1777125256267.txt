@@ -1,0 +1,964 @@
+Após a finalização da reserva pelo cliente na Loja/Vitrine, Mande um Email com as informações da reserva, Link de acesso (entrar) ao Painel do Cliente (Meu Perfil) com uma Senha regada automaticamente e provisória.
+
+Ao reservar uma viagem, crie um usuário automaticamente para o cliente e mostre na página da Loja/Vitrine um menu com o nome Meu Perfil.
+
+O menu com o nome Meu Perfil dará acesso (entrar) ao perfil do usuário cliente.
+
+
+SISTEMA DE CONTA AUTOMÁTICA PARA CLIENTES + EMAIL DE CONFIRMAÇÃO
+Implementar o sistema completo de criação automática de conta, envio de email com senha provisória e acesso ao painel "Meu Perfil".
+
+📋 ESTRUTURA DA IMPLEMENTAÇÃO
+1. BACKEND - Criação Automática de Conta
+2. BACKEND - Envio de Email
+3. FRONTEND - Menu "Meu Perfil"
+4. FRONTEND - Painel do Cliente
+🗄️ ATUALIZAÇÃO DO SCHEMA PRISMA
+
+// prisma/schema.prisma - ATUALIZAR
+
+model Customer {
+  // ... campos existentes ...
+  
+  // Conta de acesso
+  has_account     Boolean  @default(false)
+  user_id         String?  @unique
+  
+  user            User?    @relation(fields: [user_id], references: [id])
+}
+
+model User {
+  // ... campos existentes ...
+  
+  // Senha provisória
+  is_temp_password Boolean @default(false)
+  must_change_password Boolean @default(false)
+  
+  customer        Customer?
+}
+
+UTILITÁRIO - GERADOR DE SENHA
+// lib/utils/password-generator.ts
+
+import crypto from 'crypto'
+import bcrypt from 'bcryptjs'
+
+/**
+ * Gera uma senha aleatória segura
+ */
+export function generateTempPassword(): string {
+  const length = 8
+  const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%'
+  let password = ''
+
+  // Garantir pelo menos 1 maiúscula, 1 minúscula, 1 número e 1 caractere especial
+  password += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[Math.floor(Math.random() * 26)]
+  password += 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)]
+  password += '0123456789'[Math.floor(Math.random() * 10)]
+  password += '!@#$%'[Math.floor(Math.random() * 5)]
+
+  // Completar o resto
+  for (let i = password.length; i < length; i++) {
+    password += charset[Math.floor(Math.random() * charset.length)]
+  }
+
+  // Embaralhar
+  return password
+    .split('')
+    .sort(() => Math.random() - 0.5)
+    .join('')
+}
+
+/**
+ * Hash de senha
+ */
+export async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 10)
+}
+
+/**
+ * Verificar senha
+ */
+export async function verifyPassword(
+  password: string,
+  hashedPassword: string
+): Promise<boolean> {
+  return bcrypt.compare(password, hashedPassword)
+}
+
+SERVIÇO DE EMAIL
+// lib/services/email-service.ts
+
+import nodemailer from 'nodemailer'
+
+interface ReservationEmailData {
+  customerName: string
+  customerEmail: string
+  reservationId: string
+  tripName: string
+  departureDate: string
+  returnDate: string
+  totalPrice: number
+  seats: string[]
+  tempPassword: string
+  loginUrl: string
+}
+
+/**
+ * Configurar transporter do Nodemailer
+ */
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: parseInt(process.env.SMTP_PORT || '587'),
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+})
+
+/**
+ * Enviar email de confirmação de reserva
+ */
+export async function sendReservationConfirmationEmail(
+  data: ReservationEmailData
+): Promise<void> {
+  const {
+    customerName,
+    customerEmail,
+    reservationId,
+    tripName,
+    departureDate,
+    returnDate,
+    totalPrice,
+    seats,
+    tempPassword,
+    loginUrl,
+  } = data
+
+  const formattedPrice = new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(totalPrice)
+
+  const formattedDeparture = new Date(departureDate).toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+  const formattedReturn = new Date(returnDate).toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Confirmação de Reserva</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .container {
+      background-color: #ffffff;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 30px;
+      text-align: center;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+    .content {
+      padding: 30px;
+    }
+    .success-icon {
+      text-align: center;
+      font-size: 60px;
+      margin-bottom: 20px;
+    }
+    .info-box {
+      background-color: #f8f9fa;
+      border-left: 4px solid #667eea;
+      padding: 15px;
+      margin: 20px 0;
+      border-radius: 5px;
+    }
+    .info-box h3 {
+      margin-top: 0;
+      color: #667eea;
+    }
+    .seats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 15px 0;
+    }
+    .seat-badge {
+      background-color: #667eea;
+      color: white;
+      padding: 8px 15px;
+      border-radius: 20px;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    .credentials-box {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      color: white;
+      padding: 20px;
+      border-radius: 10px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .credentials-box h3 {
+      margin-top: 0;
+    }
+    .credential-item {
+      background-color: rgba(255,255,255,0.2);
+      padding: 10px;
+      border-radius: 5px;
+      margin: 10px 0;
+      font-family: monospace;
+      font-size: 16px;
+    }
+    .button {
+      display: inline-block;
+      background-color: #667eea;
+      color: white;
+      padding: 15px 30px;
+      text-decoration: none;
+      border-radius: 5px;
+      font-weight: bold;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .button:hover {
+      background-color: #5568d3;
+    }
+    .footer {
+      background-color: #f8f9fa;
+      padding: 20px;
+      text-align: center;
+      font-size: 12px;
+      color: #6c757d;
+    }
+    .divider {
+      border-top: 1px solid #e9ecef;
+      margin: 20px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>🎉 Reserva Confirmada!</h1>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+      <div class="success-icon">✅</div>
+      
+      <p style="font-size: 18px; text-align: center;">
+        Olá, <strong>${customerName}</strong>!
+      </p>
+      
+      <p style="text-align: center; color: #6c757d;">
+        Sua reserva foi confirmada com sucesso! Abaixo estão todos os detalhes da sua viagem.
+      </p>
+
+      <!-- Informações da Reserva -->
+      <div class="info-box">
+        <h3>📋 Detalhes da Reserva</h3>
+        <p><strong>Código da Reserva:</strong> #${reservationId.slice(0, 8).toUpperCase()}</p>
+        <p><strong>Viagem:</strong> ${tripName}</p>
+        <p><strong>Partida:</strong> ${formattedDeparture}</p>
+        <p><strong>Retorno:</strong> ${formattedReturn}</p>
+        <p><strong>Valor Total:</strong> <span style="color: #28a745; font-size: 20px; font-weight: bold;">${formattedPrice}</span></p>
+      </div>
+
+      <!-- Assentos -->
+      <div class="info-box">
+        <h3>🪑 Seus Assentos</h3>
+        <div class="seats">
+          ${seats.map((seat) => `<span class="seat-badge">Assento ${seat}</span>`).join('')}
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Credenciais de Acesso -->
+      <div class="credentials-box">
+        <h3>🔐 Acesso ao Seu Perfil</h3>
+        <p>Criamos uma conta para você acompanhar suas reservas!</p>
+        
+        <div class="credential-item">
+          <strong>Email:</strong> ${customerEmail}
+        </div>
+        
+        <div class="credential-item">
+          <strong>Senha Provisória:</strong> ${tempPassword}
+        </div>
+        
+        <p style="font-size: 12px; margin-top: 15px;">
+          ⚠️ Por segurança, altere sua senha no primeiro acesso
+        </p>
+      </div>
+
+      <!-- Botão de Acesso -->
+      <div style="text-align: center;">
+        <a href="${loginUrl}" class="button">
+          🚀 Acessar Meu Perfil
+        </a>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Instruções -->
+      <div class="info-box">
+        <h3>📱 Próximos Passos</h3>
+        <ol>
+          <li>Acesse seu perfil usando o link acima</li>
+          <li>Faça login com suas credenciais</li>
+          <li>Altere sua senha provisória</li>
+          <li>Acompanhe sua reserva em tempo real</li>
+          <li>Baixe seu voucher de viagem</li>
+        </ol>
+      </div>
+
+      <p style="text-align: center; margin-top: 30px; color: #6c757d;">
+        Alguma dúvida? Entre em contato conosco!
+      </p>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <p>Este é um email automático, por favor não responda.</p>
+      <p>© ${new Date().getFullYear()} VisiteCRM - Todos os direitos reservados</p>
+    </div>
+  </div>
+</body>
+</html>
+  `
+
+  const textContent = `
+Reserva Confirmada!
+
+Olá, ${customerName}!
+
+Sua reserva foi confirmada com sucesso!
+
+DETALHES DA RESERVA:
+- Código: #${reservationId.slice(0, 8).toUpperCase()}
+- Viagem: ${tripName}
+- Partida: ${formattedDeparture}
+- Retorno: ${formattedReturn}
+- Valor Total: ${formattedPrice}
+
+SEUS ASSENTOS:
+${seats.map((seat) => `- Assento ${seat}`).join('\n')}
+
+ACESSO AO SEU PERFIL:
+Criamos uma conta para você acompanhar suas reservas!
+
+Email: ${customerEmail}
+Senha Provisória: ${tempPassword}
+
+⚠️ Por segurança, altere sua senha no primeiro acesso.
+
+Acesse seu perfil: ${loginUrl}
+
+Alguma dúvida? Entre em contato conosco!
+  `
+
+  await transporter.sendMail({
+    from: `"VisiteCRM" <${process.env.SMTP_USER}>`,
+    to: customerEmail,
+    subject: `✅ Reserva Confirmada - ${tripName}`,
+    text: textContent,
+    html: htmlContent,
+  })
+}
+
+API - CRIAR RESERVA COM CONTA AUTOMÁTICA
+// app/api/public/reservations/route.ts
+
+import { NextResponse } from 'next/request'
+import { prisma } from '@/lib/prisma'
+import { generateTempPassword, hashPassword } from '@/lib/utils/password-generator'
+import { sendReservationConfirmationEmail } from '@/lib/services/email-service'
+import { z } from 'zod'
+
+const reservationSchema = z.object({
+  tripId: z.string(),
+  customer: z.object({
+    name: z.string().min(1),
+    email: z.string().email(),
+    phone: z.string(),
+    cpf: z.string(),
+  }),
+  passengers: z.array(
+    z.object({
+      seatId: z.string(),
+      seatNumber: z.string(),
+      name: z.string(),
+      cpf: z.string(),
+      age: z.string().optional(),
+    })
+  ),
+  seats: z.array(z.string()),
+  totalPrice: z.number(),
+  paymentMethod: z.string(),
+  notes: z.string().optional(),
+})
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+    const validatedData = reservationSchema.parse(body)
+
+    // Buscar viagem
+    const trip = await prisma.trip.findUnique({
+      where: { id: validatedData.tripId },
+      include: {
+        destination: true,
+        tenant: true,
+      },
+    })
+
+    if (!trip) {
+      return NextResponse.json({ error: 'Viagem não encontrada' }, { status: 404 })
+    }
+
+    // Verificar disponibilidade dos assentos
+    const seats = await prisma.seatLayout.findMany({
+      where: {
+        id: { in: validatedData.seats },
+        trip_id: validatedData.tripId,
+      },
+      include: { reservations: true },
+    })
+
+    const occupiedSeats = seats.filter(
+      (seat) => seat.reservations.length > 0 || seat.is_blocked
+    )
+
+    if (occupiedSeats.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Assentos não disponíveis: ${occupiedSeats
+            .map((s) => s.seat_number)
+            .join(', ')}`,
+        },
+        { status: 400 }
+      )
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // BUSCAR OU CRIAR CLIENTE
+    // ═══════════════════════════════════════════════════════════
+
+    let customer = await prisma.customer.findFirst({
+      where: {
+        tenant_id: trip.tenant_id,
+        email: validatedData.customer.email,
+      },
+      include: { user: true },
+    })
+
+    let tempPassword: string | null = null
+    let userCreated = false
+
+    if (!customer) {
+      // Cliente não existe - criar novo
+      customer = await prisma.customer.create({
+        data: {
+          tenant_id: trip.tenant_id,
+          name: validatedData.customer.name,
+          email: validatedData.customer.email,
+          phone: validatedData.customer.phone,
+          cpf: validatedData.customer.cpf,
+        },
+      })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR CONTA DE ACESSO (SE NÃO EXISTIR)
+    // ═══════════════════════════════════════════════════════════
+
+    if (!customer.has_account || !customer.user_id) {
+      // Gerar senha provisória
+      tempPassword = generateTempPassword()
+      const hashedPassword = await hashPassword(tempPassword)
+
+      // Criar usuário
+      const user = await prisma.user.create({
+        data: {
+          tenant_id: trip.tenant_id,
+          name: validatedData.customer.name,
+          email: validatedData.customer.email,
+          password: hashedPassword,
+          role: 'client',
+          is_temp_password: true,
+          must_change_password: true,
+        },
+      })
+
+      // Atualizar customer
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          has_account: true,
+          user_id: user.id,
+        },
+      })
+
+      customer.user_id = user.id
+      userCreated = true
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR RESERVA
+    // ═══════════════════════════════════════════════════════════
+
+    const result = await prisma.$transaction(async (tx) => {
+      // Criar reserva
+      const reservation = await tx.reservation.create({
+        data: {
+          tenant_id: trip.tenant_id,
+          trip_id: validatedData.tripId,
+          customer_id: customer!.id,
+          passengers_count: validatedData.passengers.length,
+          passengers_data: validatedData.passengers,
+          total_price: validatedData.totalPrice,
+          paid_amount: 0,
+          status: 'pending',
+          payment_status: 'pending',
+          notes: validatedData.notes,
+        },
+      })
+
+      // Criar reservas de assentos
+      await tx.seatReservation.createMany({
+        data: validatedData.passengers.map((passenger) => ({
+          reservation_id: reservation.id,
+          seat_layout_id: passenger.seatId,
+          passenger_name: passenger.name,
+          passenger_cpf: passenger.cpf,
+          passenger_age: passenger.age ? parseInt(passenger.age) : null,
+        })),
+      })
+
+      // Atualizar assentos disponíveis
+      await tx.trip.update({
+        where: { id: validatedData.tripId },
+        data: {
+          available_seats: { decrement: validatedData.seats.length },
+        },
+      })
+
+      // Criar receita
+      await tx.revenue.create({
+        data: {
+          tenant_id: trip.tenant_id,
+          customer_id: customer!.id,
+          reservation_id: reservation.id,
+          amount: validatedData.totalPrice,
+          description: `Reserva #${reservation.id.slice(0, 8)} - ${trip.name}`,
+          category: 'sale',
+          status: 'pending',
+          due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+          payment_method: validatedData.paymentMethod,
+        },
+      })
+
+      return reservation
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // ENVIAR EMAIL DE CONFIRMAÇÃO
+    // ═══════════════════════════════════════════════════════════
+
+    if (userCreated && tempPassword) {
+      const loginUrl = `${process.env.NEXT_PUBLIC_APP_URL}/meu-perfil`
+
+      try {
+        await sendReservationConfirmationEmail({
+          customerName: validatedData.customer.name,
+          customerEmail: validatedData.customer.email,
+          reservationId: result.id,
+          tripName: trip.name,
+          departureDate: trip.departure_date.toISOString(),
+          returnDate: trip.return_date.toISOString(),
+          totalPrice: validatedData.totalPrice,
+          seats: validatedData.passengers.map((p) => p.seatNumber),
+          tempPassword,
+          loginUrl,
+        })
+      } catch (emailError) {
+        console.error('Erro ao enviar email:', emailError)
+        // Não falhar a reserva se o email falhar
+      }
+    }
+
+    // Buscar reserva completa
+    const fullReservation = await prisma.reservation.findUnique({
+      where: { id: result.id },
+      include: {
+        customer: true,
+        trip: { include: { destination: true } },
+        seat_reservations: { include: { seat_layout: true } },
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      reservation: fullReservation,
+      accountCreated: userCreated,
+      tempPassword: userCreated ? tempPassword : null,
+      message: userCreated
+        ? 'Reserva criada! Verifique seu email para acessar seu perfil.'
+        : 'Reserva criada com sucesso!',
+    })
+  } catch (error) {
+    console.error('Erro ao criar reserva:', error)
+
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: error.errors[0].message }, { status: 400 })
+    }
+
+    return NextResponse.json({ error: 'Erro ao criar reserva' }, { status: 500 })
+  }
+}
+
+COMPONENTE - MENU "MEU PERFIL"
+// components/public/user-menu.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useSession, signOut } from 'next-auth/react'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { User, LogOut, Settings, FileText, CreditCard } from 'lucide-react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+
+export function UserMenu() {
+  const { data: session, status } = useSession()
+  const router = useRouter()
+  const [initials, setInitials] = useState('')
+
+  useEffect(() => {
+    if (session?.user?.name) {
+      const names = session.user.name.split(' ')
+      const first = names[0]?.[0] || ''
+      const last = names[names.length - 1]?.[0] || ''
+      setInitials((first + last).toUpperCase())
+    }
+  }, [session])
+
+  if (status === 'loading') {
+    return (
+      <div className="w-10 h-10 bg-gray-200 rounded-full animate-pulse" />
+    )
+  }
+
+  if (!session) {
+    return (
+      <Button
+        variant="outline"
+        onClick={() => router.push('/meu-perfil/login')}
+        className="flex items-center gap-2"
+      >
+        <User className="h-4 w-4" />
+        <span className="hidden sm:inline">Entrar</span>
+      </Button>
+    )
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" className="relative h-10 w-10 rounded-full">
+          <Avatar className="h-10 w-10 border-2 border-blue-500">
+            <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white font-bold">
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-56" align="end" forceMount>
+        <DropdownMenuLabel className="font-normal">
+          <div className="flex flex-col space-y-1">
+            <p className="text-sm font-medium leading-none">{session.user.name}</p>
+            <p className="text-xs leading-none text-muted-foreground">
+              {session.user.email}
+            </p>
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/meu-perfil" className="cursor-pointer">
+            <User className="mr-2 h-4 w-4" />
+            <span>Meu Perfil</span>
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/meu-perfil/reservas" className="cursor-pointer">
+            <FileText className="mr-2 h-4 w-4" />
+            <span>Minhas Reservas</span>
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/meu-perfil/pagamentos" className="cursor-pointer">
+            <CreditCard className="mr-2 h-4 w-4" />
+            <span>Pagamentos</span>
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/meu-perfil/configuracoes" className="cursor-pointer">
+            <Settings className="mr-2 h-4 w-4" />
+            <span>Configurações</span>
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="cursor-pointer text-red-600"
+          onClick={() => signOut({ callbackUrl: '/' })}
+        >
+          <LogOut className="mr-2 h-4 w-4" />
+          <span>Sair</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+PÁGINA DE LOGIN DO CLIENTE
+// app/(public)/meu-perfil/login/page.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { signIn } from 'next-auth/react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Loader2, Lock, Mail, AlertCircle } from 'lucide-react'
+import { toast } from 'sonner'
+import Link from 'next/link'
+
+export default function ClientLoginPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const callbackUrl = searchParams.get('callbackUrl') || '/meu-perfil'
+
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setIsLoading(true)
+
+    try {
+      const result = await signIn('credentials', {
+        email,
+        password,
+        redirect: false,
+      })
+
+      if (result?.error) {
+        setError('Email ou senha incorretos')
+        toast.error('Erro ao fazer login')
+      } else {
+        toast.success('Login realizado com sucesso!')
+        router.push(callbackUrl)
+        router.refresh()
+      }
+    } catch (error) {
+      console.error('Erro no login:', error)
+      setError('Erro ao fazer login. Tente novamente.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      <Card className="w-full max-w-md p-8 shadow-2xl">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="mx-auto w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mb-4">
+            <Lock className="h-8 w-8 text-white" />
+          </div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Meu Perfil</h1>
+          <p className="text-gray-600">Acesse sua conta para ver suas reservas</p>
+        </div>
+
+        {/* Error Alert */}
+        {error && (
+          <Alert variant="destructive" className="mb-6">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <Label htmlFor="email">Email</Label>
+            <div className="relative mt-1">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="seu@email.com"
+                className="pl-10"
+                required
+                disabled={isLoading}
+              />
+            </div>
+          </div>
+
+          <div>
+            <Label htmlFor="password">Senha</Label>
+            <div className="relative mt-1">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="pl-10"
+                required
+                disabled={isLoading}
+              />
+            </div>
+          </div>
+
+          <Button
+            type="submit"
+            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Entrando...
+              </>
+            ) : (
+              'Entrar'
+            )}
+          </Button>
+        </form>
+
+        {/* Links */}
+        <div className="mt-6 text-center space-y-2">
+          <Link
+            href="/meu-perfil/esqueci-senha"
+            className="text-sm text-blue-600 hover:underline block"
+          >
+            Esqueci minha senha
+          </Link>
+          <Link
+            href="/loja"
+            className="text-sm text-gray-600 hover:underline block"
+          >
+            ← Voltar para a loja
+          </Link>
+        </div>
+
+        {/* Info */}
+        <Alert className="mt-6 bg-blue-50 border-blue-200">
+          <AlertCircle className="h-4 w-4 text-blue-600" />
+          <AlertDescription className="text-sm text-blue-900">
+            <strong>Primeira vez?</strong> Ao fazer uma reserva, criamos automaticamente
+            uma conta para você. Verifique seu email!
+          </AlertDescription>
+        </Alert>
+      </Card>
+    </div>
+  )
+}
+
+PAINEL DO CLIENTE + INTEGRAÇÃO NO HEADER DA LOJA
+Implementar o painel completo do cliente e a integração no header da loja pública.
+
+LAYOUT DO PAINEL DO CLIENTE
+HEADER DO PAINEL DO CLIENTE
+SIDEBAR DO PAINEL DO CLIENTE
+PÁGINA PRINCIPAL DO PAINEL
+INTEGRAÇÃO NO HEADER DA LOJA
+ATUALIZAR LAYOUT DA LOJA
+
+IMPLEMENTAR
+ Backend:
+
+Criação automática de conta ao fazer reserva
+Geração de senha provisória segura
+Envio de email com credenciais e link de acesso
+API de autenticação configurada
+ Frontend - Painel do Cliente:
+
+Layout completo com header e sidebar
+Dashboard com estatísticas
+Próximas viagens
+Histórico de reservas
+Alerta para trocar senha provisória
+ Frontend - Loja Pública:
+
+Header com menu "Meu Perfil"
+Dropdown com avatar e opções
+Login/Logout integrado
+Responsivo para mobile
+ Fluxo Completo:
+
+Cliente faz reserva na loja
+Sistema cria conta automaticamente
+Gera senha provisória
+Envia email com credenciais
+Cliente acessa "Meu Perfil"
+Faz login com senha provisória
+Sistema pede para alterar senha
+Cliente acessa dashboard completo
+
+Implementar as páginas de Minhas Reservas, Pagamentos e Configurações.

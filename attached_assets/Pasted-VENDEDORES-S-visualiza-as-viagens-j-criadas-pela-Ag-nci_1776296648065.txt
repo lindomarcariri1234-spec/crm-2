@@ -1,0 +1,72 @@
+VENDEDORES SÓ visualiza as viagens já criadas pela Agência.
+
+Vendedor NÃO cria viagem.
+
+Na pagina de Viagens na rota /trips a opção nova viagem fica oculta para vendedores.
+
+CONTROLE DE PERMISSÕES - VENDEDORES E VIAGENS
+
+REGRAS DE ACESSO
+
+┌─────────────────────────────────────────────────────────────────┐
+│                               HIERARQUIA DE PERMISSÕES                               │
+└─────────────────────────────────────────────────────────────────┘
+
+Agência
+├──  Criar viagens
+├──  Editar viagens
+├──  Excluir viagens
+├──  Gerenciar vendedores
+├──  Aprovar comissões
+├──  Definir metas
+└──  Acesso total ao sistema
+
+
+Vendedor
+├── ❌ Criar viagens
+├── ❌ Editar viagens
+├── ❌ Excluir viagens
+├── ✅ VISUALIZAR viagens (somente leitura)
+├── ✅ Criar clientes/reservas
+├── ✅ Gerenciar próprios clientes
+├── ✅ Ver próprias comissões
+└── ✅ Ver próprias metas
+
+MIDDLEWARE DE PERMISSÕES
+
+PROTEÇÃO DE APIs
+
+┌─────────────────────────────────────────────────────────────────┐
+│         CONTROLE DE PERMISSÕES                      │
+└─────────────────────────────────────────────────────────────────┘
+
+🔒 VENDEDORES:
+├── ✅ PODEM visualizar viagens
+├── ✅ PODEM criar clientes/reservas
+├── ✅ PODEM ver próprias comissões
+├── ✅ PODEM ver próprias metas
+├── ❌ NÃO PODEM criar viagens
+├── ❌ NÃO PODEM editar viagens
+└── ❌ NÃO PODEM excluir viagens
+
+🎨 INTERFACE:
+├── Botão "Nova Viagem" oculto para vendedores
+├── Botões de edição/exclusão ocultos
+├── Alerta informativo para vendedores
+├── Botão "Vender Esta Viagem" destacado
+└── Menu lateral adaptado por role
+
+🛡️ SEGURANÇA:
+├── Verificação no servidor (SSR)
+├── Verificação nas APIs
+├── Componente <Can> para UI
+├── Hook usePermissions()
+├── Middleware de permissões
+└── Redirecionamento automático
+
+📊 EXPERIÊNCIA DO VENDEDOR:
+├── Dashboard focado em vendas
+├── Acesso rápido a viagens disponíveis
+├── Criação de reservas
+├── Acompanhamento de comissões
+└── Visualização de metas

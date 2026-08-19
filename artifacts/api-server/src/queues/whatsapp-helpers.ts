@@ -6,6 +6,7 @@ import { logger } from "../lib/logger";
 import { REFERRAL_STATUS } from "@workspace/permissions";
 import { areWorkersEnabled } from "../lib/redis";
 import { formatBRL } from "@workspace/shared";
+import { db, referralSettingsTable, clientsTable, tenantsTable, referralsTable } from "@workspace/db";
 
 const DEFAULT_CONVERTED_MESSAGE =
   "Boa notícia! {{nome}} usou seu código {{codigo}} e comprou com a {{agencia}}. Seu bônus de R$ {{valor}} está sendo processado.";

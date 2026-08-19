@@ -1,0 +1,880 @@
+IMPLEMENTAR SISTEMA COMPLETO DE MENSAGENS PARA ANIVERSARIANTES
+
+VISÃO GERAL DO SISTEMA
+Sistema automatizado que identifica clientes aniversariantes e envia mensagens personalizadas via WhatsApp, Email e SMS, com ofertas especiais e cupons de desconto exclusivos.
+
+ARQUITETURA DO SISTEMA
+
+┌─────────────────────────────────────────────────────────────────┐
+│                   FLUXO DE ANIVERSARIANTES                       │
+└─────────────────────────────────────────────────────────────────┘
+
+00:00 - Cron Job Diário
+    ↓
+Busca clientes com aniversário hoje
+    ↓
+Para cada cliente:
+    ├── Gera cupom de desconto exclusivo
+    ├── Cria mensagem personalizada
+    ├── Envia WhatsApp (prioridade 1)
+    ├── Envia Email (prioridade 2)
+    ├── Envia SMS (opcional)
+    └── Registra no histórico
+    ↓
+Dashboard de Aniversariantes
+    ├── Lista de hoje
+    ├── Próximos 7 dias
+    ├── Próximos 30 dias
+    └── Estatísticas de conversão
+
+SCHEMA DO BANCO DE DADOS
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE CLIENTES (atualizada)
+// ═══════════════════════════════════════════════════════════════
+
+model Client {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  name            String
+  email           String
+  phone           String
+  cpf             String
+  birthdate       DateTime  // ✅ Data de nascimento
+  
+  // PREFERÊNCIAS DE COMUNICAÇÃO
+  whatsapp_opt_in Boolean   @default(true)  // Aceita WhatsApp
+  email_opt_in    Boolean   @default(true)  // Aceita Email
+  sms_opt_in      Boolean   @default(false) // Aceita SMS
+  
+  // HISTÓRICO DE ANIVERSÁRIOS
+  birthday_messages BirthdayMessage[]
+  
+  // ... resto do modelo ...
+  
+  @@map("clients")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE MENSAGENS DE ANIVERSÁRIO
+// ═══════════════════════════════════════════════════════════════
+
+model BirthdayMessage {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  client_id       String
+  client          Client    @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  
+  // DATA DO ANIVERSÁRIO
+  birthday_year   Int       // 2026
+  birthday_date   DateTime  // Data completa do aniversário
+  
+  // CANAIS DE ENVIO
+  sent_whatsapp   Boolean   @default(false)
+  sent_email      Boolean   @default(false)
+  sent_sms        Boolean   @default(false)
+  
+  // TIMESTAMPS DE ENVIO
+  whatsapp_sent_at DateTime?
+  email_sent_at    DateTime?
+  sms_sent_at      DateTime?
+  
+  // STATUS DE ENTREGA
+  whatsapp_delivered Boolean @default(false)
+  email_opened       Boolean @default(false)
+  sms_delivered      Boolean @default(false)
+  
+  // CUPOM GERADO
+  coupon_id       String?
+  coupon          Coupon?   @relation(fields: [coupon_id], references: [id])
+  
+  // CONVERSÃO
+  converted       Boolean   @default(false) // Cliente fez reserva
+  reservation_id  String?
+  reservation     Reservation? @relation(fields: [reservation_id], references: [id])
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, client_id, birthday_year])
+  @@index([tenant_id, birthday_date])
+  @@index([client_id])
+  @@map("birthday_messages")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE CUPONS (atualizada)
+// ═══════════════════════════════════════════════════════════════
+
+model Coupon {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  code            String    @unique // "ANIVER-LINDOMAR-2026"
+  type            String    // percentage, fixed, birthday
+  
+  // DESCONTO
+  discount_type   String    // percentage, fixed
+  discount_value  Decimal   // 15 (15%) ou 50 (R$ 50)
+  
+  // VALIDADE
+  valid_from      DateTime
+  valid_until     DateTime
+  
+  // RESTRIÇÕES
+  min_amount      Decimal?  // Valor mínimo da compra
+  max_uses        Int       @default(1) // Quantas vezes pode usar
+  used_count      Int       @default(0)
+  
+  // CLIENTE ESPECÍFICO (para cupons de aniversário)
+  client_id       String?
+  client          Client?   @relation(fields: [client_id], references: [id])
+  
+  // TIPO ESPECIAL
+  is_birthday     Boolean   @default(false)
+  
+  status          String    @default("active") // active, expired, used
+  
+  // RELACIONAMENTOS
+  birthday_messages BirthdayMessage[]
+  reservations    Reservation[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id])
+  @@index([client_id])
+  @@index([code])
+  @@map("coupons")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE TEMPLATES DE MENSAGENS
+// ═══════════════════════════════════════════════════════════════
+
+model MessageTemplate {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  name            String    // "Aniversário - WhatsApp"
+  type            String    // birthday, reservation_confirmation, payment_reminder
+  channel         String    // whatsapp, email, sms
+  
+  // CONTEÚDO
+  subject         String?   // Para email
+  body            String    @db.Text // Suporta variáveis: {{name}}, {{coupon_code}}
+  
+  // CONFIGURAÇÕES
+  is_active       Boolean   @default(true)
+  is_default      Boolean   @default(false)
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@index([tenant_id, type, channel])
+  @@map("message_templates")
+}
+
+CRON JOB DIÁRIO (VERCEL CRON / NEXT.JS)
+
+// app/api/cron/birthday-messages/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { sendBirthdayMessages } from '@/lib/birthday/send-messages'
+
+/**
+ * Cron Job que roda todos os dias às 00:00
+ * Vercel Cron: https://vercel.com/docs/cron-jobs
+ */
+export async function GET(req: Request) {
+  try {
+    // Verificar autenticação do cron (segurança)
+    const authHeader = req.headers.get('authorization')
+    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    console.log('🎂 Iniciando envio de mensagens de aniversário...')
+
+    // Buscar todos os tenants ativos
+    const tenants = await prisma.tenant.findMany({
+      where: {
+        status: 'active',
+        birthday_messages_enabled: true, // Feature flag
+      },
+    })
+
+    let totalSent = 0
+    const results = []
+
+    for (const tenant of tenants) {
+      try {
+        const result = await sendBirthdayMessages(tenant.id)
+        totalSent += result.sent
+        results.push({
+          tenant_id: tenant.id,
+          tenant_name: tenant.name,
+          ...result,
+        })
+      } catch (error) {
+        console.error(`Erro ao processar tenant ${tenant.id}:`, error)
+        results.push({
+          tenant_id: tenant.id,
+          tenant_name: tenant.name,
+          error: error instanceof Error ? error.message : 'Erro desconhecido',
+        })
+      }
+    }
+
+    console.log(`✅ Processo concluído. Total de mensagens enviadas: ${totalSent}`)
+
+    return NextResponse.json({
+      success: true,
+      total_sent: totalSent,
+      results,
+    })
+  } catch (error) {
+    console.error('Erro no cron job de aniversários:', error)
+    return NextResponse.json(
+      { error: 'Erro ao processar aniversários' },
+      { status: 500 }
+    )
+  }
+}
+
+Configuração do Vercel Cron
+
+// vercel.json
+
+{
+  "crons": [
+    {
+      "path": "/api/cron/birthday-messages",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
+
+FUNÇÃO PRINCIPAL DE ENVIO
+
+// lib/birthday/send-messages.ts
+
+import { prisma } from '@/lib/prisma'
+import { startOfDay, endOfDay } from 'date-fns'
+import { sendWhatsAppMessage } from '@/lib/whatsapp/send-message'
+import { sendEmail } from '@/lib/email/send-email'
+import { sendSMS } from '@/lib/sms/send-sms'
+import { generateBirthdayCoupon } from './generate-coupon'
+import { renderTemplate } from './render-template'
+
+export async function sendBirthdayMessages(tenantId: string) {
+  const today = new Date()
+  const currentYear = today.getFullYear()
+  
+  // Buscar clientes que fazem aniversário hoje
+  const birthdayClients = await prisma.client.findMany({
+    where: {
+      tenant_id: tenantId,
+      status: 'active',
+      // Comparar apenas mês e dia (ignorar ano)
+      AND: [
+        {
+          birthdate: {
+            gte: startOfDay(new Date(currentYear, today.getMonth(), today.getDate())),
+            lte: endOfDay(new Date(currentYear, today.getMonth(), today.getDate())),
+          },
+        },
+      ],
+    },
+    include: {
+      birthday_messages: {
+        where: {
+          birthday_year: currentYear,
+        },
+      },
+    },
+  })
+
+  console.log(`🎂 Encontrados ${birthdayClients.length} aniversariantes para ${tenantId}`)
+
+  let sent = 0
+  let errors = 0
+
+  for (const client of birthdayClients) {
+    try {
+      // Verificar se já enviou este ano
+      if (client.birthday_messages.length > 0) {
+        console.log(`⏭️ Já enviado para ${client.name} este ano`)
+        continue
+      }
+
+      // ═══════════════════════════════════════════════════════════
+      // GERAR CUPOM DE ANIVERSÁRIO
+      // ═══════════════════════════════════════════════════════════
+      
+      const coupon = await generateBirthdayCoupon({
+        tenantId,
+        clientId: client.id,
+        clientName: client.name,
+        year: currentYear,
+      })
+
+      console.log(`🎟️ Cupom gerado: ${coupon.code}`)
+
+      // ═══════════════════════════════════════════════════════════
+      // CRIAR REGISTRO DE MENSAGEM
+      // ═══════════════════════════════════════════════════════════
+      
+      const birthdayMessage = await prisma.birthdayMessage.create({
+        data: {
+          tenant_id: tenantId,
+          client_id: client.id,
+          birthday_year: currentYear,
+          birthday_date: today,
+          coupon_id: coupon.id,
+        },
+      })
+
+      // ═══════════════════════════════════════════════════════════
+      // ENVIAR WHATSAPP (PRIORIDADE 1)
+      // ═══════════════════════════════════════════════════════════
+      
+      if (client.whatsapp_opt_in && client.phone) {
+        try {
+          const whatsappMessage = await renderTemplate({
+            tenantId,
+            type: 'birthday',
+            channel: 'whatsapp',
+            variables: {
+              name: client.name.split(' ')[0], // Primeiro nome
+              coupon_code: coupon.code,
+              discount: '15%',
+              valid_until: '7 dias',
+            },
+          })
+
+          await sendWhatsAppMessage({
+            to: client.phone,
+            message: whatsappMessage,
+          })
+
+          await prisma.birthdayMessage.update({
+            where: { id: birthdayMessage.id },
+            data: {
+              sent_whatsapp: true,
+              whatsapp_sent_at: new Date(),
+            },
+          })
+
+          console.log(`✅ WhatsApp enviado para ${client.name}`)
+        } catch (error) {
+          console.error(`❌ Erro ao enviar WhatsApp para ${client.name}:`, error)
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════════
+      // ENVIAR EMAIL (PRIORIDADE 2)
+      // ═══════════════════════════════════════════════════════════
+      
+      if (client.email_opt_in && client.email) {
+        try {
+          await sendEmail({
+            to: client.email,
+            subject: `🎉 Feliz Aniversário, ${client.name.split(' ')[0]}!`,
+            template: 'birthday',
+            variables: {
+              name: client.name,
+              coupon_code: coupon.code,
+              discount: '15%',
+              valid_until: '7 dias',
+            },
+          })
+
+          await prisma.birthdayMessage.update({
+            where: { id: birthdayMessage.id },
+            data: {
+              sent_email: true,
+              email_sent_at: new Date(),
+            },
+          })
+
+          console.log(`✅ Email enviado para ${client.name}`)
+        } catch (error) {
+          console.error(`❌ Erro ao enviar email para ${client.name}:`, error)
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════════
+      // ENVIAR SMS (OPCIONAL)
+      // ═══════════════════════════════════════════════════════════
+      
+      if (client.sms_opt_in && client.phone) {
+        try {
+          const smsMessage = `🎂 Feliz aniversário! Ganhe 15% OFF com o cupom ${coupon.code}. Válido por 7 dias!`
+
+          await sendSMS({
+            to: client.phone,
+            message: smsMessage,
+          })
+
+          await prisma.birthdayMessage.update({
+            where: { id: birthdayMessage.id },
+            data: {
+              sent_sms: true,
+              sms_sent_at: new Date(),
+            },
+          })
+
+          console.log(`✅ SMS enviado para ${client.name}`)
+        } catch (error) {
+          console.error(`❌ Erro ao enviar SMS para ${client.name}:`, error)
+        }
+      }
+
+      sent++
+    } catch (error) {
+      console.error(`❌ Erro ao processar ${client.name}:`, error)
+      errors++
+    }
+  }
+
+  return {
+    total: birthdayClients.length,
+    sent,
+    errors,
+    skipped: birthdayClients.length - sent - errors,
+  }
+}
+
+GERAÇÃO DE CUPOM DE ANIVERSÁRIO
+
+// lib/birthday/generate-coupon.ts
+
+import { prisma } from '@/lib/prisma'
+import { addDays } from 'date-fns'
+
+interface GenerateBirthdayCouponParams {
+  tenantId: string
+  clientId: string
+  clientName: string
+  year: number
+}
+
+export async function generateBirthdayCoupon({
+  tenantId,
+  clientId,
+  clientName,
+  year,
+}: GenerateBirthdayCouponParams) {
+  // Gerar código único
+  const firstName = clientName.split(' ')[0].toUpperCase()
+  const code = `ANIVER-${firstName}-${year}`
+
+  // Verificar se já existe
+  const existing = await prisma.coupon.findUnique({
+    where: { code },
+  })
+
+  if (existing) {
+    return existing
+  }
+
+  // Criar cupom
+  const coupon = await prisma.coupon.create({
+    data: {
+      tenant_id: tenantId,
+      client_id: clientId,
+      code,
+      type: 'birthday',
+      discount_type: 'percentage',
+      discount_value: 15, // 15% de desconto
+      valid_from: new Date(),
+      valid_until: addDays(new Date(), 7), // Válido por 7 dias
+      max_uses: 1, // Uso único
+      is_birthday: true,
+      status: 'active',
+    },
+  })
+
+  return coupon
+}
+
+TEMPLATES DE MENSAGENS
+
+// lib/birthday/render-template.ts
+
+import { prisma } from '@/lib/prisma'
+
+interface RenderTemplateParams {
+  tenantId: string
+  type: string // 'birthday'
+  channel: string // 'whatsapp', 'email', 'sms'
+  variables: Record<string, string>
+}
+
+export async function renderTemplate({
+  tenantId,
+  type,
+  channel,
+  variables,
+}: RenderTemplateParams) {
+  // Buscar template customizado
+  let template = await prisma.messageTemplate.findFirst({
+    where: {
+      tenant_id: tenantId,
+      type,
+      channel,
+      is_active: true,
+    },
+    orderBy: {
+      is_default: 'desc',
+    },
+  })
+
+  // Se não encontrar, usar template padrão
+  if (!template) {
+    template = getDefaultTemplate(type, channel)
+  }
+
+  // Substituir variáveis
+  let message = template.body
+
+  for (const [key, value] of Object.entries(variables)) {
+    message = message.replace(new RegExp(`{{${key}}}`, 'g'), value)
+  }
+
+  return message
+}
+
+function getDefaultTemplate(type: string, channel: string) {
+  const templates = {
+    birthday: {
+      whatsapp: {
+        body: `🎉 *Feliz Aniversário, {{name}}!* 🎂
+
+Que dia especial! Para comemorar, preparamos um presente exclusivo para você:
+
+🎁 *{{discount}} de desconto* em qualquer viagem!
+
+Use o cupom: *{{coupon_code}}*
+Válido por {{valid_until}}
+
+Escolha seu destino dos sonhos e aproveite! 🌎✈️
+
+_Equipe de Turismo_`,
+      },
+      email: {
+        body: `
+<h1>🎉 Feliz Aniversário, {{name}}!</h1>
+
+<p>Que dia especial! Para comemorar, preparamos um presente exclusivo para você:</p>
+
+<div style="background: #f0f9ff; padding: 20px; border-radius: 8px; margin: 20px 0;">
+  <h2>🎁 {{discount}} de desconto</h2>
+  <p>Use o cupom: <strong>{{coupon_code}}</strong></p>
+  <p>Válido por {{valid_until}}</p>
+</div>
+
+<p>Escolha seu destino dos sonhos e aproveite!</p>
+
+<a href="{{website}}" style="background: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block;">
+  Ver Pacotes
+</a>
+        `,
+      },
+      sms: {
+        body: `🎂 Feliz aniversário, {{name}}! Ganhe {{discount}} com o cupom {{coupon_code}}. Válido por {{valid_until}}!`,
+      },
+    },
+  }
+
+  return {
+    body: templates[type as keyof typeof templates][channel as keyof typeof templates.birthday].body,
+  }
+}
+
+DASHBOARD DE ANIVERSARIANTES
+
+// app/(dashboard)/dashboard/aniversariantes/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Cake, Mail, MessageSquare, Send } from 'lucide-react'
+import { format, addDays, startOfDay, endOfDay } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default async function AniversariantesPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  const today = new Date()
+  const currentYear = today.getFullYear()
+
+  // Aniversariantes de hoje
+  const todayBirthdays = await getBirthdaysForDate(
+    session.user.tenantId,
+    today
+  )
+
+  // Próximos 7 dias
+  const next7Days = await getBirthdaysForPeriod(
+    session.user.tenantId,
+    today,
+    addDays(today, 7)
+  )
+
+  // Próximos 30 dias
+  const next30Days = await getBirthdaysForPeriod(
+    session.user.tenantId,
+    today,
+    addDays(today, 30)
+  )
+
+  // Estatísticas do mês
+  const monthStats = await getMonthStats(session.user.tenantId, currentYear)
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">🎂 Aniversariantes</h1>
+        <p className="text-gray-600">
+          Gerencie mensagens de aniversário e acompanhe conversões
+        </p>
+      </div>
+
+      {/* Estatísticas */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <Card className="p-6">
+          <p className="text-sm text-gray-600 mb-2">Hoje</p>
+          <p className="text-3xl font-bold text-blue-600">
+            {todayBirthdays.length}
+          </p>
+        </Card>
+
+        <Card className="p-6">
+          <p className="text-sm text-gray-600 mb-2">Próximos 7 dias</p>
+          <p className="text-3xl font-bold text-purple-600">
+            {next7Days.length}
+          </p>
+        </Card>
+
+        <Card className="p-6">
+          <p className="text-sm text-gray-600 mb-2">Próximos 30 dias</p>
+          <p className="text-3xl font-bold text-green-600">
+            {next30Days.length}
+          </p>
+        </Card>
+
+        <Card className="p-6">
+          <p className="text-sm text-gray-600 mb-2">Taxa de Conversão</p>
+          <p className="text-3xl font-bold text-orange-600">
+            {monthStats.conversionRate}%
+          </p>
+        </Card>
+      </div>
+
+      {/* Aniversariantes de Hoje */}
+      <Card className="p-6 mb-8">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-bold flex items-center gap-2">
+            <Cake className="h-6 w-6 text-pink-500" />
+            Aniversariantes de Hoje
+          </h2>
+          <Button>
+            <Send className="h-4 w-4 mr-2" />
+            Enviar Mensagens
+          </Button>
+        </div>
+
+        {todayBirthdays.length === 0 ? (
+          <p className="text-gray-500 text-center py-8">
+            Nenhum aniversariante hoje
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {todayBirthdays.map((client) => (
+              <BirthdayClientCard key={client.id} client={client} />
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* Próximos Aniversariantes */}
+      <Card className="p-6">
+        <h2 className="text-2xl font-bold mb-6">Próximos 7 Dias</h2>
+        
+        {next7Days.length === 0 ? (
+          <p className="text-gray-500 text-center py-8">
+            Nenhum aniversariante nos próximos 7 dias
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {next7Days.map((client) => (
+              <UpcomingBirthdayCard key={client.id} client={client} />
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+// Componente de Card do Aniversariante
+function BirthdayClientCard({ client }: { client: any }) {
+  const age = new Date().getFullYear() - new Date(client.birthdate).getFullYear()
+  const hasSentMessage = client.birthday_messages.length > 0
+
+  return (
+    <div className="flex items-center justify-between p-4 bg-pink-50 border border-pink-200 rounded-lg">
+      <div className="flex items-center gap-4">
+        <div className="w-12 h-12 bg-pink-500 rounded-full flex items-center justify-center text-white font-bold text-xl">
+          {client.name.charAt(0)}
+        </div>
+        <div>
+          <p className="font-bold text-lg">{client.name}</p>
+          <p className="text-sm text-gray-600">
+            {age} anos • {client.phone}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        {hasSentMessage ? (
+          <>
+            <Badge className="bg-green-500">
+              <MessageSquare className="h-3 w-3 mr-1" />
+              Enviado
+            </Badge>
+            {client.birthday_messages[0].coupon && (
+              <Badge variant="outline">
+                Cupom: {client.birthday_messages[0].coupon.code}
+              </Badge>
+            )}
+          </>
+        ) : (
+          <Button size="sm">
+            <Send className="h-3 w-3 mr-1" />
+            Enviar Agora
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Funções auxiliares
+async function getBirthdaysForDate(tenantId: string, date: Date) {
+  const year = date.getFullYear()
+  const month = date.getMonth()
+  const day = date.getDate()
+
+  return await prisma.client.findMany({
+    where: {
+      tenant_id: tenantId,
+      status: 'active',
+      birthdate: {
+        gte: startOfDay(new Date(year, month, day)),
+        lte: endOfDay(new Date(year, month, day)),
+      },
+    },
+    include: {
+      birthday_messages: {
+        where: {
+          birthday_year: year,
+        },
+        include: {
+          coupon: true,
+        },
+      },
+    },
+  })
+}
+
+async function getBirthdaysForPeriod(
+  tenantId: string,
+  startDate: Date,
+  endDate: Date
+) {
+  // Implementação similar
+  return []
+}
+
+async function getMonthStats(tenantId: string, year: number) {
+  const messages = await prisma.birthdayMessage.findMany({
+    where: {
+      tenant_id: tenantId,
+      birthday_year: year,
+    },
+  })
+
+  const converted = messages.filter((m) => m.converted).length
+  const conversionRate = messages.length > 0
+    ? Math.round((converted / messages.length) * 100)
+    : 0
+
+  return {
+    total: messages.length,
+    converted,
+    conversionRate,
+  }
+}
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│         IMPLEMENTAR SISTEMA DE MENSAGENS PARA ANIVERSARIANTES                │
+└─────────────────────────────────────────────────────────────────┘
+
+🤖 AUTOMAÇÃO:
+├── Cron job diário (00:00)
+├── Identifica aniversariantes do dia
+├── Gera cupom exclusivo (15% OFF por 7 dias)
+└── Envia mensagens em múltiplos canais
+
+📱 CANAIS DE ENVIO:
+├── WhatsApp (prioridade 1)
+├── Email (prioridade 2)
+└── SMS (opcional)
+
+🎟️ CUPOM DE ANIVERSÁRIO:
+├── Código: ANIVER-[NOME]-[ANO]
+├── Desconto: 15% (configurável)
+├── Validade: 7 dias
+├── Uso único
+└── Cliente específico
+
+📊 DASHBOARD:
+├── Aniversariantes de hoje
+├── Próximos 7 dias
+├── Próximos 30 dias
+├── Taxa de conversão
+└── Histórico de envios
+
+📈 MÉTRICAS:
+├── Mensagens enviadas
+├── Taxa de entrega
+├── Taxa de abertura (email)
+├── Conversões (reservas)
+└── ROI por campanha
+
+🎯 BENEFÍCIOS:
+├── Fidelização de clientes
+├── Aumento de vendas
+├── Experiência personalizada
+├── Automação total
+└── Rastreamento completo

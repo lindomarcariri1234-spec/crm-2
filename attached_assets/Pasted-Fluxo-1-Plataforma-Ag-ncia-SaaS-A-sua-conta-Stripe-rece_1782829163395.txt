@@ -1,0 +1,161 @@
+Fluxo 1 — Plataforma → Agência (SaaS)
+A sua conta Stripe recebe as assinaturas das agências (planos Starter/Pro/Enterprise). Isso é o que a Task #1 está configurando.
+
+O que você precisa fazer agora (Task #1 está aguardando isso):
+
+No painel do Replit, clique em Tools → Integrations
+Encontre a integração Stripe (já instalada como stripe==1.0.0)
+Clique em Connect e faça login com sua conta Stripe da plataforma
+Após conectar, a integração expõe as chaves automaticamente — o servidor já sabe lê-las
+Depois disso, você precisará:
+
+Ir ao Stripe Dashboard → Webhooks e registrar:
+https://<seu-domínio>/api/webhooks/stripe-platform
+
+Copiar o whsec_... gerado e salvar como secret STRIPE_WEBHOOK_SECRET no Replit
+
+https://crm-1--lindomarcariri1.replit.app/api/webhooks/stripe-platform
+
+Segredo da assinatura
+whsec_ipvwpzBLf7sw2KK1HLUVoljcM2AzNFEH
+
+Segredo da assinatura
+whsec_7vBnIJic02bWjbhMCT2SIpf7PBCEGhTE
+
+STRIPE_WEBHOOK_SECRET='whsec_ipvwpzBLf7sw2KK1HLUVoljcM2AzNFEH'
+
+
+
+
+
+Nome da conta
+Visite Cariri Cearense Receptivo
+ID da conta
+
+acct_1TSu3dKLGMGrnwqH
+Endereço comercial
+R. Des. Edmilson da Cruz Neves, 527
+Apartamento
+Crato
+
+Ceará
+63119-185
+Verificação de telefone
+Verificado
+Fuso horário
+
+America - Sao Paulo
+
+Dados da empresa
+Visite Cariri Cearense Receptivo
+Editar
+Site da empresa
+visitecrm.com
+Outras informações fornecidas
+Descrição do produto, Setor
+Dados públicos
+Informações de suporte do cliente
+
+Nome jurídico da empresa
+Visite Cariri Cearense Receptivo
+Nome da empresa
+Visite Cariri Cearense Receptivo
+Endereço do suporte
+R. Des. Edmilson da Cruz Neves, 527
+Apartamento
+Crato-CE
+63119-185
+BR
+
+Telefone do suporte
++55 88 98163 4178
+E-mail do suporte
+lindomarcariri1234@gmail.com
+Também informado
+Site empresarial
+Descrição no extrato
+Descrição no extrato
+Editar
+VISITE CARIRI VIAGENS
+Administração e propriedade
+Lindomar Dos Santos de Oliveira Santos de Oliveira
+
+Função
+Representante de conta
+E-mail
+visitecrm23@gmail.com
+Data de nascimento
+Data de nascimento: 27 de março de 1987
+Endereço
+R. Des. Edmilson da Cruz Neves, 527
+Apartamento
+Crato-CE
+63119-185
+BR
+
+Outras informações fornecidas
+Documento de identificação, CPF, Telefone
+
+
+
+Área restrita
+
+Chaves de API
+
+Chave publicável
+pk_test_51TSu3dKLGMGrnwqHWK93yo2Pt0LidgbYDCs5WQlkSlTJM9lDbOugAEh8XfekTEcUbRIsUjUlyc0gkgHJrXfHZmWE00I1fi8uLi
+Chave secreta
+
+sk_test_51TSu3dKLGMGrnwqHc3
+
+
+
+STRIPE_PUBLISHABLE_KEY='pk_test_51TSu3dKLGMGrnwqHWK93yo2Pt0LidgbYDCs5WQlkSlTJM9lDbOugAEh8XfekTEcUbRIsUjUlyc0gkgHJrXfHZmWE00I1fi8uLi'
+
+STRIPE_SECRET_KEY='sk_test_51TSu3dKLGMGrnwqHc3kZc2W4IQkyQspFgdFJWBD2Xmn1Jgav8WFnJO4GOmf0seHzE9DSdKpCjQa9zO7D4kObQZII00Cqo6E8JZ'
+
+
+Conta criada
+Compartilhe este link com a conta conectada para que eles possam fornecer informações adicionais necessárias. Ele expira em 7 dias.
+
+https://connect.stripe.com/d/setup/s/_UndK8QNsZNS6OyYJza1ftua5sS/YWNjdF8xVG8yM0dLTEdNZkU0ZnlV/a229aaad9ad2a1fed
+
+
+
+Ouvindo
+18 eventos
+Segredo da assinatura
+Use este segredo para verificar se os eventos foram gerados pela Stripe. Você pode ver ou revogar este segredo na página de dados de destino.
+whsec_ipvwpzBLf7sw2KK1HLUVoljcM2AzNFEH
+Destino
+•
+2 de 2
+upbeat-triumph-thin
+Ver destino
+https://crm-1--lindomarcariri1.replit.app
+Descrição
+-
+Eventos de
+Sua conta
+Versão da API
+Sem controle de versão
+Estilo do conteúdo
+Mínimo
+Ouvindo
+15 eventos
+Segredo da assinatura
+Use este segredo para verificar se os eventos foram gerados pela Stripe. Você pode ver ou revogar este segredo na página de dados de destino.
+whsec_7vBnIJic02bWjbhMCT2SIpf7PBCEGhTE
+
+
+
+
+Chaves de API
+pk_live_51TSu3dKLGMGrnwqHJDTpyRaBeVgvnoM9Qh9PVNjjIlAqqIS3ZJ5i8DfBoqpCcbOqugWnAvAwljcpDG5BUzV2yE5Q00Nve2mZkZ
+
+
+Chave secreta
+
+
+
+

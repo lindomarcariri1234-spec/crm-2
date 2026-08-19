@@ -34,24 +34,18 @@ function formatUser(u: typeof usersTable.$inferSelect) {
 router.get("/users/me", async (req, res, next): Promise<void> => {
   try {
     const auth = getAuth(req);
-    const { userId: clerkId } = auth;
-    if (!clerkId) {
-      req.log.warn({
-        sessionId: auth.sessionId ?? null,
-        hasAuthHeader: !!req.headers["authorization"],
-        hasSessionCookie: !!req.cookies?.["__session"],
-        sessionClaimsKeys: auth.sessionClaims ? Object.keys(auth.sessionClaims) : null,
-        origin: req.headers["origin"] ?? null,
-      }, "[auth] getAuth returned null userId on GET /users/me — token missing or rejected");
-      next(new AppError("Not authenticated", 401, "UNAUTHENTICATED")); return;
-    }
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkId)).limit(1);
+    const { userId: clerkId } = getAuth(req);
+    if (!clerkId) { next(new AppError("Not authenticated", 401, "UNAUTHENTICATED")); return; }
+
+    const [user] = await db.select().from(usersTable)
+      .where(eq(usersTable.clerkId, clerkId))
+      .limit(1);
     if (!user) { next(new NotFoundError("User not found", "USER_NOT_FOUND")); return; }
     // Check tenant access for non-superadmin users so that expired trials,
     // suspensions, and cancelled subscriptions surface here (the entry point
     // for the frontend auth flow) rather than only on subsequent API calls.
     if (user.tenantId && user.role !== ROLES.SUPER_ADMIN) {
-      const allowed = await checkTenantAccess(user.tenantId, req, res);
+      const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
       if (!allowed) return;
     }
     let tenant = null;
@@ -114,7 +108,7 @@ async function resolveInviteForUser(
 router.post("/users/me/sync", async (req, res, next): Promise<void> => {
   try {
     const auth = getAuth(req);
-    const { userId: clerkId } = auth;
+    const { userId: clerkId } = getAuth(req);
     if (!clerkId) {
       req.log.warn({
         sessionId: auth.sessionId ?? null,
@@ -126,7 +120,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       next(new AppError("Not authenticated", 401, "UNAUTHENTICATED")); return;
     }
 
-    const parsed = SyncMeBody.safeParse(req.body);
+    const parsed = UpdateUserBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
 
     const { name, avatarUrl } = parsed.data;
@@ -150,8 +144,8 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
     const [existing] = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkId)).limit(1);
 
     if (!existing) {
-      const userId = generateId();
-      const referralCode = (await import("crypto")).randomBytes(4).toString("hex").substring(0, 6).toUpperCase();
+    const userId = generateId();
+    const referralCode = (await import("crypto")).randomBytes(4).toString("hex").substring(0, 6).toUpperCase();
 
       let pendingInvite: typeof invitesTable.$inferSelect | undefined;
       if (!clerkFetchFailed) {
@@ -183,7 +177,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       }
 
       if (linkedTenantId) {
-        const allowed = await checkPlanLimit(linkedTenantId, "users", req, res);
+      const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
         if (!allowed) return;
       }
 
@@ -214,7 +208,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       // suspended, cancelled subscription) return the same 403 code that
       // GET /users/me returns, so RoleRedirect can show the AccessBlockedWall.
       if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN) {
-        const allowed = await checkTenantAccess(existing.tenantId, req, res);
+      const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
         if (!allowed) return;
       }
 
@@ -286,7 +280,7 @@ router.post("/users", async (req, res, next): Promise<void> => {
       const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
       if (!allowed) return;
     }
-    const parsed = CreateUserBody.safeParse(req.body);
+    const parsed = UpdateUserBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     if (me.role !== ROLES.SUPER_ADMIN && parsed.data.role === ROLES.SUPER_ADMIN) {
       next(new ForbiddenError("Forbidden: apenas superadmins podem atribuir a funcao superadmin", "FORBIDDEN_ROLE")); return;
@@ -304,7 +298,7 @@ router.post("/users", async (req, res, next): Promise<void> => {
       referralBalance: "0",
     });
     const [user] = await db.select().from(usersTable)
-      .where(and(eq(usersTable.id, userId), eq(usersTable.tenantId, me.tenantId)))
+      .where(eq(usersTable.clerkId, clerkId))
       .limit(1);
     if (!user) { next(new AppError("Failed to create user", 500, "USER_CREATE_FAILED")); return; }
     res.status(201).json(formatUser(user));
@@ -355,7 +349,7 @@ router.patch("/users/:id", async (req, res, next): Promise<void> => {
     await db.update(usersTable).set(updates)
       .where(and(eq(usersTable.id, req.params.id), eq(usersTable.tenantId, me.tenantId)));
     const [user] = await db.select().from(usersTable)
-      .where(and(eq(usersTable.id, req.params.id), eq(usersTable.tenantId, me.tenantId)))
+      .where(eq(usersTable.clerkId, clerkId))
       .limit(1);
     if (!user) { next(new NotFoundError("Not found", "USER_NOT_FOUND")); return; }
     res.json(formatUser(user));

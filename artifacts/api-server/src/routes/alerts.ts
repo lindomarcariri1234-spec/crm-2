@@ -246,7 +246,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
 
     const tripsNoRes = tripsNoReservationsRows.length;
     if (tripsNoRes > 0) {
-      const names = tripsNoReservationsRows.slice(0, 2).map(t => t.name).join(", ");
+      const names = lowOccupancyTripsRows.slice(0, 2).map(t => t.name).join(", ");
       alerts.push({
         id: "trips-no-reservations-24h",
         type: "critical",
@@ -304,8 +304,8 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
       // somehow accumulates more than one exhaustion cycle correctly.
       const exhaustionByReservation = new Map<string, Date>();
       for (const log of exhaustedEmailLogs) {
-        const rid = log.reservationId!;
-        const exhaustedAt = log.retriesExhaustedAt!;
+          const rid = resend.reservationId!;
+          const exhaustedAt = exhaustionByReservation.get(rid)!;
         const existing = exhaustionByReservation.get(rid);
         if (!existing || exhaustedAt > existing) {
           exhaustionByReservation.set(rid, exhaustedAt);
@@ -360,7 +360,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
 
       if (exhaustedCount > 0) {
         // Fetch reservation details to include in the alert description
-        let description = "Intervenção manual necessária — acesse o Log de E-mails";
+        const description = shown.join("; ") + (remainder > 0 ? ` e mais ${remainder}` : "");
         try {
           const details = await db
             .select({
@@ -374,12 +374,13 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
             .where(inArray(reservationsTable.id, exhaustedReservationIds));
 
           if (details.length > 0) {
-            const MAX_SHOWN = 3;
-            const shown = details.slice(0, MAX_SHOWN).map((d) => {
-              const ref = d.reservationNumber ?? d.voucherCode ?? d.reservationId;
-              return `#${ref} (${d.clientEmail ?? "sem e-mail"})`;
-            });
-            const remainder = details.length - shown.length;
+        const MAX_SHOWN = 3;
+        const shown = gaps.slice(0, MAX_SHOWN).map((g) => {
+          const resRef = g.reservation_number ?? g.reservation_id;
+          const referrer = g.referrer_name ?? "indicador desconhecido";
+          return `#${resRef} (cód. ${g.referral_code}, ${referrer})`;
+        });
+        const remainder = totalGaps - shown.length;
             description = shown.join(", ") + (remainder > 0 ? ` e mais ${remainder}` : "");
           }
         } catch {
@@ -507,9 +508,12 @@ router.post("/alerts/email-retry-exhausted/:reservationId/resolve", async (req, 
 
     const { reservationId } = req.params;
 
-    // Verify the reservation belongs to this tenant before updating
+    // Verify the reservation belongs to this tenant and grab its referral code
     const [reservation] = await db
-      .select({ id: reservationsTable.id })
+      .select({
+        id: reservationsTable.id,
+        discountReferralCode: reservationsTable.discountReferralCode,
+      })
       .from(reservationsTable)
       .where(and(
         eq(reservationsTable.id, reservationId),
@@ -522,6 +526,14 @@ router.post("/alerts/email-retry-exhausted/:reservationId/resolve", async (req, 
       return;
     }
 
+    if (!reservation.discountReferralCode) {
+      next(new ValidationError("Reserva não possui código de indicação", "VALIDATION_ERROR"));
+      return;
+    }
+
+    // Acknowledge the surfaced gap by stamping the COMPLETED referral rows that
+    // match this reservation's code. This mirrors the gap-detection JOIN
+    // (status=COMPLETED AND code=discount_referral_code) so the alert clears.
     const now = new Date();
     await db
       .update(emailLogsTable)

@@ -450,4 +450,3 @@ export default function VitrineOrderTracking({
     </div>
   );
 }
-

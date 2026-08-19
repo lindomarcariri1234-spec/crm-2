@@ -1387,6 +1387,28 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
       }
     }
 
+    const newTripId = parsed.data.tripId ?? undefined;
+    const newClientId = parsed.data.clientId ?? undefined;
+    const tripChanged = newTripId != null && newTripId !== existing.tripId;
+    const clientChanged = newClientId != null && newClientId !== existing.clientId;
+
+    if (tripChanged || clientChanged) {
+      if (tripChanged) {
+        const [trip] = await db.select({ id: tripsTable.id }).from(tripsTable)
+          .where(and(eq(tripsTable.id, newTripId), eq(tripsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!trip) { next(new ValidationError("Trip not found", "TRIP_NOT_FOUND")); return; }
+        updates.tripId = newTripId;
+      }
+      if (clientChanged) {
+        const [client] = await db.select({ id: clientsTable.id }).from(clientsTable)
+          .where(and(eq(clientsTable.id, newClientId), eq(clientsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!client) { next(new ValidationError("Client not found", "CLIENT_NOT_FOUND")); return; }
+        updates.clientId = newClientId;
+      }
+    }
+
     const isBeingCancelled = parsed.data.status != null && CANCELLING_STATUSES.includes(parsed.data.status);
     const wasActive = ACTIVE_STATUSES.includes(existing.status);
     const wasConfirmed = existing.status === RESERVATION_STATUS.CONFIRMED;

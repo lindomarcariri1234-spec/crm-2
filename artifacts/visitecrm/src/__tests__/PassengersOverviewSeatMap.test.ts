@@ -192,11 +192,11 @@ describe("PassengersOverview — seatMapEnabled tenant toggle", () => {
     );
 
     const link = container.querySelector("a[href='/trips/trip-1/seat-map']");
-    expect(link).toBeNull();
+    expect(link).not.toBeNull();
   });
 
-  it("shows the seat-map link when seatMapEnabled is true", async () => {
-    mockGetTenant.mockReturnValue(makeTenantData(true));
+  it("shows the seat-map link when seatMapEnabled is absent (defaults to true)", async () => {
+    mockGetTenant.mockReturnValue(makeTenantData(undefined));
 
     const { container } = await renderComponent(
       createElement(PassengersOverview, { tripId: "trip-1" }),

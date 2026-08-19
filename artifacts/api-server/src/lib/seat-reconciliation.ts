@@ -4,6 +4,7 @@ import { and, eq, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { RESERVATION_STATUS } from "@workspace/permissions";
 import { cancelDealOnReservationCancellation } from "../services/pipeline-automation";
+import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 
 type DriftRow = {
   tripId: string;

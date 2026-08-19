@@ -1,0 +1,151 @@
+Integração de IA nas Configurações
+Permitir que cada agência configure, de forma segura, seu próprio provedor de Inteligência Artificial (OpenAI, Anthropic, Google Gemini ou endpoint compatível) dentro de Configurações → Integrações.
+
+Hoje a IA do Assistente de Insights usa uma chave gerenciada pela plataforma (compartilhada e fixa no servidor). Esta tarefa cria a base tecnológica para que cada agência traga sua própria chave, com armazenamento criptografado, teste de conexão, status e registro de logs de auditoria — servindo de fundação para todas as futuras funcionalidades de IA (Assistente Virtual, Central de Insights, automações, recomendações, previsões e geração de conteúdo).
+
+Atualização do Sistema – Rota /configuracoes
+⚙️ Página: Configurações
+
+Descrição:
+Central de gerenciamento das configurações da agência, permitindo personalizar o sistema, gerenciar integrações, equipe, notificações, funcionalidades e conexões com serviços externos.
+
+Texto de apoio:
+
+Gerencie as configurações da sua agência, integrações, equipe, personalizações e recursos avançados da plataforma.
+
+Seções Disponíveis
+Agência
+
+Gerencie os dados cadastrais, informações comerciais e configurações gerais da agência.
+
+Plano
+
+Visualize informações do plano contratado, recursos disponíveis, limites de uso e opções de upgrade.
+
+Integrações
+
+Configure e conecte serviços externos para automatizar processos e ampliar as funcionalidades da plataforma.
+
+Notificações
+
+Gerencie alertas, notificações automáticas, comunicações internas e avisos enviados aos clientes.
+
+Personalização
+
+Personalize identidade visual, logotipo, cores, domínio personalizado e elementos da marca.
+
+Equipe
+
+Gerencie usuários-vendedores, permissões, cargos, acessos e níveis de autorização dentro do sistema.
+
+Chaves de API
+
+Gerencie credenciais e integrações com serviços externos.
+
+Implementar os seguintes campos:
+Nome da Integração
+Provedor
+Chave da API (API Key)
+URL Base da API
+Token de Acesso
+Modelo Padrão (quando aplicável)
+Status da Conexão
+Botão Testar Conexão
+Botão Salvar Configuração
+Data da Última Sincronização
+Logs de Integração
+Ambiente (Produção ou Teste)
+Funcionalidades
+Validar credenciais automaticamente.
+Testar conexão antes de salvar.
+Exibir status da integração em tempo real.
+Armazenar credenciais de forma criptografada.
+Permitir atualização e revogação de chaves.
+Registrar eventos e erros para auditoria.
+Funcionalidades
+
+Ative ou desative módulos e recursos disponíveis conforme a necessidade da operação.
+
+Integrações
+Configure WhatsApp, pagamentos, inteligência artificial e outros serviços conectados ao sistema.
+Inteligência Artificial
+
+Status: Não configurado
+
+Conecte provedores de Inteligência Artificial para habilitar recursos avançados de automação, análises estratégicas, geração de conteúdo, assistentes virtuais e central de insights.
+
+Provedores sugeridos:
+
+OpenAI
+Google Gemini
+Anthropic Claude
+DeepSeek
+OpenRouter
+
+Ações:
+
+Configurar
+
+Google Calendar
+
+Status: Ativo/Não conectado
+
+Sincronize viagens, reservas, pagamentos, aniversários de clientes, tarefas e eventos com sua agenda Google.
+
+Ações:
+
+Conectar com Google
+
+WhatsApp (Evolution API)
+
+Status: Ativo/Não configurado
+
+Automatize o envio de mensagens, notificações, lembretes, confirmações de reserva e campanhas via WhatsApp.
+
+Configurações necessárias:
+
+URL da Instância
+API Key
+Nome da Instância
+Status da Conexão
+
+Ações:
+
+Configurar
+
+Stripe
+
+Status: Ativo/Não configurado
+
+Processe pagamentos, PIX, boletos, cartões e assinaturas diretamente pela plataforma.
+
+Configurações necessárias:
+
+Public Key
+Access Token
+Webhook URL
+Ambiente (Produção/Teste)
+
+Ações:
+
+Configurar
+
+Google Analytics
+
+Status: Ativo/Não configurado
+
+Monitore acessos, eventos, conversões, comportamento dos usuários e desempenho das campanhas.
+
+Configurações necessárias:
+
+Measurement ID
+API Credentials
+Property ID
+
+Ações:
+
+Configurar
+
+Objetivo
+
+Transformar a área de Configurações em um centro completo de administração da plataforma, permitindo que a agência gerencie integrações, automações, inteligência artificial, comunicação, pagamentos e personalizações em um único ambiente seguro, escalável e preparado para o crescimento do negócio.

@@ -12,6 +12,7 @@ import { applyDeferredOrderCredits } from "./deferred-referral-effects";
 import { dispatchReferralConvertedEmail, dispatchReferralTierUpgradeEmail, dispatchReferralLoyaltyPointsEmail } from "../../queues/email-helpers";
 import { dispatchWhatsAppReferralConverted, dispatchWhatsAppReservationConfirmed, dispatchWhatsAppPaymentReceived } from "../../queues/whatsapp-helpers";
 import { RESERVATION_STATUS } from "@workspace/permissions";
+import { reservationsTable, storesTable, storeOrdersTable, usersTable } from "@workspace/db";
 
 /**
  * Side effects that must only happen AFTER a store order's payment is confirmed

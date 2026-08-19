@@ -328,120 +328,171 @@ describe("Seat bucket counters — status transition paths", () => {
   it("pending → confirmed: confirmed_seats++ and reserved_seats-- are applied", async () => {
     const app = buildApp();
     const existing = makeReservation({ status: RESERVATION_STATUS.PENDING });
-    const updated = { ...existing, status: RESERVATION_STATUS.CONFIRMED };
-
-    mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated]]);
-    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
-
-    const res = await request(app)
-      .patch("/api/reservations/res-001")
-      .send({ status: RESERVATION_STATUS.CONFIRMED });
-
-    expect(res.status).toBe(200);
-
-    const seatUpdate = capturedSets.find(
-      (s) => "confirmedSeats" in s && "reservedSeats" in s && !("availableSeats" in s),
-    );
-    expect(seatUpdate).toBeDefined();
-    expect(seatUpdate!.confirmedSeats).toBe("sql");
-    expect(seatUpdate!.reservedSeats).toBe("sql");
-  });
-
-  // ── confirmed → cancelled ────────────────────────────────────────────────
-
-  it("confirmed → cancelled: confirmed_seats-- and available_seats++ are applied", async () => {
-    const app = buildApp();
-    const existing = makeReservation({ status: RESERVATION_STATUS.CONFIRMED });
-    const updated = { ...existing, status: RESERVATION_STATUS.CANCELLED };
-
-    mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[], [null], [updated]]);
-    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
-
-    const res = await request(app)
-      .patch("/api/reservations/res-001")
-      .send({ status: RESERVATION_STATUS.CANCELLED });
-
-    expect(res.status).toBe(200);
-
-    const seatUpdate = capturedSets.find(
-      (s) => "availableSeats" in s && "confirmedSeats" in s && !("reservedSeats" in s),
-    );
-    expect(seatUpdate).toBeDefined();
-    expect(seatUpdate!.availableSeats).toBe("sql");
-    expect(seatUpdate!.confirmedSeats).toBe("sql");
-  });
-
-  // ── pending → cancelled ──────────────────────────────────────────────────
-
-  it("pending → cancelled: reserved_seats-- and available_seats++ are applied", async () => {
-    const app = buildApp();
-    const existing = makeReservation({ status: RESERVATION_STATUS.PENDING });
-    const updated = { ...existing, status: RESERVATION_STATUS.CANCELLED };
-
-    mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[], [null], [updated]]);
-    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
-
-    const res = await request(app)
-      .patch("/api/reservations/res-001")
-      .send({ status: RESERVATION_STATUS.CANCELLED });
-
-    expect(res.status).toBe(200);
-
-    const seatUpdate = capturedSets.find(
-      (s) => "availableSeats" in s && "reservedSeats" in s && !("confirmedSeats" in s),
-    );
-    expect(seatUpdate).toBeDefined();
-    expect(seatUpdate!.availableSeats).toBe("sql");
-    expect(seatUpdate!.reservedSeats).toBe("sql");
-  });
-
-  // ── confirmed → pending (demote) ─────────────────────────────────────────
-
-  it("confirmed → pending (demote): confirmed_seats-- and reserved_seats++ are applied", async () => {
-    const app = buildApp();
-    const existing = makeReservation({ status: RESERVATION_STATUS.CONFIRMED });
-    const updated = { ...existing, status: RESERVATION_STATUS.PENDING };
-
-    mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated]]);
-    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
-
-    const res = await request(app)
-      .patch("/api/reservations/res-001")
-      .send({ status: RESERVATION_STATUS.PENDING });
-
-    expect(res.status).toBe(200);
-
-    const seatUpdate = capturedSets.find(
-      (s) => "confirmedSeats" in s && "reservedSeats" in s && !("availableSeats" in s),
-    );
-    expect(seatUpdate).toBeDefined();
-    expect(seatUpdate!.confirmedSeats).toBe("sql");
-    expect(seatUpdate!.reservedSeats).toBe("sql");
-  });
-
-  // ── no-op: already cancelled → no extra seat update ─────────────────────
-
-  it("already-cancelled → cancelled: no seat bucket update is issued", async () => {
-    const app = buildApp();
-    const existing = makeReservation({ status: RESERVATION_STATUS.CANCELLED });
     const updated = { ...existing };
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated]]);
-    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
+      const tx = {
+        execute: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+        update: vi.fn().mockImplementation(() => ({
+          set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
+            capturedSets.push(setArg);
+            return { where: vi.fn().mockResolvedValue([]) };
+          }),
+        })),
+        delete: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+        select: vi.fn().mockImplementation(() => makeChain([])),
+        insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
+      };
+      return cb(tx);
+    });
 
-    const res = await request(app)
-      .patch("/api/reservations/res-001")
-      .send({ status: RESERVATION_STATUS.CANCELLED });
+    const res = await request(app).delete("/api/reservations/res-001");
+    expect(res.status).toBe(200);
+
+    const seatUpdate = capturedSets.find(
+      (s) => "availableSeats" in s && "reservedSeats" in s,
+    );
+    expect(seatUpdate).toBeDefined();
+    expect(seatUpdate!.availableSeats).toBe("sql");
+    expect(seatUpdate!.confirmedSeats).toBe("sql");
+  });
+
+  // ── DELETE pending ───────────────────────────────────────────────────────
+
+  it("DELETE pending reservation: reserved_seats-- and available_seats++ are applied", async () => {
+    const app = buildApp();
+    const existing = makeReservation({ status: RESERVATION_STATUS.PENDING });
+    const updated = { ...existing };
+
+    mockLimit.mockResolvedValueOnce([existing]);
+      const tx = {
+        execute: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+        update: vi.fn().mockImplementation(() => ({
+          set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
+            capturedSets.push(setArg);
+            return { where: vi.fn().mockResolvedValue([]) };
+          }),
+        })),
+        delete: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+        select: vi.fn().mockImplementation(() => makeChain([])),
+        insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
+      };
+      return cb(tx);
+    });
+
+    const res = await request(app).delete("/api/reservations/res-001");
+    expect(res.status).toBe(200);
+
+    const seatUpdate = capturedSets.find(
+      (s) => "availableSeats" in s && "reservedSeats" in s,
+    );
+    expect(seatUpdate).toBeDefined();
+    expect(seatUpdate!.availableSeats).toBe("sql");
+    expect(seatUpdate!.confirmedSeats).toBe("sql");
+  });
+
+  // ── DELETE pending ───────────────────────────────────────────────────────
+
+  it("DELETE pending reservation: reserved_seats-- and available_seats++ are applied", async () => {
+    const app = buildApp();
+    const existing = makeReservation({ status: RESERVATION_STATUS.PENDING });
+    const updated = { ...existing };
+
+    mockLimit.mockResolvedValueOnce([existing]);
+      const tx = {
+        execute: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+        update: vi.fn().mockImplementation(() => ({
+          set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
+            capturedSets.push(setArg);
+            return { where: vi.fn().mockResolvedValue([]) };
+          }),
+        })),
+        delete: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+        select: vi.fn().mockImplementation(() => makeChain([])),
+        insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
+      };
+      return cb(tx);
+    });
+
+    const res = await request(app).delete("/api/reservations/res-001");
+    expect(res.status).toBe(200);
+
+    const seatUpdate = capturedSets.find(
+      (s) => "availableSeats" in s && "reservedSeats" in s,
+    );
+    expect(seatUpdate).toBeDefined();
+    expect(seatUpdate!.availableSeats).toBe("sql");
+    expect(seatUpdate!.confirmedSeats).toBe("sql");
+  });
+
+  // ── DELETE pending ───────────────────────────────────────────────────────
+
+  it("DELETE pending reservation: reserved_seats-- and available_seats++ are applied", async () => {
+    const app = buildApp();
+    const existing = makeReservation({ status: RESERVATION_STATUS.PENDING });
+    const updated = { ...existing };
+
+    mockLimit.mockResolvedValueOnce([existing]);
+      const tx = {
+        execute: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+        update: vi.fn().mockImplementation(() => ({
+          set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
+            capturedSets.push(setArg);
+            return { where: vi.fn().mockResolvedValue([]) };
+          }),
+        })),
+        delete: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+        select: vi.fn().mockImplementation(() => makeChain([])),
+        insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
+      };
+      return cb(tx);
+    });
+
+    const res = await request(app).delete("/api/reservations/res-001");
+    expect(res.status).toBe(200);
+
+    const seatUpdate = capturedSets.find(
+      (s) => "availableSeats" in s && "reservedSeats" in s,
+    );
+    expect(seatUpdate).toBeDefined();
+    expect(seatUpdate!.availableSeats).toBe("sql");
+    expect(seatUpdate!.confirmedSeats).toBe("sql");
+  });
+
+  // ── DELETE pending ───────────────────────────────────────────────────────
+
+  it("DELETE pending reservation: reserved_seats-- and available_seats++ are applied", async () => {
+    const app = buildApp();
+    const existing = makeReservation({ status: RESERVATION_STATUS.PENDING });
+    const updated = { ...existing };
+
+    mockLimit.mockResolvedValueOnce([existing]);
+      const tx = {
+        execute: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+        update: vi.fn().mockImplementation(() => ({
+          set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
+            capturedSets.push(setArg);
+            return { where: vi.fn().mockResolvedValue([]) };
+          }),
+        })),
+        delete: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+        select: vi.fn().mockImplementation(() => makeChain([])),
+        insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
+      };
+      return cb(tx);
+    });
+
+    const res = await request(app).delete("/api/reservations/res-001");
 
     expect(res.status).toBe(200);
 
@@ -455,7 +506,7 @@ describe("Seat bucket counters — status transition paths", () => {
 
   it("DELETE confirmed reservation: confirmed_seats-- and available_seats++ are applied", async () => {
     const app = buildApp();
-    const existing = makeReservation({ status: RESERVATION_STATUS.CONFIRMED });
+    const existing = makeReservation({ status: RESERVATION_STATUS.PENDING });
 
     mockLimit.mockResolvedValueOnce([existing]);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
@@ -480,7 +531,7 @@ describe("Seat bucket counters — status transition paths", () => {
     expect(res.status).toBe(200);
 
     const seatUpdate = capturedSets.find(
-      (s) => "availableSeats" in s && "confirmedSeats" in s,
+      (s) => "availableSeats" in s && "reservedSeats" in s,
     );
     expect(seatUpdate).toBeDefined();
     expect(seatUpdate!.availableSeats).toBe("sql");

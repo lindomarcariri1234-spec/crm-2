@@ -1,0 +1,39 @@
+Atualizar o sistema de indicação.
+
+O desconto/Bônus/Benefícios que o indicado recebe ao clicar no link de indicação, será valido na primeira compra realizada pelo o indicado no período determinado nas configurações do sistema pela a Agencia.
+
+O desconto/Bônus/Benefícios que o indicado recebe ao clicar no link de indicação, não é valido se o CPF do indicado for o mesmo CPF do indicador.
+
+O valor que o indicador recebe pela a indicação bem sucedida, só será sacado no período determinado pela a agencia nas configurações do sistema pela a agencia.
+
+O valor que o indicador recebe pela a indicação bem sucedida só poderá ser usado para abater na compra de algum produto ou viagem na finalização do checkout após o período determinado pela a agencia nas configurações do sistema pela a agencia.
+
+
+Atualização das Regras do Sistema de Indicação
+1. Benefício para o Indicado
+
+O desconto, bônus ou benefício concedido ao indicado por meio do link de indicação será válido exclusivamente para a primeira compra realizada, desde que ocorra dentro do prazo de validade definido pela agência nas configurações do sistema.
+
+2. Validação de CPF
+
+O desconto, bônus ou benefício não poderá ser utilizado quando o CPF do indicado for igual ao CPF do indicador, impedindo o uso de autoindicação para obtenção de vantagens.
+
+3. Liberação da Recompensa do Indicador
+
+O valor gerado por uma indicação bem-sucedida ficará disponível para saque somente após o período de liberação configurado pela agência no sistema.
+
+4. Utilização do Saldo em Compras
+
+O valor recebido pelo indicador também poderá ser utilizado como crédito para abatimento na compra de produtos, serviços ou viagens durante o checkout. No entanto, esse saldo somente ficará disponível para uso após o prazo de liberação definido pela agência nas configurações do sistema.
+
+5. Configurações Administrativas
+
+A agência deverá ter autonomia para definir e gerenciar os seguintes parâmetros:
+
+Prazo de validade dos benefícios concedidos ao indicado;
+Prazo de liberação das recompensas do indicador;
+Regras de saque dos valores acumulados;
+Regras de utilização dos créditos em compras;
+Percentuais, valores e tipos de recompensa do programa de indicação.
+
+Objetivo: garantir maior controle operacional, evitar fraudes por autoindicação e assegurar que os benefícios e recompensas sejam liberados conforme as políticas comerciais definidas pela agência.

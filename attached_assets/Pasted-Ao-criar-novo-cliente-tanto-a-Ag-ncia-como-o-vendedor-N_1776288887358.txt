@@ -1,0 +1,876 @@
+Ao criar novo cliente, tanto a Agência como o vendedor. Na opção de viagem sincronizar automaticamente e puxar todas as informações referente a viagem: como valores, quantidade de assentos livres e ocupados, dando a opção de escolher qual assento reservar.
+
+SINCRONIZAÇÃO AUTOMÁTICA DE VIAGEM NO CADASTRO DE CLIENTE
+
+┌─────────────────────────────────────────────────────────────┐
+│ PROBLEMA: Campos desconectados e sem informações            │
+└─────────────────────────────────────────────────────────────┘
+
+- Dropdown de viagem simples (sem detalhes)
+- Não mostra vagas disponíveis
+- Não mostra preço
+- Sem seleção de assento
+- Campo "Poltrona" manual (Ex: 12)
+- Informações desconectadas
+
+┌─────────────────────────────────────────────────────────────┐
+│ SOLUÇÃO: Integração completa com mapa de assentos           │
+└─────────────────────────────────────────────────────────────┘
+
+- Dropdown mostra viagem + data
+- Exibe automaticamente:
+  ✓ Destino
+  ✓ Data de partida
+  ✓ Preço por pessoa
+  ✓ Vagas disponíveis
+  
+- Mapa visual de assentos:
+  ✓ Layout
+  ✓ Status visual (disponível/ocupado/selecionado)
+  ✓ Seleção interativa
+  ✓ Contador em tempo real
+
+MPLEMENTAÇÃO COMPLETA
+1️⃣ COMPONENTE DE SELEÇÃO DE VIAGEM COM DETALHES
+
+// components/dashboard/clients/trip-selector-with-details.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+import { Loader2, MapPin, Calendar, DollarSign, Users } from 'lucide-react'
+
+interface Trip {
+  id: string
+  title: string
+  destination: string
+  departureDate: string
+  pricePerPerson: number
+  availableSeats: number
+  totalSeats: number
+  layoutId: string
+}
+
+interface TripSelectorWithDetailsProps {
+  value: string
+  onChange: (tripId: string) => void
+  onTripLoaded: (trip: Trip) => void
+}
+
+export function TripSelectorWithDetails({
+  value,
+  onChange,
+  onTripLoaded,
+}: TripSelectorWithDetailsProps) {
+  const [trips, setTrips] = useState<Trip[]>([])
+  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  // Carregar viagens disponíveis
+  useEffect(() => {
+    loadTrips()
+  }, [])
+
+  // Carregar detalhes quando selecionar
+  useEffect(() => {
+    if (value) {
+      loadTripDetails(value)
+    }
+  }, [value])
+
+  const loadTrips = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/dashboard/trips/available')
+      const data = await response.json()
+      setTrips(data.trips)
+    } catch (error) {
+      console.error('Erro ao carregar viagens:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const loadTripDetails = async (tripId: string) => {
+    try {
+      const response = await fetch(`/api/dashboard/trips/${tripId}/details`)
+      const data = await response.json()
+      setSelectedTrip(data.trip)
+      onTripLoaded(data.trip)
+    } catch (error) {
+      console.error('Erro ao carregar detalhes da viagem:', error)
+    }
+  }
+
+  const handleChange = (tripId: string) => {
+    onChange(tripId)
+    loadTripDetails(tripId)
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Dropdown de Seleção */}
+      <div>
+        <label className="block text-sm font-medium mb-2">
+          Viagem <span className="text-red-500">*</span>
+        </label>
+        
+        <Select value={value} onValueChange={handleChange}>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Selecione a viagem..." />
+          </SelectTrigger>
+          <SelectContent>
+            {trips.map((trip) => (
+              <SelectItem key={trip.id} value={trip.id}>
+                {trip.title} — {format(new Date(trip.departureDate), 'dd/MM/yyyy')}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Card com Detalhes da Viagem */}
+      {selectedTrip && (
+        <Card className="p-4 bg-blue-50 border-blue-200">
+          <h4 className="font-bold mb-3">{selectedTrip.title}</h4>
+          
+          <div className="grid grid-cols-2 gap-3">
+            {/* Destino */}
+            <div className="flex items-start gap-2">
+              <MapPin className="h-4 w-4 text-blue-600 mt-0.5" />
+              <div>
+                <p className="text-xs text-gray-600">Destino</p>
+                <p className="font-semibold text-sm">{selectedTrip.destination}</p>
+              </div>
+            </div>
+
+            {/* Data de Partida */}
+            <div className="flex items-start gap-2">
+              <Calendar className="h-4 w-4 text-blue-600 mt-0.5" />
+              <div>
+                <p className="text-xs text-gray-600">Data de Partida</p>
+                <p className="font-semibold text-sm">
+                  {format(new Date(selectedTrip.departureDate), 'dd/MM/yyyy', {
+                    locale: ptBR,
+                  })}
+                </p>
+              </div>
+            </div>
+
+            {/* Preço */}
+            <div className="flex items-start gap-2">
+              <DollarSign className="h-4 w-4 text-green-600 mt-0.5" />
+              <div>
+                <p className="text-xs text-gray-600">Preço / Pessoa</p>
+                <p className="font-semibold text-sm text-green-600">
+                  R$ {selectedTrip.pricePerPerson.toFixed(2)}
+                </p>
+              </div>
+            </div>
+
+            {/* Vagas Disponíveis */}
+            <div className="flex items-start gap-2">
+              <Users className="h-4 w-4 text-purple-600 mt-0.5" />
+              <div>
+                <p className="text-xs text-gray-600">Vagas disponíveis</p>
+                <div className="flex items-center gap-2">
+                  <Badge
+                    className={
+                      selectedTrip.availableSeats > 10
+                        ? 'bg-green-500'
+                        : selectedTrip.availableSeats > 5
+                        ? 'bg-yellow-500'
+                        : 'bg-red-500'
+                    }
+                  >
+                    {selectedTrip.availableSeats}
+                  </Badge>
+                  <span className="text-xs text-gray-500">
+                    de {selectedTrip.totalSeats}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+COMPONENTE PRINCIPAL: FORMULÁRIO DE CLIENTE COM SELEÇÃO DE ASSENTO
+// components/dashboard/clients/client-form-with-seats.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { TripSelectorWithDetails } from './trip-selector-with-details'
+import { SeatSelectionMap } from '@/components/public/seat-selection-map'
+import { CPFInput } from '@/components/forms/cpf-input'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Textarea } from '@/components/ui/textarea'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { AlertCircle, Save, X } from 'lucide-react'
+
+interface ClientFormData {
+  // Dados Pessoais
+  name: string
+  cpf: string
+  email: string
+  phone: string
+  birthdate: string
+  
+  // Viagem
+  tripId: string
+  itineraryId: string
+  selectedSeats: string[]
+  totalPrice: number
+  
+  // Opcionais
+  hasInsurance: boolean
+  hasChild: boolean
+  packageType: string
+  travelReason: string
+  observations: string
+}
+
+export function ClientFormWithSeats({ onSubmit, onCancel }: any) {
+  const [formData, setFormData] = useState<ClientFormData>({
+    name: '',
+    cpf: '',
+    email: '',
+    phone: '',
+    birthdate: '',
+    tripId: '',
+    itineraryId: '',
+    selectedSeats: [],
+    totalPrice: 0,
+    hasInsurance: false,
+    hasChild: false,
+    packageType: '',
+    travelReason: '',
+    observations: '',
+  })
+
+  const [selectedTrip, setSelectedTrip] = useState<any>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const [errors, setErrors] = useState<string[]>([])
+
+  // Validação
+  const validate = () => {
+    const newErrors: string[] = []
+
+    if (!formData.name) newErrors.push('Nome é obrigatório')
+    if (!formData.cpf) newErrors.push('CPF é obrigatório')
+    if (!formData.email) newErrors.push('Email é obrigatório')
+    if (!formData.phone) newErrors.push('Telefone é obrigatório')
+    if (!formData.tripId) newErrors.push('Selecione uma viagem')
+    if (formData.selectedSeats.length === 0) {
+      newErrors.push('Selecione pelo menos um assento')
+    }
+
+    setErrors(newErrors)
+    return newErrors.length === 0
+  }
+
+  const handleSubmit = async () => {
+    if (!validate()) {
+      return
+    }
+
+    setIsSaving(true)
+
+    try {
+      const response = await fetch('/api/dashboard/clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        onSubmit?.(data)
+      } else {
+        const error = await response.json()
+        setErrors([error.message || 'Erro ao criar cliente'])
+      }
+    } catch (error) {
+      console.error('Erro ao salvar:', error)
+      setErrors(['Erro ao salvar cliente'])
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Erros */}
+      {errors.length > 0 && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            <ul className="list-disc list-inside">
+              {errors.map((error, index) => (
+                <li key={index}>{error}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Tabs */}
+      <Tabs defaultValue="pessoal" className="w-full">
+        <TabsList className="grid w-full grid-cols-6">
+          <TabsTrigger value="pessoal">Pessoal</TabsTrigger>
+          <TabsTrigger value="viagem">Viagem</TabsTrigger>
+          <TabsTrigger value="financeiro">Financeiro</TabsTrigger>
+          <TabsTrigger value="obs">Obs.</TabsTrigger>
+          <TabsTrigger value="followup">Follow-up</TabsTrigger>
+          <TabsTrigger value="agencia">Agência</TabsTrigger>
+        </TabsList>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: PESSOAL */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="pessoal" className="space-y-4">
+          <Card className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Nome */}
+              <div className="md:col-span-2">
+                <Label htmlFor="name">
+                  Nome Completo <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  placeholder="Digite o nome completo"
+                  required
+                />
+              </div>
+
+              {/* CPF */}
+              <div>
+                <CPFInput
+                  value={formData.cpf}
+                  onChange={(cpf) => setFormData({ ...formData, cpf })}
+                  required
+                />
+              </div>
+
+              {/* Data de Nascimento */}
+              <div>
+                <Label htmlFor="birthdate">
+                  Data de Nascimento <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="birthdate"
+                  type="date"
+                  value={formData.birthdate}
+                  onChange={(e) =>
+                    setFormData({ ...formData, birthdate: e.target.value })
+                  }
+                  required
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <Label htmlFor="email">
+                  Email <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) =>
+                    setFormData({ ...formData, email: e.target.value })
+                  }
+                  placeholder="email@exemplo.com"
+                  required
+                />
+              </div>
+
+              {/* Telefone */}
+              <div>
+                <Label htmlFor="phone">
+                  Telefone <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  value={formData.phone}
+                  onChange={(e) =>
+                    setFormData({ ...formData, phone: e.target.value })
+                  }
+                  placeholder="(00) 00000-0000"
+                  required
+                />
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: VIAGEM (PRINCIPAL - COM SELEÇÃO DE ASSENTO) */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="viagem" className="space-y-4">
+          {/* Seletor de Viagem com Detalhes */}
+          <TripSelectorWithDetails
+            value={formData.tripId}
+            onChange={(tripId) => {
+              setFormData({ ...formData, tripId })
+            }}
+            onTripLoaded={(trip) => {
+              setSelectedTrip(trip)
+              setFormData({
+                ...formData,
+                itineraryId: trip.itineraryId,
+              })
+            }}
+          />
+
+          {/* Mapa de Seleção de Assentos */}
+          {selectedTrip && selectedTrip.layoutId && (
+            <div className="mt-6">
+              <SeatSelectionMap
+                tripId={formData.tripId}
+                itineraryId={formData.itineraryId}
+                maxSeats={1}
+                basePrice={selectedTrip.pricePerPerson}
+                onSelectionChange={(seats, totalPrice) => {
+                  setFormData({
+                    ...formData,
+                    selectedSeats: seats,
+                    totalPrice,
+                  })
+                }}
+              />
+            </div>
+          )}
+
+          {/* Opções Adicionais */}
+          <Card className="p-6">
+            <h4 className="font-bold mb-4">Opções Adicionais</h4>
+            
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="hasInsurance"
+                  checked={formData.hasInsurance}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, hasInsurance: !!checked })
+                  }
+                />
+                <Label htmlFor="hasInsurance" className="cursor-pointer">
+                  Possui Seguro de Viagem
+                </Label>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="hasChild"
+                  checked={formData.hasChild}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, hasChild: !!checked })
+                  }
+                />
+                <Label htmlFor="hasChild" className="cursor-pointer">
+                  Criança menor de 7 anos
+                </Label>
+              </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: FINANCEIRO */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="financeiro">
+          <Card className="p-6">
+            <h4 className="font-bold mb-4">Informações Financeiras</h4>
+            
+            {formData.totalPrice > 0 && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-lg font-semibold">Valor Total:</span>
+                  <span className="text-2xl font-bold text-green-600">
+                    R$ {formData.totalPrice.toFixed(2)}
+                  </span>
+                </div>
+                
+                {formData.selectedSeats.length > 0 && (
+                  <p className="text-sm text-gray-600 mt-2">
+                    Assento(s): {formData.selectedSeats.join(', ')}
+                  </p>
+                )}
+              </div>
+            )}
+          </Card>
+        </TabsContent>
+
+        {/* ═══════════════════════════════════════════════════════════ */}
+        {/* TAB: OBSERVAÇÕES */}
+        {/* ═══════════════════════════════════════════════════════════ */}
+        
+        <TabsContent value="obs">
+          <Card className="p-6">
+            <Label htmlFor="observations">Observações</Label>
+            <Textarea
+              id="observations"
+              value={formData.observations}
+              onChange={(e) =>
+                setFormData({ ...formData, observations: e.target.value })
+              }
+              placeholder="Observações adicionais sobre o cliente ou viagem..."
+              rows={6}
+              className="mt-2"
+            />
+          </Card>
+        </TabsContent>
+
+        {/* Outras tabs... */}
+        <TabsContent value="followup">
+          <Card className="p-6">
+            <p className="text-gray-500">Configurações de follow-up...</p>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="agencia">
+          <Card className="p-6">
+            <p className="text-gray-500">Informações da agência...</p>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Botões de Ação */}
+      <div className="flex justify-end gap-3 pt-6 border-t">
+        <Button variant="outline" onClick={onCancel}>
+          <X className="h-4 w-4 mr-2" />
+          Cancelar
+        </Button>
+
+        <Button
+          onClick={handleSubmit}
+          disabled={isSaving}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
+          {isSaving ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Salvando...
+            </>
+          ) : (
+            <>
+              <Save className="h-4 w-4 mr-2" />
+              Criar Cliente
+            </>
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+API: DETALHES DA VIAGEM
+
+// app/api/dashboard/trips/[tripId]/details/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(
+  req: Request,
+  { params }: { params: { tripId: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const trip = await prisma.trip.findUnique({
+      where: {
+        id: params.tripId,
+        tenant_id: session.user.tenantId,
+      },
+      include: {
+        layout: true,
+        itineraries: {
+          where: {
+            status: 'active',
+          },
+          orderBy: {
+            departure_date: 'asc',
+          },
+          take: 1,
+        },
+      },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    const itinerary = trip.itineraries[0]
+
+    if (!itinerary) {
+      return NextResponse.json(
+        { error: 'Nenhum itinerário disponível' },
+        { status: 404 }
+      )
+    }
+
+    // Calcular assentos ocupados
+    const occupiedSeats = await prisma.reservationSeat.count({
+      where: {
+        trip_id: trip.id,
+        itinerary_id: itinerary.id,
+        status: {
+          in: ['reserved', 'confirmed', 'checked_in'],
+        },
+      },
+    })
+
+    const totalSeats = trip.layout?.total_seats || itinerary.total_seats
+    const availableSeats = totalSeats - occupiedSeats
+
+    return NextResponse.json({
+      trip: {
+        id: trip.id,
+        title: trip.title,
+        destination: trip.destination,
+        departureDate: itinerary.departure_date,
+        pricePerPerson: Number(trip.promotional_price || trip.price_per_person),
+        availableSeats,
+        totalSeats,
+        layoutId: trip.layout_id,
+        itineraryId: itinerary.id,
+      },
+    })
+  } catch (error) {
+    console.error('Erro ao buscar detalhes da viagem:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar detalhes' },
+      { status: 500 }
+    )
+  }
+}
+
+API: CRIAR CLIENTE COM RESERVA
+// app/api/dashboard/clients/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { findOrCreateClient } from '@/lib/clients/find-or-create'
+import { generateReservationNumber } from '@/lib/reservations/generate-number-complete'
+import { prisma } from '@/lib/prisma'
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const body = await req.json()
+
+    const {
+      name,
+      cpf,
+      email,
+      phone,
+      birthdate,
+      tripId,
+      itineraryId,
+      selectedSeats,
+      totalPrice,
+      hasInsurance,
+      hasChild,
+      observations,
+    } = body
+
+    // ═══════════════════════════════════════════════════════════
+    // 1. BUSCAR OU CRIAR CLIENTE
+    // ═══════════════════════════════════════════════════════════
+    
+    const { client } = await findOrCreateClient({
+      tenantId: session.user.tenantId,
+      data: {
+        name,
+        cpf,
+        email,
+        phone,
+        birthdate: new Date(birthdate),
+      },
+      userId: session.user.id,
+      source: 'dashboard',
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // 2. CRIAR RESERVA
+    // ═══════════════════════════════════════════════════════════
+    
+    const trip = await prisma.trip.findUnique({
+      where: { id: tripId },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    const reservationNumberData = await generateReservationNumber(
+      session.user.tenantId,
+      trip.type as any
+    )
+
+    const reservation = await prisma.reservation.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        reservation_number: reservationNumberData.full,
+        number_prefix: reservationNumberData.prefix,
+        number_type: reservationNumberData.typeCode,
+        number_yearmonth: reservationNumberData.yearMonth,
+        number_sequence: reservationNumberData.sequence,
+        voucher_code: generateVoucherCode(),
+        trip_id: tripId,
+        itinerary_id: itineraryId,
+        client_id: client.id,
+        client_name: client.name,
+        client_cpf: client.cpf,
+        client_email: client.email,
+        client_phone: client.phone,
+        total_passengers: selectedSeats.length,
+        adults_count: selectedSeats.length,
+        subtotal_amount: totalPrice,
+        total_amount: totalPrice,
+        amount_pending: totalPrice,
+        payment_status: 'pending',
+        status: 'pending',
+        source: 'dashboard',
+        observations,
+        seats_summary: selectedSeats.join(', '),
+        created_by: session.user.id,
+      },
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // 3. CRIAR ASSENTOS
+    // ═══════════════════════════════════════════════════════════
+    
+    for (const seatNumber of selectedSeats) {
+      await prisma.reservationSeat.create({
+        data: {
+          reservation_id: reservation.id,
+          trip_id: tripId,
+          itinerary_id: itineraryId,
+          seat_number: seatNumber,
+          passenger_name: client.name,
+          passenger_cpf: client.cpf,
+          status: 'confirmed',
+        },
+      })
+    }
+
+    return NextResponse.json({
+      success: true,
+      client,
+      reservation,
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar cliente:', error)
+    return NextResponse.json(
+      { error: error.message || 'Erro ao criar cliente' },
+      { status: 500 }
+    )
+  }
+}
+
+function generateVoucherCode(): string {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let code = 'VC-'
+  for (let i = 0; i < 6; i++) {
+    code += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+  return code
+}
+
+
+┌─────────────────────────────────────────────────────────────────┐
+│         FLUXO COMPLETO DE CADASTRO COM RESERVA                   │
+└─────────────────────────────────────────────────────────────────┘
+
+1.  "NOVO CLIENTE"
+   ↓
+2. ABA "PESSOAL"
+   ├── Preenche dados básicos
+   └── CPF valida automaticamente
+   ↓
+3. ABA "VIAGEM" ⭐ PRINCIPAL
+   ├── Seleciona viagem no dropdown
+   ├── Sistema carrega automaticamente:
+   │   ✓ Destino
+   │   ✓ Data de partida
+   │   ✓ Preço
+   │   ✓ Vagas disponíveis
+   ├── Exibe mapa de assentos
+   ├── Cliente seleciona assento(s)
+   └── Preço atualiza automaticamente
+   ↓
+4. ABA "FINANCEIRO"
+   └── Mostra valor total calculado
+   ↓
+   Obs.
+   ↓
+   Follow-up
+   ↓
+5. CLICA "CRIAR CLIENTE"
+   ├── Sistema cria/atualiza cliente
+   ├── Cria reserva automaticamente
+   ├── Vincula assentos
+   └── Gera número de pedido
+   ↓
+6. SUCESSO!
+   └── Cliente + Reserva criados
+
+Sistema totalmente integrado e automatizado!

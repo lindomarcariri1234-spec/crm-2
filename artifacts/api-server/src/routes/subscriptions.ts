@@ -167,7 +167,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
         .limit(1);
 
       if (priorTrialOrPaid.length === 0) {
-        const now = new Date();
+    const now = new Date();
         const trialEnd = new Date(now.getTime() + trialDays * 24 * 60 * 60 * 1000);
 
         // Try Stripe-native trial (creates subscription with trial_end so Stripe
@@ -205,11 +205,11 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
               .from(usersTable)
               .where(and(eq(usersTable.tenantId, me.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
               .limit(1);
-            const customer = await stripeForTrial.customers.create({
-              email: adminUserForTrial?.email ?? undefined,
-              name: adminUserForTrial?.name ?? undefined,
-              metadata: { tenantId: me.tenantId },
-            });
+      const customer = await stripe.customers.create({
+        email: adminUser?.email ?? undefined,
+        name: adminUser?.name ?? undefined,
+        metadata: { tenantId: me.tenantId },
+      });
             stripeCustomerIdForTrial = customer.id;
           }
 
@@ -230,10 +230,10 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
 
           if (matchingPriceForTrial) {
             // Create Stripe Checkout Session with trial_end — Stripe charges automatically
-            const frontendUrl = process.env["FRONTEND_URL"]
-              ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "");
-            const successUrl = `${frontendUrl}/configuracoes?tab=plano&payment=success&trial=1`;
-            const cancelUrl = `${frontendUrl}/configuracoes?tab=plano&payment=cancel`;
+    const frontendUrl = process.env["FRONTEND_URL"]
+      ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "");
+      const successUrl = `${frontendUrl}/configuracoes?tab=plano&payment=success`;
+      const cancelUrl = `${frontendUrl}/configuracoes?tab=plano&payment=cancel`;
 
             const trialSession = await stripeForTrial.checkout.sessions.create({
               mode: "subscription",
@@ -317,9 +317,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
 
     const now = new Date();
     const periodStart = now;
-    const periodEnd = parsed.data.billingCycle === "annual"
-      ? new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000)
-      : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+        const periodEnd = invoice.billingPeriodEnd ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const dueDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
     const invoiceId = generateId();
@@ -335,7 +333,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
         .orderBy(desc(subscriptionsTable.createdAt))
         .limit(10);
 
-      let stripeCustomerId = existingSubs.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
+    let stripeCustomerId = subs.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
       if (!stripeCustomerId) {
         const existingInv = await db
           .select({ cid: invoicesTable.stripeCustomerId })
@@ -347,17 +345,17 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
       }
 
       if (!stripeCustomerId) {
-        const [adminUser] = await db
-          .select({ email: usersTable.email, name: usersTable.name })
-          .from(usersTable)
-          .where(and(eq(usersTable.tenantId, me.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
-          .limit(1);
+      const [adminUser] = await db
+        .select({ email: usersTable.email, name: usersTable.name })
+        .from(usersTable)
+        .where(and(eq(usersTable.tenantId, me.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
+        .limit(1);
 
-        const customer = await stripe.customers.create({
-          email: adminUser?.email ?? undefined,
-          name: adminUser?.name ?? undefined,
-          metadata: { tenantId: me.tenantId },
-        });
+      const customer = await stripe.customers.create({
+        email: adminUser?.email ?? undefined,
+        name: adminUser?.name ?? undefined,
+        metadata: { tenantId: me.tenantId },
+      });
         stripeCustomerId = customer.id;
 
         if (existingSubs.length > 0) {
@@ -369,7 +367,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
 
       // Find active Stripe price matching plan + billing cycle
       const priceInterval = parsed.data.billingCycle === "annual" ? "year" : "month";
-      const amountCents = Math.round(price * 100);
+    const amountCents = Math.round(Number(invoice.amount) * 100);
 
       const stripePrices = await stripe.prices.search({
         query: `metadata['planSlug']:'${newPlan.slug}' AND active:'true'`,
@@ -398,8 +396,8 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
         return;
       }
 
-      const frontendUrl = process.env["FRONTEND_URL"]
-        ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "");
+    const frontendUrl = process.env["FRONTEND_URL"]
+      ?? (process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : "");
       const successUrl = `${frontendUrl}/configuracoes?tab=plano&payment=success`;
       const cancelUrl = `${frontendUrl}/configuracoes?tab=plano&payment=cancel`;
 
@@ -468,9 +466,16 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
     const pixName = process.env["PIX_NAME"] ?? "VisiteCRM";
     const pixCity = process.env["PIX_CITY"] ?? "SAO PAULO";
 
-    let pixCode: string | undefined;
-    let pixQrCodeUrl: string | undefined;
-    const pixExpiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const pixCode = generatePixEMV({
+      key: pixKey,
+      name: pixName,
+      city: pixCity,
+      amount: Number(invoice.amount),
+      txid: invoice.id.slice(0, 25),
+      description: invoice.description?.slice(0, 40) ?? "Assinatura VisiteCRM",
+    });
+    const pixQrCodeUrl = generatePixQrCodeUrl(pixCode);
+    const pixExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     if (pixKey) {
       pixCode = generatePixEMV({
@@ -502,7 +507,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
       pixExpiresAt: pixKey ? pixExpiresAt : null,
     });
 
-    const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, invoiceId)).limit(1);
+    const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
 
     await db.update(tenantsTable)
       .set({ status: TENANT_STATUS.PENDING_PAYMENT, pendingPlanId: newPlan.slug, updatedAt: now })
@@ -570,11 +575,10 @@ router.post("/invoices/:id/pix", async (req, res, next: NextFunction): Promise<v
   }
 });
 
-router.post("/admin/invoices/:id/confirm-payment", async (req, res, next: NextFunction): Promise<void> => {
+router.post("/invoices/:id/stripe/checkout", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
     if (!me) return;
-    if (me.role !== ROLES.SUPER_ADMIN) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
     if (!invoice) { next(new NotFoundError("Fatura não encontrada", "NOT_FOUND")); return; }
@@ -598,12 +602,15 @@ router.post("/admin/invoices/:id/confirm-payment", async (req, res, next: NextFu
           await db.update(tripsTable).set({ showSeatMap: true }).where(eq(tripsTable.tenantId, invoice.tenantId));
         }
 
-        const existingSub = await db
-          .select()
-          .from(subscriptionsTable)
-          .where(eq(subscriptionsTable.tenantId, invoice.tenantId))
-          .orderBy(desc(subscriptionsTable.createdAt))
-          .limit(1);
+    const existingSub = await db
+      .select()
+      .from(subscriptionsTable)
+      .where(and(
+        eq(subscriptionsTable.tenantId, invoice.tenantId),
+        // stripeCustomerId must not be null — Drizzle handles this via .isNotNull() but a simple filter works too
+      ))
+      .orderBy(desc(subscriptionsTable.createdAt))
+      .limit(10);
 
         const periodEnd = invoice.billingPeriodEnd ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
@@ -667,19 +674,19 @@ router.post("/invoices/:id/stripe/checkout", async (req, res, next: NextFunction
       .orderBy(desc(subscriptionsTable.createdAt))
       .limit(10);
 
-    let stripeCustomerId = existingSub.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
+    let stripeCustomerId = subs.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
 
     if (!stripeCustomerId) {
       const [adminUser] = await db
         .select({ email: usersTable.email, name: usersTable.name })
         .from(usersTable)
-        .where(and(eq(usersTable.tenantId, invoice.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
+        .where(and(eq(usersTable.tenantId, me.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
         .limit(1);
 
       const customer = await stripe.customers.create({
         email: adminUser?.email ?? undefined,
         name: adminUser?.name ?? undefined,
-        metadata: { tenantId: invoice.tenantId },
+        metadata: { tenantId: me.tenantId },
       });
       stripeCustomerId = customer.id;
 

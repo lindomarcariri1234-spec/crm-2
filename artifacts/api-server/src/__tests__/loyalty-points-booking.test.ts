@@ -230,9 +230,9 @@ describe("POST /api/reservations — loyalty points deducted in real DB", () => 
       tripId: TRIP_ID,
       clientId: CLIENT_ID,
       seats: ["1A"],
-      totalValue: 800,
+      totalValue: 100,
       paidValue: 0,
-      discountLoyaltyPoints: 200,
+      discountLoyaltyPoints: 300,
     });
 
     expect(res.status).toBe(201);

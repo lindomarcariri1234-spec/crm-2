@@ -71,13 +71,12 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
     const result = await utapi.uploadFiles(file);
 
     if (result.error) {
-      req.log?.error({ err: result.error }, "[upload] utapi.uploadFiles failed");
+      req.log?.error({ err: result.error }, "[upload] utapi.uploadFiles failed (video)");
       res.status(500).json({ error: result.error.message });
       return;
     }
 
-    // When tripId is provided, insert the record into trip_media atomically so
-    // no second request is needed and no orphaned UploadThing files are left behind.
+    // When tripId is provided, insert the record into trip_media atomically.
     const tripId = req.body?.tripId ? String(req.body.tripId) : undefined;
     if (tripId) {
       if (!MANAGEMENT_ROLES.includes(me.role)) {
@@ -105,36 +104,42 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
           tripId,
           tenantId: me.tenantId,
           url: result.data.ufsUrl,
-          type: "image",
+          type: "video",
           caption,
           uploadedByUserId: me.id,
         });
       } catch (insertErr) {
-        // The UploadThing file already exists; remove it so it doesn't become
-        // a permanent orphan when the DB record could not be created.
         try { await utapi.deleteFiles(result.data.key); } catch { /* best-effort */ }
         throw insertErr;
       }
-      req.log?.info({ id, tripId, tenantId: me.tenantId }, "[upload] trip media record created");
+      req.log?.info({ id, tripId, tenantId: me.tenantId }, "[upload] trip video media record created");
       res.status(201).json({
         id,
         url: result.data.ufsUrl,
         key: result.data.key,
         name: result.data.name,
-        type: "image",
+        type: "video",
         caption,
         createdAt: createdAt.toISOString(),
+        size: result.data.size,
+        mimeType: req.file.mimetype,
       });
       return;
     }
 
-    res.json({ url: result.data.ufsUrl, key: result.data.key, name: result.data.name });
+    res.json({
+      url: result.data.ufsUrl,
+      key: result.data.key,
+      name: result.data.name,
+      size: result.data.size,
+      mimeType: req.file.mimetype,
+    });
   } catch (err) {
     next(err);
   }
 });
 
-router.post("/images", imageUpload.array("files", 10), async (req, res, next: NextFunction) => {
+router.post("/document", documentUpload.single("file"), async (req, res, next: NextFunction) => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
@@ -203,11 +208,6 @@ router.post("/video", videoUpload.single("file"), async (req, res, next: NextFun
       res.status(400).json({ error: "Nenhum arquivo enviado" });
       return;
     }
-
-    req.log?.info(
-      { size: req.file.size, mime: req.file.mimetype, name: req.file.originalname },
-      "[upload] received video, uploading to UploadThing"
-    );
 
     const buf = Buffer.from(req.file.buffer);
     const file = new File([buf], req.file.originalname, { type: req.file.mimetype });

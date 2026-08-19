@@ -1,0 +1,2476 @@
+Implementar a personalização de layouts de transportes pelas Agências.
+
+
+Permite cada Agência criar layouts personalizados para qualquer tipo de operação.
+
+---
+
+# 🧭 VISÃO GERAL — O QUE É O “LAYOUT DE ASSENTOS”
+
+O Layout de Assentos é um **módulo visual e operacional** que representa graficamente os lugares disponíveis em um veículo (ônibus, van, micro, etc.), permitindo:
+
+* Controle de ocupação
+* Venda organizada
+* Escolha de assento pelo cliente
+* Gestão em tempo real
+
+Esse tipo de sistema é considerado padrão moderno no turismo rodoviário. ([Viagilize][1])
+
+---
+
+# 🧱 ESTRUTURA COMPLETA DO LAYOUT DE ASSENTOS
+
+## 1. CONFIGURAÇÃO DO VEÍCULO
+
+Aqui você define a base estrutural do layout:
+
+### 🔹 Tipo de veículo
+
+* Ônibus convencional
+* Micro-ônibus
+* Van / Sprinter
+* Double Decker (2 andares)
+
+### 🔹 Quantidade de assentos
+
+* Total de poltronas (ex: 46 lugares)
+* Distribuição por fileiras
+
+### 🔹 Estrutura interna
+
+* Corredor central (sim/não)
+* Número de colunas (2x2, 2x1, etc.)
+* Andares (no caso de DD)
+
+👉 Isso permite criar layouts personalizados para qualquer tipo de operação.
+
+---
+
+## 2. CRIAÇÃO DO MAPA VISUAL
+
+É o coração do sistema.
+
+### 🔹 Representação gráfica
+
+* Assentos como “blocos clicáveis”
+* Identificação por número (1, 2, 3…)
+* Organização por fileiras
+
+### 🔹 Elementos visuais adicionais
+
+* Motorista (posição frontal)
+* Porta de entrada
+* Banheiro (se houver)
+* Escadas (ônibus DD)
+
+### 🔹 Orientação
+
+* Frente do veículo claramente indicada
+* Sentido da viagem
+
+👉 Isso transforma o controle em algo visual e intuitivo (tipo mapa de avião).
+
+---
+
+## 3. STATUS DOS ASSENTOS (CORES E ESTADOS)
+
+Cada assento possui um status com cor específica:
+
+* 🟢 Disponível
+* 🔴 Ocupado (vendido)
+* 🟡 Reservado (pré-venda)
+* ⚫ Bloqueado (uso interno/manutenção)
+
+Esse controle evita erros graves como venda duplicada. ([Viagilize][1])
+
+---
+
+## 4. INTERAÇÃO (BACKOFFICE E CLIENTE)
+
+### 🔹 Para o operador (agência)
+
+* Selecionar assento manualmente
+* Reservar temporariamente
+* Bloquear assentos específicos
+* Visualizar ocupação em tempo real
+
+### 🔹 Para o cliente (checkout)
+
+* Escolher o assento diretamente
+* Visualizar mapa antes de comprar
+* Experiência similar a compra de passagem aérea
+
+👉 Isso aumenta percepção de valor e conversão.
+
+---
+
+## 5. REGRAS E CONFIGURAÇÕES AVANÇADAS
+
+### 🔹 Regras de venda
+
+* Limite de assentos por cliente
+* Assentos exclusivos (ex: guia, motorista)
+* Assentos premium (ex: primeira fila)
+
+### 🔹 Bloqueios automáticos
+
+* Assentos quebrados
+* Distanciamento (quando necessário)
+* Uso operacional
+
+### 🔹 Liberação automática
+
+* Reservas expiram após X minutos
+* Retorno automático para “disponível”
+
+---
+
+## 6. SINCRONIZAÇÃO EM TEMPO REAL
+
+* Atualização instantânea
+* Evita conflito de vendas simultâneas
+* Integração com:
+
+  * Checkout
+  * CRM
+  * Financeiro
+
+👉 Dois clientes não conseguem comprar o mesmo assento ao mesmo tempo.
+
+---
+
+## 7. PERSONALIZAÇÃO DO LAYOUT
+
+### 🔹 Customização completa
+
+* Criar layout do zero
+* Definir número de fileiras
+* Ajustar espaçamento
+
+### 🔹 Templates prontos
+
+* Ônibus padrão
+* DD (dois andares)
+* Vans
+
+👉 Flexibilidade total para diferentes tipos de excursão.
+
+---
+
+## 8. VINCULAÇÃO COM A VIAGEM
+
+Cada layout está ligado a:
+
+* Uma excursão específica
+* Data da viagem
+* Veículo utilizado
+
+Ou seja:
+👉 O mesmo ônibus pode ter layouts diferentes por viagem (dependendo da configuração).
+
+---
+
+## 9. RELATÓRIOS E CONTROLE
+
+* Taxa de ocupação (%)
+* Assentos vendidos vs disponíveis
+* Mapa geral da viagem
+* Lista de passageiros por assento
+
+---
+
+# 🧠 VISÃO ESTRATÉGICA (IMPORTANTE PRA VOCÊ)
+
+Para o seu CRM de turismo, esse módulo não é só operacional — ele é **estratégico**:
+
+### 💰 Impacto direto em vendas
+
+* Cliente escolhe lugar → aumenta conversão
+* Sensação de controle → reduz objeção
+
+### ⚙️ Redução de erros
+
+* Evita overbooking
+* Elimina confusão de planilhas
+
+### 🚀 Posicionamento premium
+
+* Experiência parecida com companhias aéreas
+* Percepção de tecnologia e profissionalismo
+
+---
+
+# 🔥 COMO VOCÊ PODE EVOLUIR ISSO (IDEIAS AVANÇADAS)
+
+Se quiser ir além do padrão Travell:
+
+* 🔥 Assentos VIP com preço diferenciado
+* 🔥 Mapa com fotos reais do ônibus
+* 🔥 Sugestão automática de melhores lugares
+* 🔥 IA recomendando assento com base no perfil do cliente
+* 🔥 Gamificação (ex: “últimos 3 lugares disponíveis”)
+
+---
+
+# ✅ RESUMO SIMPLES
+
+O Layout de Assentos é:
+
+👉 Um sistema visual + inteligente
+👉 Que controla, vende e organiza lugares
+👉 Em tempo real
+👉 Integrado ao processo de venda
+
+---
+
+Gestor de Layout de Veículos
+
+E terá 3 camadas principais:
+
+Criação do Layout (builder)
+Vinculação com viagens
+Venda e operação (mapa interativo)
+🧩 1. TELA: CRIAR / EDITAR LAYOUT (BUILDER)
+🔝 TOPO (HEADER)
+← Voltar     Nome do Layout [___________] (0/30)        [Salvar]
+
+Regras:
+Nome obrigatório
+Máx: 30 caracteres
+Auto-save opcional (🔥 melhoria)
+
+LADO ESQUERDO (PAINEL DE CONTROLE)
+🔹 MODELO BASE
+
+Dropdown:
+
+Personalizado (livre)
+Ônibus 46 lugares
+Micro-ônibus
+Van (15 lugares)
+Double Decker
+
+👉 Ao selecionar:
+
+Preenche automaticamente o grid
+🔹 ESTATÍSTICAS (DINÂMICO EM TEMPO REAL)
+
+Exemplo:
+🪑 46 assentos
+🚻 1 WC
+🪜 1 escada
+🧊 1 frigobar
+
+Atualiza automaticamente conforme edição
+
+🔹 EDIÇÃO RÁPIDA (IGUAL AO PRINT, MAS MELHORADO)
+
+Botões clicáveis:
+
+🪑 Assento
+🚻 WC
+🪜 Escada
+🧊 Frigobar
+⛔ Vazio
+
+🔥 MELHORIA IMPORTANTE:
+Adicionar:
+
+⭐ Assento VIP
+♿ Assento acessível
+🔒 Assento bloqueado
+
+👉 Isso já te posiciona acima da concorrência
+
+🔹 DIMENSÕES (GRID CONTROL)
+Fileiras:   [-] 10 [+]
+Colunas:    [-] 4 [+]
+Andares:    [1] [2]
+
+Regras:
+
+Alterar dimensão reorganiza grid automaticamente
+Confirmação antes de resetar layout
+
+ÁREA CENTRAL (GRID VISUAL)
+🎯 ESTRUTURA
+
+O grid é um editor visual tipo “arrastar ou clicar”
+
+Cada célula pode ser:
+Assento
+Vazio
+WC
+Escada
+etc.
+🎨 CORES PADRÃO
+
+| Tipo        | Cor     |
+| ----------- | ------- |
+| Assento     | Azul    |
+| Selecionado | Amarelo |
+| Vazio       | Cinza   |
+| WC          | Roxo    |
+| Escada      | Preto   |
+| VIP         | Dourado |
+
+COMPORTAMENTO
+Clique simples:
+
+→ Aplica item selecionado
+
+Clique duplo:
+
+→ Editar assento (abre modal)
+
+✏️ MODAL DO ASSENTO (SUPER IMPORTANTE)
+
+Quando clicar em um assento:
+Assento: 12
+
+[ ] VIP
+[ ] Acessível
+[ ] Bloqueado
+Preço adicional: R$ ____
+Observação: _________
+
+Isso é DIFERENCIAL DE VENDA
+
+🔢 NUMERAÇÃO AUTOMÁTICA
+
+Opções:
+
+Crescente automático
+Manual
+Por fileira (1A, 1B…)
+
+👉 Muito importante pro operacional
+
+🧩 3. BOTÕES INFERIORES
+
+[Cancelar]                      [Salvar Layout]
+
+🔥 MELHORIA:
+
+“Salvar como modelo”
+“Duplicar layout”
+🔗 4. VINCULAÇÃO COM VIAGEM
+
+Na criação da excursão:
+
+Selecionar Layout:
+[Ônibus 46 lugares padrão ▼]
+
+Isso carrega o mapa automaticamente
+
+🧾 5. TELA DE VENDA (USO REAL)
+
+Aqui é onde você ganha dinheiro 💰
+
+🎯 MAPA INTERATIVO
+Cliente escolhe assento
+Visualiza disponíveis em tempo real
+Cores:
+Verde → livre
+Vermelho → ocupado
+Amarelo → selecionado
+🔥 RECURSOS AVANÇADOS
+Timer de reserva (5 min)
+Sugestão automática de assento
+Destaque: “Últimos lugares”
+
+LÓGICA DE BACKEND (RESUMO TÉCNICO)
+🧱 TABELAS
+layouts
+id
+nome
+colunas
+fileiras
+andares
+layout_itens
+id
+layout_id
+tipo (assento, wc, etc.)
+posição (x, y, andar)
+número
+propriedades (json)
+viagens_assentos
+id
+viagem_id
+assento_id
+status (livre, reservado, vendido)
+
+DIFERENCIAIS QUE VOCÊ DEVE IMPLEMENTAR
+
+Isso aqui é o que vai transformar seu CRM em nível alto:
+
+🔥 1. Heatmap de ocupação
+Mostra assentos mais vendidos
+🔥 2. Assento inteligente (IA)
+Sugere melhor lugar
+🔥 3. Venda por WhatsApp integrada
+Cliente escolhe assento direto no link
+🔥 4. Multi-veículo
+Uma viagem com 2 ônibus
+
+RESUMO ESTRATÉGICO
+
+Você não está criando só um layout…
+
+👉 Você está criando um motor de vendas visual
+
+Isso impacta diretamente:
+
+Conversão
+Ticket médio
+Organização
+Escala da operação
+🔥 PRÓXIMO PASSO
+
+Se quiser, eu posso:
+
+✅ Desenhar o wireframe visual (tipo Figma)
+✅ Criar o fluxo completo de UX
+✅ Ou montar o código base (React + lógica do grid)
+
+SISTEMA COMPLETO DE LAYOUTS DE TRANSPORTE PERSONALIZADOS
+
+┌─────────────────────────────────────────────────────────────────┐
+│              SISTEMA DE LAYOUTS DE VEÍCULOS                      │
+└─────────────────────────────────────────────────────────────────┘
+
+1. BUILDER DE LAYOUTS
+   ├── Editor visual drag & drop
+   ├── Templates pré-definidos
+   ├── Personalização total
+   └── Salvamento de modelos
+
+2. GESTÃO DE ASSENTOS
+   ├── Status em tempo real
+   ├── Regras de bloqueio
+   ├── Preços diferenciados
+   └── Tipos especiais (VIP, acessível)
+
+3. INTEGRAÇÃO COM VENDAS
+   ├── Seleção visual pelo cliente
+   ├── Reserva temporária (5 min)
+   ├── Sincronização em tempo real
+   └── Prevenção de overbooking
+
+4. RELATÓRIOS E ANALYTICS
+   ├── Taxa de ocupação
+   ├── Heatmap de vendas
+   ├── Assentos mais vendidos
+   └── Receita por posição
+
+SCHEMA COMPLETO DO BANCO DE DADOS
+
+// prisma/schema.prisma
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE LAYOUTS DE VEÍCULOS
+// ═══════════════════════════════════════════════════════════════
+
+model VehicleLayout {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // INFORMAÇÕES BÁSICAS
+  name            String    // "Ônibus Executivo 46 lugares"
+  description     String?   @db.Text
+  
+  // TIPO DE VEÍCULO
+  vehicle_type    String    // bus, microbus, van, double_decker
+  
+  // DIMENSÕES DO GRID
+  rows            Int       // Número de fileiras
+  columns         Int       // Número de colunas
+  floors          Int       @default(1) // Andares (1 ou 2)
+  
+  // CAPACIDADE
+  total_seats     Int       // Total de assentos
+  total_wc        Int       @default(0)
+  total_stairs    Int       @default(0)
+  total_fridge    Int       @default(0)
+  
+  // CONFIGURAÇÕES
+  has_corridor    Boolean   @default(true)
+  numbering_type  String    @default("sequential") // sequential, by_row, custom
+  
+  // TEMPLATE
+  is_template     Boolean   @default(false) // Se é modelo reutilizável
+  is_default      Boolean   @default(false) // Layout padrão do tenant
+  
+  // STATUS
+  status          String    @default("active") // active, inactive, archived
+  
+  // RELACIONAMENTOS
+  seats           VehicleSeat[]
+  trips           Trip[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  created_by      String?
+  
+  @@index([tenant_id])
+  @@index([tenant_id, is_template])
+  @@index([tenant_id, is_default])
+  @@map("vehicle_layouts")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE ASSENTOS/ELEMENTOS DO LAYOUT
+// ═══════════════════════════════════════════════════════════════
+
+model VehicleSeat {
+  id              String    @id @default(cuid())
+  layout_id       String
+  layout          VehicleLayout @relation(fields: [layout_id], references: [id], onDelete: Cascade)
+  
+  // POSIÇÃO NO GRID
+  row             Int       // Fileira (1, 2, 3...)
+  column          Int       // Coluna (1, 2, 3, 4)
+  floor           Int       @default(1) // Andar (1 ou 2)
+  
+  // TIPO DO ELEMENTO
+  type            String    // seat, wc, stairs, fridge, empty, driver
+  
+  // IDENTIFICAÇÃO (PARA ASSENTOS)
+  number          String?   // "1", "2", "3A", etc.
+  label           String?   // Label customizado
+  
+  // CARACTERÍSTICAS (PARA ASSENTOS)
+  is_vip          Boolean   @default(false)
+  is_accessible   Boolean   @default(false) // ♿ Acessível
+  is_blocked      Boolean   @default(false) // 🔒 Bloqueado permanentemente
+  is_premium      Boolean   @default(false) // ⭐ Premium
+  
+  // PREÇO ADICIONAL
+  extra_price     Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // OBSERVAÇÕES
+  notes           String?   @db.Text
+  
+  // PROPRIEDADES CUSTOMIZADAS (JSON)
+  properties      Json?     // Flexibilidade para futuras features
+  
+  // RELACIONAMENTOS
+  reservations    ReservationSeat[]
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([layout_id, row, column, floor])
+  @@index([layout_id])
+  @@index([layout_id, type])
+  @@map("vehicle_seats")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ATUALIZAÇÃO DA TABELA DE VIAGENS
+// ═══════════════════════════════════════════════════════════════
+
+model Trip {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // ... campos existentes ...
+  
+  // LAYOUT DO VEÍCULO
+  layout_id       String?
+  layout          VehicleLayout? @relation(fields: [layout_id], references: [id])
+  
+  // ... resto do modelo ...
+  
+  @@map("trips")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ATUALIZAÇÃO DA TABELA DE ASSENTOS RESERVADOS
+// ═══════════════════════════════════════════════════════════════
+
+model ReservationSeat {
+  id              String    @id @default(cuid())
+  
+  // RELACIONAMENTOS
+  reservation_id  String
+  reservation     Reservation @relation(fields: [reservation_id], references: [id], onDelete: Cascade)
+  
+  trip_id         String
+  trip            Trip      @relation(fields: [trip_id], references: [id])
+  
+  itinerary_id    String
+  itinerary       Itinerary @relation(fields: [itinerary_id], references: [id])
+  
+  // REFERÊNCIA AO ASSENTO DO LAYOUT
+  vehicle_seat_id String?
+  vehicle_seat    VehicleSeat? @relation(fields: [vehicle_seat_id], references: [id])
+  
+  // DADOS DO ASSENTO (CACHE)
+  seat_number     String
+  seat_type       String    @default("seat")
+  is_vip          Boolean   @default(false)
+  extra_price     Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // DADOS DO PASSAGEIRO
+  passenger_name  String?
+  passenger_cpf   String?
+  
+  // STATUS
+  status          String    @default("reserved") // reserved, confirmed, checked_in, cancelled
+  
+  // RESERVA TEMPORÁRIA
+  reserved_until  DateTime? // Expira após X minutos
+  
+  // CHECK-IN
+  checked_in      Boolean   @default(false)
+  checked_in_at   DateTime?
+  checked_in_by   String?
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([trip_id, itinerary_id, seat_number])
+  @@index([reservation_id])
+  @@index([trip_id, itinerary_id])
+  @@index([vehicle_seat_id])
+  @@map("reservation_seats")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TABELA DE ANALYTICS DE ASSENTOS
+// ═══════════════════════════════════════════════════════════════
+
+model SeatAnalytics {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  layout_id       String
+  layout          VehicleLayout @relation(fields: [layout_id], references: [id])
+  
+  seat_number     String
+  
+  // MÉTRICAS
+  times_sold      Int       @default(0)
+  total_revenue   Decimal   @default(0) @db.Decimal(10, 2)
+  avg_price       Decimal   @default(0) @db.Decimal(10, 2)
+  
+  // PERÍODO
+  year            Int
+  month           Int
+  
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  
+  @@unique([tenant_id, layout_id, seat_number, year, month])
+  @@index([tenant_id, layout_id])
+  @@map("seat_analytics")
+}
+
+COMPONENTE BUILDER DE LAYOUTS
+
+// components/dashboard/layouts/layout-builder.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Armchair,
+  Toilet,
+  Stairs,
+  Refrigerator,
+  Square,
+  Star,
+  Lock,
+  Accessibility,
+  Plus,
+  Minus,
+  Save,
+  ArrowLeft,
+} from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Badge } from '@/components/ui/badge'
+
+interface SeatElement {
+  row: number
+  column: number
+  floor: number
+  type: 'seat' | 'wc' | 'stairs' | 'fridge' | 'empty' | 'driver'
+  number?: string
+  isVip?: boolean
+  isAccessible?: boolean
+  isBlocked?: boolean
+  isPremium?: boolean
+  extraPrice?: number
+  notes?: string
+}
+
+export function LayoutBuilder({ layoutId }: { layoutId?: string }) {
+  const router = useRouter()
+  
+  // Estado do Layout
+  const [name, setName] = useState('')
+  const [vehicleType, setVehicleType] = useState('bus')
+  const [rows, setRows] = useState(12)
+  const [columns, setColumns] = useState(4)
+  const [floors, setFloors] = useState(1)
+  const [grid, setGrid] = useState<SeatElement[][]>([])
+  const [selectedTool, setSelectedTool] = useState<SeatElement['type']>('seat')
+  const [currentFloor, setCurrentFloor] = useState(1)
+  const [isSaving, setIsSaving] = useState(false)
+
+  // Inicializar grid
+  useEffect(() => {
+    initializeGrid()
+  }, [rows, columns, floors])
+
+  const initializeGrid = () => {
+    const newGrid: SeatElement[][] = []
+    
+    for (let row = 0; row < rows; row++) {
+      newGrid[row] = []
+      for (let col = 0; col < columns; col++) {
+        newGrid[row][col] = {
+          row,
+          column: col,
+          floor: currentFloor,
+          type: 'empty',
+        }
+      }
+    }
+    
+    setGrid(newGrid)
+  }
+
+  // Aplicar template pré-definido
+  const applyTemplate = (template: string) => {
+    switch (template) {
+      case 'bus_46':
+        setRows(12)
+        setColumns(4)
+        setFloors(1)
+        applyBus46Template()
+        break
+      case 'microbus':
+        setRows(8)
+        setColumns(4)
+        setFloors(1)
+        break
+      case 'van':
+        setRows(5)
+        setColumns(3)
+        setFloors(1)
+        break
+      case 'double_decker':
+        setRows(12)
+        setColumns(4)
+        setFloors(2)
+        break
+    }
+  }
+
+  const applyBus46Template = () => {
+    const newGrid: SeatElement[][] = []
+    let seatNumber = 1
+
+    for (let row = 0; row < 12; row++) {
+      newGrid[row] = []
+      
+      for (let col = 0; col < 4; col++) {
+        // Primeira fileira: motorista
+        if (row === 0 && col === 0) {
+          newGrid[row][col] = {
+            row,
+            column: col,
+            floor: 1,
+            type: 'driver',
+          }
+        }
+        // Última fileira: WC
+        else if (row === 11 && col >= 2) {
+          newGrid[row][col] = {
+            row,
+            column: col,
+            floor: 1,
+            type: 'wc',
+          }
+        }
+        // Corredor (coluna 2)
+        else if (col === 2) {
+          newGrid[row][col] = {
+            row,
+            column: col,
+            floor: 1,
+            type: 'empty',
+          }
+        }
+        // Assentos normais
+        else {
+          newGrid[row][col] = {
+            row,
+            column: col,
+            floor: 1,
+            type: 'seat',
+            number: String(seatNumber++),
+          }
+        }
+      }
+    }
+
+    setGrid(newGrid)
+  }
+
+  // Clicar em célula
+  const handleCellClick = (row: number, col: number) => {
+    const newGrid = [...grid]
+    
+    if (selectedTool === 'seat') {
+      const seatNumber = calculateSeatNumber()
+      newGrid[row][col] = {
+        row,
+        column: col,
+        floor: currentFloor,
+        type: 'seat',
+        number: seatNumber,
+      }
+    } else {
+      newGrid[row][col] = {
+        row,
+        column: col,
+        floor: currentFloor,
+        type: selectedTool,
+      }
+    }
+    
+    setGrid(newGrid)
+  }
+
+  // Calcular número do assento
+  const calculateSeatNumber = () => {
+    const seats = grid.flat().filter((cell) => cell.type === 'seat')
+    return String(seats.length + 1)
+  }
+
+  // Estatísticas
+  const stats = {
+    seats: grid.flat().filter((c) => c.type === 'seat').length,
+    wc: grid.flat().filter((c) => c.type === 'wc').length,
+    stairs: grid.flat().filter((c) => c.type === 'stairs').length,
+    fridge: grid.flat().filter((c) => c.type === 'fridge').length,
+  }
+
+  // Salvar layout
+  const handleSave = async () => {
+    setIsSaving(true)
+
+    try {
+      const response = await fetch('/api/dashboard/layouts', {
+        method: layoutId ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: layoutId,
+          name,
+          vehicleType,
+          rows,
+          columns,
+          floors,
+          grid,
+        }),
+      })
+
+      if (response.ok) {
+        router.push('/dashboard/layouts')
+      }
+    } catch (error) {
+      console.error('Erro ao salvar layout:', error)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="container mx-auto px-4">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              onClick={() => router.back()}
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Voltar
+            </Button>
+            
+            <div className="flex-1">
+              <Label>Nome do Layout</Label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Ex: Ônibus Executivo 46 lugares"
+                maxLength={30}
+                className="max-w-md"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                {name.length}/30 caracteres
+              </p>
+            </div>
+          </div>
+
+          <Button
+            onClick={handleSave}
+            disabled={isSaving || !name}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            <Save className="h-4 w-4 mr-2" />
+            {isSaving ? 'Salvando...' : 'Salvar Layout'}
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* PAINEL DE CONTROLE (ESQUERDA) */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          
+          <div className="space-y-6">
+            {/* Modelo Base */}
+            <Card className="p-6">
+              <h3 className="font-bold mb-4">🚌 Modelo Base</h3>
+              
+              <Select value={vehicleType} onValueChange={setVehicleType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="custom">Personalizado</SelectItem>
+                  <SelectItem value="bus">Ônibus Convencional</SelectItem>
+                  <SelectItem value="microbus">Micro-ônibus</SelectItem>
+                  <SelectItem value="van">Van / Sprinter</SelectItem>
+                  <SelectItem value="double_decker">Double Decker</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Button
+                variant="outline"
+                className="w-full mt-3"
+                onClick={() => applyTemplate('bus_46')}
+              >
+                Aplicar Template 46 lugares
+              </Button>
+            </Card>
+
+            {/* Estatísticas */}
+            <Card className="p-6">
+              <h3 className="font-bold mb-4">📊 Estatísticas</h3>
+              
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">🪑 Assentos:</span>
+                  <Badge>{stats.seats}</Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">🚻 WC:</span>
+                  <Badge>{stats.wc}</Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">🪜 Escadas:</span>
+                  <Badge>{stats.stairs}</Badge>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">🧊 Frigobar:</span>
+                  <Badge>{stats.fridge}</Badge>
+                </div>
+              </div>
+            </Card>
+
+            {/* Ferramentas */}
+            <Card className="p-6">
+              <h3 className="font-bold mb-4">🛠️ Ferramentas</h3>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant={selectedTool === 'seat' ? 'default' : 'outline'}
+                  onClick={() => setSelectedTool('seat')}
+                  className="flex flex-col items-center gap-2 h-auto py-3"
+                >
+                  <Armchair className="h-5 w-5" />
+                  <span className="text-xs">Assento</span>
+                </Button>
+
+                <Button
+                  variant={selectedTool === 'wc' ? 'default' : 'outline'}
+                  onClick={() => setSelectedTool('wc')}
+                  className="flex flex-col items-center gap-2 h-auto py-3"
+                >
+                  <Toilet className="h-5 w-5" />
+                  <span className="text-xs">WC</span>
+                </Button>
+
+                <Button
+                  variant={selectedTool === 'stairs' ? 'default' : 'outline'}
+                  onClick={() => setSelectedTool('stairs')}
+                  className="flex flex-col items-center gap-2 h-auto py-3"
+                >
+                  <Stairs className="h-5 w-5" />
+                  <span className="text-xs">Escada</span>
+                </Button>
+
+                <Button
+                  variant={selectedTool === 'fridge' ? 'default' : 'outline'}
+                  onClick={() => setSelectedTool('fridge')}
+                  className="flex flex-col items-center gap-2 h-auto py-3"
+                >
+                  <Refrigerator className="h-5 w-5" />
+                  <span className="text-xs">Frigobar</span>
+                </Button>
+
+                <Button
+                  variant={selectedTool === 'empty' ? 'default' : 'outline'}
+                  onClick={() => setSelectedTool('empty')}
+                  className="flex flex-col items-center gap-2 h-auto py-3"
+                >
+                  <Square className="h-5 w-5" />
+                  <span className="text-xs">Vazio</span>
+                </Button>
+              </div>
+            </Card>
+
+            {/* Dimensões */}
+            <Card className="p-6">
+              <h3 className="font-bold mb-4">📐 Dimensões</h3>
+              
+              <div className="space-y-4">
+                <div>
+                  <Label>Fileiras</Label>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRows(Math.max(1, rows - 1))}
+                    >
+                      <Minus className="h-4 w-4" />
+                    </Button>
+                    <span className="font-bold w-12 text-center">{rows}</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setRows(Math.min(20, rows + 1))}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Colunas</Label>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setColumns(Math.max(2, columns - 1))}
+                    >
+                      <Minus className="h-4 w-4" />
+                    </Button>
+                    <span className="font-bold w-12 text-center">{columns}</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setColumns(Math.min(6, columns + 1))}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Andares</Label>
+                  <div className="flex gap-2 mt-2">
+                    <Button
+                      size="sm"
+                      variant={floors === 1 ? 'default' : 'outline'}
+                      onClick={() => setFloors(1)}
+                      className="flex-1"
+                    >
+                      1
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={floors === 2 ? 'default' : 'outline'}
+                      onClick={() => setFloors(2)}
+                      className="flex-1"
+                    >
+                      2
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* GRID VISUAL (CENTRO) */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          
+          <div className="lg:col-span-3">
+            <Card className="p-8">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-2xl font-bold">Layout do Veículo</h3>
+                
+                {floors === 2 && (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={currentFloor === 1 ? 'default' : 'outline'}
+                      onClick={() => setCurrentFloor(1)}
+                    >
+                      1º Andar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={currentFloor === 2 ? 'default' : 'outline'}
+                      onClick={() => setCurrentFloor(2)}
+                    >
+                      2º Andar
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              {/* Indicador de Frente */}
+              <div className="text-center mb-4">
+                <Badge className="bg-blue-600">
+                  ⬆️ FRENTE DO VEÍCULO
+                </Badge>
+              </div>
+
+              {/* Grid */}
+              <div className="flex justify-center">
+                <div
+                  className="inline-grid gap-2"
+                  style={{
+                    gridTemplateColumns: `repeat(${columns}, 60px)`,
+                  }}
+                >
+                  {grid.map((row, rowIndex) =>
+                    row.map((cell, colIndex) => (
+                      <SeatCell
+                        key={`${rowIndex}-${colIndex}`}
+                        cell={cell}
+                        onClick={() => handleCellClick(rowIndex, colIndex)}
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Legenda */}
+              <div className="mt-8 flex flex-wrap gap-4 justify-center">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-blue-500 rounded" />
+                  <span className="text-sm">Assento</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-purple-500 rounded" />
+                  <span className="text-sm">WC</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-gray-800 rounded" />
+                  <span className="text-sm">Escada</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-cyan-500 rounded" />
+                  <span className="text-sm">Frigobar</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 bg-gray-200 rounded border border-gray-300" />
+                  <span className="text-sm">Vazio</span>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Componente de Célula do Grid
+function SeatCell({
+  cell,
+  onClick,
+}: {
+  cell: SeatElement
+  onClick: () => void
+}) {
+  const getColor = () => {
+    switch (cell.type) {
+      case 'seat':
+        return 'bg-blue-500 hover:bg-blue-600 text-white'
+      case 'wc':
+        return 'bg-purple-500 hover:bg-purple-600 text-white'
+      case 'stairs':
+        return 'bg-gray-800 hover:bg-gray-900 text-white'
+      case 'fridge':
+        return 'bg-cyan-500 hover:bg-cyan-600 text-white'
+      case 'driver':
+        return 'bg-yellow-500 hover:bg-yellow-600 text-white'
+      case 'empty':
+        return 'bg-gray-100 hover:bg-gray-200 border border-gray-300'
+    }
+  }
+
+  const getIcon = () => {
+    switch (cell.type) {
+      case 'seat':
+        return <Armchair className="h-4 w-4" />
+      case 'wc':
+        return <Toilet className="h-4 w-4" />
+      case 'stairs':
+        return <Stairs className="h-4 w-4" />
+      case 'fridge':
+        return <Refrigerator className="h-4 w-4" />
+      default:
+        return null
+    }
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        w-14 h-14 rounded-lg flex flex-col items-center justify-center
+        transition-all duration-200 cursor-pointer
+        ${getColor()}
+      `}
+    >
+      {getIcon()}
+      {cell.number && (
+        <span className="text-xs font-bold mt-1">{cell.number}</span>
+      )}
+    </button>
+  )
+}
+
+API DE GERENCIAMENTO DE LAYOUTS
+
+// app/api/dashboard/layouts/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+// Listar layouts
+export async function GET(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const layouts = await prisma.vehicleLayout.findMany({
+      where: {
+        tenant_id: session.user.tenantId,
+        status: 'active',
+      },
+      include: {
+        seats: true,
+        _count: {
+          select: {
+            trips: true,
+          },
+        },
+      },
+      orderBy: {
+        created_at: 'desc',
+      },
+    })
+
+    return NextResponse.json({ layouts })
+  } catch (error) {
+    console.error('Erro ao buscar layouts:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar layouts' },
+      { status: 500 }
+    )
+  }
+}
+
+// Criar layout
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { name, vehicleType, rows, columns, floors, grid } = await req.json()
+
+    // Validações
+    if (!name || !vehicleType || !rows || !columns || !grid) {
+      return NextResponse.json(
+        { error: 'Dados incompletos' },
+        { status: 400 }
+      )
+    }
+
+    // Calcular estatísticas
+    const flatGrid = grid.flat()
+    const totalSeats = flatGrid.filter((c: any) => c.type === 'seat').length
+    const totalWC = flatGrid.filter((c: any) => c.type === 'wc').length
+    const totalStairs = flatGrid.filter((c: any) => c.type === 'stairs').length
+    const totalFridge = flatGrid.filter((c: any) => c.type === 'fridge').length
+
+    // Criar layout
+    const layout = await prisma.vehicleLayout.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        name,
+        vehicle_type: vehicleType,
+        rows,
+        columns,
+        floors,
+        total_seats: totalSeats,
+        total_wc: totalWC,
+        total_stairs: totalStairs,
+        total_fridge: totalFridge,
+        created_by: session.user.id,
+      },
+    })
+
+    // Criar assentos
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell.type !== 'empty') {
+          await prisma.vehicleSeat.create({
+            data: {
+              layout_id: layout.id,
+              row: cell.row,
+              column: cell.column,
+              floor: cell.floor,
+              type: cell.type,
+              number: cell.number,
+              is_vip: cell.isVip || false,
+              is_accessible: cell.isAccessible || false,
+              is_blocked: cell.isBlocked || false,
+              is_premium: cell.isPremium || false,
+              extra_price: cell.extraPrice || 0,
+              notes: cell.notes,
+            },
+          })
+        }
+      }
+    }
+
+    return NextResponse.json({ layout })
+  } catch (error) {
+    console.error('Erro ao criar layout:', error)
+    return NextResponse.json(
+      { error: 'Erro ao criar layout' },
+      { status: 500 }
+    )
+  }
+}
+
+
+MAPA INTERATIVO DE SELEÇÃO DE ASSENTOS - EXPERIÊNCIA DO CLIENTE
+
+VISÃO GERAL DO COMPONENTE
+
+┌─────────────────────────────────────────────────────────────────┐
+│              FLUXO DE SELEÇÃO DE ASSENTOS                        │
+└─────────────────────────────────────────────────────────────────┘
+
+1. Cliente acessa página da viagem
+           ↓
+2. Clica em "Reservar Agora"
+           ↓
+3. Preenche dados pessoais (Wizard Step 1)
+           ↓
+4. MAPA INTERATIVO DE ASSENTOS (Step 2)
+   ├── Visualiza layout do veículo
+   ├── Vê assentos disponíveis (verde)
+   ├── Vê assentos ocupados (vermelho)
+   ├── Seleciona assento(s) desejado(s)
+   ├── Vê preço adicional (se VIP/Premium)
+   └── Reserva temporária (5 minutos)
+           ↓
+5. Confirma seleção e prossegue
+           ↓
+6. Pagamento (Step 3)
+           ↓
+7. Confirmação (Step 4)
+
+API DE DISPONIBILIDADE DE ASSENTOS
+
+// app/api/public/trips/[tripId]/seats/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+
+/**
+ * Retorna disponibilidade de assentos em tempo real
+ */
+export async function GET(
+  req: Request,
+  { params }: { params: { tripId: string } }
+) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const itineraryId = searchParams.get('itinerary_id')
+
+    if (!itineraryId) {
+      return NextResponse.json(
+        { error: 'itinerary_id é obrigatório' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar viagem com layout
+    const trip = await prisma.trip.findUnique({
+      where: { id: params.tripId },
+      include: {
+        layout: {
+          include: {
+            seats: {
+              orderBy: [
+                { floor: 'asc' },
+                { row: 'asc' },
+                { column: 'asc' },
+              ],
+            },
+          },
+        },
+      },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    if (!trip.layout) {
+      return NextResponse.json(
+        { error: 'Layout não configurado para esta viagem' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar assentos ocupados/reservados
+    const occupiedSeats = await prisma.reservationSeat.findMany({
+      where: {
+        trip_id: params.tripId,
+        itinerary_id: itineraryId,
+        status: {
+          in: ['reserved', 'confirmed', 'checked_in'],
+        },
+        OR: [
+          // Confirmados
+          { status: { in: ['confirmed', 'checked_in'] } },
+          // Reservados e ainda válidos
+          {
+            status: 'reserved',
+            reserved_until: {
+              gte: new Date(),
+            },
+          },
+        ],
+      },
+      select: {
+        seat_number: true,
+        status: true,
+        reserved_until: true,
+      },
+    })
+
+    // Mapear status de cada assento
+    const seatsWithStatus = trip.layout.seats.map((seat) => {
+      const occupied = occupiedSeats.find((os) => os.seat_number === seat.number)
+
+      return {
+        id: seat.id,
+        number: seat.number,
+        row: seat.row,
+        column: seat.column,
+        floor: seat.floor,
+        type: seat.type,
+        isVip: seat.is_vip,
+        isAccessible: seat.is_accessible,
+        isPremium: seat.is_premium,
+        isBlocked: seat.is_blocked,
+        extraPrice: Number(seat.extra_price),
+        notes: seat.notes,
+        // Status de disponibilidade
+        status: occupied
+          ? occupied.status === 'reserved'
+            ? 'reserved'
+            : 'occupied'
+          : seat.is_blocked
+          ? 'blocked'
+          : 'available',
+        reservedUntil: occupied?.reserved_until,
+      }
+    })
+
+    return NextResponse.json({
+      layout: {
+        id: trip.layout.id,
+        name: trip.layout.name,
+        rows: trip.layout.rows,
+        columns: trip.layout.columns,
+        floors: trip.layout.floors,
+        vehicleType: trip.layout.vehicle_type,
+      },
+      seats: seatsWithStatus,
+      basePrice: Number(trip.promotional_price || trip.price_per_person),
+    })
+  } catch (error) {
+    console.error('Erro ao buscar assentos:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar assentos' },
+      { status: 500 }
+    )
+  }
+}
+
+COMPONENTE PRINCIPAL - MAPA INTERATIVO
+
+// components/public/seat-selection-map.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import {
+  Armchair,
+  Toilet,
+  Stairs,
+  Refrigerator,
+  Star,
+  Accessibility,
+  Lock,
+  Check,
+  X,
+  Clock,
+  AlertCircle,
+} from 'lucide-react'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+
+interface Seat {
+  id: string
+  number: string
+  row: number
+  column: number
+  floor: number
+  type: 'seat' | 'wc' | 'stairs' | 'fridge' | 'driver' | 'empty'
+  isVip: boolean
+  isAccessible: boolean
+  isPremium: boolean
+  isBlocked: boolean
+  extraPrice: number
+  notes?: string
+  status: 'available' | 'occupied' | 'reserved' | 'blocked'
+  reservedUntil?: Date
+}
+
+interface SeatSelectionMapProps {
+  tripId: string
+  itineraryId: string
+  maxSeats: number
+  basePrice: number
+  onSelectionChange: (selectedSeats: string[], totalPrice: number) => void
+}
+
+export function SeatSelectionMap({
+  tripId,
+  itineraryId,
+  maxSeats,
+  basePrice,
+  onSelectionChange,
+}: SeatSelectionMapProps) {
+  const [layout, setLayout] = useState<any>(null)
+  const [seats, setSeats] = useState<Seat[]>([])
+  const [selectedSeats, setSelectedSeats] = useState<string[]>([])
+  const [currentFloor, setCurrentFloor] = useState(1)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [reservationTimer, setReservationTimer] = useState<number | null>(null)
+
+  // Carregar assentos
+  useEffect(() => {
+    loadSeats()
+    
+    // Atualizar a cada 10 segundos
+    const interval = setInterval(loadSeats, 10000)
+    
+    return () => clearInterval(interval)
+  }, [tripId, itineraryId])
+
+  // Timer de reserva (5 minutos)
+  useEffect(() => {
+    if (selectedSeats.length > 0 && !reservationTimer) {
+      setReservationTimer(300) // 5 minutos em segundos
+    }
+
+    if (reservationTimer && reservationTimer > 0) {
+      const timer = setInterval(() => {
+        setReservationTimer((prev) => (prev ? prev - 1 : null))
+      }, 1000)
+
+      return () => clearInterval(timer)
+    }
+
+    if (reservationTimer === 0) {
+      // Tempo expirado - limpar seleção
+      handleClearSelection()
+      alert('Tempo de reserva expirado. Por favor, selecione novamente.')
+    }
+  }, [reservationTimer, selectedSeats.length])
+
+  const loadSeats = async () => {
+    try {
+      setIsLoading(true)
+      setError(null)
+
+      const response = await fetch(
+        `/api/public/trips/${tripId}/seats?itinerary_id=${itineraryId}`
+      )
+
+      if (!response.ok) {
+        throw new Error('Erro ao carregar assentos')
+      }
+
+      const data = await response.json()
+      setLayout(data.layout)
+      setSeats(data.seats)
+    } catch (error) {
+      console.error('Erro ao carregar assentos:', error)
+      setError('Erro ao carregar mapa de assentos. Tente novamente.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSeatClick = (seat: Seat) => {
+    // Não permitir seleção de assentos não disponíveis
+    if (seat.status !== 'available') {
+      return
+    }
+
+    // Se já está selecionado, remover
+    if (selectedSeats.includes(seat.number)) {
+      const newSelection = selectedSeats.filter((s) => s !== seat.number)
+      setSelectedSeats(newSelection)
+      updateParent(newSelection)
+      return
+    }
+
+    // Verificar limite de assentos
+    if (selectedSeats.length >= maxSeats) {
+      alert(`Você pode selecionar no máximo ${maxSeats} assento(s)`)
+      return
+    }
+
+    // Adicionar à seleção
+    const newSelection = [...selectedSeats, seat.number]
+    setSelectedSeats(newSelection)
+    updateParent(newSelection)
+  }
+
+  const updateParent = (selection: string[]) => {
+    // Calcular preço total
+    const total = selection.reduce((sum, seatNumber) => {
+      const seat = seats.find((s) => s.number === seatNumber)
+      return sum + basePrice + (seat?.extraPrice || 0)
+    }, 0)
+
+    onSelectionChange(selection, total)
+  }
+
+  const handleClearSelection = () => {
+    setSelectedSeats([])
+    setReservationTimer(null)
+    updateParent([])
+  }
+
+  // Organizar assentos em grid
+  const getSeatsForFloor = (floor: number) => {
+    return seats.filter((s) => s.floor === floor)
+  }
+
+  const getSeatAtPosition = (floor: number, row: number, col: number) => {
+    return seats.find(
+      (s) => s.floor === floor && s.row === row && s.column === col
+    )
+  }
+
+  // Estatísticas
+  const stats = {
+    total: seats.filter((s) => s.type === 'seat').length,
+    available: seats.filter((s) => s.status === 'available' && s.type === 'seat')
+      .length,
+    occupied: seats.filter((s) => s.status === 'occupied').length,
+    selected: selectedSeats.length,
+  }
+
+  if (isLoading) {
+    return (
+      <Card className="p-8">
+        <div className="flex items-center justify-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />
+        </div>
+        <p className="text-center mt-4 text-gray-600">
+          Carregando mapa de assentos...
+        </p>
+      </Card>
+    )
+  }
+
+  if (error) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>{error}</AlertDescription>
+        <Button onClick={loadSeats} className="mt-4">
+          Tentar Novamente
+        </Button>
+      </Alert>
+    )
+  }
+
+  if (!layout) {
+    return (
+      <Alert>
+        <AlertDescription>
+          Mapa de assentos não disponível para esta viagem.
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* HEADER COM ESTATÍSTICAS */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-2xl font-bold">Escolha seu(s) Assento(s)</h3>
+          
+          {reservationTimer && (
+            <div className="flex items-center gap-2 text-orange-600">
+              <Clock className="h-5 w-5 animate-pulse" />
+              <span className="font-bold">
+                {Math.floor(reservationTimer / 60)}:
+                {String(reservationTimer % 60).padStart(2, '0')}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Estatísticas */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="text-center p-3 bg-gray-50 rounded-lg">
+            <p className="text-2xl font-bold text-gray-800">{stats.total}</p>
+            <p className="text-sm text-gray-600">Total</p>
+          </div>
+          <div className="text-center p-3 bg-green-50 rounded-lg">
+            <p className="text-2xl font-bold text-green-600">
+              {stats.available}
+            </p>
+            <p className="text-sm text-gray-600">Disponíveis</p>
+          </div>
+          <div className="text-center p-3 bg-red-50 rounded-lg">
+            <p className="text-2xl font-bold text-red-600">{stats.occupied}</p>
+            <p className="text-sm text-gray-600">Ocupados</p>
+          </div>
+          <div className="text-center p-3 bg-blue-50 rounded-lg">
+            <p className="text-2xl font-bold text-blue-600">{stats.selected}</p>
+            <p className="text-sm text-gray-600">Selecionados</p>
+          </div>
+        </div>
+
+        {/* Alerta de seleção */}
+        {selectedSeats.length > 0 && (
+          <Alert className="mt-4 bg-blue-50 border-blue-200">
+            <Check className="h-4 w-4 text-blue-600" />
+            <AlertDescription className="text-blue-800">
+              Você selecionou {selectedSeats.length} assento(s):{' '}
+              <strong>{selectedSeats.join(', ')}</strong>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleClearSelection}
+                className="ml-2"
+              >
+                <X className="h-3 w-3 mr-1" />
+                Limpar
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* MAPA DO VEÍCULO */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      
+      <Card className="p-8">
+        {/* Seletor de Andar (se Double Decker) */}
+        {layout.floors === 2 && (
+          <div className="flex justify-center gap-2 mb-6">
+            <Button
+              variant={currentFloor === 1 ? 'default' : 'outline'}
+              onClick={() => setCurrentFloor(1)}
+            >
+              1º Andar
+            </Button>
+            <Button
+              variant={currentFloor === 2 ? 'default' : 'outline'}
+              onClick={() => setCurrentFloor(2)}
+            >
+              2º Andar
+            </Button>
+          </div>
+        )}
+
+        {/* Indicador de Frente */}
+        <div className="text-center mb-6">
+          <Badge className="bg-blue-600 text-white px-6 py-2">
+            ⬆️ FRENTE DO VEÍCULO
+          </Badge>
+        </div>
+
+        {/* Grid de Assentos */}
+        <div className="flex justify-center">
+          <div
+            className="inline-grid gap-3"
+            style={{
+              gridTemplateColumns: `repeat(${layout.columns}, 70px)`,
+            }}
+          >
+            {Array.from({ length: layout.rows }).map((_, rowIndex) =>
+              Array.from({ length: layout.columns }).map((_, colIndex) => {
+                const seat = getSeatAtPosition(currentFloor, rowIndex, colIndex)
+                
+                if (!seat) {
+                  return (
+                    <div
+                      key={`${rowIndex}-${colIndex}`}
+                      className="w-16 h-16"
+                    />
+                  )
+                }
+
+                return (
+                  <SeatButton
+                    key={seat.id}
+                    seat={seat}
+                    isSelected={selectedSeats.includes(seat.number)}
+                    onClick={() => handleSeatClick(seat)}
+                    basePrice={basePrice}
+                  />
+                )
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Legenda */}
+        <div className="mt-8 pt-6 border-t">
+          <h4 className="font-bold mb-4 text-center">Legenda</h4>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <LegendItem
+              color="bg-green-500"
+              icon={<Check className="h-4 w-4" />}
+              label="Disponível"
+            />
+            <LegendItem
+              color="bg-blue-600"
+              icon={<Check className="h-4 w-4" />}
+              label="Selecionado"
+            />
+            <LegendItem
+              color="bg-red-500"
+              icon={<X className="h-4 w-4" />}
+              label="Ocupado"
+            />
+            <LegendItem
+              color="bg-yellow-500"
+              icon={<Star className="h-4 w-4" />}
+              label="VIP/Premium"
+            />
+            <LegendItem
+              color="bg-gray-400"
+              icon={<Lock className="h-4 w-4" />}
+              label="Bloqueado"
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* RESUMO DA SELEÇÃO */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      
+      {selectedSeats.length > 0 && (
+        <Card className="p-6 bg-blue-50 border-blue-200">
+          <h4 className="font-bold mb-4">📋 Resumo da Seleção</h4>
+          
+          <div className="space-y-3">
+            {selectedSeats.map((seatNumber) => {
+              const seat = seats.find((s) => s.number === seatNumber)
+              if (!seat) return null
+
+              const seatPrice = basePrice + seat.extraPrice
+
+              return (
+                <div
+                  key={seatNumber}
+                  className="flex items-center justify-between p-3 bg-white rounded-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-blue-600 text-white rounded-lg flex items-center justify-center font-bold">
+                      {seatNumber}
+                    </div>
+                    <div>
+                      <p className="font-semibold">Assento {seatNumber}</p>
+                      <div className="flex gap-2 mt-1">
+                        {seat.isVip && (
+                          <Badge className="bg-yellow-500 text-xs">VIP</Badge>
+                        )}
+                        {seat.isPremium && (
+                          <Badge className="bg-purple-500 text-xs">
+                            Premium
+                          </Badge>
+                        )}
+                        {seat.isAccessible && (
+                          <Badge className="bg-blue-500 text-xs">
+                            Acessível
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="font-bold text-lg text-green-600">
+                      R$ {seatPrice.toFixed(2)}
+                    </p>
+                    {seat.extraPrice > 0 && (
+                      <p className="text-xs text-gray-600">
+                        +R$ {seat.extraPrice.toFixed(2)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-blue-200">
+            <div className="flex items-center justify-between">
+              <span className="text-lg font-bold">Total:</span>
+              <span className="text-2xl font-bold text-green-600">
+                R${' '}
+                {selectedSeats
+                  .reduce((sum, seatNumber) => {
+                    const seat = seats.find((s) => s.number === seatNumber)
+                    return sum + basePrice + (seat?.extraPrice || 0)
+                  }, 0)
+                  .toFixed(2)}
+              </span>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// COMPONENTE DE BOTÃO DE ASSENTO
+// ═══════════════════════════════════════════════════════════
+
+function SeatButton({
+  seat,
+  isSelected,
+  onClick,
+  basePrice,
+}: {
+  seat: Seat
+  isSelected: boolean
+  onClick: () => void
+  basePrice: number
+}) {
+  // Não renderizar se não for assento
+  if (seat.type !== 'seat') {
+    return <NonSeatElement seat={seat} />
+  }
+
+  // Determinar cor e estado
+  const getButtonStyle = () => {
+    if (isSelected) {
+      return 'bg-blue-600 text-white border-2 border-blue-800 shadow-lg scale-105'
+    }
+
+    switch (seat.status) {
+      case 'available':
+        if (seat.isVip || seat.isPremium) {
+          return 'bg-yellow-500 text-white hover:bg-yellow-600 border-2 border-yellow-600'
+        }
+        return 'bg-green-500 text-white hover:bg-green-600 border-2 border-green-600'
+      
+      case 'occupied':
+        return 'bg-red-500 text-white cursor-not-allowed opacity-60'
+      
+      case 'reserved':
+        return 'bg-orange-500 text-white cursor-not-allowed opacity-60'
+      
+      case 'blocked':
+        return 'bg-gray-400 text-white cursor-not-allowed opacity-60'
+      
+      default:
+        return 'bg-gray-200'
+    }
+  }
+
+  const isClickable = seat.status === 'available'
+
+  const seatPrice = basePrice + seat.extraPrice
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={onClick}
+            disabled={!isClickable}
+            className={`
+              w-16 h-16 rounded-lg flex flex-col items-center justify-center
+              transition-all duration-200 font-bold
+              ${getButtonStyle()}
+              ${isClickable ? 'cursor-pointer' : 'cursor-not-allowed'}
+            `}
+          >
+            {/* Ícones especiais */}
+            <div className="flex gap-1 mb-1">
+              {seat.isVip && <Star className="h-3 w-3" />}
+              {seat.isAccessible && <Accessibility className="h-3 w-3" />}
+            </div>
+
+            {/* Número do assento */}
+            <span className="text-sm">{seat.number}</span>
+
+            {/* Checkmark se selecionado */}
+            {isSelected && <Check className="h-4 w-4 mt-1" />}
+          </button>
+        </TooltipTrigger>
+        
+        <TooltipContent className="bg-gray-900 text-white p-4">
+          <div className="space-y-2">
+            <p className="font-bold">Assento {seat.number}</p>
+            
+            <div className="space-y-1 text-sm">
+              <p>
+                Status:{' '}
+                <span className="font-semibold">
+                  {seat.status === 'available' && '✅ Disponível'}
+                  {seat.status === 'occupied' && '❌ Ocupado'}
+                  {seat.status === 'reserved' && '⏳ Reservado'}
+                  {seat.status === 'blocked' && '🔒 Bloqueado'}
+                </span>
+              </p>
+
+              {seat.status === 'available' && (
+                <p>
+                  Preço:{' '}
+                  <span className="font-bold text-green-400">
+                    R$ {seatPrice.toFixed(2)}
+                  </span>
+                </p>
+              )}
+
+              {seat.extraPrice > 0 && (
+                <p className="text-yellow-400">
+                  +R$ {seat.extraPrice.toFixed(2)} (adicional)
+                </p>
+              )}
+
+              {seat.isVip && (
+                <p className="text-yellow-400">⭐ Assento VIP</p>
+              )}
+
+              {seat.isPremium && (
+                <p className="text-purple-400">💎 Assento Premium</p>
+              )}
+
+              {seat.isAccessible && (
+                <p className="text-blue-400">♿ Assento Acessível</p>
+              )}
+
+              {seat.notes && (
+                <p className="text-gray-300 italic">{seat.notes}</p>
+              )}
+            </div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// COMPONENTE DE ELEMENTOS NÃO-ASSENTO
+// ═══════════════════════════════════════════════════════════
+
+function NonSeatElement({ seat }: { seat: Seat }) {
+  const getStyle = () => {
+    switch (seat.type) {
+      case 'wc':
+        return 'bg-purple-500 text-white'
+      case 'stairs':
+        return 'bg-gray-800 text-white'
+      case 'fridge':
+        return 'bg-cyan-500 text-white'
+      case 'driver':
+        return 'bg-yellow-500 text-white'
+      case 'empty':
+        return 'bg-transparent'
+      default:
+        return 'bg-gray-200'
+    }
+  }
+
+  const getIcon = () => {
+    switch (seat.type) {
+      case 'wc':
+        return <Toilet className="h-6 w-6" />
+      case 'stairs':
+        return <Stairs className="h-6 w-6" />
+      case 'fridge':
+        return <Refrigerator className="h-6 w-6" />
+      default:
+        return null
+    }
+  }
+
+  const getLabel = () => {
+    switch (seat.type) {
+      case 'wc':
+        return 'WC'
+      case 'stairs':
+        return 'Escada'
+      case 'fridge':
+        return 'Frigobar'
+      case 'driver':
+        return '🚗'
+      default:
+        return ''
+    }
+  }
+
+  if (seat.type === 'empty') {
+    return <div className="w-16 h-16" />
+  }
+
+  return (
+    <div
+      className={`
+        w-16 h-16 rounded-lg flex flex-col items-center justify-center
+        ${getStyle()}
+      `}
+    >
+      {getIcon()}
+      <span className="text-xs font-bold mt-1">{getLabel()}</span>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// COMPONENTE DE ITEM DE LEGENDA
+// ═══════════════════════════════════════════════════════════
+
+function LegendItem({
+  color,
+  icon,
+  label,
+}: {
+  color: string
+  icon: React.ReactNode
+  label: string
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <div
+        className={`w-8 h-8 ${color} rounded flex items-center justify-center text-white`}
+      >
+        {icon}
+      </div>
+      <span className="text-sm font-medium">{label}</span>
+    </div>
+  )
+}
+
+INTEGRAÇÃO COM WIZARD DE RESERVA
+
+// components/public/reservation-wizard.tsx
+
+'use client'
+
+import { useState } from 'react'
+import { SeatSelectionMap } from './seat-selection-map'
+import { Button } from '@/components/ui/button'
+import { ArrowLeft, ArrowRight } from 'lucide-react'
+
+export function ReservationWizard({ trip, itinerary }: any) {
+  const [currentStep, setCurrentStep] = useState(1)
+  const [formData, setFormData] = useState({
+    // Step 1: Dados pessoais
+    name: '',
+    cpf: '',
+    email: '',
+    phone: '',
+    birthdate: '',
+    
+    // Step 2: Assentos
+    selectedSeats: [] as string[],
+    totalPrice: 0,
+    
+    // Step 3: Pagamento
+    paymentMethod: '',
+  })
+
+  const handleSeatSelection = (seats: string[], totalPrice: number) => {
+    setFormData({
+      ...formData,
+      selectedSeats: seats,
+      totalPrice,
+    })
+  }
+
+  const handleNext = () => {
+    // Validações por step
+    if (currentStep === 1) {
+      if (!formData.name || !formData.cpf || !formData.email) {
+        alert('Preencha todos os campos obrigatórios')
+        return
+      }
+    }
+
+    if (currentStep === 2) {
+      if (formData.selectedSeats.length === 0) {
+        alert('Selecione pelo menos um assento')
+        return
+      }
+    }
+
+    setCurrentStep(currentStep + 1)
+  }
+
+  const handleBack = () => {
+    setCurrentStep(currentStep - 1)
+  }
+
+  return (
+    <div className="max-w-6xl mx-auto">
+      {/* Progress Bar */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between">
+          {[1, 2, 3, 4].map((step) => (
+            <div
+              key={step}
+              className={`flex-1 h-2 mx-1 rounded-full transition-all ${
+                step <= currentStep ? 'bg-blue-600' : 'bg-gray-200'
+              }`}
+            />
+          ))}
+        </div>
+        <div className="flex justify-between mt-2 text-sm">
+          <span className={currentStep >= 1 ? 'text-blue-600 font-bold' : 'text-gray-400'}>
+            1. Dados
+          </span>
+          <span className={currentStep >= 2 ? 'text-blue-600 font-bold' : 'text-gray-400'}>
+            2. Assentos
+          </span>
+          <span className={currentStep >= 3 ? 'text-blue-600 font-bold' : 'text-gray-400'}>
+            3. Pagamento
+          </span>
+          <span className={currentStep >= 4 ? 'text-blue-600 font-bold' : 'text-gray-400'}>
+            4. Confirmação
+          </span>
+        </div>
+      </div>
+
+      {/* Step Content */}
+      <div className="mb-8">
+        {currentStep === 1 && (
+          <PersonalDataForm data={formData} onChange={setFormData} />
+        )}
+
+        {currentStep === 2 && (
+          <SeatSelectionMap
+            tripId={trip.id}
+            itineraryId={itinerary.id}
+            maxSeats={formData.passengersCount || 1}
+            basePrice={Number(trip.promotional_price || trip.price_per_person)}
+            onSelectionChange={handleSeatSelection}
+          />
+        )}
+
+        {currentStep === 3 && (
+          <PaymentForm data={formData} onChange={setFormData} />
+        )}
+
+        {currentStep === 4 && (
+          <ConfirmationStep data={formData} trip={trip} />
+        )}
+      </div>
+
+      {/* Navigation Buttons */}
+      <div className="flex justify-between">
+        {currentStep > 1 && (
+          <Button variant="outline" onClick={handleBack}>
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Voltar
+          </Button>
+        )}
+
+        {currentStep < 4 && (
+          <Button onClick={handleNext} className="ml-auto">
+            Próximo
+            <ArrowRight className="h-4 w-4 ml-2" />
+          </Button>
+        )}
+
+        {currentStep === 4 && (
+          <Button onClick={handleSubmit} className="ml-auto bg-green-600">
+            Confirmar Reserva
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+┌─────────────────────────────────────────────────────────────────┐
+│         MAPA INTERATIVO DE SELEÇÃO DE ASSENTOS                   │
+└─────────────────────────────────────────────────────────────────┘
+
+🎨 INTERFACE:
+├── Grid visual do veículo
+├── Cores intuitivas por status
+├── Tooltips informativos
+├── Seleção múltipla
+└── Responsivo (mobile/desktop)
+
+🔄 TEMPO REAL:
+├── Atualização automática (10s)
+├── Sincronização entre clientes
+├── Prevenção de overbooking
+└── Reserva temporária (5 min)
+
+💰 PREÇOS:
+├── Preço base da viagem
+├── Adicional por assento VIP/Premium
+├── Cálculo automático do total
+└── Resumo detalhado
+
+🎯 TIPOS DE ASSENTO:
+├── 🟢 Disponível
+├── 🔴 Ocupado
+├── 🟡 Reservado temporariamente
+├── ⭐ VIP (preço adicional)
+├── 💎 Premium (preço adicional)
+├── ♿ Acessível
+└── 🔒 Bloqueado
+
+⏱️ TIMER DE RESERVA:
+├── 5 minutos para completar
+├── Contagem regressiva visual
+├── Alerta de expiração
+└── Liberação automática
+
+📊 ESTATÍSTICAS:
+├── Total de assentos
+├── Disponíveis
+├── Ocupados
+└── Selecionados pelo cliente
+
+🚀 DIFERENCIAIS:
+├── Experiência
+├── Visual profissional
+├── UX otimizada
+└── Conversão aumentada
+
+┌─────────────────────────────────────────────────────────────────┐
+│             IMPLEMENTAR SISTEMA COMPLETO DE LAYOUTS E SELEÇÃO DE ASSENTOS               │
+└─────────────────────────────────────────────────────────────────┘
+
+ 1. BANCO DE DADOS
+   ├──  Schema de layouts de veículos
+   ├──  Schema de assentos
+   ├──  Schema de analytics
+   ├──  Constraints únicos
+   └──  Índices otimizados
+
+ 2. BUILDER DE LAYOUTS (Dashboard)
+   ├──  Editor visual drag & drop
+   ├──  Templates pré-definidos
+   ├──  Configuração de dimensões
+   ├──  Tipos de elementos (assento, WC, escada, etc)
+   ├──  Assentos especiais (VIP, Premium, Acessível)
+   ├──  Preços diferenciados
+   └──  Salvamento e edição
+
+ 3. MAPA INTERATIVO (Cliente)
+   ├──  Visualização em tempo real
+   ├──  Seleção de assentos
+   ├──  Status visual (disponível, ocupado, reservado)
+   ├──  Timer de reserva (5 minutos)
+   ├──  Tooltips informativos
+   ├──  Cálculo automático de preços
+   ├──  Responsivo (mobile/desktop)
+   └──  Sincronização automática
+
+ 4. APIs
+   ├──  CRUD de layouts
+   ├──  Disponibilidade de assentos
+   ├──  Reserva temporária
+   └──  Atualização em tempo real
+
+ 5. INTEGRAÇÕES
+   ├──  Wizard de reserva
+   ├──  Sistema de pagamento
+   ├──  CRM (vinculação com cliente)
+   └──  Relatórios e analytics
+
+
+

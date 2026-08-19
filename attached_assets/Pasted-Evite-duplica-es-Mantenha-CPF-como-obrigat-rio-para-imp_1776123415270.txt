@@ -1,0 +1,1125 @@
+Evite duplicações.
+Mantenha CPF como obrigatório para impedir a criação de cadastros duplicados
+
+Analise o sistema e implemente a validação por CPF.
+
+Cada usuário, cada cliente, cada cadastro deverá haver APENAS um CPF único.
+
+Se já houver o CPF cadastrado no sistema, atualizar as informações do cliente no registro já existente.
+
+IMPLEMENTAR SISTEMA DE VALIDAÇÃO ÚNICA POR CPF - ANTI-DUPLICAÇÃO
+
+┌─────────────────────────────────────────────────────────────────┐
+│           FLUXO DE VALIDAÇÃO DE CPF ÚNICO                        │
+└─────────────────────────────────────────────────────────────────┘
+
+Cliente tenta fazer reserva/cadastro
+           ↓
+Sistema valida formato do CPF
+           ↓
+Busca CPF no banco de dados
+           ↓
+    ┌─────┴─────┐
+    │           │
+  Existe?    Não existe?
+    │           │
+    ↓           ↓
+Atualizar   Criar novo
+dados       registro
+    │           │
+    └─────┬─────┘
+          ↓
+Prosseguir com reserva
+
+
+SCHEMA ATUALIZADO COM CONSTRAINTS
+
+// prisma/schema.prisma
+
+model Client {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // DADOS PESSOAIS (CPF OBRIGATÓRIO E ÚNICO POR TENANT)
+  name            String
+  cpf             String    // ✅ OBRIGATÓRIO
+  email           String
+  phone           String
+  birthdate       DateTime
+  
+  // ENDEREÇO
+  address         String?
+  city            String?
+  state           String?
+  zip_code        String?
+  
+  // DADOS ADICIONAIS
+  rg              String?
+  gender          String?   // male, female, other
+  
+  // STATUS
+  status          String    @default("active") // active, inactive, blocked
+  source          String    @default("manual") // manual, website, whatsapp, phone
+  segment         String?   // individual, corporate, vip
+  
+  // PREFERÊNCIAS DE COMUNICAÇÃO
+  whatsapp_opt_in Boolean   @default(true)
+  email_opt_in    Boolean   @default(true)
+  sms_opt_in      Boolean   @default(false)
+  
+  // RELACIONAMENTOS
+  reservations    Reservation[]
+  deals           Deal[]
+  activities      Activity[]
+  coupons         Coupon[]
+  birthday_messages BirthdayMessage[]
+  
+  // AUDITORIA
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  created_by      String?   // ID do usuário que criou
+  updated_by      String?   // ID do usuário que atualizou
+  
+  // ═══════════════════════════════════════════════════════════
+  // CONSTRAINT ÚNICO: CPF + TENANT
+  // ═══════════════════════════════════════════════════════════
+  @@unique([tenant_id, cpf], name: "unique_cpf_per_tenant")
+  
+  // ÍNDICES PARA PERFORMANCE
+  @@index([tenant_id])
+  @@index([cpf])
+  @@index([email])
+  @@index([phone])
+  @@index([tenant_id, status])
+  
+  @@map("clients")
+}
+
+// ═══════════════════════════════════════════════════════════
+// TABELA DE LOG DE TENTATIVAS DE DUPLICAÇÃO
+// ═══════════════════════════════════════════════════════════
+
+model DuplicateAttemptLog {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  // DADOS DA TENTATIVA
+  cpf             String
+  attempted_name  String
+  attempted_email String
+  attempted_phone String
+  
+  // CLIENTE EXISTENTE
+  existing_client_id String?
+  client          Client?   @relation(fields: [existing_client_id], references: [id])
+  
+  // ORIGEM DA TENTATIVA
+  source          String    // website, dashboard, api
+  ip_address      String?
+  user_agent      String?
+  
+  // AÇÃO TOMADA
+  action_taken    String    // updated, rejected, merged
+  
+  created_at      DateTime  @default(now())
+  
+  @@index([tenant_id, cpf])
+  @@index([created_at])
+  @@map("duplicate_attempt_logs")
+}
+
+UTILITÁRIO DE VALIDAÇÃO DE CPF
+
+// lib/utils/cpf-validator.ts
+
+/**
+ * Remove caracteres não numéricos do CPF
+ */
+export function cleanCPF(cpf: string): string {
+  return cpf.replace(/\D/g, '')
+}
+
+/**
+ * Formata CPF para exibição (000.000.000-00)
+ */
+export function formatCPF(cpf: string): string {
+  const cleaned = cleanCPF(cpf)
+  return cleaned.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
+}
+
+/**
+ * Valida se o CPF é válido (algoritmo oficial)
+ */
+export function isValidCPF(cpf: string): boolean {
+  const cleaned = cleanCPF(cpf)
+
+  // CPF deve ter 11 dígitos
+  if (cleaned.length !== 11) {
+    return false
+  }
+
+  // CPFs inválidos conhecidos (todos os dígitos iguais)
+  const invalidCPFs = [
+    '00000000000',
+    '11111111111',
+    '22222222222',
+    '33333333333',
+    '44444444444',
+    '55555555555',
+    '66666666666',
+    '77777777777',
+    '88888888888',
+    '99999999999',
+  ]
+
+  if (invalidCPFs.includes(cleaned)) {
+    return false
+  }
+
+  // Validação do dígito verificador
+  let sum = 0
+  let remainder
+
+  // Valida primeiro dígito
+  for (let i = 1; i <= 9; i++) {
+    sum += parseInt(cleaned.substring(i - 1, i)) * (11 - i)
+  }
+
+  remainder = (sum * 10) % 11
+
+  if (remainder === 10 || remainder === 11) {
+    remainder = 0
+  }
+
+  if (remainder !== parseInt(cleaned.substring(9, 10))) {
+    return false
+  }
+
+  sum = 0
+
+  // Valida segundo dígito
+  for (let i = 1; i <= 10; i++) {
+    sum += parseInt(cleaned.substring(i - 1, i)) * (12 - i)
+  }
+
+  remainder = (sum * 10) % 11
+
+  if (remainder === 10 || remainder === 11) {
+    remainder = 0
+  }
+
+  if (remainder !== parseInt(cleaned.substring(10, 11))) {
+    return false
+  }
+
+  return true
+}
+
+/**
+ * Valida e retorna CPF limpo ou lança erro
+ */
+export function validateAndCleanCPF(cpf: string): string {
+  if (!cpf) {
+    throw new Error('CPF é obrigatório')
+  }
+
+  const cleaned = cleanCPF(cpf)
+
+  if (!isValidCPF(cleaned)) {
+    throw new Error('CPF inválido')
+  }
+
+  return cleaned
+}
+
+SERVIÇO DE BUSCA E ATUALIZAÇÃO DE CLIENTE
+
+// lib/clients/find-or-create.ts
+
+import { prisma } from '@/lib/prisma'
+import { validateAndCleanCPF, formatCPF } from '@/lib/utils/cpf-validator'
+
+interface ClientData {
+  name: string
+  cpf: string
+  email: string
+  phone: string
+  birthdate: Date
+  address?: string
+  city?: string
+  state?: string
+  zip_code?: string
+  rg?: string
+  gender?: string
+  source?: string
+}
+
+interface FindOrCreateClientParams {
+  tenantId: string
+  data: ClientData
+  userId?: string // ID do usuário que está fazendo a operação
+  source?: string // website, dashboard, api
+  ipAddress?: string
+  userAgent?: string
+}
+
+/**
+ * Busca cliente por CPF ou cria novo
+ * Se existir, atualiza os dados
+ */
+export async function findOrCreateClient({
+  tenantId,
+  data,
+  userId,
+  source = 'website',
+  ipAddress,
+  userAgent,
+}: FindOrCreateClientParams) {
+  // ═══════════════════════════════════════════════════════════
+  // VALIDAR CPF
+  // ═══════════════════════════════════════════════════════════
+  
+  let cleanedCPF: string
+  
+  try {
+    cleanedCPF = validateAndCleanCPF(data.cpf)
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'CPF inválido')
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // BUSCAR CLIENTE EXISTENTE POR CPF
+  // ═══════════════════════════════════════════════════════════
+  
+  const existingClient = await prisma.client.findUnique({
+    where: {
+      tenant_id_cpf: {
+        tenant_id: tenantId,
+        cpf: cleanedCPF,
+      },
+    },
+  })
+
+  // ═══════════════════════════════════════════════════════════
+  // CLIENTE EXISTE: ATUALIZAR DADOS
+  // ═══════════════════════════════════════════════════════════
+  
+  if (existingClient) {
+    console.log(`📝 Cliente existente encontrado: ${existingClient.name} (CPF: ${formatCPF(cleanedCPF)})`)
+
+    // Registrar tentativa de duplicação
+    await prisma.duplicateAttemptLog.create({
+      data: {
+        tenant_id: tenantId,
+        cpf: cleanedCPF,
+        attempted_name: data.name,
+        attempted_email: data.email,
+        attempted_phone: data.phone,
+        existing_client_id: existingClient.id,
+        source,
+        ip_address: ipAddress,
+        user_agent: userAgent,
+        action_taken: 'updated',
+      },
+    })
+
+    // Atualizar dados do cliente
+    const updatedClient = await prisma.client.update({
+      where: { id: existingClient.id },
+      data: {
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        birthdate: data.birthdate,
+        address: data.address,
+        city: data.city,
+        state: data.state,
+        zip_code: data.zip_code,
+        rg: data.rg,
+        gender: data.gender,
+        updated_by: userId,
+        updated_at: new Date(),
+      },
+    })
+
+    console.log(`✅ Dados do cliente atualizados com sucesso`)
+
+    return {
+      client: updatedClient,
+      isNew: false,
+      message: 'Cliente já cadastrado. Dados atualizados com sucesso.',
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // CLIENTE NÃO EXISTE: CRIAR NOVO
+  // ═══════════════════════════════════════════════════════════
+  
+  console.log(`➕ Criando novo cliente: ${data.name} (CPF: ${formatCPF(cleanedCPF)})`)
+
+  const newClient = await prisma.client.create({
+    data: {
+      tenant_id: tenantId,
+      name: data.name,
+      cpf: cleanedCPF,
+      email: data.email,
+      phone: data.phone,
+      birthdate: data.birthdate,
+      address: data.address,
+      city: data.city,
+      state: data.state,
+      zip_code: data.zip_code,
+      rg: data.rg,
+      gender: data.gender,
+      source: data.source || source,
+      status: 'active',
+      created_by: userId,
+    },
+  })
+
+  console.log(`✅ Novo cliente criado com sucesso`)
+
+  return {
+    client: newClient,
+    isNew: true,
+    message: 'Cliente cadastrado com sucesso.',
+  }
+}
+
+/**
+ * Busca cliente por CPF (sem criar)
+ */
+export async function findClientByCPF(tenantId: string, cpf: string) {
+  const cleanedCPF = validateAndCleanCPF(cpf)
+
+  return await prisma.client.findUnique({
+    where: {
+      tenant_id_cpf: {
+        tenant_id: tenantId,
+        cpf: cleanedCPF,
+      },
+    },
+  })
+}
+
+/**
+ * Verifica se CPF já está cadastrado
+ */
+export async function checkCPFExists(tenantId: string, cpf: string): Promise<boolean> {
+  try {
+    const cleanedCPF = validateAndCleanCPF(cpf)
+    const client = await findClientByCPF(tenantId, cleanedCPF)
+    return !!client
+  } catch (error) {
+    return false
+  }
+}
+
+ATUALIZAÇÃO DA API DE RESERVA
+
+// app/api/public/reservations/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { findOrCreateClient } from '@/lib/clients/find-or-create'
+import { generateReservationNumber } from '@/lib/reservations/generate-number-complete'
+import { createDealFromReservation } from '@/lib/deals/create-from-reservation'
+import { sendReservationConfirmation } from '@/lib/email/send-reservation-confirmation'
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+
+    const {
+      trip_id,
+      itinerary_id,
+      name,
+      cpf,
+      email,
+      phone,
+      birthdate,
+      passengers_count,
+      selected_seats,
+      referral_code,
+      coupon_code,
+      referral_discount,
+      coupon_discount,
+      payment_method,
+      observations,
+    } = body
+
+    // ═══════════════════════════════════════════════════════════
+    // VALIDAÇÕES BÁSICAS
+    // ═══════════════════════════════════════════════════════════
+    
+    if (!trip_id || !itinerary_id || !name || !cpf || !email || !phone) {
+      return NextResponse.json(
+        { error: 'Campos obrigatórios faltando' },
+        { status: 400 }
+      )
+    }
+
+    if (!birthdate) {
+      return NextResponse.json(
+        { error: 'Data de nascimento é obrigatória' },
+        { status: 400 }
+      )
+    }
+
+    // Buscar viagem
+    const trip = await prisma.trip.findUnique({
+      where: { id: trip_id },
+      include: {
+        itineraries: true,
+        tenant: true,
+      },
+    })
+
+    if (!trip) {
+      return NextResponse.json(
+        { error: 'Viagem não encontrada' },
+        { status: 404 }
+      )
+    }
+
+    const itinerary = trip.itineraries.find((it) => it.id === itinerary_id)
+
+    if (!itinerary) {
+      return NextResponse.json(
+        { error: 'Itinerário não encontrado' },
+        { status: 404 }
+      )
+    }
+
+    // Verificar disponibilidade
+    if (itinerary.available_seats < passengers_count) {
+      return NextResponse.json(
+        { error: 'Vagas insuficientes' },
+        { status: 400 }
+      )
+    }
+
+    // Verificar assentos
+    if (!selected_seats || selected_seats.length === 0) {
+      return NextResponse.json(
+        { error: 'Nenhum assento selecionado' },
+        { status: 400 }
+      )
+    }
+
+    // Verificar se assentos estão disponíveis
+    const occupiedSeats = await prisma.reservationSeat.findMany({
+      where: {
+        trip_id,
+        itinerary_id,
+        seat_number: { in: selected_seats },
+        status: { in: ['reserved', 'confirmed', 'checked_in'] },
+      },
+    })
+
+    if (occupiedSeats.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Um ou mais assentos já estão ocupados',
+          occupied: occupiedSeats.map((s) => s.seat_number),
+        },
+        { status: 400 }
+      )
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // BUSCAR OU CRIAR CLIENTE (COM VALIDAÇÃO DE CPF)
+    // ═══════════════════════════════════════════════════════════
+    
+    const { client, isNew, message } = await findOrCreateClient({
+      tenantId: trip.tenant_id,
+      data: {
+        name,
+        cpf,
+        email,
+        phone,
+        birthdate: new Date(birthdate),
+      },
+      source: 'website',
+      ipAddress: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined,
+      userAgent: req.headers.get('user-agent') || undefined,
+    })
+
+    console.log(`${isNew ? '➕ Novo cliente criado' : '📝 Cliente existente atualizado'}: ${client.name}`)
+
+    // Calcular valores
+    const basePrice = trip.promotional_price || trip.price_per_person
+    const subtotal = basePrice * passengers_count
+    const totalDiscount = (referral_discount || 0) + (coupon_discount || 0)
+    const totalAmount = subtotal - totalDiscount
+
+    // Gerar número de reserva
+    const reservationNumberData = await generateReservationNumber(
+      trip.tenant_id,
+      trip.type as 'excursion' | 'package' | 'day_trip'
+    )
+
+    // Gerar voucher
+    const voucherCode = generateVoucherCode()
+
+    // Resumo dos assentos
+    const seatsSummary = selected_seats
+      .sort((a: string, b: string) => parseInt(a) - parseInt(b))
+      .join(', ')
+
+    // ═══════════════════════════════════════════════════════════
+    // CRIAR RESERVA
+    // ═══════════════════════════════════════════════════════════
+    
+    const reservation = await prisma.reservation.create({
+      data: {
+        tenant_id: trip.tenant_id,
+        reservation_number: reservationNumberData.full,
+        number_prefix: reservationNumberData.prefix,
+        number_type: reservationNumberData.typeCode,
+        number_yearmonth: reservationNumberData.yearMonth,
+        number_sequence: reservationNumberData.sequence,
+        voucher_code: voucherCode,
+        trip_id,
+        itinerary_id,
+        client_id: client.id,
+        client_name: client.name,
+        client_cpf: client.cpf,
+        client_email: client.email,
+        client_phone: client.phone,
+        total_passengers: passengers_count,
+        adults_count: passengers_count,
+        subtotal_amount: subtotal,
+        discount_amount: totalDiscount,
+        total_amount: totalAmount,
+        amount_pending: totalAmount,
+        payment_method,
+        payment_status: 'pending',
+        status: 'pending',
+        source: 'website',
+        observations,
+        departure_date: itinerary.departure_date,
+        seats_summary: seatsSummary,
+      },
+    })
+
+    // Criar assentos
+    for (const seatNumber of selected_seats) {
+      await prisma.reservationSeat.create({
+        data: {
+          reservation_id: reservation.id,
+          trip_id,
+          itinerary_id,
+          seat_number: seatNumber,
+          passenger_name: client.name,
+          passenger_cpf: client.cpf,
+          status: 'reserved',
+        },
+      })
+    }
+
+    // Processar referral
+    if (referral_code) {
+      const referral = await prisma.referral.findFirst({
+        where: { code: referral_code, status: 'active' },
+      })
+
+      if (referral) {
+        await prisma.reservation.update({
+          where: { id: reservation.id },
+          data: { referral_id: referral.id, referral_code },
+        })
+      }
+    }
+
+    // Atualizar vagas
+    await prisma.itinerary.update({
+      where: { id: itinerary_id },
+      data: { available_seats: { decrement: passengers_count } },
+    })
+
+    // Criar deal no pipeline
+    const deal = await createDealFromReservation({
+      tenantId: trip.tenant_id,
+      clientId: client.id,
+      reservationId: reservation.id,
+      tripId: trip_id,
+      totalAmount,
+      seatsSummary,
+      tripTitle: trip.title,
+      departureDate: itinerary.departure_date,
+    })
+
+    // Vincular deal à reserva
+    await prisma.reservation.update({
+      where: { id: reservation.id },
+      data: { deal_id: deal.id },
+    })
+
+    // Enviar email de confirmação (assíncrono)
+    sendReservationConfirmation({
+      reservationId: reservation.id,
+    }).catch((error) => {
+      console.error('Erro ao enviar email:', error)
+    })
+
+    // Buscar reserva completa
+    const fullReservation = await prisma.reservation.findUnique({
+      where: { id: reservation.id },
+      include: {
+        seats: true,
+        client: true,
+        deal: true,
+        trip: true,
+        itinerary: true,
+      },
+    })
+
+    return NextResponse.json({
+      success: true,
+      reservation: fullReservation,
+      reservation_number: reservationNumberData.full,
+      client_message: message, // "Cliente já cadastrado. Dados atualizados." ou "Cliente cadastrado com sucesso."
+      is_new_client: isNew,
+    })
+  } catch (error: any) {
+    console.error('Erro ao criar reserva:', error)
+
+    // Tratamento específico para erro de CPF
+    if (error.message.includes('CPF')) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json(
+      { error: 'Erro ao criar reserva' },
+      { status: 500 }
+    )
+  }
+}
+
+function generateVoucherCode(): string {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let code = 'VC-'
+
+  for (let i = 0; i < 6; i++) {
+    code += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+
+  return code
+}
+
+API DE VALIDAÇÃO DE CPF (TEMPO REAL)
+
+// app/api/public/validate-cpf/route.ts
+
+import { NextResponse } from 'next/request'
+import { checkCPFExists } from '@/lib/clients/find-or-create'
+import { isValidCPF, cleanCPF, formatCPF } from '@/lib/utils/cpf-validator'
+
+export async function POST(req: Request) {
+  try {
+    const { cpf, tenant_id } = await req.json()
+
+    if (!cpf) {
+      return NextResponse.json(
+        { error: 'CPF é obrigatório' },
+        { status: 400 }
+      )
+    }
+
+    // Validar formato
+    const cleaned = cleanCPF(cpf)
+    
+    if (!isValidCPF(cleaned)) {
+      return NextResponse.json({
+        valid: false,
+        exists: false,
+        message: 'CPF inválido',
+      })
+    }
+
+    // Verificar se existe (se tenant_id foi fornecido)
+    let exists = false
+    if (tenant_id) {
+      exists = await checkCPFExists(tenant_id, cleaned)
+    }
+
+    return NextResponse.json({
+      valid: true,
+      exists,
+      formatted: formatCPF(cleaned),
+      message: exists
+        ? 'CPF já cadastrado. Seus dados serão atualizados.'
+        : 'CPF válido',
+    })
+  } catch (error) {
+    console.error('Erro ao validar CPF:', error)
+    return NextResponse.json(
+      { error: 'Erro ao validar CPF' },
+      { status: 500 }
+    )
+  }
+}
+
+COMPONENTE DE INPUT DE CPF COM VALIDAÇÃO
+
+// components/forms/cpf-input.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react'
+import { cleanCPF, formatCPF, isValidCPF } from '@/lib/utils/cpf-validator'
+
+interface CPFInputProps {
+  value: string
+  onChange: (value: string) => void
+  tenantId?: string
+  onValidation?: (isValid: boolean, exists: boolean) => void
+  required?: boolean
+  disabled?: boolean
+}
+
+export function CPFInput({
+  value,
+  onChange,
+  tenantId,
+  onValidation,
+  required = true,
+  disabled = false,
+}: CPFInputProps) {
+  const [displayValue, setDisplayValue] = useState('')
+  const [isValidating, setIsValidating] = useState(false)
+  const [validationState, setValidationState] = useState<{
+    valid: boolean
+    exists: boolean
+    message: string
+  } | null>(null)
+
+  // Formatar valor ao digitar
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target.value
+    const cleaned = cleanCPF(input)
+
+    // Limitar a 11 dígitos
+    if (cleaned.length > 11) return
+
+    // Atualizar valor limpo
+    onChange(cleaned)
+
+    // Formatar para exibição
+    const formatted = formatCPF(cleaned)
+    setDisplayValue(formatted)
+
+    // Resetar validação
+    setValidationState(null)
+  }
+
+  // Validar CPF quando completo
+  useEffect(() => {
+    const cleaned = cleanCPF(value)
+
+    if (cleaned.length === 11) {
+      validateCPF(cleaned)
+    } else {
+      setValidationState(null)
+    }
+  }, [value, tenantId])
+
+  const validateCPF = async (cpf: string) => {
+    setIsValidating(true)
+
+    try {
+      // Validar formato localmente primeiro
+      if (!isValidCPF(cpf)) {
+        const result = {
+          valid: false,
+          exists: false,
+          message: 'CPF inválido',
+        }
+        setValidationState(result)
+        onValidation?.(false, false)
+        setIsValidating(false)
+        return
+      }
+
+      // Validar no servidor (verificar duplicação)
+      if (tenantId) {
+        const response = await fetch('/api/public/validate-cpf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cpf, tenant_id: tenantId }),
+        })
+
+        const data = await response.json()
+        setValidationState(data)
+        onValidation?.(data.valid, data.exists)
+      } else {
+        // Sem tenant, apenas validar formato
+        const result = {
+          valid: true,
+          exists: false,
+          message: 'CPF válido',
+        }
+        setValidationState(result)
+        onValidation?.(true, false)
+      }
+    } catch (error) {
+      console.error('Erro ao validar CPF:', error)
+      setValidationState({
+        valid: false,
+        exists: false,
+        message: 'Erro ao validar CPF',
+      })
+      onValidation?.(false, false)
+    } finally {
+      setIsValidating(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="cpf">
+        CPF {required && <span className="text-red-500">*</span>}
+      </Label>
+      
+      <div className="relative">
+        <Input
+          id="cpf"
+          type="text"
+          value={displayValue}
+          onChange={handleChange}
+          placeholder="000.000.000-00"
+          required={required}
+          disabled={disabled}
+          className={`
+            pr-10
+            ${validationState?.valid === false ? 'border-red-500' : ''}
+            ${validationState?.valid && !validationState?.exists ? 'border-green-500' : ''}
+            ${validationState?.exists ? 'border-yellow-500' : ''}
+          `}
+        />
+
+        {/* Ícone de Status */}
+        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+          {isValidating && (
+            <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+          )}
+          
+          {!isValidating && validationState?.valid === false && (
+            <AlertCircle className="h-4 w-4 text-red-500" />
+          )}
+          
+          {!isValidating && validationState?.valid && !validationState?.exists && (
+            <CheckCircle className="h-4 w-4 text-green-500" />
+          )}
+          
+          {!isValidating && validationState?.exists && (
+            <AlertCircle className="h-4 w-4 text-yellow-500" />
+          )}
+        </div>
+      </div>
+
+      {/* Mensagem de Validação */}
+      {validationState && (
+        <p
+          className={`text-sm ${
+            validationState.valid === false
+              ? 'text-red-500'
+              : validationState.exists
+              ? 'text-yellow-600'
+              : 'text-green-600'
+          }`}
+        >
+          {validationState.message}
+        </p>
+      )}
+    </div>
+  )
+}
+
+DASHBOARD DE DUPLICAÇÕES
+
+// app/(dashboard)/dashboard/clientes/duplicacoes/page.tsx
+
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { formatCPF } from '@/lib/utils/cpf-validator'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+export default async function DuplicacoesPage() {
+  const session = await getServerSession(authOptions)
+
+  if (!session) {
+    return null
+  }
+
+  // Buscar tentativas de duplicação
+  const duplicateAttempts = await prisma.duplicateAttemptLog.findMany({
+    where: {
+      tenant_id: session.user.tenantId,
+    },
+    include: {
+      client: true,
+    },
+    orderBy: {
+      created_at: 'desc',
+    },
+    take: 100,
+  })
+
+  // Estatísticas
+  const stats = {
+    total: duplicateAttempts.length,
+    updated: duplicateAttempts.filter((a) => a.action_taken === 'updated').length,
+    rejected: duplicateAttempts.filter((a) => a.action_taken === 'rejected').length,
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">🔍 Log de Duplicações</h1>
+        <p className="text-gray-600">
+          Histórico de tentativas de cadastro com CPF duplicado
+        </p>
+      </div>
+
+      {/* Estatísticas */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <Card className="p-6">
+          <p className="text-sm text-gray-600 mb-2">Total de Tentativas</p>
+          <p className="text-3xl font-bold">{stats.total}</p>
+        </Card>
+
+        <Card className="p-6">
+          <p className="text-sm text-gray-600 mb-2">Atualizados</p>
+          <p className="text-3xl font-bold text-green-600">{stats.updated}</p>
+        </Card>
+
+        <Card className="p-6">
+          <p className="text-sm text-gray-600 mb-2">Rejeitados</p>
+          <p className="text-3xl font-bold text-red-600">{stats.rejected}</p>
+        </Card>
+      </div>
+
+      {/* Lista de Tentativas */}
+      <Card className="p-6">
+        <h2 className="text-2xl font-bold mb-6">Histórico</h2>
+
+        <div className="space-y-4">
+          {duplicateAttempts.map((attempt) => (
+            <div
+              key={attempt.id}
+              className="p-4 border rounded-lg hover:bg-gray-50 transition"
+            >
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <p className="font-bold text-lg">{attempt.attempted_name}</p>
+                  <p className="text-sm text-gray-600">
+                    CPF: {formatCPF(attempt.cpf)}
+                  </p>
+                </div>
+
+                <Badge
+                  className={
+                    attempt.action_taken === 'updated'
+                      ? 'bg-green-500'
+                      : 'bg-red-500'
+                  }
+                >
+                  {attempt.action_taken === 'updated' && 'Atualizado'}
+                  {attempt.action_taken === 'rejected' && 'Rejeitado'}
+                  {attempt.action_taken === 'merged' && 'Mesclado'}
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-600">Email Tentado:</p>
+                  <p className="font-medium">{attempt.attempted_email}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Telefone Tentado:</p>
+                  <p className="font-medium">{attempt.attempted_phone}</p>
+                </div>
+              </div>
+
+              {attempt.client && (
+                <div className="mt-3 pt-3 border-t">
+                  <p className="text-sm text-gray-600 mb-2">
+                    Cliente Existente:
+                  </p>
+                  <p className="font-medium">{attempt.client.name}</p>
+                  <p className="text-sm text-gray-600">
+                    {attempt.client.email} • {attempt.client.phone}
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
+                <span>
+                  📅 {format(new Date(attempt.created_at), "dd/MM/yyyy 'às' HH:mm", {
+                    locale: ptBR,
+                  })}
+                </span>
+                <span>📍 Origem: {attempt.source}</span>
+                {attempt.ip_address && <span>🌐 IP: {attempt.ip_address}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+┌─────────────────────────────────────────────────────────────────┐
+│         IMPLEMENTAR SISTEMA DE VALIDAÇÃO ÚNICA POR CPF                       │
+└─────────────────────────────────────────────────────────────────┘
+
+🔒 VALIDAÇÕES:
+├── Formato do CPF (algoritmo oficial)
+├── Dígitos verificadores
+├── CPFs inválidos conhecidos (111.111.111-11, etc)
+└── Unicidade por tenant
+
+🔍 BUSCA E ATUALIZAÇÃO:
+├── Busca por CPF no banco
+├── Se existe: atualiza dados
+├── Se não existe: cria novo
+└── Registra tentativas de duplicação
+
+📊 CONSTRAINT NO BANCO:
+├── @@unique([tenant_id, cpf])
+├── Impossível duplicar CPF no mesmo tenant
+└── Diferentes tenants podem ter mesmo CPF
+
+🎯 VALIDAÇÃO EM TEMPO REAL:
+├── API de validação instantânea
+├── Feedback visual no formulário
+├── Mensagens claras para o usuário
+└── Previne envio de dados inválidos
+
+📈 DASHBOARD DE CONTROLE:
+├── Log de todas as tentativas
+├── Estatísticas de duplicação
+├── Histórico completo
+└── Auditoria de alterações
+
+✅ BENEFÍCIOS:
+├── Zero duplicações
+├── Dados sempre atualizados
+├── Experiência do usuário melhorada
+├── Rastreabilidade total
+└── Conformidade com LGPD

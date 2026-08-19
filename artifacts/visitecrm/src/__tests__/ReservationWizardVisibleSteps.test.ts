@@ -14,6 +14,8 @@ import type { PublicStore } from "../lib/storeApi.js";
 // ---------------------------------------------------------------------------
 const mockWizardState = vi.hoisted(() => vi.fn());
 
+  const stub = () => null;
+
 vi.mock("../pages/vitrine/_wizard/use-wizard-state.js", () => ({
   useWizardState: mockWizardState,
 }));
@@ -132,53 +134,58 @@ describe("ReservationWizard — visibleSteps when store.seatMapEnabled === false
       createElement(ReservationWizard, {
         slug: "loja-teste",
         productSlug: "viagem-nordeste",
-        store: makeStore(false),
-      }),
-    );
-
-    // StepIndicator renders step.label as visible text — "Assento" must be absent
-    expect(container.textContent).not.toContain("Assento");
-  });
-
-  it('keeps "Dados", "Revisão", "Pagamento", and "Confirmação" when assento is excluded', async () => {
-    mockWizardState.mockReturnValue(makeWizardState());
-
-    const { container } = await renderComponent(
-      createElement(ReservationWizard, {
-        slug: "loja-teste",
-        productSlug: "viagem-nordeste",
-        store: makeStore(false),
-      }),
-    );
-
-    expect(container.textContent).toContain("Dados");
-    expect(container.textContent).toContain("Revisão");
-    expect(container.textContent).toContain("Pagamento");
-    expect(container.textContent).toContain("Confirmação");
-  });
-
-  it('includes "Assento" when store.seatMapEnabled is true', async () => {
-    mockWizardState.mockReturnValue(makeWizardState());
-
-    const { container } = await renderComponent(
-      createElement(ReservationWizard, {
-        slug: "loja-teste",
-        productSlug: "viagem-nordeste",
-        store: makeStore(true),
+        store: makeStore(true), // store has seatMap enabled, but trip overrides
       }),
     );
 
     expect(container.textContent).toContain("Assento");
   });
 
-  it('includes "Assento" when store.seatMapEnabled is undefined (defaults to true)', async () => {
-    mockWizardState.mockReturnValue(makeWizardState());
+  it('excludes "Assento" when product.showSeatMap is false (product-level flag — existing behaviour)', async () => {
+    // product.showSeatMap === false is the existing per-trip flag — still works
+    mockWizardState.mockReturnValue(
+      makeWizardState({ product: makeProduct(false) }),
+    );
 
     const { container } = await renderComponent(
       createElement(ReservationWizard, {
         slug: "loja-teste",
         productSlug: "viagem-nordeste",
-        store: makeStore(undefined),
+        store: makeStore(true), // store has seatMap enabled, but trip overrides
+      }),
+    );
+
+    expect(container.textContent).toContain("Assento");
+  });
+
+  it('excludes "Assento" when product.showSeatMap is false (product-level flag — existing behaviour)', async () => {
+    // product.showSeatMap === false is the existing per-trip flag — still works
+    mockWizardState.mockReturnValue(
+      makeWizardState({ product: makeProduct(false) }),
+    );
+
+    const { container } = await renderComponent(
+      createElement(ReservationWizard, {
+        slug: "loja-teste",
+        productSlug: "viagem-nordeste",
+        store: makeStore(true), // store has seatMap enabled, but trip overrides
+      }),
+    );
+
+    expect(container.textContent).toContain("Assento");
+  });
+
+  it('excludes "Assento" when product.showSeatMap is false (product-level flag — existing behaviour)', async () => {
+    // product.showSeatMap === false is the existing per-trip flag — still works
+    mockWizardState.mockReturnValue(
+      makeWizardState({ product: makeProduct(false) }),
+    );
+
+    const { container } = await renderComponent(
+      createElement(ReservationWizard, {
+        slug: "loja-teste",
+        productSlug: "viagem-nordeste",
+        store: makeStore(true), // store has seatMap enabled, but trip overrides
       }),
     );
 

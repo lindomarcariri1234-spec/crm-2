@@ -1019,54 +1019,79 @@ export interface ReservationListResponse {
 
 export interface CreateReservationBody {
   tripId: string;
+
   clientId: string;
+
   seats: string[];
   /** @nullable */
+
   tripType?: string | null;
   /** @nullable */
+
   packageType?: string | null;
+
   hasInsurance?: boolean;
+
   isGratuidade?: boolean;
+
   totalValue: number;
   /** @nullable */
+
   paymentMethod?: string | null;
+
   installments?: number;
   /** @nullable */
+
   commissionPercentage?: number | null;
   /**
    * Direct commission amount in BRL (overrides rule-based calculation)
    * @nullable
    */
+
   commissionAmount?: number | null;
   /**
    * ID of the seller/consultant responsible for this reservation
    * @nullable
    */
+
   sellerId?: string | null;
   /** Amount already paid at the time of booking */
+
   paidValue?: number;
   /** @nullable */
+
   notes?: string | null;
   /** @nullable */
+
   discountCouponCode?: string | null;
   /** @nullable */
+
   discountCouponAmount?: number | null;
   /** @nullable */
+
   discountLoyaltyPoints?: number | null;
   /** @nullable */
+
   discountLoyaltyAmount?: number | null;
   /** @nullable */
+
   discountReferralCode?: string | null;
   /** @nullable */
+
   discountReferralAmount?: number | null;
   /** @nullable */
+
   discountTotal?: number | null;
   /** @nullable */
+
   firstDueDate?: string | null;
   /** @nullable */
+
   boardingLocationId?: string | null;
+
   isOnLap?: boolean;
   /** Criança menor de 7 anos que ocupa poltrona — força ageCategory=child */
+
   isChildUnder7?: boolean;
 }
 

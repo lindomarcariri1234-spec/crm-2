@@ -2560,4 +2560,3 @@ router.get("/trips/:id/location", async (req, res, next: NextFunction): Promise<
 });
 
 export default router;
-

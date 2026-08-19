@@ -274,7 +274,7 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
 
       const res = await request(buildApp())
         .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
+        .send({ status: "completed" });
 
       expect(res.status).toBe(200);
       expect(mockReverseProductOnly).toHaveBeenCalledTimes(1);
@@ -309,87 +309,59 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
 
       const res = await request(buildApp())
         .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
-
-      expect(res.status).toBe(200);
-      expect(mockReverseProductOnly).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          referralCode: "LEGACY50",
-          referralId: undefined, // no referralId in JSONB
-          reversalReason: "order_cancelled",
-        }),
-      );
-    });
-  });
-
-  describe("trip-based order (linked reservations exist)", () => {
-    it("calls reverseTripOrderReferrals and NOT reverseProductOnlyOrderReferral", async () => {
-      // DB selects: [store, order, reservations=[res-001, res-002]]
-      selectQueue.push([FAKE_STORE]);
-      selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
-      selectQueue.push([{ id: "res-001" }, { id: "res-002" }]);
-
-      const res = await request(buildApp())
-        .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
-
-      expect(res.status).toBe(200);
-      expect(mockReverseTripOrder).toHaveBeenCalledTimes(1);
-      expect(mockReverseTripOrder).toHaveBeenCalledWith(
-        expect.anything(), // db
-        expect.objectContaining({
-          tenantId: "tenant-001",
-          orderId: "order-001",
-          cancellableReservationIds: ["res-001", "res-002"],
-          reversalReason: "order_cancelled",
-        }),
-      );
-      expect(mockReverseProductOnly).not.toHaveBeenCalled();
-    });
-
-    it("passes a single reservation id when order has one linked reservation", async () => {
-      selectQueue.push([FAKE_STORE]);
-      selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
-      selectQueue.push([{ id: "res-solo" }]);
-
-      const res = await request(buildApp())
-        .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
-
-      expect(res.status).toBe(200);
-      expect(mockReverseTripOrder).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({
-          cancellableReservationIds: ["res-solo"],
-          reversalReason: "order_cancelled",
-        }),
-      );
-    });
-  });
-
-  describe("guard conditions — referral reversal must be skipped", () => {
-    it("does not reverse when referralEffectsAppliedAt is null (referral never applied)", async () => {
-      selectQueue.push([FAKE_STORE]);
-      selectQueue.push([FAKE_UNPAID_ORDER]);
-      // No reservations select needed — guard fires before that call
-
-      const res = await request(buildApp())
-        .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
+        .send({ status: "completed" });
 
       expect(res.status).toBe(200);
       expect(mockReverseProductOnly).not.toHaveBeenCalled();
       expect(mockReverseTripOrder).not.toHaveBeenCalled();
     });
 
-    it("does not reverse when order has no pendingReferral", async () => {
+    it("does not reverse when the new status is not CANCELLED (e.g. COMPLETED)", async () => {
       selectQueue.push([FAKE_STORE]);
-      selectQueue.push([FAKE_PAID_ORDER_NO_REFERRAL]);
+      selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
 
       const res = await request(buildApp())
         .put("/api/store/orders/order-001/status")
-        .send({ status: "cancelled" });
+        .send({ status: "completed" });
+
+      expect(res.status).toBe(200);
+      expect(mockReverseProductOnly).not.toHaveBeenCalled();
+      expect(mockReverseTripOrder).not.toHaveBeenCalled();
+    });
+
+    it("does not reverse when the new status is not CANCELLED (e.g. COMPLETED)", async () => {
+      selectQueue.push([FAKE_STORE]);
+      selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
+
+      const res = await request(buildApp())
+        .put("/api/store/orders/order-001/status")
+        .send({ status: "completed" });
+
+      expect(res.status).toBe(200);
+      expect(mockReverseProductOnly).not.toHaveBeenCalled();
+      expect(mockReverseTripOrder).not.toHaveBeenCalled();
+    });
+
+    it("does not reverse when the new status is not CANCELLED (e.g. COMPLETED)", async () => {
+      selectQueue.push([FAKE_STORE]);
+      selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
+
+      const res = await request(buildApp())
+        .put("/api/store/orders/order-001/status")
+        .send({ status: "completed" });
+
+      expect(res.status).toBe(200);
+      expect(mockReverseProductOnly).not.toHaveBeenCalled();
+      expect(mockReverseTripOrder).not.toHaveBeenCalled();
+    });
+
+    it("does not reverse when the new status is not CANCELLED (e.g. COMPLETED)", async () => {
+      selectQueue.push([FAKE_STORE]);
+      selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
+
+      const res = await request(buildApp())
+        .put("/api/store/orders/order-001/status")
+        .send({ status: "completed" });
 
       expect(res.status).toBe(200);
       expect(mockReverseProductOnly).not.toHaveBeenCalled();

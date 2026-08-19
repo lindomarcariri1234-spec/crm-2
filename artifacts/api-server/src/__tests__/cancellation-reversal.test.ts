@@ -1985,7 +1985,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     expect(storeOrderUpdate).toBeUndefined();
   });
 
-  // =========================================================================
+  // -------------------------------------------------------------------------
   // Store order lifecycle tests — refunded-status path
   //
   // These mirror the cancelled-status store order tests above, verifying that
@@ -1993,7 +1993,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
   // through a payment-gateway webhook) also closes out the linked store order.
   // Both "cancelled" and "refunded" flow through the same isBeingCancelled &&
   // wasActive gate in the PATCH handler, so the behaviour must be identical.
-  // =========================================================================
+  // -------------------------------------------------------------------------
 
   it("cancels the linked store order when a storefront reservation is marked as refunded", async () => {
     const app = buildReservationsApp();
@@ -2481,11 +2481,11 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     expect((memberUpdates[0] as { set: Record<string, unknown> }).set.availablePoints).toBe(0);
   });
 
-  // =========================================================================
+  // -------------------------------------------------------------------------
   // Refunded-status mirrors
   // The isBeingCancelled guard treats "refunded" the same as "cancelled", so
   // all three financial reversals must fire identically for both statuses.
-  // =========================================================================
+  // -------------------------------------------------------------------------
 
   it("decrements coupon usage_count when reservation with a coupon is refunded", async () => {
     const app = buildReservationsApp();

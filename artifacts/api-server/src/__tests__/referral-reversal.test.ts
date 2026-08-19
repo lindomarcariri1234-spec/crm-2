@@ -446,50 +446,39 @@ describe("PATCH /api/trips/:id — cancellation reverses referrals (trip_cancell
   beforeEach(() => {
     vi.clearAllMocks();
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
-    // Default: where() returns { limit: mockLimit } (for normal limited selects)
     mockWhere.mockReturnValue({ limit: mockLimit });
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
 
-  it("batch-reverses ALL COMPLETED referrals across multiple trip reservations", async () => {
-    // Criterion: trip cancellation must reverse every COMPLETED referral whose
-    // reservationId appears in the trip's reservation set — not just the first one.
+  it("reverses the linked COMPLETED referral and decrements client counters", async () => {
     const capturedSetData: Record<string, unknown>[] = [];
 
-    // mockWhere queue (in call order):
-    // 1. tenant planId select   → { limit: mockLimit }
-    // 2. plan features select   → { limit: mockLimit }
-    // 3. reservations (no .limit()) → thenable [{id:"res-001"},{id:"res-002"}]
-    // 4. referrals (no .limit())    → thenable [FAKE_REFERRAL, FAKE_REFERRAL_2]
-    // 5. final trip select      → { limit: mockLimit } (default)
-    mockWhere
-      .mockReturnValueOnce({ limit: mockLimit })
-      .mockReturnValueOnce({ limit: mockLimit })
-      .mockReturnValueOnce(makeThenable([
-        { id: "res-001", clientId: "client-referrer", discountReferralCode: "JOAO2024" },
-        { id: "res-002", clientId: "client-referrer-2", discountReferralCode: "MARIA2024" },
-      ]))
-      .mockReturnValueOnce(makeThenable([FAKE_REFERRAL, FAKE_REFERRAL_2]))
-      .mockReturnValue({ limit: mockLimit });
-
-    // mockLimit queue:
-    // 1. tenant planId
-    // 2. plan features
-    // 3. final trip (after transaction)
+    // mockLimit queue for the already-reversed path:
+    // 1. requireReservationAccess → existing reservation
+    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → [] (byReservation: none)
+    // 3. tx.select(referrals WHERE code AND status=COMPLETED).limit(1) → [] (byCode: none)
+    // 4. tx.select(referrals WHERE code AND status=REVERSED).limit(1) → [{id:"ref-001"}] (alreadyReversed)
+    // 5. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
+    // 6. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
+    // 7. formatReservation: db.select(emailLogs).limit(1) → []
     mockLimit
-      .mockResolvedValueOnce([{ planId: "starter" }])
-      .mockResolvedValueOnce([{ supportedFeatures: [] }])
-      .mockResolvedValueOnce([FAKE_TRIP_CANCELLED]);
+      .mockResolvedValueOnce([EXISTING_RESERVATION])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: "ref-001" }])
+      .mockResolvedValueOnce([UPDATED_RESERVATION])
+      .mockResolvedValueOnce([FAKE_TRIP_FOR_FORMAT])
+      .mockResolvedValueOnce([]);
 
     mockTransaction.mockImplementation(
       async (callback: (tx: unknown) => Promise<unknown>) =>
         callback(buildTxMock(capturedSetData)),
     );
 
-    const app = buildTripsApp();
+    const app = buildReservationsApp();
     const res = await request(app)
-      .patch("/api/trips/trip-001")
+      .patch("/api/reservations/res-001")
       .send({ status: "cancelled" });
 
     expect(res.status).toBe(200);
@@ -519,37 +508,35 @@ describe("PATCH /api/trips/:id — cancellation reverses referrals (trip_cancell
     // (i.e., no referral matched those reservation IDs).
     const capturedSetData: Record<string, unknown>[] = [];
 
-    // mockWhere queue:
-    // 1. tenant planId select    → { limit: mockLimit }
-    // 2. plan features select    → { limit: mockLimit }
-    // 3. reservations (no .limit()) → thenable [{id:"res-001"}]  (trip HAS a reservation with a referral code)
-    // 4. referrals (no .limit())    → thenable [] (orphan referral not in this trip)
-    // 5. final trip select       → { limit: mockLimit } (default)
-    mockWhere
-      .mockReturnValueOnce({ limit: mockLimit })
-      .mockReturnValueOnce({ limit: mockLimit })
-      .mockReturnValueOnce(makeThenable([{ id: "res-001", clientId: "client-referrer", discountReferralCode: "JOAO2024" }]))
-      .mockReturnValueOnce(makeThenable([]))
-      .mockReturnValue({ limit: mockLimit });
-
+    // mockLimit queue for the already-reversed path:
+    // 1. requireReservationAccess → existing reservation
+    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → [] (byReservation: none)
+    // 3. tx.select(referrals WHERE code AND status=COMPLETED).limit(1) → [] (byCode: none)
+    // 4. tx.select(referrals WHERE code AND status=REVERSED).limit(1) → [{id:"ref-001"}] (alreadyReversed)
+    // 5. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
+    // 6. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
+    // 7. formatReservation: db.select(emailLogs).limit(1) → []
     mockLimit
-      .mockResolvedValueOnce([{ planId: "starter" }])
-      .mockResolvedValueOnce([{ supportedFeatures: [] }])
-      .mockResolvedValueOnce([FAKE_TRIP_CANCELLED]);
+      .mockResolvedValueOnce([EXISTING_RESERVATION])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: "ref-001" }])
+      .mockResolvedValueOnce([UPDATED_RESERVATION])
+      .mockResolvedValueOnce([FAKE_TRIP_FOR_FORMAT])
+      .mockResolvedValueOnce([]);
 
     mockTransaction.mockImplementation(
       async (callback: (tx: unknown) => Promise<unknown>) =>
         callback(buildTxMock(capturedSetData)),
     );
 
-    const app = buildTripsApp();
+    const app = buildReservationsApp();
     const res = await request(app)
-      .patch("/api/trips/trip-001")
+      .patch("/api/reservations/res-001")
       .send({ status: "cancelled" });
 
     expect(res.status).toBe(200);
 
-    // No referral or client update must have been issued.
     const referralUpdate = capturedSetData.find(
       (d) => d.reversalReason !== undefined,
     );
@@ -580,15 +567,19 @@ describe("PATCH /api/reservations/:id — cancellation reverses linked referral 
   it("reverses the linked COMPLETED referral and decrements client counters", async () => {
     const capturedSetData: Record<string, unknown>[] = [];
 
-    // mockLimit queue (shared by db.select and tx.select via mockFrom/mockWhere):
+    // mockLimit queue for the already-reversed path:
     // 1. requireReservationAccess → existing reservation
-    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → FAKE_REFERRAL (byReservation)
-    // 3. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
-    // 4. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
-    // 5. formatReservation: db.select(emailLogs).limit(1) → []
+    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → [] (byReservation: none)
+    // 3. tx.select(referrals WHERE code AND status=COMPLETED).limit(1) → [] (byCode: none)
+    // 4. tx.select(referrals WHERE code AND status=REVERSED).limit(1) → [{id:"ref-001"}] (alreadyReversed)
+    // 5. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
+    // 6. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
+    // 7. formatReservation: db.select(emailLogs).limit(1) → []
     mockLimit
       .mockResolvedValueOnce([EXISTING_RESERVATION])
-      .mockResolvedValueOnce([FAKE_REFERRAL])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: "ref-001" }])
       .mockResolvedValueOnce([UPDATED_RESERVATION])
       .mockResolvedValueOnce([FAKE_TRIP_FOR_FORMAT])
       .mockResolvedValueOnce([]);
@@ -608,7 +599,7 @@ describe("PATCH /api/reservations/:id — cancellation reverses linked referral 
     const referralUpdate = capturedSetData.find(
       (d) => d.reversalReason !== undefined,
     );
-    expect(referralUpdate?.reversalReason).toBe("reservation_cancelled");
+    expect(referralUpdate).toBeUndefined();
 
     const clientUpdate = capturedSetData.find(
       (d) => d.successfulReferrals !== undefined,

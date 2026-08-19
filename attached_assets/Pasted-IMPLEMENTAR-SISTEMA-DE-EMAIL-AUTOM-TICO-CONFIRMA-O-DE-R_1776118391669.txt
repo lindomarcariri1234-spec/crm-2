@@ -1,0 +1,1022 @@
+IMPLEMENTAR SISTEMA DE EMAIL AUTOMÁTICO - CONFIRMAÇÃO DE RESERVA
+
+ESTRUTURA COMPLETA DO EMAIL
+
+// lib/email/templates/reservation-confirmation.tsx
+
+import * as React from 'react'
+import {
+  Html,
+  Head,
+  Body,
+  Container,
+  Section,
+  Row,
+  Column,
+  Heading,
+  Text,
+  Button,
+  Hr,
+  Img,
+  Link,
+} from '@react-email/components'
+
+interface ReservationConfirmationEmailProps {
+  // Dados da Reserva
+  reservationNumber: string
+  voucherCode: string
+  
+  // Dados do Cliente
+  clientName: string
+  clientCpf: string
+  clientEmail: string
+  clientPhone: string
+  
+  // Dados da Viagem
+  tripTitle: string
+  destination: string
+  departureDate: string
+  duration: string
+  
+  // Assentos
+  seats: string[]
+  
+  // Valores
+  totalAmount: number
+  amountPaid: number
+  amountPending: number
+  
+  // Pagamento
+  paymentMethod: string
+  paymentStatus: 'pending' | 'partial' | 'paid'
+  
+  // Agência
+  agencyName: string
+  agencyLogo: string
+  agencyPhone: string
+  agencyEmail: string
+  agencyWebsite: string
+  
+  // URLs
+  voucherUrl: string
+  consultUrl: string
+  whatsappUrl: string
+}
+
+export function ReservationConfirmationEmail({
+  reservationNumber,
+  voucherCode,
+  clientName,
+  clientCpf,
+  clientEmail,
+  clientPhone,
+  tripTitle,
+  destination,
+  departureDate,
+  duration,
+  seats,
+  totalAmount,
+  amountPaid,
+  amountPending,
+  paymentMethod,
+  paymentStatus,
+  agencyName,
+  agencyLogo,
+  agencyPhone,
+  agencyEmail,
+  agencyWebsite,
+  voucherUrl,
+  consultUrl,
+  whatsappUrl,
+}: ReservationConfirmationEmailProps) {
+  return (
+    <Html>
+      <Head />
+      <Body style={main}>
+        <Container style={container}>
+          
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* HEADER COM SUCESSO */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={headerSuccess}>
+            <div style={successIcon}>✓</div>
+            <Heading style={successTitle}>Reserva Confirmada! 🎉</Heading>
+            <Text style={successSubtitle}>
+              Sua reserva foi realizada com sucesso!
+            </Text>
+          </Section>
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* NÚMERO DO PEDIDO DESTAQUE */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={numberSection}>
+            <Text style={numberLabel}>Número do Pedido</Text>
+            <Text style={numberValue}>{reservationNumber}</Text>
+          </Section>
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* DETALHES DA VIAGEM */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={section}>
+            <Heading style={sectionTitle}>📍 Detalhes da Viagem</Heading>
+            
+            <table style={infoTable}>
+              <tr>
+                <td style={infoLabel}>Viagem:</td>
+                <td style={infoValue}>{tripTitle}</td>
+              </tr>
+              <tr>
+                <td style={infoLabel}>Destino:</td>
+                <td style={infoValue}>{destination}</td>
+              </tr>
+              <tr>
+                <td style={infoLabel}>Data de Saída:</td>
+                <td style={infoValue}>{departureDate}</td>
+              </tr>
+              <tr>
+                <td style={infoLabel}>Duração:</td>
+                <td style={infoValue}>{duration}</td>
+              </tr>
+              <tr>
+                <td style={infoLabel}>Passageiros:</td>
+                <td style={infoValue}>{seats.length} passageiro(s)</td>
+              </tr>
+            </table>
+
+            {/* Assentos em Destaque */}
+            <div style={seatsContainer}>
+              <Text style={seatsLabel}>Assentos Reservados:</Text>
+              <div style={seatsGrid}>
+                {seats.map((seat) => (
+                  <div key={seat} style={seatBadge}>
+                    Assento {seat}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Section>
+
+          <Hr style={divider} />
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* SUAS INFORMAÇÕES */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={section}>
+            <Heading style={sectionTitle}>👤 Suas Informações</Heading>
+            
+            <table style={infoTable}>
+              <tr>
+                <td style={infoLabel}>Nome:</td>
+                <td style={infoValue}>{clientName}</td>
+              </tr>
+              <tr>
+                <td style={infoLabel}>CPF:</td>
+                <td style={infoValue}>{clientCpf}</td>
+              </tr>
+              <tr>
+                <td style={infoLabel}>Email:</td>
+                <td style={infoValue}>{clientEmail}</td>
+              </tr>
+              <tr>
+                <td style={infoLabel}>Telefone:</td>
+                <td style={infoValue}>{clientPhone}</td>
+              </tr>
+            </table>
+          </Section>
+
+          <Hr style={divider} />
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* RESUMO FINANCEIRO */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={section}>
+            <Heading style={sectionTitle}>💰 Resumo Financeiro</Heading>
+            
+            <table style={financialTable}>
+              <tr>
+                <td style={financialLabel}>Valor Total:</td>
+                <td style={financialValue}>R$ {totalAmount.toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td style={financialLabel}>Valor Pago:</td>
+                <td style={financialValuePaid}>R$ {amountPaid.toFixed(2)}</td>
+              </tr>
+              <tr style={financialTotalRow}>
+                <td style={financialTotalLabel}>Saldo Pendente:</td>
+                <td style={financialTotalValue}>R$ {amountPending.toFixed(2)}</td>
+              </tr>
+            </table>
+
+            {/* Status do Pagamento */}
+            <div style={paymentStatusContainer}>
+              <Text style={paymentStatusLabel}>Forma de Pagamento:</Text>
+              <Text style={paymentStatusValue}>
+                {paymentMethod === 'pix' && '💳 PIX'}
+                {paymentMethod === 'credit_card' && '💳 Cartão de Crédito'}
+                {paymentMethod === 'debit_card' && '💳 Cartão de Débito'}
+                {paymentMethod === 'bank_slip' && '📄 Boleto Bancário'}
+              </Text>
+              
+              {paymentStatus === 'pending' && (
+                <div style={alertWarning}>
+                  ⏳ Aguardando confirmação do pagamento. Você receberá um email assim que o pagamento for confirmado.
+                </div>
+              )}
+              
+              {paymentStatus === 'paid' && (
+                <div style={alertSuccess}>
+                  ✓ Pagamento confirmado!
+                </div>
+              )}
+            </div>
+          </Section>
+
+          <Hr style={divider} />
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* PRÓXIMOS PASSOS */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={section}>
+            <Heading style={sectionTitle}>📋 Próximos Passos</Heading>
+            
+            <div style={stepsList}>
+              <div style={stepItem}>
+                <div style={stepNumber}>1</div>
+                <Text style={stepText}>
+                  Você receberá um email de confirmação com todos os detalhes da sua reserva e o voucher em anexo.
+                </Text>
+              </div>
+
+              <div style={stepItem}>
+                <div style={stepNumber}>2</div>
+                <Text style={stepText}>
+                  Também enviaremos uma mensagem no WhatsApp com as informações de embarque.
+                </Text>
+              </div>
+
+              <div style={stepItem}>
+                <div style={stepNumber}>3</div>
+                <Text style={stepText}>
+                  Apresente o voucher e documento com foto no dia do embarque.
+                </Text>
+              </div>
+
+              <div style={stepItem}>
+                <div style={stepNumber}>4</div>
+                <Text style={stepText}>
+                  Chegue ao ponto de embarque com 30 minutos de antecedência.
+                </Text>
+              </div>
+            </div>
+          </Section>
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* BOTÕES DE AÇÃO */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={buttonsSection}>
+            <Row>
+              <Column style={buttonColumn}>
+                <Button style={buttonPrimary} href={voucherUrl}>
+                  📄 Baixar Voucher
+                </Button>
+              </Column>
+              <Column style={buttonColumn}>
+                <Button style={buttonSecondary} href={whatsappUrl}>
+                  💬 Falar no WhatsApp
+                </Button>
+              </Column>
+            </Row>
+            <Row style={{ marginTop: '12px' }}>
+              <Column>
+                <Button style={buttonOutline} href={consultUrl}>
+                  🔍 Consultar Pedido
+                </Button>
+              </Column>
+            </Row>
+          </Section>
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* INFORMAÇÕES IMPORTANTES */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={alertInfo}>
+            <Text style={alertTitle}>⚠️ Informações Importantes</Text>
+            <ul style={alertList}>
+              <li>Apresente este voucher e documento com foto no embarque</li>
+              <li>Sente-se apenas no assento indicado no voucher</li>
+              <li>Chegue com 30 minutos de antecedência</li>
+              <li>Em caso de dúvidas, entre em contato conosco</li>
+            </ul>
+          </Section>
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* PRECISA DE AJUDA? */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={helpSection}>
+            <Heading style={helpTitle}>🆘 Precisa de Ajuda?</Heading>
+            <Text style={helpText}>
+              Nossa equipe está pronta para atendê-lo!
+            </Text>
+            
+            <table style={contactTable}>
+              <tr>
+                <td style={contactIcon}>📱</td>
+                <td>
+                  <Text style={contactLabel}>WhatsApp</Text>
+                  <Link href={whatsappUrl} style={contactValue}>
+                    {agencyPhone}
+                  </Link>
+                </td>
+              </tr>
+              <tr>
+                <td style={contactIcon}>📧</td>
+                <td>
+                  <Text style={contactLabel}>Email</Text>
+                  <Link href={`mailto:${agencyEmail}`} style={contactValue}>
+                    {agencyEmail}
+                  </Link>
+                </td>
+              </tr>
+              <tr>
+                <td style={contactIcon}>☎️</td>
+                <td>
+                  <Text style={contactLabel}>Telefone</Text>
+                  <Text style={contactValue}>{agencyPhone}</Text>
+                </td>
+              </tr>
+            </table>
+          </Section>
+
+          {/* ═══════════════════════════════════════════════════════════ */}
+          {/* FOOTER */}
+          {/* ═══════════════════════════════════════════════════════════ */}
+          <Section style={footer}>
+            <Img
+              src={agencyLogo}
+              alt={agencyName}
+              style={footerLogo}
+            />
+            <Text style={footerText}>
+              {agencyName}
+            </Text>
+            <Text style={footerSubtext}>
+              Sua viagem dos sonhos começa aqui!
+            </Text>
+            <Link href={agencyWebsite} style={footerLink}>
+              {agencyWebsite}
+            </Link>
+            
+            <Hr style={footerDivider} />
+            
+            <Text style={footerCopyright}>
+              © {new Date().getFullYear()} {agencyName}. Todos os direitos reservados.
+            </Text>
+            <Text style={footerDisclaimer}>
+              Você está recebendo este email porque realizou uma reserva em nosso site.
+            </Text>
+          </Section>
+
+        </Container>
+      </Body>
+    </Html>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+// ESTILOS CSS-IN-JS
+// ═══════════════════════════════════════════════════════════
+
+const main = {
+  backgroundColor: '#f6f9fc',
+  fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Ubuntu,sans-serif',
+}
+
+const container = {
+  backgroundColor: '#ffffff',
+  margin: '0 auto',
+  padding: '20px 0',
+  marginBottom: '64px',
+  maxWidth: '600px',
+}
+
+const headerSuccess = {
+  backgroundColor: '#10b981',
+  padding: '40px 20px',
+  textAlign: 'center' as const,
+  borderRadius: '8px 8px 0 0',
+}
+
+const successIcon = {
+  width: '64px',
+  height: '64px',
+  backgroundColor: '#ffffff',
+  borderRadius: '50%',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: '32px',
+  fontWeight: 'bold',
+  color: '#10b981',
+  margin: '0 auto 16px',
+}
+
+const successTitle = {
+  color: '#ffffff',
+  fontSize: '28px',
+  fontWeight: 'bold',
+  margin: '0 0 8px',
+}
+
+const successSubtitle = {
+  color: '#ffffff',
+  fontSize: '16px',
+  margin: '0',
+  opacity: 0.9,
+}
+
+const numberSection = {
+  backgroundColor: '#f3f4f6',
+  padding: '24px',
+  textAlign: 'center' as const,
+  borderBottom: '1px solid #e5e7eb',
+}
+
+const numberLabel = {
+  fontSize: '14px',
+  color: '#6b7280',
+  margin: '0 0 8px',
+}
+
+const numberValue = {
+  fontSize: '24px',
+  fontWeight: 'bold',
+  color: '#1f2937',
+  fontFamily: 'monospace',
+  letterSpacing: '2px',
+  margin: '0',
+}
+
+const section = {
+  padding: '32px 24px',
+}
+
+const sectionTitle = {
+  fontSize: '20px',
+  fontWeight: 'bold',
+  color: '#1f2937',
+  margin: '0 0 20px',
+}
+
+const infoTable = {
+  width: '100%',
+  borderCollapse: 'collapse' as const,
+}
+
+const infoLabel = {
+  fontSize: '14px',
+  color: '#6b7280',
+  padding: '8px 0',
+  width: '40%',
+}
+
+const infoValue = {
+  fontSize: '14px',
+  color: '#1f2937',
+  fontWeight: '600',
+  padding: '8px 0',
+}
+
+const seatsContainer = {
+  marginTop: '20px',
+  padding: '16px',
+  backgroundColor: '#fef3c7',
+  borderRadius: '8px',
+  border: '2px solid #fbbf24',
+}
+
+const seatsLabel = {
+  fontSize: '14px',
+  fontWeight: 'bold',
+  color: '#92400e',
+  margin: '0 0 12px',
+}
+
+const seatsGrid = {
+  display: 'flex',
+  flexWrap: 'wrap' as const,
+  gap: '8px',
+}
+
+const seatBadge = {
+  backgroundColor: '#f59e0b',
+  color: '#ffffff',
+  padding: '8px 16px',
+  borderRadius: '20px',
+  fontSize: '14px',
+  fontWeight: 'bold',
+  display: 'inline-block',
+}
+
+const divider = {
+  borderColor: '#e5e7eb',
+  margin: '0',
+}
+
+const financialTable = {
+  width: '100%',
+  borderCollapse: 'collapse' as const,
+}
+
+const financialLabel = {
+  fontSize: '14px',
+  color: '#6b7280',
+  padding: '12px 0',
+}
+
+const financialValue = {
+  fontSize: '16px',
+  color: '#1f2937',
+  fontWeight: '600',
+  textAlign: 'right' as const,
+  padding: '12px 0',
+}
+
+const financialValuePaid = {
+  ...financialValue,
+  color: '#10b981',
+}
+
+const financialTotalRow = {
+  borderTop: '2px solid #e5e7eb',
+}
+
+const financialTotalLabel = {
+  fontSize: '16px',
+  color: '#1f2937',
+  fontWeight: 'bold',
+  padding: '16px 0 12px',
+}
+
+const financialTotalValue = {
+  fontSize: '20px',
+  color: '#f59e0b',
+  fontWeight: 'bold',
+  textAlign: 'right' as const,
+  padding: '16px 0 12px',
+}
+
+const paymentStatusContainer = {
+  marginTop: '20px',
+}
+
+const paymentStatusLabel = {
+  fontSize: '14px',
+  color: '#6b7280',
+  margin: '0 0 4px',
+}
+
+const paymentStatusValue = {
+  fontSize: '16px',
+  color: '#1f2937',
+  fontWeight: '600',
+  margin: '0 0 12px',
+}
+
+const alertWarning = {
+  backgroundColor: '#fef3c7',
+  border: '1px solid #fbbf24',
+  borderRadius: '8px',
+  padding: '12px 16px',
+  fontSize: '14px',
+  color: '#92400e',
+  marginTop: '12px',
+}
+
+const alertSuccess = {
+  backgroundColor: '#d1fae5',
+  border: '1px solid #10b981',
+  borderRadius: '8px',
+  padding: '12px 16px',
+  fontSize: '14px',
+  color: '#065f46',
+  marginTop: '12px',
+}
+
+const stepsList = {
+  marginTop: '16px',
+}
+
+const stepItem = {
+  display: 'flex',
+  gap: '16px',
+  marginBottom: '20px',
+  alignItems: 'flex-start',
+}
+
+const stepNumber = {
+  width: '32px',
+  height: '32px',
+  backgroundColor: '#3b82f6',
+  color: '#ffffff',
+  borderRadius: '50%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: '16px',
+  fontWeight: 'bold',
+  flexShrink: 0,
+}
+
+const stepText = {
+  fontSize: '14px',
+  color: '#4b5563',
+  margin: '0',
+  lineHeight: '1.6',
+}
+
+const buttonsSection = {
+  padding: '24px',
+  textAlign: 'center' as const,
+}
+
+const buttonColumn = {
+  padding: '0 6px',
+}
+
+const buttonPrimary = {
+  backgroundColor: '#3b82f6',
+  color: '#ffffff',
+  padding: '12px 24px',
+  borderRadius: '8px',
+  textDecoration: 'none',
+  fontWeight: '600',
+  fontSize: '14px',
+  display: 'inline-block',
+  width: '100%',
+  textAlign: 'center' as const,
+}
+
+const buttonSecondary = {
+  backgroundColor: '#10b981',
+  color: '#ffffff',
+  padding: '12px 24px',
+  borderRadius: '8px',
+  textDecoration: 'none',
+  fontWeight: '600',
+  fontSize: '14px',
+  display: 'inline-block',
+  width: '100%',
+  textAlign: 'center' as const,
+}
+
+const buttonOutline = {
+  backgroundColor: 'transparent',
+  color: '#3b82f6',
+  padding: '12px 24px',
+  borderRadius: '8px',
+  border: '2px solid #3b82f6',
+  textDecoration: 'none',
+  fontWeight: '600',
+  fontSize: '14px',
+  display: 'inline-block',
+  width: '100%',
+  textAlign: 'center' as const,
+}
+
+const alertInfo = {
+  backgroundColor: '#dbeafe',
+  border: '1px solid #3b82f6',
+  borderRadius: '8px',
+  padding: '20px 24px',
+  margin: '0 24px',
+}
+
+const alertTitle = {
+  fontSize: '16px',
+  fontWeight: 'bold',
+  color: '#1e40af',
+  margin: '0 0 12px',
+}
+
+const alertList = {
+  margin: '0',
+  paddingLeft: '20px',
+  fontSize: '14px',
+  color: '#1e3a8a',
+  lineHeight: '1.8',
+}
+
+const helpSection = {
+  padding: '32px 24px',
+  backgroundColor: '#f9fafb',
+  textAlign: 'center' as const,
+}
+
+const helpTitle = {
+  fontSize: '20px',
+  fontWeight: 'bold',
+  color: '#1f2937',
+  margin: '0 0 8px',
+}
+
+const helpText = {
+  fontSize: '14px',
+  color: '#6b7280',
+  margin: '0 0 24px',
+}
+
+const contactTable = {
+  width: '100%',
+  maxWidth: '400px',
+  margin: '0 auto',
+}
+
+const contactIcon = {
+  fontSize: '24px',
+  padding: '12px',
+  textAlign: 'center' as const,
+  width: '60px',
+}
+
+const contactLabel = {
+  fontSize: '12px',
+  color: '#6b7280',
+  margin: '0',
+}
+
+const contactValue = {
+  fontSize: '14px',
+  color: '#3b82f6',
+  fontWeight: '600',
+  textDecoration: 'none',
+  display: 'block',
+  marginTop: '4px',
+}
+
+const footer = {
+  padding: '32px 24px',
+  textAlign: 'center' as const,
+  backgroundColor: '#f9fafb',
+}
+
+const footerLogo = {
+  width: '120px',
+  margin: '0 auto 16px',
+}
+
+const footerText = {
+  fontSize: '16px',
+  fontWeight: 'bold',
+  color: '#1f2937',
+  margin: '0 0 4px',
+}
+
+const footerSubtext = {
+  fontSize: '14px',
+  color: '#6b7280',
+  margin: '0 0 8px',
+}
+
+const footerLink = {
+  fontSize: '14px',
+  color: '#3b82f6',
+  textDecoration: 'none',
+  display: 'block',
+  margin: '0 0 24px',
+}
+
+const footerDivider = {
+  borderColor: '#e5e7eb',
+  margin: '24px 0',
+}
+
+const footerCopyright = {
+  fontSize: '12px',
+  color: '#9ca3af',
+  margin: '0 0 8px',
+}
+
+const footerDisclaimer = {
+  fontSize: '11px',
+  color: '#9ca3af',
+  margin: '0',
+  fontStyle: 'italic',
+}
+
+FUNÇÃO DE ENVIO DE EMAIL
+
+// lib/email/send-reservation-confirmation.ts
+
+import { Resend } from 'resend'
+import { ReservationConfirmationEmail } from './templates/reservation-confirmation'
+import { prisma } from '@/lib/prisma'
+import { format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+const resend = new Resend(process.env.RESEND_API_KEY)
+
+interface SendReservationConfirmationParams {
+  reservationId: string
+}
+
+export async function sendReservationConfirmation({
+  reservationId,
+}: SendReservationConfirmationParams) {
+  try {
+    // Buscar reserva completa
+    const reservation = await prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: {
+        client: true,
+        trip: true,
+        seats: {
+          orderBy: { seat_number: 'asc' },
+        },
+        tenant: true,
+        payments: true,
+      },
+    })
+
+    if (!reservation) {
+      throw new Error('Reserva não encontrada')
+    }
+
+    // Formatar data
+    const departureDate = format(
+      new Date(reservation.departure_date),
+      "dd 'de' MMMM 'de' yyyy 'às' HH:mm",
+      { locale: ptBR }
+    )
+
+    // Calcular duração (exemplo: "6 dias / 5 noites")
+    const duration = `${reservation.trip.duration_days} dias / ${reservation.trip.duration_days - 1} noites`
+
+    // Extrair assentos
+    const seats = reservation.seats.map((seat) => seat.seat_number)
+
+    // Calcular valor pago
+    const amountPaid = reservation.payments?.reduce(
+      (sum, payment) => sum + Number(payment.amount),
+      0
+    ) || 0
+
+    // URLs
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+    const voucherUrl = `${baseUrl}/voucher/${reservation.voucher_code}`
+    const consultUrl = `${baseUrl}/consultar-pedido?numero=${reservation.reservation_number}`
+    const whatsappUrl = `https://wa.me/${reservation.tenant.phone.replace(/\D/g, '')}?text=Olá! Fiz uma reserva (${reservation.reservation_number}) e gostaria de mais informações.`
+
+    // Enviar email
+    const { data, error } = await resend.emails.send({
+      from: `${reservation.tenant.name} <reservas@${process.env.EMAIL_DOMAIN}>`,
+      to: [reservation.client_email],
+      subject: `✅ Reserva Confirmada - ${reservation.reservation_number}`,
+      react: ReservationConfirmationEmail({
+        reservationNumber: reservation.reservation_number,
+        voucherCode: reservation.voucher_code,
+        clientName: reservation.client_name,
+        clientCpf: reservation.client_cpf,
+        clientEmail: reservation.client_email,
+        clientPhone: reservation.client_phone,
+        tripTitle: reservation.trip.title,
+        destination: reservation.trip.destination,
+        departureDate,
+        duration,
+        seats,
+        totalAmount: Number(reservation.total_amount),
+        amountPaid,
+        amountPending: Number(reservation.amount_pending),
+        paymentMethod: reservation.payment_method,
+        paymentStatus: reservation.payment_status as 'pending' | 'partial' | 'paid',
+        agencyName: reservation.tenant.name,
+        agencyLogo: reservation.tenant.logo_url || `${baseUrl}/logo.png`,
+        agencyPhone: reservation.tenant.phone,
+        agencyEmail: reservation.tenant.email,
+        agencyWebsite: baseUrl,
+        voucherUrl,
+        consultUrl,
+        whatsappUrl,
+      }),
+    })
+
+    if (error) {
+      console.error('Erro ao enviar email:', error)
+      throw error
+    }
+
+    console.log('✅ Email enviado com sucesso:', data)
+
+    // Registrar envio no banco
+    await prisma.emailLog.create({
+      data: {
+        tenant_id: reservation.tenant_id,
+        reservation_id: reservation.id,
+        recipient: reservation.client_email,
+        subject: `Reserva Confirmada - ${reservation.reservation_number}`,
+        type: 'reservation_confirmation',
+        status: 'sent',
+        sent_at: new Date(),
+      },
+    })
+
+    return { success: true, data }
+  } catch (error) {
+    console.error('Erro ao enviar email de confirmação:', error)
+    
+    // Registrar erro no banco
+    await prisma.emailLog.create({
+      data: {
+        tenant_id: reservation?.tenant_id || '',
+        reservation_id: reservationId,
+        recipient: reservation?.client_email || '',
+        subject: `Reserva Confirmada - ${reservation?.reservation_number}`,
+        type: 'reservation_confirmation',
+        status: 'failed',
+        error_message: error instanceof Error ? error.message : 'Erro desconhecido',
+      },
+    })
+
+    return { success: false, error }
+  }
+}
+
+INTEGRAÇÃO COM A API DE RESERVA
+
+// app/api/public/reservations/route.ts
+
+import { sendReservationConfirmation } from '@/lib/email/send-reservation-confirmation'
+
+export async function POST(req: Request) {
+  try {
+    // ... código existente de criação da reserva ...
+
+    const reservation = await prisma.reservation.create({
+      // ... dados da reserva ...
+    })
+
+    // ═══════════════════════════════════════════════════════════
+    // ENVIAR EMAIL DE CONFIRMAÇÃO AUTOMATICAMENTE
+    // ═══════════════════════════════════════════════════════════
+    
+    // Enviar de forma assíncrona (não bloqueia a resposta)
+    sendReservationConfirmation({
+      reservationId: reservation.id,
+    }).catch((error) => {
+      console.error('Erro ao enviar email (assíncrono):', error)
+      // Não falha a requisição se o email falhar
+    })
+
+    return NextResponse.json({
+      success: true,
+      reservation,
+      message: 'Reserva criada com sucesso! Você receberá um email de confirmação em breve.',
+    })
+  } catch (error) {
+    // ... tratamento de erro ...
+  }
+}
+
+SCHEMA PARA LOG DE EMAILS
+
+// prisma/schema.prisma
+
+model EmailLog {
+  id              String    @id @default(cuid())
+  tenant_id       String
+  tenant          Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  
+  reservation_id  String?
+  reservation     Reservation? @relation(fields: [reservation_id], references: [id])
+  
+  recipient       String    // Email do destinatário
+  subject         String    // Assunto do email
+  type            String    // reservation_confirmation, payment_reminder, etc.
+  
+  status          String    // sent, failed, bounced
+  error_message   String?   // Mensagem de erro (se falhou)
+  
+  sent_at         DateTime?
+  opened_at       DateTime? // Se foi aberto
+  clicked_at      DateTime? // Se clicou em algum link
+  
+  created_at      DateTime  @default(now())
+  
+  @@index([tenant_id])
+  @@index([reservation_id])
+  @@index([recipient])
+  @@map("email_logs")
+}
+
+Implementar sistema:
+
+ Email HTML Responsivo - Funciona em todos os dispositivos
+ Design Profissional - Layout limpo e moderno
+ Todas as Informações - Dados completos da reserva
+ Botões de Ação - Download voucher, WhatsApp, consulta
+ Status Visual - Cores e ícones intuitivos
+ Próximos Passos - Guia claro para o cliente
+ Contato Fácil - Múltiplos canais de suporte
+ Envio Automático - Dispara após confirmação
+ Log Completo - Rastreamento de envios
+ Tratamento de Erros - Não falha a reserva se email falhar
+
+Sistema de email profissional e completo

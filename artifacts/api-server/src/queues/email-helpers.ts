@@ -11,6 +11,7 @@ import type { ReservationConfirmationEmailProps, ReservationCancellationEmailPro
 import { insertClientNotification } from "../lib/client-notifications";
 import { areWorkersEnabled } from "../lib/redis";
 import { dispatchWhatsAppReferralReversed } from "./whatsapp-helpers.js";
+import { sendReservationConfirmationEmail, sendReservationCancellationEmail, sendWelcomeCredentialsEmail, sendNewBookingNotificationEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReferralTierUpgradeEmail, sendReferralReversedEmail, sendReminderHtmlEmail, sendReferralCodeSuspendedEmail, sendAgencySuspendedEmail, sendAgencyReactivatedEmail, sendReferralLoyaltyPointsEmail } from "@workspace/email";
 
 interface EnqueueEmailOpts {
   tenantId: string;

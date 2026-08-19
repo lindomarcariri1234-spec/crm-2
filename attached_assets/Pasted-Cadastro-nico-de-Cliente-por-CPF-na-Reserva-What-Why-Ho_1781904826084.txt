@@ -1,0 +1,23 @@
+Cadastro Único de Cliente por CPF na Reserva
+What & Why
+Hoje, ao criar uma reserva manual no CRM, o atendente precisa selecionar um cliente já cadastrado (busca por nome/WhatsApp). Se o cliente não existir, é necessário sair do wizard, cadastrá-lo no módulo "Clientes" e depois voltar. Isso causa registros duplicados e histórico fragmentado.
+
+A melhoria adiciona CPF como identificador central: ao digitar o CPF durante a reserva, o sistema verifica se já existe cadastro. Se sim, vincula automaticamente; se não, permite criar o cliente ali mesmo, sem interromper o fluxo.
+
+Done looks like
+No wizard de nova reserva, o campo de busca de cliente aceita pesquisa por CPF (além de nome/WhatsApp)
+Ao digitar um CPF que já consta na base, o sistema exibe o cliente encontrado e o seleciona automaticamente com um aviso "Cliente identificado pelo CPF"
+Se nenhum cadastro for encontrado para o CPF informado, um botão "+ Novo cliente" abre um mini-formulário inline (nome, WhatsApp, CPF pré-preenchido) sem sair do wizard
+Ao salvar o novo cliente, se outro atendente já cadastrou o mesmo CPF entre duas ações, o backend retorna o cliente existente (sem erro de duplicata)
+Todo o histórico de reservas, pagamentos e atendimentos fica concentrado em um único registro por cliente por CPF
+Out of scope
+Fusão (merge) de registros duplicados já existentes no banco — esse é um trabalho separado de limpeza de dados
+Alteração no fluxo da vitrine pública (já possui deduplicação por e-mail/CPF via upsertCheckoutClient)
+Alterações no esquema do banco (a constraint única clients_tenant_cpf_unique já existe)
+Deduplicação por e-mail ou WhatsApp (apenas CPF nesta tarefa)
+Steps
+Backend — busca por CPF em GET /api/clients: Adicionar filtro ?cpf= ao endpoint de listagem de clientes para suportar lookup em tempo real pelo CPF digitado no wizard.
+Backend — deduplicação em POST /api/clients: Quando um novo cliente é submetido com CPF já existente no mesmo tenant, retornar o cliente existente (HTTP 200 com campo existed: true) em vez de lançar erro de constraint. Atualizar name/whatsapp se estiverem em branco no registro existente.
+Frontend — busca por CPF no wizard (WizardStep1): No componente de seleção de cliente, detectar quando o texto digitado tem formato de CPF (11 dígitos numéricos) e disparar uma busca dedicada por CPF. Se um cliente for encontrado, exibi-lo em destaque no topo da lista com o label "Identificado pelo CPF" e selecioná-lo automaticamente.
+Frontend — criação inline no wizard: Quando o CPF buscado não retornar nenhum cliente, exibir a opção "+ Cadastrar novo cliente" que abre um painel deslizante (Sheet) com formulário mínimo (nome, WhatsApp, CPF já preenchido). Ao confirmar, chama POST /api/clients e seleciona automaticamente o cliente criado/encontrado.
+Frontend — feedback visual: Exibir toast de confirmação diferenciando os casos: "Cliente vinculado pelo CPF" (encontrado) vs "Novo cliente cadastrado" (criado).

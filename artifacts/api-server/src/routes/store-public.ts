@@ -1,15 +1,83 @@
-import { Router, type NextFunction } from "express";
-import { logger } from "../lib/logger";
-import { getAuth } from "@clerk/express";
-import { db } from "@workspace/db";
-import { tryAddSeatClient, removeSeatClient, emitSeatUpdate } from "../lib/seat-sse";
-import { broadcastSeatUpdate } from "../lib/realtime";
-import { RESERVATION_STATUS } from "@workspace/permissions";
-import { AppError, NotFoundError, ValidationError, ConflictError } from "../lib/errors";
-import { normalizeOrderEmail, roundMoney } from "../lib/pricing";
-import { localToday } from "@workspace/shared";
-import { getTenantUser } from "../lib/tenant";
-import {
+import 
+{
+ Router, type NextFunction 
+}
+ from "express"
+;
+
+import 
+{
+ logger 
+}
+ from "../lib/logger"
+;
+
+import 
+{
+ getAuth 
+}
+ from "@clerk/express"
+;
+
+import 
+{
+ db 
+}
+ from "@workspace/db"
+;
+
+import 
+{
+ tryAddSeatClient, removeSeatClient, emitSeatUpdate 
+}
+ from "../lib/seat-sse"
+;
+
+import 
+{
+ broadcastSeatUpdate 
+}
+ from "../lib/realtime"
+;
+
+import 
+{
+ RESERVATION_STATUS 
+}
+ from "@workspace/permissions"
+;
+
+import 
+{
+ AppError, NotFoundError, ValidationError, ConflictError 
+}
+ from "../lib/errors"
+;
+
+import 
+{
+ normalizeOrderEmail, roundMoney 
+}
+ from "../lib/pricing"
+;
+
+import 
+{
+ localToday 
+}
+ from "@workspace/shared"
+;
+
+import 
+{
+ getTenantUser 
+}
+ from "../lib/tenant"
+;
+
+import 
+{
+
   storesTable,
   storeProductsTable,
   storeCategoriesTable,
@@ -29,76 +97,258 @@ import {
   partnerAvailabilityTable,
   priceAlertSubscriptionsTable,
   referralAttemptLogsTable,
-} from "@workspace/db";
-import { eq, and, desc, asc, ilike, or, sql, inArray, ne } from "drizzle-orm";
-import { z } from "zod/v4";
-import { generateId } from "../lib/id";
-import { randomBytes, createHash } from "crypto";
-import { getAIClientForTenant } from "../lib/ai-client";
-import { sendPriceAlertConfirmationEmail, enqueuePixOrderAlertEmail } from "../queues/email-helpers";
-import { decryptOrPassthrough } from "../lib/crypto";
-import { generatePixEMV, generatePixQrCodeUrl } from "../lib/pix";
-import { getClientIp } from "../lib/get-client-ip";
-import { resolveCheckoutDiscounts } from "../services/checkout/discounts";
-import { prepareCheckoutItems } from "../services/checkout/items";
-import { persistCheckoutOrder } from "../services/checkout/persist-order";
-import { createReservationsForOrder } from "../services/checkout/create-reservations";
-import { ensurePortalAccount } from "../services/checkout/portal-account";
-import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
-import { insertClientNotification } from "../lib/client-notifications";
+}
+ from "@workspace/db"
+;
 
-function generateCookieId(): string {
-  return randomBytes(16).toString("hex");
+import 
+{
+ eq, and, desc, asc, ilike, or, sql, inArray, ne 
+}
+ from "drizzle-orm"
+;
+
+import 
+{
+ z 
+}
+ from "zod/v4"
+;
+
+import 
+{
+ generateId 
+}
+ from "../lib/id"
+;
+
+import 
+{
+ randomBytes, createHash 
+}
+ from "crypto"
+;
+
+import 
+{
+ getAIClientForTenant 
+}
+ from "../lib/ai-client"
+;
+
+import 
+{
+ sendPriceAlertConfirmationEmail, enqueuePixOrderAlertEmail 
+}
+ from "../queues/email-helpers"
+;
+
+import 
+{
+ decryptOrPassthrough 
+}
+ from "../lib/crypto"
+;
+
+import 
+{
+ generatePixEMV, generatePixQrCodeUrl 
+}
+ from "../lib/pix"
+;
+
+import 
+{
+ getClientIp 
+}
+ from "../lib/get-client-ip"
+;
+
+import 
+{
+ resolveCheckoutDiscounts 
+}
+ from "../services/checkout/discounts"
+;
+
+import 
+{
+ prepareCheckoutItems 
+}
+ from "../services/checkout/items"
+;
+
+import 
+{
+ persistCheckoutOrder 
+}
+ from "../services/checkout/persist-order"
+;
+
+import 
+{
+ createReservationsForOrder 
+}
+ from "../services/checkout/create-reservations"
+;
+
+import 
+{
+ ensurePortalAccount 
+}
+ from "../services/checkout/portal-account"
+;
+
+import 
+{
+ enqueueNewBookingNotificationEmail 
+}
+ from "../queues/email-helpers"
+;
+
+import 
+{
+ insertClientNotification 
+}
+ from "../lib/client-notifications"
+;
+
+
+function generateCookieId(): string 
+{
+
+  return randomBytes(16).toString("hex")
+;
+
 }
 
-function detectDeviceType(ua: string): string {
-  if (/mobile/i.test(ua)) return "mobile";
-  if (/tablet/i.test(ua)) return "tablet";
-  return "desktop";
+
+function detectDeviceType(ua: string): string 
+{
+
+  if (/mobile/i.test(ua)) return "mobile"
+;
+
+  if (/tablet/i.test(ua)) return "tablet"
+;
+
+  return "desktop"
+;
+
 }
-function detectBrowser(ua: string): string {
-  if (/edg/i.test(ua)) return "Edge";
-  if (/chrome/i.test(ua)) return "Chrome";
-  if (/firefox/i.test(ua)) return "Firefox";
-  if (/safari/i.test(ua)) return "Safari";
-  return "Unknown";
+
+function detectBrowser(ua: string): string 
+{
+
+  if (/edg/i.test(ua)) return "Edge"
+;
+
+  if (/chrome/i.test(ua)) return "Chrome"
+;
+
+  if (/firefox/i.test(ua)) return "Firefox"
+;
+
+  if (/safari/i.test(ua)) return "Safari"
+;
+
+  return "Unknown"
+;
+
 }
-function detectOS(ua: string): string {
-  if (/windows/i.test(ua)) return "Windows";
-  if (/android/i.test(ua)) return "Android";
-  if (/iphone|ipad|ios/i.test(ua)) return "iOS";
-  if (/mac/i.test(ua)) return "MacOS";
-  if (/linux/i.test(ua)) return "Linux";
-  return "Unknown";
+
+function detectOS(ua: string): string 
+{
+
+  if (/windows/i.test(ua)) return "Windows"
+;
+
+  if (/android/i.test(ua)) return "Android"
+;
+
+  if (/iphone|ipad|ios/i.test(ua)) return "iOS"
+;
+
+  if (/mac/i.test(ua)) return "MacOS"
+;
+
+  if (/linux/i.test(ua)) return "Linux"
+;
+
+  return "Unknown"
+;
+
 }
 
 
-const router = Router();
+const router = Router()
+;
 
-async function getActiveStore(slug: string) {
+
+async function getActiveStore(slug: string) 
+{
+
   const [store] = await db.select().from(storesTable)
     .where(and(
       eq(storesTable.slug, slug),
       eq(storesTable.isActive, true),
-    )).limit(1);
-  return store;
+    )).limit(1)
+;
+
+  return store
+;
+
 }
 
-router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const store = await getActiveStore(req.params.slug);
-    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
 
-    const [tenant] = await db.select({ settings: tenantsTable.settings })
+router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getActiveStore(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
+
+    const [tenant] = await db.select(
+{
+ settings: tenantsTable.settings 
+}
+)
       .from(tenantsTable)
       .where(eq(tenantsTable.id, store.tenantId))
-      .limit(1);
-    const tenantSettings = (tenant?.settings ?? {}) as Record<string, unknown>;
-    const couponsEnabled = tenantSettings.couponsEnabled !== false;
-    const referralsEnabled = tenantSettings.referralsEnabled !== false;
-    const seatMapEnabled = tenantSettings.seatMapEnabled !== false;
+      .limit(1)
+;
 
-    const publicData = {
+    const tenantSettings = (tenant?.settings ?? 
+{
+}
+) as Record<string, unknown>
+;
+
+    const couponsEnabled = tenantSettings.couponsEnabled !== false
+;
+
+    const referralsEnabled = tenantSettings.referralsEnabled !== false
+;
+
+    const seatMapEnabled = tenantSettings.seatMapEnabled !== false
+;
+
+
+    const publicData = 
+{
+
       id: store.id,
       name: store.name,
       slug: store.slug,
@@ -153,65 +403,178 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
       couponsEnabled,
       referralsEnabled,
       seatMapEnabled,
-    };
-    await db.update(storesTable).set({ totalVisits: store.totalVisits + 1 })
-      .where(eq(storesTable.id, store.id));
-    res.json(publicData);
-  } catch (err) {
-    next(err);
-  }
-});
+    
+}
+;
 
-router.get("/public/store/:slug/categories", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const store = await getActiveStore(req.params.slug);
-    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    await db.update(storesTable).set(
+{
+ totalVisits: store.totalVisits + 1 
+}
+)
+      .where(eq(storesTable.id, store.id))
+;
+
+    res.json(publicData)
+;
+
+  
+}
+ catch (err) 
+{
+
+    next(err)
+;
+
+  
+}
+
+}
+)
+;
+
+
+router.get("/public/store/:slug/categories", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getActiveStore(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
     const categories = await db.select().from(storeCategoriesTable)
       .where(and(
         eq(storeCategoriesTable.storeId, store.id),
         eq(storeCategoriesTable.isActive, true),
       ))
-      .orderBy(asc(storeCategoriesTable.order));
-    res.json(categories);
-  } catch (err) {
-    next(err);
-  }
-});
+      .orderBy(asc(storeCategoriesTable.order))
+;
 
-router.get("/public/store/:slug/products", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const store = await getActiveStore(req.params.slug);
-    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
-    if (store.maintenanceMode) {
-      next(new AppError("Store is under maintenance", 503, "STORE_MAINTENANCE", { maintenanceMessage: store.maintenanceMessage }));
-      return;
-    }
-    const {
+    res.json(categories)
+;
+
+  
+}
+ catch (err) 
+{
+
+    next(err)
+;
+
+  
+}
+
+}
+)
+;
+
+
+router.get("/public/store/:slug/products", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getActiveStore(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
+    if (store.maintenanceMode) 
+{
+
+      next(new AppError("Store is under maintenance", 503, "STORE_MAINTENANCE", 
+{
+ maintenanceMessage: store.maintenanceMessage 
+}
+))
+;
+
+      return
+;
+
+    
+}
+
+    const 
+{
+
       category, categoryId, type, featured, search, sort = "newest",
       destination, minPrice, maxPrice, departureFrom, minSeats,
       page: pageStr, limit: limitStr,
-    } = req.query;
+    
+}
+ = req.query
+;
+
     const conditions = [
       eq(storeProductsTable.storeId, store.id),
       eq(storeProductsTable.status, "active"),
-    ];
-    const categoryFilter = (categoryId ?? category) as string | undefined;
-    if (categoryFilter) conditions.push(eq(storeProductsTable.categoryId, categoryFilter));
-    if (type) conditions.push(eq(storeProductsTable.type, type as string));
-    if (featured === "true") conditions.push(eq(storeProductsTable.isFeatured, true));
-    if (search) {
+    ]
+;
+
+    const categoryFilter = (categoryId ?? category) as string | undefined
+;
+
+    if (categoryFilter) conditions.push(eq(storeProductsTable.categoryId, categoryFilter))
+;
+
+    if (type) conditions.push(eq(storeProductsTable.type, type as string))
+;
+
+    if (featured === "true") conditions.push(eq(storeProductsTable.isFeatured, true))
+;
+
+    if (search) 
+{
+
       conditions.push(or(
         ilike(storeProductsTable.name, `%${search}%`),
         ilike(storeProductsTable.description, `%${search}%`),
-      )!);
-    }
-    if (destination && destination !== "all") {
-      conditions.push(eq(storeProductsTable.destination, destination as string));
-    }
-    const minPriceNum = minPrice ? Number(minPrice) : NaN;
-    const maxPriceNum = maxPrice ? Number(maxPrice) : NaN;
-    if (!isNaN(minPriceNum) && isFinite(minPriceNum)) conditions.push(sql`CAST(${storeProductsTable.price} AS NUMERIC) >= ${minPriceNum}`);
-    if (!isNaN(maxPriceNum) && isFinite(maxPriceNum)) conditions.push(sql`CAST(${storeProductsTable.price} AS NUMERIC) <= ${maxPriceNum}`);
+      )!)
+;
+
+    
+}
+
+    if (destination && destination !== "all") 
+{
+
+      conditions.push(eq(storeProductsTable.destination, destination as string))
+;
+
+    
+}
+
+    const minPriceNum = minPrice ? Number(minPrice) : NaN
+;
+
+    const maxPriceNum = maxPrice ? Number(maxPrice) : NaN
+;
+
+    if (!isNaN(minPriceNum) && isFinite(minPriceNum)) conditions.push(sql`CAST(${storeProductsTable.price} AS NUMERIC) >= ${minPriceNum}`)
+;
+
+    if (!isNaN(maxPriceNum) && isFinite(maxPriceNum)) conditions.push(sql`CAST(${storeProductsTable.price} AS NUMERIC) <= ${maxPriceNum}`)
+;
+
     // Trip-linked filters (smart search). These reference the joined trips
     // table, so the COUNT query below must also join trips. Products without a
     // linked trip have NULL trip columns and are excluded by these filters,
@@ -823,7 +1186,10 @@ const CreateOrderBody = z.object({
   // reuse the original order instead of creating a duplicate and
   // double-reserving seats. See store_orders_store_idempotency_key_unique.
   idempotencyKey: z.string().min(1).max(128).optional(),
-});
+}
+)
+;
+
 
 /**
  * If a prior order already exists for this store + idempotencyKey, replay its
@@ -840,94 +1206,226 @@ async function handleIdempotentOrderReplay(
   idempotencyKey: string,
   res: import("express").Response,
   next: NextFunction,
-): Promise<boolean> {
+): Promise<boolean> 
+{
+
   const [existingOrder] = await db
     .select()
     .from(storeOrdersTable)
     .where(and(eq(storeOrdersTable.storeId, store.id), eq(storeOrdersTable.idempotencyKey, idempotencyKey)))
-    .limit(1);
-  if (!existingOrder) return false;
+    .limit(1)
+;
 
-  try {
-    await createReservationsForOrder(existingOrder.id);
-  } catch (reservationErr) {
+  if (!existingOrder) return false
+;
+
+
+  try 
+{
+
+    await createReservationsForOrder(existingOrder.id)
+;
+
+  
+}
+ catch (reservationErr) 
+{
+
     logger.error(
-      { err: reservationErr, orderId: existingOrder.id, orderNumber: existingOrder.orderNumber },
+      
+{
+ err: reservationErr, orderId: existingOrder.id, orderNumber: existingOrder.orderNumber 
+}
+,
       "[store/orders] Idempotent replay: failed to finish creating reservations",
-    );
+    )
+;
+
     next(new AppError(
       "Não foi possível confirmar sua reserva. Por favor, tente novamente ou contate a agência.",
       502,
       "RESERVATION_SYNC_FAILED",
-      { orderId: existingOrder.id, orderNumber: existingOrder.orderNumber },
-    ));
-    return true;
-  }
+      
+{
+ orderId: existingOrder.id, orderNumber: existingOrder.orderNumber 
+}
+,
+    ))
+;
+
+    return true
+;
+
+  
+}
+
 
   const items = await db
     .select()
     .from(storeOrderItemsTable)
-    .where(eq(storeOrderItemsTable.orderId, existingOrder.id));
+    .where(eq(storeOrderItemsTable.orderId, existingOrder.id))
+;
 
-  res.status(200).json({
+
+  res.status(200).json(
+{
+
     ...existingOrder,
     orderId: existingOrder.id,
     items,
     paymentToken: existingOrder.paymentToken,
     reservationExpiresAt: null,
-  });
-  return true;
+  
+}
+)
+;
+
+  return true
+;
+
 }
 
-router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const store = await getActiveStore(req.params.slug);
-    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
-    if (store.maintenanceMode) {
-      next(new AppError("Store is under maintenance", 503, "SERVICE_UNAVAILABLE"));
-      return;
-    }
-    const parsed = CreateOrderBody.safeParse(req.body);
-    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
-    const data = { ...parsed.data, ipAddress: getClientIp(req) ?? parsed.data.ipAddress };
+
+router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getActiveStore(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
+    if (store.maintenanceMode) 
+{
+
+      next(new AppError("Store is under maintenance", 503, "SERVICE_UNAVAILABLE"))
+;
+
+      return
+;
+
+    
+}
+
+    const parsed = CreateOrderBody.safeParse(req.body)
+;
+
+    if (!parsed.success) 
+{
+ next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR"))
+;
+ return
+;
+ 
+}
+
+    const data = 
+{
+ ...parsed.data, ipAddress: getClientIp(req) ?? parsed.data.ipAddress 
+}
+;
+
 
     // Idempotency: a browser retry / accidental double-submit of the same
     // checkout attempt carries the same client-generated key. Reuse the
     // original order (and finish creating reservations for it if a prior
     // attempt crashed partway) instead of creating a duplicate order and
     // double-reserving seats.
-    if (data.idempotencyKey) {
-      const existing = await handleIdempotentOrderReplay(store, data.idempotencyKey, res, next);
-      if (existing) return;
-    }
+    if (data.idempotencyKey) 
+{
 
-    const { subtotal, orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts } =
-      await prepareCheckoutItems({ storeId: store.id, tenantId: store.tenantId, items: data.items });
+      const existing = await handleIdempotentOrderReplay(store, data.idempotencyKey, res, next)
+;
 
-    const discounts = await resolveCheckoutDiscounts({
+      if (existing) return
+;
+
+    
+}
+
+
+    const 
+{
+ subtotal, orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts 
+}
+ =
+      await prepareCheckoutItems(
+{
+ storeId: store.id, tenantId: store.tenantId, items: data.items 
+}
+)
+;
+
+
+    const discounts = await resolveCheckoutDiscounts(
+{
+
       storeId: store.id,
       tenantId: store.tenantId,
       subtotal,
       couponCode: data.couponCode,
       referralCode: data.referralCode,
       customerEmail: data.customerEmail,
-    });
+    
+}
+)
+;
+
 
     // Resolve referral credit spend — requires authenticated Clerk user whose email matches the order
-    let appliedCreditAmount = 0;
-    let creditSpend: Array<{ id: string; consumedAmount: number }> = [];
-    if (data.referralCreditUsed && data.referralCreditUsed > 0) {
+    let appliedCreditAmount = 0
+;
+
+    let creditSpend: Array<
+{
+ id: string
+;
+ consumedAmount: number 
+}
+> = []
+;
+
+    if (data.referralCreditUsed && data.referralCreditUsed > 0) 
+{
+
       // Must have a valid Clerk session AND that user's email must match the order's customerEmail
-      const authedUser = await getTenantUser(req);
-      if (!authedUser) {
-        next(new ValidationError("Autenticação necessária para usar créditos de indicação", "UNAUTHENTICATED_CREDIT"));
-        return;
-      }
+      const authedUser = await getTenantUser(req)
+;
+
+      if (!authedUser) 
+{
+
+        next(new ValidationError("Autenticação necessária para usar créditos de indicação", "UNAUTHENTICATED_CREDIT"))
+;
+
+        return
+;
+
+      
+}
+
       // Bind authenticated identity to the order email — prevent IDOR spend
-      if (authedUser.email.toLowerCase() !== data.customerEmail.toLowerCase()) {
-        next(new ValidationError("E-mail da conta não corresponde ao e-mail do pedido", "CREDIT_EMAIL_MISMATCH"));
-        return;
-      }
+      if (authedUser.email.toLowerCase() !== data.customerEmail.toLowerCase()) 
+{
+
+        next(new ValidationError("E-mail da conta não corresponde ao e-mail do pedido", "CREDIT_EMAIL_MISMATCH"))
+;
+
+        return
+;
+
+      
+}
+
       // Verify a client record exists for this email in this store's tenant
       const [creditClient] = await db
         .select({ id: clientsTable.id })
@@ -1068,55 +1566,123 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         // idempotencyKey both passed the pre-check and raced to insert. The
         // unique index rejects the loser here — replay the winner's order
         // instead of surfacing a 500 / creating a duplicate.
-        if (tagged.code === "23505" && tagged.constraint === "store_orders_store_idempotency_key_unique" && data.idempotencyKey) {
-          const replayed = await handleIdempotentOrderReplay(store, data.idempotencyKey, res, next);
-          if (replayed) return;
-        }
-      }
-      throw txErr;
-    }
+        if (tagged.code === "23505" && tagged.constraint === "store_orders_store_idempotency_key_unique" && data.idempotencyKey) 
+{
+
+          const replayed = await handleIdempotentOrderReplay(store, data.idempotencyKey, res, next)
+;
+
+          if (replayed) return
+;
+
+        
+}
+
+      
+}
+
+      throw txErr
+;
+
+    
+}
+
 
     const [order] = await db.select().from(storeOrdersTable)
-      .where(eq(storeOrdersTable.id, orderId)).limit(1);
+      .where(eq(storeOrdersTable.id, orderId)).limit(1)
+;
+
     const items = await db.select().from(storeOrderItemsTable)
-      .where(eq(storeOrderItemsTable.orderId, orderId));
+      .where(eq(storeOrderItemsTable.orderId, orderId))
+;
+
 
     // Generate PIX QR code immediately when payment method is PIX and store
     // has a PIX key configured. The QR code is stored on the order so the
     // customer can scan it right after checkout (confirmation page + tracking).
-    if (data.paymentMethod === "pix" && store.pixEnabled && store.pixKey) {
-      try {
-        const decryptedPixKey = decryptOrPassthrough(store.pixKey);
-        if (decryptedPixKey) {
-          const pixAmount = depositAmount ?? totalAmount;
-          const pixCode = generatePixEMV({
+    if (data.paymentMethod === "pix" && store.pixEnabled && store.pixKey) 
+{
+
+      try 
+{
+
+        const decryptedPixKey = decryptOrPassthrough(store.pixKey)
+;
+
+        if (decryptedPixKey) 
+{
+
+          const pixAmount = depositAmount ?? totalAmount
+;
+
+          const pixCode = generatePixEMV(
+{
+
             key: decryptedPixKey,
             name: store.name,
             city: store.city ?? "BRASIL",
             amount: pixAmount,
             txid: orderId.slice(0, 25),
             description: `Reserva ${orderNumber}`.slice(0, 40),
-          });
-          const pixQrCodeUrl = generatePixQrCodeUrl(pixCode);
-          await db.update(storeOrdersTable).set({
+          
+}
+)
+;
+
+          const pixQrCodeUrl = generatePixQrCodeUrl(pixCode)
+;
+
+          await db.update(storeOrdersTable).set(
+{
+
             pixQrCode: pixCode,
             pixQrCodeUrl,
             pixCopyPaste: pixCode,
-          }).where(eq(storeOrdersTable.id, orderId));
+          
+}
+).where(eq(storeOrdersTable.id, orderId))
+;
+
           // Reflect generated PIX data in the order object returned below
-          (order as Record<string, unknown>).pixQrCode = pixCode;
-          (order as Record<string, unknown>).pixQrCodeUrl = pixQrCodeUrl;
-          (order as Record<string, unknown>).pixCopyPaste = pixCode;
-        }
-      } catch (pixErr) {
-        logger.warn({ pixErr, orderId }, "[store/orders] Failed to generate PIX QR code");
-      }
-    }
+          (order as Record<string, unknown>).pixQrCode = pixCode
+;
+
+          (order as Record<string, unknown>).pixQrCodeUrl = pixQrCodeUrl
+;
+
+          (order as Record<string, unknown>).pixCopyPaste = pixCode
+;
+
+        
+}
+
+      
+}
+ catch (pixErr) 
+{
+
+        logger.warn(
+{
+ pixErr, orderId 
+}
+, "[store/orders] Failed to generate PIX QR code")
+;
+
+      
+}
+
+    
+}
+
 
     // Notify agency users whenever a PIX order is placed — regardless of whether
     // the store has a PIX key configured — so they know to confirm the payment.
-    if (data.paymentMethod === "pix") {
-      enqueuePixOrderAlertEmail({
+    if (data.paymentMethod === "pix") 
+{
+
+      enqueuePixOrderAlertEmail(
+{
+
         tenantId: store.tenantId,
         storeName: store.name,
         orderNumber,
@@ -1125,10 +1691,26 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         customerPhone: data.customerPhone ?? undefined,
         totalAmount,
         productName: items[0]?.productName ?? "Produto",
-      }).catch((err) => {
-        logger.warn({ err, orderId }, "[store/orders] Failed to send PIX order alert to agency");
-      });
-    }
+      
+}
+).catch((err) => 
+{
+
+        logger.warn(
+{
+ err, orderId 
+}
+, "[store/orders] Failed to send PIX order alert to agency")
+;
+
+      
+}
+)
+;
+
+    
+}
+
 
     // Referral-code minting and referral conversion/credit-spend crediting are
     // intentionally NOT done here — they stay deferred to runPostPaymentSideEffects
@@ -1150,14 +1732,32 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     // so a retry (either the customer resubmitting or the later
     // payment-confirmation call in webhooks.ts/store.ts) will safely pick up
     // where this left off without creating duplicates.
-    let checkoutReservationIds: string[] = [];
-    let checkoutTripIds: string[] = [];
-    if (tripLinkedProducts.size > 0) {
-      try {
-        const createResult = await createReservationsForOrder(orderId);
-        checkoutReservationIds = createResult.reservationIds;
-        checkoutTripIds = createResult.tripIds;
-      } catch (reservationErr) {
+    let checkoutReservationIds: string[] = []
+;
+
+    let checkoutTripIds: string[] = []
+;
+
+    if (tripLinkedProducts.size > 0) 
+{
+
+      try 
+{
+
+        const createResult = await createReservationsForOrder(orderId)
+;
+
+        checkoutReservationIds = createResult.reservationIds
+;
+
+        checkoutTripIds = createResult.tripIds
+;
+
+      
+}
+ catch (reservationErr) 
+{
+
         // Race condition: two simultaneous checkouts for the same client+trip
         // both passed the order-creation step and raced to insert the reservation.
         // The unique index fires a 23505 — return 409 instead of a generic 500/502.
@@ -1165,38 +1765,87 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
           reservationErr != null &&
           typeof reservationErr === "object" &&
           "code" in reservationErr &&
-          (reservationErr as { code: unknown }).code === "23505" &&
+          (reservationErr as 
+{
+ code: unknown 
+}
+).code === "23505" &&
           "constraint" in reservationErr &&
-          (reservationErr as { constraint: unknown }).constraint === "reservations_active_client_trip_unique"
-        ) {
+          (reservationErr as 
+{
+ constraint: unknown 
+}
+).constraint === "reservations_active_client_trip_unique"
+        ) 
+{
+
           next(new ConflictError(
             "Esta viagem já possui uma reserva ativa para este cliente. Por favor, entre em contato com a agência.",
             "DUPLICATE_RESERVATION",
-          ));
-          return;
-        }
-        logger.error({ err: reservationErr, orderId, orderNumber }, "[store/orders] Failed to create reservations at checkout — surfacing error instead of a false-success response");
+          ))
+;
+
+          return
+;
+
+        
+}
+
+        logger.error(
+{
+ err: reservationErr, orderId, orderNumber 
+}
+, "[store/orders] Failed to create reservations at checkout — surfacing error instead of a false-success response")
+;
+
         next(new AppError(
           "Não foi possível confirmar sua reserva. Por favor, tente novamente ou contate a agência.",
           502,
           "RESERVATION_SYNC_FAILED",
-          { orderId, orderNumber },
-        ));
-        return;
-      }
-    }
+          
+{
+ orderId, orderNumber 
+}
+,
+        ))
+;
 
-    res.status(200).json({
+        return
+;
+
+      
+}
+
+    
+}
+
+
+    res.status(200).json(
+{
+
       ...order,
       orderId: order.id,
       items,
       paymentToken: orderPaymentToken,
       reservationExpiresAt: null,
-    });
+    
+}
+)
+;
 
-    for (const [tripId] of tripLinkedProducts) {
-      broadcastSeatUpdate(tripId, store.tenantId).catch(() => {});
-    }
+
+    for (const [tripId] of tripLinkedProducts) 
+{
+
+      broadcastSeatUpdate(tripId, store.tenantId).catch(() => 
+{
+}
+)
+;
+
+    
+}
+
 
     // Notify the agency of the new (pending) booking and provision the customer's
     // portal account right away, only when this call actually created new
@@ -1476,35 +2125,73 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
     const cartTotal = parsed.data.cartTotal ?? parsed.data.orderTotal ?? 0;
 
     // Look up by client's permanent referral code
-    const [referrer] = await db.select({
+    const [referrer] = await db.select(
+{
+
       id: clientsTable.id,
       name: clientsTable.name,
       email: clientsTable.email,
       referralCode: clientsTable.referralCode,
       referralCodeStatus: clientsTable.referralCodeStatus,
       successfulReferrals: clientsTable.successfulReferrals,
-    }).from(clientsTable)
+    
+}
+).from(clientsTable)
       .where(and(
         eq(clientsTable.tenantId, store.tenantId),
         eq(clientsTable.referralCode, code),
-      )).limit(1);
+      )).limit(1)
+;
 
-    if (!referrer) {
-      next(new ValidationError("Código de indicação inválido", "REFERRAL_CODE_INVALID", { valid: false })); return;
-    }
 
-    if (referrer.referralCodeStatus !== "active") {
-      recordSuspendedReferralAttempt({
+    if (!referrer) 
+{
+
+      next(new ValidationError("Código de indicação inválido", "REFERRAL_CODE_INVALID", 
+{
+ valid: false 
+}
+))
+;
+ return
+;
+
+    
+}
+
+
+    if (referrer.referralCodeStatus !== "active") 
+{
+
+      recordSuspendedReferralAttempt(
+{
+
         clientId: referrer.id,
         tenantId: store.tenantId,
         storeSlug: req.params.slug,
         ipAddress: getClientIp(req) ?? null,
-      });
-      next(new ValidationError("Código de indicação bloqueado ou cancelado", "REFERRAL_CODE_SUSPENDED", { valid: false })); return;
-    }
+      
+}
+)
+;
+
+      next(new ValidationError("Código de indicação bloqueado ou cancelado", "REFERRAL_CODE_SUSPENDED", 
+{
+ valid: false 
+}
+))
+;
+ return
+;
+
+    
+}
+
 
     // Get discount % from referral settings
-    const [settings] = await db.select({
+    const [settings] = await db.select(
+{
+
       discountValue: referralSettingsTable.discountValue,
       discountType: referralSettingsTable.discountType,
       isEnabled: referralSettingsTable.isEnabled,
@@ -1512,19 +2199,51 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
       allowSelfReferral: referralSettingsTable.allowSelfReferral,
       minPurchaseAmount: referralSettingsTable.minPurchaseAmount,
       maxReferralsPerUser: referralSettingsTable.maxReferralsPerUser,
-    }).from(referralSettingsTable)
-      .where(eq(referralSettingsTable.tenantId, store.tenantId)).limit(1);
+    
+}
+).from(referralSettingsTable)
+      .where(eq(referralSettingsTable.tenantId, store.tenantId)).limit(1)
+;
 
-    if (settings && !settings.isEnabled) {
-      next(new ValidationError("Programa de indicação inativo", "REFERRAL_PROGRAM_INACTIVE", { valid: false })); return;
-    }
+
+    if (settings && !settings.isEnabled) 
+{
+
+      next(new ValidationError("Programa de indicação inativo", "REFERRAL_PROGRAM_INACTIVE", 
+{
+ valid: false 
+}
+))
+;
+ return
+;
+
+    
+}
+
 
     // Self-referral check when customer email is provided
-    if (!settings?.allowSelfReferral && parsed.data.customerEmail && referrer.email) {
-      if (referrer.email.toLowerCase() === parsed.data.customerEmail.toLowerCase()) {
-        next(new ValidationError("Você não pode usar seu próprio código de indicação", "REFERRAL_SELF_USE", { valid: false })); return;
-      }
-    }
+    if (!settings?.allowSelfReferral && parsed.data.customerEmail && referrer.email) 
+{
+
+      if (referrer.email.toLowerCase() === parsed.data.customerEmail.toLowerCase()) 
+{
+
+        next(new ValidationError("Você não pode usar seu próprio código de indicação", "REFERRAL_SELF_USE", 
+{
+ valid: false 
+}
+))
+;
+ return
+;
+
+      
+}
+
+    
+}
+
 
     // NOTE: requireFirstPurchase is intentionally NOT enforced here. Probing
     // store_orders by customerEmail from this anonymous endpoint leaked whether
@@ -1533,61 +2252,127 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
     // checkout in the discount-application path, which is the only place the
     // discount actually affects the order total.
 
-    const discountType = settings?.discountType ?? "percentage";
-    const discountValue = Number(settings?.discountValue ?? 5);
-    const discountPercent = discountType === "percentage" ? discountValue : 0;
+    const discountType = settings?.discountType ?? "percentage"
+;
 
-    const referrerName = referrer.name ?? "um amigo";
+    const discountValue = Number(settings?.discountValue ?? 5)
+;
+
+    const discountPercent = discountType === "percentage" ? discountValue : 0
+;
+
+
+    const referrerName = referrer.name ?? "um amigo"
+;
+
 
     const discountLabel = discountType === "fixed"
       ? `R$ ${discountValue.toFixed(2).replace(".", ",")}`
-      : `${discountValue}%`;
+      : `${discountValue}%`
+;
+
 
     // Enforce minPurchaseAmount: reject if cart total is below the configured minimum
-    const minPurchaseAmount = settings?.minPurchaseAmount != null ? Number(settings.minPurchaseAmount) : 0;
-    if (minPurchaseAmount > 0 && cartTotal > 0 && cartTotal < minPurchaseAmount) {
+    const minPurchaseAmount = settings?.minPurchaseAmount != null ? Number(settings.minPurchaseAmount) : 0
+;
+
+    if (minPurchaseAmount > 0 && cartTotal > 0 && cartTotal < minPurchaseAmount) 
+{
+
       next(new AppError(
         `Valor mínimo para indicação: R$ ${minPurchaseAmount.toFixed(2).replace(".", ",")}`,
         422,
         "REFERRAL_MINIMUM_NOT_MET",
-        { valid: false },
-      ));
-      return;
-    }
+        
+{
+ valid: false 
+}
+,
+      ))
+;
+
+      return
+;
+
+    
+}
+
 
     // Enforce maxReferralsPerUser: reject if referrer has already hit their limit
-    const maxReferralsPerUser = settings?.maxReferralsPerUser != null ? Number(settings.maxReferralsPerUser) : 0;
-    if (maxReferralsPerUser > 0) {
+    const maxReferralsPerUser = settings?.maxReferralsPerUser != null ? Number(settings.maxReferralsPerUser) : 0
+;
+
+    if (maxReferralsPerUser > 0) 
+{
+
       const [countRow] = await db
-        .select({ cnt: sql<string>`COALESCE(successful_referrals, 0)` })
+        .select(
+{
+ cnt: sql<string>`COALESCE(successful_referrals, 0)` 
+}
+)
         .from(clientsTable)
         .where(eq(clientsTable.id, referrer.id))
-        .limit(1);
-      const currentCount = countRow ? Number(countRow.cnt) : 0;
-      if (currentCount >= maxReferralsPerUser) {
+        .limit(1)
+;
+
+      const currentCount = countRow ? Number(countRow.cnt) : 0
+;
+
+      if (currentCount >= maxReferralsPerUser) 
+{
+
         next(new AppError(
           "Este indicador atingiu o limite máximo de indicações",
           422,
           "REFERRAL_CODE_LIMIT_REACHED",
-          { valid: false },
-        ));
-        return;
-      }
-    }
+          
+{
+ valid: false 
+}
+,
+        ))
+;
 
-    const validatorIp = getClientIp(req);
-    const validatorCookieId = parsed.data.cookieId;
-    if (validatorIp && validatorCookieId) {
+        return
+;
+
+      
+}
+
+    
+}
+
+
+    const validatorIp = getClientIp(req)
+;
+
+    const validatorCookieId = parsed.data.cookieId
+;
+
+    if (validatorIp && validatorCookieId) 
+{
+
       db.update(referralTrackingTable)
-        .set({ ipAddress: validatorIp, updatedAt: new Date() })
+        .set(
+{
+ ipAddress: validatorIp, updatedAt: new Date() 
+}
+)
         .where(and(
           eq(referralTrackingTable.tenantId, store.tenantId),
           eq(referralTrackingTable.cookieId, validatorCookieId),
         ))
-        .catch(() => undefined);
-    }
+        .catch(() => undefined)
+;
 
-    res.json({
+    
+}
+
+
+    res.json(
+{
+
       valid: true,
       code,
       referrerName,
@@ -1595,22 +2380,75 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
       discountValue,
       discountType,
       description: `Desconto de ${discountLabel} por indicação de ${referrerName}`,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+    
+}
+)
+;
 
-router.get("/public/store/:slug/referral/info", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const store = await getActiveStore(req.params.slug);
-    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
-    const [tenantRowRefInfo] = await db.select({ settings: tenantsTable.settings }).from(tenantsTable).where(eq(tenantsTable.id, store.tenantId)).limit(1);
-    if ((tenantRowRefInfo?.settings as Record<string, unknown> | null)?.referralsEnabled === false) {
-      next(new NotFoundError("Not found", "NOT_FOUND")); return;
-    }
-    const code = (req.query.code as string | undefined)?.toUpperCase();
-    if (!code) { next(new ValidationError("code is required", "VALIDATION_ERROR")); return; }
+  
+}
+ catch (err) 
+{
+
+    next(err)
+;
+
+  
+}
+
+}
+)
+;
+
+
+router.get("/public/store/:slug/referral/info", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getActiveStore(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
+    const [tenantRowRefInfo] = await db.select(
+{
+ settings: tenantsTable.settings 
+}
+).from(tenantsTable).where(eq(tenantsTable.id, store.tenantId)).limit(1)
+;
+
+    if ((tenantRowRefInfo?.settings as Record<string, unknown> | null)?.referralsEnabled === false) 
+{
+
+      next(new NotFoundError("Not found", "NOT_FOUND"))
+;
+ return
+;
+
+    
+}
+
+    const code = (req.query.code as string | undefined)?.toUpperCase()
+;
+
+    if (!code) 
+{
+ next(new ValidationError("code is required", "VALIDATION_ERROR"))
+;
+ return
+;
+ 
+}
+
 
     // Look up by client's permanent referral code
     const [referrer] = await db.select({
@@ -1692,49 +2530,111 @@ router.post("/public/store/:slug/referral/track", async (req, res, next: NextFun
 
     // Only accept server-issued cookie IDs (those that exist in DB for this tenant)
     // Never trust client-provided IDs that don't match an existing record
-    let cookieId: string;
-    let existingRecord: { id: string; pagesVisited: unknown; referralCode: string } | undefined;
+    let cookieId: string
+;
 
-    if (parsed.data.serverCookieId) {
+    let existingRecord: 
+{
+ id: string
+;
+ pagesVisited: unknown
+;
+ referralCode: string 
+}
+ | undefined
+;
+
+
+    if (parsed.data.serverCookieId) 
+{
+
       // Verify the provided ID is actually server-issued (exists in DB for this tenant)
-      const [found] = await db.select({
+      const [found] = await db.select(
+{
+
         id: referralTrackingTable.id,
         pagesVisited: referralTrackingTable.pagesVisited,
         referralCode: referralTrackingTable.referralCode,
-      })
+      
+}
+)
         .from(referralTrackingTable)
         .where(and(
           eq(referralTrackingTable.tenantId, store.tenantId),
           eq(referralTrackingTable.cookieId, parsed.data.serverCookieId),
-        )).limit(1);
-      if (found) {
-        // Recognized server-issued ID — update existing record
-        cookieId = parsed.data.serverCookieId;
-        existingRecord = found;
-      } else {
-        // Unrecognized — ignore and issue a new one
-        cookieId = generateCookieId();
-      }
-    } else {
-      // First visit — always generate server-side
-      cookieId = generateCookieId();
-    }
+        )).limit(1)
+;
 
-    const now = new Date();
-    if (existingRecord) {
-      const pages = Array.isArray(existingRecord.pagesVisited) ? existingRecord.pagesVisited as string[] : [];
-      if (parsed.data.landingPage) pages.push(parsed.data.landingPage);
-      await db.update(referralTrackingTable).set({
+      if (found) 
+{
+
+        // Recognized server-issued ID — update existing record
+        cookieId = parsed.data.serverCookieId
+;
+
+        existingRecord = found
+;
+
+      
+}
+ else 
+{
+
+        // Unrecognized — ignore and issue a new one
+        cookieId = generateCookieId()
+;
+
+      
+}
+
+    
+}
+ else 
+{
+
+      // First visit — always generate server-side
+      cookieId = generateCookieId()
+;
+
+    
+}
+
+
+    const now = new Date()
+;
+
+    if (existingRecord) 
+{
+
+      const pages = Array.isArray(existingRecord.pagesVisited) ? existingRecord.pagesVisited as string[] : []
+;
+
+      if (parsed.data.landingPage) pages.push(parsed.data.landingPage)
+;
+
+      await db.update(referralTrackingTable).set(
+{
+
         lastVisit: now,
         visitsCount: sql`visits_count + 1`,
         pagesVisited: pages,
         updatedAt: now,
-      }).where(and(
+      
+}
+).where(and(
         eq(referralTrackingTable.tenantId, store.tenantId),
         eq(referralTrackingTable.cookieId, cookieId),
-      ));
-    } else {
-      await db.insert(referralTrackingTable).values({
+      ))
+;
+
+    
+}
+ else 
+{
+
+      await db.insert(referralTrackingTable).values(
+{
+
         id: generateId(),
         tenantId: store.tenantId,
         cookieId,
@@ -1750,21 +2650,45 @@ router.post("/public/store/:slug/referral/track", async (req, res, next: NextFun
         utmCampaign: parsed.data.utmCampaign,
         utmContent: parsed.data.utmContent,
         utmTerm: parsed.data.utmTerm,
-      });
+      
+}
+)
+;
+
 
       // Notify the referrer that someone has clicked their link (first visit only)
-      db.select({ clientId: clientsTable.id, name: clientsTable.name })
+      db.select(
+{
+ clientId: clientsTable.id, name: clientsTable.name 
+}
+)
         .from(clientsTable)
         .where(and(eq(clientsTable.tenantId, store.tenantId), eq(clientsTable.referralCode, code)))
         .limit(1)
-        .then(([referrer]) => {
-          if (!referrer) return;
-          return insertClientNotification(referrer.clientId, store.tenantId, "referral_link_clicked", {
+        .then(([referrer]) => 
+{
+
+          if (!referrer) return
+;
+
+          return insertClientNotification(referrer.clientId, store.tenantId, "referral_link_clicked", 
+{
+
             referralCode: code,
-          });
-        })
-        .catch(() => undefined);
-    }
+          
+}
+)
+;
+
+        
+}
+)
+        .catch(() => undefined)
+;
+
+    
+}
+
 
     // Sync lastVisit and visitsCount back to the referrals table so the admin panel shows live data.
     // Use the tracking record's original referralCode (not the request's code) to prevent

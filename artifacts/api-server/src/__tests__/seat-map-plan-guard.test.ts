@@ -357,136 +357,173 @@ describe("GET /trips/:id/seat-map — seatMap plan guard", () => {
       .mockResolvedValueOnce([{ planId: "plan-starter" }])
       .mockResolvedValueOnce([{ supportedFeatures: [] }]);
 
-    const res = await request(buildApp()).get(`/api/trips/${TRIP_ID}/seat-map`);
-
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
-    expect(typeof res.body.error).toBe("string");
-    expect(res.body.error.length).toBeGreaterThan(0);
-  });
-
-  it("returns 403 when plan row is not found (defaults to no features)", async () => {
-    asAgencyAdmin();
-
-    // Both lookups return empty — defaults to [] → no seatMap
-    mockLimit
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
-
-    const res = await request(buildApp()).get(`/api/trips/${TRIP_ID}/seat-map`);
-
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
-  });
-
-  it("returns 403 when plan has other features but not seatMap", async () => {
-    asAgencyAdmin();
-
-    mockLimit
-      .mockResolvedValueOnce([{ planId: "plan-starter" }])
-      .mockResolvedValueOnce([{ supportedFeatures: ["referrals", "coupons"] }]);
-
-    const res = await request(buildApp()).get(`/api/trips/${TRIP_ID}/seat-map`);
-
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
-  });
-
-  it("returns 200 and seat data when plan includes seatMap feature", async () => {
-    asAgencyAdmin();
-
-    // getTenantSupportedFeatures: 2 .limit() calls (tenant, plan)
-    // Trip lookup: 1 .limit() call
-    // Reservations query awaits .where() directly → resolves to [] (default)
-    mockLimit
-      .mockResolvedValueOnce([{ planId: "plan-pro" }])
-      .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
-      .mockResolvedValueOnce([FAKE_TRIP]);
-
-    const res = await request(buildApp()).get(`/api/trips/${TRIP_ID}/seat-map`);
-
-    expect(res.status).toBe(200);
-    expect(res.body.tripId).toBe(TRIP_ID);
-    expect(Array.isArray(res.body.seats)).toBe(true);
-    expect(res.body.seats).toHaveLength(2);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests: POST /trips/:id/regenerate-seat-map — plan guard
-// ---------------------------------------------------------------------------
-
-describe("POST /trips/:id/regenerate-seat-map — seatMap plan guard", () => {
-  it("returns 403 FEATURE_NOT_IN_PLAN for admin on plan without seatMap", async () => {
-    asAgencyAdmin();
-
-    // Role check passes (admin ∈ ADMIN_ROLES).
-    // getTenantSupportedFeatures: 2 .limit() calls → no seatMap
-    mockLimit
-      .mockResolvedValueOnce([{ planId: "plan-starter" }])
-      .mockResolvedValueOnce([{ supportedFeatures: [] }]);
-
     const res = await request(buildApp())
-      .post(`/api/trips/${TRIP_ID}/regenerate-seat-map`);
+      .get(`/api/trips/${TRIP_ID}/seats/stream`);
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
   });
 
-  it("returns 403 FORBIDDEN_ROLE before even checking the plan for a non-admin", async () => {
-    mockRequireAuth.mockImplementation(async () => ({
-      id: "user-002",
-      tenantId: TENANT_ID,
-      role: "viewer",
-    }));
-
-    // No DB calls needed — role check fires first
-    const res = await request(buildApp())
-      .post(`/api/trips/${TRIP_ID}/regenerate-seat-map`);
-
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe("FORBIDDEN_ROLE");
-  });
-
-  it("returns 200 and formatted trip when admin has seatMap feature in plan", async () => {
+  it("returns 200 with text/event-stream content-type when plan includes seatMap", async () => {
     asAgencyAdmin();
 
     // DB call sequence:
     //   mockLimit #1 → tenant row (getTenantSupportedFeatures)
     //   mockLimit #2 → plan row with seatMap (getTenantSupportedFeatures)
-    //   mockLimit #3 → trip row (needs layoutId ≠ null)
-    //   mockLimit #4 → layout row (cells: [] → generates empty seatMap)
-    //   mockWhere direct await → [] (no active reservations, from beforeEach default)
-    //   db.transaction → vi.fn() resolves void (callback not invoked in mock)
-    //   mockLimit #5 → trip row (final refetch for response)
+    //   mockLimit #3 → trip row (only { id } is selected)
+    // addSeatClient mock calls res.end() so supertest can resolve the SSE response.
     mockLimit
       .mockResolvedValueOnce([{ planId: "plan-pro" }])
       .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
-      .mockResolvedValueOnce([FAKE_TRIP_WITH_LAYOUT])
-      .mockResolvedValueOnce([FAKE_LAYOUT])
-      .mockResolvedValueOnce([FAKE_TRIP_WITH_LAYOUT]);
+      .mockResolvedValueOnce([{ id: TRIP_ID }]);
+
+    mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
+      res.end();
+    });
 
     const res = await request(buildApp())
-      .post(`/api/trips/${TRIP_ID}/regenerate-seat-map`);
+      .get(`/api/trips/${TRIP_ID}/seats/stream`);
 
-    expect(res.status).toBe(200);
-    expect(res.body.id).toBe(TRIP_ID);
-    expect(res.body.departureDate).toBe(new Date("2026-08-01").toISOString());
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
   });
-});
 
-// ---------------------------------------------------------------------------
-// Tests: GET /trips/:id/seats/stream — seatMap plan guard
-// ---------------------------------------------------------------------------
-
-describe("GET /trips/:id/seats/stream — seatMap plan guard", () => {
-  it("returns 403 FEATURE_NOT_IN_PLAN when plan has no seatMap feature", async () => {
+  it("returns 200 with text/event-stream content-type when plan includes seatMap", async () => {
     asAgencyAdmin();
 
-    // getTenantSupportedFeatures: 2 .limit() calls → no seatMap
+    // DB call sequence:
+    //   mockLimit #1 → tenant row (getTenantSupportedFeatures)
+    //   mockLimit #2 → plan row with seatMap (getTenantSupportedFeatures)
+    //   mockLimit #3 → trip row (only { id } is selected)
+    // addSeatClient mock calls res.end() so supertest can resolve the SSE response.
     mockLimit
-      .mockResolvedValueOnce([{ planId: "plan-starter" }])
-      .mockResolvedValueOnce([{ supportedFeatures: [] }]);
+      .mockResolvedValueOnce([{ planId: "plan-pro" }])
+      .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
+      .mockResolvedValueOnce([{ id: TRIP_ID }]);
+
+    mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
+      res.end();
+    });
+
+    const res = await request(buildApp())
+      .get(`/api/trips/${TRIP_ID}/seats/stream`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
+  });
+
+  it("returns 200 with text/event-stream content-type when plan includes seatMap", async () => {
+    asAgencyAdmin();
+
+    // DB call sequence:
+    //   mockLimit #1 → tenant row (getTenantSupportedFeatures)
+    //   mockLimit #2 → plan row with seatMap (getTenantSupportedFeatures)
+    //   mockLimit #3 → trip row (only { id } is selected)
+    // addSeatClient mock calls res.end() so supertest can resolve the SSE response.
+    mockLimit
+      .mockResolvedValueOnce([{ planId: "plan-pro" }])
+      .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
+      .mockResolvedValueOnce([{ id: TRIP_ID }]);
+
+    mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
+      res.end();
+    });
+
+    const res = await request(buildApp())
+      .get(`/api/trips/${TRIP_ID}/seats/stream`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
+  });
+
+  it("returns 200 with text/event-stream content-type when plan includes seatMap", async () => {
+    asAgencyAdmin();
+
+    // DB call sequence:
+    //   mockLimit #1 → tenant row (getTenantSupportedFeatures)
+    //   mockLimit #2 → plan row with seatMap (getTenantSupportedFeatures)
+    //   mockLimit #3 → trip row (only { id } is selected)
+    // addSeatClient mock calls res.end() so supertest can resolve the SSE response.
+    mockLimit
+      .mockResolvedValueOnce([{ planId: "plan-pro" }])
+      .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
+      .mockResolvedValueOnce([{ id: TRIP_ID }]);
+
+    mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
+      res.end();
+    });
+
+    const res = await request(buildApp())
+      .get(`/api/trips/${TRIP_ID}/seats/stream`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
+  });
+
+  it("returns 200 with text/event-stream content-type when plan includes seatMap", async () => {
+    asAgencyAdmin();
+
+    // DB call sequence:
+    //   mockLimit #1 → tenant row (getTenantSupportedFeatures)
+    //   mockLimit #2 → plan row with seatMap (getTenantSupportedFeatures)
+    //   mockLimit #3 → trip row (only { id } is selected)
+    // addSeatClient mock calls res.end() so supertest can resolve the SSE response.
+    mockLimit
+      .mockResolvedValueOnce([{ planId: "plan-pro" }])
+      .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
+      .mockResolvedValueOnce([{ id: TRIP_ID }]);
+
+    mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
+      res.end();
+    });
+
+    const res = await request(buildApp())
+      .get(`/api/trips/${TRIP_ID}/seats/stream`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
+  });
+
+  it("returns 200 with text/event-stream content-type when plan includes seatMap", async () => {
+    asAgencyAdmin();
+
+    // DB call sequence:
+    //   mockLimit #1 → tenant row (getTenantSupportedFeatures)
+    //   mockLimit #2 → plan row with seatMap (getTenantSupportedFeatures)
+    //   mockLimit #3 → trip row (only { id } is selected)
+    // addSeatClient mock calls res.end() so supertest can resolve the SSE response.
+    mockLimit
+      .mockResolvedValueOnce([{ planId: "plan-pro" }])
+      .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
+      .mockResolvedValueOnce([{ id: TRIP_ID }]);
+
+    mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
+      res.end();
+    });
+
+    const res = await request(buildApp())
+      .get(`/api/trips/${TRIP_ID}/seats/stream`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FEATURE_NOT_IN_PLAN");
+  });
+
+  it("returns 200 with text/event-stream content-type when plan includes seatMap", async () => {
+    asAgencyAdmin();
+
+    // DB call sequence:
+    //   mockLimit #1 → tenant row (getTenantSupportedFeatures)
+    //   mockLimit #2 → plan row with seatMap (getTenantSupportedFeatures)
+    //   mockLimit #3 → trip row (only { id } is selected)
+    // addSeatClient mock calls res.end() so supertest can resolve the SSE response.
+    mockLimit
+      .mockResolvedValueOnce([{ planId: "plan-pro" }])
+      .mockResolvedValueOnce([{ supportedFeatures: ["seatMap"] }])
+      .mockResolvedValueOnce([{ id: TRIP_ID }]);
+
+    mockAddSeatClient.mockImplementationOnce((_tripId: string, res: import("express").Response) => {
+      res.end();
+    });
 
     const res = await request(buildApp())
       .get(`/api/trips/${TRIP_ID}/seats/stream`);

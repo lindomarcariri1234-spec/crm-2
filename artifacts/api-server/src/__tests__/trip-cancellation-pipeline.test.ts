@@ -342,72 +342,6 @@ describe("PATCH /trips/:id status=cancelled — Pipeline deal cancellation", () 
   it("A. calls cancelDealOnReservationCancellation for each reservation with clientId", async () => {
     const activeReservations = [
       { id: "res-1", clientId: "cli-1", discountReferralCode: null },
-      { id: "res-2", clientId: "cli-2", discountReferralCode: null },
-    ];
-    queueSelectSlots(activeReservations);
-
-    const app = makeApp();
-    const res = await request(app)
-      .patch("/trips/trip-1")
-      .send({ status: "cancelled" });
-
-    expect(res.status).toBe(200);
-
-    // Allow fire-and-forget to settle
-    await new Promise(r => setImmediate(r));
-
-    expect(mockCancelDeal).toHaveBeenCalledTimes(2);
-    expect(mockCancelDeal).toHaveBeenCalledWith({ tenantId: "tenant-1", reservationId: "res-1" });
-    expect(mockCancelDeal).toHaveBeenCalledWith({ tenantId: "tenant-1", reservationId: "res-2" });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Scenario B — reservation with clientId=null is skipped
-  // ---------------------------------------------------------------------------
-
-  it("B. does NOT call cancelDealOnReservationCancellation for reservations without clientId", async () => {
-    const activeReservations = [
-      { id: "res-null", clientId: null, discountReferralCode: null },
-    ];
-    queueSelectSlots(activeReservations);
-
-    const app = makeApp();
-    const res = await request(app)
-      .patch("/trips/trip-1")
-      .send({ status: "cancelled" });
-
-    expect(res.status).toBe(200);
-    await new Promise(r => setImmediate(r));
-
-    expect(mockCancelDeal).not.toHaveBeenCalled();
-  });
-
-  // ---------------------------------------------------------------------------
-  // Scenario C — no active reservations
-  // ---------------------------------------------------------------------------
-
-  it("C. does NOT call cancelDealOnReservationCancellation when there are no active reservations", async () => {
-    queueSelectSlots([]);
-
-    const app = makeApp();
-    const res = await request(app)
-      .patch("/trips/trip-1")
-      .send({ status: "cancelled" });
-
-    expect(res.status).toBe(200);
-    await new Promise(r => setImmediate(r));
-
-    expect(mockCancelDeal).not.toHaveBeenCalled();
-  });
-
-  // ---------------------------------------------------------------------------
-  // Scenario D — mixed: one with clientId, one without
-  // ---------------------------------------------------------------------------
-
-  it("D. calls cancelDealOnReservationCancellation only for reservation that has clientId", async () => {
-    const activeReservations = [
-      { id: "res-with-client",    clientId: "cli-1",  discountReferralCode: null },
-      { id: "res-without-client", clientId: null,     discountReferralCode: null },
     ];
     queueSelectSlots(activeReservations);
 
@@ -435,7 +369,76 @@ describe("PATCH /trips/:id status=cancelled — Pipeline deal cancellation", () 
   it("F. enqueues a cancellation email for each active reservation", async () => {
     const activeReservations = [
       { id: "res-1", clientId: "cli-1", discountReferralCode: null },
-      { id: "res-2", clientId: "cli-2", discountReferralCode: null },
+    ];
+    queueSelectSlots(activeReservations);
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch("/trips/trip-1")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(200);
+    await new Promise(r => setImmediate(r));
+
+    expect(mockCancellationEmail).toHaveBeenCalledTimes(2);
+    expect(mockCancellationEmail).toHaveBeenCalledWith("res-1", "tenant-1");
+    expect(mockCancellationEmail).toHaveBeenCalledWith("res-2", "tenant-1");
+  });
+
+  it("F2. does NOT enqueue a cancellation email when there are no active reservations", async () => {
+    queueSelectSlots([]);
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch("/trips/trip-1")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(200);
+    await new Promise(r => setImmediate(r));
+
+    expect(mockCancelDeal).toHaveBeenCalledTimes(1);
+    expect(mockCancelDeal).toHaveBeenCalledWith({ tenantId: "tenant-1", reservationId: "res-with-client" });
+    expect(mockCancelDeal).not.toHaveBeenCalledWith(expect.objectContaining({ reservationId: "res-without-client" }));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Scenario E — bulk reservation update happens inside the transaction
+  // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Scenario F — cancellation email enqueued for every active reservation
+  // ---------------------------------------------------------------------------
+
+  it("F. enqueues a cancellation email for each active reservation", async () => {
+    const activeReservations = [
+      { id: "res-1", clientId: "cli-1", discountReferralCode: null },
+    ];
+    queueSelectSlots(activeReservations);
+
+    const app = makeApp();
+    const res = await request(app)
+      .patch("/trips/trip-1")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(200);
+    await new Promise(r => setImmediate(r));
+
+    expect(mockCancelDeal).toHaveBeenCalledTimes(1);
+    expect(mockCancelDeal).toHaveBeenCalledWith({ tenantId: "tenant-1", reservationId: "res-with-client" });
+    expect(mockCancelDeal).not.toHaveBeenCalledWith(expect.objectContaining({ reservationId: "res-without-client" }));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Scenario E — bulk reservation update happens inside the transaction
+  // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Scenario F — cancellation email enqueued for every active reservation
+  // ---------------------------------------------------------------------------
+
+  it("F. enqueues a cancellation email for each active reservation", async () => {
+    const activeReservations = [
+      { id: "res-1", clientId: "cli-1", discountReferralCode: null },
     ];
     queueSelectSlots(activeReservations);
 

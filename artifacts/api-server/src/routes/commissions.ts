@@ -26,8 +26,7 @@ router.get("/commission-rules", async (req, res, next: NextFunction): Promise<vo
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const rules = await db.select().from(commissionRulesTable)
-      .where(eq(commissionRulesTable.tenantId, me.tenantId))
-      .orderBy(desc(commissionRulesTable.createdAt));
+      .where(and(eq(commissionRulesTable.tenantId, me.tenantId), eq(commissionRulesTable.isActive, true)));
     res.json(rules);
   } catch (err) {
     req.log.error({ err }, "Error listing commission rules");
@@ -40,24 +39,26 @@ router.post("/commission-rules", async (req, res, next: NextFunction): Promise<v
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-    const parsed = CreateRuleBody.safeParse(req.body);
+    const parsed = z.object({ status: z.string().optional(), paidAt: z.string().optional() }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     const id = generateId();
     await db.insert(commissionRulesTable).values({ id, tenantId: me.tenantId, ...parsed.data });
-    const [rule] = await db.select().from(commissionRulesTable).where(eq(commissionRulesTable.id, id)).limit(1);
-    res.status(201).json(rule);
+    const [rule] = await db.select().from(commissionRulesTable)
+      .where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me.tenantId))).limit(1);
+    if (!rule) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+    res.json(rule);
   } catch (err) {
-    req.log.error({ err }, "Error creating commission rule");
+    req.log.error({ err }, "Error updating commission rule");
     next(err);
   }
 });
 
-router.patch("/commission-rules/:id", async (req, res, next: NextFunction): Promise<void> => {
+router.delete("/commission-rules/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-    const parsed = CreateRuleBody.partial().safeParse(req.body);
+    const parsed = z.object({ status: z.string().optional(), paidAt: z.string().optional() }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     await db.update(commissionRulesTable).set(parsed.data)
       .where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me.tenantId)));
@@ -109,9 +110,7 @@ router.get("/commissions/calculate", async (req, res, next: NextFunction): Promi
     const rule = tripSpecificRule ?? allRule;
 
     if (rule) {
-      const commissionAmount = rule.type === "percentage"
-        ? (amount * parseFloat(String(rule.value))) / 100
-        : parseFloat(String(rule.value));
+      const commissionAmount = roundMoney(amount * rate / 100);
       res.json({
         commissionAmount: roundMoney(commissionAmount),
         commissionRate: parseFloat(String(rule.value)),
@@ -141,7 +140,7 @@ router.get("/commissions/calculate", async (req, res, next: NextFunction): Promi
       res.json({ commissionAmount: fixed, commissionRate: null, commissionType: "fixed", source: "seller", saleAmount: amount });
     } else if (seller.commissionType === "hybrid") {
       const pct = rate > 0 ? roundMoney(amount * rate / 100) : 0;
-      const commissionAmount = roundMoney(pct + fixed);
+      const commissionAmount = roundMoney(amount * rate / 100);
       res.json({ commissionAmount, commissionRate: rate, commissionType: "hybrid", source: "seller", saleAmount: amount });
     } else if (rate > 0) {
       const commissionAmount = roundMoney(amount * rate / 100);

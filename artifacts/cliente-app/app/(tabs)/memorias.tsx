@@ -2,8 +2,8 @@
  * Álbum de Viagens — trip memory album for the client portal.
  *
  * Shows past confirmed trips with agency-uploaded photos (tripMediaTable)
- * and trip videos (trips.videos). Each video card opens the URL in the
- * system browser/player via Linking — expo-av is not a dependency.
+ * and trip videos (trips.videos). YouTube and Vimeo links play inside an
+ * embedded sheet, while direct video files continue to use the system player.
  *
  * API: GET /client/me/memories
  */
@@ -15,6 +15,8 @@ import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
 import {
   Linking,
+  Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -25,14 +27,156 @@ import {
   Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
 
 import { useColors } from "@/hooks/useColors";
 import { apiFetch, fmtDate } from "@/lib/api";
 import type { MemoriesResponse, TripMemory } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
-// Video card — plays via system browser/player
+// Video cards and embedded player
 // ---------------------------------------------------------------------------
+
+type EmbeddedVideo = {
+  provider: "youtube" | "vimeo";
+  id: string;
+  thumbnailUrl: string;
+  embedUrl: string;
+  label: string;
+};
+
+function getEmbeddedVideo(url: string): EmbeddedVideo | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+  const pathParts = parsed.pathname.split("/").filter(Boolean);
+  const youtubeHosts = new Set(["youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"]);
+
+  if (youtubeHosts.has(host)) {
+    const candidate =
+      host === "youtu.be"
+        ? pathParts[0]
+        : parsed.searchParams.get("v") ??
+          (["embed", "shorts", "live"].includes(pathParts[0] ?? "") ? pathParts[1] : null);
+
+    if (candidate && /^[a-zA-Z0-9_-]{6,64}$/.test(candidate)) {
+      return {
+        provider: "youtube",
+        id: candidate,
+        thumbnailUrl: `https://i.ytimg.com/vi/${candidate}/hqdefault.jpg`,
+        embedUrl: `https://www.youtube.com/embed/${candidate}?autoplay=1&playsinline=1&rel=0`,
+        label: "YouTube",
+      };
+    }
+  }
+
+  const isVimeo = host === "vimeo.com" || host === "player.vimeo.com";
+  if (isVimeo) {
+    const candidate = [...pathParts].reverse().find((part) => /^\d{4,20}$/.test(part));
+    if (candidate) {
+      return {
+        provider: "vimeo",
+        id: candidate,
+        thumbnailUrl: `https://vumbnail.com/${candidate}.jpg`,
+        embedUrl: `https://player.vimeo.com/video/${candidate}?autoplay=1&playsinline=1`,
+        label: "Vimeo",
+      };
+    }
+  }
+
+  return null;
+}
+
+function getVideoDisplayName(url: string, index: number) {
+  try {
+    const parsed = new URL(url);
+    const lastPathPart = parsed.pathname.split("/").filter(Boolean).pop() ?? "";
+    return lastPathPart.length > 0 && lastPathPart.length <= 40 ? lastPathPart : `Vídeo ${index + 1}`;
+  } catch {
+    return `Vídeo ${index + 1}`;
+  }
+}
+
+function VideoPlayerSheet({
+  video,
+  visible,
+  onClose,
+  colors,
+}: {
+  video: EmbeddedVideo;
+  visible: boolean;
+  onClose: () => void;
+  colors: ReturnType<typeof useColors>;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal transparent animationType="slide" visible={visible} onRequestClose={onClose} statusBarTranslucent>
+      <View style={styles.playerOverlay}>
+        <Pressable
+          accessibilityLabel="Fechar reprodutor"
+          onPress={onClose}
+          style={StyleSheet.absoluteFill}
+        />
+        <View
+          style={[
+            styles.playerSheet,
+            {
+              backgroundColor: colors.card,
+              borderColor: colors.border,
+              paddingBottom: Math.max(insets.bottom, 12),
+            },
+          ]}
+        >
+          <View style={styles.playerHeader}>
+            <View>
+              <Text style={[styles.playerTitle, { color: colors.foreground }]}>
+                Reproduzindo no álbum
+              </Text>
+              <Text style={[styles.playerSubtitle, { color: colors.mutedForeground }]}>
+                {video.label}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Fechar reprodutor"
+              hitSlop={10}
+              onPress={onClose}
+              style={styles.playerCloseButton}
+              testID="close-embedded-video"
+            >
+              <Feather name="x" size={22} color={colors.foreground} />
+            </Pressable>
+          </View>
+          <View style={styles.playerFrame}>
+            {Platform.OS === "web" ? (
+              React.createElement("iframe", {
+                allow: "autoplay; fullscreen; picture-in-picture",
+                allowFullScreen: true,
+                src: video.embedUrl,
+                style: { border: 0, height: "100%", width: "100%" },
+                title: `${video.label} player`,
+              })
+            ) : (
+              <WebView
+                allowsFullscreenVideo
+                allowsInlineMediaPlayback
+                mediaPlaybackRequiresUserAction={false}
+                originWhitelist={["https://*"]}
+                source={{ uri: video.embedUrl }}
+                style={styles.webView}
+              />
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 function VideoCard({
   url,
@@ -44,8 +188,16 @@ function VideoCard({
   colors: ReturnType<typeof useColors>;
 }) {
   const [pressing, setPressing] = useState(false);
+  const [playerVisible, setPlayerVisible] = useState(false);
+  const [thumbnailErrored, setThumbnailErrored] = useState(false);
+  const embeddedVideo = getEmbeddedVideo(url);
 
   async function handlePress() {
+    if (embeddedVideo) {
+      setPlayerVisible(true);
+      return;
+    }
+
     try {
       const supported = await Linking.canOpenURL(url);
       if (supported) {
@@ -58,42 +210,67 @@ function VideoCard({
     }
   }
 
-  // Try to extract a short display name from the URL
-  const displayName = (() => {
-    try {
-      const u = new URL(url);
-      const parts = u.pathname.split("/").filter(Boolean);
-      const last = parts[parts.length - 1] ?? "";
-      return last.length > 0 && last.length <= 40 ? last : `Vídeo ${index + 1}`;
-    } catch {
-      return `Vídeo ${index + 1}`;
-    }
-  })();
+  const displayName = embeddedVideo?.label ?? getVideoDisplayName(url, index);
 
   return (
-    <Pressable
-      onPress={handlePress}
-      onPressIn={() => setPressing(true)}
-      onPressOut={() => setPressing(false)}
-      style={[
-        styles.videoCard,
-        {
-          backgroundColor: pressing ? "#111827" : "#1f2937",
-          opacity: pressing ? 0.85 : 1,
-        },
-      ]}
-    >
-      <View style={styles.videoPlayCircle}>
-        <Feather name="play" size={20} color="#ffffff" />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.videoCardName} numberOfLines={1}>
-          {displayName}
-        </Text>
-        <Text style={styles.videoCardHint}>Toque para reproduzir</Text>
-      </View>
-      <Feather name="external-link" size={16} color="rgba(255,255,255,0.4)" />
-    </Pressable>
+    <>
+      <Pressable
+        accessibilityLabel={`Reproduzir ${displayName}`}
+        onPress={handlePress}
+        onPressIn={() => setPressing(true)}
+        onPressOut={() => setPressing(false)}
+        style={[
+          styles.videoCard,
+          {
+            backgroundColor: pressing ? "#111827" : "#1f2937",
+            opacity: pressing ? 0.85 : 1,
+          },
+        ]}
+        testID={`trip-video-${index}`}
+      >
+        {embeddedVideo ? (
+          <View style={styles.videoThumbnail}>
+            {!thumbnailErrored ? (
+              <Image
+                source={{ uri: embeddedVideo.thumbnailUrl }}
+                style={styles.videoThumbnailImage}
+                resizeMode="cover"
+                onError={() => setThumbnailErrored(true)}
+              />
+            ) : null}
+            <View style={styles.videoThumbnailShade} />
+            <View style={styles.videoPlayCircle}>
+              <Feather name="play" size={20} color="#ffffff" />
+            </View>
+          </View>
+        ) : (
+          <View style={styles.videoPlayCircle}>
+            <Feather name="play" size={20} color="#ffffff" />
+          </View>
+        )}
+        <View style={{ flex: 1 }}>
+          <Text style={styles.videoCardName} numberOfLines={1}>
+            {displayName}
+          </Text>
+          <Text style={styles.videoCardHint}>
+            {embeddedVideo ? "Toque para assistir aqui" : "Toque para reproduzir"}
+          </Text>
+        </View>
+        <Feather
+          name={embeddedVideo ? "chevron-right" : "external-link"}
+          size={16}
+          color="rgba(255,255,255,0.4)"
+        />
+      </Pressable>
+      {embeddedVideo ? (
+        <VideoPlayerSheet
+          colors={colors}
+          onClose={() => setPlayerVisible(false)}
+          video={embeddedVideo}
+          visible={playerVisible}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -426,10 +603,26 @@ const styles = StyleSheet.create({
   },
   videoCard: {
     borderRadius: 12,
-    padding: 12,
+    overflow: "hidden",
+    minHeight: 68,
+    paddingRight: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+  videoThumbnail: {
+    width: 104,
+    height: 68,
+    backgroundColor: "#111827",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  videoThumbnailImage: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  videoThumbnailShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.28)",
   },
   videoPlayCircle: {
     width: 40,
@@ -438,6 +631,45 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.15)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  playerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "flex-end",
+  },
+  playerSheet: {
+    borderTopWidth: 1,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    overflow: "hidden",
+  },
+  playerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  playerTitle: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+  },
+  playerSubtitle: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    marginTop: 2,
+  },
+  playerCloseButton: {
+    padding: 4,
+  },
+  playerFrame: {
+    width: "100%",
+    aspectRatio: 16 / 9,
+    backgroundColor: "#000000",
+  },
+  webView: {
+    flex: 1,
+    backgroundColor: "#000000",
   },
   videoCardName: {
     fontSize: 14,

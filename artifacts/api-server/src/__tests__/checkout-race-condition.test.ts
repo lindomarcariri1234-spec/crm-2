@@ -340,7 +340,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
 
     const pgErr = Object.assign(new Error("duplicate key value violates unique constraint"), {
       code: "23505",
-      constraint: "reservations_active_client_trip_unique",
+      constraint: "some_other_unique_index",
     });
     mockCreateReservations.mockRejectedValueOnce(pgErr);
 
@@ -348,11 +348,11 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
       .post("/api/public/store/minha-loja/orders")
       .send(VALID_BODY);
 
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe("DUPLICATE_RESERVATION");
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("RESERVATION_SYNC_FAILED");
   });
 
-  it("response body contains a user-friendly Portuguese message (not a raw PG error)", async () => {
+  it("does not treat a 23505 on a different constraint as DUPLICATE_RESERVATION", async () => {
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
     mockResolveDiscounts.mockResolvedValueOnce(NO_DISCOUNT);
@@ -360,7 +360,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
 
     const pgErr = Object.assign(new Error("duplicate key value violates unique constraint"), {
       code: "23505",
-      constraint: "reservations_active_client_trip_unique",
+      constraint: "some_other_unique_index",
     });
     mockCreateReservations.mockRejectedValueOnce(pgErr);
 

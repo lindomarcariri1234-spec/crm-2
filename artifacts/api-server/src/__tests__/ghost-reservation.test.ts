@@ -105,7 +105,7 @@ afterAll(async () => {
 
 describe("Ghost reservation prevention — checkout route (real DB)", () => {
   it("leaves no client row when transaction rolls back after client insert", async () => {
-    const email = `ghost-customer-${RUN}@test.com`;
+    const email = `no-prealloc-${RUN}@test.com`;
 
     // generateId is mocked above. We need: orderId succeeds (before tx),
     // then newClientId inside tx.insert(clientsTable) throws to force rollback.
@@ -122,7 +122,7 @@ describe("Ghost reservation prevention — checkout route (real DB)", () => {
 
     const res = await request(buildApp())
       .post(`/api/public/store/${SLUG}/orders`)
-      .send({ customerName: "Ghost Customer", customerEmail: email, items: [{ productId: PROD_ID, quantity: 1 }] });
+      .send({ customerName: "No Prealloc Customer", customerEmail: email, items: [{ productId: PROD_ID, quantity: 1 }] });
 
     // Restore to random UUID for subsequent tests
     mockGenerateId.mockImplementation(() => randomUUID());

@@ -119,6 +119,12 @@ Note: `prices.search` uses Stripe's **eventually-consistent search index** — n
 
 **Admin visibility into missing prices**: `GET /api/admin/plans/stripe-health` (superadmin-only) checks every non-free plan against the same `prices.search` query used at checkout time, and reports per-plan whether a matching monthly/annual recurring `brl` price exists. This surfaces the misconfiguration described above *before* a customer hits the `STRIPE_PRICE_NOT_FOUND` 400 during checkout. The admin Plans page (`artifacts/visitecrm/src/pages/admin/plans.tsx`) calls this endpoint and renders: a banner when Stripe isn't configured at all, a summary banner with a refresh button when any plan is missing a price, and a per-row warning badge/icon next to the offending price column. Free plans (monthly and annual price both `0`) are always reported healthy and skipped from the Stripe search.
 
+
+### Stripe Webhook Duplicate-Endpoint Audit
+After registering the managed webhook, `initStripeSync()` (`artifacts/api-server/src/lib/stripeSync.ts`) lists all Stripe webhook endpoints for the active mode and warns (non-fatally) when more than one *enabled* endpoint targets `/api/stripe/webhook` — a prior incident had a stale duplicate endpoint silently double-delivering every billing event (double plan activations).
+
+The result of the most recent audit is cached in module state and exposed via `getWebhookAuditStatus()` (`status: "ok" | "duplicate" | "unknown"`, `duplicateCount`, `endpoints`, `checkedAt`). `GET /admin/system-health` returns it as `stripeWebhookAudit` in the response, and the Plans admin page (`artifacts/visitecrm/src/pages/admin/plans.tsx`) renders an amber warning banner when `status === "duplicate"`, listing the offending endpoint URLs so an operator can remove the extra one(s) in the Stripe Dashboard. `status` is `"unknown"` until the first successful audit or whenever the last attempt could not reach Stripe (never blocks startup).
+
 ### Duplicate Reservation Diagnostic
 
 Se houver suspeita de reservas duplicadas para o mesmo cliente na mesma viagem, execute o script de diagnóstico (somente leitura — não altera dados):

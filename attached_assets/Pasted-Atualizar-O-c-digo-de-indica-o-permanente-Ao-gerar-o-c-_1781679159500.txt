@@ -1,0 +1,42 @@
+Atualizar
+O código de indicação é permanente.
+
+Ao gerar o código, o mesmo será usado até a exclusão da conta do usuário.
+
+O código de indicação só pode ser alterado, modificado ou excluído pela a agencia.
+
+O código criado permanece valido para até a conta do usuário ser excluída.
+
+O cash de indicação, ou seja, código que o indicado recebe é valido pelo período determinado no sistema pela a agencia.
+
+Atualização das Regras do Código de Indicação
+1. Código de Indicação Permanente
+
+O código de indicação deverá ser gerado automaticamente e permanecer vinculado ao usuário de forma permanente durante todo o ciclo de vida da sua conta.
+
+2. Validade do Código
+
+Após sua criação, o código de indicação continuará ativo e válido até que a conta do usuário seja excluída ou desativada pela agência.
+
+3. Controle Administrativo
+
+O código de indicação não poderá ser alterado, editado ou excluído pelo usuário. Qualquer modificação deverá ser realizada exclusivamente pela administração da agência, conforme as regras definidas pela plataforma.
+
+4. Exclusividade do Código
+
+Cada usuário deverá possuir um único código de indicação, garantindo rastreabilidade, integridade dos dados e correta atribuição das recompensas geradas pelas indicações.
+
+5. Validade dos Benefícios da Indicação
+
+O cashback, crédito, desconto, bônus ou qualquer outro benefício concedido ao indicado por meio do código de indicação terá validade conforme o período configurado pela agência nas configurações do sistema.
+
+6. Configuração pela Agência
+
+A administração deverá ter autonomia para definir:
+
+Prazo de validade dos benefícios concedidos ao indicado;
+Regras de utilização dos créditos e bônus;
+Critérios de elegibilidade para participação no programa;
+Políticas de ativação, bloqueio ou cancelamento de códigos de indicação.
+
+Objetivo: garantir estabilidade, rastreabilidade e controle do programa de indicação, mantendo um código permanente para cada usuário e permitindo que a agência gerencie integralmente as regras e benefícios associados ao programa.

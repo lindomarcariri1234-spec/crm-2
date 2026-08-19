@@ -1,0 +1,45 @@
+Código de Cliente + Prefixo de Identificação
+What & Why
+Two related changes to strengthen agency identity and client traceability:
+
+Client Registration Code — expose the existing customerCode field (already generated at creation in {PREFIX}-{YYYYMM}-{SEQ} format) as a permanent, immutable identifier visible in the client profile UI. Ensure no API path allows it to be overwritten after creation.
+
+Identification Prefix with one-time lock — the existing reservationPrefix field in /configuracoes becomes the agency's "Prefixo de Identificação", used for both reservation numbers and client codes. Add stricter validation (letters A-Z only, 1–5 chars) and a one-time lock: once saved for the first time, the prefix cannot be changed by any agency user.
+
+Done looks like
+In the client detail page (and list), the customerCode (e.g. VIS-202606-00002) is displayed as a read-only badge/field labelled "Código de Registro". It is never editable via the UI.
+PATCH /api/clients/:id does not accept customerCode in the request body; the field is silently ignored or rejected if sent.
+In /configuracoes → Agency Profile tab, the prefix field is labelled "Prefixo de Identificação" with helper text explaining it is used for client and reservation codes.
+Validation enforces 1–5 uppercase letters only (no numbers, no special chars, no spaces). The frontend shows an inline error and the API returns 422 if violated.
+After the first successful save of the prefix, the field becomes read-only (locked) for all agency users. A visual indicator (lock icon + "Configurado permanentemente" caption) makes the locked state clear.
+PUT /api/tenants/:id rejects any attempt to change reservationPrefix once prefixLocked = true, returning 422 with a descriptive error.
+A new DB migration adds the prefix_locked boolean column (default false) to the tenants table.
+Existing agencies that already have a reservationPrefix set are not automatically locked — the lock only triggers on the next explicit save through the settings UI, giving them one final opportunity to correct the value.
+Out of scope
+Retroactively updating existing customerCode values already stored in the DB.
+Superadmin override endpoint for unlocking a prefix (noted in the spec as a future authorized intervention — not in this task).
+Changing the actual sequence counters or code generation logic (it already works correctly).
+Any changes to reservation number generation beyond benefiting from the validated prefix.
+Steps
+DB migration — Add prefix_locked boolean NOT NULL DEFAULT false column to the tenants table via a new Drizzle migration. Update the Drizzle schema TS to include the new column. Run pnpm --filter @workspace/db generate and follow the manual migration workflow (update _journal.json with a when strictly above 1800000000000).
+
+API — prefix validation & lock enforcement — In PUT /api/tenants/:id, add validation that reservationPrefix (when provided) matches /^[A-Z]{1,5}$/. If prefixLocked = true on the existing tenant record and the request includes reservationPrefix, return 422. When a valid prefix is successfully saved and prefixLocked is false, set prefixLocked = true in the same update.
+
+API — protect customerCode from updates — In PATCH /api/clients/:id, explicitly strip customerCode from the accepted update payload (it should already be absent from the Zod schema, but verify and make this explicit).
+
+Frontend — client profile: read-only Código de Registro — In the client detail page and any client form/modal, display customerCode as a read-only field labelled "Código de Registro" with a copy-to-clipboard button. The field must never render as an editable input. Also surface it in the client list table as an optional visible column.
+
+Frontend — configuracoes: Prefixo de Identificação with lock UI — Rename the existing prefix field label to "Prefixo de Identificação". Update the frontend validation to enforce letters-only, 1–5 chars. When prefixLocked = true is returned by the tenant API, render the field as read-only with a lock icon and the caption "Configurado permanentemente — não pode ser alterado". Show helper text below the field explaining it is used in client and reservation codes.
+
+API codegen + types — After schema and API changes, regenerate Orval types (lib/api-zod) and rebuild workspace TypeScript references (tsc --build) to keep the frontend in sync with the new prefixLocked field.
+
+Relevant files
+lib/db/src/schema/tenants.ts
+lib/db/src/schema/clients.ts
+lib/db/drizzle/meta/_journal.json
+artifacts/api-server/src/routes/clients.ts
+artifacts/api-server/src/routes/tenants.ts
+artifacts/api-server/src/lib/reservation-number.ts
+artifacts/visitecrm/src/pages/configuracoes.tsx
+artifacts/visitecrm/src/pages/clients/
+lib/api-zod/src/api.ts

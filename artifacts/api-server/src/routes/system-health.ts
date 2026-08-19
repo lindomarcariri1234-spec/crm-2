@@ -5,12 +5,16 @@ import { getRedisStatus, fetchUpstashDailyStats, areWorkersEnabled } from "../li
 import { getWebhookAuditStatus, recheckWebhookAudit } from "../lib/stripeSync";
 import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount, cleanupOrphanDeals, repairSeatDriftOnly } from "../lib/seat-reconciliation";
 import { ROLES } from "@workspace/permissions";
+import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount } from "../lib/seat-reconciliation";
 
 const router = Router();
 
 router.get("/admin/system-health", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
+
+    const redisStatus = getRedisStatus();
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
@@ -70,6 +74,8 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
 router.post("/admin/stripe/audit-webhooks", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
+
+    const redisStatus = getRedisStatus();
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
@@ -85,6 +91,8 @@ router.post("/admin/stripe/audit-webhooks", async (req, res, next: NextFunction)
 router.post("/admin/system-health/repair-seat-drift", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
+
+    const redisStatus = getRedisStatus();
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
@@ -100,6 +108,8 @@ router.post("/admin/system-health/repair-seat-drift", async (req, res, next: Nex
 router.post("/admin/system-health/repair", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
+
+    const redisStatus = getRedisStatus();
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
@@ -116,3 +126,7 @@ router.post("/admin/system-health/repair", async (req, res, next: NextFunction):
 });
 
 export default router;
+
+    const dailyStats = await fetchUpstashDailyStats();
+
+    const webhookAudit = getWebhookAuditStatus();

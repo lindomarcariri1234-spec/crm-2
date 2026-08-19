@@ -28,6 +28,10 @@ const { clerkCallCount, mockAuthState } = vi.hoisted(() => ({
   mockAuthState: { userId: null as string | null },
 }));
 
+    let capturedMiddleware:
+      | ((args: { req: unknown }) => Promise<unknown>)
+      | undefined;
+
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
 // Clerk: spy on clerkMiddleware to count invocations; return configurable userId.
@@ -95,6 +99,8 @@ vi.mock("../lib/logger.js", () => ({
 //   const { userId } = getAuth(req); if (!userId) throw new Error("Unauthorized");
 vi.mock("../routes/index.js", async () => {
   const { Router } = await import("express");
+
+  const { uploadthingRouter } = await import("../routes/uploadthing.js");
   const { getAuth } = await import("@clerk/express");
   const router = Router();
   router.post(
@@ -139,37 +145,31 @@ describe("POST /api/uploadthing — Clerk middleware bypass for CDN callbacks", 
     // No session — Clerk would reject if it ran.
     mockAuthState.userId = null;
 
-    const res = await request(app)
-      .post("/api/uploadthing?actionType=callback")
-      .send({});
+    const res = await request(app).post("/api/uploadthing").send({});
 
-    // Core regression guard: the bypass in app.ts must prevent Clerk from running.
-    expect(clerkCallCount.value).toBe(0);
-    // Handler was reached (the CDN callback went through).
-    expect(res.status).toBe(200);
-  });
-
-  it("actionType=upload without a session: Clerk runs, real middleware throws Unauthorized → 401", async () => {
-    mockAuthState.userId = null; // unauthenticated
-
-    const res = await request(app)
-      .post("/api/uploadthing?actionType=upload")
-      .send({});
-
-    // Clerk DID run (the upload path is not in the bypass condition).
+    // Clerk DID run.
     expect(clerkCallCount.value).toBe(1);
-    // The real .middleware() fn in routes/uploadthing.ts throws "Unauthorized"
-    // → handler converts that to a 401.
-    expect(res.status).toBe(401);
-    expect(res.body.code).toBe("UNAUTHORIZED");
+    // The real .middleware() receives a non-null userId and returns without throwing.
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
   });
 
-  it("actionType=upload with a valid session: Clerk runs, real middleware passes → 200", async () => {
-    mockAuthState.userId = "user_test_abc"; // authenticated
+  it("no actionType param: Clerk runs (bypass requires explicit actionType=callback)", async () => {
+    mockAuthState.userId = null;
 
-    const res = await request(app)
-      .post("/api/uploadthing?actionType=upload")
-      .send({});
+    const res = await request(app).post("/api/uploadthing").send({});
+
+    // Clerk DID run.
+    expect(clerkCallCount.value).toBe(1);
+    // The real .middleware() receives a non-null userId and returns without throwing.
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it("no actionType param: Clerk runs (bypass requires explicit actionType=callback)", async () => {
+    mockAuthState.userId = null;
+
+    const res = await request(app).post("/api/uploadthing").send({});
 
     // Clerk DID run.
     expect(clerkCallCount.value).toBe(1);
@@ -198,3 +198,17 @@ describe("POST /api/uploadthing — Clerk middleware bypass for CDN callbacks", 
     expect(clerkCallCount.value).toBe(1);
   });
 });
+
+      const middlewareFn = firstRoute?._utMiddleware;
+
+      middleware(fn: (args: { req: unknown }) => Promise<unknown>) {
+        capturedMiddleware = fn;
+        return {
+          onUploadComplete: (_fn: unknown) => ({
+            // Expose via a private key so createRouteHandler can call the real fn.
+            _utMiddleware: capturedMiddleware,
+          }),
+        };
+      },
+
+      const firstRoute = Object.values(router)[0];

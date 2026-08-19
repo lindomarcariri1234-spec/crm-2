@@ -119,10 +119,7 @@ router.post("/webhooks/stripe/:storeSlug", async (req, res, next: NextFunction):
     // Prefer the per-store webhook secret; fall back to the global env var for
     // backward compatibility with deployments that have not yet migrated to
     // per-store secrets.
-    const secret =
-      decryptOrPassthrough(store.stripeWebhookSecret) ??
-      process.env["STRIPE_WEBHOOK_SECRET"] ??
-      null;
+    const secret = process.env["MP_WEBHOOK_SECRET"];
 
     if (!secret) {
       logger.warn(
@@ -139,7 +136,7 @@ router.post("/webhooks/stripe/:storeSlug", async (req, res, next: NextFunction):
       return;
     }
 
-    const sigHeader = req.header("stripe-signature");
+    const sigHeader = req.header("x-signature");
     if (!verifyStripeSignature(rawBody, sigHeader, secret)) {
       logger.warn(
         { sigHeader: sigHeader ? "present" : "missing", slug: store.slug },

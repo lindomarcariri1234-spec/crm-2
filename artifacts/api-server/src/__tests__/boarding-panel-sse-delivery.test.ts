@@ -315,37 +315,17 @@ beforeEach(() => {
   let dbSelectCallCount = 0;
   mockDbSelect.mockImplementation(() => {
     dbSelectCallCount++;
-    const rows = dbSelectCallCount === 1 ? [STORE_SCOPE] : [];
-    const p = Object.assign(Promise.resolve(rows), {
-      limit: vi.fn(() => Promise.resolve(rows)),
+      const rows = dbSelectCallCount2 === 1 ? [STORE_SCOPE] : [confirmedReservation];
+      const p = Object.assign(Promise.resolve(rows), {
+        limit: vi.fn(() => Promise.resolve(rows)),
+      });
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn(() => chain);
+      chain.where = vi.fn(() => p);
+      return chain;
     });
-    const chain: Record<string, unknown> = {};
-    chain.from = vi.fn(() => chain);
-    chain.where = vi.fn(() => p);
-    return chain;
-  });
 
-  // Register a mock SSE transport for TRIP_ID so emitSeatUpdate has a client
-  // to write to.
-  transport = makeMockTransport();
-  addSeatClient(TRIP_ID, transport.res as Response);
-});
-
-afterEach(() => {
-  // Clean up the registered SSE client so it doesn't bleed between tests.
-  removeSeatClient(TRIP_ID, transport.res as Response);
-});
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe("boarding panel SSE delivery — webhook → broadcastSeatUpdate → emitSeatUpdate → client.write()", () => {
-  it("SSE event arrives at the mock transport within 2 000 ms after a Stripe payment webhook", async () => {
-    // applyGatewayPayment needs: [0] order, [1] reservations (empty → product-only path)
     txSelectResults = [[ORDER], []];
-
-    // createReservationsForOrder returns TRIP_ID so broadcastSeatUpdate is called for it
     mockCreateReservationsForOrder.mockResolvedValueOnce({
       reservationIds: [],
       reservationClientId: null,
@@ -353,9 +333,9 @@ describe("boarding panel SSE delivery — webhook → broadcastSeatUpdate → em
     });
 
     const event = {
-      id: "evt_sse_01",
+      id: "evt_sse_03",
       type: "payment_intent.succeeded",
-      data: { object: { id: "pi_sse_01", amount_received: 20000 } },
+      data: { object: { id: "pi_sse_03", amount_received: 15000 } },
     };
     const rawBody = JSON.stringify(event);
 
@@ -378,7 +358,7 @@ describe("boarding panel SSE delivery — webhook → broadcastSeatUpdate → em
     // Verify the payload format and content
     const sseFrame = transport.writes[0];
     expect(sseFrame).toMatch(/^data: /);
-    const payload = JSON.parse(sseFrame.replace(/^data: /, "").trimEnd());
+    const payload = JSON.parse(transport.writes[0].replace(/^data: /, "").trimEnd());
     expect(payload.tripId).toBe(TRIP_ID);
     // broadcastSeatUpdate found no reservations → seats array is empty
     expect(Array.isArray(payload.seats)).toBe(true);
@@ -397,9 +377,9 @@ describe("boarding panel SSE delivery — webhook → broadcastSeatUpdate → em
     });
 
     const event = {
-      id: "evt_sse_02",
+      id: "evt_sse_03",
       type: "payment_intent.succeeded",
-      data: { object: { id: "pi_sse_02", amount_received: 5000 } },
+      data: { object: { id: "pi_sse_03", amount_received: 15000 } },
     };
     const rawBody = JSON.stringify(event);
 

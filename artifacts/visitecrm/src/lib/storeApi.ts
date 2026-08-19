@@ -675,25 +675,40 @@ export interface CouponInput {
 
 export interface CreateOrderInput {
   customerName: string;
+
   customerEmail: string;
+
   customerPhone?: string;
+
   customerCpf?: string;
+
   customerBirthdate?: string;
+
   items: Array<{
     productId: string;
     productName: string;
     quantity: number;
     unitPrice: number;
     variantLabel?: string;
+
   }>;
+
   couponCode?: string;
+
   referralCode?: string;
+
   referralCookieId?: string;
+
   referralCreditUsed?: number;
+
   paymentMethod?: string;
+
   notes?: string;
+
   seats?: string[];
+
   boardingLocationId?: string;
+
   coPassengers?: Array<{ name: string; cpf?: string; phone?: string }>;
   depositAmount?: number;
   /**
@@ -701,6 +716,14 @@ export interface CreateOrderInput {
    * browser retry / accidental double-submit of the same attempt reuse the
    * original order instead of creating a duplicate and double-reserving seats.
    */
+
+  depositAmount?: number;
+  /**
+   * Client-generated key, one per checkout attempt (see checkout.tsx). Lets a
+   * browser retry / accidental double-submit of the same attempt reuse the
+   * original order instead of creating a duplicate and double-reserving seats.
+   */
+
   idempotencyKey?: string;
 }
 

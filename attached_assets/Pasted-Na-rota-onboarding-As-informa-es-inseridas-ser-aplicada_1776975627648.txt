@@ -1,0 +1,1839 @@
+Na rota /onboarding
+
+As informações inseridas será aplicadas registradas no banco de dados.
+
+As informações inseridas no onboarding será sincronizada na pagina da loja da Agência, na pagina de configuração da Agência.
+
+As informações inseridas no onboarding deverá servir para configurar a Agência automaticamente, e a Loja da Agência automaticamente.
+
+Sendo assim, após o onboarding todas as informações sobre a Agência e as configurações da loja (Vitrine) já estarão ativa e operante no sistema.
+
+
+SISTEMA DE ONBOARDING COMPLETO
+Vou criar um sistema de onboarding que configure automaticamente a agência e sua loja pública.
+
+📋 1. SCHEMA PRISMA - ATUALIZAÇÃO
+// prisma/schema.prisma
+
+model Tenant {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique
+  cnpj            String?
+  phone           String?
+  whatsapp        String?
+  email           String?
+  website         String?
+  
+  // Endereço
+  address         String?
+  city            String?
+  state           String?
+  zipcode         String?
+  country         String    @default("Brasil")
+  
+  // Branding
+  logo_url        String?
+  banner_url      String?
+  primary_color   String    @default("#3B82F6")
+  secondary_color String    @default("#8B5CF6")
+  
+  // Configurações da loja
+  store_enabled   Boolean   @default(true)
+  store_title     String?
+  store_description String?
+  store_meta_tags Json?     @db.JsonB
+  
+  // Social Media
+  facebook_url    String?
+  instagram_url   String?
+  twitter_url     String?
+  youtube_url     String?
+  
+  // Onboarding
+  onboarding_completed Boolean @default(false)
+  onboarding_step      Int     @default(1)
+  
+  // Plano
+  plan_type       String    @default("free") // free, basic, pro, enterprise
+  plan_expires_at DateTime?
+  
+  // Status
+  is_active       Boolean   @default(true)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+
+  users           User[]
+  customers       Customer[]
+  destinations    Destination[]
+  trips           Trip[]
+  reservations    Reservation[]
+  revenues        Revenue[]
+  expenses        Expense[]
+  bus_models      BusModel[]
+  system_logs     SystemLog[]
+
+  @@index([slug])
+  @@map("tenants")
+}
+
+🎯 2. API DE ONBOARDING
+// app/api/onboarding/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+import { z } from 'zod'
+
+const onboardingStep1Schema = z.object({
+  name: z.string().min(3, 'Nome deve ter no mínimo 3 caracteres'),
+  slug: z
+    .string()
+    .min(3)
+    .regex(/^[a-z0-9-]+$/, 'Slug deve conter apenas letras minúsculas, números e hífens'),
+  cnpj: z.string().optional(),
+  phone: z.string().min(10, 'Telefone inválido'),
+  email: z.string().email('Email inválido').optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zipcode: z.string().optional(),
+})
+
+const onboardingStep2Schema = z.object({
+  plan_type: z.enum(['free', 'basic', 'pro', 'enterprise']),
+})
+
+export async function POST(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+    const { step } = body
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 1: DADOS DA AGÊNCIA
+    // ═══════════════════════════════════════════════════════════
+
+    if (step === 1) {
+      const validatedData = onboardingStep1Schema.parse(body.data)
+
+      // Verificar se slug já existe
+      const existingTenant = await prisma.tenant.findUnique({
+        where: { slug: validatedData.slug },
+      })
+
+      if (existingTenant && existingTenant.id !== session.user.tenantId) {
+        return NextResponse.json(
+          { error: 'Este slug já está em uso' },
+          { status: 400 }
+        )
+      }
+
+      // Atualizar tenant
+      const tenant = await prisma.tenant.update({
+        where: { id: session.user.tenantId },
+        data: {
+          ...validatedData,
+          whatsapp: validatedData.phone, // Usar mesmo número para WhatsApp
+          onboarding_step: 2,
+          store_enabled: true,
+          store_title: `${validatedData.name} - Pacotes de Viagem`,
+          store_description: `Encontre os melhores pacotes de viagem com ${validatedData.name}. Destinos incríveis com os melhores preços!`,
+        },
+      })
+
+      // Log
+      await prisma.systemLog.create({
+        data: {
+          tenant_id: session.user.tenantId,
+          user_id: session.user.id,
+          category: 'onboarding',
+          action: 'step_1_completed',
+          severity: 'info',
+          description: 'Dados da agência configurados',
+          metadata: { tenantId: tenant.id },
+        },
+      })
+
+      return NextResponse.json({ tenant, nextStep: 2 })
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // STEP 2: ESCOLHA DO PLANO
+    // ═══════════════════════════════════════════════════════════
+
+    if (step === 2) {
+      const validatedData = onboardingStep2Schema.parse(body.data)
+
+      // Calcular data de expiração baseado no plano
+      let plan_expires_at = null
+      if (validatedData.plan_type !== 'free') {
+        plan_expires_at = new Date()
+        plan_expires_at.setDate(plan_expires_at.getDate() + 30) // 30 dias de trial
+      }
+
+      // Atualizar tenant
+      const tenant = await prisma.tenant.update({
+        where: { id: session.user.tenantId },
+        data: {
+          plan_type: validatedData.plan_type,
+          plan_expires_at,
+          onboarding_completed: true,
+          onboarding_step: 3,
+        },
+      })
+
+      // ═══════════════════════════════════════════════════════════
+      // CRIAR DADOS INICIAIS (SEED)
+      // ═══════════════════════════════════════════════════════════
+
+      await seedInitialData(session.user.tenantId)
+
+      // Log
+      await prisma.systemLog.create({
+        data: {
+          tenant_id: session.user.tenantId,
+          user_id: session.user.id,
+          category: 'onboarding',
+          action: 'onboarding_completed',
+          severity: 'info',
+          description: 'Onboarding concluído com sucesso',
+          metadata: { tenantId: tenant.id, plan: validatedData.plan_type },
+        },
+      })
+
+      return NextResponse.json({
+        tenant,
+        completed: true,
+        message: 'Onboarding concluído com sucesso!',
+      })
+    }
+
+    return NextResponse.json({ error: 'Step inválido' }, { status: 400 })
+  } catch (error) {
+    console.error('Erro no onboarding:', error)
+
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        { error: error.errors[0].message },
+        { status: 400 }
+      )
+    }
+
+    return NextResponse.json(
+      { error: 'Erro ao processar onboarding' },
+      { status: 500 }
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// FUNÇÃO PARA CRIAR DADOS INICIAIS
+// ═══════════════════════════════════════════════════════════
+
+async function seedInitialData(tenantId: string) {
+  // Criar destinos de exemplo
+  const destinations = await prisma.destination.createMany({
+    data: [
+      {
+        tenant_id: tenantId,
+        name: 'Rio de Janeiro',
+        country: 'Brasil',
+        state: 'RJ',
+        city: 'Rio de Janeiro',
+        description: 'Cidade Maravilhosa com praias paradisíacas',
+        is_active: true,
+      },
+      {
+        tenant_id: tenantId,
+        name: 'São Paulo',
+        country: 'Brasil',
+        state: 'SP',
+        city: 'São Paulo',
+        description: 'Maior cidade da América Latina',
+        is_active: true,
+      },
+      {
+        tenant_id: tenantId,
+        name: 'Salvador',
+        country: 'Brasil',
+        state: 'BA',
+        city: 'Salvador',
+        description: 'Capital da alegria e cultura',
+        is_active: true,
+      },
+    ],
+  })
+
+  // Criar modelo de ônibus padrão
+  const busModel = await prisma.busModel.create({
+    data: {
+      tenant_id: tenantId,
+      name: 'Double Decker 55 Lugares',
+      bus_type: 'DOUBLE_DECKER',
+      total_seats: 55,
+      has_upper_deck: true,
+      has_lower_deck: true,
+      upper_deck_seats: 46,
+      lower_deck_seats: 9,
+      config: {
+        upperDeck: {
+          rows: 12,
+          columns: 4,
+          layout: [
+            ['1', '2', 'AISLE', '4', '3'],
+            ['5', '6', 'AISLE', '8', '7'],
+            ['9', '10', 'AISLE', '11', '12'],
+            ['13', '14', 'AISLE', 'X', 'X'],
+            ['15', '16', 'AISLE', '18', '17'],
+            ['19', '20', 'AISLE', '22', '21'],
+            ['23', '24', 'AISLE', '26', '25'],
+            ['27', '28', 'AISLE', '30', '29'],
+            ['31', '32', 'AISLE', '34', '33'],
+            ['35', '36', 'AISLE', '38', '37'],
+            ['39', '40', 'AISLE', '42', '41'],
+            ['43', '44', 'AISLE', '46', '45'],
+          ],
+        },
+        lowerDeck: {
+          rows: 3,
+          columns: 3,
+          layout: [
+            ['47', '48', 'AISLE', '49'],
+            ['50', '51', 'AISLE', '52'],
+            ['53', '54', 'AISLE', '55'],
+          ],
+        },
+      },
+    },
+  })
+
+  return { destinations, busModel }
+}
+
+🎨 3. PÁGINA DE ONBOARDING - STEP 1
+// app/(auth)/onboarding/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { useSession } from 'next-auth/react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import {
+  Building2,
+  Check,
+  Loader2,
+  ArrowRight,
+  Sparkles,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+
+export default function OnboardingPage() {
+  const router = useRouter()
+  const { data: session } = useSession()
+  const [currentStep, setCurrentStep] = useState(1)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isCheckingSlug, setIsCheckingSlug] = useState(false)
+  const [slugAvailable, setSlugAvailable] = useState<boolean | null>(null)
+
+  const [formData, setFormData] = useState({
+    // Step 1
+    name: '',
+    slug: '',
+    cnpj: '',
+    phone: '',
+    email: '',
+    address: '',
+    city: '',
+    state: '',
+    zipcode: '',
+
+    // Step 2
+    plan_type: 'free',
+  })
+
+  // Gerar slug automaticamente do nome
+  useEffect(() => {
+    if (formData.name && !formData.slug) {
+      const generatedSlug = formData.name
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .trim()
+
+      setFormData((prev) => ({ ...prev, slug: generatedSlug }))
+    }
+  }, [formData.name])
+
+  // Verificar disponibilidade do slug
+  useEffect(() => {
+    if (formData.slug.length >= 3) {
+      const timer = setTimeout(async () => {
+        setIsCheckingSlug(true)
+        try {
+          const response = await fetch(
+            `/api/onboarding/check-slug?slug=${formData.slug}`
+          )
+          const data = await response.json()
+          setSlugAvailable(data.available)
+        } catch (error) {
+          console.error('Erro ao verificar slug:', error)
+        } finally {
+          setIsCheckingSlug(false)
+        }
+      }, 500)
+
+      return () => clearTimeout(timer)
+    }
+  }, [formData.slug])
+
+  const handleStep1Submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!slugAvailable) {
+      toast.error('Escolha um slug disponível')
+      return
+    }
+
+    try {
+      setIsLoading(true)
+
+      const response = await fetch('/api/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          step: 1,
+          data: {
+            name: formData.name,
+            slug: formData.slug,
+            cnpj: formData.cnpj,
+            phone: formData.phone,
+            email: formData.email,
+            address: formData.address,
+            city: formData.city,
+            state: formData.state,
+            zipcode: formData.zipcode,
+          },
+        }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success('Dados salvos com sucesso!')
+        setCurrentStep(2)
+      } else {
+        toast.error(data.error || 'Erro ao salvar dados')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao processar dados')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleStep2Submit = async (planType: string) => {
+    try {
+      setIsLoading(true)
+
+      const response = await fetch('/api/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          step: 2,
+          data: { plan_type: planType },
+        }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        toast.success('Configuração concluída! Redirecionando...')
+        setTimeout(() => {
+          router.push('/dashboard')
+        }, 2000)
+      } else {
+        toast.error(data.error || 'Erro ao finalizar')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao processar')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const plans = [
+    {
+      id: 'free',
+      name: 'Gratuito',
+      price: 'R$ 0',
+      period: '/mês',
+      description: 'Ideal para começar',
+      features: [
+        'Até 10 pacotes ativos',
+        'Até 50 reservas/mês',
+        'Loja pública básica',
+        'Suporte por email',
+      ],
+      highlighted: false,
+    },
+    {
+      id: 'basic',
+      name: 'Básico',
+      price: 'R$ 97',
+      period: '/mês',
+      description: 'Para agências pequenas',
+      features: [
+        'Até 50 pacotes ativos',
+        'Até 200 reservas/mês',
+        'Loja pública completa',
+        'Suporte prioritário',
+        'Relatórios básicos',
+      ],
+      highlighted: false,
+    },
+    {
+      id: 'pro',
+      name: 'Profissional',
+      price: 'R$ 197',
+      period: '/mês',
+      description: 'Para agências em crescimento',
+      features: [
+        'Pacotes ilimitados',
+        'Reservas ilimitadas',
+        'Loja pública premium',
+        'Suporte 24/7',
+        'Relatórios avançados',
+        'API de integração',
+        'Multi-usuários',
+      ],
+      highlighted: true,
+    },
+    {
+      id: 'enterprise',
+      name: 'Enterprise',
+      price: 'Personalizado',
+      period: '',
+      description: 'Para grandes operações',
+      features: [
+        'Tudo do plano Pro',
+        'Servidor dedicado',
+        'Customizações',
+        'Gerente de conta',
+        'SLA garantido',
+        'Treinamento incluso',
+      ],
+      highlighted: false,
+    },
+  ]
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl mb-4">
+            <Building2 className="h-8 w-8 text-white" />
+          </div>
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+            Vamos configurar sua agência
+          </h1>
+          <p className="text-gray-600">
+            Preencha as informações abaixo para começar a usar o VisiteCRM.
+          </p>
+        </div>
+
+        {/* Progress Steps */}
+        <div className="flex items-center justify-center gap-4 mb-8">
+          <div className="flex items-center gap-2">
+            <div
+              className={cn(
+                'w-10 h-10 rounded-full flex items-center justify-center font-bold transition',
+                currentStep >= 1
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 text-gray-600'
+              )}
+            >
+              {currentStep > 1 ? <Check className="h-6 w-6" /> : '1'}
+            </div>
+            <span
+              className={cn(
+                'font-medium',
+                currentStep >= 1 ? 'text-blue-600' : 'text-gray-600'
+              )}
+            >
+              Perfil da Agência
+            </span>
+          </div>
+
+          <ArrowRight className="h-5 w-5 text-gray-400" />
+
+          <div className="flex items-center gap-2">
+            <div
+              className={cn(
+                'w-10 h-10 rounded-full flex items-center justify-center font-bold transition',
+                currentStep >= 2
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-200 text-gray-600'
+              )}
+            >
+              2
+            </div>
+            <span
+              className={cn(
+                'font-medium',
+                currentStep >= 2 ? 'text-blue-600' : 'text-gray-600'
+              )}
+            >
+              Escolha o Plano
+            </span>
+          </div>
+        </div>
+
+        {/* Step 1: Dados da Agência */}
+        {currentStep === 1 && (
+          <Card className="p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <Building2 className="h-6 w-6 text-blue-600" />
+              <div>
+                <h2 className="text-2xl font-bold">Dados da Agência</h2>
+                <p className="text-gray-600 text-sm">
+                  Informe os dados básicos da sua agência. Você poderá editar depois.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleStep1Submit} className="space-y-6">
+              {/* Nome da Agência */}
+              <div>
+                <Label htmlFor="name">
+                  Nome da Agência <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                  placeholder="Ex: Chiquinha Turismo"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* CNPJ */}
+                <div>
+                  <Label htmlFor="cnpj">CNPJ</Label>
+                  <Input
+                    id="cnpj"
+                    value={formData.cnpj}
+                    onChange={(e) =>
+                      setFormData({ ...formData, cnpj: e.target.value })
+                    }
+                    placeholder="00.000.000/0000-00"
+                  />
+                </div>
+
+                {/* Telefone */}
+                <div>
+                  <Label htmlFor="phone">
+                    Telefone <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    id="phone"
+                    value={formData.phone}
+                    onChange={(e) =>
+                      setFormData({ ...formData, phone: e.target.value })
+                    }
+                    placeholder="+55 88 98155-2447"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Slug da Loja */}
+              <div>
+                <Label htmlFor="slug">
+                  Slug da loja <span className="text-red-500">*</span>
+                  <span className="text-gray-500 text-xs ml-2">
+                    (URL pública da sua vitrine)
+                  </span>
+                </Label>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600 text-sm">visitecrm.com/loja/</span>
+                  <div className="flex-1 relative">
+                    <Input
+                      id="slug"
+                      value={formData.slug}
+                      onChange={(e) =>
+                        setFormData({ ...formData, slug: e.target.value })
+                      }
+                      placeholder="chiquinha-turismo"
+                      required
+                    />
+                    {isCheckingSlug && (
+                      <Loader2 className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 animate-spin text-gray-400" />
+                    )}
+                  </div>
+                </div>
+                {slugAvailable === true && (
+                  <p className="text-green-600 text-sm mt-1 flex items-center gap-1">
+                    <Check className="h-4 w-4" />
+                    Slug disponível!
+                  </p>
+                )}
+                {slugAvailable === false && (
+                  <p className="text-red-600 text-sm mt-1">
+                    Este slug já está em uso
+                  </p>
+                )}
+              </div>
+
+              {/* Submit */}
+              <Button
+                type="submit"
+                className="w-full"
+                size="lg"
+                disabled={isLoading || !slugAvailable}
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    Continuar
+                    <ArrowRight className="h-5 w-5 ml-2" />
+                  </>
+                )}
+              </Button>
+            </form>
+          </Card>
+        )}
+
+        {/* Step 2: Escolha do Plano */}
+        {currentStep === 2 && (
+          <div className="space-y-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold mb-2">Escolha seu plano</h2>
+              <p className="text-gray-600">
+                Comece com 30 dias grátis em qualquer plano pago
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {plans.map((plan) => (
+                <Card
+                  key={plan.id}
+                  className={cn(
+                    'p-6 relative transition-all hover:shadow-lg',
+                    plan.highlighted && 'border-2 border-blue-600 shadow-xl'
+                  )}
+                >
+                  {plan.highlighted && (
+                    <Badge className="absolute -top-3 left-1/2 transform -translate-x-1/2 bg-blue-600">
+                      <Sparkles className="h-3 w-3 mr-1" />
+                      Mais Popular
+                    </Badge>
+                  )}
+
+                  <div className="text-center mb-6">
+                    <h3 className="text-xl font-bold mb-2">{plan.name}</h3>
+                    <div className="mb-2">
+                      <span className="text-3xl font-bold">{plan.price}</span>
+                      <span className="text-gray-600">{plan.period}</span>
+                    </div>
+                    <p className="text-sm text-gray-600">{plan.description}</p>
+                  </div>
+
+                  <ul className="space-y-2 mb-6">
+                    {plan.features.map((feature, index) => (
+                      <li key={index} className="flex items-start gap-2 text-sm">
+                        <Check className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                        <span>{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  <Button
+                    onClick={() => handleStep2Submit(plan.id)}
+                    className="w-full"
+                    variant={plan.highlighted ? 'default' : 'outline'}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      'Selecionar'
+                    )}
+                  </Button>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+🔍 4. API PARA VERIFICAR SLUG
+// app/api/onboarding/check-slug/route.ts
+
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const slug = searchParams.get('slug')
+
+    if (!slug) {
+      return NextResponse.json({ error: 'Slug não informado' }, { status: 400 })
+    }
+
+    const existingTenant = await prisma.tenant.findUnique({
+      where: { slug },
+    })
+
+    return NextResponse.json({ available: !existingTenant })
+  } catch (error) {
+    console.error('Erro ao verificar slug:', error)
+    return NextResponse.json(
+      { error: 'Erro ao verificar slug' },
+      { status: 500 }
+    )
+  }
+}
+
+🔄 SINCRONIZAÇÃO AUTOMÁTICA E REDIRECIONAMENTOS
+🎯 1. MIDDLEWARE DE ONBOARDING
+
+// middleware.ts
+
+import { withAuth } from 'next-auth/middleware'
+import { NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+
+export default withAuth(
+  async function middleware(req) {
+    const token = req.nextauth.token
+    const path = req.nextUrl.pathname
+
+    // Rotas públicas que não precisam de verificação
+    const publicPaths = [
+      '/loja',
+      '/auth/login',
+      '/auth/register',
+      '/auth/forgot-password',
+      '/api/public',
+    ]
+
+    const isPublicPath = publicPaths.some((publicPath) =>
+      path.startsWith(publicPath)
+    )
+
+    if (isPublicPath) {
+      return NextResponse.next()
+    }
+
+    // Se não está autenticado, redirecionar para login
+    if (!token) {
+      return NextResponse.redirect(new URL('/auth/login', req.url))
+    }
+
+    // Verificar se o onboarding foi concluído
+    if (token.role === 'admin' && path !== '/onboarding') {
+      try {
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: token.tenantId as string },
+          select: { onboarding_completed: true },
+        })
+
+        if (!tenant?.onboarding_completed) {
+          return NextResponse.redirect(new URL('/onboarding', req.url))
+        }
+      } catch (error) {
+        console.error('Erro ao verificar onboarding:', error)
+      }
+    }
+
+    // Se está no onboarding mas já completou, redirecionar para dashboard
+    if (path === '/onboarding' && token.role === 'admin') {
+      try {
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: token.tenantId as string },
+          select: { onboarding_completed: true },
+        })
+
+        if (tenant?.onboarding_completed) {
+          return NextResponse.redirect(new URL('/dashboard', req.url))
+        }
+      } catch (error) {
+        console.error('Erro ao verificar onboarding:', error)
+      }
+    }
+
+    return NextResponse.next()
+  },
+  {
+    callbacks: {
+      authorized: ({ token }) => !!token,
+    },
+  }
+)
+
+export const config = {
+  matcher: [
+    '/dashboard/:path*',
+    '/onboarding',
+    '/api/reservations/:path*',
+    '/api/trips/:path*',
+    '/api/destinations/:path*',
+    '/api/customers/:path*',
+    '/api/users/:path*',
+    '/api/onboarding/:path*',
+  ],
+}
+
+🔗 2. HOOK DE SINCRONIZAÇÃO
+// hooks/use-tenant-sync.ts
+
+import { useEffect, useState } from 'react'
+import { useSession } from 'next-auth/react'
+
+export function useTenantSync() {
+  const { data: session, update } = useSession()
+  const [tenant, setTenant] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    if (session?.user?.tenantId) {
+      loadTenant()
+    }
+  }, [session?.user?.tenantId])
+
+  const loadTenant = async () => {
+    try {
+      setIsLoading(true)
+      const response = await fetch('/api/tenant/current')
+      const data = await response.json()
+      setTenant(data.tenant)
+    } catch (error) {
+      console.error('Erro ao carregar tenant:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const syncTenant = async () => {
+    await loadTenant()
+    await update() // Atualizar sessão
+  }
+
+  return {
+    tenant,
+    isLoading,
+    syncTenant,
+  }
+}
+
+📡 3. API DE TENANT ATUAL
+// app/api/tenant/current/route.ts
+
+import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { prisma } from '@/lib/prisma'
+
+export async function GET() {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session) {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: session.user.tenantId },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        cnpj: true,
+        phone: true,
+        whatsapp: true,
+        email: true,
+        website: true,
+        address: true,
+        city: true,
+        state: true,
+        zipcode: true,
+        country: true,
+        logo_url: true,
+        banner_url: true,
+        primary_color: true,
+        secondary_color: true,
+        store_enabled: true,
+        store_title: true,
+        store_description: true,
+        store_meta_tags: true,
+        facebook_url: true,
+        instagram_url: true,
+        twitter_url: true,
+        youtube_url: true,
+        onboarding_completed: true,
+        onboarding_step: true,
+        plan_type: true,
+        plan_expires_at: true,
+        is_active: true,
+        created_at: true,
+      },
+    })
+
+    if (!tenant) {
+      return NextResponse.json({ error: 'Tenant não encontrado' }, { status: 404 })
+    }
+
+    return NextResponse.json({ tenant })
+  } catch (error) {
+    console.error('Erro ao buscar tenant:', error)
+    return NextResponse.json(
+      { error: 'Erro ao buscar tenant' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const session = await getServerSession(authOptions)
+
+    if (!session || session.user.role !== 'admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 403 })
+    }
+
+    const body = await req.json()
+
+    const tenant = await prisma.tenant.update({
+      where: { id: session.user.tenantId },
+      data: {
+        ...body,
+        updated_at: new Date(),
+      },
+    })
+
+    // Log
+    await prisma.systemLog.create({
+      data: {
+        tenant_id: session.user.tenantId,
+        user_id: session.user.id,
+        category: 'tenant',
+        action: 'tenant_updated',
+        severity: 'info',
+        description: 'Configurações da agência atualizadas',
+        metadata: { changes: body },
+      },
+    })
+
+    return NextResponse.json({ tenant })
+  } catch (error) {
+    console.error('Erro ao atualizar tenant:', error)
+    return NextResponse.json(
+      { error: 'Erro ao atualizar tenant' },
+      { status: 500 }
+    )
+  }
+}
+
+⚙️ 4. PÁGINA DE CONFIGURAÇÕES DA AGÊNCIA
+
+// app/(dashboard)/dashboard/settings/agency/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Separator } from '@/components/ui/separator'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Building2,
+  Store,
+  Palette,
+  Globe,
+  Save,
+  Loader2,
+  ExternalLink,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { useTenantSync } from '@/hooks/use-tenant-sync'
+
+export default function AgencySettingsPage() {
+  const { tenant, isLoading, syncTenant } = useTenantSync()
+  const [isSaving, setIsSaving] = useState(false)
+
+  const [formData, setFormData] = useState({
+    // Dados básicos
+    name: '',
+    slug: '',
+    cnpj: '',
+    phone: '',
+    whatsapp: '',
+    email: '',
+    website: '',
+    address: '',
+    city: '',
+    state: '',
+    zipcode: '',
+
+    // Loja
+    store_enabled: true,
+    store_title: '',
+    store_description: '',
+
+    // Branding
+    primary_color: '#3B82F6',
+    secondary_color: '#8B5CF6',
+
+    // Social
+    facebook_url: '',
+    instagram_url: '',
+    twitter_url: '',
+    youtube_url: '',
+  })
+
+  useEffect(() => {
+    if (tenant) {
+      setFormData({
+        name: tenant.name || '',
+        slug: tenant.slug || '',
+        cnpj: tenant.cnpj || '',
+        phone: tenant.phone || '',
+        whatsapp: tenant.whatsapp || '',
+        email: tenant.email || '',
+        website: tenant.website || '',
+        address: tenant.address || '',
+        city: tenant.city || '',
+        state: tenant.state || '',
+        zipcode: tenant.zipcode || '',
+        store_enabled: tenant.store_enabled ?? true,
+        store_title: tenant.store_title || '',
+        store_description: tenant.store_description || '',
+        primary_color: tenant.primary_color || '#3B82F6',
+        secondary_color: tenant.secondary_color || '#8B5CF6',
+        facebook_url: tenant.facebook_url || '',
+        instagram_url: tenant.instagram_url || '',
+        twitter_url: tenant.twitter_url || '',
+        youtube_url: tenant.youtube_url || '',
+      })
+    }
+  }, [tenant])
+
+  const handleSave = async (section: string) => {
+    try {
+      setIsSaving(true)
+
+      const response = await fetch('/api/tenant/current', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData),
+      })
+
+      if (response.ok) {
+        toast.success('Configurações salvas com sucesso!')
+        await syncTenant() // Sincronizar dados
+      } else {
+        toast.error('Erro ao salvar configurações')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao salvar')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">
+          Configurações da Agência
+        </h1>
+        <p className="text-gray-600 mt-1">
+          Gerencie as informações e configurações da sua agência
+        </p>
+      </div>
+
+      <Tabs defaultValue="basic">
+        <TabsList className="grid w-full grid-cols-4">
+          <TabsTrigger value="basic">
+            <Building2 className="h-4 w-4 mr-2" />
+            Dados Básicos
+          </TabsTrigger>
+          <TabsTrigger value="store">
+            <Store className="h-4 w-4 mr-2" />
+            Loja Pública
+          </TabsTrigger>
+          <TabsTrigger value="branding">
+            <Palette className="h-4 w-4 mr-2" />
+            Branding
+          </TabsTrigger>
+          <TabsTrigger value="social">
+            <Globe className="h-4 w-4 mr-2" />
+            Redes Sociais
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Dados Básicos */}
+        <TabsContent value="basic">
+          <Card className="p-6">
+            <h3 className="text-xl font-bold mb-4">Informações da Agência</h3>
+
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="name">Nome da Agência *</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="slug">Slug da Loja *</Label>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">
+                    visitecrm.com/loja/
+                  </span>
+                  <Input
+                    id="slug"
+                    value={formData.slug}
+                    onChange={(e) =>
+                      setFormData({ ...formData, slug: e.target.value })
+                    }
+                    disabled
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() =>
+                      window.open(`/loja/${formData.slug}`, '_blank')
+                    }
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  O slug não pode ser alterado após o cadastro
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="cnpj">CNPJ</Label>
+                  <Input
+                    id="cnpj"
+                    value={formData.cnpj}
+                    onChange={(e) =>
+                      setFormData({ ...formData, cnpj: e.target.value })
+                    }
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="phone">Telefone *</Label>
+                  <Input
+                    id="phone"
+                    value={formData.phone}
+                    onChange={(e) =>
+                      setFormData({ ...formData, phone: e.target.value })
+                    }
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="whatsapp">WhatsApp</Label>
+                  <Input
+                    id="whatsapp"
+                    value={formData.whatsapp}
+                    onChange={(e) =>
+                      setFormData({ ...formData, whatsapp: e.target.value })
+                    }
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) =>
+                      setFormData({ ...formData, email: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="website">Website</Label>
+                <Input
+                  id="website"
+                  value={formData.website}
+                  onChange={(e) =>
+                    setFormData({ ...formData, website: e.target.value })
+                  }
+                  placeholder="https://www.suaagencia.com.br"
+                />
+              </div>
+
+              <Separator />
+
+              <h4 className="font-semibold">Endereço</h4>
+
+              <div>
+                <Label htmlFor="address">Logradouro</Label>
+                <Input
+                  id="address"
+                  value={formData.address}
+                  onChange={(e) =>
+                    setFormData({ ...formData, address: e.target.value })
+                  }
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <Label htmlFor="city">Cidade</Label>
+                  <Input
+                    id="city"
+                    value={formData.city}
+                    onChange={(e) =>
+                      setFormData({ ...formData, city: e.target.value })
+                    }
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="state">Estado</Label>
+                  <Input
+                    id="state"
+                    value={formData.state}
+                    onChange={(e) =>
+                      setFormData({ ...formData, state: e.target.value })
+                    }
+                    maxLength={2}
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="zipcode">CEP</Label>
+                  <Input
+                    id="zipcode"
+                    value={formData.zipcode}
+                    onChange={(e) =>
+                      setFormData({ ...formData, zipcode: e.target.value })
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <Button onClick={() => handleSave('basic')} disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    Salvar Alterações
+                  </>
+                )}
+              </Button>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* Loja Pública */}
+        <TabsContent value="store">
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-xl font-bold">Configurações da Loja</h3>
+                <p className="text-sm text-gray-600">
+                  Personalize sua vitrine pública
+                </p>
+              </div>
+
+              <Button
+                variant="outline"
+                onClick={() => window.open(`/loja/${formData.slug}`, '_blank')}
+              >
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Ver Loja
+              </Button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="store_title">Título da Loja</Label>
+                <Input
+                  id="store_title"
+                  value={formData.store_title}
+                  onChange={(e) =>
+                    setFormData({ ...formData, store_title: e.target.value })
+                  }
+                  placeholder="Ex: Chiquinha Turismo - Pacotes de Viagem"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Aparece no título da página e nos resultados de busca
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="store_description">Descrição da Loja</Label>
+                <Textarea
+                  id="store_description"
+                  value={formData.store_description}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      store_description: e.target.value,
+                    })
+                  }
+                  rows={4}
+                  placeholder="Descreva sua agência e os serviços oferecidos..."
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Aparece na meta description para SEO
+                </p>
+              </div>
+
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h4 className="font-semibold text-blue-900 mb-2">
+                  URL da sua loja:
+                </h4>
+                <a
+                  href={`/loja/${formData.slug}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline flex items-center gap-2"
+                >
+                  visitecrm.com/loja/{formData.slug}
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <Button onClick={() => handleSave('store')} disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    Salvar Alterações
+                  </>
+                )}
+              </Button>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* Branding */}
+        <TabsContent value="branding">
+          <Card className="p-6">
+            <h3 className="text-xl font-bold mb-4">Identidade Visual</h3>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="primary_color">Cor Primária</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="primary_color"
+                      type="color"
+                      value={formData.primary_color}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          primary_color: e.target.value,
+                        })
+                      }
+                      className="w-20 h-10"
+                    />
+                    <Input
+                      value={formData.primary_color}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          primary_color: e.target.value,
+                        })
+                      }
+                      placeholder="#3B82F6"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="secondary_color">Cor Secundária</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="secondary_color"
+                      type="color"
+                      value={formData.secondary_color}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          secondary_color: e.target.value,
+                        })
+                      }
+                      className="w-20 h-10"
+                    />
+                    <Input
+                      value={formData.secondary_color}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          secondary_color: e.target.value,
+                        })
+                      }
+                      placeholder="#8B5CF6"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <p className="text-sm text-gray-600 mb-3">Pré-visualização:</p>
+                <div className="flex gap-4">
+                  <div
+                    className="w-20 h-20 rounded-lg shadow"
+                    style={{ backgroundColor: formData.primary_color }}
+                  />
+                  <div
+                    className="w-20 h-20 rounded-lg shadow"
+                    style={{ backgroundColor: formData.secondary_color }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <Button onClick={() => handleSave('branding')} disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    Salvar Alterações
+                  </>
+                )}
+              </Button>
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* Redes Sociais */}
+        <TabsContent value="social">
+          <Card className="p-6">
+            <h3 className="text-xl font-bold mb-4">Redes Sociais</h3>
+
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="facebook_url">Facebook</Label>
+                <Input
+                  id="facebook_url"
+                  value={formData.facebook_url}
+                  onChange={(e) =>
+                    setFormData({ ...formData, facebook_url: e.target.value })
+                  }
+                  placeholder="https://facebook.com/suaagencia"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="instagram_url">Instagram</Label>
+                <Input
+                  id="instagram_url"
+                  value={formData.instagram_url}
+                  onChange={(e) =>
+                    setFormData({ ...formData, instagram_url: e.target.value })
+                  }
+                  placeholder="https://instagram.com/suaagencia"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="twitter_url">Twitter/X</Label>
+                <Input
+                  id="twitter_url"
+                  value={formData.twitter_url}
+                  onChange={(e) =>
+                    setFormData({ ...formData, twitter_url: e.target.value })
+                  }
+                  placeholder="https://twitter.com/suaagencia"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="youtube_url">YouTube</Label>
+                <Input
+                  id="youtube_url"
+                  value={formData.youtube_url}
+                  onChange={(e) =>
+                    setFormData({ ...formData, youtube_url: e.target.value })
+                  }
+                  placeholder="https://youtube.com/@suaagencia"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <Button onClick={() => handleSave('social')} disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Salvando...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    Salvar Alterações
+                  </>
+                )}
+              </Button>
+            </div>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+🏪 5. ATUALIZAÇÃO DA LOJA PÚBLICA COM DADOS DO TENANT
+// app/(public)/loja/[slug]/layout.tsx
+
+import { notFound } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { Header } from '@/components/public/header'
+import { Footer } from '@/components/public/footer'
+
+export async function generateMetadata({
+  params,
+}: {
+  params: { slug: string }
+}) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: params.slug },
+  })
+
+  if (!tenant) {
+    return {
+      title: 'Agência não encontrada',
+    }
+  }
+
+  return {
+    title: tenant.store_title || tenant.name,
+    description: tenant.store_description,
+    openGraph: {
+      title: tenant.store_title || tenant.name,
+      description: tenant.store_description,
+      images: tenant.banner_url ? [tenant.banner_url] : [],
+    },
+  }
+}
+
+export default async function StoreLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode
+  params: { slug: string }
+}) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: params.slug },
+  })
+
+  if (!tenant || !tenant.store_enabled) {
+    notFound()
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <Header tenant={tenant} />
+      <main className="flex-1">{children}</main>
+      <Footer tenant={tenant} />
+    </div>
+  )
+}
+
+🎨 6. HEADER DINÂMICO COM DADOS DO TENANT
+// components/public/header.tsx - ATUALIZADO
+
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import Image from 'next/image'
+import { usePathname } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { Menu, Search, Phone, Mail, MapPin } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+interface HeaderProps {
+  tenant: {
+    name: string
+    slug: string
+    logo_url?: string
+    phone?: string
+    email?: string
+    primary_color?: string
+  }
+}
+
+export function Header({ tenant }: HeaderProps) {
+  const pathname = usePathname()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+  const navigation = [
+    { name: 'Início', href: `/loja/${tenant.slug}` },
+    { name: 'Pacotes', href: `/loja/${tenant.slug}/pacotes` },
+    { name: 'Destinos', href: `/loja/${tenant.slug}/destinos` },
+    { name: 'Sobre', href: `/loja/${tenant.slug}/sobre` },
+    { name: 'Contato', href: `/loja/${tenant.slug}/contato` },
+  ]
+
+  return (
+    <header className="sticky top-0 z-50 bg-white border-b shadow-sm">
+      {/* Top Bar */}
+      <div
+        className="text-white"
+        style={{ backgroundColor: tenant.primary_color || '#3B82F6' }}
+      >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-10 text-sm">
+            <div className="flex items-center gap-6">
+              {tenant.phone && (
+                <a
+                  href={`tel:${tenant.phone}`}
+                  className="flex items-center gap-2 hover:opacity-80 transition"
+                >
+                  <Phone className="h-4 w-4" />
+                  <span className="hidden sm:inline">{tenant.phone}</span>
+                </a>
+              )}
+              {tenant.email && (
+                <a
+                  href={`mailto:${tenant.email}`}
+                  className="flex items-center gap-2 hover:opacity-80 transition"
+                >
+                  <Mail className="h-4 w-4" />
+                  <span className="hidden sm:inline">{tenant.email}</span>
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Header */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16">
+          {/* Logo */}
+          <Link href={`/loja/${tenant.slug}`} className="flex items-center gap-3">
+            {tenant.logo_url ? (
+              <Image
+                src={tenant.logo_url}
+                alt={tenant.name}
+                width={40}
+                height={40}
+                className="rounded-lg"
+              />
+            ) : (
+              <div
+                className="w-10 h-10 rounded-lg flex items-center justify-center"
+                style={{ backgroundColor: tenant.primary_color || '#3B82F6' }}
+              >
+                <MapPin className="h-6 w-6 text-white" />
+              </div>
+            )}
+            <div className="hidden sm:block">
+              <h1 className="text-xl font-bold text-gray-900">{tenant.name}</h1>
+            </div>
+          </Link>
+
+          {/* Desktop Navigation */}
+          <nav className="hidden md:flex items-center gap-1">
+            {navigation.map((item) => (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={cn(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition',
+                  pathname === item.href
+                    ? 'text-white'
+                    : 'text-gray-700 hover:bg-gray-100'
+                )}
+                style={
+                  pathname === item.href
+                    ? { backgroundColor: tenant.primary_color || '#3B82F6' }
+                    : {}
+                }
+              >
+                {item.name}
+              </Link>
+            ))}
+          </nav>
+
+          {/* Mobile Menu Button */}
+          <Button variant="ghost" size="icon" className="md:hidden">
+            <Menu className="h-6 w-6" />
+          </Button>
+        </div>
+      </div>
+    </header>
+  )
+}
+

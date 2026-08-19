@@ -1,0 +1,1172 @@
+Analisar o sistema de datas.
+
+Na criação da viagem está inserido 17/12/2026, porem na visualização da viagem na vitrine está mostrando a 16 de dez. de 2026.
+
+Na criação da viagem:
+Data de Saída *
+17/12/2026
+Horário de Saída
+20:00
+Data de Retorno
+21/12/2026
+Horário de Retorno
+02:00
+
+
+Na web - Vitrine:
+Praia do Francês, AL
+16 de dez. de 2026
+3 dias e 6 horas
+
+Corrigir para que a data inserida na criação da viagem seja a mesma na visualização da viagem.
+
+
+A forma correta deverá ser assim:
+📍 Saída: 17/12/2026 às 20:00
+📍 Retorno: 21/12/2026 às 02:00
+
+A contagem do tempo correto deverá ser assim:
+
+De 17/12 às 20h até 18/12 às 20h = 1 dia
+De 18/12 às 20h até 19/12 às 20h = 2 dias
+De 19/12 às 20h até 20/12 às 20h = 3 dias
+De 20/12 às 20h até 21/12 às 02h = +6 horas
+
+👉 Resultado final:
+Duração da viagem: 3 dias e 6 horas de viagem
+
+Regra de cálculo da duração da viagem:
+
+A duração deve ser calculada como a diferença entre a data/hora de saída e a data/hora de retorno, considerando o tempo total contínuo.
+
+👉 Entradas:
+
+data_saida = 17/12/2026
+hora_saida = 20:00
+data_retorno = 21/12/2026
+hora_retorno = 02:00
+
+👉 Processamento:
+
+Converter as datas e horas em um formato único (ex: datetime)
+Subtrair:
+duração = data_hora_retorno - data_hora_saida
+
+👉 Cálculo detalhado:
+
+17/12/2026 20:00 → 18/12/2026 20:00 = 24h
+18/12/2026 20:00 → 19/12/2026 20:00 = 48h
+19/12/2026 20:00 → 20/12/2026 20:00 = 72h
+20/12/2026 20:00 → 21/12/2026 02:00 = +6h
+
+👉 Total em horas: 78 horas
+
+👉 Conversão final:
+
+dias = 78 ÷ 24 = 3 dias
+horas_restantes = 6 horas
+
+👉 Saída esperada:
+Duração da viagem: 3 dias e 6 horas
+
+
+CORREÇÃO DE DATAS E CÁLCULO DE DURAÇÃO
+
+ATUALIZAÇÃO DO SCHEMA PRISMA
+
+// prisma/schema.prisma - ATUALIZAR MODEL TRIP
+
+model Trip {
+  id                String      @id @default(cuid())
+  tenant_id         String
+  destination_id    String
+  vehicle_id        String?
+  
+  name              String
+  description       String?
+  
+  // Datas e Horários
+  departure_date    DateTime    // Data e hora de saída
+  return_date       DateTime?   // Data e hora de retorno
+  
+  // Preços
+  price_per_person  Decimal     @db.Decimal(10, 2)
+  available_seats   Int
+  
+  // Status
+  status            String      @default("active") // active, cancelled, completed
+  is_featured       Boolean     @default(false)
+  
+  created_at        DateTime    @default(now())
+  updated_at        DateTime    @updatedAt
+
+  tenant            Tenant      @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  destination       Destination @relation(fields: [destination_id], references: [id])
+  vehicle           Vehicle?    @relation(fields: [vehicle_id], references: [id])
+  reservations      Reservation[]
+
+  @@index([tenant_id])
+  @@index([destination_id])
+  @@index([departure_date])
+  @@index([status])
+  @@map("trips")
+}
+
+# Executar migração
+npx prisma migrate dev --name add_datetime_to_trips
+
+UTILITÁRIO DE CÁLCULO DE DURAÇÃO
+
+// lib/date-utils.ts
+
+import { differenceInHours, differenceInMinutes, format } from 'date-fns'
+import { ptBR } from 'date-fns/locale'
+
+/**
+ * Calcula a duração entre duas datas em dias e horas
+ */
+export function calculateTripDuration(
+  departureDate: Date,
+  returnDate: Date
+): {
+  totalHours: number
+  days: number
+  hours: number
+  formatted: string
+} {
+  // Calcular diferença total em horas
+  const totalHours = differenceInHours(returnDate, departureDate)
+  
+  // Calcular dias completos
+  const days = Math.floor(totalHours / 24)
+  
+  // Calcular horas restantes
+  const hours = totalHours % 24
+
+  // Formatar string de duração
+  let formatted = ''
+  
+  if (days > 0) {
+    formatted += `${days} ${days === 1 ? 'dia' : 'dias'}`
+  }
+  
+  if (hours > 0) {
+    if (formatted) formatted += ' e '
+    formatted += `${hours} ${hours === 1 ? 'hora' : 'horas'}`
+  }
+  
+  if (!formatted) {
+    formatted = 'Menos de 1 hora'
+  }
+
+  return {
+    totalHours,
+    days,
+    hours,
+    formatted,
+  }
+}
+
+/**
+ * Formata data e hora para exibição
+ */
+export function formatDateTime(date: Date): string {
+  return format(date, "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })
+}
+
+/**
+ * Formata apenas a data
+ */
+export function formatDate(date: Date): string {
+  return format(date, 'dd/MM/yyyy', { locale: ptBR })
+}
+
+/**
+ * Formata apenas a hora
+ */
+export function formatTime(date: Date): string {
+  return format(date, 'HH:mm', { locale: ptBR })
+}
+
+/**
+ * Formata data de forma extensa
+ */
+export function formatDateLong(date: Date): string {
+  return format(date, "dd 'de' MMMM 'de' yyyy", { locale: ptBR })
+}
+
+/**
+ * Formata data e hora de forma extensa
+ */
+export function formatDateTimeLong(date: Date): string {
+  return format(date, "dd 'de' MMMM 'de' yyyy 'às' HH:mm", { locale: ptBR })
+}
+
+/**
+ * Combina data e hora em um único DateTime
+ */
+export function combineDateAndTime(date: string, time: string): Date {
+  // date formato: "2026-12-17"
+  // time formato: "20:00"
+  return new Date(`${date}T${time}:00`)
+}
+
+/**
+ * Valida se a data de retorno é posterior à data de saída
+ */
+export function validateTripDates(
+  departureDate: Date,
+  returnDate: Date
+): { valid: boolean; error?: string } {
+  if (returnDate <= departureDate) {
+    return {
+      valid: false,
+      error: 'A data de retorno deve ser posterior à data de saída',
+    }
+  }
+
+  const duration = differenceInHours(returnDate, departureDate)
+  
+  if (duration < 1) {
+    return {
+      valid: false,
+      error: 'A viagem deve ter no mínimo 1 hora de duração',
+    }
+  }
+
+  return { valid: true }
+}
+
+FORMULÁRIO DE CRIAÇÃO DE VIAGEM ATUALIZADO
+// app/(dashboard)/dashboard/trips/new/page.tsx
+
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { ArrowLeft, Save, Loader2, Calendar, Clock, Info } from 'lucide-react'
+import { toast } from 'sonner'
+import { combineDateAndTime, validateTripDates, calculateTripDuration } from '@/lib/date-utils'
+
+export default function NewTripPage() {
+  const router = useRouter()
+  const [isLoading, setIsLoading] = useState(false)
+  const [destinations, setDestinations] = useState<any[]>([])
+  const [vehicles, setVehicles] = useState<any[]>([])
+
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+    destination_id: '',
+    vehicle_id: '',
+    
+    // Datas e Horas separadas
+    departure_date: '',
+    departure_time: '20:00',
+    return_date: '',
+    return_time: '02:00',
+    
+    price_per_person: '',
+    available_seats: '',
+    is_featured: false,
+  })
+
+  const [duration, setDuration] = useState<{
+    days: number
+    hours: number
+    formatted: string
+  } | null>(null)
+
+  useEffect(() => {
+    loadDestinations()
+    loadVehicles()
+  }, [])
+
+  // Calcular duração quando as datas mudarem
+  useEffect(() => {
+    if (
+      formData.departure_date &&
+      formData.departure_time &&
+      formData.return_date &&
+      formData.return_time
+    ) {
+      try {
+        const departureDateTime = combineDateAndTime(
+          formData.departure_date,
+          formData.departure_time
+        )
+        const returnDateTime = combineDateAndTime(
+          formData.return_date,
+          formData.return_time
+        )
+
+        const validation = validateTripDates(departureDateTime, returnDateTime)
+        
+        if (validation.valid) {
+          const calc = calculateTripDuration(departureDateTime, returnDateTime)
+          setDuration(calc)
+        } else {
+          setDuration(null)
+        }
+      } catch (error) {
+        setDuration(null)
+      }
+    } else {
+      setDuration(null)
+    }
+  }, [
+    formData.departure_date,
+    formData.departure_time,
+    formData.return_date,
+    formData.return_time,
+  ])
+
+  const loadDestinations = async () => {
+    try {
+      const response = await fetch('/api/destinations')
+      const data = await response.json()
+      setDestinations(data.destinations || [])
+    } catch (error) {
+      console.error('Erro ao carregar destinos:', error)
+    }
+  }
+
+  const loadVehicles = async () => {
+    try {
+      const response = await fetch('/api/vehicles')
+      const data = await response.json()
+      setVehicles(data.vehicles || [])
+    } catch (error) {
+      console.error('Erro ao carregar veículos:', error)
+    }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    try {
+      setIsLoading(true)
+
+      // Combinar datas e horas
+      const departureDateTime = combineDateAndTime(
+        formData.departure_date,
+        formData.departure_time
+      )
+      const returnDateTime = combineDateAndTime(
+        formData.return_date,
+        formData.return_time
+      )
+
+      // Validar datas
+      const validation = validateTripDates(departureDateTime, returnDateTime)
+      if (!validation.valid) {
+        toast.error(validation.error)
+        return
+      }
+
+      const response = await fetch('/api/trips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...formData,
+          departure_date: departureDateTime.toISOString(),
+          return_date: returnDateTime.toISOString(),
+          price_per_person: parseFloat(formData.price_per_person),
+          available_seats: parseInt(formData.available_seats),
+        }),
+      })
+
+      if (response.ok) {
+        toast.success('Viagem criada com sucesso!')
+        router.push('/dashboard/trips')
+      } else {
+        const data = await response.json()
+        toast.error(data.error || 'Erro ao criar viagem')
+      }
+    } catch (error) {
+      console.error('Erro:', error)
+      toast.error('Erro ao criar viagem')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <Button variant="ghost" onClick={() => router.back()} className="mb-2 -ml-2">
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Voltar
+        </Button>
+        <h1 className="text-3xl font-bold text-gray-900">Nova Viagem</h1>
+        <p className="text-gray-600 mt-1">Crie um novo pacote de viagem</p>
+      </div>
+
+      <form onSubmit={handleSubmit}>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Coluna Principal */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Informações Básicas */}
+            <Card className="p-6">
+              <h3 className="text-xl font-bold mb-4">Informações Básicas</h3>
+
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="name">Nome da Viagem *</Label>
+                  <Input
+                    id="name"
+                    value={formData.name}
+                    onChange={(e) =>
+                      setFormData({ ...formData, name: e.target.value })
+                    }
+                    placeholder="Ex: Pacote Réveillon Rio de Janeiro"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="description">Descrição</Label>
+                  <Textarea
+                    id="description"
+                    value={formData.description}
+                    onChange={(e) =>
+                      setFormData({ ...formData, description: e.target.value })
+                    }
+                    placeholder="Descreva os detalhes da viagem..."
+                    rows={4}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="destination_id">Destino *</Label>
+                    <Select
+                      value={formData.destination_id}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, destination_id: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione o destino" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {destinations.map((dest) => (
+                          <SelectItem key={dest.id} value={dest.id}>
+                            {dest.name} - {dest.state}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <Label htmlFor="vehicle_id">Veículo</Label>
+                    <Select
+                      value={formData.vehicle_id}
+                      onValueChange={(value) =>
+                        setFormData({ ...formData, vehicle_id: value })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecione o veículo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {vehicles.map((vehicle) => (
+                          <SelectItem key={vehicle.id} value={vehicle.id}>
+                            {vehicle.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            {/* Datas e Horários */}
+            <Card className="p-6">
+              <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-blue-600" />
+                Datas e Horários
+              </h3>
+
+              <div className="space-y-6">
+                {/* Saída */}
+                <div>
+                  <Label className="text-base font-semibold mb-3 block">
+                    📍 Data e Hora de Saída *
+                  </Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="departure_date">Data</Label>
+                      <Input
+                        id="departure_date"
+                        type="date"
+                        value={formData.departure_date}
+                        onChange={(e) =>
+                          setFormData({ ...formData, departure_date: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="departure_time">Hora</Label>
+                      <Input
+                        id="departure_time"
+                        type="time"
+                        value={formData.departure_time}
+                        onChange={(e) =>
+                          setFormData({ ...formData, departure_time: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Retorno */}
+                <div>
+                  <Label className="text-base font-semibold mb-3 block">
+                    📍 Data e Hora de Retorno *
+                  </Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="return_date">Data</Label>
+                      <Input
+                        id="return_date"
+                        type="date"
+                        value={formData.return_date}
+                        onChange={(e) =>
+                          setFormData({ ...formData, return_date: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="return_time">Hora</Label>
+                      <Input
+                        id="return_time"
+                        type="time"
+                        value={formData.return_time}
+                        onChange={(e) =>
+                          setFormData({ ...formData, return_time: e.target.value })
+                        }
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Duração Calculada */}
+                {duration && (
+                  <Card className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200">
+                    <div className="flex items-center gap-3">
+                      <Clock className="h-6 w-6 text-blue-600" />
+                      <div>
+                        <p className="text-sm text-blue-700 font-medium">
+                          Duração da Viagem
+                        </p>
+                        <p className="text-2xl font-bold text-blue-900">
+                          {duration.formatted}
+                        </p>
+                        <p className="text-xs text-blue-600 mt-1">
+                          Total: {duration.totalHours} horas
+                        </p>
+                      </div>
+                    </div>
+                  </Card>
+                )}
+              </div>
+            </Card>
+
+            {/* Preços e Disponibilidade */}
+            <Card className="p-6">
+              <h3 className="text-xl font-bold mb-4">Preços e Disponibilidade</h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="price_per_person">Preço por Pessoa (R$) *</Label>
+                  <Input
+                    id="price_per_person"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.price_per_person}
+                    onChange={(e) =>
+                      setFormData({ ...formData, price_per_person: e.target.value })
+                    }
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="available_seats">Assentos Disponíveis *</Label>
+                  <Input
+                    id="available_seats"
+                    type="number"
+                    min="1"
+                    value={formData.available_seats}
+                    onChange={(e) =>
+                      setFormData({ ...formData, available_seats: e.target.value })
+                    }
+                    placeholder="0"
+                    required
+                  />
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* Sidebar */}
+          <div className="lg:col-span-1">
+            <div className="sticky top-6 space-y-6">
+              {/* Preview */}
+              <Card className="p-6 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200">
+                <h3 className="font-bold text-lg mb-4 text-blue-900">
+                  📋 Preview da Viagem
+                </h3>
+
+                <div className="space-y-3 text-sm">
+                  {formData.name && (
+                    <div>
+                      <p className="text-blue-700 font-medium">Nome:</p>
+                      <p className="font-bold text-gray-900">{formData.name}</p>
+                    </div>
+                  )}
+
+                  {formData.departure_date && formData.departure_time && (
+                    <div>
+                      <p className="text-blue-700 font-medium">Saída:</p>
+                      <p className="font-bold text-gray-900">
+                        {new Date(
+                          `${formData.departure_date}T${formData.departure_time}`
+                        ).toLocaleDateString('pt-BR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                        })}{' '}
+                        às {formData.departure_time}
+                      </p>
+                    </div>
+                  )}
+
+                  {formData.return_date && formData.return_time && (
+                    <div>
+                      <p className="text-blue-700 font-medium">Retorno:</p>
+                      <p className="font-bold text-gray-900">
+                        {new Date(
+                          `${formData.return_date}T${formData.return_time}`
+                        ).toLocaleDateString('pt-BR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                        })}{' '}
+                        às {formData.return_time}
+                      </p>
+                    </div>
+                  )}
+
+                  {duration && (
+                    <div>
+                      <p className="text-blue-700 font-medium">Duração:</p>
+                      <p className="font-bold text-gray-900">{duration.formatted}</p>
+                    </div>
+                  )}
+
+                  {formData.price_per_person && (
+                    <div>
+                      <p className="text-blue-700 font-medium">Preço:</p>
+                      <p className="font-bold text-gray-900">
+                        {new Intl.NumberFormat('pt-BR', {
+                          style: 'currency',
+                          currency: 'BRL',
+                        }).format(parseFloat(formData.price_per_person))}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              {/* Dica */}
+              <Card className="p-5 bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-yellow-200">
+                <div className="flex items-start gap-3">
+                  <Info className="h-5 w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                  <div className="text-sm text-yellow-900">
+                    <p className="font-bold mb-2">💡 Dica</p>
+                    <p>
+                      A duração é calculada automaticamente com base nas datas e
+                      horários informados. Certifique-se de que a data de retorno
+                      seja posterior à data de saída.
+                    </p>
+                  </div>
+                </div>
+              </Card>
+
+              {/* Botões */}
+              <div className="space-y-3">
+                <Button
+                  type="submit"
+                  className="w-full"
+                  size="lg"
+                  disabled={isLoading || !duration}
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                      Salvando...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-5 w-5 mr-2" />
+                      Criar Viagem
+                    </>
+                  )}
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => router.back()}
+                  disabled={isLoading}
+                >
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+COMPONENTE DE EXIBIÇÃO DE VIAGEM
+// components/trips/trip-card.tsx
+
+'use client'
+
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  MapPin,
+  Calendar,
+  Clock,
+  Users,
+  DollarSign,
+  ArrowRight,
+} from 'lucide-react'
+import { formatDateTime, calculateTripDuration } from '@/lib/date-utils'
+import Link from 'next/link'
+
+interface TripCardProps {
+  trip: {
+    id: string
+    name: string
+    description?: string
+    departure_date: Date
+    return_date: Date
+    price_per_person: number
+    available_seats: number
+    destination: {
+      name: string
+      city: string
+      state: string
+    }
+  }
+  tenantSlug: string
+}
+
+export function TripCard({ trip, tenantSlug }: TripCardProps) {
+  const duration = calculateTripDuration(
+    new Date(trip.departure_date),
+    new Date(trip.return_date)
+  )
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  return (
+    <Card className="overflow-hidden hover:shadow-xl transition-all duration-300 group">
+      {/* Header com Destino */}
+      <div className="p-6 bg-gradient-to-r from-blue-600 to-blue-700 text-white">
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-2">
+              <MapPin className="h-5 w-5" />
+              <span className="text-sm font-medium opacity-90">
+                {trip.destination.city} - {trip.destination.state}
+              </span>
+            </div>
+            <h3 className="text-2xl font-bold line-clamp-2 group-hover:text-blue-100 transition-colors">
+              {trip.name}
+            </h3>
+          </div>
+        </div>
+      </div>
+
+      {/* Conteúdo */}
+      <div className="p-6 space-y-4">
+        {/* Datas */}
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <Calendar className="h-5 w-5 text-green-600 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm text-gray-600">Saída</p>
+              <p className="font-bold text-gray-900">
+                {formatDateTime(new Date(trip.departure_date))}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3">
+            <Calendar className="h-5 w-5 text-orange-600 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm text-gray-600">Retorno</p>
+              <p className="font-bold text-gray-900">
+                {formatDateTime(new Date(trip.return_date))}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Duração */}
+        <Card className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+          <div className="flex items-center gap-3">
+            <Clock className="h-5 w-5 text-blue-600" />
+            <div>
+              <p className="text-sm text-blue-700">Duração</p>
+              <p className="font-bold text-blue-900">{duration.formatted}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Descrição */}
+        {trip.description && (
+          <p className="text-sm text-gray-600 line-clamp-2">
+            {trip.description}
+          </p>
+        )}
+
+        {/* Footer */}
+        <div className="flex items-center justify-between pt-4 border-t">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <Users className="h-4 w-4" />
+              <span>{trip.available_seats} vagas</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <DollarSign className="h-5 w-5 text-green-600" />
+              <span className="text-2xl font-bold text-green-600">
+                {formatCurrency(trip.price_per_person)}
+              </span>
+            </div>
+          </div>
+
+          <Link href={`/loja/${tenantSlug}/pacotes/${trip.id}`}>
+            <Button className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800">
+              Ver Detalhes
+              <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          </Link>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+PÁGINA DE DETALHES DA VIAGEM
+// app/(public)/loja/[slug]/pacotes/[id]/page.tsx
+
+import { notFound } from 'next/navigation'
+import { prisma } from '@/lib/prisma'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  MapPin,
+  Calendar,
+  Clock,
+  Users,
+  DollarSign,
+  Armchair,
+  Info,
+} from 'lucide-react'
+import {
+  formatDateTime,
+  calculateTripDuration,
+  formatDateLong,
+} from '@/lib/date-utils'
+import Link from 'next/link'
+
+export default async function PackageDetailsPage({
+  params,
+}: {
+  params: { slug: string; id: string }
+}) {
+  const tenant = await prisma.tenant.findUnique({
+    where: { slug: params.slug },
+  })
+
+  if (!tenant) {
+    notFound()
+  }
+
+  const trip = await prisma.trip.findUnique({
+    where: {
+      id: params.id,
+      tenant_id: tenant.id,
+    },
+    include: {
+      destination: true,
+      vehicle: {
+        include: {
+          bus_model: true,
+        },
+      },
+    },
+  })
+
+  if (!trip) {
+    notFound()
+  }
+
+  const duration = calculateTripDuration(
+    new Date(trip.departure_date),
+    new Date(trip.return_date)
+  )
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(Number(value))
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Coluna Principal */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Header */}
+            <Card className="p-8 bg-gradient-to-r from-blue-600 to-blue-700 text-white">
+              <div className="flex items-start gap-3 mb-4">
+                <MapPin className="h-6 w-6 mt-1" />
+                <div>
+                  <p className="text-blue-100 mb-1">
+                    {trip.destination.city} - {trip.destination.state}
+                  </p>
+                  <h1 className="text-4xl font-bold">{trip.name}</h1>
+                </div>
+              </div>
+
+              {trip.description && (
+                <p className="text-blue-50 text-lg mt-4">{trip.description}</p>
+              )}
+            </Card>
+
+            {/* Datas e Duração */}
+            <Card className="p-6">
+              <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
+                <Calendar className="h-6 w-6 text-blue-600" />
+                Datas da Viagem
+              </h2>
+
+              <div className="space-y-6">
+                {/* Saída */}
+                <div className="flex items-start gap-4 p-4 bg-green-50 rounded-xl border-2 border-green-200">
+                  <div className="p-3 bg-green-600 rounded-xl">
+                    <Calendar className="h-6 w-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm text-green-700 font-medium mb-1">
+                      📍 Saída
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {formatDateTime(new Date(trip.departure_date))}
+                    </p>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {formatDateLong(new Date(trip.departure_date))}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Retorno */}
+                <div className="flex items-start gap-4 p-4 bg-orange-50 rounded-xl border-2 border-orange-200">
+                  <div className="p-3 bg-orange-600 rounded-xl">
+                    <Calendar className="h-6 w-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm text-orange-700 font-medium mb-1">
+                      📍 Retorno
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {formatDateTime(new Date(trip.return_date))}
+                    </p>
+                    <p className="text-sm text-gray-600 mt-1">
+                      {formatDateLong(new Date(trip.return_date))}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Duração */}
+                <Card className="p-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200">
+                  <div className="flex items-center gap-4">
+                    <div className="p-4 bg-blue-600 rounded-2xl">
+                      <Clock className="h-8 w-8 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm text-blue-700 font-medium mb-1">
+                        Duração da Viagem
+                      </p>
+                      <p className="text-3xl font-bold text-blue-900">
+                        {duration.formatted}
+                      </p>
+                      <p className="text-sm text-blue-600 mt-1">
+                        Total de {duration.totalHours} horas
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            </Card>
+
+            {/* Veículo */}
+            {trip.vehicle && (
+              <Card className="p-6">
+                <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
+                  <Armchair className="h-6 w-6 text-purple-600" />
+                  Veículo
+                </h2>
+
+                <div className="flex items-center gap-4">
+                  <div className="p-4 bg-purple-100 rounded-xl">
+                    <Armchair className="h-8 w-8 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-xl">{trip.vehicle.name}</p>
+                    {trip.vehicle.bus_model && (
+                      <p className="text-gray-600">
+                        {trip.vehicle.bus_model.name}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            )}
+          </div>
+
+          {/* Sidebar */}
+          <div className="lg:col-span-1">
+            <div className="sticky top-6 space-y-6">
+              {/* Card de Reserva */}
+              <Card className="p-6 shadow-xl border-2">
+                <div className="text-center mb-6">
+                  <p className="text-gray-600 mb-2">A partir de</p>
+                  <p className="text-4xl font-bold text-green-600">
+                    {formatCurrency(trip.price_per_person)}
+                  </p>
+                  <p className="text-sm text-gray-600">por pessoa</p>
+                </div>
+
+                <div className="space-y-3 mb-6">
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <span className="text-gray-600 flex items-center gap-2">
+                      <Users className="h-4 w-4" />
+                      Vagas disponíveis
+                    </span>
+                    <span className="font-bold">{trip.available_seats}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <span className="text-gray-600 flex items-center gap-2">
+                      <Clock className="h-4 w-4" />
+                      Duração
+                    </span>
+                    <span className="font-bold">{duration.formatted}</span>
+                  </div>
+                </div>
+
+                <Link href={`/loja/${tenant.slug}/pacotes/${trip.id}/assentos`}>
+                  <Button
+                    size="lg"
+                    className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg text-lg h-14"
+                  >
+                    <Armchair className="h-6 w-6 mr-2" />
+                    Escolher Assentos
+                  </Button>
+                </Link>
+              </Card>
+
+              {/* Informações */}
+              <Card className="p-5 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200">
+                <div className="flex items-start gap-3">
+                  <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div className="text-sm text-blue-900">
+                    <p className="font-bold mb-2">ℹ️ Informações Importantes</p>
+                    <ul className="space-y-1.5">
+                      <li>• Chegue com 30 minutos de antecedência</li>
+                      <li>• Documento de identificação obrigatório</li>
+                      <li>• Crianças até 5 anos não pagam</li>
+                      <li>• Cancelamento gratuito até 48h antes</li>
+                    </ul>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+Sistema de datas e duração
+
+ Datas e Horários Precisos:
+
+Campos separados para data e hora
+Combinação correta em DateTime
+Validação de datas
+ Cálculo de Duração:
+
+Diferença exata em horas
+Conversão para dias e horas
+Formatação legível
+ Exibição Correta:
+
+Formato: "17/12/2026 às 20:00"
+Duração: "3 dias e 6 horas"
+Preview em tempo real
+ Validações:
+
+Retorno posterior à saída
+Duração mínima de 1 hora
+Feedback visual
+ UI/UX Aprimorada:
+
+Cards coloridos por tipo
+Ícones contextuais
+Preview ao criar
+Cálculo automático
+Tudo funcionando perfeitamente

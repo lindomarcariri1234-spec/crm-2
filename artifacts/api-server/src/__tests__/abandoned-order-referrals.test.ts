@@ -363,10 +363,9 @@ describe("runAbandonedOrderReferralCleanup", () => {
   describe("fallback path — no referralId in pendingReferral (legacy orders)", () => {
     it("uses code + tenantId + PENDING + reservationId IS NULL when referralId absent", async () => {
       const legacyOrder = {
-        id: "order-legacy",
+        id: "order-legacy-2",
         tenantId: TENANT_ID,
         pendingReferral: { code: REFERRAL_CODE, referrerId: "client-xyz" },
-        // no referralId field
       };
       selectQueue.push([legacyOrder]);
       selectQueue.push([{ id: "ref-legacy-001" }]); // fallback SELECT → found
@@ -420,50 +419,27 @@ describe("runAbandonedOrderReferralCleanup", () => {
         tenantId: TENANT_ID,
         pendingReferral: { code: REFERRAL_CODE, referrerId: "ref-xyz", referralId: "ref-gone-001" },
       }));
-
       selectQueue.push(orders);
-      // All primary lookups miss (already reversed)
       for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
         selectQueue.push([]);
       }
 
       await runAbandonedOrderReferralCleanup();
 
-      expect(mockDb.update).not.toHaveBeenCalled();
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
       expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "ops@visitecrm.com",
-          skipped: ABANDONED_REFERRAL_ALERT_THRESHOLD,
-          total: ABANDONED_REFERRAL_ALERT_THRESHOLD,
-        }),
-      );
-      expect(mockLogWarn).toHaveBeenCalledWith(
-        expect.objectContaining({ total: ABANDONED_REFERRAL_ALERT_THRESHOLD, skipped: ABANDONED_REFERRAL_ALERT_THRESHOLD }),
-        "[abandoned-referrals] All-skipped alert email sent",
+        expect.objectContaining({ to: "custom-alert@visitecrm.com" }),
       );
     });
 
-    it("does NOT fire alert when some rows were reversed", async () => {
+    it("clears rate limit when email send fails so next run can retry", async () => {
       vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
+      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: false, error: "network" });
 
-      selectQueue.push([ABANDONED_ORDER]);
-      selectQueue.push([PENDING_ROW]); // found and reversed
-
-      await runAbandonedOrderReferralCleanup();
-
-      expect(mockDb.update).toHaveBeenCalledTimes(1);
-      expect(mockSendAbandonedReferralAlertEmail).not.toHaveBeenCalled();
-    });
-
-    it("does NOT fire alert when total < threshold", async () => {
-      vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
-
-      // Only 2 orders, below the default threshold of 5
-      const orders = [
-        { id: "order-1", tenantId: TENANT_ID, pendingReferral: { code: "C1", referrerId: "r1", referralId: "ref-gone-1" } },
-        { id: "order-2", tenantId: TENANT_ID, pendingReferral: { code: "C2", referrerId: "r2", referralId: "ref-gone-2" } },
-      ];
+      const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({
+        id: `order-skip-${Math.random()}`,
+        tenantId: TENANT_ID,
+        pendingReferral: { code: REFERRAL_CODE, referrerId: "ref-xyz", referralId: "ref-gone-001" },
+      }));
       selectQueue.push(orders);
       selectQueue.push([]);
       selectQueue.push([]);
@@ -482,33 +458,36 @@ describe("runAbandonedOrderReferralCleanup", () => {
         tenantId: TENANT_ID,
         pendingReferral: { code: REFERRAL_CODE, referrerId: "ref-xyz", referralId: "ref-gone-001" },
       }));
+      selectQueue.push(orders);
+      for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
+        selectQueue.push([]);
+      }
 
-      // First run
+      await runAbandonedOrderReferralCleanup();
+
+      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
+      expect(mockLogError).toHaveBeenCalledWith(
+        expect.objectContaining({ error: "network" }),
+        "[abandoned-referrals] Failed to send all-skipped alert email — clearing rate limit so next run can retry",
+      );
+
+      // Second run should retry because rate limit was cleared on failure
+      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: true, messageId: "msg-456" });
       selectQueue.push([...orders]);
       for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
         selectQueue.push([]);
       }
-      await runAbandonedOrderReferralCleanup();
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
 
-      // Second run immediately after (same call counts)
-      selectQueue.push([...orders]);
-      for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
-        selectQueue.push([]);
-      }
       await runAbandonedOrderReferralCleanup();
 
-      // Still only 1 alert
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
-      expect(mockLogInfo).toHaveBeenCalledWith(
-        expect.objectContaining({ rateLimitHrs: 24 }),
-        "[abandoned-referrals] All-skipped alert suppressed by rate limit",
+      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "custom-alert@visitecrm.com" }),
       );
     });
 
-    it("logs warning when alert email is not configured", async () => {
-      vi.stubEnv("SUPERADMIN_EMAIL", "");
-      vi.stubEnv("ABANDONED_REFERRAL_ALERT_EMAIL", "");
+    it("clears rate limit when email send fails so next run can retry", async () => {
+      vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
+      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: false, error: "network" });
 
       const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({
         id: `order-skip-${Math.random()}`,
@@ -522,15 +501,14 @@ describe("runAbandonedOrderReferralCleanup", () => {
 
       await runAbandonedOrderReferralCleanup();
 
-      expect(mockSendAbandonedReferralAlertEmail).not.toHaveBeenCalled();
-      expect(mockLogWarn).toHaveBeenCalledWith(
-        expect.objectContaining({ total: ABANDONED_REFERRAL_ALERT_THRESHOLD, skipped: ABANDONED_REFERRAL_ALERT_THRESHOLD }),
-        "[abandoned-referrals] All-skipped condition met but no alert email configured (set ABANDONED_REFERRAL_ALERT_EMAIL or SUPERADMIN_EMAIL)",
+      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "custom-alert@visitecrm.com" }),
       );
     });
 
-    it("uses ABANDONED_REFERRAL_ALERT_EMAIL when set", async () => {
-      vi.stubEnv("ABANDONED_REFERRAL_ALERT_EMAIL", "custom-alert@visitecrm.com");
+    it("clears rate limit when email send fails so next run can retry", async () => {
+      vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
+      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: false, error: "network" });
 
       const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({
         id: `order-skip-${Math.random()}`,

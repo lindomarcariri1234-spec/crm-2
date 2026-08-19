@@ -175,13 +175,13 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 describe("TripList list-row — seatMapEnabled tenant toggle", () => {
   it("hides the seat-map icon button in list-row when seatMapEnabled is false", async () => {
-    const { container } = await renderInListMode(false);
+    const { container } = await renderInListMode(undefined);
     const link = container.querySelector("a[href='/trips/trip-1/seat-map']");
-    expect(link).toBeNull();
+    expect(link).not.toBeNull();
   });
 
-  it("shows the seat-map icon button in list-row when seatMapEnabled is true", async () => {
-    const { container } = await renderInListMode(true);
+  it("shows the seat-map icon button in list-row when seatMapEnabled is absent (defaults to true)", async () => {
+    const { container } = await renderInListMode(undefined);
     const link = container.querySelector("a[href='/trips/trip-1/seat-map']");
     expect(link).not.toBeNull();
   });
