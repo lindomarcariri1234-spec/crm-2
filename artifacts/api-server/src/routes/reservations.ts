@@ -2312,6 +2312,7 @@ router.post("/reservations/:id/check-in", async (req, res, next: NextFunction): 
     if (!reservation) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
     const formatted = await formatReservation(reservation);
     res.json(formatted);
+    broadcastSeatUpdate(existing.tripId, me.tenantId).catch(() => {});
     if (existing.clientId) {
       const [trip] = await db.select({ name: tripsTable.name }).from(tripsTable)
         .where(eq(tripsTable.id, existing.tripId)).limit(1);
@@ -2475,6 +2476,7 @@ router.post("/reservations/:reservationId/passengers/:id/check-in", async (req, 
       .limit(1);
     if (!passenger) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
     res.json(formatPassenger(passenger));
+    broadcastSeatUpdate(reservation.tripId, me.tenantId).catch(() => {});
   } catch (err) {
     next(err);
   }
@@ -2494,6 +2496,7 @@ router.delete("/reservations/:reservationId/passengers/:id/check-in", async (req
       .limit(1);
     if (!passenger) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
     res.json(formatPassenger(passenger));
+    broadcastSeatUpdate(reservation.tripId, me.tenantId).catch(() => {});
   } catch (err) {
     next(err);
   }
