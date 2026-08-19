@@ -305,7 +305,8 @@ export function useUploadVideo(callbacks: UploadCallbacks = {}, options: UploadO
       if (elapsed >= 1) {
         const rate = (pct / 100) / elapsed; // fraction-of-file per second
         const remaining = 1 - pct / 100;
-        setUploadEta(remaining / rate);
+        const eta = remaining / rate;
+        setUploadEta(Number.isFinite(eta) && eta > 0 ? eta : null);
       }
     } else {
       setUploadEta(null);

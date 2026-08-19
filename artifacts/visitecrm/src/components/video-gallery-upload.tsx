@@ -12,7 +12,7 @@ import { useUploadVideo } from "@/hooks/use-upload";
  * Returns an empty string when the estimate is not yet available or invalid,
  * so the caller can conditionally append it without extra guard logic.
  */
-function formatEta(seconds: number | null): string {
+export function formatEta(seconds: number | null): string {
   if (seconds === null || !isFinite(seconds) || seconds <= 0) return "";
   if (seconds < 10) return "< 10s";
   if (seconds < 60) return `~${Math.round(seconds)}s`;
