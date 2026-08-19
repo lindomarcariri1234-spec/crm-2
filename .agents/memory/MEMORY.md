@@ -60,3 +60,4 @@
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
+- [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
