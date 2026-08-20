@@ -48,6 +48,7 @@ vi.mock("@clerk/express", () => ({
 
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: vi.fn(),
+  checkTenantAccess: vi.fn().mockResolvedValue(true),
   ADMIN_ROLES: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN],
   MANAGEMENT_ROLES: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER],
 }));
@@ -69,7 +70,7 @@ vi.mock("@workspace/api-zod", () => ({
   SyncMeResponse: {},
 }));
 
-import { requireAuth } from "../lib/tenant.js";
+import { checkTenantAccess, requireAuth } from "../lib/tenant.js";
 import usersRouter from "../routes/users.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
@@ -87,6 +88,7 @@ function buildApp() {
 }
 
 const requireAuthMock = vi.mocked(requireAuth);
+const checkTenantAccessMock = vi.mocked(checkTenantAccess);
 
 function authAs(role: string) {
   requireAuthMock.mockResolvedValue({
@@ -150,5 +152,60 @@ describe("GET /api/users — TEAM.VIEW authorization gate", () => {
     const res = await request(buildApp()).get("/api/users");
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("FORBIDDEN_ROLE");
+  });
+});
+
+describe("GET /api/users/me — authenticated profile", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkTenantAccessMock.mockResolvedValue(true);
+    mockLimit.mockReset();
+    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockSelect.mockReturnValue({ from: mockFrom });
+  });
+
+  it("returns an existing tenant user after checking the agency access state", async () => {
+    const currentUser = {
+      id: "user-001",
+      clerkId: "user_test",
+      name: "Ana Agência",
+      email: "ana@example.com",
+      role: ROLES.AGENCY_ADMIN,
+      avatarUrl: null,
+      isActive: true,
+      tenantId: "tenant-001",
+      referralCode: "ANA123",
+      referralBalance: "0",
+      commissionType: "percentage",
+      commissionRate: "0",
+      commissionFixed: "0",
+      monthlyGoal: null,
+      createdAt: new Date("2026-08-20T12:00:00.000Z"),
+    };
+    const tenant = {
+      id: "tenant-001",
+      name: "Agência Teste",
+      slug: "agencia-teste",
+      logoUrl: null,
+      primaryColor: null,
+      secondaryColor: null,
+      status: "active",
+      planId: "starter",
+      website: null,
+      settings: {},
+    };
+    mockLimit.mockResolvedValueOnce([currentUser]).mockResolvedValueOnce([tenant]);
+
+    const res = await request(buildApp()).get("/api/users/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe("user-001");
+    expect(res.body.tenantId).toBe("tenant-001");
+    expect(checkTenantAccessMock).toHaveBeenCalledWith(
+      "tenant-001",
+      expect.any(Object),
+      expect.any(Object),
+    );
   });
 });

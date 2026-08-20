@@ -30,6 +30,8 @@ const {
   mockUpdate,
   mockSyncMeBodySafeParse,
   mockGetUser,
+  mockCheckPlanLimit,
+  mockCheckTenantAccess,
 } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
@@ -45,11 +47,13 @@ const {
 
   const mockSyncMeBodySafeParse = vi.fn();
   const mockGetUser = vi.fn();
+  const mockCheckPlanLimit = vi.fn().mockResolvedValue(true);
+  const mockCheckTenantAccess = vi.fn().mockResolvedValue(true);
 
   return {
     mockLimit, mockWhere, mockFrom, mockSelect,
     mockInsertValues, mockInsert, mockUpdate,
-    mockSyncMeBodySafeParse, mockGetUser,
+    mockSyncMeBodySafeParse, mockGetUser, mockCheckPlanLimit, mockCheckTenantAccess,
   };
 });
 
@@ -89,12 +93,13 @@ vi.mock("@clerk/express", () => ({
 
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: vi.fn(),
+  checkTenantAccess: mockCheckTenantAccess,
   ADMIN_ROLES: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN],
   MANAGEMENT_ROLES: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER],
 }));
 
 vi.mock("../lib/planLimits.js", () => ({
-  checkPlanLimit: vi.fn().mockResolvedValue(true),
+  checkPlanLimit: mockCheckPlanLimit,
 }));
 
 vi.mock("../lib/id.js", () => ({
@@ -156,6 +161,8 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
     // Reset queues that clearAllMocks doesn't drain
     mockLimit.mockReset();
     mockInsertValues.mockReset().mockResolvedValue([]);
+    mockCheckPlanLimit.mockReset().mockResolvedValue(true);
+    mockCheckTenantAccess.mockReset().mockResolvedValue(true);
   });
 
   // -------------------------------------------------------------------------
@@ -167,7 +174,7 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
 
     mockSyncMeBodySafeParse.mockReturnValue({
       success: true,
-      data: { ...BASE_BODY, storeSlug: "agencia-abc" },
+      data: { ...BASE_BODY, clerkId: "spoofed-clerk-id", storeSlug: "agencia-abc" },
     });
 
     // Select call sequence for the new-user path:
@@ -202,7 +209,7 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
 
     const res = await request(buildApp())
       .post("/api/users/me/sync")
-      .send({ ...BASE_BODY, storeSlug: "agencia-abc" });
+      .send({ ...BASE_BODY, clerkId: "spoofed-clerk-id", storeSlug: "agencia-abc" });
 
     expect(res.status).toBe(200);
     expect(res.body.role).toBe(ROLES.CLIENT);
@@ -213,6 +220,8 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
     const insertedValues = mockInsertValues.mock.calls[0][0] as Record<string, unknown>;
     expect(insertedValues.role).toBe(ROLES.CLIENT);
     expect(insertedValues.tenantId).toBe("store-tenant-001");
+    expect(insertedValues.clerkId).toBe("clerk_new_user");
+    expect(mockSyncMeBodySafeParse).toHaveBeenCalledOnce();
   });
 
   // -------------------------------------------------------------------------
@@ -265,6 +274,11 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
 
     // db.insert must NOT have been called (update path, not create)
     expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockCheckTenantAccess).toHaveBeenCalledWith(
+      "existing-tenant",
+      expect.any(Object),
+      expect.any(Object),
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -452,5 +466,43 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
     const insertedValues = mockInsertValues.mock.calls[0][0] as Record<string, unknown>;
     expect(insertedValues.role).toBe(ROLES.AGENCY_ADMIN);
     expect(insertedValues.tenantId).toBeNull();
+  });
+
+  it("returns the agency access error without updating an existing user", async () => {
+    stubClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: { ...BASE_BODY, clerkId: "clerk_new_user" },
+    });
+    mockLimit.mockResolvedValueOnce([{
+      id: "existing-user-id",
+      clerkId: "clerk_new_user",
+      tenantId: "blocked-tenant",
+      name: "Ana Viajante",
+      email: "traveller@example.com",
+      role: ROLES.AGENCY_ADMIN,
+      avatarUrl: null,
+      isActive: true,
+      referralCode: "BLOCKED",
+      referralBalance: "0",
+      createdAt: new Date(),
+    }]);
+    mockCheckTenantAccess.mockImplementation(async (_tenantId, _req, res) => {
+      res.status(403).json({
+        code: "TENANT_SUSPENDED",
+        message: "Esta conta está suspensa.",
+      });
+      return false;
+    });
+
+    const res = await request(buildApp())
+      .post("/api/users/me/sync")
+      .send({ ...BASE_BODY, clerkId: "clerk_new_user" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("TENANT_SUSPENDED");
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockCheckPlanLimit).not.toHaveBeenCalled();
   });
 });

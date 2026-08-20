@@ -33,7 +33,6 @@ function formatUser(u: typeof usersTable.$inferSelect) {
 
 router.get("/users/me", async (req, res, next): Promise<void> => {
   try {
-    const auth = getAuth(req);
     const { userId: clerkId } = getAuth(req);
     if (!clerkId) { next(new AppError("Not authenticated", 401, "UNAUTHENTICATED")); return; }
 
@@ -41,11 +40,11 @@ router.get("/users/me", async (req, res, next): Promise<void> => {
       .where(eq(usersTable.clerkId, clerkId))
       .limit(1);
     if (!user) { next(new NotFoundError("User not found", "USER_NOT_FOUND")); return; }
-    // Check tenant access for non-superadmin users so that expired trials,
-    // suspensions, and cancelled subscriptions surface here (the entry point
-    // for the frontend auth flow) rather than only on subsequent API calls.
+    // Check the agency status at the login entry point. Do not use a users-plan
+    // limit here: a limit controls creation of another profile, not whether an
+    // existing staff member can sign in.
     if (user.tenantId && user.role !== ROLES.SUPER_ADMIN) {
-      const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
+      const allowed = await checkTenantAccess(user.tenantId, req, res);
       if (!allowed) return;
     }
     let tenant = null;
@@ -120,7 +119,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       next(new AppError("Not authenticated", 401, "UNAUTHENTICATED")); return;
     }
 
-    const parsed = UpdateUserBody.safeParse(req.body);
+    const parsed = SyncMeBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
 
     const { name, avatarUrl } = parsed.data;
@@ -177,7 +176,9 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       }
 
       if (linkedTenantId) {
-      const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
+        const hasTenantAccess = await checkTenantAccess(linkedTenantId, req, res);
+        if (!hasTenantAccess) return;
+        const allowed = await checkPlanLimit(linkedTenantId, "users", req, res);
         if (!allowed) return;
       }
 
@@ -204,11 +205,11 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
         referralBalance: Number(newUser.referralBalance), createdAt: newUser.createdAt.toISOString(),
       }));
     } else {
-      // For existing users whose tenant's access is blocked (expired trial,
-      // suspended, cancelled subscription) return the same 403 code that
-      // GET /users/me returns, so RoleRedirect can show the AccessBlockedWall.
+      // Existing users only need their tenant's access status checked. Applying
+      // a users-plan limit here would block someone from logging in merely
+      // because their agency has already reached its account capacity.
       if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN) {
-      const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
+        const allowed = await checkTenantAccess(existing.tenantId, req, res);
         if (!allowed) return;
       }
 

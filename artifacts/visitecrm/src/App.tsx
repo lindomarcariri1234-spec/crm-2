@@ -208,7 +208,10 @@ function RoleRedirect() {
       // active session and bounces the user straight back to /, which re-mounts
       // RoleRedirect, which calls syncMe again, and so on.
       // Show an auth-error state instead so the user can sign out cleanly.
-      setAuthError({ fromSync: false });
+      // A failed synchronization can be followed by a failed profile lookup.
+      // Preserve the original error so the UI does not incorrectly tell an
+      // authenticated user that their account is simply missing.
+      setAuthError((current) => current ?? { fromSync: false });
       return;
     }
 
@@ -255,6 +258,8 @@ function RoleRedirect() {
       ? "Sua sessão expirou ou o token não foi aceito pelo servidor."
       : isServerError
         ? `O servidor retornou um erro ${statusCode}. Aguarde alguns instantes e tente novamente.`
+        : statusCode === 403
+          ? "O acesso à agência foi recusado. Verifique a situação da assinatura ou fale com o responsável pela conta."
         : authError.fromSync
           ? "Não foi possível sincronizar sua conta. Isso pode ser um problema temporário."
           : "Conta autenticada, mas não encontrada no sistema. Tente sair e entrar novamente.";
