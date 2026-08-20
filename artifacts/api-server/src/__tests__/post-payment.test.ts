@@ -215,7 +215,7 @@ describe("runPostPaymentSideEffects", () => {
     );
   });
 
-  it("mints a referral code but does NOT provision a portal account for a product-only order (no reservations)", async () => {
+  it("mints a referral code but does NOT provision a portal account or send WhatsApps for a product-only order", async () => {
     installSelectQueue([
       [ORDER], // order lookup
       [ADMIN_USER], // admin user for writeClientActivity
@@ -226,6 +226,45 @@ describe("runPostPaymentSideEffects", () => {
 
     expect(mockGenerateAndAssignReferralCode).toHaveBeenCalledTimes(1);
     expect(mockEnsurePortalAccount).not.toHaveBeenCalled();
+    expect(mockScheduleReservationConfirmedWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchWhatsAppPaymentReceived).not.toHaveBeenCalled();
+  });
+
+  it("schedules reservation confirmation and dispatches payment received for a confirmed storefront reservation", async () => {
+    installSelectQueue([
+      [ORDER], // order lookup
+      [ADMIN_USER], // admin user for writeClientActivity
+      [{ id: "res-1", clientId: "client-1", tripId: "trip-1" }], // reservations for order
+      [ADMIN_USER], // actor user for overlap-detection IIFE
+      [
+        {
+          id: "res-1",
+          status: "confirmed",
+          paidValue: "125.50",
+          balance: "374.50",
+          tripName: "Litoral Norte",
+          departureDate: new Date("2026-12-20T12:00:00.000Z"),
+        },
+      ], // confirmed reservation for WhatsApp IIFE
+      [STORE], // store lookup
+    ]);
+
+    await runPostPaymentSideEffects("order-1");
+    await vi.waitFor(() =>
+      expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenCalledTimes(1),
+    );
+
+    // Reservation confirmations go through the durable outbox. The outbox unit
+    // test verifies that it invokes dispatchWhatsAppReservationConfirmed with
+    // delivery: "direct"; this test verifies the post-payment handoff shared by
+    // Mercado Pago, Stripe, and manual-payment paths.
+    expect(mockScheduleReservationConfirmedWhatsApp).toHaveBeenCalledWith("res-1", "tenant-1");
+    expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenCalledWith({
+      reservationId: "res-1",
+      tenantId: "tenant-1",
+      amount: 125.5,
+      remainingBalance: 374.5,
+    });
   });
 
   it("schedules one durable reservation confirmation while still notifying each payment", async () => {
