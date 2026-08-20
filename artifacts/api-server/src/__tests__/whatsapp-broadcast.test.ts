@@ -119,6 +119,7 @@ vi.mock("../lib/logger.js", () => ({
 
 import {
   dispatchWhatsAppReservationConfirmed,
+  dispatchWhatsAppPaymentReceived,
   dispatchWhatsAppCadastroRealizado,
   dispatchWhatsAppPagamentoPendente,
   dispatchWhatsAppBoardingReminder,
@@ -136,6 +137,13 @@ const SETTINGS_CADASTRO_ON = [{ value: { cadastroRealizado: true } }];
 
 /** Settings enabling pagamentoPendente. */
 const SETTINGS_PAGAMENTO_ON = [{ value: { pagamentoPendente: true } }];
+
+const RESERVATION_CONFIRMED_TEMPLATE =
+  "RESERVA {nome} | {viagem} | {data} | {referencia} | {agencia}";
+const PAYMENT_RECEIVED_TEMPLATE =
+  "PAGAMENTO {nome} | {valor} | {saldo_restante} | {agencia}";
+const BOARDING_REMINDER_TEMPLATE =
+  "EMBARQUE {nome} | {viagem} | {data} | {local_saida} | {horario} | {agencia}";
 
 const TRIP_ROW = {
   tripName: "Litoral Norte",
@@ -269,6 +277,43 @@ describe("broadcastToReservationPassengers", () => {
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the configured custom template and interpolates reservation variables", async () => {
+    setQueue([
+      [{ value: { reservationConfirmedMessage: RESERVATION_CONFIRMED_TEMPLATE } }],
+      [TRIP_ROW],
+      [PASSENGER_A],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppReservationConfirmed({
+      reservationId: "res-1",
+      tenantId: "tenant-1",
+    });
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      RESERVATION_CONFIRMED_TEMPLATE,
+      expect.objectContaining({
+        nome: PASSENGER_A.name,
+        viagem: TRIP_ROW.tripName,
+        referencia: TRIP_ROW.reservationNumber,
+        agencia: TRIP_ROW.tenantName,
+      }),
+    );
+  });
+
+  it("sends nothing when reservation confirmation is disabled", async () => {
+    setQueue([[{ value: { reservationConfirmed: false } }]]);
+
+    await dispatchWhatsAppReservationConfirmed({
+      reservationId: "res-1",
+      tenantId: "tenant-1",
+    });
+
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("deduplicates passengers that share the same normalized phone", async () => {
     // PASSENGER_A and a clone with the same phone but different formatting.
     const duplicatePhone = { id: "p2", name: "Duplicate", phone: " +55 11 88888-0001 " };
@@ -396,6 +441,114 @@ describe("broadcastToReservationPassengers", () => {
 
     // Passenger's own phone is sent once; client phone is the same digits → no second send.
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Tests: dispatchWhatsAppPaymentReceived ────────────────────────────────────
+
+describe("dispatchWhatsAppPaymentReceived", () => {
+  const PAYMENT_OPTS = {
+    reservationId: "res-1",
+    tenantId: "tenant-1",
+    amount: 123.45,
+    remainingBalance: 76.55,
+  };
+  const TENANT_ROW = { name: "Agência Teste" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockInterpolate.mockImplementation(
+      (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
+    );
+    mockSendWhatsApp.mockResolvedValue({ success: true });
+  });
+
+  it("sends one correctly interpolated message when payment notification is enabled", async () => {
+    setQueue([
+      SETTINGS_DEFAULT,
+      [TENANT_ROW],
+      [PASSENGER_A],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(sentPhones()[0]).toBe(PASSENGER_A.phone);
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      expect.stringContaining("{valor}"),
+      expect.objectContaining({
+        nome: PASSENGER_A.name,
+        valor: "123,45",
+        saldo_restante: "76,55",
+        agencia: TENANT_ROW.name,
+      }),
+    );
+  });
+
+  it("deduplicates payment notifications for passengers sharing a phone", async () => {
+    const duplicatePhone = {
+      id: "p2",
+      name: "Duplicate",
+      phone: " +55 11 88888-0001 ",
+    };
+    setQueue([
+      SETTINGS_DEFAULT,
+      [TENANT_ROW],
+      [PASSENGER_A, duplicatePhone],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(sentPhones()[0]).toBe(PASSENGER_A.phone);
+  });
+
+  it("uses the configured custom payment template", async () => {
+    setQueue([
+      [{ value: { paymentReceivedMessage: PAYMENT_RECEIVED_TEMPLATE } }],
+      [TENANT_ROW],
+      [PASSENGER_A],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      PAYMENT_RECEIVED_TEMPLATE,
+      expect.objectContaining({
+        nome: PASSENGER_A.name,
+        valor: "123,45",
+        saldo_restante: "76,55",
+      }),
+    );
+  });
+
+  it("sends nothing when payment notification is disabled", async () => {
+    setQueue([[{ value: { paymentReceived: false } }]]);
+
+    await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
+
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("respects client opt-out when payment has no passenger phone", async () => {
+    setQueue([
+      SETTINGS_DEFAULT,
+      [TENANT_ROW],
+      [PASSENGER_NO_PHONE],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_OUT],
+    ]);
+
+    await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
+
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
   });
 });
 
@@ -559,6 +712,62 @@ describe("dispatchWhatsAppBoardingReminder", () => {
     const bobVars = JSON.parse(calls[1][2] as string);
     expect(bobVars.local_saida).toBe(BP_B.name);
     expect(bobVars.horario).toBe(BP_B.time);
+  });
+
+  it("uses the configured custom boarding template", async () => {
+    const passenger = {
+      id: "p1",
+      name: "Alice",
+      phone: "+5511111110001",
+      boardingLocationId: "bp-1",
+    };
+    setQueue([
+      [{ value: { boardingReminderMessage: BOARDING_REMINDER_TEMPLATE } }],
+      [passenger],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      BOARDING_REMINDER_TEMPLATE,
+      expect.objectContaining({
+        nome: passenger.name,
+        viagem: BOARDING_OPTS.tripName,
+        data: BOARDING_OPTS.departureDate,
+        local_saida: BP_A.name,
+        horario: BP_A.time,
+        agencia: BOARDING_OPTS.tenantName,
+      }),
+    );
+  });
+
+  it("deduplicates boarding reminders for passengers sharing a phone", async () => {
+    const duplicatePhone = {
+      id: "p2",
+      name: "Duplicate",
+      phone: " +55 11 11111-0001 ",
+      boardingLocationId: "bp-2",
+    };
+    const firstPassenger = {
+      id: "p1",
+      name: "Alice",
+      phone: "+5511111110001",
+      boardingLocationId: "bp-1",
+    };
+    setQueue([
+      SETTINGS_DEFAULT,
+      [firstPassenger, duplicatePhone],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(sentPhones()[0]).toBe(firstPassenger.phone);
   });
 
   it("falls back to the first boarding point when passenger has no boardingLocationId", async () => {
