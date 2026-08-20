@@ -61,3 +61,4 @@
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
+- [Orval js-yaml generation incompatibility](orval-js-yaml-codegen.md) — current Orval generation fails with the workspace js-yaml override; fix toolchain compatibility before relying on codegen.

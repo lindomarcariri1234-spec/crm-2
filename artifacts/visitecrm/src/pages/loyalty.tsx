@@ -9,6 +9,8 @@ import {
   useListLoyaltyTransactions,
   useCreateLoyaltyTransaction,
   useSyncLoyaltyPoints,
+  useListSystemConfigs,
+  useUpsertSystemConfig,
 } from "@workspace/api-client-react";
 import { useListClients } from "@workspace/api-client-react";
 import type { CreateLoyaltyTransactionBodyType } from "@workspace/api-client-react";
@@ -121,7 +123,10 @@ const TIER_BENEFIT_LABELS: Record<string, string> = {
   diamond: "💎 Diamante",
 };
 
-function ProgramConfig({ program }: { program: LoyaltyProgram }) {
+function ProgramConfig({ program, onProgramUpdated }: {
+  program: LoyaltyProgram;
+  onProgramUpdated: () => Promise<unknown>;
+}) {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isBenefitsOpen, setIsBenefitsOpen] = useState(false);
   const updateProgram = useUpdateLoyaltyProgram();
@@ -150,6 +155,8 @@ function ProgramConfig({ program }: { program: LoyaltyProgram }) {
           : undefined,
       },
     });
+    await onProgramUpdated();
+    toast({ title: "Programa atualizado!" });
     setIsEditOpen(false);
   };
 
@@ -167,6 +174,7 @@ function ProgramConfig({ program }: { program: LoyaltyProgram }) {
         id: program.id,
         data: { tierBenefits },
       });
+      await onProgramUpdated();
       toast({ title: "Benefícios salvos!", description: "Os benefícios de tier foram atualizados." });
       setIsBenefitsOpen(false);
     } catch {
@@ -305,6 +313,57 @@ function ProgramConfig({ program }: { program: LoyaltyProgram }) {
   );
 }
 
+function TierUpgradeWhatsappSettings({
+  initialMessage,
+  onSave,
+}: {
+  initialMessage: string;
+  onSave: (message: string) => Promise<void>;
+}) {
+  const [message, setMessage] = useState(initialMessage);
+  const [isSaving, setIsSaving] = useState(false);
+  const { toast } = useToast();
+
+  const handleSave = async () => {
+    try {
+      setIsSaving(true);
+      await onSave(message);
+      toast({ title: "Mensagem de parabéns salva!" });
+    } catch {
+      toast({ title: "Erro ao salvar mensagem", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Mensagem de WhatsApp ao subir de nível</CardTitle>
+        <CardDescription>
+          Personalize a mensagem de parabéns enviada aos clientes quando alcançarem um novo nível.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Textarea
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          rows={5}
+          placeholder="🎉 Parabéns, {nome}! Você chegou ao nível {nivel} com {pontos} pontos!"
+        />
+        <p className="text-xs text-muted-foreground">
+          Variáveis disponíveis: {"{nome}"}, {"{nivel}"}, {"{pontos}"} e {"{proximo_nivel}"}. Deixe em branco para usar a mensagem padrão.
+        </p>
+        <div className="flex justify-end">
+          <Button onClick={handleSave} disabled={isSaving}>
+            {isSaving ? "Salvando..." : "Salvar mensagem"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 const VALID_LOYALTY_TABS = ["members", "transactions"];
 
 export default function Loyalty() {
@@ -344,6 +403,7 @@ export default function Loyalty() {
     useListLoyaltyMembers();
   const { data: transactions, refetch: refetchTx } = useListLoyaltyTransactions();
   const { data: clients } = useListClients({ limit: 200 });
+  const { data: configs = [], refetch: refetchConfigs } = useListSystemConfigs();
 
   const { toast } = useToast();
 
@@ -351,6 +411,7 @@ export default function Loyalty() {
   const createMember = useCreateLoyaltyMember();
   const createTransaction = useCreateLoyaltyTransaction();
   const syncPoints = useSyncLoyaltyPoints();
+  const upsertSystemConfig = useUpsertSystemConfig();
 
   const handleCreateProgram = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -432,6 +493,23 @@ export default function Loyalty() {
 
   const totalPoints = (members ?? []).reduce((s, m) => s + m.totalPoints, 0);
   const availablePoints = (members ?? []).reduce((s, m) => s + m.availablePoints, 0);
+  const loyaltySettings = (configs.find((config) => config.key === "loyalty_settings")?.value ?? {}) as {
+    tierUpgradeWhatsappMessage?: unknown;
+  };
+  const tierUpgradeWhatsappMessage =
+    typeof loyaltySettings.tierUpgradeWhatsappMessage === "string"
+      ? loyaltySettings.tierUpgradeWhatsappMessage
+      : "";
+
+  const saveTierUpgradeWhatsappMessage = async (message: string) => {
+    await upsertSystemConfig.mutateAsync({
+      data: {
+        key: "loyalty_settings",
+        value: { ...loyaltySettings, tierUpgradeWhatsappMessage: message.trim() || null },
+      },
+    });
+    await refetchConfigs();
+  };
 
   return (
     <div className="space-y-6">
@@ -662,7 +740,17 @@ export default function Loyalty() {
           </CardContent>
         </Card>
       ) : (
-        (programs ?? []).map((p) => <ProgramConfig key={p.id} program={p} />)
+        (programs ?? []).map((p) => (
+          <ProgramConfig key={p.id} program={p} onProgramUpdated={refetchPrograms} />
+        ))
+      )}
+
+      {(programs ?? []).length > 0 && (
+        <TierUpgradeWhatsappSettings
+          key={tierUpgradeWhatsappMessage}
+          initialMessage={tierUpgradeWhatsappMessage}
+          onSave={saveTierUpgradeWhatsappMessage}
+        />
       )}
 
       <Tabs value={tab} onValueChange={handleTabChange}>

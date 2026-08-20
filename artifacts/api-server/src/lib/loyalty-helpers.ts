@@ -1,4 +1,4 @@
-import { db, loyaltyProgramsTable, loyaltyMembersTable, loyaltyTransactionsTable, clientsTable, tenantsTable } from "@workspace/db";
+import { db, loyaltyProgramsTable, loyaltyMembersTable, loyaltyTransactionsTable, clientsTable, tenantsTable, systemConfigsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { generateId } from "./id";
 import { logger } from "./logger";
@@ -62,12 +62,31 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
     .where(eq(tenantsTable.id, tenantId))
     .limit(1);
 
+  const [settings] = await db
+    .select({ value: systemConfigsTable.value })
+    .from(systemConfigsTable)
+    .where(
+      and(
+        eq(systemConfigsTable.tenantId, tenantId),
+        eq(systemConfigsTable.key, "loyalty_settings"),
+      ),
+    )
+    .limit(1);
+
   const agencyName = tenant?.name ?? "sua agência";
   const firstName = client.name.split(" ")[0];
   const newTierLabel = TIER_LABELS_PT[newTier] ?? newTier;
   const nextTierLabel = TIER_NEXT_LABEL[newTier] ?? null;
   const nextTierMin = TIER_NEXT_MIN[newTier] ?? null;
   const pointsToNext = nextTierMin !== null ? Math.max(0, nextTierMin - totalPoints) : null;
+  const formattedPoints = totalPoints.toLocaleString("pt-BR");
+
+  const interpolateWhatsappTemplate = (template: string): string =>
+    template
+      .replace(/\{\{?nome\}?\}/gi, firstName)
+      .replace(/\{\{?nivel\}?\}/gi, newTierLabel)
+      .replace(/\{\{?pontos\}?\}/gi, formattedPoints)
+      .replace(/\{\{?proximo_nivel\}?\}/gi, nextTierLabel ?? "nível máximo");
 
   const sendEmailFallback = () => {
     if (client.emailOptIn === false || !client.email) return;
@@ -100,9 +119,13 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
         ? `\n\n📈 Próximo nível: *${nextTierLabel}* — faltam *${pointsToNext.toLocaleString("pt-BR")} pts*`
         : `\n\n🏆 Você atingiu o nível máximo do programa! Aproveite todos os benefícios.`;
 
-    const message =
-      `🎉 Parabéns, ${firstName}! Você subiu para o nível *${newTierLabel}* no programa de fidelidade da ${agencyName}!\n\n` +
-      `💎 Pontos acumulados: *${totalPoints.toLocaleString("pt-BR")} pts*${nextLine}`;
+    const storedTemplate = (settings?.value as { tierUpgradeWhatsappMessage?: unknown } | null)
+      ?.tierUpgradeWhatsappMessage;
+    const template = typeof storedTemplate === "string" ? storedTemplate.trim() : "";
+    const message = template
+      ? interpolateWhatsappTemplate(template)
+      : `🎉 Parabéns, ${firstName}! Você subiu para o nível *${newTierLabel}* no programa de fidelidade da ${agencyName}!\n\n` +
+        `💎 Pontos acumulados: *${formattedPoints} pts*${nextLine}`;
 
     sendTenantWhatsAppMessage(tenantId, client.whatsapp, message)
       .then((result) => {

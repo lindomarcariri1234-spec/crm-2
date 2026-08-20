@@ -15,6 +15,11 @@ vi.mock("@workspace/db", () => ({
   loyaltyProgramsTable: {},
   loyaltyMembersTable: {},
   loyaltyTransactionsTable: {},
+  systemConfigsTable: {
+    tenantId: "tenantId",
+    key: "key",
+    value: "value",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -84,6 +89,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
         emailOptIn: true,
       }],
       [{ name: "Agência Teste" }],
+      [],
     );
 
     await sendLoyaltyTierUpgradeNotification({
@@ -121,6 +127,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
         emailOptIn: true,
       }],
       [{ name: "Agência Teste" }],
+      [],
     );
     mockedSendWhatsApp.mockResolvedValue({
       success: false,
@@ -156,6 +163,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
         emailOptIn: true,
       }],
       [{ name: "Agência Teste" }],
+      [],
     );
     mockedSendWhatsApp.mockResolvedValue({ success: true });
 
@@ -168,6 +176,11 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
     await flushAsyncNotifications();
 
     expect(mockedSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockedSendWhatsApp).toHaveBeenCalledWith(
+      "tenant-1",
+      "5599999999999",
+      expect.stringContaining("🎉 Parabéns, Ana! Você subiu para o nível *Prata*"),
+    );
     expect(mockedSendEmail).not.toHaveBeenCalled();
   });
 
@@ -181,6 +194,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
         emailOptIn: true,
       }],
       [{ name: "Agência Teste" }],
+      [],
     );
     mockedSendEmail.mockReturnValue(new Promise(() => {}));
 
@@ -194,5 +208,38 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
     ).resolves.toBeUndefined();
 
     expect(mockedSendEmail).toHaveBeenCalledOnce();
+  });
+
+  it("uses the agency WhatsApp template and interpolates its variables", async () => {
+    mockSelectRows(
+      [{
+        name: "Ana Silva",
+        email: "ana@example.com",
+        whatsapp: "5599999999999",
+        whatsappOptIn: true,
+        emailOptIn: true,
+      }],
+      [{ name: "Agência Teste" }],
+      [{
+        value: {
+          tierUpgradeWhatsappMessage:
+            "Oi, {nome}! Agora você é {nivel}, com {pontos} pontos. Próximo: {proximo_nivel}.",
+        },
+      }],
+    );
+    mockedSendWhatsApp.mockResolvedValue({ success: true });
+
+    await sendLoyaltyTierUpgradeNotification({
+      clientId: "client-1",
+      tenantId: "tenant-1",
+      newTier: "silver",
+      totalPoints: 700,
+    });
+
+    expect(mockedSendWhatsApp).toHaveBeenCalledWith(
+      "tenant-1",
+      "5599999999999",
+      "Oi, Ana! Agora você é Prata, com 700 pontos. Próximo: Ouro.",
+    );
   });
 });
