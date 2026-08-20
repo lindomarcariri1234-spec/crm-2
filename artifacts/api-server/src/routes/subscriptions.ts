@@ -205,12 +205,12 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
               .from(usersTable)
               .where(and(eq(usersTable.tenantId, me.tenantId), eq(usersTable.role, ROLES.AGENCY_ADMIN)))
               .limit(1);
-      const customer = await stripe.customers.create({
-        email: adminUser?.email ?? undefined,
-        name: adminUser?.name ?? undefined,
-        metadata: { tenantId: me.tenantId },
-      });
-            stripeCustomerIdForTrial = customer.id;
+            const customerForTrial = await stripeForTrial.customers.create({
+              email: adminUserForTrial?.email ?? undefined,
+              name: adminUserForTrial?.name ?? undefined,
+              metadata: { tenantId: me.tenantId },
+            });
+            stripeCustomerIdForTrial = customerForTrial.id;
           }
 
           // Find a Stripe price for this plan
@@ -237,7 +237,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
 
             const trialSession = await stripeForTrial.checkout.sessions.create({
               mode: "subscription",
-              customer: stripeCustomerIdForTrial,
+              customer: stripeCustomerIdForTrial ?? undefined,
               line_items: [{ price: matchingPriceForTrial.id, quantity: 1 }],
               success_url: successUrl,
               cancel_url: cancelUrl,
@@ -317,7 +317,8 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
 
     const now = new Date();
     const periodStart = now;
-        const periodEnd = invoice.billingPeriodEnd ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    const periodDays = parsed.data.billingCycle === "annual" ? 365 : 30;
+    const periodEnd = new Date(Date.now() + periodDays * 24 * 60 * 60 * 1000);
     const dueDate = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
     const invoiceId = generateId();
@@ -333,7 +334,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
         .orderBy(desc(subscriptionsTable.createdAt))
         .limit(10);
 
-    let stripeCustomerId = subs.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
+    let stripeCustomerId = existingSubs.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
       if (!stripeCustomerId) {
         const existingInv = await db
           .select({ cid: invoicesTable.stripeCustomerId })
@@ -367,7 +368,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
 
       // Find active Stripe price matching plan + billing cycle
       const priceInterval = parsed.data.billingCycle === "annual" ? "year" : "month";
-    const amountCents = Math.round(Number(invoice.amount) * 100);
+      const amountCents = Math.round(price * 100);
 
       const stripePrices = await stripe.prices.search({
         query: `metadata['planSlug']:'${newPlan.slug}' AND active:'true'`,
@@ -445,16 +446,33 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
         client_reference_id: me.tenantId,
         metadata: { tenantId: me.tenantId, planId: newPlan.id, invoiceId },
         subscription_data: {
-          metadata: { tenantId: me.tenantId, planId: newPlan.id },
+          // Carry the LOCAL invoiceId onto the Stripe subscription metadata so a
+          // later asynchronous `invoice.payment_succeeded` — which Stripe surfaces
+          // via `subscription_details.metadata` on the invoice — can be matched
+          // back to THIS exact local pending invoice even if
+          // `checkout.session.completed` has not run yet (and thus the durable
+          // subscription-id correlation has not been stamped).
+          metadata: { tenantId: me.tenantId, planId: newPlan.id, invoiceId },
         },
       });
 
-      // Store the checkout session ID on the invoice
+      // Persist durable Stripe correlation IDs on the local invoice so a later
+      // asynchronous `invoice.payment_succeeded` webhook — which for a
+      // Subscription Checkout carries only the Stripe subscription id (and not
+      // our local invoiceId metadata) — can be matched back to THIS exact
+      // pending invoice. `checkoutSession.subscription` is typically null at
+      // creation time for mode: "subscription" (Stripe creates it when the
+      // customer completes checkout); the webhook path fills it in later.
+      const checkoutInvoicePatch: Partial<typeof invoicesTable.$inferInsert> = {
+        stripeCheckoutSessionId: checkoutSession.id,
+      };
       if (checkoutSession.payment_intent && typeof checkoutSession.payment_intent === "string") {
-        await db.update(invoicesTable).set({
-          stripePaymentIntentId: checkoutSession.payment_intent,
-        }).where(eq(invoicesTable.id, invoiceId));
+        checkoutInvoicePatch.stripePaymentIntentId = checkoutSession.payment_intent;
       }
+      if (typeof checkoutSession.subscription === "string") {
+        checkoutInvoicePatch.stripeSubscriptionId = checkoutSession.subscription;
+      }
+      await db.update(invoicesTable).set(checkoutInvoicePatch).where(eq(invoicesTable.id, invoiceId));
 
       const [createdInvoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, invoiceId)).limit(1);
       res.json({ upgraded: false, pendingInvoice: true, plan: newPlan, invoice: createdInvoice, checkoutUrl: checkoutSession.url });
@@ -466,15 +484,8 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
     const pixName = process.env["PIX_NAME"] ?? "VisiteCRM";
     const pixCity = process.env["PIX_CITY"] ?? "SAO PAULO";
 
-    let pixCode = generatePixEMV({
-      key: pixKey,
-      name: pixName,
-      city: pixCity,
-      amount: Number(invoice.amount),
-      txid: invoice.id.slice(0, 25),
-      description: invoice.description?.slice(0, 40) ?? "Assinatura VisiteCRM",
-    });
-    let pixQrCodeUrl = generatePixQrCodeUrl(pixCode);
+    let pixCode: string | null = null;
+    let pixQrCodeUrl: string | null = null;
     const pixExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     if (pixKey) {
@@ -507,7 +518,7 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
       pixExpiresAt: pixKey ? pixExpiresAt : null,
     });
 
-    const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
+    const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, invoiceId)).limit(1);
 
     await db.update(tenantsTable)
       .set({ status: TENANT_STATUS.PENDING_PAYMENT, pendingPlanId: newPlan.slug, updatedAt: now })
@@ -582,72 +593,6 @@ router.post("/invoices/:id/stripe/checkout", async (req, res, next: NextFunction
 
     const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
     if (!invoice) { next(new NotFoundError("Fatura não encontrada", "NOT_FOUND")); return; }
-    if (invoice.status === INVOICE_STATUS.PAID) { next(new ValidationError(String("Fatura já está paga" ), "VALIDATION_ERROR")); return; }
-
-    await db.update(invoicesTable).set({
-      status: INVOICE_STATUS.PAID,
-      paidAt: new Date(),
-    }).where(eq(invoicesTable.id, req.params.id));
-
-    if (invoice.planId && invoice.tenantId) {
-      const [plan] = await db.select().from(plansTable).where(eq(plansTable.id, invoice.planId)).limit(1);
-      if (plan) {
-        await db.update(tenantsTable).set({
-          planId: plan.slug,
-          pendingPlanId: null,
-          status: TENANT_STATUS.ACTIVE,
-        }).where(eq(tenantsTable.id, invoice.tenantId));
-
-        if (!hasSeatMapFeature((plan.supportedFeatures ?? []) as string[])) {
-          await db.update(tripsTable).set({ showSeatMap: true }).where(eq(tripsTable.tenantId, invoice.tenantId));
-        }
-
-    const existingSub = await db
-      .select()
-      .from(subscriptionsTable)
-      .where(and(
-        eq(subscriptionsTable.tenantId, invoice.tenantId),
-        // stripeCustomerId must not be null — Drizzle handles this via .isNotNull() but a simple filter works too
-      ))
-      .orderBy(desc(subscriptionsTable.createdAt))
-      .limit(10);
-
-        const periodEnd = invoice.billingPeriodEnd ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-        if (existingSub.length > 0) {
-          await db.update(subscriptionsTable).set({
-            planId: plan.id,
-            status: SUBSCRIPTION_STATUS.ACTIVE,
-            currentPeriodEnd: periodEnd,
-          }).where(eq(subscriptionsTable.id, existingSub[0]!.id));
-        } else {
-          await db.insert(subscriptionsTable).values({
-            id: generateId(),
-            tenantId: invoice.tenantId,
-            planId: plan.id,
-            status: SUBSCRIPTION_STATUS.ACTIVE,
-            billingCycle: "monthly",
-            currentPeriodStart: new Date(),
-            currentPeriodEnd: periodEnd,
-          });
-        }
-      }
-    }
-
-    const [updated] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
-    res.json(updated);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post("/invoices/:id/stripe/checkout", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
-    if (!me) return;
-
-    const [invoice] = await db.select().from(invoicesTable).where(eq(invoicesTable.id, req.params.id)).limit(1);
-    if (!invoice) { next(new NotFoundError("Fatura não encontrada", "NOT_FOUND")); return; }
     if (me.role !== ROLES.SUPER_ADMIN && invoice.tenantId !== me.tenantId) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
@@ -674,7 +619,7 @@ router.post("/invoices/:id/stripe/checkout", async (req, res, next: NextFunction
       .orderBy(desc(subscriptionsTable.createdAt))
       .limit(10);
 
-    let stripeCustomerId = subs.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
+    let stripeCustomerId = existingSub.find(s => s.stripeCustomerId)?.stripeCustomerId ?? null;
 
     if (!stripeCustomerId) {
       const [adminUser] = await db

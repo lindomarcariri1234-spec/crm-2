@@ -4,8 +4,6 @@ import { eq, and, desc, ne, inArray, lte, gte, isNotNull, max, sql } from "drizz
 import { DEAL_STATUS } from "@workspace/permissions";
 import { logger } from "../lib/logger";
 import { generateId } from "../lib/id";
-import { dealsTable, pipelineStagesTable, tripsTable } from "@workspace/db";
-import { eq, and, desc, lte, gte, isNotNull, sql } from "drizzle-orm";
 
 export async function moveDealToStage({
   tenantId,

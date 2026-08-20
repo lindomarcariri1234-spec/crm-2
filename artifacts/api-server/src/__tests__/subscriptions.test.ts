@@ -420,6 +420,153 @@ const CARD_INVOICE = {
   description: "Assinatura VisiteCRM — Pro",
 };
 
+// ---------------------------------------------------------------------------
+// POST /invoices/:id/stripe/checkout — tenant authorization safety
+//
+// The first (unsafe) duplicate handler lacked the ownership check:
+//   if (me.role !== ROLES.SUPER_ADMIN && invoice.tenantId !== me.tenantId)
+// This means any authenticated user could mark ANY tenant's invoice as paid
+// and activate their account — without any Stripe confirmation.
+//
+// These tests confirm the surviving handler:
+//   1. Rejects a request from a user whose tenantId does not match the invoice.
+//   2. Does NOT mark the invoice paid or activate the tenant.
+//   3. Never calls Stripe when the request is rejected at the auth gate.
+// ---------------------------------------------------------------------------
+
+describe("POST /invoices/:id/stripe/checkout — tenant authorization safety", () => {
+  it("returns 403 FORBIDDEN_ROLE when the caller does not own the invoice and is not SUPER_ADMIN", async () => {
+    // Invoice belongs to "tenant-other", but ME has tenantId "tenant-1"
+    const FOREIGN_INVOICE = {
+      id: "invoice-foreign",
+      tenantId: "tenant-other",
+      status: "pending",
+      amount: "99",
+      description: "Assinatura VisiteCRM — Pro",
+    };
+
+    installSelectQueue([
+      [FOREIGN_INVOICE],
+    ]);
+
+    const res = await request(buildApp())
+      .post("/api/invoices/invoice-foreign/stripe/checkout")
+      .set("Content-Type", "application/json");
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN_ROLE");
+
+    // No Stripe call, no DB write
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does NOT mark the invoice paid or activate the tenant when authorization fails", async () => {
+    const FOREIGN_INVOICE = {
+      id: "invoice-foreign",
+      tenantId: "tenant-other",
+      status: "pending",
+      amount: "99",
+    };
+
+    installSelectQueue([[FOREIGN_INVOICE]]);
+
+    await request(buildApp())
+      .post("/api/invoices/invoice-foreign/stripe/checkout")
+      .set("Content-Type", "application/json");
+
+    // Critically: invoice must not be flipped to PAID, tenant must not be activated
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /subscriptions/upgrade — annual billing period stored correctly
+//
+// Previously the billing period was always computed as 30 days regardless of
+// billingCycle. An annual subscriber would receive a currentPeriodEnd only 30
+// days out, causing premature expiry. The fix computes 365 days for annual.
+//
+// This test confirms that when billingCycle=annual and no Stripe recurring
+// price exists (so PIX fallback is used), the insert into subscriptionsTable
+// carries a currentPeriodEnd ~365 days from now, not ~30 days.
+// ---------------------------------------------------------------------------
+
+describe("POST /subscriptions/upgrade — annual billing period is stored as 365 days", () => {
+  it("inserts a subscriptionsTable row with currentPeriodEnd ~365 days away when billingCycle=annual (PIX path)", async () => {
+    // No Stripe client available → falls through to PIX path, which creates the
+    // subscription with the computed periodEnd.
+    mockGetUncachableStripeClient.mockRejectedValueOnce(new Error("Stripe not configured"));
+
+    installSelectQueue([
+      [PLAN],
+      [TENANT],
+    ]);
+
+    const before = Date.now();
+
+    await request(buildApp())
+      .post("/api/subscriptions/upgrade")
+      .send({ planSlug: "pro", billingCycle: "annual" })
+      .set("Content-Type", "application/json");
+
+    const after = Date.now();
+
+    // Find the subscriptionsTable insert call
+    const insertCall = mockInsertValues.mock.calls.find((args) => {
+      const v = args[0] as Record<string, unknown>;
+      return v && "billingCycle" in v;
+    });
+
+    expect(insertCall).toBeDefined();
+    const insertedValues = insertCall![0] as Record<string, unknown>;
+
+    expect(insertedValues.billingCycle).toBe("annual");
+
+    const periodEnd = insertedValues.currentPeriodEnd as Date;
+    expect(periodEnd).toBeInstanceOf(Date);
+
+    const daysAway = (periodEnd.getTime() - before) / (24 * 60 * 60 * 1000);
+    // Should be ~365 days, not ~30
+    expect(daysAway).toBeGreaterThan(360);
+    expect(daysAway).toBeLessThan(370);
+  });
+
+  it("inserts a subscriptionsTable row with currentPeriodEnd ~30 days away when billingCycle=monthly (PIX path)", async () => {
+    mockGetUncachableStripeClient.mockRejectedValueOnce(new Error("Stripe not configured"));
+
+    installSelectQueue([
+      [PLAN],
+      [TENANT],
+    ]);
+
+    const before = Date.now();
+
+    await request(buildApp())
+      .post("/api/subscriptions/upgrade")
+      .send({ planSlug: "pro", billingCycle: "monthly" })
+      .set("Content-Type", "application/json");
+
+    const insertCall = mockInsertValues.mock.calls.find((args) => {
+      const v = args[0] as Record<string, unknown>;
+      return v && "billingCycle" in v;
+    });
+
+    expect(insertCall).toBeDefined();
+    const insertedValues = insertCall![0] as Record<string, unknown>;
+
+    expect(insertedValues.billingCycle).toBe("monthly");
+
+    const periodEnd = insertedValues.currentPeriodEnd as Date;
+    expect(periodEnd).toBeInstanceOf(Date);
+
+    const daysAway = (periodEnd.getTime() - before) / (24 * 60 * 60 * 1000);
+    // Should be ~30 days, not 365
+    expect(daysAway).toBeGreaterThan(28);
+    expect(daysAway).toBeLessThan(35);
+  });
+});
+
 describe("POST /invoices/:id/stripe/checkout — publishableKey must match the environment-resolved key", () => {
   it("returns publishableKey from getStripePublishableKey() alongside clientSecret, not a hardcoded value", async () => {
     const mockPaymentIntentsCreate = vi.fn().mockResolvedValue({

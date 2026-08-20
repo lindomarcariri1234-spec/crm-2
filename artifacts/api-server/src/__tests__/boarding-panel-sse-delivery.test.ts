@@ -292,39 +292,78 @@ async function waitFor(
 
 let transport: MockTransport;
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  txSelectResults = [];
-  mockPaymentExists.mockResolvedValue(false);
-  mockCreateReservationsForOrder.mockResolvedValue({
-    reservationIds: [],
-    reservationClientId: null,
-    tripIds: [],
+function makeDbSelectRows(rows: unknown[]) {
+  const result = Object.assign(Promise.resolve(rows), {
+    limit: vi.fn(() => Promise.resolve(rows)),
   });
+  const chain: Record<string, unknown> = {};
+  chain.from = vi.fn(() => chain);
+  chain.where = vi.fn(() => result);
+  return chain;
+}
 
-  // db.transaction calls its callback with a real-enough tx object so
-  // applyGatewayPayment executes for real (same pattern as the webhook test).
-  mockDbTransaction.mockImplementation(
-    async (cb: (tx: ReturnType<typeof makeTx>) => Promise<unknown>) => cb(makeTx()),
-  );
+function paymentSucceededEvent() {
+  return {
+    id: "evt_sse_03",
+    type: "payment_intent.succeeded",
+    data: { object: { id: "pi_sse_03", amount_received: 15000 } },
+  };
+}
 
-  // db.select is used by BOTH resolveStore (1st call) and broadcastSeatUpdate
-  // (2nd call). We route them by call count:
-  //   call 1 → [STORE_SCOPE] with .limit() support (resolveStore)
-  //   call 2 → []           with .limit() support (broadcastSeatUpdate reservation lookup)
-  let dbSelectCallCount = 0;
-  mockDbSelect.mockImplementation(() => {
-    dbSelectCallCount++;
-      const rows = dbSelectCallCount2 === 1 ? [STORE_SCOPE] : [confirmedReservation];
-      const p = Object.assign(Promise.resolve(rows), {
-        limit: vi.fn(() => Promise.resolve(rows)),
-      });
-      const chain: Record<string, unknown> = {};
-      chain.from = vi.fn(() => chain);
-      chain.where = vi.fn(() => p);
-      return chain;
+async function deliverPaymentEvent() {
+  const rawBody = JSON.stringify(paymentSucceededEvent());
+  return request(buildApp())
+    .post("/api/webhooks/stripe/loja-sse")
+    .set("x-signature", makeStripeSignature(rawBody))
+    .set("content-type", "application/json")
+    .send(rawBody);
+}
+
+// Saved so we can restore it after each test without affecting other suites.
+let _savedMpWebhookSecret: string | undefined;
+
+describe("Stripe payment seat updates reach boarding clients", () => {
+  beforeEach(() => {
+    // The production Stripe handler reads MP_WEBHOOK_SECRET from process.env.
+    // Set it to the test secret before each test and restore it afterward.
+    _savedMpWebhookSecret = process.env["MP_WEBHOOK_SECRET"];
+    process.env["MP_WEBHOOK_SECRET"] = WEBHOOK_SECRET;
+
+    vi.clearAllMocks();
+    txSelectResults = [];
+    mockPaymentExists.mockResolvedValue(false);
+    mockCreateReservationsForOrder.mockResolvedValue({
+      reservationIds: [],
+      reservationClientId: null,
+      tripIds: [],
+    });
+    mockDbTransaction.mockImplementation(
+      async (cb: (tx: ReturnType<typeof makeTx>) => Promise<unknown>) => cb(makeTx()),
+    );
+
+    let dbSelectCallCount = 0;
+    mockDbSelect.mockImplementation(() => {
+      dbSelectCallCount++;
+      return makeDbSelectRows(dbSelectCallCount === 1 ? [STORE_SCOPE] : []);
     });
 
+    transport = makeMockTransport();
+    addSeatClient(TRIP_ID, transport.res as Response);
+  });
+
+  afterEach(() => {
+    removeSeatClient(TRIP_ID, transport.res as Response);
+
+    // Restore MP_WEBHOOK_SECRET to its original value (or remove it if it
+    // was not set before the test ran).
+    if (_savedMpWebhookSecret === undefined) {
+      delete process.env["MP_WEBHOOK_SECRET"];
+    } else {
+      process.env["MP_WEBHOOK_SECRET"] = _savedMpWebhookSecret;
+    }
+  });
+
+  it("delivers an SSE event after a successful payment", async () => {
     txSelectResults = [[ORDER], []];
     mockCreateReservationsForOrder.mockResolvedValueOnce({
       reservationIds: [],
@@ -332,89 +371,46 @@ beforeEach(() => {
       tripIds: [TRIP_ID],
     });
 
-    const event = {
-      id: "evt_sse_03",
-      type: "payment_intent.succeeded",
-      data: { object: { id: "pi_sse_03", amount_received: 15000 } },
-    };
-    const rawBody = JSON.stringify(event);
-
-    const res = await request(buildApp())
-      .post("/api/webhooks/stripe/loja-sse")
-      .set("stripe-signature", makeStripeSignature(rawBody))
-      .set("content-type", "application/json")
-      .send(rawBody);
-
+    const res = await deliverPaymentEvent();
     expect(res.status).toBe(200);
 
-    // broadcastSeatUpdate is fire-and-forget; wait up to 2 000 ms for
-    // emitSeatUpdate to write the SSE payload to our mock transport.
     await waitFor(
       () => transport.writes.length > 0,
       2000,
       "SSE event must arrive at the connected mock transport within 2 000 ms",
     );
 
-    // Verify the payload format and content
     const sseFrame = transport.writes[0];
     expect(sseFrame).toMatch(/^data: /);
-    const payload = JSON.parse(transport.writes[0].replace(/^data: /, "").trimEnd());
+    const payload = JSON.parse(sseFrame.replace(/^data: /, "").trimEnd());
     expect(payload.tripId).toBe(TRIP_ID);
-    // broadcastSeatUpdate found no reservations → seats array is empty
     expect(Array.isArray(payload.seats)).toBe(true);
   });
 
-  it("SSE event is NOT delivered when the mock transport has no client for the tripId", async () => {
-    // Remove the client for TRIP_ID so emitSeatUpdate has no recipients.
-    // Create a different trip ID for this test — the transport remains
-    // registered for TRIP_ID but the broadcast fires for a DIFFERENT trip.
-    const otherTripId = "trip-SSE-other";
+  it("does not deliver an event to a client registered for another trip", async () => {
     txSelectResults = [[ORDER], []];
     mockCreateReservationsForOrder.mockResolvedValueOnce({
       reservationIds: [],
       reservationClientId: null,
-      tripIds: [otherTripId],
+      tripIds: ["trip-SSE-other"],
     });
 
-    const event = {
-      id: "evt_sse_03",
-      type: "payment_intent.succeeded",
-      data: { object: { id: "pi_sse_03", amount_received: 15000 } },
-    };
-    const rawBody = JSON.stringify(event);
+    await deliverPaymentEvent();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
-    await request(buildApp())
-      .post("/api/webhooks/stripe/loja-sse")
-      .set("stripe-signature", makeStripeSignature(rawBody))
-      .set("content-type", "application/json")
-      .send(rawBody);
-
-    // Allow the fire-and-forget broadcast to complete.
-    await new Promise<void>((r) => setImmediate(r));
-    await new Promise<void>((r) => setImmediate(r));
-
-    // The mock transport for TRIP_ID must NOT receive any event because the
-    // broadcast targeted a different trip (otherTripId).
     expect(transport.writes).toHaveLength(0);
   });
 
-  it("SSE payload carries real seat status from the reservation query (occupied seats)", async () => {
-    // broadcastSeatUpdate will find a confirmed reservation with seat "1A"
-    // on the 2nd db.select call.  Override the mockDbSelect for this test.
-    let dbSelectCallCount2 = 0;
+  it("includes occupied seats from the real seat update query", async () => {
+    let dbSelectCallCount = 0;
     const confirmedReservation = { seats: ["1A"], status: "confirmed" };
     mockDbSelect.mockImplementation(() => {
-      dbSelectCallCount2++;
-      const rows = dbSelectCallCount2 === 1 ? [STORE_SCOPE] : [confirmedReservation];
-      const p = Object.assign(Promise.resolve(rows), {
-        limit: vi.fn(() => Promise.resolve(rows)),
-      });
-      const chain: Record<string, unknown> = {};
-      chain.from = vi.fn(() => chain);
-      chain.where = vi.fn(() => p);
-      return chain;
+      dbSelectCallCount++;
+      return makeDbSelectRows(
+        dbSelectCallCount === 1 ? [STORE_SCOPE] : [confirmedReservation],
+      );
     });
-
     txSelectResults = [[ORDER], []];
     mockCreateReservationsForOrder.mockResolvedValueOnce({
       reservationIds: [],
@@ -422,19 +418,7 @@ beforeEach(() => {
       tripIds: [TRIP_ID],
     });
 
-    const event = {
-      id: "evt_sse_03",
-      type: "payment_intent.succeeded",
-      data: { object: { id: "pi_sse_03", amount_received: 15000 } },
-    };
-    const rawBody = JSON.stringify(event);
-
-    await request(buildApp())
-      .post("/api/webhooks/stripe/loja-sse")
-      .set("stripe-signature", makeStripeSignature(rawBody))
-      .set("content-type", "application/json")
-      .send(rawBody);
-
+    await deliverPaymentEvent();
     await waitFor(
       () => transport.writes.length > 0,
       2000,
@@ -443,7 +427,6 @@ beforeEach(() => {
 
     const payload = JSON.parse(transport.writes[0].replace(/^data: /, "").trimEnd());
     expect(payload.tripId).toBe(TRIP_ID);
-    // The confirmed reservation's seat "1A" must appear with status "confirmed"
     expect(payload.seats).toContainEqual({ number: "1A", status: "confirmed" });
   });
 });

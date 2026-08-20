@@ -19,12 +19,24 @@ const h = vi.hoisted(() => {
     invoicesTable: { __name: "invoices" },
     subscriptionsTable: { __name: "subscriptions" },
     tripsTable: { __name: "trips" },
+    stripeWebhookEventsTable: { __name: "stripe_webhook_events", id: { __col: "id" } },
   };
 
   // Results popped, in order, by each db.select() the handler performs.
   const selectQueue: unknown[][] = [];
+  // Rows returned, in order, by each atomic-claim `.returning()` an invoice
+  // UPDATE performs. Non-empty = claim WON; `[]` = LOSER (already PAID). Empty
+  // queue defaults to WON.
+  const claimQueue: unknown[][] = [];
+  // Event-idempotency claim rows (INSERT … ON CONFLICT DO NOTHING RETURNING):
+  // non-empty = claim WON; `[]` = duplicate/concurrent LOSER; empty queue → WON.
+  const eventClaimQueue: unknown[][] = [];
   const updates: { table: string; values: Record<string, unknown> }[] = [];
   const inserts: { table: string; values: Record<string, unknown> }[] = [];
+  const deletes: { table: string }[] = [];
+  // stripe_webhook_events writes tracked separately so existing side-effect
+  // assertions (updates.length === 0) stay meaningful.
+  const eventUpdates: { values: Record<string, unknown> }[] = [];
 
   const makeChain = (result: unknown) => {
     const c: Record<string, unknown> = {};
@@ -34,27 +46,99 @@ const h = vi.hoisted(() => {
     return c;
   };
 
-  const db = {
-    select: vi.fn(() => makeChain(selectQueue.length ? selectQueue.shift() : [])),
-    update: vi.fn((table: { __name: string }) => ({
-      set: (values: Record<string, unknown>) => ({
-        where: () => {
-          updates.push({ table: table.__name, values });
+  // Buffered writes flushed on COMMIT and discarded on ROLLBACK — see the
+  // activation suite for the rationale. Lets fault-injection tests assert that
+  // an injected failure commits NO partial writes.
+  type Buffers = {
+    updates: { table: string; values: Record<string, unknown> }[];
+    inserts: { table: string; values: Record<string, unknown> }[];
+    deletes: { table: string }[];
+    eventUpdates: { values: Record<string, unknown> }[];
+  };
+
+  const faultInjection: { shouldThrow: ((op: { kind: string; table?: string; values?: Record<string, unknown> }) => boolean) | null } = {
+    shouldThrow: null,
+  };
+
+  const makeExecutor = (buf: Buffers) => {
+    const maybeThrow = (op: { kind: string; table?: string; values?: Record<string, unknown> }) => {
+      if (faultInjection.shouldThrow && faultInjection.shouldThrow(op)) {
+        throw new Error(`injected-fault:${op.kind}:${op.table ?? ""}`);
+      }
+    };
+    return {
+      select: vi.fn(() => makeChain(selectQueue.length ? selectQueue.shift() : [])),
+      update: vi.fn((table: { __name: string }) => ({
+        set: (values: Record<string, unknown>) => {
+          const record = () => {
+            if (table.__name === "stripe_webhook_events") {
+              buf.eventUpdates.push({ values });
+            } else {
+              buf.updates.push({ table: table.__name, values });
+            }
+            maybeThrow({ kind: "update", table: table.__name, values });
+          };
+          const whereResult = {
+            then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+              try { record(); } catch (e) { return void (reject ? reject(e) : undefined); }
+              return Promise.resolve().then(resolve, reject);
+            },
+            returning: () => {
+              try { record(); } catch (e) { return Promise.reject(e); }
+              const rows = claimQueue.length ? claimQueue.shift()! : [{ id: "claimed" }];
+              return Promise.resolve(rows);
+            },
+          };
+          return { where: () => whereResult };
+        },
+      })),
+      insert: vi.fn((table: { __name: string }) => ({
+        values: (values: Record<string, unknown>) => {
+          // Event-idempotency ledger insert: chains
+          // .onConflictDoNothing().returning() and is tracked via eventClaimQueue,
+          // NOT recorded in `inserts` so side-effect assertions stay meaningful.
+          if (table.__name === "stripe_webhook_events") {
+            return {
+              onConflictDoNothing: () => ({
+                returning: () => {
+                  const rows = eventClaimQueue.length ? eventClaimQueue.shift()! : [{ id: "claimed-event" }];
+                  return Promise.resolve(rows);
+                },
+              }),
+            };
+          }
+          buf.inserts.push({ table: table.__name, values });
+          try { maybeThrow({ kind: "insert", table: table.__name, values }); }
+          catch (e) { return Promise.reject(e); }
           return Promise.resolve();
         },
-      }),
-    })),
-    insert: vi.fn((table: { __name: string }) => ({
-      values: (values: Record<string, unknown>) => {
-        inserts.push({ table: table.__name, values });
-        return Promise.resolve();
-      },
-    })),
+      })),
+      delete: vi.fn((table: { __name: string }) => ({
+        where: () => {
+          buf.deletes.push({ table: table.__name });
+          return Promise.resolve();
+        },
+      })),
+    };
+  };
+
+  const db = {
+    ...makeExecutor({ updates, inserts, deletes, eventUpdates }),
+    transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+      const buf: Buffers = { updates: [], inserts: [], deletes: [], eventUpdates: [] };
+      const tx = makeExecutor(buf);
+      const result = await cb(tx); // throws → propagate WITHOUT flushing (rollback)
+      updates.push(...buf.updates);
+      inserts.push(...buf.inserts);
+      deletes.push(...buf.deletes);
+      eventUpdates.push(...buf.eventUpdates);
+      return result;
+    }),
   };
 
   const stripe = { constructEvent: vi.fn() };
 
-  return { tables, selectQueue, updates, inserts, db, stripe };
+  return { tables, selectQueue, claimQueue, eventClaimQueue, updates, inserts, deletes, eventUpdates, faultInjection, db, stripe };
 });
 
 vi.mock("@workspace/db", () => ({
@@ -64,9 +148,10 @@ vi.mock("@workspace/db", () => ({
   invoicesTable: h.tables.invoicesTable,
   subscriptionsTable: h.tables.subscriptionsTable,
   tripsTable: h.tables.tripsTable,
+  stripeWebhookEventsTable: h.tables.stripeWebhookEventsTable,
 }));
 
-vi.mock("drizzle-orm", () => ({ eq: vi.fn(), desc: vi.fn() }));
+vi.mock("drizzle-orm", () => ({ eq: vi.fn(), desc: vi.fn(), and: vi.fn(), ne: vi.fn() }));
 
 vi.mock("@workspace/permissions", () => ({
   INVOICE_STATUS: { PAID: "paid", FAILED: "failed" },
@@ -120,8 +205,13 @@ const PLAN = { id: "plan-pro", slug: "pro", supportedFeatures: ["seat_map"] };
 beforeEach(() => {
   vi.clearAllMocks();
   h.selectQueue.length = 0;
+  h.claimQueue.length = 0;
+  h.eventClaimQueue.length = 0;
   h.updates.length = 0;
   h.inserts.length = 0;
+  h.deletes.length = 0;
+  h.eventUpdates.length = 0;
+  h.faultInjection.shouldThrow = null;
 });
 
 describe("stripeWebhookHandler — payment_intent.succeeded", () => {
@@ -159,6 +249,55 @@ describe("stripeWebhookHandler — payment_intent.succeeded", () => {
     expect(res.json).toHaveBeenCalledWith({ received: true });
   });
 
+  it("preserves the invoice billingPeriodEnd so an annual PaymentIntent activates for a full year (not 30 days)", async () => {
+    // Annual invoice: billingPeriodEnd is ~365 days out. The handler must pass
+    // this through to activateSubscriptionForTenant so the subscription's
+    // currentPeriodEnd matches the annual term, instead of defaulting to +30d.
+    const annualPeriodEnd = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    h.selectQueue.push([
+      {
+        id: "inv-annual",
+        status: "pending",
+        tenantId: "tenant-annual",
+        planId: "plan-pro",
+        billingPeriodEnd: annualPeriodEnd,
+      },
+    ]); // invoice lookup
+    h.selectQueue.push([PLAN]); // plansTable lookup
+    h.selectQueue.push([]); // subscriptionsTable existing → none → insert
+
+    h.stripe.constructEvent.mockReturnValue({
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          metadata: { invoiceId: "inv-annual", tenantId: "tenant-annual", planId: "plan-pro" },
+          customer: "cus_ANNUAL",
+        },
+      },
+    });
+
+    const { req, res } = makeReqRes();
+    await handleStripeWebhook(req as never, res as never);
+
+    const invUpdate = h.updates.find((u) => u.table === "invoices");
+    expect(invUpdate?.values.status).toBe("paid");
+
+    const subInsert = h.inserts.find((i) => i.table === "subscriptions");
+    expect(subInsert).toBeDefined();
+    expect(subInsert?.values.status).toBe("active");
+
+    // The subscription period must reflect the annual invoice's billing period,
+    // exactly — proving the 30-day default was NOT used.
+    expect(subInsert?.values.currentPeriodEnd).toBe(annualPeriodEnd);
+
+    const daysAway =
+      ((subInsert?.values.currentPeriodEnd as Date).getTime() - Date.now()) /
+      (24 * 60 * 60 * 1000);
+    expect(daysAway).toBeGreaterThan(360);
+
+    expect(res.json).toHaveBeenCalledWith({ received: true });
+  });
+
   it("falls back to the invoice's own tenantId/planId when the PaymentIntent metadata omits them", async () => {
     h.selectQueue.push([{ id: "inv-2", status: "pending", tenantId: "tenant-from-invoice", planId: "plan-from-invoice" }]);
     h.selectQueue.push([PLAN]); // plansTable lookup by id "plan-from-invoice" (mock returns PLAN regardless of id)
@@ -185,8 +324,10 @@ describe("stripeWebhookHandler — payment_intent.succeeded", () => {
     expect(invUpdate?.values.status).toBe("paid");
   });
 
-  it("is idempotent — does nothing when the invoice is already PAID", async () => {
+  it("is idempotent — the atomic claim loses and nothing activates when the invoice is already PAID", async () => {
     h.selectQueue.push([{ id: "inv-3", status: "paid", tenantId: "tenant-1", planId: "plan-pro" }]);
+    // Atomic claim (…WHERE status != PAID) matches zero rows.
+    h.claimQueue.push([]);
 
     h.stripe.constructEvent.mockReturnValue({
       type: "payment_intent.succeeded",
@@ -201,10 +342,71 @@ describe("stripeWebhookHandler — payment_intent.succeeded", () => {
     const { req, res } = makeReqRes();
     await handleStripeWebhook(req as never, res as never);
 
-    expect(h.updates.find((u) => u.table === "invoices")).toBeUndefined();
+    // The claim lost → no activation: tenant untouched, no subscription writes.
     expect(h.updates.find((u) => u.table === "tenants")).toBeUndefined();
     expect(h.inserts.find((i) => i.table === "subscriptions")).toBeUndefined();
     expect(res.json).toHaveBeenCalledWith({ received: true });
+  });
+
+  it("activates exactly once under duplicate delivery — the second (losing) claim does not re-activate", async () => {
+    const annualPeriodEnd = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+
+    // ── Delivery 1: claim WINS ──
+    h.selectQueue.push([
+      { id: "inv-dup", status: "pending", tenantId: "tenant-dup", planId: "plan-pro", billingPeriodEnd: annualPeriodEnd },
+    ]);
+    h.selectQueue.push([PLAN]); // plansTable lookup
+    h.selectQueue.push([]); // subscriptionsTable existing → none → insert
+
+    h.stripe.constructEvent.mockReturnValue({
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          metadata: { invoiceId: "inv-dup", tenantId: "tenant-dup", planId: "plan-pro" },
+          customer: "cus_DUP",
+        },
+      },
+    });
+
+    const first = makeReqRes();
+    await handleStripeWebhook(first.req as never, first.res as never);
+
+    const subInsert = h.inserts.find((i) => i.table === "subscriptions");
+    expect(subInsert).toBeDefined();
+    expect(subInsert?.values.currentPeriodEnd).toBe(annualPeriodEnd);
+    expect(first.res.json).toHaveBeenCalledWith({ received: true });
+
+    // ── Delivery 2 (duplicate): claim LOSES ──
+    vi.clearAllMocks();
+    h.selectQueue.length = 0;
+    h.claimQueue.length = 0;
+    h.updates.length = 0;
+    h.inserts.length = 0;
+
+    // The invoice is now PAID; the conditional claim matches zero rows.
+    h.selectQueue.push([
+      { id: "inv-dup", status: "paid", tenantId: "tenant-dup", planId: "plan-pro", billingPeriodEnd: annualPeriodEnd },
+    ]);
+    h.claimQueue.push([]);
+
+    h.stripe.constructEvent.mockReturnValue({
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          metadata: { invoiceId: "inv-dup", tenantId: "tenant-dup", planId: "plan-pro" },
+          customer: "cus_DUP",
+        },
+      },
+    });
+
+    const second = makeReqRes();
+    await handleStripeWebhook(second.req as never, second.res as never);
+
+    // No re-activation on the duplicate.
+    expect(h.updates.find((u) => u.table === "tenants")).toBeUndefined();
+    expect(h.updates.find((u) => u.table === "subscriptions")).toBeUndefined();
+    expect(h.inserts.length).toBe(0);
+    expect(second.res.json).toHaveBeenCalledWith({ received: true });
   });
 
   it("does nothing when the PaymentIntent has no invoiceId metadata", async () => {

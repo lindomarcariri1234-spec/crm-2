@@ -229,6 +229,80 @@ async function fetchClientCounters(id: string) {
 
 describe("reverseTripOrderReferrals integration", () => {
   it("flips a COMPLETED referral to REVERSED and decrements the referrer's counters", async () => {
+    // Referrer starts with one credited referral so the decrement is visible.
+    const referrerId = await createReferrer({
+      successfulReferrals: 1,
+      referralEarnings: "25.00",
+    });
+    const { referralId, reservationId } = await createCompletedTripReferral({
+      referrerId,
+      bonusAmount: "25.00",
+    });
+
+    const reversed = await reverseTripOrderReferrals(db, {
+      tenantId: TENANT_ID,
+      orderId: `fake-order-${generateId()}`,
+      cancellableReservationIds: [reservationId],
+      reversalReason: "order_cancelled",
+    });
+
+    expect(reversed).toHaveLength(1);
+    expect(reversed[0]).toBe(referralId);
+
+    const ref = await fetchReferral(referralId);
+    expect(ref?.status).toBe(REFERRAL_STATUS.REVERSED);
+
+    const counters = await fetchClientCounters(referrerId);
+    expect(counters?.successfulReferrals).toBe(0);
+    expect(Number(counters?.referralEarnings)).toBeCloseTo(0, 1);
+  });
+
+  it("GREATEST guard prevents negative counters when referrer was already at zero", async () => {
+    // Referrer starts at zero. Reversing one of two referrals triggers the
+    // GREATEST guard and keeps both counters at 0 (never goes negative).
+    const referrerId = await createReferrer({
+      successfulReferrals: 0,
+      referralEarnings: "0.00",
+    });
+    const { referralId: referralIdA, reservationId: reservationIdA } =
+      await createCompletedTripReferral({
+        referrerId,
+        bonusAmount: "20.00",
+      });
+    const { referralId: referralIdB, reservationId: reservationIdB } =
+      await createCompletedTripReferral({
+        referrerId,
+        bonusAmount: "30.00",
+      });
+
+    // Only cancel reservationIdA — referralIdB is untouched.
+    const reversed = await reverseTripOrderReferrals(db, {
+      tenantId: TENANT_ID,
+      orderId: `fake-order-${generateId()}`,
+      cancellableReservationIds: [reservationIdA],
+      reversalReason: "order_cancelled",
+    });
+
+    expect(reversed).toHaveLength(1);
+    expect(reversed[0]).toBe(referralIdA);
+
+    const refA = await fetchReferral(referralIdA);
+    expect(refA?.status).toBe(REFERRAL_STATUS.REVERSED);
+
+    const refB = await fetchReferral(referralIdB);
+    expect(refB?.status).toBe(REFERRAL_STATUS.COMPLETED);
+
+    // GREATEST guard: started at 0, can't go below 0.
+    const counters = await fetchClientCounters(referrerId);
+    expect(counters?.successfulReferrals).toBe(0);
+    expect(Number(counters?.referralEarnings)).toBe(0);
+
+    void reservationIdB;
+  });
+
+  it("reverses a trip-linked referral when referrer starts at zero (GREATEST guard holds)", async () => {
+    // Single trip referral; referrer starts at 0.  The GREATEST guard fires
+    // and prevents the counters from going negative.
     const referrerId = await createReferrer({
       successfulReferrals: 0,
       referralEarnings: "0.00",
@@ -245,128 +319,68 @@ describe("reverseTripOrderReferrals integration", () => {
       reversalReason: "order_cancelled",
     });
 
-    expect(reversed).toHaveLength(0);
+    expect(reversed).toHaveLength(1);
+    expect(reversed[0]).toBe(referralId);
 
     const ref = await fetchReferral(referralId);
-    expect(ref?.status).toBe(REFERRAL_STATUS.COMPLETED);
+    expect(ref?.status).toBe(REFERRAL_STATUS.REVERSED);
 
+    // GREATEST guard: started at 0, stays at 0.
     const counters = await fetchClientCounters(referrerId);
-    expect(counters?.successfulReferrals).toBe(1);
-    expect(Number(counters?.referralEarnings)).toBeCloseTo(25, 1);
+    expect(counters?.successfulReferrals).toBe(0);
+    expect(Number(counters?.referralEarnings)).toBe(0);
   });
 
-  it("GREATEST guard prevents negative counters when referrer was already at zero", async () => {
+  it("idempotency: calling reverseTripOrderReferrals twice on the same reservation is a no-op on the second call", async () => {
+    // Referrer starts with 1 credited referral (bonus 20).
     const referrerId = await createReferrer({
-      successfulReferrals: 0,
-      referralEarnings: "0.00",
+      successfulReferrals: 1,
+      referralEarnings: "20.00",
     });
-    const { referralId: referralIdA, reservationId: reservationIdA } =
-      await createCompletedTripReferral({
-        referrerId,
-        bonusAmount: "20.00",
-      });
-    const { referralId: referralIdB, reservationId: reservationIdB } =
-      await createCompletedTripReferral({
-        referrerId,
-        bonusAmount: "30.00",
-      });
+    const { referralId, reservationId } = await createCompletedTripReferral({
+      referrerId,
+      bonusAmount: "20.00",
+    });
 
-    const reversed = await reverseTripOrderReferrals(db, {
+    // First call — should reverse the referral.
+    const firstReversed = await reverseTripOrderReferrals(db, {
       tenantId: TENANT_ID,
       orderId: `fake-order-${generateId()}`,
       cancellableReservationIds: [reservationId],
       reversalReason: "order_cancelled",
     });
 
-    expect(reversed).toHaveLength(0);
+    expect(firstReversed).toHaveLength(1);
+    expect(firstReversed[0]).toBe(referralId);
 
-    const counters = await fetchClientCounters(referrerId);
-    expect(counters?.successfulReferrals).toBe(1);
-    expect(Number(counters?.referralEarnings)).toBeCloseTo(25, 1);
-  });
+    const refAfterFirst = await fetchReferral(referralId);
+    expect(refAfterFirst?.status).toBe(REFERRAL_STATUS.REVERSED);
 
-  it("GREATEST guard prevents negative counters when referrer was already at zero", async () => {
-    const referrerId = await createReferrer({
-      successfulReferrals: 0,
-      referralEarnings: "0.00",
-    });
-    const reservationId = await createRealReservationId();
-    const referralId = await createCompletedProductReferral({
-      referrerId,
-      bonusAmount: "25.00",
-    });
-    referralIds.push(referralId);
-    await db.insert(referralsTable).values({
-      id: referralId,
-      tenantId: otherTenantId,
-      referrerId,
-      code: `REF-${generateId()}`,
-      status: REFERRAL_STATUS.COMPLETED,
-      reservationId,
-      bonusAmount: "25.00",
-      discountApplied: true,
-      discountValue: "10",
-    });
+    const countersAfterFirst = await fetchClientCounters(referrerId);
+    expect(countersAfterFirst?.successfulReferrals).toBe(0);
+    expect(Number(countersAfterFirst?.referralEarnings)).toBeCloseTo(0, 1);
 
-    const reversed = await reverseTripOrderReferrals(db, {
+    // Second call — referral is already REVERSED, service skips it (no-op).
+    const secondReversed = await reverseTripOrderReferrals(db, {
       tenantId: TENANT_ID,
       orderId: `fake-order-${generateId()}`,
       cancellableReservationIds: [reservationId],
       reversalReason: "order_cancelled",
     });
 
-    expect(reversed).toHaveLength(0);
+    expect(secondReversed).toHaveLength(0);
 
-    const counters = await fetchClientCounters(referrerId);
-    expect(counters?.successfulReferrals).toBe(1);
-    expect(Number(counters?.referralEarnings)).toBeCloseTo(25, 1);
-  });
-
-  it("GREATEST guard prevents negative counters when referrer was already at zero", async () => {
-    const referrerId = await createReferrer({
-      successfulReferrals: 0,
-      referralEarnings: "0.00",
-    });
-    const reservationId = await createRealReservationId();
-    const referralId = await createCompletedProductReferral({
-      referrerId,
-      bonusAmount: "25.00",
-    });
-    referralIds.push(referralId);
-    await db.insert(referralsTable).values({
-      id: referralId,
-      tenantId: otherTenantId,
-      referrerId,
-      code: `REF-${generateId()}`,
-      status: REFERRAL_STATUS.COMPLETED,
-      reservationId,
-      bonusAmount: "25.00",
-      discountApplied: true,
-      discountValue: "10",
-    });
-
-    const reversed = await reverseTripOrderReferrals(db, {
-      tenantId: TENANT_ID,
-      orderId: `fake-order-${generateId()}`,
-      cancellableReservationIds: [reservationId],
-      reversalReason: "order_cancelled",
-    });
-
-    expect(reversed).toHaveLength(0);
-
-    const ref = await fetchReferral(referralId);
-    expect(ref?.status).toBe(REFERRAL_STATUS.COMPLETED);
-
-    const counters = await fetchClientCounters(referrerId);
-    expect(counters?.successfulReferrals).toBe(2);
-    expect(Number(counters?.referralEarnings)).toBeCloseTo(50, 1);
+    // Counters must not have been decremented a second time.
+    const countersAfterSecond = await fetchClientCounters(referrerId);
+    expect(countersAfterSecond?.successfulReferrals).toBe(0);
+    expect(Number(countersAfterSecond?.referralEarnings)).toBeCloseTo(0, 1);
   });
 
   it("returns an empty array and makes no DB changes when reservationIds list is empty", async () => {
     const reversed = await reverseTripOrderReferrals(db, {
       tenantId: TENANT_ID,
       orderId: `fake-order-${generateId()}`,
-      cancellableReservationIds: [reservationId],
+      cancellableReservationIds: [],
       reversalReason: "order_cancelled",
     });
 
@@ -374,23 +388,23 @@ describe("reverseTripOrderReferrals integration", () => {
   });
 
   it("does NOT reverse referrals belonging to a different tenant", async () => {
+    // otherTenantId is never inserted into tenantsTable; referralsTable has no
+    // FK on tenant_id so the insert succeeds and lets us test the isolation
+    // guard inside reverseTripOrderReferrals (tenantId filter in the WHERE).
     const otherTenantId = `other-tenant-${generateId()}`;
     const referrerId = await createReferrer({
       successfulReferrals: 0,
       referralEarnings: "0.00",
     });
-    // The reservation row lives under TENANT_ID (we can't create rows for a
-    // non-existent tenant); tenant isolation is tested via the referral's own
-    // tenantId column, not via the reservation row.
+    // Reservation lives under TENANT_ID (required for FK); tenant isolation is
+    // enforced via the referral row's own tenantId column.
     const reservationId = await createRealReservationId();
 
-    const referralId = await createCompletedProductReferral({
-      referrerId,
-      bonusAmount: "25.00",
-    });
-    referralIds.push(referralId);
+    // Insert the cross-tenant referral under otherTenantId with a fresh id.
+    const crossTenantReferralId = `test-ref-${generateId()}`;
+    referralIds.push(crossTenantReferralId);
     await db.insert(referralsTable).values({
-      id: referralId,
+      id: crossTenantReferralId,
       tenantId: otherTenantId,
       referrerId,
       code: `REF-${generateId()}`,
@@ -401,6 +415,7 @@ describe("reverseTripOrderReferrals integration", () => {
       discountValue: "10",
     });
 
+    // Service is called with TENANT_ID — must NOT touch the otherTenant referral.
     const reversed = await reverseTripOrderReferrals(db, {
       tenantId: TENANT_ID,
       orderId: `fake-order-${generateId()}`,
@@ -410,43 +425,37 @@ describe("reverseTripOrderReferrals integration", () => {
 
     expect(reversed).toHaveLength(0);
 
-    const ref = await fetchReferral(referralId);
+    // Cross-tenant referral must remain COMPLETED.
+    const ref = await fetchReferral(crossTenantReferralId);
     expect(ref?.status).toBe(REFERRAL_STATUS.COMPLETED);
 
+    // Referrer counters must be untouched (started at 0, still 0).
     const counters = await fetchClientCounters(referrerId);
-    expect(counters?.successfulReferrals).toBe(1);
-    expect(Number(counters?.referralEarnings)).toBeCloseTo(25, 1);
+    expect(counters?.successfulReferrals).toBe(0);
+    expect(Number(counters?.referralEarnings)).toBe(0);
   });
 
-  it("GREATEST guard prevents negative counters when referrer was already at zero", async () => {
+  // ---------------------------------------------------------------------------
+  // Tests: reverseProductOnlyOrderReferral
+  // ---------------------------------------------------------------------------
+
+  it("reverseProductOnlyOrderReferral reverses a COMPLETED product-only referral", async () => {
+    // Referrer starts with 1 credited referral so the decrement is visible.
     const referrerId = await createReferrer({
-      successfulReferrals: 0,
-      referralEarnings: "0.00",
+      successfulReferrals: 1,
+      referralEarnings: "25.00",
     });
     const referralId = await createCompletedProductReferral({
       referrerId,
       bonusAmount: "25.00",
     });
 
-    const ref = await fetchReferral(referralId);
     const code = (
       await db
         .select({ code: referralsTable.code })
         .from(referralsTable)
         .where(eq(referralsTable.id, referralId))
     )[0]?.code ?? "";
-    await db.insert(referralsTable).values({
-      id: referralId,
-      tenantId: TENANT_ID,
-      referrerId,
-      code,
-      status: REFERRAL_STATUS.REVERSED,
-      reservationId: null,
-      bonusAmount: "25.00",
-      discountApplied: true,
-      discountValue: "10",
-      reversalReason: "order_cancelled",
-    });
 
     const wasReversed = await reverseProductOnlyOrderReferral(db, {
       tenantId: TENANT_ID,
@@ -462,14 +471,12 @@ describe("reverseTripOrderReferrals integration", () => {
     expect(refAfter?.status).toBe(REFERRAL_STATUS.REVERSED);
     expect(refAfter?.reversalReason).toBe("order_cancelled");
 
-    void ref;
-
     const counters = await fetchClientCounters(referrerId);
-    expect(counters?.successfulReferrals).toBe(1);
-    expect(Number(counters?.referralEarnings)).toBeCloseTo(25, 1);
+    expect(counters?.successfulReferrals).toBe(0);
+    expect(Number(counters?.referralEarnings)).toBeCloseTo(0, 1);
   });
 
-  it("GREATEST guard prevents negative counters when referrer was already at zero", async () => {
+  it("reverseProductOnlyOrderReferral is idempotent: second call on already-REVERSED referral returns false", async () => {
     const referrerId = await createReferrer({
       successfulReferrals: 0,
       referralEarnings: "0.00",
@@ -485,19 +492,18 @@ describe("reverseTripOrderReferrals integration", () => {
         .from(referralsTable)
         .where(eq(referralsTable.id, referralId))
     )[0]?.code ?? "";
-    await db.insert(referralsTable).values({
-      id: referralId,
+
+    // First call — reverses the referral.
+    const firstResult = await reverseProductOnlyOrderReferral(db, {
       tenantId: TENANT_ID,
-      referrerId,
-      code,
-      status: REFERRAL_STATUS.REVERSED,
-      reservationId: null,
-      bonusAmount: "25.00",
-      discountApplied: true,
-      discountValue: "10",
+      orderId: `fake-order-${generateId()}`,
+      referralCode: code,
+      referralId,
       reversalReason: "order_cancelled",
     });
+    expect(firstResult).toBe(true);
 
+    // Second call — already REVERSED, must be a no-op.
     const wasReversed = await reverseProductOnlyOrderReferral(db, {
       tenantId: TENANT_ID,
       orderId: `fake-order-${generateId()}`,
@@ -508,12 +514,13 @@ describe("reverseTripOrderReferrals integration", () => {
 
     expect(wasReversed).toBe(false);
 
+    // Counters must not have been decremented a second time.
     const counters = await fetchClientCounters(referrerId);
-    expect(counters?.successfulReferrals).toBe(1);
-    expect(Number(counters?.referralEarnings)).toBeCloseTo(25, 1);
+    expect(counters?.successfulReferrals).toBe(0);
+    expect(Number(counters?.referralEarnings)).toBe(0);
   });
 
-  it("GREATEST guard prevents negative counters when referrer was already at zero", async () => {
+  it("reverseProductOnlyOrderReferral GREATEST guard prevents negative counters when referrer starts at zero", async () => {
     const referrerId = await createReferrer({
       successfulReferrals: 0,
       referralEarnings: "0.00",
@@ -538,6 +545,7 @@ describe("reverseTripOrderReferrals integration", () => {
       reversalReason: "order_cancelled",
     });
 
+    // GREATEST guard: started at 0, stays at 0 — never goes negative.
     const counters = await fetchClientCounters(referrerId);
     expect(counters?.successfulReferrals).toBe(0);
     expect(Number(counters?.referralEarnings)).toBe(0);

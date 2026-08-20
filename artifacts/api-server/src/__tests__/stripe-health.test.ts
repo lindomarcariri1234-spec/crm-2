@@ -30,7 +30,7 @@ const { mockOrderBy, mockWhere, mockFrom, mockSelect, mockGetStripeSecretKey, Mo
     const mockFrom = vi.fn(() => ({ where: mockWhere, orderBy: mockOrderBy }));
     const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
-    const mockGetStripeSecretKey = vi.fn<[], Promise<string | null>>();
+    const mockGetStripeSecretKey = vi.fn<() => Promise<string | null>>();
 
     // Mock Stripe constructor — each test can override the returned instance
     const MockStripe = vi.fn();

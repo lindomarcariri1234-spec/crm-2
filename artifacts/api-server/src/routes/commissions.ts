@@ -39,26 +39,26 @@ router.post("/commission-rules", async (req, res, next: NextFunction): Promise<v
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-    const parsed = z.object({ status: z.string().optional(), paidAt: z.string().optional() }).safeParse(req.body);
+    const parsed = CreateRuleBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     const id = generateId();
     await db.insert(commissionRulesTable).values({ id, tenantId: me.tenantId, ...parsed.data });
     const [rule] = await db.select().from(commissionRulesTable)
-      .where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me.tenantId))).limit(1);
+      .where(and(eq(commissionRulesTable.id, id), eq(commissionRulesTable.tenantId, me.tenantId))).limit(1);
     if (!rule) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
     res.json(rule);
   } catch (err) {
-    req.log.error({ err }, "Error updating commission rule");
+    req.log.error({ err }, "Error creating commission rule");
     next(err);
   }
 });
 
-router.delete("/commission-rules/:id", async (req, res, next: NextFunction): Promise<void> => {
+router.patch("/commission-rules/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-    const parsed = z.object({ status: z.string().optional(), paidAt: z.string().optional() }).safeParse(req.body);
+    const parsed = CreateRuleBody.partial().safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     await db.update(commissionRulesTable).set(parsed.data)
       .where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me.tenantId)));
@@ -110,11 +110,16 @@ router.get("/commissions/calculate", async (req, res, next: NextFunction): Promi
     const rule = tripSpecificRule ?? allRule;
 
     if (rule) {
-      const commissionAmount = roundMoney(amount * rate / 100);
+      const ruleValue = parseFloat(String(rule.value));
+      const ruleType = rule.type ?? "percentage";
+      const commissionAmount =
+        ruleType === "fixed"
+          ? roundMoney(ruleValue)
+          : roundMoney(amount * ruleValue / 100);
       res.json({
-        commissionAmount: roundMoney(commissionAmount),
-        commissionRate: parseFloat(String(rule.value)),
-        commissionType: rule.type ?? "percentage",
+        commissionAmount,
+        commissionRate: ruleType === "fixed" ? null : ruleValue,
+        commissionType: ruleType,
         source: "rule",
         saleAmount: amount,
       });

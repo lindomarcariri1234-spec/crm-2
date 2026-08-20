@@ -3,7 +3,7 @@ import { sendTenantWhatsAppMessage } from "../lib/whatsapp";
 import { getRedisConnection } from "../lib/redis";
 import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
-import type { WhatsAppNotificationJobData } from "../queues/index";
+import type { WhatsAppNotificationJobData, WhatsAppMessageJobData } from "../queues/index";
 import { deliverReservationConfirmedWhatsApp } from "../services/checkout/reservation-confirmation-outbox";
 
 let _worker: Worker<WhatsAppNotificationJobData> | null = null;
@@ -25,8 +25,9 @@ export function startWhatsAppWorker(): Worker<WhatsAppNotificationJobData> | nul
         if (!delivered) throw new Error("reservation_confirmation_delivery_failed");
         return;
       }
-      logger.info({ jobId: job.id, phone: job.data.phone }, "[whatsapp-worker] Processing job");
-      const result = await sendTenantWhatsAppMessage(job.data.tenantId, job.data.phone, job.data.message);
+      const msgData = job.data as WhatsAppMessageJobData;
+      logger.info({ jobId: job.id, phone: msgData.phone }, "[whatsapp-worker] Processing job");
+      const result = await sendTenantWhatsAppMessage(msgData.tenantId, msgData.phone, msgData.message);
       if (!result.success && result.error !== "credentials_not_configured") {
         throw new Error(result.error ?? "send_failed");
       }

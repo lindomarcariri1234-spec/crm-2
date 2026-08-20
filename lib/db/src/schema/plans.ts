@@ -48,6 +48,13 @@ export const invoicesTable = pgTable("invoices", {
   stripePaymentIntentId: text("stripe_payment_intent_id"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeInvoiceId: text("stripe_invoice_id"),
+  // Durable correlation for async Subscription Checkout: the Checkout Session id
+  // and the Stripe Subscription id it creates are persisted here so a later
+  // `invoice.payment_succeeded` webhook (which only carries the Stripe
+  // subscription id, not our local invoiceId metadata) can be matched back to
+  // the exact local pending invoice.
+  stripeCheckoutSessionId: text("stripe_checkout_session_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
   paymentId: text("payment_id"),
   taxAmount: numeric("tax_amount", { precision: 10, scale: 2 }).notNull().default("0"),
   totalAmount: numeric("total_amount", { precision: 10, scale: 2 }),

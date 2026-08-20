@@ -992,12 +992,18 @@ CREATE TABLE IF NOT EXISTS "invoices" (
         "stripe_payment_intent_id" text,
         "stripe_customer_id" text,
         "stripe_invoice_id" text,
+        "stripe_checkout_session_id" text,
+        "stripe_subscription_id" text,
         "payment_id" text,
         "tax_amount" numeric(10, 2) DEFAULT '0' NOT NULL,
         "total_amount" numeric(10, 2),
         "created_at" timestamp with time zone DEFAULT now() NOT NULL,
         "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "invoices_stripe_subscription_id_idx" ON "invoices" ("stripe_subscription_id");;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "invoices_stripe_checkout_session_id_idx" ON "invoices" ("stripe_checkout_session_id");;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "plans" (
         "id" text PRIMARY KEY NOT NULL,
@@ -2369,4 +2375,12 @@ CREATE TABLE IF NOT EXISTS "insights_chat_history" (
         "messages" json DEFAULT '[]' NOT NULL,
         "updated_at" timestamptz DEFAULT now() NOT NULL,
         CONSTRAINT "insights_chat_history_unique" UNIQUE("tenant_id","user_id","chat_type")
+);;
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "stripe_webhook_events" (
+        "id" text PRIMARY KEY NOT NULL,
+        "type" text,
+        "status" text DEFAULT 'processing' NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "processed_at" timestamp with time zone
 );;

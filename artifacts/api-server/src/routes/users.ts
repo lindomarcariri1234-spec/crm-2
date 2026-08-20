@@ -281,16 +281,17 @@ router.post("/users", async (req, res, next): Promise<void> => {
       const allowed = await checkPlanLimit(me.tenantId, "users", req, res);
       if (!allowed) return;
     }
-    const parsed = UpdateUserBody.safeParse(req.body);
+    const parsed = CreateUserBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     if (me.role !== ROLES.SUPER_ADMIN && parsed.data.role === ROLES.SUPER_ADMIN) {
       next(new ForbiddenError("Forbidden: apenas superadmins podem atribuir a funcao superadmin", "FORBIDDEN_ROLE")); return;
     }
     const userId = generateId();
     const referralCode = (await import("crypto")).randomBytes(4).toString("hex").substring(0, 6).toUpperCase();
+    const pendingClerkId = "pending-" + userId;
     await db.insert(usersTable).values({
       id: userId,
-      clerkId: "pending-" + userId,
+      clerkId: pendingClerkId,
       tenantId: me.tenantId,
       name: parsed.data.name,
       email: parsed.data.email,
@@ -299,7 +300,7 @@ router.post("/users", async (req, res, next): Promise<void> => {
       referralBalance: "0",
     });
     const [user] = await db.select().from(usersTable)
-      .where(eq(usersTable.clerkId, clerkId))
+      .where(eq(usersTable.clerkId, pendingClerkId))
       .limit(1);
     if (!user) { next(new AppError("Failed to create user", 500, "USER_CREATE_FAILED")); return; }
     res.status(201).json(formatUser(user));
@@ -350,7 +351,7 @@ router.patch("/users/:id", async (req, res, next): Promise<void> => {
     await db.update(usersTable).set(updates)
       .where(and(eq(usersTable.id, req.params.id), eq(usersTable.tenantId, me.tenantId)));
     const [user] = await db.select().from(usersTable)
-      .where(eq(usersTable.clerkId, clerkId))
+      .where(and(eq(usersTable.id, req.params.id), eq(usersTable.tenantId, me.tenantId)))
       .limit(1);
     if (!user) { next(new NotFoundError("Not found", "USER_NOT_FOUND")); return; }
     res.json(formatUser(user));

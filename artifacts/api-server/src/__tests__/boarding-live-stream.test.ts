@@ -232,6 +232,7 @@ describe("GET /api/trips/:id/boarding-live/stream — boarding-control live SSE"
   const requireAuthMock = vi.mocked(requireAuth);
   const tryAddBoardingClientMock = vi.mocked(tryAddBoardingClient);
   const removeBoardingClientMock = vi.mocked(removeBoardingClient);
+  const emitBoardingUpdateMock = vi.mocked(emitBoardingUpdate);
   const eqMock = vi.mocked(eq);
 
   beforeEach(() => {
@@ -244,38 +245,30 @@ describe("GET /api/trips/:id/boarding-live/stream — boarding-control live SSE"
 
   it("rejects an unauthenticated request with 401 and registers no client", async () => {
     const app = buildApp();
-    selectQueue.push([{ id: "trip-001" }]); // trip lookup → found in tenant
-    selectQueue.push([{ id: "pax-001" }]);  // passenger ownership check → belongs to trip
+    requireAuthMock.mockImplementation(async (_req, res) => {
+      (res as express.Response).status(401).json({ error: "Not authenticated", code: "UNAUTHORIZED" });
+      return null as never;
+    });
 
-    const res = await request(app).delete("/api/trips/trip-001/checkins/pax-001");
+    const res = await request(app).get("/api/trips/trip-001/boarding-live/stream");
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
+    expect(tryAddBoardingClientMock).not.toHaveBeenCalled();
     expect(emitBoardingUpdateMock).not.toHaveBeenCalled();
   });
 
-  it("emits a refresh for the trip after a check-in is removed (DELETE /checkins/:passengerId)", async () => {
+  it("returns 404 when the trip does not belong to the caller's tenant", async () => {
     const app = buildApp();
-    selectQueue.push([{ id: "trip-001" }]); // trip lookup → found in tenant
-    selectQueue.push([{ id: "pax-001" }]);  // passenger ownership check → belongs to trip
+    selectQueue.push([]); // trip lookup → not found in tenant
 
-    const res = await request(app).delete("/api/trips/trip-001/checkins/pax-001");
-
-    expect(res.status).toBe(404);
-    expect(emitBoardingUpdateMock).not.toHaveBeenCalled();
-  });
-
-  it("emits a refresh for the trip after a check-in is removed (DELETE /checkins/:passengerId)", async () => {
-    const app = buildApp();
-    selectQueue.push([{ id: "trip-001" }]); // trip lookup → found in tenant
-    selectQueue.push([{ id: "pax-001" }]);  // passenger ownership check → belongs to trip
-
-    const res = await request(app).delete("/api/trips/trip-001/checkins/pax-001");
+    const res = await request(app).get("/api/trips/trip-999/boarding-live/stream");
 
     expect(res.status).toBe(404);
-    expect(emitBoardingUpdateMock).not.toHaveBeenCalled();
+    expect(tryAddBoardingClientMock).not.toHaveBeenCalled();
+    expect(removeBoardingClientMock).not.toHaveBeenCalled();
   });
 
-  it("emits a refresh for the trip after a check-in is removed (DELETE /checkins/:passengerId)", async () => {
+  it("registers and cleans up the SSE client on connect and disconnect", async () => {
     const app = buildApp();
     selectQueue.push([{ id: "trip-001" }]); // tenant-scoped lookup → found
 
@@ -332,9 +325,9 @@ describe("GET /api/trips/:id/boarding-live/stream — boarding-control live SSE"
   it("returns 429 (not an SSE upgrade) and registers no client when the connection cap is reached", async () => {
     const app = buildApp();
     selectQueue.push([{ id: "trip-001" }]); // trip lookup → found in tenant
-    selectQueue.push([{ id: "pax-001" }]);  // passenger ownership check → belongs to trip
+    tryAddBoardingClientMock.mockReturnValue(false); // cap reached
 
-    const res = await request(app).delete("/api/trips/trip-001/checkins/pax-001");
+    const res = await request(app).get("/api/trips/trip-001/boarding-live/stream");
 
     expect(res.status).toBe(429);
     expect(res.headers["content-type"]).not.toContain("text/event-stream");
@@ -371,18 +364,23 @@ describe("boarding-state changes emit a live refresh", () => {
     selectQueue.push([{ id: "trip-001" }]); // trip lookup → found in tenant
     selectQueue.push([{ id: "pax-001" }]);  // passenger ownership check → belongs to trip
 
-    const res = await request(app).delete("/api/trips/trip-001/checkins/pax-001");
+    const res = await request(app)
+      .post("/api/trips/trip-001/checkins")
+      .send({ passengerId: "pax-001", status: "present" });
 
-    expect(res.status).toBe(404);
-    expect(emitBoardingUpdateMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(emitBoardingUpdateMock).toHaveBeenCalledTimes(1);
+    expect(emitBoardingUpdateMock).toHaveBeenCalledWith("trip-001");
   });
 
-  it("emits a refresh for the trip after a check-in is removed (DELETE /checkins/:passengerId)", async () => {
+  it("returns 404 when the passenger does not belong to the trip (POST /checkins)", async () => {
     const app = buildApp();
     selectQueue.push([{ id: "trip-001" }]); // trip lookup → found in tenant
-    selectQueue.push([{ id: "pax-001" }]);  // passenger ownership check → belongs to trip
+    selectQueue.push([]);                    // passenger lookup → not found
 
-    const res = await request(app).delete("/api/trips/trip-001/checkins/pax-001");
+    const res = await request(app)
+      .post("/api/trips/trip-001/checkins")
+      .send({ passengerId: "pax-999", status: "present" });
 
     expect(res.status).toBe(404);
     expect(emitBoardingUpdateMock).not.toHaveBeenCalled();

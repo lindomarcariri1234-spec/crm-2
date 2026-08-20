@@ -717,14 +717,6 @@ export interface CreateOrderInput {
    * browser retry / accidental double-submit of the same attempt reuse the
    * original order instead of creating a duplicate and double-reserving seats.
    */
-
-  depositAmount?: number;
-  /**
-   * Client-generated key, one per checkout attempt (see checkout.tsx). Lets a
-   * browser retry / accidental double-submit of the same attempt reuse the
-   * original order instead of creating a duplicate and double-reserving seats.
-   */
-
   idempotencyKey?: string;
 }
 
