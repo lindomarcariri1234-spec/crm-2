@@ -4,6 +4,7 @@ import { getRedisConnection } from "../lib/redis";
 import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import type { WhatsAppNotificationJobData } from "../queues/index";
+import { deliverReservationConfirmedWhatsApp } from "../services/checkout/reservation-confirmation-outbox";
 
 let _worker: Worker<WhatsAppNotificationJobData> | null = null;
 
@@ -19,6 +20,11 @@ export function startWhatsAppWorker(): Worker<WhatsAppNotificationJobData> | nul
   _worker = new Worker<WhatsAppNotificationJobData>(
     "whatsapp-notifications",
     async (job) => {
+      if ("kind" in job.data && job.data.kind === "reservation-confirmed") {
+        const delivered = await deliverReservationConfirmedWhatsApp(job.data.outboxId);
+        if (!delivered) throw new Error("reservation_confirmation_delivery_failed");
+        return;
+      }
       logger.info({ jobId: job.id, phone: job.data.phone }, "[whatsapp-worker] Processing job");
       const result = await sendTenantWhatsAppMessage(job.data.tenantId, job.data.phone, job.data.message);
       if (!result.success && result.error !== "credentials_not_configured") {

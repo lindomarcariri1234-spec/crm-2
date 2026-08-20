@@ -283,6 +283,7 @@ CREATE TABLE IF NOT EXISTS "reservations" (
         "completed_at" timestamp with time zone,
         "notes" text,
         "confirmed_at" timestamp with time zone,
+        "whatsapp_confirmed_sent_at" timestamp with time zone,
         "cancelled_at" timestamp with time zone,
         "created_by_id" text NOT NULL,
         "store_order_id" text,
@@ -1481,6 +1482,20 @@ CREATE TABLE IF NOT EXISTS "client_notifications" (
         "payload" jsonb,
         "read_at" timestamp with time zone,
         "created_at" timestamp with time zone DEFAULT now() NOT NULL
+);;
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "whatsapp_notification_outbox" (
+        "id" text PRIMARY KEY NOT NULL,
+        "tenant_id" text NOT NULL,
+        "reservation_id" text NOT NULL,
+        "type" text NOT NULL,
+        "status" text DEFAULT 'pending' NOT NULL,
+        "enqueued_at" timestamp with time zone,
+        "sent_at" timestamp with time zone,
+        "last_error" text,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+        CONSTRAINT "whatsapp_notification_outbox_reservation_type_unique" UNIQUE("tenant_id","reservation_id","type")
 );;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "client_nps_responses" (

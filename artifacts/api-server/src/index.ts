@@ -44,6 +44,7 @@ import { startPdfWorker, stopPdfWorker } from "./workers/pdf.worker";
 import { startCommissionSyncWorker, stopCommissionSyncWorker } from "./workers/commission-sync.worker";
 import { startWhatsAppWorker, stopWhatsAppWorker } from "./workers/whatsapp.worker";
 import { startCalendarSyncWorker, stopCalendarSyncWorker } from "./workers/calendar-sync.worker";
+import { retryPendingReservationConfirmedWhatsApps } from "./services/checkout/reservation-confirmation-outbox";
 
 process.on("unhandledRejection", (reason: unknown) => {
   logger.error({ err: reason }, "Unhandled promise rejection — process kept alive");
@@ -277,6 +278,15 @@ applyMigrations()
       cron.schedule("0 * * * *", () => {
         logger.info("[campaign-automation] Daily automation cron triggered");
         runCampaignAutomationCron().catch((err) => logger.error({ err }, "[campaign-automation] Cron failed"));
+      }, { timezone: "America/Sao_Paulo" });
+
+      retryPendingReservationConfirmedWhatsApps().catch((err) =>
+        logger.error({ err }, "[whatsapp-outbox] Startup retry failed"),
+      );
+      cron.schedule("*/5 * * * *", () => {
+        retryPendingReservationConfirmedWhatsApps().catch((err) =>
+          logger.error({ err }, "[whatsapp-outbox] Pending retry failed"),
+        );
       }, { timezone: "America/Sao_Paulo" });
 
       // ── Seat-map SSE pub/sub fan-out (non-fatal, no-op when Redis absent) ──

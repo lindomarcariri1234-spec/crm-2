@@ -35,6 +35,7 @@ export const reservationsTable = pgTable("reservations", {
   completedAt: timestamp("completed_at", { withTimezone: true }),
   notes: text("notes"),
   confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  whatsappConfirmedSentAt: timestamp("whatsapp_confirmed_sent_at", { withTimezone: true }),
   cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
   createdById: text("created_by_id").notNull().references(() => usersTable.id),
   storeOrderId: text("store_order_id"),

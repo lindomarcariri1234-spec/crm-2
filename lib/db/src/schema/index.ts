@@ -31,6 +31,7 @@ export * from "./calendar";
 export * from "./redis";
 export * from "./trip-costs";
 export * from "./notifications";
+export * from "./whatsapp-outbox";
 export * from "./nps";
 export * from "./favorites";
 export * from "./ai-integration";

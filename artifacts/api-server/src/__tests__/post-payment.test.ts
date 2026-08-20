@@ -29,6 +29,9 @@ vi.mock("@workspace/db", () => ({
     id: "id",
     tenantId: "tenant_id",
     storeOrderId: "store_order_id",
+    status: "status",
+    paidValue: "paid_value",
+    balance: "balance",
   },
   storesTable: {
     id: "id",
@@ -42,6 +45,10 @@ vi.mock("@workspace/db", () => ({
     id: "id",
     tenantId: "tenant_id",
     isActive: "is_active",
+  },
+  tripsTable: {
+    name: "name",
+    departureDate: "departure_date",
   },
 }));
 
@@ -97,9 +104,21 @@ vi.mock("../queues/email-helpers.js", () => ({
 }));
 
 const mockDispatchWhatsAppReferralConverted = vi.fn();
+const mockDispatchWhatsAppReservationConfirmed = vi.fn();
+const mockDispatchWhatsAppPaymentReceived = vi.fn();
 vi.mock("../queues/whatsapp-helpers.js", () => ({
   dispatchWhatsAppReferralConverted: (...args: unknown[]) =>
     mockDispatchWhatsAppReferralConverted(...args),
+  dispatchWhatsAppReservationConfirmed: (...args: unknown[]) =>
+    mockDispatchWhatsAppReservationConfirmed(...args),
+  dispatchWhatsAppPaymentReceived: (...args: unknown[]) =>
+    mockDispatchWhatsAppPaymentReceived(...args),
+}));
+
+const mockScheduleReservationConfirmedWhatsApp = vi.fn();
+vi.mock("../services/checkout/reservation-confirmation-outbox.js", () => ({
+  scheduleReservationConfirmedWhatsApp: (...args: unknown[]) =>
+    mockScheduleReservationConfirmedWhatsApp(...args),
 }));
 
 import { db } from "@workspace/db";
@@ -115,6 +134,7 @@ function installSelectQueue(results: object[][]) {
   (db.select as ReturnType<typeof vi.fn>).mockImplementation(() => {
     const chain: Record<string, unknown> = {};
     chain.from = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
     chain.where = vi.fn(() => {
       const rows = selectResults.shift() ?? [];
       const p = Promise.resolve(rows) as Promise<object[]> & {
@@ -157,6 +177,9 @@ beforeEach(() => {
   mockDispatchReferralTierUpgradeEmail.mockResolvedValue(undefined);
   mockDispatchReferralLoyaltyPointsEmail.mockResolvedValue(undefined);
   mockDispatchWhatsAppReferralConverted.mockResolvedValue(undefined);
+  mockDispatchWhatsAppReservationConfirmed.mockResolvedValue(undefined);
+  mockDispatchWhatsAppPaymentReceived.mockResolvedValue(undefined);
+  mockScheduleReservationConfirmedWhatsApp.mockResolvedValue(undefined);
   mockDetectAndNotifyTripOverlap.mockResolvedValue(undefined);
 });
 
@@ -167,6 +190,7 @@ describe("runPostPaymentSideEffects", () => {
       [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations for order
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
+      [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
     ]);
 
@@ -204,11 +228,51 @@ describe("runPostPaymentSideEffects", () => {
     expect(mockEnsurePortalAccount).not.toHaveBeenCalled();
   });
 
+  it("schedules one durable reservation confirmation while still notifying each payment", async () => {
+    installSelectQueue([
+      // Deposit payment
+      [ORDER],
+      [ADMIN_USER],
+      [{ id: "res-1", clientId: "client-1", tripId: "trip-1" }],
+      [ADMIN_USER],
+      [{ id: "res-1", status: "confirmed", paidValue: "100.00", balance: "400.00" }],
+      [STORE],
+      // Remaining-balance payment
+      [ORDER],
+      [ADMIN_USER],
+      [{ id: "res-1", clientId: "client-1", tripId: "trip-1" }],
+      [ADMIN_USER],
+      [{ id: "res-1", status: "confirmed", paidValue: "500.00", balance: "0.00" }],
+      [STORE],
+    ]);
+
+    await runPostPaymentSideEffects("order-1");
+    await vi.waitFor(() =>
+      expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenCalledTimes(1),
+    );
+
+    await runPostPaymentSideEffects("order-1");
+    await vi.waitFor(() =>
+      expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenCalledTimes(2),
+    );
+
+    expect(mockScheduleReservationConfirmedWhatsApp).toHaveBeenCalledTimes(2);
+    expect(mockScheduleReservationConfirmedWhatsApp).toHaveBeenNthCalledWith(1, "res-1", "tenant-1");
+    expect(mockScheduleReservationConfirmedWhatsApp).toHaveBeenNthCalledWith(2, "res-1", "tenant-1");
+    expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenNthCalledWith(2, {
+      reservationId: "res-1",
+      tenantId: "tenant-1",
+      amount: 500,
+      remainingBalance: 0,
+    });
+  });
+
   it("does NOT mint a referral code when the order has no clientId, but still provisions a portal account when reservations exist", async () => {
     installSelectQueue([
       [{ ...ORDER, clientId: null }], // order without a linked client (no clientId block)
       [{ id: "res-1" }], // reservations exist
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
+      [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
     ]);
 
@@ -236,6 +300,7 @@ describe("runPostPaymentSideEffects", () => {
       [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
+      [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
     ]);
 
@@ -251,6 +316,7 @@ describe("runPostPaymentSideEffects", () => {
       [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
+      [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
     ]);
 
@@ -275,6 +341,7 @@ describe("runPostPaymentSideEffects", () => {
       [], // admin user lookup → none found
       [{ id: "res-1" }], // reservations
       [], // actor user for overlap-detection IIFE → none found → detectAndNotifyTripOverlap not called
+      [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
     ]);
 
@@ -291,6 +358,7 @@ describe("runPostPaymentSideEffects", () => {
       [ADMIN_USER], // admin user for writeClientActivity
       [{ id: "res-1" }], // reservations
       [ADMIN_USER], // actor user for overlap-detection IIFE (fire-and-forget)
+      [], // confirmed reservations for WhatsApp IIFE
       [STORE], // store lookup
     ]);
 

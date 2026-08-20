@@ -302,6 +302,20 @@
       "when": 1805100000000,
       "tag": "0042_reservations_active_client_trip_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1805200000000,
+      "tag": "0043_reservation_whatsapp_confirmation",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1805300000000,
+      "tag": "0044_whatsapp_notification_outbox",
+      "breakpoints": true
     }
   ]
 }

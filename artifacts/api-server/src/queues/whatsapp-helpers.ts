@@ -6,7 +6,6 @@ import { logger } from "../lib/logger";
 import { REFERRAL_STATUS } from "@workspace/permissions";
 import { areWorkersEnabled } from "../lib/redis";
 import { formatBRL } from "@workspace/shared";
-import { db, referralSettingsTable, clientsTable, tenantsTable, referralsTable } from "@workspace/db";
 
 const DEFAULT_CONVERTED_MESSAGE =
   "Boa notícia! {{nome}} usou seu código {{codigo}} e comprou com a {{agencia}}. Seu bônus de R$ {{valor}} está sendo processado.";
@@ -57,6 +56,15 @@ export async function enqueueOrSend(
   if (!result.success && result.error !== "credentials_not_configured") {
     logger.warn({ phone, error: result.error }, "[whatsapp-queue] Direct send failed");
   }
+  return { mode: "direct", success: result.success, error: result.error };
+}
+
+async function sendDirect(
+  phone: string,
+  message: string,
+  tenantId: string,
+): Promise<WhatsAppDispatchResult> {
+  const result = await sendTenantWhatsAppMessage(tenantId, phone, message);
   return { mode: "direct", success: result.success, error: result.error };
 }
 
@@ -291,8 +299,11 @@ async function broadcastToReservationPassengers(opts: {
   /** Optional fallback phone/name used when no passengers exist yet. */
   fallbackPhone?: string | null;
   fallbackName?: string | null;
-}): Promise<void> {
-  const { reservationId, tenantId, buildMessage, fallbackPhone, fallbackName } = opts;
+  delivery?: "queue" | "direct";
+}): Promise<WhatsAppDispatchResult[]> {
+  const { reservationId, tenantId, buildMessage, fallbackPhone, fallbackName, delivery = "queue" } = opts;
+  const send = delivery === "direct" ? sendDirect : enqueueOrSend;
+  const results: WhatsAppDispatchResult[] = [];
 
   // Load passengers for this reservation
   const passengers = await db
@@ -338,7 +349,7 @@ async function broadcastToReservationPassengers(opts: {
       const normalized = p.phone.replace(/\D/g, "");
       if (sentPhones.has(normalized)) continue;
       sentPhones.add(normalized);
-      await enqueueOrSend(p.phone, buildMessage(p.name), tenantId);
+      results.push(await send(p.phone, buildMessage(p.name), tenantId));
       continue;
     }
     // No passenger phone — fall back to booking client's contact, respecting opt-in.
@@ -346,7 +357,7 @@ async function broadcastToReservationPassengers(opts: {
       const normalized = clientPhone.replace(/\D/g, "");
       if (sentPhones.has(normalized)) continue;
       sentPhones.add(normalized);
-      await enqueueOrSend(clientPhone, buildMessage(p.name), tenantId);
+      results.push(await send(clientPhone, buildMessage(p.name), tenantId));
     }
   }
 
@@ -359,10 +370,11 @@ async function broadcastToReservationPassengers(opts: {
       const normalized = phone.replace(/\D/g, "");
       if (!sentPhones.has(normalized)) {
         sentPhones.add(normalized);
-        await enqueueOrSend(phone, buildMessage(name), tenantId);
+        results.push(await send(phone, buildMessage(name), tenantId));
       }
     }
   }
+  return results;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -372,10 +384,12 @@ async function broadcastToReservationPassengers(opts: {
 export async function dispatchWhatsAppReservationConfirmed(opts: {
   reservationId: string;
   tenantId: string;
-}): Promise<void> {
+  /** The durable outbox worker delivers directly; ordinary callers enqueue jobs. */
+  delivery?: "queue" | "direct";
+}): Promise<boolean> {
   try {
     const settings = await getWhatsAppNotificationSettings(opts.tenantId);
-    if (!settings.reservationConfirmed) return;
+    if (!settings.reservationConfirmed) return true;
 
     // Look up reservation + trip + tenant for message vars
     const [row] = await db
@@ -392,7 +406,7 @@ export async function dispatchWhatsAppReservationConfirmed(opts: {
       .where(and(eq(reservationsTable.id, opts.reservationId), eq(reservationsTable.tenantId, opts.tenantId)))
       .limit(1);
 
-    if (!row) return;
+    if (!row) return true;
 
     const depDate = row.departureDate
       ? row.departureDate.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/Sao_Paulo" })
@@ -401,9 +415,10 @@ export async function dispatchWhatsAppReservationConfirmed(opts: {
 
     const template = settings.reservationConfirmedMessage?.trim() || DEFAULT_RESERVATION_CONFIRMED_MESSAGE;
 
-    await broadcastToReservationPassengers({
+    const results = await broadcastToReservationPassengers({
       reservationId: opts.reservationId,
       tenantId: opts.tenantId,
+      delivery: opts.delivery,
       buildMessage: (nome) =>
         interpolateWhatsAppMessage(template, {
           nome,
@@ -413,8 +428,10 @@ export async function dispatchWhatsAppReservationConfirmed(opts: {
           agencia: row.tenantName,
         }),
     });
+    return results.every((result) => result.success);
   } catch (err) {
     logger.warn({ err, tenantId: opts.tenantId }, "[whatsapp] dispatchWhatsAppReservationConfirmed failed — non-fatal");
+    return false;
   }
 }
 

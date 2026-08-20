@@ -115,12 +115,20 @@ export interface CommissionSyncJobData {
   tenantId: string;
 }
 
-export interface WhatsAppNotificationJobData {
+export interface WhatsAppMessageJobData {
   phone: string;
   message: string;
   tenantId: string;
 }
 
+export interface ReservationConfirmedWhatsAppJobData {
+  kind: "reservation-confirmed";
+  outboxId: string;
+}
+
+export type WhatsAppNotificationJobData =
+  | WhatsAppMessageJobData
+  | ReservationConfirmedWhatsAppJobData;
 export interface CalendarSyncJobData {
   type: "syncTrip" | "syncTripForUser" | "syncPayment" | "syncBirthday" | "deleteEventsForTrip";
   tripId?: string;

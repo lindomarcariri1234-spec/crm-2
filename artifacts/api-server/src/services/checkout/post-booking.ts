@@ -9,10 +9,10 @@ import { ensurePortalAccount } from "./portal-account";
 import { generateAndAssignReferralCode } from "../../lib/referral-code";
 import { generateReferralCode } from "../../lib/id";
 import { applyDeferredOrderCredits } from "./deferred-referral-effects";
+import { scheduleReservationConfirmedWhatsApp } from "./reservation-confirmation-outbox";
 import { dispatchReferralConvertedEmail, dispatchReferralTierUpgradeEmail, dispatchReferralLoyaltyPointsEmail } from "../../queues/email-helpers";
 import { dispatchWhatsAppReferralConverted, dispatchWhatsAppReservationConfirmed, dispatchWhatsAppPaymentReceived } from "../../queues/whatsapp-helpers";
 import { RESERVATION_STATUS } from "@workspace/permissions";
-import { reservationsTable, storesTable, storeOrdersTable, usersTable } from "@workspace/db";
 
 /**
  * Side effects that must only happen AFTER a store order's payment is confirmed
@@ -198,8 +198,9 @@ export async function runPostPaymentSideEffects(orderId: string): Promise<void> 
 
   // WhatsApp: reservation confirmed + payment received (fire-and-forget, post-commit)
   // Runs here so it fires for both gateway (Stripe/MercadoPago) and manual payment paths.
-  // applyGatewayPayment returns null for duplicates, so runPostPaymentSideEffects is only
-  // called once per real payment — no double-send risk.
+  // A durable outbox row owns each reservation-confirmation notification. A deposit
+  // confirms its reservation before the balance is paid, so filtering by status
+  // alone would otherwise send the same confirmation again on the balance payment.
   ;(async () => {
     try {
       // Fetch confirmed reservations with their trip details
@@ -224,14 +225,11 @@ export async function runPostPaymentSideEffects(orderId: string): Promise<void> 
           ),
         );
 
-      // One WhatsApp per confirmed reservation
+      // The unique outbox key (tenant + reservation + notification type) makes
+      // scheduling safe on retries and prevents the balance payment from creating a
+      // second confirmation. Failed delivery remains pending for the queue retry.
       for (const res of confirmedReservations) {
-        dispatchWhatsAppReservationConfirmed({
-          reservationId: res.id,
-          tenantId: order.tenantId,
-        }).catch((err) =>
-          logger.warn({ err, reservationId: res.id }, "[checkout/post-payment] WhatsApp reservation confirmed failed — non-fatal"),
-        );
+        await scheduleReservationConfirmedWhatsApp(res.id, order.tenantId);
       }
 
       // Payment received — one per reservation using the reservation's own paidValue
