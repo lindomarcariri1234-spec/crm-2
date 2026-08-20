@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatCurrency } from "@/lib/utils";
 import {
   useListPlans,
@@ -6,6 +6,8 @@ import {
   useUpdatePlan,
   useArchivePlan,
   useGetPlansStripeHealth,
+  useListPlatformSettings,
+  useUpdatePlatformSetting,
   type Plan,
   type PlanStripeHealthItem,
 } from "@workspace/api-client-react";
@@ -23,13 +25,14 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Archive, AlertTriangle, RefreshCw, CheckCircle2, ChevronDown, ChevronUp, Zap } from "lucide-react";
+import { Plus, Pencil, Archive, AlertTriangle, RefreshCw, CheckCircle2, ChevronDown, ChevronUp, Zap, Mail, Save } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   getListPlansQueryKey,
   useGetSystemHealth,
   getGetSystemHealthQueryKey,
   getGetPlansStripeHealthQueryKey,
+  getListPlatformSettingsQueryKey,
   type SystemHealthStripeWebhookAuditEndpoint,
 } from "@workspace/api-client-react";
 
@@ -300,6 +303,99 @@ function StripeHealthBadge({ health }: { health: PlanStripeHealthItem | undefine
   );
 }
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function StripeAlertRecipientSettings() {
+  const { data: platformSettings = [], isLoading } = useListPlatformSettings();
+  const updateSetting = useUpdatePlatformSetting();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const setting = platformSettings.find((item) => item.key === "stripe_health_alert_email");
+  const [email, setEmail] = useState("");
+
+  useEffect(() => {
+    setEmail(setting?.value ?? "");
+  }, [setting?.value]);
+
+  const trimmedEmail = email.trim();
+  const isDirty = trimmedEmail !== (setting?.value?.trim() ?? "");
+  const emailError = trimmedEmail !== "" && !EMAIL_REGEX.test(trimmedEmail)
+    ? "Insira um endereço de e-mail válido"
+    : null;
+  const fallbackEmail = setting?.fallbackValue?.trim();
+
+  async function handleSave() {
+    if (!setting || emailError) return;
+
+    try {
+      await updateSetting.mutateAsync({
+        key: setting.key,
+        data: { value: trimmedEmail || null },
+      });
+      await queryClient.invalidateQueries({ queryKey: getListPlatformSettingsQueryKey() });
+      toast({
+        title: trimmedEmail ? "E-mail de alerta do Stripe atualizado" : "Alerta do Stripe voltou a usar o e-mail padrão",
+      });
+    } catch {
+      toast({ title: "Erro ao salvar e-mail de alerta do Stripe", variant: "destructive" });
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Mail className="w-4 h-4" />
+          Alertas de saúde do Stripe
+        </CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Receba um aviso quando algum plano pago não tiver um preço mensal ou anual válido no Stripe.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <div className="animate-pulse text-sm text-muted-foreground">Carregando configuração...</div>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <Label htmlFor="stripe-alert-email">E-mail para alertas</Label>
+              <Input
+                id="stripe-alert-email"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder={fallbackEmail ?? "operacoes@empresa.com"}
+                className={emailError ? "border-red-400 focus-visible:ring-red-400" : ""}
+              />
+              {emailError ? (
+                <p className="text-xs text-red-600">{emailError}</p>
+              ) : trimmedEmail ? (
+                <p className="text-xs text-muted-foreground">Este endereço substitui o e-mail padrão da plataforma.</p>
+              ) : fallbackEmail ? (
+                <p className="text-xs text-muted-foreground">
+                  Sem substituição: os alertas serão enviados para o e-mail padrão <span className="font-medium">{fallbackEmail}</span>.
+                </p>
+              ) : (
+                <p className="text-xs text-amber-700">
+                  Nenhum e-mail padrão foi configurado. Informe um endereço para receber os alertas.
+                </p>
+              )}
+            </div>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={!setting || !isDirty || Boolean(emailError) || updateSetting.isPending}
+            >
+              <Save className="w-3.5 h-3.5 mr-1.5" />
+              {updateSetting.isPending ? "Salvando..." : "Salvar e-mail"}
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 interface StripeSeedSectionProps {
   stripeConfigured: boolean | undefined;
   unhealthyCount: number;
@@ -473,6 +569,8 @@ export default function AdminPlans() {
           }}
         />
       )}
+
+      <StripeAlertRecipientSettings />
 
       <Card>
         <CardContent className="p-0">

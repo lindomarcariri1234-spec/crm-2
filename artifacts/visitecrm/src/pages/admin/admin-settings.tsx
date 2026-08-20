@@ -143,7 +143,7 @@ function FlagRow({ flag }: { flag: FeatureFlag }) {
   );
 }
 
-const EMAIL_SETTING_KEYS = new Set(["redis_alert_email"]);
+const EMAIL_SETTING_KEYS = new Set(["redis_alert_email", "stripe_health_alert_email"]);
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function SettingRow({ setting }: { setting: PlatformSetting }) {

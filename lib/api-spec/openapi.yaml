@@ -9796,6 +9796,8 @@ components:
           type: string
         value:
           type: ["string", "null"]
+        fallbackValue:
+          type: ["string", "null"]
         label:
           type: string
         description:
@@ -19580,6 +19582,8 @@ components:
         key:
           type: string
         value:
+          type: ["string", "null"]
+        fallbackValue:
           type: ["string", "null"]
         label:
           type: string

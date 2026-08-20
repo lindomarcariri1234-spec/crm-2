@@ -23,15 +23,46 @@ import request from "supertest";
 // vi.hoisted: shared db mock chain
 // ---------------------------------------------------------------------------
 
-const { mockLimit, mockWhere, mockFrom, mockSelect, mockInsertValues, mockInsert, mockUpdate } = vi.hoisted(() => {
+const {
+  mockLimit,
+  mockWhere,
+  mockFrom,
+  mockOrderBy,
+  mockSelect,
+  mockInsertReturning,
+  mockInsertValues,
+  mockInsert,
+  mockUpdateReturning,
+  mockUpdateWhere,
+  mockUpdateSet,
+  mockUpdate,
+} = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
-  const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
+  const mockOrderBy = vi.fn();
+  const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
-  const mockInsertValues = vi.fn().mockResolvedValue([]);
+  const mockInsertReturning = vi.fn();
+  const mockInsertValues = vi.fn(() => ({ returning: mockInsertReturning }));
   const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
-  const mockUpdate = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) }));
-  return { mockLimit, mockWhere, mockFrom, mockSelect, mockInsertValues, mockInsert, mockUpdate };
+  const mockUpdateReturning = vi.fn();
+  const mockUpdateWhere = vi.fn(() => ({ returning: mockUpdateReturning }));
+  const mockUpdateSet = vi.fn(() => ({ where: mockUpdateWhere }));
+  const mockUpdate = vi.fn(() => ({ set: mockUpdateSet }));
+  return {
+    mockLimit,
+    mockWhere,
+    mockFrom,
+    mockOrderBy,
+    mockSelect,
+    mockInsertReturning,
+    mockInsertValues,
+    mockInsert,
+    mockUpdateReturning,
+    mockUpdateWhere,
+    mockUpdateSet,
+    mockUpdate,
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -261,6 +292,16 @@ describe("PUT /api/admin/platform-settings/:key — body validation & role", () 
     expect(res.body).toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
+  it("returns 400 when stripe_health_alert_email value is not a valid email", async () => {
+    const app = buildApp(platformSettingsRouter);
+    const res = await request(app)
+      .put("/api/admin/platform-settings/stripe_health_alert_email")
+      .send({ value: "not-an-email" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
   it("returns 403 when the caller is not a superadmin", async () => {
     requireAuthMock.mockResolvedValue(AGENCY_USER as never);
     const app = buildApp(platformSettingsRouter);
@@ -269,6 +310,56 @@ describe("PUT /api/admin/platform-settings/:key — body validation & role", () 
       .send({ value: "valid" });
 
     expect(res.status).toBe(403);
+  });
+
+  it("creates the Stripe alert override when it has not been saved before", async () => {
+    mockLimit.mockResolvedValue([]);
+    mockInsertReturning.mockResolvedValue([{
+      id: "setting-001",
+      key: "stripe_health_alert_email",
+      value: "stripe-alerts@example.com",
+      label: "E-mail de alerta de saúde do Stripe",
+      description: "Recebe alertas Stripe",
+      type: "string",
+      updatedAt: new Date(),
+    }]);
+
+    const app = buildApp(platformSettingsRouter);
+    const res = await request(app)
+      .put("/api/admin/platform-settings/stripe_health_alert_email")
+      .send({ value: "stripe-alerts@example.com" });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      key: "stripe_health_alert_email",
+      value: "stripe-alerts@example.com",
+    });
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      key: "stripe_health_alert_email",
+      value: "stripe-alerts@example.com",
+    }));
+  });
+});
+
+describe("GET /api/admin/platform-settings — Stripe alert fallback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requireAuthMock.mockResolvedValue(SUPERADMIN_USER as never);
+    mockOrderBy.mockResolvedValue([]);
+    mockFrom.mockReturnValue({ orderBy: mockOrderBy });
+    vi.stubEnv("SUPERADMIN_EMAIL", "fallback@example.com");
+  });
+
+  it("exposes an editable Stripe alert setting with the default recipient before an override exists", async () => {
+    const app = buildApp(platformSettingsRouter);
+    const res = await request(app).get("/api/admin/platform-settings");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toContainEqual(expect.objectContaining({
+      key: "stripe_health_alert_email",
+      value: null,
+      fallbackValue: "fallback@example.com",
+    }));
   });
 });
 

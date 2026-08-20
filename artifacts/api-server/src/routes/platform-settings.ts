@@ -9,6 +9,10 @@ import { z } from "zod/v4";
 
 const router = Router();
 
+const STRIPE_ALERT_EMAIL_KEY = "stripe_health_alert_email";
+const EMAIL_SETTING_KEYS = new Set(["redis_alert_email", STRIPE_ALERT_EMAIL_KEY]);
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 const UpdatePlatformSettingBody = z.object({
   value: z.union([z.string(), z.null()]).optional(),
 });
@@ -20,7 +24,33 @@ router.get("/admin/platform-settings", async (req, res, next: NextFunction): Pro
     if (me.role !== ROLES.SUPER_ADMIN) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const settings = await db.select().from(platformSettingsTable).orderBy(platformSettingsTable.key);
-    res.json(settings);
+    const fallbackValue = process.env["SUPERADMIN_EMAIL"]?.trim() || null;
+    const stripeAlertSetting = settings.find((setting) => setting.key === STRIPE_ALERT_EMAIL_KEY);
+
+    if (stripeAlertSetting) {
+      res.json(settings.map((setting) => (
+        setting.key === STRIPE_ALERT_EMAIL_KEY
+          ? { ...setting, fallbackValue }
+          : setting
+      )));
+      return;
+    }
+
+    // This setting must be visible even before an operator saves an override.
+    // The virtual row is persisted on the first PUT request below.
+    res.json([
+      ...settings,
+      {
+        id: STRIPE_ALERT_EMAIL_KEY,
+        key: STRIPE_ALERT_EMAIL_KEY,
+        value: null,
+        fallbackValue,
+        label: "E-mail de alerta de saúde do Stripe",
+        description: "Recebe alertas quando um plano pago não tem preço Stripe válido. Deixe em branco para usar o e-mail padrão da plataforma.",
+        type: "string",
+        updatedAt: new Date(),
+      },
+    ]);
   } catch (err) {
     next(err);
   }
@@ -39,10 +69,11 @@ router.put("/admin/platform-settings/:key", async (req, res, next: NextFunction)
       return;
     }
     const { value } = parsed.data;
+    const isEmailSetting = EMAIL_SETTING_KEYS.has(key);
+    const normalizedValue = isEmailSetting ? value?.trim() || null : value;
 
-    if (key === "redis_alert_email" && value !== null && value !== undefined && String(value).trim() !== "") {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(String(value).trim())) {
+    if (isEmailSetting && normalizedValue !== null && normalizedValue !== undefined) {
+      if (!EMAIL_REGEX.test(normalizedValue.trim())) {
         next(new ValidationError("Endereço de e-mail inválido", "VALIDATION_ERROR"));
         return;
       }
@@ -50,14 +81,30 @@ router.put("/admin/platform-settings/:key", async (req, res, next: NextFunction)
 
     const existing = await db.select().from(platformSettingsTable).where(eq(platformSettingsTable.key, key)).limit(1);
 
-    if (existing.length === 0) {
+    if (existing.length === 0 && key !== STRIPE_ALERT_EMAIL_KEY) {
       next(new NotFoundError("Setting not found", "NOT_FOUND"));
+      return;
+    }
+
+    if (existing.length === 0) {
+      const [created] = await db
+        .insert(platformSettingsTable)
+        .values({
+          id: generateId(),
+          key: STRIPE_ALERT_EMAIL_KEY,
+          value: normalizedValue ?? null,
+          label: "E-mail de alerta de saúde do Stripe",
+          description: "Recebe alertas quando um plano pago não tem preço Stripe válido. Deixe em branco para usar o e-mail padrão da plataforma.",
+          type: "string",
+        })
+        .returning();
+      res.status(201).json(created);
       return;
     }
 
     const [updated] = await db
       .update(platformSettingsTable)
-      .set({ value: value !== undefined ? String(value) : null })
+      .set({ value: normalizedValue !== undefined ? String(normalizedValue) : null })
       .where(eq(platformSettingsTable.key, key))
       .returning();
 

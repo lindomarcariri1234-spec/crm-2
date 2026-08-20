@@ -11,6 +11,8 @@ export interface PlatformSetting {
   key: string;
   /** @nullable */
   value?: string | null;
+  /** @nullable */
+  fallbackValue?: string | null;
   label: string;
   /** @nullable */
   description?: string | null;
