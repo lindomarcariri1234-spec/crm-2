@@ -279,7 +279,7 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
 
     const trips = await db.select().from(tripsTable)
       .where(and(...conditions))
-      .orderBy(desc(tripsTable.departureDate))
+      .orderBy(asc(tripsTable.departureDate))
       .limit(limitNum).offset(offset);
 
     const [countResult] = await db.select({ count: sql<number>`count(*)` })
