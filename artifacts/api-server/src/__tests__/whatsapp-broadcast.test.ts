@@ -122,7 +122,9 @@ import {
   dispatchWhatsAppCadastroRealizado,
   dispatchWhatsAppPagamentoPendente,
   dispatchWhatsAppBoardingReminder,
+  enqueueOrSend,
 } from "../queues/whatsapp-helpers.js";
+import { getWhatsAppQueue } from "../queues/index.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -159,6 +161,8 @@ const CLIENT_OPTED_OUT = {
   whatsappOptIn: false,
 };
 
+const mockedGetWhatsAppQueue = vi.mocked(getWhatsAppQueue);
+
 const PASSENGER_A = { id: "p1", name: "Alice", phone: "+5511888880001" };
 const PASSENGER_B = { id: "p2", name: "Bob",   phone: "+5511888880002" };
 /** Same normalized phone as CLIENT_OPTED_IN */
@@ -177,6 +181,64 @@ function sentMessages(): string[] {
 }
 
 // ─── Tests: broadcastToReservationPassengers (via dispatchWhatsAppReservationConfirmed) ──
+
+describe("enqueueOrSend", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedGetWhatsAppQueue.mockReturnValue(null);
+    mockSendWhatsApp.mockResolvedValue({ success: true });
+  });
+
+  it("enqueues WhatsApp notifications when Redis is available", async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    mockedGetWhatsAppQueue.mockReturnValue({ add } as never);
+
+    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
+      mode: "queued",
+      success: true,
+    });
+
+    expect(add).toHaveBeenCalledWith("whatsapp-notification", {
+      phone: "+5511999990001",
+      message: "Olá!",
+      tenantId: "tenant-1",
+    });
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("keeps the direct-send fallback when Redis is unavailable", async () => {
+    mockSendWhatsApp.mockResolvedValue({
+      success: false,
+      error: "credentials_not_configured",
+    });
+
+    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
+      mode: "direct",
+      success: false,
+      error: "credentials_not_configured",
+    });
+
+    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", "+5511999990001", "Olá!");
+  });
+
+  it("falls back to direct send when adding a Redis job fails", async () => {
+    const add = vi.fn().mockRejectedValue(new Error("Redis unavailable"));
+    mockedGetWhatsAppQueue.mockReturnValue({ add } as never);
+    mockSendWhatsApp.mockResolvedValue({
+      success: false,
+      error: "gateway_unavailable",
+    });
+
+    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
+      mode: "direct",
+      success: false,
+      error: "gateway_unavailable",
+    });
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", "+5511999990001", "Olá!");
+  });
+});
 
 describe("broadcastToReservationPassengers", () => {
   beforeEach(() => {

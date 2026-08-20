@@ -2,9 +2,9 @@ import { db, loyaltyProgramsTable, loyaltyMembersTable, loyaltyTransactionsTable
 import { eq, and } from "drizzle-orm";
 import { generateId } from "./id";
 import { logger } from "./logger";
-import { sendTenantWhatsAppMessage } from "./whatsapp";
 import { insertClientNotification } from "./client-notifications";
 import { sendLoyaltyTierUpgradeEmail } from "@workspace/email";
+import { enqueueOrSend } from "../queues/whatsapp-helpers";
 
 export function calculateTier(totalPoints: number): string {
   if (totalPoints >= 5000) return "diamond";
@@ -127,9 +127,13 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
       : `🎉 Parabéns, ${firstName}! Você subiu para o nível *${newTierLabel}* no programa de fidelidade da ${agencyName}!\n\n` +
         `💎 Pontos acumulados: *${formattedPoints} pts*${nextLine}`;
 
-    sendTenantWhatsAppMessage(tenantId, client.whatsapp, message)
+    enqueueOrSend(client.whatsapp, message, tenantId)
       .then((result) => {
-        if (!result.success && result.error === "credentials_not_configured") {
+        if (
+          result.mode === "direct" &&
+          !result.success &&
+          result.error === "credentials_not_configured"
+        ) {
           sendEmailFallback();
         }
       })

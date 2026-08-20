@@ -5,7 +5,7 @@ import { generateId } from "./id";
 import { logger } from "./logger";
 import { sendBirthdayEmail } from "@workspace/email";
 import { getBirthdayEmailQueue } from "../queues/index";
-import { sendTenantWhatsAppMessage } from "./whatsapp";
+import { enqueueOrSend } from "../queues/whatsapp-helpers";
 
 interface BirthdaySettings {
   enabled: boolean;
@@ -188,10 +188,13 @@ export async function processBirthdayForClient(
         ? interpolateTemplate(settings.whatsappMessage)
         : `🎂 Feliz Aniversário, ${firstName}!\n\nA ${agencyName} tem um presente especial para você: *${settings.discountPercent}% de desconto* na sua próxima viagem!\n\nUse o cupom: *${couponCode}*\nVálido até ${validUntilStr}\n\nAproveite para planejar a viagem dos seus sonhos! 🌍`;
 
-      const result = await sendTenantWhatsAppMessage(tenantId, client.whatsapp, defaultMsg);
+      const result = await enqueueOrSend(client.whatsapp, defaultMsg, tenantId);
       if (result.success) {
         sentWhatsapp = true;
-        logger.info({ tenantId, clientId }, "[birthday] WhatsApp sent via tenant integration");
+        logger.info(
+          { tenantId, clientId, mode: result.mode },
+          "[birthday] WhatsApp queued or sent via tenant integration",
+        );
       } else if (result.error !== "credentials_not_configured") {
         whatsappError = result.error;
         logger.warn({ tenantId, clientId, error: result.error }, "[birthday] WhatsApp send failed");

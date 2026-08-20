@@ -31,8 +31,8 @@ vi.mock("@workspace/email", () => ({
   sendLoyaltyTierUpgradeEmail: vi.fn(),
 }));
 
-vi.mock("./whatsapp", () => ({
-  sendTenantWhatsAppMessage: vi.fn(),
+vi.mock("../queues/whatsapp-helpers.js", () => ({
+  enqueueOrSend: vi.fn(),
 }));
 
 vi.mock("./client-notifications", () => ({
@@ -47,11 +47,11 @@ import { db } from "@workspace/db";
 import { sendLoyaltyTierUpgradeEmail } from "@workspace/email";
 import { insertClientNotification } from "./client-notifications";
 import { sendLoyaltyTierUpgradeNotification } from "./loyalty-helpers";
-import { sendTenantWhatsAppMessage } from "./whatsapp";
+import { enqueueOrSend } from "../queues/whatsapp-helpers.js";
 
 const mockedDbSelect = vi.mocked(db.select);
 const mockedSendEmail = vi.mocked(sendLoyaltyTierUpgradeEmail);
-const mockedSendWhatsApp = vi.mocked(sendTenantWhatsAppMessage);
+const mockedEnqueueOrSend = vi.mocked(enqueueOrSend);
 const mockedInsertNotification = vi.mocked(insertClientNotification);
 
 function mockSelectRows(...rows: unknown[][]) {
@@ -77,6 +77,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
     vi.clearAllMocks();
     mockedInsertNotification.mockResolvedValue(undefined);
     mockedSendEmail.mockResolvedValue({ success: true });
+    mockedEnqueueOrSend.mockResolvedValue({ mode: "direct", success: true });
   });
 
   it("sends the tier-upgrade email when the client opted out of WhatsApp", async () => {
@@ -99,7 +100,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       totalPoints: 1800,
     });
 
-    expect(mockedSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockedEnqueueOrSend).not.toHaveBeenCalled();
     expect(mockedSendEmail).toHaveBeenCalledWith({
       clientName: "Ana Silva",
       clientEmail: "ana@example.com",
@@ -129,7 +130,8 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       [{ name: "Agência Teste" }],
       [],
     );
-    mockedSendWhatsApp.mockResolvedValue({
+    mockedEnqueueOrSend.mockResolvedValue({
+      mode: "direct",
       success: false,
       error: "credentials_not_configured",
     });
@@ -142,7 +144,12 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
     });
     await flushAsyncNotifications();
 
-    expect(mockedSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockedEnqueueOrSend).toHaveBeenCalledOnce();
+    expect(mockedEnqueueOrSend).toHaveBeenCalledWith(
+      "5599999999999",
+      expect.stringContaining("🎉 Parabéns, Ana!"),
+      "tenant-1",
+    );
     expect(mockedSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         newTierLabel: "Prata",
@@ -165,7 +172,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       [{ name: "Agência Teste" }],
       [],
     );
-    mockedSendWhatsApp.mockResolvedValue({ success: true });
+    mockedEnqueueOrSend.mockResolvedValue({ mode: "queued", success: true });
 
     await sendLoyaltyTierUpgradeNotification({
       clientId: "client-1",
@@ -175,11 +182,11 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
     });
     await flushAsyncNotifications();
 
-    expect(mockedSendWhatsApp).toHaveBeenCalledOnce();
-    expect(mockedSendWhatsApp).toHaveBeenCalledWith(
-      "tenant-1",
+    expect(mockedEnqueueOrSend).toHaveBeenCalledOnce();
+    expect(mockedEnqueueOrSend).toHaveBeenCalledWith(
       "5599999999999",
-      expect.stringContaining("🎉 Parabéns, Ana! Você subiu para o nível *Prata*"),
+      expect.stringContaining("🎉 Parabéns, Ana!"),
+      "tenant-1",
     );
     expect(mockedSendEmail).not.toHaveBeenCalled();
   });
@@ -227,7 +234,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
         },
       }],
     );
-    mockedSendWhatsApp.mockResolvedValue({ success: true });
+    mockedEnqueueOrSend.mockResolvedValue({ mode: "direct", success: true });
 
     await sendLoyaltyTierUpgradeNotification({
       clientId: "client-1",
@@ -236,10 +243,10 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       totalPoints: 700,
     });
 
-    expect(mockedSendWhatsApp).toHaveBeenCalledWith(
-      "tenant-1",
+    expect(mockedEnqueueOrSend).toHaveBeenCalledWith(
       "5599999999999",
       "Oi, Ana! Agora você é Prata, com 700 pontos. Próximo: Ouro.",
+      "tenant-1",
     );
   });
 });

@@ -17,28 +17,47 @@ const DEFAULT_BONUS_PAID_MESSAGE =
 const DEFAULT_REVERSED_MESSAGE =
   "Olá! A reserva de {{nome}} foi cancelada e o bônus de R$ {{valor}} foi estornado do seu saldo na {{agencia}}. Seu saldo atual é R$ {{saldo}}.";
 
-/** Public wrapper for enqueueing a single WhatsApp job (e.g. from a bulk broadcast route). */
-export async function enqueueWhatsAppMessage(phone: string, message: string, tenantId: string): Promise<void> {
-  return enqueueOrSend(phone, message, tenantId);
+export interface WhatsAppDispatchResult {
+  mode: "queued" | "direct";
+  success: boolean;
+  error?: string;
 }
 
-async function enqueueOrSend(phone: string, message: string, tenantId: string): Promise<void> {
+/** Public wrapper for enqueueing a single WhatsApp job (e.g. from a bulk broadcast route). */
+export async function enqueueWhatsAppMessage(phone: string, message: string, tenantId: string): Promise<void> {
+  await enqueueOrSend(phone, message, tenantId);
+}
+
+export async function enqueueOrSend(
+  phone: string,
+  message: string,
+  tenantId: string,
+): Promise<WhatsAppDispatchResult> {
   const queue = getWhatsAppQueue();
   if (queue) {
-    await queue.add("whatsapp-notification", { phone, message, tenantId });
-    logger.info({ phone }, "[whatsapp-queue] Job enqueued");
-  } else {
-    if (!areWorkersEnabled()) {
+    try {
+      await queue.add("whatsapp-notification", { phone, message, tenantId });
+      logger.info({ phone }, "[whatsapp-queue] Job enqueued");
+      return { mode: "queued", success: true };
+    } catch (err) {
       logger.warn(
-        { phone, tenantId, jobType: "whatsapp-notification" },
-        "[workers-disabled] ENABLE_WORKERS=false — sending WhatsApp message directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
+        { err, phone, tenantId },
+        "[whatsapp-queue] Enqueue failed; falling back to direct send",
       );
     }
-    const result = await sendTenantWhatsAppMessage(tenantId, phone, message);
-    if (!result.success && result.error !== "credentials_not_configured") {
-      logger.warn({ phone, error: result.error }, "[whatsapp-queue] Direct send failed");
-    }
   }
+
+  if (!areWorkersEnabled()) {
+    logger.warn(
+      { phone, tenantId, jobType: "whatsapp-notification" },
+      "[workers-disabled] ENABLE_WORKERS=false — sending WhatsApp message directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
+    );
+  }
+  const result = await sendTenantWhatsAppMessage(tenantId, phone, message);
+  if (!result.success && result.error !== "credentials_not_configured") {
+    logger.warn({ phone, error: result.error }, "[whatsapp-queue] Direct send failed");
+  }
+  return { mode: "direct", success: result.success, error: result.error };
 }
 
 export async function dispatchWhatsAppReferralConverted(opts: {
