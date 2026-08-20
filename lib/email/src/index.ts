@@ -38,5 +38,5 @@ export { FavoriteLowAvailabilityEmail } from './templates/favorite-low-availabil
 export { ReferralLoyaltyPointsEmail } from './templates/referral-loyalty-points';
 export type { ReferralLoyaltyPointsEmailProps } from './service';
 export type { LoyaltyTierUpgradeEmailProps } from './service';
-export { sendStripeHealthAlertEmail } from './service';
-export type { SendStripeHealthAlertEmailOptions } from './service';
+export { sendStripeHealthAlertEmail, sendStripeHealthRecoveryEmail } from './service';
+export type { SendStripeHealthAlertEmailOptions, SendStripeHealthRecoveryEmailOptions } from './service';

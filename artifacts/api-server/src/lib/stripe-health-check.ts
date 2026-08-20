@@ -36,13 +36,25 @@ import { asc, eq, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
 import { getStripeSecretKey } from "./stripeClient";
-import { sendStripeHealthAlertEmail } from "@workspace/email";
+import {
+  sendStripeHealthAlertEmail,
+  sendStripeHealthRecoveryEmail,
+} from "@workspace/email";
 import { logger } from "./logger";
 import { generateId } from "./id";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DEDUP_KEY = "stripe_health_alert_last_sent";
+/**
+ * Tracks whether the last successfully delivered alert still has an open
+ * recovery event.  Keeping this separate from the daily alert slot means the
+ * alert can retain its existing once-per-day semantics while recovery is
+ * sent exactly once per outage.
+ */
+const UNHEALTHY_STATE_KEY = "stripe_health_was_unhealthy";
+const UNHEALTHY_STATE_VALUE = "unhealthy";
+const RECOVERY_CLAIM_PREFIX = "recovery:";
 /** Separator between the date part and the per-claim ownership token. */
 const SEP = ":";
 
@@ -173,6 +185,103 @@ async function releaseAlertSlot(
   }
 }
 
+// ─── Recovery state ───────────────────────────────────────────────────────────
+
+interface RecoveryClaimResult {
+  /** True when this invocation won the recovery race and may send the email. */
+  claimed: boolean;
+  /** Ownership token used to finalize or release the claim safely. */
+  claimToken: string;
+}
+
+/**
+ * Records that an alert was successfully delivered and that a future healthy
+ * check should notify the recipient when the incident is resolved.
+ *
+ * An upsert also repairs the marker if a previous recovery claim overlaps a
+ * newly detected outage.  The recovery finalizer checks its ownership token,
+ * so it cannot clear this newer unhealthy state.
+ */
+async function markStripeHealthUnhealthy(): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO platform_settings (id, key, value, label, description, type)
+    VALUES (
+      ${generateId()},
+      ${UNHEALTHY_STATE_KEY},
+      ${UNHEALTHY_STATE_VALUE},
+      ${"Estado do alerta de saúde Stripe"},
+      ${"Indica que um alerta de preços Stripe foi enviado e aguarda notificação de recuperação."},
+      ${"string"}
+    )
+    ON CONFLICT (key) DO UPDATE
+      SET value = EXCLUDED.value,
+          updated_at = now()
+  `);
+}
+
+/**
+ * Atomically claims the pending recovery event.  Only one instance can
+ * transition the marker from `unhealthy` to its own recovery token.
+ */
+async function tryClaimRecoverySlot(): Promise<RecoveryClaimResult> {
+  const claimToken = randomUUID();
+  const claimValue = `${RECOVERY_CLAIM_PREFIX}${claimToken}`;
+  const raw = await db.execute(sql`
+    UPDATE platform_settings
+    SET value = ${claimValue},
+        updated_at = now()
+    WHERE key = ${UNHEALTHY_STATE_KEY}
+      AND value = ${UNHEALTHY_STATE_VALUE}
+    RETURNING value
+  `);
+
+  const rows = (raw as unknown as { rows: Array<{ value: string }> }).rows;
+  return { claimed: rows.length > 0, claimToken };
+}
+
+/**
+ * Restores a failed recovery claim.  A concurrent unhealthy check may have
+ * replaced the claim with a new `unhealthy` state, in which case no write is
+ * needed.
+ */
+async function releaseRecoverySlot(claimToken: string): Promise<void> {
+  const claimValue = `${RECOVERY_CLAIM_PREFIX}${claimToken}`;
+  try {
+    await db.execute(sql`
+      UPDATE platform_settings
+      SET value = ${UNHEALTHY_STATE_VALUE},
+          updated_at = now()
+      WHERE key = ${UNHEALTHY_STATE_KEY}
+        AND value = ${claimValue}
+    `);
+  } catch (err) {
+    logger.error(
+      { err, claimToken },
+      "[stripe-health] Failed to release recovery slot after send failure — next run may skip incorrectly if this error persists",
+    );
+  }
+}
+
+/**
+ * Finalizes a successful recovery only when this invocation still owns the
+ * claim.  This prevents an overlapping new outage from being erased.
+ */
+async function completeRecoverySlot(claimToken: string): Promise<void> {
+  const claimValue = `${RECOVERY_CLAIM_PREFIX}${claimToken}`;
+  try {
+    await db.execute(sql`
+      DELETE FROM platform_settings
+      WHERE key = ${UNHEALTHY_STATE_KEY}
+        AND value = ${claimValue}
+    `);
+  } catch (err) {
+    logger.error(
+      { err, claimToken },
+      "[stripe-health] Failed to clear Stripe recovery state after successful email",
+    );
+  }
+}
+
 // ─── Core health-check logic (mirrors /admin/plans/stripe-health route) ───────
 
 interface PlanHealthResult {
@@ -286,6 +395,49 @@ export async function runStripeHealthCheckCron(): Promise<void> {
   const unhealthy = results.filter((r) => !r.isFree && (!r.monthlyOk || !r.annualOk));
 
   if (unhealthy.length === 0) {
+    let recoveryClaim: RecoveryClaimResult;
+    try {
+      recoveryClaim = await tryClaimRecoverySlot();
+    } catch (err) {
+      logger.error(
+        { err },
+        "[stripe-health] Failed to acquire recovery slot from DB — skipping recovery email",
+      );
+      return;
+    }
+
+    if (recoveryClaim.claimed) {
+      const alertEmail = await getAlertEmail();
+      if (!alertEmail) {
+        await releaseRecoverySlot(recoveryClaim.claimToken);
+        logger.warn(
+          "[stripe-health] No alert email configured for Stripe recovery (set stripe_health_alert_email in platform settings or SUPERADMIN_EMAIL env) — recovery slot released",
+        );
+        return;
+      }
+
+      const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
+      const dashboardUrl = appUrl ? `${appUrl}/admin/plans` : null;
+      const emailResult = await sendStripeHealthRecoveryEmail({
+        to: alertEmail,
+        dashboardUrl,
+      });
+
+      if (emailResult.success) {
+        await completeRecoverySlot(recoveryClaim.claimToken);
+        logger.info(
+          { to: alertEmail },
+          "[stripe-health] Recovery email sent — Stripe prices restored",
+        );
+      } else {
+        await releaseRecoverySlot(recoveryClaim.claimToken);
+        logger.error(
+          { error: emailResult.error },
+          "[stripe-health] Failed to send recovery email — slot released, will retry on next cron run",
+        );
+      }
+    }
+
     logger.info(
       "[stripe-health] All non-free plans have matching Stripe prices — no alert needed",
     );
@@ -339,6 +491,14 @@ export async function runStripeHealthCheckCron(): Promise<void> {
 
   if (emailResult.success) {
     // Slot stays written with today's date+token — other instances will skip.
+    try {
+      await markStripeHealthUnhealthy();
+    } catch (err) {
+      logger.error(
+        { err },
+        "[stripe-health] Alert email was sent but failed to persist recovery state",
+      );
+    }
     logger.warn(
       {
         to: alertEmail,
