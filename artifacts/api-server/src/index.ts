@@ -25,7 +25,7 @@ import cron from "node-cron";
 import path from "path";
 import { fileURLToPath } from "url";
 import { runBirthdayCron } from "./lib/birthday";
-import { processNpsDispatch, processInstallmentDueReminders } from "./workers/reminder.worker";
+import { processNpsDispatch, processInstallmentDueReminders, processTrialExpiryNotifications } from "./workers/reminder.worker";
 import { runExpiredReservationsCron } from "./lib/expired-reservations";
 import { runPipelineTripEndedCron } from "./services/pipeline-automation";
 import { calculateScoresForAllTenants } from "./lib/client-scores";
@@ -381,6 +381,13 @@ applyMigrations()
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[installment-due-reminder] node-cron fallback registered (daily 08:00)");
 
+        cron.schedule("0 9 * * *", () => {
+          processTrialExpiryNotifications().catch((err) =>
+            logger.error({ err }, "[trial-expiry] node-cron fallback failed"),
+          );
+        }, { timezone: "America/Sao_Paulo" });
+        logger.info("[trial-expiry] node-cron fallback registered (daily 09:00)");
+
         return;
       }
 
@@ -482,6 +489,12 @@ applyMigrations()
             { name: "seat_reconciliation", data: { type: "seat_reconciliation" } },
           ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule seat reconciliation"));
 
+          await reminderQueue.upsertJobScheduler(
+            "trial-expiry-notification-daily",
+            { pattern: "0 9 * * *", tz: REMINDER_TZ },
+            { name: "trial_expiry_notification", data: { type: "trial_expiry_notification" } },
+          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule trial expiry notification"));
+
           logger.info("[reminders] Repeatable reminder jobs registered");
         }
       } else {
@@ -507,6 +520,13 @@ applyMigrations()
           );
         });
         logger.info("[expiry-warning-retry] node-cron fallback registered (every 15 minutes)");
+
+        cron.schedule("0 9 * * *", () => {
+          processTrialExpiryNotifications().catch((err) =>
+            logger.error({ err }, "[trial-expiry] node-cron fallback failed"),
+          );
+        }, { timezone: "America/Sao_Paulo" });
+        logger.info("[trial-expiry] node-cron fallback registered (daily 09:00)");
       }
     })();
   });

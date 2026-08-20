@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import { db, reservationsTable, tripsTable, clientsTable, tenantsTable, paymentsTable, emailLogsTable, storesTable, usersTable, referralsTable, referralSettingsTable, systemConfigsTable, npsInvitationsTable, reservationInstallmentsTable } from "@workspace/db";
 import { eq, and, gt, sql, gte, lt, lte, isNull, isNotNull, notLike, like, inArray, not, exists } from "drizzle-orm";
-import { sendReminderHtmlEmail, sendReservationConfirmationEmail, sendReferralExpiringSoonEmail, sendNpsSurveyEmail } from "@workspace/email";
+import { sendReminderHtmlEmail, sendReservationConfirmationEmail, sendReferralExpiringSoonEmail, sendNpsSurveyEmail, sendTrialExpiryEmail } from "@workspace/email";
 import { dispatchReferralExpiredEmail, dispatchReferralExpiringSoonEmail, dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
 import { dispatchWhatsAppBoardingReminder, dispatchWhatsAppPagamentoPendente, getWhatsAppNotificationSettings } from "../queues/whatsapp-helpers";
 import { getRedisConnection } from "../lib/redis";
@@ -1701,6 +1701,157 @@ export async function processNpsDispatch(): Promise<void> {
 }
 
 // ────────────────────────────────────────────────────────────
+// Trial expiry notifications (D-7 through D-3, then expiry day)
+// ────────────────────────────────────────────────────────────
+
+type TrialNotificationWindow = "warning" | "expired";
+
+type TrialNotificationTenant = {
+  id: string;
+  name: string;
+  email: string;
+  trialEndsAt: Date | null;
+};
+
+/**
+ * Sends one warning during the 3–7 day window before a trial ends, and one
+ * notice on the local calendar day it expires. A unique row in
+ * platform_settings is claimed before delivery, so multiple API instances
+ * cannot deliver duplicate notices. A failed delivery releases its claim for
+ * the following scheduled run.
+ */
+export async function processTrialExpiryNotifications(): Promise<void> {
+  const tz = process.env["REMINDER_TZ"] ?? BRAZIL_TZ;
+
+  const warningTenants = await db
+    .select({
+      id: tenantsTable.id,
+      name: tenantsTable.name,
+      email: tenantsTable.email,
+      trialEndsAt: tenantsTable.trialEndsAt,
+    })
+    .from(tenantsTable)
+    .where(
+      and(
+        eq(tenantsTable.status, "trial"),
+        isNotNull(tenantsTable.trialEndsAt),
+        sql`(${tenantsTable.trialEndsAt} AT TIME ZONE ${tz})::date BETWEEN (NOW() AT TIME ZONE ${tz})::date + 3 AND (NOW() AT TIME ZONE ${tz})::date + 7`,
+      ),
+    );
+
+  const expiredTodayTenants = await db
+    .select({
+      id: tenantsTable.id,
+      name: tenantsTable.name,
+      email: tenantsTable.email,
+      trialEndsAt: tenantsTable.trialEndsAt,
+    })
+    .from(tenantsTable)
+    .where(
+      and(
+        eq(tenantsTable.status, "trial"),
+        isNotNull(tenantsTable.trialEndsAt),
+        sql`(${tenantsTable.trialEndsAt} AT TIME ZONE ${tz})::date = (NOW() AT TIME ZONE ${tz})::date`,
+      ),
+    );
+
+  const frontendBase = (process.env["FRONTEND_URL"] ?? "https://app.visitecrm.com.br").replace(/\/$/, "");
+  const upgradeUrl = `${frontendBase}/configuracoes?tab=plan`;
+  const supportEmail = process.env["SUPPORT_EMAIL"] ?? "suporte@visitecrm.com";
+  let sent = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  const notify = async (tenant: TrialNotificationTenant, window: TrialNotificationWindow): Promise<void> => {
+    if (!tenant.trialEndsAt || !tenant.email) {
+      skipped++;
+      return;
+    }
+
+    const trialEndKey = new Intl.DateTimeFormat("sv-SE", { timeZone: BRAZIL_TZ }).format(tenant.trialEndsAt);
+    const slotKey = `trial_expiry_${window}:${tenant.id}:${trialEndKey}`;
+    const claimToken = generateId();
+    const rawClaim = await db.execute(sql`
+      INSERT INTO platform_settings (id, key, value, label, description, type)
+      SELECT
+        ${generateId()},
+        ${slotKey},
+        ${claimToken},
+        ${"Notificação de expiração de teste"},
+        ${"Marcador de envio único para o aviso ou término de teste de uma agência."},
+        ${"string"}
+      FROM tenants
+      WHERE id = ${tenant.id}
+        AND status = ${"trial"}
+        AND trial_ends_at = ${tenant.trialEndsAt}
+      ON CONFLICT (key) DO NOTHING
+      RETURNING value
+    `);
+    const claimed = (rawClaim as unknown as { rows: Array<{ value: string }> }).rows.length > 0;
+
+    if (!claimed) {
+      skipped++;
+      return;
+    }
+
+    const result = await sendTrialExpiryEmail({
+      agencyName: tenant.name,
+      agencyEmail: tenant.email,
+      trialEndsAt: formatDateBRServer(tenant.trialEndsAt),
+      upgradeUrl,
+      supportEmail,
+      expired: window === "expired",
+    });
+
+    if (result.success) {
+      sent++;
+      return;
+    }
+
+    failed++;
+    logger.warn(
+      { tenantId: tenant.id, window, err: result.error },
+      "[trial-expiry] Email failed — notification claim released for retry",
+    );
+
+    await db.execute(sql`
+      DELETE FROM platform_settings
+      WHERE key = ${slotKey}
+        AND value = ${claimToken}
+    `);
+  };
+
+  for (const tenant of warningTenants) {
+    try {
+      await notify(tenant, "warning");
+    } catch (err) {
+      failed++;
+      logger.error({ err, tenantId: tenant.id, window: "warning" }, "[trial-expiry] Failed to process trial warning");
+    }
+  }
+
+  for (const tenant of expiredTodayTenants) {
+    try {
+      await notify(tenant, "expired");
+    } catch (err) {
+      failed++;
+      logger.error({ err, tenantId: tenant.id, window: "expired" }, "[trial-expiry] Failed to process expiry-day notice");
+    }
+  }
+
+  logger.info(
+    {
+      warningCandidates: warningTenants.length,
+      expiryCandidates: expiredTodayTenants.length,
+      sent,
+      skipped,
+      failed,
+    },
+    "[trial-expiry] Trial expiry notification run complete",
+  );
+}
+
+// ────────────────────────────────────────────────────────────
 // Worker bootstrap
 // ────────────────────────────────────────────────────────────
 
@@ -1742,6 +1893,8 @@ export function startReminderWorker(): Worker<ReminderJobData> | null {
         await processInstallmentDueReminders();
       } else if (job.data.type === "seat_reconciliation") {
         await runSeatReconciliationCron();
+      } else if (job.data.type === "trial_expiry_notification") {
+        await processTrialExpiryNotifications();
       } else {
         logger.warn({ type: job.data.type }, "[reminder-worker] Unknown reminder type");
       }

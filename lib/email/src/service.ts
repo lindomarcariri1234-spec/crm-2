@@ -18,9 +18,11 @@ import { NpsSurveyEmail, type NpsSurveyEmailProps } from './templates/nps-survey
 import { AgencySuspendedEmail, type AgencySuspendedEmailProps } from './templates/agency-suspended';
 import { AgencyReactivatedEmail, type AgencyReactivatedEmailProps } from './templates/agency-reactivated';
 import { FavoriteLowAvailabilityEmail, type FavoriteLowAvailabilityEmailProps } from './templates/favorite-low-availability';
+import { TrialExpiryEmail, type TrialExpiryEmailProps } from './templates/trial-expiry';
 export type { FavoriteLowAvailabilityEmailProps };
 export type { ReferralWelcomeEmailProps };
 export type { AgencySuspendedEmailProps, AgencyReactivatedEmailProps };
+export type { TrialExpiryEmailProps };
 export type { ReferralTierUpgradeEmailProps };
 export type { ReferralLoyaltyPointsEmailProps };
 export type { LoyaltyTierUpgradeEmailProps };
@@ -1057,6 +1059,38 @@ export async function sendAgencyReactivatedEmail(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[email] Unexpected error sending agency-reactivated email:', message);
+    return { success: false, error: message };
+  }
+}
+
+export async function sendTrialExpiryEmail(
+  props: TrialExpiryEmailProps & { agencyEmail: string },
+): Promise<SendEmailResult> {
+  try {
+    const resend = getResend();
+    if (!resend) {
+      return { success: false, error: "RESEND_API_KEY not configured" };
+    }
+
+    const subject = props.expired
+      ? "Seu período de teste no VisiteCRM terminou"
+      : `Seu período de teste no VisiteCRM termina em ${props.trialEndsAt}`;
+    const { data, error } = await resend.emails.send({
+      from: "VisiteCRM <noreply@resend.visitecrm.com>",
+      to: [props.agencyEmail],
+      subject,
+      react: React.createElement(TrialExpiryEmail, props),
+    });
+
+    if (error) {
+      console.error("[email] Failed to send trial expiry notification:", error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, messageId: data?.id };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[email] Unexpected error sending trial expiry notification:", message);
     return { success: false, error: message };
   }
 }

@@ -20,9 +20,11 @@ const {
   mockDbSelect,
   mockDbInsert,
   mockDbUpdate,
+  mockDbExecute,
   mockBuildEmailProps,
   mockSendReservationConfirmationEmail,
   mockSendReminderHtmlEmail,
+  mockSendTrialExpiryEmail,
   mockGenerateId,
   mockLogInfo,
   mockLogWarn,
@@ -32,9 +34,11 @@ const {
   mockDbSelect: vi.fn(),
   mockDbInsert: vi.fn(),
   mockDbUpdate: vi.fn(),
+  mockDbExecute: vi.fn(),
   mockBuildEmailProps: vi.fn(),
   mockSendReservationConfirmationEmail: vi.fn(),
   mockSendReminderHtmlEmail: vi.fn(),
+  mockSendTrialExpiryEmail: vi.fn(),
   mockGenerateId: vi.fn(() => "generated-id"),
   mockLogInfo: vi.fn(),
   mockLogWarn: vi.fn(),
@@ -47,6 +51,7 @@ vi.mock("@workspace/db", () => ({
     select: mockDbSelect,
     insert: mockDbInsert,
     update: mockDbUpdate,
+    execute: mockDbExecute,
   },
   emailLogsTable: {
     id: "id",
@@ -63,7 +68,14 @@ vi.mock("@workspace/db", () => ({
   reservationsTable: { id: "id", tenantId: "tenantId", clientId: "clientId", tripId: "tripId", reservationNumber: "reservationNumber", voucherCode: "voucherCode" },
   clientsTable: { id: "id", email: "email", name: "name" },
   tripsTable: { id: "id", name: "name", destination: "destination" },
-  tenantsTable: { id: "id", name: "name" },
+  tenantsTable: {
+    id: "id",
+    name: "name",
+    email: "email",
+    status: "status",
+    trialEndsAt: "trialEndsAt",
+  },
+  platformSettingsTable: { id: "id", key: "key", value: "value" },
   storesTable: { id: "id", tenantId: "tenantId", email: "email" },
   usersTable: { id: "id", tenantId: "tenantId", email: "email", role: "role", isActive: "isActive" },
   paymentsTable: { id: "id", status: "status", type: "type", dueDate: "dueDate", paidAt: "paidAt", amount: "amount", reservationId: "reservationId" },
@@ -86,6 +98,7 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("@workspace/email", () => ({
   sendReservationConfirmationEmail: mockSendReservationConfirmationEmail,
   sendReminderHtmlEmail: mockSendReminderHtmlEmail,
+  sendTrialExpiryEmail: mockSendTrialExpiryEmail,
 }));
 
 vi.mock("../queues/email-helpers.js", () => ({
@@ -119,7 +132,7 @@ vi.mock("@workspace/permissions", () => ({
   ROLES: { AGENCY_ADMIN: "agency_admin", AGENCY_MANAGER: "agency_manager" },
 }));
 
-import { retryFailedBookingEmails } from "./reminder.worker.js";
+import { processTrialExpiryNotifications, retryFailedBookingEmails } from "./reminder.worker.js";
 
 // ─── Test setup helpers ───────────────────────────────────────────────────────
 
@@ -142,7 +155,11 @@ function setupInsertMock() {
 
 function setupUpdateMock() {
   mockDbUpdate.mockReturnValue({
-    set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+    set: vi.fn(() => ({
+      where: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: TENANT_ID }]),
+      })),
+    })),
   });
 }
 
@@ -440,6 +457,68 @@ describe("retryFailedBookingEmails", () => {
 
     expect(mockBuildEmailProps).toHaveBeenCalledTimes(1);
     expect(mockSendReservationConfirmationEmail).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("processTrialExpiryNotifications", () => {
+  const trialTenant = {
+    id: TENANT_ID,
+    name: "Agência Teste",
+    email: "agencia@example.com",
+    trialEndsAt: new Date("2026-08-27T15:00:00.000Z"),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupUpdateMock();
+    mockSendTrialExpiryEmail.mockResolvedValue({ success: true, messageId: "trial-email-1" });
+    mockDbExecute.mockResolvedValue({ rows: [{ value: "claim-token" }] });
+    process.env["FRONTEND_URL"] = "https://app.example.com";
+  });
+
+  it("sends one upgrade warning to trials ending in the 3–7 day window", async () => {
+    setupSelectQueue([[trialTenant], []]);
+
+    await processTrialExpiryNotifications();
+
+    expect(mockSendTrialExpiryEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendTrialExpiryEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agencyName: "Agência Teste",
+        agencyEmail: "agencia@example.com",
+        upgradeUrl: "https://app.example.com/configuracoes?tab=plan",
+        expired: false,
+      }),
+    );
+  });
+
+  it("sends an expiry-day notice only for the expiry candidate window", async () => {
+    setupSelectQueue([[], [trialTenant]]);
+
+    await processTrialExpiryNotifications();
+
+    expect(mockSendTrialExpiryEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendTrialExpiryEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ expired: true }),
+    );
+  });
+
+  it("does not send when another instance already claimed the notification", async () => {
+    setupSelectQueue([[trialTenant], []]);
+    mockDbExecute.mockResolvedValue({ rows: [] });
+
+    await processTrialExpiryNotifications();
+
+    expect(mockSendTrialExpiryEmail).not.toHaveBeenCalled();
+  });
+
+  it("releases a failed delivery claim so a later run can retry", async () => {
+    setupSelectQueue([[trialTenant], []]);
+    mockSendTrialExpiryEmail.mockResolvedValue({ success: false, error: "Resend unavailable" });
+
+    await processTrialExpiryNotifications();
+
+    expect(mockDbExecute).toHaveBeenCalledTimes(2);
   });
 });
 
