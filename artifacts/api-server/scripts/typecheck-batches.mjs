@@ -7,7 +7,13 @@ const root = process.cwd();
 const workspaceRoot = path.resolve(root, "../..");
 const sourceRoot = path.join(root, "src");
 const tempConfigRoot = await mkdtemp(path.join(os.tmpdir(), "visitecrm-api-typecheck-"));
-const batchSize = 4;
+
+// With compact api-zod declarations (ZodType<T> instead of ZodObject<{fieldTypes…}>),
+// each batch uses ~300-400 MB instead of ~2 GB, so we can safely run more files per
+// batch and drive multiple tsc processes in parallel.
+const batchSize = 6;
+const concurrency = 3;
+
 const aggregateEntrypoints = [
   "src/app.ts",
   "src/index.ts",
@@ -54,6 +60,29 @@ function runTypecheck(configPath) {
   });
 }
 
+async function writeBatchConfig(index, batch) {
+  const configPath = path.join(tempConfigRoot, `batch-${index + 1}.json`);
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        extends: path.join(root, "tsconfig.check.json"),
+        compilerOptions: {
+          incremental: false,
+          typeRoots: [
+            path.join(workspaceRoot, "node_modules/@types"),
+            path.join(root, "node_modules/@types"),
+          ],
+        },
+        include: [...sharedFiles, ...batch].map((file) => path.join(root, file)),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  return configPath;
+}
+
 const files = (await sourceFiles(sourceRoot))
   .filter((file) => !aggregateEntrypoints.includes(file))
   .filter((file) => !sharedFiles.includes(file))
@@ -63,29 +92,22 @@ for (let index = 0; index < files.length; index += batchSize) {
   batches.push(files.slice(index, index + batchSize));
 }
 
+console.log(`api-typecheck: ${batches.length} batches, concurrency ${concurrency}`);
+
 try {
-  for (const [index, batch] of batches.entries()) {
-    const configPath = path.join(tempConfigRoot, `batch-${index + 1}.json`);
-    await writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          extends: path.join(root, "tsconfig.check.json"),
-          compilerOptions: {
-            incremental: false,
-            typeRoots: [
-              path.join(workspaceRoot, "node_modules/@types"),
-              path.join(root, "node_modules/@types"),
-            ],
-          },
-          include: [...sharedFiles, ...batch].map((file) => path.join(root, file)),
-        },
-        null,
-        2,
-      ) + "\n",
+  // Run batches in groups of `concurrency` so multiple tsc processes run in parallel.
+  // Each process is independently heap-bounded by NODE_OPTIONS; with compact api-zod
+  // types the actual heap per process stays well below the 1100 MB limit.
+  for (let groupStart = 0; groupStart < batches.length; groupStart += concurrency) {
+    const group = batches.slice(groupStart, groupStart + concurrency);
+    await Promise.all(
+      group.map(async (batch, offsetInGroup) => {
+        const index = groupStart + offsetInGroup;
+        const configPath = await writeBatchConfig(index, batch);
+        console.log(`api-typecheck batch ${index + 1}/${batches.length}: ${batch.join(", ")}`);
+        await runTypecheck(configPath);
+      }),
     );
-    console.log(`api-typecheck batch ${index + 1}/${batches.length}: ${batch.join(", ")}`);
-    await runTypecheck(configPath);
   }
 } finally {
   await rm(tempConfigRoot, { recursive: true, force: true });

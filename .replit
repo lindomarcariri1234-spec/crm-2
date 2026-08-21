@@ -133,23 +133,23 @@ args = "PORT=19000 pnpm --filter @workspace/cliente-app run dev"
 name = "api-typecheck"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "set -e; NODE_OPTIONS='--max-old-space-size=1100' pnpm --filter @workspace/db exec tsc --build; NODE_OPTIONS='--max-old-space-size=1100' pnpm --filter @workspace/api-zod exec tsc --build; cd artifacts/api-server; NODE_OPTIONS='--max-old-space-size=1100' node scripts/typecheck-batches.mjs"
-
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "set -e; NODE_OPTIONS='--max-old-space-size=1100' pnpm --filter @workspace/db exec tsc --build; NODE_OPTIONS='--max-old-space-size=1100' pnpm --filter @workspace/api-zod exec tsc --build; node lib/api-zod/scripts/compact-dts.mjs; cd artifacts/api-server; NODE_OPTIONS='--max-old-space-size=1500' pnpm exec tsc -p tsconfig.check.json"
 
 [[workflows.workflow]]
 name = "visitecrm-typecheck"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "NODE_OPTIONS='--max-old-space-size=4096' pnpm --filter @workspace/visitecrm run typecheck"
-
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "set -e; NODE_OPTIONS='--max-old-space-size=1100' pnpm --filter @workspace/api-client-react exec tsc --build; NODE_OPTIONS='--max-old-space-size=4096' pnpm --filter @workspace/visitecrm run typecheck"
 
 [[workflows.workflow]]
 name = "schema-drift"
