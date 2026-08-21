@@ -3,7 +3,7 @@ import { reservationsTable } from "./reservations";
 import { tenantsTable } from "./tenants";
 
 export type WhatsAppOutboxType = "reservation_confirmed";
-export type WhatsAppOutboxStatus = "pending" | "enqueued" | "sent";
+export type WhatsAppOutboxStatus = "pending" | "enqueued" | "processing" | "sent";
 
 /**
  * Durable, idempotent records for transactional WhatsApp notifications.
