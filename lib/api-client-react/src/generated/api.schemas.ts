@@ -4163,6 +4163,15 @@ export interface SalesCycleChannelBreakdown {
   conversionRate: number;
 }
 
+export interface SalesCycleSellerBreakdown {
+  sellerId: string;
+  sellerName: string;
+  clients: number;
+  /** @nullable */
+  avgDaysToPayment: number | null;
+  conversionRate: number;
+}
+
 export interface SalesCycleTrendPoint {
   month: string;
   /** @nullable */
@@ -4189,6 +4198,7 @@ export interface SalesCycleData {
   clientsWithPayment: number;
   clientsWithTrip: number;
   byChannel: SalesCycleChannelBreakdown[];
+  bySeller: SalesCycleSellerBreakdown[];
   trend: SalesCycleTrendPoint[];
 }
 

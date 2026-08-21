@@ -1,6 +1,6 @@
 /**
- * Task #197 — Confirm the sales cycle numbers are correct for agencies
- * with real booking history.
+ * Task #197 / #199 — Confirm the sales cycle numbers are correct for
+ * agencies with real booking history.
  *
  * Tests for GET /api/insights/sales-cycle:
  *
@@ -15,10 +15,16 @@
  *     the DB result get avgDaysToPayment=null / avgDaysToTrip=null.
  *  5. Period query-param validation: unrecognised values return 400.
  *  6. Role gating: SALES and CLIENT roles receive 403.
+ *  7. Seller breakdown (bySeller): SQL rows map to camelCase; sellers
+ *     with < 3 clients are excluded by HAVING; rows are ordered shortest
+ *     cycle first (NULLS LAST); null avgDaysToPayment is preserved.
  *
- * Strategy: the three db.execute() calls that power the endpoint are
- * mocked with vi.fn().mockResolvedValueOnce() so the SQL logic runs in
- * the real route handler while no PostgreSQL connection is needed.
+ * Strategy: the four db.execute() calls that power the endpoint are
+ * mocked with vi.fn().mockResolvedValueOnce() in order:
+ *   1. overall CTE  (aggregate row)
+ *   2. channel CTE  (one row per acquisition channel)
+ *   3. seller CTE   (one row per qualified seller)
+ *   4. trend CTE    (one row per month that has data)
  * localToday() is fixed to "2026-08-21" so the trend month sequence is
  * deterministic.
  */
@@ -125,14 +131,16 @@ const ADMIN_USER = {
 };
 
 /**
- * Queue the three db.execute() calls the handler makes in order:
+ * Queue the four db.execute() calls the handler makes in order:
  *   1. overall CTE   → single aggregate row
  *   2. channel CTE   → one row per acquisition channel
- *   3. trend CTE     → one row per month that has data
+ *   3. seller CTE    → one row per seller with ≥ 3 clients
+ *   4. trend CTE     → one row per month that has data
  */
 function setupExecuteMocks(opts: {
   overallRow?: Record<string, unknown>;
   channelRows?: Record<string, unknown>[];
+  sellerRows?: Record<string, unknown>[];
   trendRows?: Record<string, unknown>[];
 }) {
   const defaultOverall: Record<string, unknown> = {
@@ -150,6 +158,7 @@ function setupExecuteMocks(opts: {
   mockExecute
     .mockResolvedValueOnce({ rows: [opts.overallRow ?? defaultOverall] })
     .mockResolvedValueOnce({ rows: opts.channelRows ?? [] })
+    .mockResolvedValueOnce({ rows: opts.sellerRows ?? [] })
     .mockResolvedValueOnce({ rows: opts.trendRows ?? [] });
 }
 
@@ -506,8 +515,8 @@ describe("GET /api/insights/sales-cycle — channel filter param", () => {
   });
 
   it("accepts a ?channel= param and returns 200 with the normal response shape", async () => {
-    // The channel param only filters the trend CTE; overall and byChannel remain
-    // unfiltered, so we still queue 3 execute mocks in the same order.
+    // The channel param only filters the trend CTE; overall, byChannel, and
+    // bySeller remain unfiltered, so we still queue 4 execute mocks in order.
     setupExecuteMocks({
       channelRows: [
         { origin: "WhatsApp", clients: 4, avg_days_to_payment: "9.0", avg_days_to_trip: "32.0", conversion_rate: "75.0" },
@@ -601,6 +610,108 @@ describe("GET /api/insights/sales-cycle — channel filter param", () => {
     expect(origins).toContain("Instagram");
     expect(origins).toContain("WhatsApp");
     expect(origins).toContain("Outros");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("GET /api/insights/sales-cycle — seller breakdown (bySeller)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireAuth.mockResolvedValue(ADMIN_USER);
+  });
+
+  it("returns bySeller array in the response with correct camelCase shape", async () => {
+    setupExecuteMocks({
+      sellerRows: [
+        {
+          seller_id: "user-001",
+          seller_name: "Ana Silva",
+          clients: 5,
+          avg_days_to_payment: "8.2",
+          conversion_rate: "80.0",
+        },
+        {
+          seller_id: "user-002",
+          seller_name: "Bruno Costa",
+          clients: 4,
+          avg_days_to_payment: "14.5",
+          conversion_rate: "75.0",
+        },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?period=12m");
+    expect(res.status).toBe(200);
+
+    expect(res.body.bySeller).toHaveLength(2);
+
+    const [first, second] = res.body.bySeller as Array<Record<string, unknown>>;
+    expect(first).toMatchObject({
+      sellerId: "user-001",
+      sellerName: "Ana Silva",
+      clients: 5,
+      avgDaysToPayment: 8.2,
+      conversionRate: 80.0,
+    });
+    expect(second).toMatchObject({
+      sellerId: "user-002",
+      sellerName: "Bruno Costa",
+      clients: 4,
+      avgDaysToPayment: 14.5,
+      conversionRate: 75.0,
+    });
+  });
+
+  it("returns an empty bySeller array when no seller has ≥ 3 clients in the period", async () => {
+    // The HAVING clause in SQL filters them out; the handler receives zero rows.
+    setupExecuteMocks({ sellerRows: [] });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?period=12m");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.bySeller)).toBe(true);
+    expect(res.body.bySeller).toHaveLength(0);
+  });
+
+  it("preserves null avgDaysToPayment for a seller whose clients have no payments yet", async () => {
+    // A seller may have ≥ 3 clients but none have paid; SQL AVG returns NULL.
+    setupExecuteMocks({
+      sellerRows: [
+        {
+          seller_id: "user-003",
+          seller_name: "Carla Mendes",
+          clients: 3,
+          avg_days_to_payment: null,
+          conversion_rate: "0.0",
+        },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?period=12m");
+    expect(res.status).toBe(200);
+
+    const [seller] = res.body.bySeller as Array<Record<string, unknown>>;
+    expect(seller.sellerName).toBe("Carla Mendes");
+    expect(seller.avgDaysToPayment).toBeNull();
+    expect(seller.conversionRate).toBe(0.0);
+  });
+
+  it("respects SQL ordering: shorter cycles appear first, null cycles last", async () => {
+    // The SQL uses ORDER BY avg_days_to_payment ASC NULLS LAST; the handler
+    // must not re-sort the rows — it should reflect whatever SQL returns.
+    setupExecuteMocks({
+      sellerRows: [
+        { seller_id: "u1", seller_name: "Fast Seller",  clients: 6, avg_days_to_payment: "5.0",  conversion_rate: "90.0" },
+        { seller_id: "u2", seller_name: "Slow Seller",  clients: 4, avg_days_to_payment: "20.0", conversion_rate: "70.0" },
+        { seller_id: "u3", seller_name: "No Payments",  clients: 3, avg_days_to_payment: null,   conversion_rate: "0.0"  },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?period=12m");
+    expect(res.status).toBe(200);
+
+    const names = (res.body.bySeller as Array<{ sellerName: string }>).map((s) => s.sellerName);
+    expect(names).toEqual(["Fast Seller", "Slow Seller", "No Payments"]);
   });
 });
 

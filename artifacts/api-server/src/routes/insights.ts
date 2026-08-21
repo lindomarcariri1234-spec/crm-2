@@ -625,7 +625,53 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
       ORDER BY avg_days_to_payment ASC NULLS LAST
     `);
 
-    // ── 3. Monthly trend (last 12 months, regardless of period filter) ─────────
+    // ── 3. Breakdown by seller (vendedor) ─────────────────────────────────────
+    const sellerRows = await db.execute(sql`
+      WITH
+      period_clients AS (
+        SELECT id, created_at
+        FROM clients
+        WHERE tenant_id = ${tenantId}
+          AND created_at >= ${windowStart}
+      ),
+      client_seller AS (
+        SELECT DISTINCT ON (r.client_id)
+          r.client_id,
+          r.seller_id
+        FROM reservations r
+        WHERE r.tenant_id = ${tenantId}
+          AND r.client_id IN (SELECT id FROM period_clients)
+          AND r.seller_id IS NOT NULL
+        ORDER BY r.client_id, r.created_at ASC
+      ),
+      first_payments AS (
+        SELECT r.client_id, MIN(p.paid_at) AS first_paid_at
+        FROM reservations r
+        JOIN payments p ON p.reservation_id = r.id
+        WHERE r.tenant_id = ${tenantId}
+          AND p.type = 'receivable'
+          AND p.status = 'paid'
+          AND p.paid_at IS NOT NULL
+          AND r.client_id IS NOT NULL
+          AND r.client_id IN (SELECT id FROM period_clients)
+        GROUP BY r.client_id
+      )
+      SELECT
+        u.id AS seller_id,
+        u.name AS seller_name,
+        COUNT(DISTINCT c.id)::int AS clients,
+        ROUND(AVG(EXTRACT(EPOCH FROM (fp.first_paid_at - c.created_at)) / 86400.0)::numeric, 1) AS avg_days_to_payment,
+        ROUND((COUNT(DISTINCT fp.client_id)::numeric / NULLIF(COUNT(DISTINCT c.id), 0)) * 100, 1) AS conversion_rate
+      FROM period_clients c
+      JOIN client_seller cs ON cs.client_id = c.id
+      JOIN users u ON u.id = cs.seller_id
+      LEFT JOIN first_payments fp ON fp.client_id = c.id
+      GROUP BY u.id, u.name
+      HAVING COUNT(DISTINCT c.id) >= 3
+      ORDER BY avg_days_to_payment ASC NULLS LAST
+    `);
+
+    // ── 4. Monthly trend (last 12 months, regardless of period filter) ─────────
     const trendStart = new Date(now.getTime() - 365 * 86400000);
     const channelFilter = channel ? sql` AND COALESCE(origin, 'Outros') = ${channel}` : sql``;
     const trendRows = await db.execute(sql`
@@ -707,6 +753,16 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
           clients: Number(r.clients ?? 0),
           avgDaysToPayment: r.avg_days_to_payment != null ? Number(r.avg_days_to_payment) : null,
           avgDaysToTrip: r.avg_days_to_trip != null ? Number(r.avg_days_to_trip) : null,
+          conversionRate: Number(r.conversion_rate ?? 0),
+        };
+      }),
+      bySeller: sellerRows.rows.map((row) => {
+        const r = row as Record<string, unknown>;
+        return {
+          sellerId: String(r.seller_id ?? ""),
+          sellerName: String(r.seller_name ?? ""),
+          clients: Number(r.clients ?? 0),
+          avgDaysToPayment: r.avg_days_to_payment != null ? Number(r.avg_days_to_payment) : null,
           conversionRate: Number(r.conversion_rate ?? 0),
         };
       }),

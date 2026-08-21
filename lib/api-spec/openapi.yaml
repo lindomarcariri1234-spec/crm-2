@@ -9876,6 +9876,25 @@ components:
           description: Percentage of clients in this channel who made a payment
       required: [origin, clients, conversionRate]
 
+    SalesCycleSellerBreakdown:
+      type: object
+      description: Sales cycle metrics for a single salesperson (seller_id on reservations). Only sellers with ≥ 3 clients in the period are included, sorted by shortest avgDaysToPayment (NULLS LAST).
+      properties:
+        sellerId:
+          type: string
+        sellerName:
+          type: string
+        clients:
+          type: integer
+          description: Number of clients assigned to this seller in the period
+        avgDaysToPayment:
+          type: ["number", "null"]
+          description: Mean days from client registration to first payment; null when no client has paid
+        conversionRate:
+          type: number
+          description: Percentage of assigned clients who made at least one payment
+      required: [sellerId, sellerName, clients, conversionRate]
+
     SalesCycleTrendPoint:
       type: object
       properties:
@@ -9915,12 +9934,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SalesCycleChannelBreakdown"
+        bySeller:
+          type: array
+          description: Breakdown by assigned salesperson; only sellers with ≥ 3 clients, sorted by shortest cycle
+          items:
+            $ref: "#/components/schemas/SalesCycleSellerBreakdown"
         trend:
           type: array
           description: Last 12 months, gap-filled with null for months with no data
           items:
             $ref: "#/components/schemas/SalesCycleTrendPoint"
-      required: [totalClients, clientsWithPayment, byChannel, trend]
+      required: [totalClients, clientsWithPayment, byChannel, bySeller, trend]
 
 openapi: 3.1.0
 

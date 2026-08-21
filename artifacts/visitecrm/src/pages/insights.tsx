@@ -998,6 +998,57 @@ function SalesCycleTab() {
               </CardContent>
             </Card>
           )}
+
+          {/* ── Breakdown by seller ── */}
+          {!isLoading && data && data.bySeller && data.bySeller.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Breakdown por Vendedor</CardTitle>
+              </CardHeader>
+              <CardContent className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-xs text-muted-foreground">
+                      <th className="py-2 pr-3 font-medium">Vendedor</th>
+                      <th className="py-2 px-3 font-medium text-right">Clientes</th>
+                      <th className="py-2 px-3 font-medium text-right">Ciclo até pagamento</th>
+                      <th className="py-2 pl-3 font-medium text-right">Taxa de conversão</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.bySeller.map((s: { sellerId: string; sellerName: string; clients: number; avgDaysToPayment: number | null; conversionRate: number }, idx: number) => (
+                      <tr key={s.sellerId} className="border-b last:border-0">
+                        <td className="py-3 pr-3">
+                          <div className="flex items-center gap-2">
+                            {idx === 0 && s.avgDaysToPayment != null && (
+                              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 text-amber-700 text-xs font-bold shrink-0">1</span>
+                            )}
+                            <span className="font-medium">{s.sellerName}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-right tabular-nums">{s.clients}</td>
+                        <td className="py-3 px-3 text-right tabular-nums">
+                          {s.avgDaysToPayment != null ? (
+                            <span className={`font-medium ${idx === 0 ? "text-emerald-600" : "text-blue-600"}`}>{fmtDays(s.avgDaysToPayment)}</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="py-3 pl-3 text-right tabular-nums">
+                          <span className={s.conversionRate >= 50 ? "text-emerald-600 font-medium" : s.conversionRate >= 25 ? "text-yellow-600 font-medium" : "text-red-600 font-medium"}>
+                            {fmtPct(s.conversionRate)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Ordenado pelo menor ciclo médio até o primeiro pagamento. Apenas vendedores com ≥ 3 clientes no período são exibidos.
+                </p>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>

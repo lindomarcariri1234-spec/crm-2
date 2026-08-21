@@ -6010,6 +6010,13 @@ export const GetSalesCycleResponse = zod.object({
     avgDaysToTrip: zod.number().nullable(),
     conversionRate: zod.number(),
   })),
+  bySeller: zod.array(zod.object({
+    sellerId: zod.string(),
+    sellerName: zod.string(),
+    clients: zod.number(),
+    avgDaysToPayment: zod.number().nullable(),
+    conversionRate: zod.number(),
+  })),
   trend: zod.array(zod.object({
     month: zod.string(),
     avgDaysToPayment: zod.number().nullable(),
