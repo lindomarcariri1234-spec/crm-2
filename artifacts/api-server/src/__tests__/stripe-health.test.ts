@@ -370,4 +370,61 @@ describe("GET /api/admin/plans/stripe-health — plan health checks", () => {
     expect(paid?.monthlyOk).toBe(true);   // monthly price found
     expect(paid?.annualOk).toBe(false);   // annual price missing
   });
+
+  it("reports monthlyOk: false when the only matching price has the wrong currency (usd instead of brl)", async () => {
+    mockOrderBy.mockResolvedValueOnce([PAID_PLAN]);
+    // Price has the right amount and interval but wrong currency
+    const wrongCurrencyPrice = {
+      ...STRIPE_MONTHLY_PRICE,
+      currency: "usd",
+    };
+    makeStripeInstance(() => Promise.resolve({ data: [wrongCurrencyPrice, STRIPE_ANNUAL_PRICE] }));
+
+    const res = await request(buildApp()).get("/api/admin/plans/stripe-health");
+
+    expect(res.status).toBe(200);
+    const plan = res.body.plans[0];
+    expect(plan.slug).toBe("pro");
+    expect(plan.isFree).toBe(false);
+    expect(plan.monthlyOk).toBe(false);  // currency mismatch → rejected
+    expect(plan.annualOk).toBe(true);    // annual price matches correctly
+  });
+
+  it("reports monthlyOk: false when the only matching price has the wrong interval (year instead of month)", async () => {
+    mockOrderBy.mockResolvedValueOnce([PAID_PLAN]);
+    // Price has the right amount and currency but wrong interval for the monthly check
+    const wrongIntervalPrice = {
+      ...STRIPE_MONTHLY_PRICE,
+      recurring: { interval: "year" },
+    };
+    makeStripeInstance(() => Promise.resolve({ data: [wrongIntervalPrice, STRIPE_ANNUAL_PRICE] }));
+
+    const res = await request(buildApp()).get("/api/admin/plans/stripe-health");
+
+    expect(res.status).toBe(200);
+    const plan = res.body.plans[0];
+    expect(plan.slug).toBe("pro");
+    expect(plan.isFree).toBe(false);
+    expect(plan.monthlyOk).toBe(false);  // interval mismatch → rejected
+    expect(plan.annualOk).toBe(true);    // annual price matches correctly
+  });
+
+  it("reports monthlyOk: false when the only matching price has an off-by-one unit_amount", async () => {
+    mockOrderBy.mockResolvedValueOnce([PAID_PLAN]);
+    // Price has the right currency and interval but unit_amount is 1 cent off
+    const offByOnePrice = {
+      ...STRIPE_MONTHLY_PRICE,
+      unit_amount: 29701, // should be 29700 (297.00 BRL)
+    };
+    makeStripeInstance(() => Promise.resolve({ data: [offByOnePrice, STRIPE_ANNUAL_PRICE] }));
+
+    const res = await request(buildApp()).get("/api/admin/plans/stripe-health");
+
+    expect(res.status).toBe(200);
+    const plan = res.body.plans[0];
+    expect(plan.slug).toBe("pro");
+    expect(plan.isFree).toBe(false);
+    expect(plan.monthlyOk).toBe(false);  // amount mismatch → rejected
+    expect(plan.annualOk).toBe(true);    // annual price matches correctly
+  });
 });
