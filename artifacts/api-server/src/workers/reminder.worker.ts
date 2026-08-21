@@ -108,9 +108,9 @@ async function processBoardingReminders(): Promise<void> {
     return tenantSettingsCache.get(tenantId)!;
   }
 
-  // Compute today's Brazil date for day-offset calculation
-  const nowBrazil = new Date(new Date().toLocaleString("en-US", { timeZone: BRAZIL_TZ }));
-  const todayBrazil = new Date(nowBrazil.getFullYear(), nowBrazil.getMonth(), nowBrazil.getDate());
+  // Anchor today at noon UTC so Brazil-day extraction is unambiguous at any server TZ.
+  const todayStr = localToday(); // "YYYY-MM-DD" in America/Sao_Paulo
+  const todayNoonUTC = new Date(todayStr + "T12:00:00Z").getTime();
 
   let sent = 0;
   let failed = 0;
@@ -120,12 +120,16 @@ async function processBoardingReminders(): Promise<void> {
       ? formatDateBRServer(row.departureDate)
       : "Amanhã";
 
-    // Determine how many days until departure (from Brazil's "today")
+    // Determine how many days until departure using Brazil calendar dates.
+    // Extract the Brazil-local date of departure via Intl to avoid server-TZ
+    // ambiguity when the DB stores a UTC timestamp near midnight Brazil time.
     let daysUntilDeparture = 1;
     if (row.departureDate) {
-      const dep = new Date(row.departureDate);
-      const depBrazil = new Date(dep.getFullYear(), dep.getMonth(), dep.getDate());
-      daysUntilDeparture = Math.round((depBrazil.getTime() - todayBrazil.getTime()) / (1000 * 60 * 60 * 24));
+      const depBrazilStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: BRAZIL_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(row.departureDate instanceof Date ? row.departureDate : new Date(row.departureDate));
+      const depNoonUTC = new Date(depBrazilStr + "T12:00:00Z").getTime();
+      daysUntilDeparture = Math.round((depNoonUTC - todayNoonUTC) / (1000 * 60 * 60 * 24));
     }
 
     // WhatsApp boarding reminder — check if today is a configured reminder day for this tenant
@@ -135,7 +139,7 @@ async function processBoardingReminders(): Promise<void> {
       : [1];
     if (reminderDays.includes(daysUntilDeparture)) {
       const waPoints = (row.boardingPoints ?? []) as { id: string; name: string; time?: string }[];
-      dispatchWhatsAppBoardingReminder({
+      await dispatchWhatsAppBoardingReminder({
         reservationId: row.reservationId,
         tenantId: row.tenantId,
         tripName: row.tripDestination ?? row.tripName,
@@ -284,8 +288,9 @@ async function processWhatsAppPagamentoPendente(): Promise<void> {
     return tenantSettingsCache.get(tenantId)!;
   }
 
-  const nowBrazil = new Date(new Date().toLocaleString("en-US", { timeZone: BRAZIL_TZ }));
-  const todayBrazil = new Date(nowBrazil.getFullYear(), nowBrazil.getMonth(), nowBrazil.getDate());
+  // Anchor today at noon UTC so Brazil-day extraction is unambiguous at any server TZ.
+  const todayStrPP = localToday(); // "YYYY-MM-DD" in America/Sao_Paulo
+  const todayNoonUTCPP = new Date(todayStrPP + "T12:00:00Z").getTime();
 
   let dispatched = 0;
   let skipped = 0;
@@ -297,15 +302,19 @@ async function processWhatsAppPagamentoPendente(): Promise<void> {
     const configuredDay = settings.pagamentoPendenteDaysBeforeTrip ?? 7;
 
     if (!row.departureDate) { skipped++; continue; }
-    const dep = new Date(row.departureDate);
-    const depBrazil = new Date(dep.getFullYear(), dep.getMonth(), dep.getDate());
-    const daysUntilDeparture = Math.round((depBrazil.getTime() - todayBrazil.getTime()) / (1000 * 60 * 60 * 24));
+
+    // Extract departure Brazil-local date via Intl to avoid server-TZ ambiguity.
+    const depBrazilStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: BRAZIL_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(row.departureDate instanceof Date ? row.departureDate : new Date(row.departureDate));
+    const depNoonUTCPP = new Date(depBrazilStr + "T12:00:00Z").getTime();
+    const daysUntilDeparture = Math.round((depNoonUTCPP - todayNoonUTCPP) / (1000 * 60 * 60 * 24));
 
     if (daysUntilDeparture !== configuredDay) { skipped++; continue; }
 
     const depDateStr = formatDateBRServer(row.departureDate);
 
-    dispatchWhatsAppPagamentoPendente({
+    await dispatchWhatsAppPagamentoPendente({
       reservationId: row.reservationId,
       tenantId: row.tenantId,
       tripName: row.tripDestination ?? row.tripName,

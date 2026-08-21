@@ -26,6 +26,8 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
   eq: vi.fn(),
   isNull: vi.fn(),
+  not: vi.fn(() => "not"),
+  ne: vi.fn(() => "ne"),
 }));
 
 const mockGenerateId = vi.fn(() => "outbox-1");
@@ -43,7 +45,7 @@ vi.mock("../queues/whatsapp-helpers.js", () => ({
 }));
 
 vi.mock("../lib/logger.js", () => ({
-  logger: { warn: vi.fn() },
+  logger: { warn: vi.fn(), info: vi.fn() },
 }));
 
 import {
@@ -53,6 +55,8 @@ import {
 let insertResults: object[][] = [];
 let selectResults: object[][] = [];
 let updates: Array<Record<string, unknown>> = [];
+/** Rows returned by .returning() on claim updates. One entry per claim attempt. */
+let claimResults: object[][] = [];
 
 function installDbMocks() {
   mockInsert.mockImplementation(() => ({
@@ -83,7 +87,14 @@ function installDbMocks() {
       updates.push(values);
       return chain;
     });
-    chain.where = vi.fn(() => Promise.resolve());
+    // .where() returns a thenable that also exposes .returning().
+    // .returning() pops from claimResults only when called (for the atomic claim update).
+    // Awaiting .where() directly resolves to undefined (for plain status updates).
+    chain.where = vi.fn(() =>
+      Object.assign(Promise.resolve(undefined), {
+        returning: vi.fn(() => Promise.resolve(claimResults.shift() ?? [])),
+      }),
+    );
     return chain;
   });
 }
@@ -93,6 +104,7 @@ describe("reservation confirmation WhatsApp outbox", () => {
     vi.clearAllMocks();
     insertResults = [];
     selectResults = [];
+    claimResults = [];
     updates = [];
     mockQueue.mockReturnValue(null);
     mockDispatchReservationConfirmed.mockResolvedValue(true);
@@ -109,10 +121,15 @@ describe("reservation confirmation WhatsApp outbox", () => {
       [], // any later retry still finds the same record
     ];
     selectResults = [
-      [pending], // first direct delivery
-      [{ id: "outbox-1", sentAt: null }], // retry locates existing record
-      [pending], // retry delivers it
-      [{ id: "outbox-1", sentAt: sent.sentAt }], // delivered record is a no-op
+      [pending], // first direct delivery — select by id
+      [{ id: "outbox-1", sentAt: null }], // retry locates existing record (no sentAt)
+      [pending], // retry delivers it — select by id
+      [{ id: "outbox-1", sentAt: sent.sentAt }], // third call — existing record already sent
+    ];
+    // Each direct delivery attempt atomically claims the row first.
+    claimResults = [
+      [{ id: "outbox-1" }], // first delivery: claim succeeds
+      [{ id: "outbox-1" }], // second delivery: claim succeeds
     ];
     mockDispatchReservationConfirmed
       .mockResolvedValueOnce(false) // provider/dispatcher failure
@@ -135,6 +152,23 @@ describe("reservation confirmation WhatsApp outbox", () => {
     });
     expect(updates).toContainEqual(expect.objectContaining({ status: "pending", lastError: "delivery_failed" }));
     expect(updates).toContainEqual(expect.objectContaining({ status: "sent", sentAt: expect.any(Date) }));
+  });
+
+  it("skips delivery when another worker already holds the processing claim", async () => {
+    const pending = { id: "outbox-1", tenantId: "tenant-1", reservationId: "res-1", sentAt: null };
+
+    insertResults = [[{ id: "outbox-1", sentAt: null }]];
+    selectResults = [[pending]];
+    // Claim update returns 0 rows → row already claimed by another worker
+    claimResults = [[]];
+
+    await scheduleReservationConfirmedWhatsApp("res-1", "tenant-1");
+
+    // No dispatch because the claim was lost
+    expect(mockDispatchReservationConfirmed).not.toHaveBeenCalled();
+    // No sent/pending status update either — the other worker will handle completion
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: "sent" }));
+    expect(updates).not.toContainEqual(expect.objectContaining({ status: "pending" }));
   });
 
   it("uses one deterministic queue job for repeated payment-side-effect calls", async () => {

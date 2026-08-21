@@ -33,6 +33,7 @@ const { getQueue, setQueue, mockSendWhatsApp, mockInterpolate, mockDb } = vi.hoi
     chain.from      = vi.fn(() => chain);
     chain.where     = vi.fn(() => chain);
     chain.innerJoin = vi.fn(() => chain);
+    chain.orderBy   = vi.fn(() => chain);
     chain.limit     = vi.fn(() => Promise.resolve(rows));
     // Make the chain itself thenable so `await chain` works (no .limit() case).
     chain.then = (
@@ -123,6 +124,9 @@ import {
   dispatchWhatsAppCadastroRealizado,
   dispatchWhatsAppPagamentoPendente,
   dispatchWhatsAppBoardingReminder,
+  dispatchWhatsAppReferralConverted,
+  dispatchWhatsAppReferralBonusPaid,
+  dispatchWhatsAppReferralReversed,
   enqueueOrSend,
 } from "../queues/whatsapp-helpers.js";
 import { getWhatsAppQueue } from "../queues/index.js";
@@ -837,6 +841,174 @@ describe("dispatchWhatsAppBoardingReminder", () => {
     setQueue([[{ value: { boardingReminder: false } }]]);
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
+
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Tests: referral dispatcher opt-in gate ───────────────────────────────────
+
+const REFERRAL_SETTINGS_ENABLED = [{
+  whatsappEnabled: true,
+  whatsappConvertedMessage: null,
+  whatsappBonusPaidMessage: null,
+  whatsappReversedMessage: null,
+}];
+
+const REFERRER_OPTED_IN = {
+  whatsapp: "+5511999990001",
+  phone: null,
+  whatsappOptIn: true,
+};
+
+const REFERRER_OPTED_OUT = {
+  whatsapp: "+5511999990001",
+  phone: null,
+  whatsappOptIn: false,
+};
+
+const TENANT_ROW = [{ name: "Agência Teste" }];
+const LATEST_REFERRAL_ROW = [{ bonusAmount: "50.00" }];
+
+describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendWhatsApp.mockResolvedValue({ success: true });
+  });
+
+  it("sends to referrer who has whatsappOptIn = true", async () => {
+    setQueue([
+      REFERRAL_SETTINGS_ENABLED,
+      [REFERRER_OPTED_IN],
+      TENANT_ROW,
+      LATEST_REFERRAL_ROW,
+    ]);
+
+    await dispatchWhatsAppReferralConverted({
+      referrerId: "ref-1",
+      referredName: "Ana",
+      referralCode: "CODE1",
+      tenantId: "tenant-1",
+    });
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockSendWhatsApp.mock.calls[0][1]).toBe("+5511999990001");
+  });
+
+  it("skips referrer who has whatsappOptIn = false", async () => {
+    setQueue([
+      REFERRAL_SETTINGS_ENABLED,
+      [REFERRER_OPTED_OUT],
+    ]);
+
+    await dispatchWhatsAppReferralConverted({
+      referrerId: "ref-1",
+      referredName: "Ana",
+      referralCode: "CODE1",
+      tenantId: "tenant-1",
+    });
+
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("skips when whatsapp is disabled in referral settings", async () => {
+    setQueue([[{ whatsappEnabled: false }]]);
+
+    await dispatchWhatsAppReferralConverted({
+      referrerId: "ref-1",
+      referredName: "Ana",
+      referralCode: "CODE1",
+      tenantId: "tenant-1",
+    });
+
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendWhatsApp.mockResolvedValue({ success: true });
+  });
+
+  it("sends to referrer who has whatsappOptIn = true", async () => {
+    setQueue([
+      REFERRAL_SETTINGS_ENABLED,
+      [REFERRER_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppReferralBonusPaid({
+      referrerId: "ref-1",
+      referrerPhone: null,
+      referrerName: "João",
+      referralCode: "CODE1",
+      bonusAmount: 50,
+      tenantId: "tenant-1",
+      tenantName: "Agência Teste",
+    });
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockSendWhatsApp.mock.calls[0][1]).toBe("+5511999990001");
+  });
+
+  it("skips referrer who has whatsappOptIn = false even when referrerPhone is supplied", async () => {
+    setQueue([
+      REFERRAL_SETTINGS_ENABLED,
+      [REFERRER_OPTED_OUT],
+    ]);
+
+    await dispatchWhatsAppReferralBonusPaid({
+      referrerId: "ref-1",
+      referrerPhone: "+5511888880001", // caller-supplied phone — must be ignored
+      referrerName: "João",
+      referralCode: "CODE1",
+      bonusAmount: 50,
+      tenantId: "tenant-1",
+      tenantName: "Agência Teste",
+    });
+
+    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSendWhatsApp.mockResolvedValue({ success: true });
+  });
+
+  it("sends to referrer who has whatsappOptIn = true", async () => {
+    setQueue([
+      REFERRAL_SETTINGS_ENABLED,
+      [REFERRER_OPTED_IN],
+      TENANT_ROW,
+    ]);
+
+    await dispatchWhatsAppReferralReversed({
+      referrerId: "ref-1",
+      referredName: "Maria",
+      bonusAmount: 50,
+      newPendingBalance: 100,
+      tenantId: "tenant-1",
+    });
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockSendWhatsApp.mock.calls[0][1]).toBe("+5511999990001");
+  });
+
+  it("skips referrer who has whatsappOptIn = false", async () => {
+    setQueue([
+      REFERRAL_SETTINGS_ENABLED,
+      [REFERRER_OPTED_OUT],
+    ]);
+
+    await dispatchWhatsAppReferralReversed({
+      referrerId: "ref-1",
+      referredName: "Maria",
+      bonusAmount: 50,
+      newPendingBalance: 100,
+      tenantId: "tenant-1",
+    });
 
     expect(mockSendWhatsApp).not.toHaveBeenCalled();
   });

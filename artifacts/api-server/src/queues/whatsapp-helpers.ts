@@ -88,12 +88,15 @@ export async function dispatchWhatsAppReferralConverted(opts: {
   if (!settings?.whatsappEnabled) return;
 
   const [referrer] = await db
-    .select({ whatsapp: clientsTable.whatsapp, phone: clientsTable.phone })
+    .select({ whatsapp: clientsTable.whatsapp, phone: clientsTable.phone, whatsappOptIn: clientsTable.whatsappOptIn })
     .from(clientsTable)
     .where(eq(clientsTable.id, referrerId))
     .limit(1);
 
-  const phone = referrer?.whatsapp || referrer?.phone;
+  // Respect the client's WhatsApp opt-in preference (default true when not explicitly false)
+  if (!referrer || referrer.whatsappOptIn === false) return;
+
+  const phone = referrer.whatsapp || referrer.phone;
   if (!phone) return;
 
   const [tenant] = await db
@@ -149,15 +152,17 @@ export async function dispatchWhatsAppReferralBonusPaid(opts: {
 
   if (!settings?.whatsappEnabled) return;
 
-  let phone = referrerPhone;
-  if (!phone) {
-    const [referrer] = await db
-      .select({ whatsapp: clientsTable.whatsapp, phone: clientsTable.phone })
-      .from(clientsTable)
-      .where(eq(clientsTable.id, referrerId))
-      .limit(1);
-    phone = referrer?.whatsapp || referrer?.phone || null;
-  }
+  // Always fetch the client to check opt-in, even when phone is supplied by caller
+  const [referrer] = await db
+    .select({ whatsapp: clientsTable.whatsapp, phone: clientsTable.phone, whatsappOptIn: clientsTable.whatsappOptIn })
+    .from(clientsTable)
+    .where(eq(clientsTable.id, referrerId))
+    .limit(1);
+
+  // Respect the client's WhatsApp opt-in preference (default true when not explicitly false)
+  if (!referrer || referrer.whatsappOptIn === false) return;
+
+  let phone = referrerPhone || referrer.whatsapp || referrer.phone || null;
   if (!phone) return;
 
   const template = settings.whatsappBonusPaidMessage ?? DEFAULT_BONUS_PAID_MESSAGE;
@@ -193,12 +198,15 @@ export async function dispatchWhatsAppReferralReversed(opts: {
   if (!settings?.whatsappEnabled) return;
 
   const [referrer] = await db
-    .select({ whatsapp: clientsTable.whatsapp, phone: clientsTable.phone })
+    .select({ whatsapp: clientsTable.whatsapp, phone: clientsTable.phone, whatsappOptIn: clientsTable.whatsappOptIn })
     .from(clientsTable)
     .where(eq(clientsTable.id, referrerId))
     .limit(1);
 
-  const phone = referrer?.whatsapp || referrer?.phone;
+  // Respect the client's WhatsApp opt-in preference (default true when not explicitly false)
+  if (!referrer || referrer.whatsappOptIn === false) return;
+
+  const phone = referrer.whatsapp || referrer.phone;
   if (!phone) return;
 
   const [tenant] = await db

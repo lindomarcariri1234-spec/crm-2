@@ -1,5 +1,5 @@
 import { db, whatsappNotificationOutboxTable } from "@workspace/db";
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, eq, isNull, ne, not } from "drizzle-orm";
 import { generateId } from "../../lib/id";
 import { logger } from "../../lib/logger";
 import { getWhatsAppQueue } from "../../queues/index";
@@ -84,6 +84,26 @@ export async function deliverReservationConfirmedWhatsApp(outboxId: string): Pro
     .limit(1);
 
   if (!outbox || outbox.sentAt) return true;
+
+  // Atomically claim the row by transitioning pending/enqueued → processing.
+  // If another worker already claimed it (status = 'processing' or sentAt set),
+  // the conditional update returns 0 rows and we bail out to avoid duplicate delivery.
+  const claimed = await db
+    .update(whatsappNotificationOutboxTable)
+    .set({ status: "processing" })
+    .where(
+      and(
+        eq(whatsappNotificationOutboxTable.id, outbox.id),
+        isNull(whatsappNotificationOutboxTable.sentAt),
+        not(eq(whatsappNotificationOutboxTable.status, "processing")),
+      ),
+    )
+    .returning({ id: whatsappNotificationOutboxTable.id });
+
+  if (!claimed.length) {
+    logger.info({ outboxId }, "[whatsapp-outbox] Row already claimed by another worker — skipping");
+    return true;
+  }
 
   const delivered = await dispatchWhatsAppReservationConfirmed({
     reservationId: outbox.reservationId,
