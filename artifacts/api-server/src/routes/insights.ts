@@ -496,6 +496,7 @@ const InsightsPeriodQuery = z.object({
 // ─── GET /insights/sales-cycle ───────────────────────────────────────────────
 const SalesCyclePeriodQuery = z.object({
   period: z.enum(["30d", "90d", "12m"]).default("12m"),
+  channel: z.string().optional(),
 });
 
 router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promise<void> => {
@@ -512,7 +513,7 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
       next(new ValidationError("Parâmetro inválido: period deve ser '30d', '90d' ou '12m'", "VALIDATION_ERROR"));
       return;
     }
-    const { period } = parsed.data;
+    const { period, channel } = parsed.data;
     const tenantId = me.tenantId;
 
     const now = new Date();
@@ -626,6 +627,7 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
 
     // ── 3. Monthly trend (last 12 months, regardless of period filter) ─────────
     const trendStart = new Date(now.getTime() - 365 * 86400000);
+    const channelFilter = channel ? sql` AND COALESCE(origin, 'Outros') = ${channel}` : sql``;
     const trendRows = await db.execute(sql`
       WITH
       all_clients AS (
@@ -633,6 +635,7 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
         FROM clients
         WHERE tenant_id = ${tenantId}
           AND created_at >= ${trendStart}
+          ${channelFilter}
       ),
       first_payments AS (
         SELECT r.client_id, MIN(p.paid_at) AS first_paid_at

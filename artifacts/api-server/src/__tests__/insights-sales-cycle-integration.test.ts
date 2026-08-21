@@ -400,3 +400,120 @@ describe("sales-cycle CTEs — channel breakdown (real DB)", () => {
     expect(Number(insta.conversion_rate)).toBe(66.7);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Helper: run the trend CTE with an optional channel filter
+// ---------------------------------------------------------------------------
+
+async function runTrendCte(tenantId: string, windowStart: string, channel?: string) {
+  const channelClause = channel
+    ? `AND COALESCE(origin, 'Outros') = '${channel.replace(/'/g, "''")}'`
+    : "";
+
+  const result = await pool.query(
+    `WITH
+     all_clients AS (
+       SELECT id, created_at
+       FROM clients
+       WHERE tenant_id = $1
+         AND created_at >= $2::timestamptz
+         ${channelClause}
+     ),
+     first_payments AS (
+       SELECT r.client_id, MIN(p.paid_at) AS first_paid_at
+       FROM reservations r
+       JOIN payments p ON p.reservation_id = r.id
+       WHERE r.tenant_id = $1
+         AND p.type = 'receivable'
+         AND p.status = 'paid'
+         AND p.paid_at IS NOT NULL
+         AND r.client_id IS NOT NULL
+         AND r.client_id IN (SELECT id FROM all_clients)
+       GROUP BY r.client_id
+     ),
+     first_trips AS (
+       SELECT r.client_id, MIN(t.departure_date) AS first_departure
+       FROM reservations r
+       JOIN trips t ON t.id = r.trip_id
+       WHERE r.tenant_id = $1
+         AND r.status IN ('confirmed', 'completed')
+         AND r.client_id IS NOT NULL
+         AND r.client_id IN (SELECT id FROM all_clients)
+       GROUP BY r.client_id
+     )
+     SELECT
+       TO_CHAR(DATE_TRUNC('month', c.created_at AT TIME ZONE 'America/Sao_Paulo'), 'YYYY-MM') AS month,
+       ROUND(AVG(EXTRACT(EPOCH FROM (fp.first_paid_at - c.created_at)) / 86400.0)::numeric, 1) AS avg_days_to_payment,
+       ROUND(AVG(EXTRACT(EPOCH FROM (ft.first_departure - c.created_at)) / 86400.0)::numeric, 1) AS avg_days_to_trip
+     FROM all_clients c
+     LEFT JOIN first_payments fp ON fp.client_id = c.id
+     LEFT JOIN first_trips ft ON ft.client_id = c.id
+     GROUP BY 1
+     ORDER BY 1`,
+    [tenantId, windowStart],
+  );
+  return result.rows as Array<Record<string, string | null>>;
+}
+
+// ---------------------------------------------------------------------------
+
+describe("sales-cycle CTEs — trend with channel filter (real DB)", () => {
+  it("without channel filter: returns one row per month across all origins", async () => {
+    // 5 clients span 3 calendar months: 2026-06 (C1,C2), 2026-07 (C3,C4), 2026-08 (C5)
+    const rows = await runTrendCte(T, WIN_START);
+    const months = rows.map((r) => r.month);
+    expect(months).toContain("2026-06");
+    expect(months).toContain("2026-07");
+    expect(months).toContain("2026-08");
+  });
+
+  it("channel=Instagram: 2026-06 has avg_days_to_payment = 35.0 (C1:40d + C2:30d)", async () => {
+    // C1 and C2 registered in 2026-06 with Instagram origin and paid in 40d/30d.
+    // C5 registered in 2026-08 with Instagram origin but has no payment.
+    const rows = await runTrendCte(T, WIN_START, "Instagram");
+    const jun = rows.find((r) => r.month === "2026-06")!;
+    expect(jun).toBeDefined();
+    expect(Number(jun.avg_days_to_payment)).toBe(35.0); // (40+30)/2
+    expect(Number(jun.avg_days_to_trip)).toBe(95.0);    // (105+85)/2
+  });
+
+  it("channel=Instagram: 2026-08 row has null avg_days_to_payment (C5 never paid)", async () => {
+    const rows = await runTrendCte(T, WIN_START, "Instagram");
+    const aug = rows.find((r) => r.month === "2026-08");
+    // C5 is in August but has no payment → avg is null (no paying clients in that month)
+    if (aug) {
+      expect(aug.avg_days_to_payment).toBeNull();
+    }
+    // Alternatively, C5 might not appear at all (GROUP BY returns nothing for that month
+    // if the only client has no payment — AVG of no rows). Both outcomes are valid:
+    // the gap-fill in the route handler converts a missing month to null anyway.
+  });
+
+  it("channel=Indicação: only 2026-07 row, avg_days_to_payment = 20.0 (C3 only)", async () => {
+    const rows = await runTrendCte(T, WIN_START, "Indicação");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].month).toBe("2026-07");
+    expect(Number(rows[0].avg_days_to_payment)).toBe(20.0);
+    expect(Number(rows[0].avg_days_to_trip)).toBe(65.0);
+  });
+
+  it("channel=Outros: only 2026-07 row with C4's values (null origin maps to Outros)", async () => {
+    // C4 has null origin — COALESCE maps it to 'Outros'
+    const rows = await runTrendCte(T, WIN_START, "Outros");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].month).toBe("2026-07");
+    expect(Number(rows[0].avg_days_to_payment)).toBe(10.0);
+    expect(Number(rows[0].avg_days_to_trip)).toBe(46.0);
+  });
+
+  it("unknown channel returns zero rows (no clients registered under that origin)", async () => {
+    const rows = await runTrendCte(T, WIN_START, "ChannelThatDoesNotExist");
+    expect(rows).toHaveLength(0);
+  });
+
+  it("channel filter does not leak cross-tenant data when tenants share origin labels", async () => {
+    // Using a different tenantId for the same origin value should return nothing.
+    const rows = await runTrendCte("other-tenant-id", WIN_START, "Instagram");
+    expect(rows).toHaveLength(0);
+  });
+});

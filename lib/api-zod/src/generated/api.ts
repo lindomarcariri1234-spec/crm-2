@@ -5989,6 +5989,7 @@ export const GetInsightsSummaryResponse = zod.object({
  */
 export const GetSalesCycleQueryParams = zod.object({
   period: zod.enum(["30d", "90d", "12m"]).optional(),
+  channel: zod.string().optional(),
 });
 
 export const GetSalesCycleResponse = zod.object({

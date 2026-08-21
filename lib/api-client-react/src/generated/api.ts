@@ -20143,6 +20143,9 @@ export const getGetSalesCycleUrl = (params?: GetSalesCycleParams) => {
   if (params?.period !== undefined) {
     normalizedParams.append("period", params.period.toString());
   }
+  if (params?.channel !== undefined) {
+    normalizedParams.append("channel", params.channel);
+  }
   const queryString = normalizedParams.toString();
   return `/api/insights/sales-cycle${queryString ? `?${queryString}` : ""}`;
 };

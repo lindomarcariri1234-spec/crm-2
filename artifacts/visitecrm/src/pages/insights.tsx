@@ -719,7 +719,20 @@ function fmtDays(v: number | null | undefined): string {
 
 function SalesCycleTab() {
   const [cyclePeriod, setCyclePeriod] = useState<GetSalesCyclePeriod>("12m");
-  const { data, isLoading, isError, refetch, isFetching } = useGetSalesCycle({ period: cyclePeriod });
+  const [cycleChannel, setCycleChannel] = useState<string | undefined>(undefined);
+  // Keep all channel options from the latest unfiltered byChannel payload
+  const [channelOptions, setChannelOptions] = useState<string[]>([]);
+  const { data, isLoading, isError, refetch, isFetching } = useGetSalesCycle({
+    period: cyclePeriod,
+    ...(cycleChannel !== undefined ? { channel: cycleChannel } : {}),
+  });
+
+  // Update channel options whenever byChannel grows — byChannel is never filtered by channel param
+  // so all channels always appear there regardless of which trend channel is selected.
+  useEffect(() => {
+    if (!data?.byChannel.length) return;
+    setChannelOptions(data.byChannel.map((c: { origin: string }) => c.origin));
+  }, [data?.byChannel]);
 
   const trendData = (data?.trend ?? []).map((t: { month: string; avgDaysToPayment: number | null; avgDaysToTrip: number | null }) => ({
     month: fmtMonthLabel(t.month),
@@ -853,10 +866,28 @@ function SalesCycleTab() {
 
       {!isError && (
         <>
-          {/* ── Trend chart ── */}
+          {/* ── Channel selector + Trend chart ── */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Tendência Mensal — Últimos 12 meses</CardTitle>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <CardTitle className="text-base">Tendência Mensal — Últimos 12 meses</CardTitle>
+                {(channelOptions.length > 0 || cycleChannel !== undefined) && (
+                  <Select
+                    value={cycleChannel ?? "__all__"}
+                    onValueChange={(v) => setCycleChannel(v === "__all__" ? undefined : v)}
+                  >
+                    <SelectTrigger className="h-8 w-[180px] text-xs">
+                      <SelectValue placeholder="Canal de aquisição" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">Todos os canais</SelectItem>
+                      {channelOptions.map((ch) => (
+                        <SelectItem key={ch} value={ch}>{ch}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
               {isLoading ? (

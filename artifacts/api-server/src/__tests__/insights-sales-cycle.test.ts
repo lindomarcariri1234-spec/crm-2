@@ -497,6 +497,115 @@ describe("GET /api/insights/sales-cycle — query-param validation", () => {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+
+describe("GET /api/insights/sales-cycle — channel filter param", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireAuth.mockResolvedValue(ADMIN_USER);
+  });
+
+  it("accepts a ?channel= param and returns 200 with the normal response shape", async () => {
+    // The channel param only filters the trend CTE; overall and byChannel remain
+    // unfiltered, so we still queue 3 execute mocks in the same order.
+    setupExecuteMocks({
+      channelRows: [
+        { origin: "WhatsApp", clients: 4, avg_days_to_payment: "9.0", avg_days_to_trip: "32.0", conversion_rate: "75.0" },
+      ],
+      trendRows: [
+        { month: "2026-07", avg_days_to_payment: "9.0", avg_days_to_trip: "32.0" },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?channel=WhatsApp");
+    expect(res.status).toBe(200);
+    expect(res.body.trend).toHaveLength(12);
+    expect(res.body.byChannel).toHaveLength(1);
+    expect(res.body.byChannel[0].origin).toBe("WhatsApp");
+  });
+
+  it("works with both period and channel params together", async () => {
+    setupExecuteMocks({});
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?period=30d&channel=Instagram");
+    expect(res.status).toBe(200);
+    expect(res.body.period).toBe("30d");
+  });
+
+  it("accepts 'Outros' as a channel value (matches null-origin clients in the trend CTE)", async () => {
+    setupExecuteMocks({
+      trendRows: [
+        { month: "2026-08", avg_days_to_payment: "10.0", avg_days_to_trip: null },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?channel=Outros");
+    expect(res.status).toBe(200);
+    // Only the month that has data is non-null; all others stay null.
+    const aug = (res.body.trend as Array<{ month: string; avgDaysToPayment: number | null }>)
+      .find((t) => t.month === "2026-08")!;
+    expect(aug.avgDaysToPayment).toBe(10.0);
+    const otherMonths = (res.body.trend as Array<{ month: string; avgDaysToPayment: number | null }>)
+      .filter((t) => t.month !== "2026-08");
+    for (const t of otherMonths) {
+      expect(t.avgDaysToPayment).toBeNull();
+    }
+  });
+
+  it("returns 12 trend entries with all-null values when no clients match the given channel", async () => {
+    // The trend CTE returns zero rows when channel is unknown — gap-fill must
+    // still produce 12 entries, all with null metrics.
+    setupExecuteMocks({ trendRows: [] });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?channel=ChannelThatDoesNotExist");
+    expect(res.status).toBe(200);
+    expect(res.body.trend).toHaveLength(12);
+    for (const t of res.body.trend as Array<{ avgDaysToPayment: number | null }>) {
+      expect(t.avgDaysToPayment).toBeNull();
+    }
+  });
+
+  it("overall aggregates and byChannel are still returned unchanged when channel is set", async () => {
+    // The overall and byChannel CTEs are NOT filtered by the channel param;
+    // they must reflect the full tenant dataset regardless of which trend
+    // channel is selected.
+    setupExecuteMocks({
+      overallRow: {
+        total_clients: 50,
+        clients_with_payment: 40,
+        clients_with_trip: 35,
+        avg_days_to_payment: "14.0",
+        median_days_to_payment: "12.0",
+        p25_days_to_payment: "6.0",
+        p75_days_to_payment: "20.0",
+        avg_days_to_trip: "48.0",
+        median_days_to_trip: "45.0",
+      },
+      channelRows: [
+        { origin: "Instagram", clients: 20, avg_days_to_payment: "16.0", avg_days_to_trip: "50.0", conversion_rate: "80.0" },
+        { origin: "WhatsApp",  clients: 18, avg_days_to_payment: "12.0", avg_days_to_trip: "44.0", conversion_rate: "83.3" },
+        { origin: "Outros",    clients: 12, avg_days_to_payment: "13.0", avg_days_to_trip: "47.0", conversion_rate: "75.0" },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?channel=WhatsApp");
+    expect(res.status).toBe(200);
+
+    // Overall stats reflect all clients
+    expect(res.body.totalClients).toBe(50);
+    expect(res.body.clientsWithPayment).toBe(40);
+
+    // byChannel still lists all channels
+    expect(res.body.byChannel).toHaveLength(3);
+    const origins = (res.body.byChannel as Array<{ origin: string }>).map((ch) => ch.origin);
+    expect(origins).toContain("Instagram");
+    expect(origins).toContain("WhatsApp");
+    expect(origins).toContain("Outros");
+  });
+});
+
+// ---------------------------------------------------------------------------
+
 describe("GET /api/insights/sales-cycle — role gating", () => {
   beforeEach(() => {
     vi.clearAllMocks();

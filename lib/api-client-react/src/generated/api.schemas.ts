@@ -4196,6 +4196,8 @@ export type GetSalesCyclePeriod = '30d' | '90d' | '12m';
 
 export interface GetSalesCycleParams {
   period?: GetSalesCyclePeriod;
+  /** Filter the trend series to a specific acquisition channel (origin). Omit for all channels. */
+  channel?: string;
 }
 
 export interface BroadcastTripWhatsAppBody {

@@ -704,6 +704,14 @@ paths:
             type: string
             enum: [30d, 90d, 12m]
             default: 12m
+        - name: channel
+          in: query
+          description: |
+            Optional acquisition channel (client origin) to scope the trend
+            series. When omitted the trend covers all channels. The overall
+            aggregates and byChannel breakdown are always unfiltered.
+          schema:
+            type: string
       responses:
         "200":
           description: Sales cycle data
