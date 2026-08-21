@@ -301,7 +301,7 @@ export function TripCard({ trip, isVendedor, seatMapEnabled = true, onDelete, on
           <span>{formatDate(trip.departureDate)}{trip.departureTime ? ` às ${trip.departureTime}` : ""}</span>
           {trip.returnDate && <><span>—</span><span>{formatDate(trip.returnDate)}{trip.returnTime ? ` às ${trip.returnTime}` : ""}</span></>}
         </div>
-        <TripCountdown date={trip.departureDate} />
+        <TripCountdown date={trip.departureDate} time={trip.departureTime} />
         <OccupancyBar reserved={trip.reservedSeats} confirmed={trip.confirmedSeats} free={freeCount} total={trip.totalCapacity} />
         <div className="flex items-center justify-between text-sm">
           <span className="font-semibold text-primary">{formatCurrency(trip.priceAdult)}<span className="text-xs text-muted-foreground font-normal">/pessoa</span></span>

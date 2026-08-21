@@ -1,19 +1,18 @@
 import { useState, useEffect } from "react";
-import { parseISO } from "date-fns";
 import { Badge } from "@/components/ui/badge";
-import { getCountdownLabel } from "./utils";
+import { getCountdownLabel, parseTripDateTime } from "./utils";
 
-export function TripCountdown({ date }: { date: string }) {
+export function TripCountdown({ date, time }: { date: string; time?: string | null }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => setTick((v) => v + 1), 60000);
     return () => window.clearInterval(id);
   }, []);
   void tick;
-  const label = getCountdownLabel(date);
+  const label = getCountdownLabel(date, time);
   const urgent = (() => {
     try {
-      const diff = parseISO(date).getTime() - Date.now();
+      const diff = parseTripDateTime(date, time).getTime() - Date.now();
       return diff >= 0 && diff < 1000 * 60 * 60 * 24;
     } catch {
       return false;

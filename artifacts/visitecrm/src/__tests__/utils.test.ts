@@ -87,6 +87,16 @@ describe("getCountdownLabel", () => {
     expect(getCountdownLabel(days5)).toBe("5 dias");
   });
 
+  it("uses the Brazil calendar and departure time for a trip countdown", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T12:00:00-03:00"));
+    try {
+      expect(getCountdownLabel("2026-08-22", "21:00")).toBe("2 dias");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns semanas label for 3 weeks away", () => {
     // 21d12h: floor days=21, round(21/7)=3 → "3 semanas"
     const weeks3 = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000).toISOString();

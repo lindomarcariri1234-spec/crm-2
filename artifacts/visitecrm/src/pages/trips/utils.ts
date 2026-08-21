@@ -1,22 +1,63 @@
-import { parseISO } from "date-fns";
 import { calculateTripDuration } from "@/lib/tripDuration";
 import type { Trip } from "@workspace/api-client-react";
 
 export { formatCurrency, formatDate, formatCpf } from "@/lib/utils";
 
-export function getCountdownLabel(date: string) {
+const BRAZIL_TZ = "America/Sao_Paulo";
+
+function formatBrazilDate(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BRAZIL_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+/**
+ * Trip dates are date/time fields entered in Brazil. Keep them independent
+ * from the browser's timezone so countdowns remain correct for every user.
+ */
+export function parseTripDateTime(date: string, time?: string | null): Date {
+  if (!time && date.length > 10) {
+    return new Date(date);
+  }
+  const datePart = date.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    const timePart = time ? (time.length === 5 ? `${time}:00` : time) : "00:00:00";
+    return new Date(`${datePart}T${timePart}-03:00`);
+  }
+  return new Date(date);
+}
+
+export function getCountdownLabel(date: string, time?: string | null) {
   try {
-    const target = parseISO(date);
+    const target = parseTripDateTime(date, time);
     const now = new Date();
     const diffMs = target.getTime() - now.getTime();
     if (diffMs < 0) return "Encerrado";
     const hours = Math.floor(diffMs / (1000 * 60 * 60));
-    const days = Math.floor(hours / 24);
-    if (hours < 1) return "Em breve";
-    if (hours < 24) return `${hours} horas`;
-    if (days === 1) return "Amanhã";
-    if (days < 14) return `${days} dias`;
-    return `${Math.round(days / 7)} semanas`;
+    if (!time && date.length > 10) {
+      if (hours < 1) return "Em breve";
+      if (hours < 24) return `${hours} horas`;
+      const days = Math.floor(hours / 24);
+      if (days === 1) return "Amanhã";
+      if (days < 14) return `${days} dias`;
+      return `${Math.round(days / 7)} semanas`;
+    }
+    const daysUntil = Math.round(
+      (Date.parse(`${formatBrazilDate(target)}T00:00:00Z`) -
+        Date.parse(`${formatBrazilDate(now)}T00:00:00Z`)) / (1000 * 60 * 60 * 24),
+    );
+    if (daysUntil === 0) {
+      if (hours < 1) return "Em breve";
+      return `${hours} horas`;
+    }
+    if (daysUntil === 1) return "Amanhã";
+    if (daysUntil < 14) return `${daysUntil} dias`;
+    return `${Math.round(daysUntil / 7)} semanas`;
   } catch {
     return "";
   }

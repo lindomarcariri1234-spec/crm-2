@@ -176,7 +176,7 @@ export function TripList() {
                   <span>{trip.destinationCity}, {trip.destinationState}</span>
                   <span>·</span>
                   <span>{formatDate(trip.departureDate)}{trip.departureTime ? ` às ${trip.departureTime}` : ""}</span>
-                  <TripCountdown date={trip.departureDate} />
+                  <TripCountdown date={trip.departureDate} time={trip.departureTime} />
                 </p>
               </div>
               <div className="hidden md:block w-40">
