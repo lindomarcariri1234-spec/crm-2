@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useUser, useClerk } from "@clerk/react";
 import { useGetMe, useGetCalendarStatus, getGetCalendarStatusQueryKey } from "@workspace/api-client-react";
@@ -41,6 +41,7 @@ import {
   History,
   Wallet,
   Award,
+  X,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -79,6 +80,55 @@ function GoogleCalendarExpiryBanner({ userRole }: { userRole?: string }) {
           Reconectar
         </Button>
       </Link>
+    </div>
+  );
+}
+
+const TRIAL_BANNER_ROLES: string[] = [ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER, ROLES.SUPPORT, ROLES.SALES];
+
+function TrialExpiryBanner({ trialDaysLeft, userRole }: { trialDaysLeft?: number | null; userRole?: string }) {
+  const [dismissed, setDismissed] = useState(false);
+
+  if (
+    dismissed ||
+    trialDaysLeft == null ||
+    !userRole ||
+    !TRIAL_BANNER_ROLES.includes(userRole)
+  ) return null;
+
+  const daysLabel =
+    trialDaysLeft === 0
+      ? "hoje"
+      : trialDaysLeft === 1
+        ? "em 1 dia"
+        : `em ${trialDaysLeft} dias`;
+
+  return (
+    <div className="flex items-center gap-3 bg-orange-50 border-b border-orange-200 px-6 py-2 text-sm text-orange-800 shrink-0">
+      <AlertCircle className="w-4 h-4 shrink-0 text-orange-600" />
+      <span className="flex-1">
+        Seu período de avaliação termina {daysLabel} — fale conosco para continuar.
+      </span>
+      <a
+        href="mailto:suporte@visitecrm.com?subject=Solicita%C3%A7%C3%A3o%20de%20extens%C3%A3o%20de%20per%C3%ADodo%20de%20avalia%C3%A7%C3%A3o"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs border-orange-300 text-orange-800 hover:bg-orange-100 hover:border-orange-400"
+        >
+          Fale conosco
+        </Button>
+      </a>
+      <button
+        onClick={() => setDismissed(true)}
+        className="p-1 rounded-md text-orange-600/60 hover:text-orange-800 hover:bg-orange-100 transition-colors"
+        aria-label="Fechar aviso"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }
@@ -400,6 +450,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         </header>
 
         <GoogleCalendarExpiryBanner userRole={userRole} />
+        <TrialExpiryBanner trialDaysLeft={me?.trialDaysLeft} userRole={userRole} />
 
         {/* Main content */}
         <main className="flex-1 overflow-y-auto p-6">{children}</main>

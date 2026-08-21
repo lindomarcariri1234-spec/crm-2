@@ -48,6 +48,7 @@ router.get("/users/me", async (req, res, next): Promise<void> => {
       if (!allowed) return;
     }
     let tenant = null;
+    let trialDaysLeft: number | null = null;
     if (user.tenantId) {
       const [t] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, user.tenantId)).limit(1);
       if (t) {
@@ -57,6 +58,18 @@ router.get("/users/me", async (req, res, next): Promise<void> => {
           status: t.status, planId: t.planId, website: t.website,
           settings: t.settings ?? {},
         };
+        // Surface trial days remaining for non-superadmin users when expiry is within 7 days
+        if (
+          t.status === "trial" &&
+          t.trialEndsAt != null &&
+          user.role !== ROLES.SUPER_ADMIN
+        ) {
+          const msLeft = t.trialEndsAt.getTime() - Date.now();
+          const daysLeft = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+          if (daysLeft >= 0 && daysLeft <= 7) {
+            trialDaysLeft = daysLeft;
+          }
+        }
       }
     }
     res.json({
@@ -68,6 +81,7 @@ router.get("/users/me", async (req, res, next): Promise<void> => {
       commissionRate: user.commissionRate != null ? Number(user.commissionRate) : null,
       commissionFixed: user.commissionFixed != null ? Number(user.commissionFixed) : null,
       monthlyGoal: user.monthlyGoal != null ? Number(user.monthlyGoal) : null,
+      trialDaysLeft,
       tenant,
     });
   } catch (err) {

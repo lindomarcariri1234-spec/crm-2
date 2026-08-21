@@ -4082,6 +4082,8 @@ export const GetMeResponse = zod.object({
   commissionFixed: zod.number().optional(),
   monthlyGoal: zod.number().nullish(),
   createdAt: zod.string(),
+  /** Days remaining in trial (only present when status=trial and within 7 days of expiry) */
+  trialDaysLeft: zod.number().nullish(),
   tenant: zod
     .object({
       id: zod.string(),

@@ -2205,6 +2205,8 @@ export interface UserProfile {
   /** @nullable */
   monthlyGoal?: number | null;
   createdAt: string;
+  /** Days remaining in trial (only present when status=trial and within 7 days of expiry) @nullable */
+  trialDaysLeft?: number | null;
   tenant?: UserProfileTenant;
 }
 
