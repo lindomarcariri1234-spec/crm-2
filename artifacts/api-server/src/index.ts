@@ -188,14 +188,50 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 // DO NOT change this to a static import.
 const { default: app } = await import("./app");
 
+function warnDevServerSkipped(port: number): Promise<void> {
+  // Write the banner directly to stderr so it is always visible in workflow
+  // logs regardless of logger level, buffering, or JSON-transport formatting.
+  // We wait for the write callback before resolving so callers can safely
+  // call process.exit(0) immediately after — forced exit on a pipe-backed
+  // stderr would otherwise discard bytes that have not yet been flushed.
+  const banner =
+    "\n" +
+    "╔══════════════════════════════════════════════════════════════════════╗\n" +
+    `║  ⚠️  DEV SERVER SKIPPED — port ${port} is held by the production server  ║\n` +
+    "║                                                                      ║\n" +
+    "║  Your local API changes are NOT active.                              ║\n" +
+    "║  The Vite proxy at :5000 is forwarding to the production server.     ║\n" +
+    "║  Edits to API routes will NOT appear in the dev preview.             ║\n" +
+    "║                                                                      ║\n" +
+    "║  To run your local changes: stop the production server first, or     ║\n" +
+    "║  set a different PORT for the dev workflow.                          ║\n" +
+    "╚══════════════════════════════════════════════════════════════════════╝\n";
+
+  return new Promise<void>((resolve) => {
+    process.stderr.write(banner, () => {
+      // logger.warn is supplemental (pino-pretty is async); the banner above
+      // is the authoritative signal since it is drained before we return.
+      logger.warn(
+        { port },
+        "Dev server skipped — production server holds port " +
+          port +
+          ". Your local API changes are NOT active.",
+      );
+      resolve();
+    });
+  });
+}
+
 // ── Bind HTTP port IMMEDIATELY so the Cloud Run startup probe gets a 200
 //    from /api/healthz without waiting for migrations or Redis. ──
 const server = app.listen(port, (err) => {
   if (err) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
-      logger.warn({ port }, "Port already in use — dev workflow skipped (deployment server holds this port)");
-      process.exit(0);
+      // Drain stderr fully before exiting so the banner is not silently
+      // discarded when the workflow pipes the process output.
+      void warnDevServerSkipped(port).then(() => process.exit(0));
+      return;
     }
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -206,8 +242,10 @@ const server = app.listen(port, (err) => {
 // Handle EADDRINUSE via the error event (Node.js http.Server canonical path)
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
-    logger.warn({ port }, "Port already in use — dev workflow skipped (deployment server holds this port)");
-    process.exit(0);
+    // Drain stderr fully before exiting so the banner is not silently
+    // discarded when the workflow pipes the process output.
+    void warnDevServerSkipped(port).then(() => process.exit(0));
+    return;
   }
   logger.error({ err }, "Error listening on port");
   process.exit(1);
