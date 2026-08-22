@@ -34,6 +34,7 @@ import { Slider } from "@/components/ui/slider";
 import { formatCurrency } from "@/lib/utils";
 import { useAuth } from "@clerk/react";
 import { useToast } from "@/hooks/use-toast";
+import { useLocation, useSearch } from "wouter";
 
 const fmt = (v: number) => formatCurrency(v);
 const fmtCompact = (v: number) => {
@@ -718,10 +719,41 @@ function fmtDays(v: number | null | undefined): string {
 }
 
 function SalesCycleTab() {
-  const [cyclePeriod, setCyclePeriod] = useState<GetSalesCyclePeriod>("12m");
-  const [cycleChannel, setCycleChannel] = useState<string | undefined>(undefined);
+  const searchStr = useSearch();
+  const [, navigate] = useLocation();
+  const [cyclePeriod, setCyclePeriod] = useState<GetSalesCyclePeriod>(() => {
+    const period = new URLSearchParams(searchStr).get("period");
+    return period === "30d" || period === "90d" || period === "12m" ? period : "12m";
+  });
+  const [cycleChannel, setCycleChannel] = useState<string | undefined>(() => {
+    const channel = new URLSearchParams(searchStr).get("channel");
+    return channel || undefined;
+  });
   // Keep all channel options from the latest unfiltered byChannel payload
   const [channelOptions, setChannelOptions] = useState<string[]>([]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchStr);
+    const period = params.get("period");
+    const channel = params.get("channel");
+    setCyclePeriod(period === "30d" || period === "90d" || period === "12m" ? period : "12m");
+    setCycleChannel(channel || undefined);
+  }, [searchStr]);
+
+  function updateCycleFilters(next: { period?: GetSalesCyclePeriod; channel?: string }) {
+    const params = new URLSearchParams(searchStr);
+    const period = next.period ?? cyclePeriod;
+    const hasChannelUpdate = Object.prototype.hasOwnProperty.call(next, "channel");
+    const channel = hasChannelUpdate ? next.channel : cycleChannel;
+    params.set("period", period);
+    if (channel) {
+      params.set("channel", channel);
+    } else {
+      params.delete("channel");
+    }
+    navigate(`?${params.toString()}`);
+  }
+
   const { data, isLoading, isError, refetch, isFetching } = useGetSalesCycle({
     period: cyclePeriod,
     ...(cycleChannel !== undefined ? { channel: cycleChannel } : {}),
@@ -761,7 +793,7 @@ function SalesCycleTab() {
             {(["30d", "90d", "12m"] as const).map((p) => (
               <button
                 key={p}
-                onClick={() => setCyclePeriod(p)}
+                onClick={() => updateCycleFilters({ period: p })}
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                   cyclePeriod === p ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"
                 }`}
@@ -874,7 +906,7 @@ function SalesCycleTab() {
                 {(channelOptions.length > 0 || cycleChannel !== undefined) && (
                   <Select
                     value={cycleChannel ?? "__all__"}
-                    onValueChange={(v) => setCycleChannel(v === "__all__" ? undefined : v)}
+                    onValueChange={(v) => updateCycleFilters({ channel: v === "__all__" ? undefined : v })}
                   >
                     <SelectTrigger className="h-8 w-[180px] text-xs">
                       <SelectValue placeholder="Canal de aquisição" />
