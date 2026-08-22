@@ -729,6 +729,10 @@ function SalesCycleTab() {
     const channel = new URLSearchParams(searchStr).get("channel");
     return channel || undefined;
   });
+  const [cycleSeller, setCycleSeller] = useState<string | undefined>(() => {
+    const seller = new URLSearchParams(searchStr).get("seller");
+    return seller || undefined;
+  });
   // Keep all channel options from the latest unfiltered byChannel payload
   const [channelOptions, setChannelOptions] = useState<string[]>([]);
 
@@ -736,20 +740,29 @@ function SalesCycleTab() {
     const params = new URLSearchParams(searchStr);
     const period = params.get("period");
     const channel = params.get("channel");
+    const seller = params.get("seller");
     setCyclePeriod(period === "30d" || period === "90d" || period === "12m" ? period : "12m");
     setCycleChannel(channel || undefined);
+    setCycleSeller(seller || undefined);
   }, [searchStr]);
 
-  function updateCycleFilters(next: { period?: GetSalesCyclePeriod; channel?: string }) {
+  function updateCycleFilters(next: { period?: GetSalesCyclePeriod; channel?: string; seller?: string }) {
     const params = new URLSearchParams(searchStr);
     const period = next.period ?? cyclePeriod;
     const hasChannelUpdate = Object.prototype.hasOwnProperty.call(next, "channel");
+    const hasSellerUpdate = Object.prototype.hasOwnProperty.call(next, "seller");
     const channel = hasChannelUpdate ? next.channel : cycleChannel;
+    const seller = hasSellerUpdate ? next.seller : cycleSeller;
     params.set("period", period);
     if (channel) {
       params.set("channel", channel);
     } else {
       params.delete("channel");
+    }
+    if (seller) {
+      params.set("seller", seller);
+    } else {
+      params.delete("seller");
     }
     navigate(`?${params.toString()}`);
   }
@@ -757,6 +770,7 @@ function SalesCycleTab() {
   const { data, isLoading, isError, refetch, isFetching } = useGetSalesCycle({
     period: cyclePeriod,
     ...(cycleChannel !== undefined ? { channel: cycleChannel } : {}),
+    ...(cycleSeller !== undefined ? { seller: cycleSeller } : {}),
   });
 
   // Update channel options whenever byChannel grows — byChannel is never filtered by channel param
@@ -915,6 +929,22 @@ function SalesCycleTab() {
                       <SelectItem value="__all__">Todos os canais</SelectItem>
                       {channelOptions.map((ch) => (
                         <SelectItem key={ch} value={ch}>{ch}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {(data?.bySeller?.length > 0 || cycleSeller !== undefined) && (
+                  <Select
+                    value={cycleSeller ?? "__all__"}
+                    onValueChange={(v) => updateCycleFilters({ seller: v === "__all__" ? undefined : v })}
+                  >
+                    <SelectTrigger className="h-8 w-[180px] text-xs">
+                      <SelectValue placeholder="Vendedor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">Todos os vendedores</SelectItem>
+                      {(data?.bySeller ?? []).map((seller: { sellerId: string; sellerName: string }) => (
+                        <SelectItem key={seller.sellerId} value={seller.sellerId}>{seller.sellerName}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

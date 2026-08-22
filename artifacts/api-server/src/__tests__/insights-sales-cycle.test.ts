@@ -561,6 +561,22 @@ describe("GET /api/insights/sales-cycle — channel filter param", () => {
     }
   });
 
+  it("accepts a seller filter and keeps the standard response shape", async () => {
+    setupExecuteMocks({
+      sellerRows: [
+        { seller_id: "seller-001", seller_name: "Ana Silva", clients: 4, avg_days_to_payment: "8.0", conversion_rate: "75.0" },
+      ],
+      trendRows: [
+        { month: "2026-08", avg_days_to_payment: "8.0", avg_days_to_trip: "30.0" },
+      ],
+    });
+
+    const res = await request(buildApp()).get("/api/insights/sales-cycle?seller=seller-001");
+    expect(res.status).toBe(200);
+    expect(res.body.trend).toHaveLength(12);
+    expect(res.body.bySeller[0].sellerId).toBe("seller-001");
+  });
+
   it("returns 12 trend entries with all-null values when no clients match the given channel", async () => {
     // The trend CTE returns zero rows when channel is unknown — gap-fill must
     // still produce 12 entries, all with null metrics.

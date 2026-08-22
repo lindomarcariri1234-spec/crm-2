@@ -497,6 +497,7 @@ const InsightsPeriodQuery = z.object({
 const SalesCyclePeriodQuery = z.object({
   period: z.enum(["30d", "90d", "12m"]).default("12m"),
   channel: z.string().optional(),
+  seller: z.string().optional(),
 });
 
 router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promise<void> => {
@@ -513,7 +514,7 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
       next(new ValidationError("Parâmetro inválido: period deve ser '30d', '90d' ou '12m'", "VALIDATION_ERROR"));
       return;
     }
-    const { period, channel } = parsed.data;
+    const { period, channel, seller } = parsed.data;
     const tenantId = me.tenantId;
 
     const now = new Date();
@@ -674,13 +675,25 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
     // ── 4. Monthly trend (last 12 months, regardless of period filter) ─────────
     const trendStart = new Date(now.getTime() - 365 * 86400000);
     const channelFilter = channel ? sql` AND COALESCE(origin, 'Outros') = ${channel}` : sql``;
+    const sellerFilter = seller ? sql` AND cs.seller_id = ${seller}` : sql``;
     const trendRows = await db.execute(sql`
       WITH
+      client_seller AS (
+        SELECT DISTINCT ON (r.client_id)
+          r.client_id,
+          r.seller_id
+        FROM reservations r
+        WHERE r.tenant_id = ${tenantId}
+          AND r.seller_id IS NOT NULL
+        ORDER BY r.client_id, r.created_at ASC
+      ),
       all_clients AS (
-        SELECT id, created_at
-        FROM clients
+        SELECT c.id, c.created_at, COALESCE(c.origin, 'Outros') AS origin
+        FROM clients c
+        ${seller ? sql`JOIN client_seller cs ON cs.client_id = c.id` : sql``}
         WHERE tenant_id = ${tenantId}
-          AND created_at >= ${trendStart}
+          AND c.created_at >= ${trendStart}
+          ${sellerFilter}
           ${channelFilter}
       ),
       first_payments AS (

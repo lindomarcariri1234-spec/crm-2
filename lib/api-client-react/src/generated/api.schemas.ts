@@ -4208,6 +4208,8 @@ export interface GetSalesCycleParams {
   period?: GetSalesCyclePeriod;
   /** Filter the trend series to a specific acquisition channel (origin). Omit for all channels. */
   channel?: string;
+  /** Filter the trend series to a specific seller. Omit for all sellers. */
+  seller?: string;
 }
 
 export interface BroadcastTripWhatsAppBody {
