@@ -65,3 +65,4 @@
 - [Orval js-yaml generation incompatibility](orval-js-yaml-codegen.md) — current Orval generation fails with the workspace js-yaml override; fix toolchain compatibility before relying on codegen.
 - [Trial expiry notification idempotency](trial-expiry-notification-idempotency.md) — use the platform-settings ledger for atomic per-tenant, per-trial-window email claims without changing the immutable tenant schema
 - [Vite canonical URL handling](vite-canonical-url.md) — a relative canonical href="/" is processed as a filesystem asset and breaks this Vite production build; use an absolute fallback URL
+- [Shared UploadThing file references](shared-uploadthing-file-references.md) — after a cascade, protect files still referenced by another record in the same tenant, not only by another tenant

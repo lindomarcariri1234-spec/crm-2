@@ -48,9 +48,10 @@ export function extractVerifiedUploadThingKey(url: string): string | null {
 }
 
 /**
- * Returns true if the given file key is currently referenced by a record
- * belonging to a different tenant. When true the file must NOT be deleted —
- * doing so would destroy another tenant's asset (cross-tenant integrity attack).
+ * Returns true if the given file key is currently referenced by another record.
+ * By default only other-tenant references are considered. Callers that already
+ * removed their own DB record can opt into checking same-tenant references too,
+ * which prevents deleting a file shared by multiple records in that tenant.
  *
  * Checks scalar UploadThing URL columns and image-array columns across all
  * tenant-scoped tables that participate in deleteOrphanedFile / deleteOrphanedImages
@@ -59,52 +60,62 @@ export function extractVerifiedUploadThingKey(url: string): string | null {
  * column. store_products has no direct tenantId so it is resolved via a JOIN to
  * stores.
  */
-async function isFileKeyReferencedByOtherTenant(key: string, callerTenantId: string): Promise<boolean> {
+async function isFileKeyStillReferenced(
+  key: string,
+  callerTenantId: string,
+  includeSameTenantReferences = false,
+): Promise<boolean> {
   const like = `%/f/${key}`;
+  const tenantFilter = includeSameTenantReferences ? sql`` : sql`AND tenant_id != ${callerTenantId}`;
+  const tenantIdFilter = includeSameTenantReferences ? sql`` : sql`AND id != ${callerTenantId}`;
+  const storeTenantFilter = includeSameTenantReferences ? sql`` : sql`AND s.tenant_id != ${callerTenantId}`;
   const result = await db.execute(sql`
     SELECT EXISTS(
       SELECT 1 FROM tenants
-        WHERE logo_url LIKE ${like} AND id != ${callerTenantId}
+        WHERE logo_url LIKE ${like} ${tenantIdFilter}
       UNION ALL
       SELECT 1 FROM stores
         WHERE (logo LIKE ${like} OR logo_dark LIKE ${like} OR favicon LIKE ${like}
                OR banner_home LIKE ${like} OR banner_mobile LIKE ${like})
-          AND tenant_id != ${callerTenantId}
+          ${tenantFilter}
       UNION ALL
       SELECT 1 FROM trips
         WHERE (cover_image LIKE ${like}
                OR EXISTS (SELECT 1 FROM unnest(gallery) g WHERE g LIKE ${like}))
-          AND tenant_id != ${callerTenantId}
+          ${tenantFilter}
+      UNION ALL
+      SELECT 1 FROM trip_media
+        WHERE url LIKE ${like} ${tenantFilter}
       UNION ALL
       SELECT 1 FROM accommodations
         WHERE (cover_image LIKE ${like}
                OR EXISTS (SELECT 1 FROM unnest(gallery) g WHERE g LIKE ${like}))
-          AND tenant_id != ${callerTenantId}
+          ${tenantFilter}
       UNION ALL
       SELECT 1 FROM destinations
         WHERE (cover_image LIKE ${like}
                OR EXISTS (SELECT 1 FROM unnest(gallery) g WHERE g LIKE ${like}))
-          AND tenant_id != ${callerTenantId}
+          ${tenantFilter}
       UNION ALL
       SELECT 1 FROM vehicles
-        WHERE photo_url LIKE ${like} AND tenant_id != ${callerTenantId}
+        WHERE photo_url LIKE ${like} ${tenantFilter}
       UNION ALL
       SELECT 1 FROM clients
-        WHERE photo_url LIKE ${like} AND tenant_id != ${callerTenantId}
+        WHERE photo_url LIKE ${like} ${tenantFilter}
       UNION ALL
       SELECT 1 FROM users
-        WHERE avatar_url LIKE ${like} AND tenant_id != ${callerTenantId}
+        WHERE avatar_url LIKE ${like} ${tenantFilter}
       UNION ALL
       SELECT 1 FROM documents
         WHERE (file_key = ${key} OR url LIKE ${like})
-          AND tenant_id != ${callerTenantId}
+          ${tenantFilter}
       UNION ALL
       SELECT 1 FROM store_products sp
         JOIN stores s ON s.id = sp.store_id
         WHERE (sp.thumbnail LIKE ${like}
                OR EXISTS (SELECT 1 FROM unnest(sp.images) img WHERE img LIKE ${like})
                OR EXISTS (SELECT 1 FROM unnest(sp.gallery) g WHERE g LIKE ${like}))
-          AND s.tenant_id != ${callerTenantId}
+          ${storeTenantFilter}
     ) AS referenced
   `);
   // db.execute returns { rows: [...] } — read the first row from .rows
@@ -113,12 +124,16 @@ async function isFileKeyReferencedByOtherTenant(key: string, callerTenantId: str
 }
 
 type Logger = { warn: (obj: object, msg: string) => void };
+type DeleteOrphanedFileOptions = {
+  checkSameTenantReferences?: boolean;
+};
 
 export async function deleteOrphanedFile(
   oldUrl: string | null | undefined,
   newUrl: string | null | undefined,
   log: Logger,
-  callerTenantId?: string
+  callerTenantId?: string,
+  options?: DeleteOrphanedFileOptions,
 ): Promise<void> {
   if (!oldUrl || oldUrl === newUrl) return;
   const key = extractVerifiedUploadThingKey(oldUrl);
@@ -128,9 +143,18 @@ export async function deleteOrphanedFile(
   }
   if (callerTenantId) {
     try {
-      const crossTenantRisk = await isFileKeyReferencedByOtherTenant(key, callerTenantId);
-      if (crossTenantRisk) {
-        log.warn({ fileKey: key, callerTenantId }, "Skipped file deletion: key is referenced by another tenant");
+      const referenceRisk = await isFileKeyStillReferenced(
+        key,
+        callerTenantId,
+        options?.checkSameTenantReferences,
+      );
+      if (referenceRisk) {
+        log.warn(
+          { fileKey: key, callerTenantId },
+          options?.checkSameTenantReferences
+            ? "Skipped file deletion: key is still referenced by another record"
+            : "Skipped file deletion: key is referenced by another tenant",
+        );
         return;
       }
     } catch (checkErr) {

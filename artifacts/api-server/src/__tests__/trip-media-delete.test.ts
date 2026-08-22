@@ -1,15 +1,17 @@
 /**
  * trip-media-delete.test.ts
  *
- * Regression guard for Task #215:
+ * Regression guard for trip media cleanup:
  * DELETE /trips/:id/media/:mediaId must call deleteOrphanedFile(media.url, …)
  * after removing the DB record so the file is also purged from UploadThing
  * storage and does not consume quota indefinitely.
+ * DELETE /trips/:id must do the same for every media row before the trip is
+ * deleted, including the no-media case.
  *
  * deleteOrphanedFile already catches its own storage errors and logs them,
  * so a UploadThing failure must never prevent the 204 response.
  *
- * Scenarios:
+ * Single-media scenarios:
  *  A. Happy path — deleteOrphanedFile called with correct URL; 204 returned
  *  B. deleteOrphanedFile rejects — 204 still returned (best-effort cleanup)
  *  C. 403 — unauthenticated role; deleteOrphanedFile NOT called
@@ -30,11 +32,16 @@ const {
   mockLimit,
   mockDelete,
   mockDeleteWhere,
+  tripMediaRows,
 } = vi.hoisted(() => {
   const mockDeleteOrphanedFile = vi.fn().mockResolvedValue(undefined);
 
   const mockLimit = vi.fn();
-  const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+  const tripMediaRows: Array<{ url: string }> = [];
+  const mockWhere = vi.fn(() => {
+    const query = Promise.resolve(tripMediaRows);
+    return Object.assign(query, { limit: mockLimit });
+  });
   const mockFrom = vi.fn(() => ({ where: mockWhere }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
@@ -45,6 +52,7 @@ const {
     mockDeleteOrphanedFile,
     mockSelect, mockFrom, mockWhere, mockLimit,
     mockDelete, mockDeleteWhere,
+    tripMediaRows,
   };
 });
 
@@ -213,6 +221,9 @@ import { errorHandler } from "../middlewares/errorHandler.js";
 const TRIP_ID  = "trip-abc-123";
 const MEDIA_ID = "media-xyz-456";
 const MEDIA_URL = "https://utfs.io/f/file-key-abc";
+const SECOND_MEDIA_URL = "https://utfs.io/f/file-key-def";
+const THIRD_MEDIA_URL = "https://utfs.io/f/file-key-ghi";
+const COVER_URL = "https://utfs.io/f/cover-key";
 
 const MEDIA_ROW = {
   id:       MEDIA_ID,
@@ -251,6 +262,7 @@ beforeEach(() => {
 
   // Default: media row found
   mockLimit.mockResolvedValue([MEDIA_ROW]);
+  tripMediaRows.splice(0);
 
   // Default: deleteOrphanedFile succeeds
   mockDeleteOrphanedFile.mockResolvedValue(undefined);
@@ -324,6 +336,61 @@ describe("DELETE /trips/:id/media/:mediaId — UploadThing cleanup", () => {
       .delete(`/trips/${TRIP_ID}/media/${MEDIA_ID}`);
 
     expect(res.status).toBe(404);
+    expect(mockDeleteOrphanedFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("DELETE /trips/:id — UploadThing cleanup", () => {
+  it("removes every associated media URL before returning success", async () => {
+    tripMediaRows.push({ url: MEDIA_URL }, { url: SECOND_MEDIA_URL }, { url: THIRD_MEDIA_URL });
+    mockLimit.mockResolvedValueOnce([{ coverImage: COVER_URL }]);
+
+    const res = await request(app).delete(`/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(mockDeleteOrphanedFile).toHaveBeenCalledTimes(4);
+    expect(mockDeleteOrphanedFile).toHaveBeenNthCalledWith(
+      1, COVER_URL, null, expect.anything(), ME.tenantId,
+      { checkSameTenantReferences: true },
+    );
+    expect(mockDeleteOrphanedFile).toHaveBeenNthCalledWith(
+      2, MEDIA_URL, null, expect.anything(), ME.tenantId,
+      { checkSameTenantReferences: true },
+    );
+    expect(mockDeleteOrphanedFile).toHaveBeenNthCalledWith(
+      3, SECOND_MEDIA_URL, null, expect.anything(), ME.tenantId,
+      { checkSameTenantReferences: true },
+    );
+    expect(mockDeleteOrphanedFile).toHaveBeenNthCalledWith(
+      4, THIRD_MEDIA_URL, null, expect.anything(), ME.tenantId,
+      { checkSameTenantReferences: true },
+    );
+  });
+
+  it("protects media files that may still be shared by another trip in the tenant", async () => {
+    tripMediaRows.push({ url: MEDIA_URL });
+    mockLimit.mockResolvedValueOnce([{ coverImage: null }]);
+
+    const res = await request(app).delete(`/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(mockDeleteOrphanedFile).toHaveBeenCalledWith(
+      MEDIA_URL,
+      null,
+      expect.anything(),
+      ME.tenantId,
+      { checkSameTenantReferences: true },
+    );
+  });
+
+  it("returns success without attempting media cleanup when the trip has no media", async () => {
+    mockLimit.mockResolvedValueOnce([{ coverImage: null }]);
+
+    const res = await request(app).delete(`/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
     expect(mockDeleteOrphanedFile).not.toHaveBeenCalled();
   });
 });

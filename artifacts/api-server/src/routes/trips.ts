@@ -806,10 +806,19 @@ router.delete("/trips/:id", async (req, res, next: NextFunction): Promise<void> 
       .from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
       .limit(1);
+    const media = await db.select({ url: tripMediaTable.url })
+      .from(tripMediaTable)
+      .where(and(eq(tripMediaTable.tripId, req.params.id), eq(tripMediaTable.tenantId, me.tenantId)));
     await db.delete(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)));
+    const cleanupOptions = { checkSameTenantReferences: true };
     if (existing?.coverImage) {
-      await deleteOrphanedFile(existing.coverImage, null, req.log, me.tenantId);
+      await deleteOrphanedFile(existing.coverImage, null, req.log, me.tenantId, cleanupOptions);
+    }
+    // Best-effort: remove all media files after their DB rows are cascaded with
+    // the trip, unless another record still references the same file.
+    for (const item of media) {
+      await deleteOrphanedFile(item.url, null, req.log, me.tenantId, cleanupOptions);
     }
     res.json({ success: true });
     scheduleCalendarDeleteEventsForTrip(req.params.id).catch((err) => logger.warn({ err }, "[trips] calendar delete events failed"));
