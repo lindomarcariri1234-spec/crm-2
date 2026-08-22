@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "NODE_OPTIONS='--max-old-space-size=4096' tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:integration": "if [ -z \"${DATABASE_URL:-}\" ]; then echo 'Skipping referral-reversal integration tests: DATABASE_URL is not set.'; else vitest run --config vitest.integration.config.ts; fi"
   },
   "dependencies": {
     "@clerk/express": "^2.1.12",
