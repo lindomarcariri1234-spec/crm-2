@@ -26,6 +26,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { runBirthdayCron } from "./lib/birthday";
 import { processNpsDispatch, processInstallmentDueReminders, processTrialExpiryNotifications } from "./workers/reminder.worker";
+import { runUploadThingOrphanCleanup } from "./lib/uploadthing-orphan-cleanup";
 import { runExpiredReservationsCron } from "./lib/expired-reservations";
 import { runPipelineTripEndedCron } from "./services/pipeline-automation";
 import { calculateScoresForAllTenants } from "./lib/client-scores";
@@ -426,6 +427,13 @@ applyMigrations()
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[trial-expiry] node-cron fallback registered (daily 09:00)");
 
+        cron.schedule("0 2 * * *", () => {
+          runUploadThingOrphanCleanup().catch((err) =>
+            logger.error({ err }, "[uploadthing-orphan] node-cron fallback failed"),
+          );
+        }, { timezone: "America/Sao_Paulo" });
+        logger.info("[uploadthing-orphan] node-cron fallback registered (nightly 02:00)");
+
         return;
       }
 
@@ -533,6 +541,12 @@ applyMigrations()
             { name: "trial_expiry_notification", data: { type: "trial_expiry_notification" } },
           ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule trial expiry notification"));
 
+          await reminderQueue.upsertJobScheduler(
+            "uploadthing-orphan-cleanup-nightly",
+            { pattern: "0 2 * * *", tz: "America/Sao_Paulo" },
+            { name: "uploadthing_orphan_cleanup", data: { type: "uploadthing_orphan_cleanup" } },
+          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule uploadthing orphan cleanup"));
+
           logger.info("[reminders] Repeatable reminder jobs registered");
         }
       } else {
@@ -565,6 +579,13 @@ applyMigrations()
           );
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[trial-expiry] node-cron fallback registered (daily 09:00)");
+
+        cron.schedule("0 2 * * *", () => {
+          runUploadThingOrphanCleanup().catch((err) =>
+            logger.error({ err }, "[uploadthing-orphan] node-cron fallback failed"),
+          );
+        }, { timezone: "America/Sao_Paulo" });
+        logger.info("[uploadthing-orphan] node-cron fallback registered (nightly 02:00)");
       }
     })();
   });

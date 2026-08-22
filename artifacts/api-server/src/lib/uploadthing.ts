@@ -28,7 +28,7 @@ const { UTApi } = require("uploadthing/server") as { UTApi: typeof UTApiType };
 
 export const utapi = new UTApi();
 
-const UPLOADTHING_HOSTNAME_SUFFIXES = ["utfs.io", "ufs.io", "uploadthing.com"];
+const UPLOADTHING_HOSTNAME_SUFFIXES = ["utfs.io", "ufs.io", "ufs.sh", "uploadthing.com"];
 const UPLOADTHING_PATH_PREFIX = "/f/";
 
 export function extractVerifiedUploadThingKey(url: string): string | null {

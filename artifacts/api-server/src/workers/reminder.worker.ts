@@ -9,6 +9,7 @@ import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import { runExpiredReservationsCron } from "../lib/expired-reservations";
 import { runSeatReconciliationCron } from "../lib/seat-reconciliation";
+import { runUploadThingOrphanCleanup } from "../lib/uploadthing-orphan-cleanup";
 import { sendPushNotification } from "../lib/push-notifications";
 import type { ReminderJobData } from "../queues/index";
 import { formatBRL, localToday } from "@workspace/shared";
@@ -1904,6 +1905,8 @@ export function startReminderWorker(): Worker<ReminderJobData> | null {
         await runSeatReconciliationCron();
       } else if (job.data.type === "trial_expiry_notification") {
         await processTrialExpiryNotifications();
+      } else if (job.data.type === "uploadthing_orphan_cleanup") {
+        await runUploadThingOrphanCleanup();
       } else {
         logger.warn({ type: job.data.type }, "[reminder-worker] Unknown reminder type");
       }
