@@ -1,3 +1,5 @@
+import { formatBRL } from "@workspace/shared";
+
 type StorefrontMetadataStore = {
   name: string;
   slug: string;
@@ -24,6 +26,13 @@ type StorefrontMetadataProduct = {
   metaTitle?: string | null;
   metaDescription?: string | null;
   metaKeywords?: string | null;
+  price?: string | number | null;
+  onSale?: boolean | null;
+  salePrice?: string | number | null;
+  saleStartsAt?: Date | string | null;
+  saleEndsAt?: Date | string | null;
+  startDate?: Date | string | null;
+  departureDate?: Date | string | null;
 };
 
 export type StorefrontMetadata = {
@@ -97,6 +106,62 @@ function firstAsset(...values: Array<string | null | undefined>): string | null 
   return values.find((value) => typeof value === "string" && value.trim().length > 0) ?? null;
 }
 
+function validTime(value: Date | string | null | undefined): number | null | undefined {
+  if (!value) return undefined;
+  const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function activeProductPrice(product: StorefrontMetadataProduct, now = Date.now()): number | null {
+  const basePrice = Number(product.price);
+  if (!Number.isFinite(basePrice) || basePrice <= 0) return null;
+
+  if (product.onSale && product.salePrice != null) {
+    const salePrice = Number(product.salePrice);
+    const startsAt = validTime(product.saleStartsAt);
+    const endsAt = validTime(product.saleEndsAt);
+    const saleWindowIsValid =
+      startsAt !== null
+      && endsAt !== null
+      && (startsAt === undefined || startsAt <= now)
+      && (endsAt === undefined || endsAt > now);
+    if (saleWindowIsValid && Number.isFinite(salePrice) && salePrice > 0) {
+      return salePrice;
+    }
+  }
+
+  return basePrice;
+}
+
+function upcomingDepartureLabel(
+  value: Date | string | null | undefined,
+  now = new Date(),
+): string | null {
+  if (!value) return null;
+  const raw = value instanceof Date ? value.toISOString() : value;
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const date = new Date(dateOnly ? `${raw}T12:00:00Z` : raw);
+  if (!Number.isFinite(date.getTime())) return null;
+
+  const dateKeyFormatter = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" });
+  if (dateKeyFormatter.format(date) < dateKeyFormatter.format(now)) return null;
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
+function withProductDetails(description: string, details: string[]): string {
+  const suffix = details.length > 0 ? ` ${details.join(" · ")}` : "";
+  if (!suffix) return description;
+  const availableDescriptionLength = 180 - suffix.length;
+  if (availableDescriptionLength < 20) return suffix.trim().slice(0, 180);
+  return `${description.slice(0, availableDescriptionLength).trim()}${suffix}`;
+}
+
 export function productSlugFromStorefrontPath(pathname: string, storeSlug: string): string | null {
   const parts = pathname.split("/").filter(Boolean);
   if (
@@ -148,6 +213,19 @@ export function buildStorefrontMetadata(
       180,
     )
     : storeDescription;
+  const departureLabel = isProductPage
+    ? upcomingDepartureLabel(product?.departureDate) ?? upcomingDepartureLabel(product?.startDate)
+    : null;
+  const price = isProductPage && product ? activeProductPrice(product) : null;
+  const descriptionWithProductDetails = isProductPage
+    ? withProductDetails(
+      description,
+      [
+        departureLabel ? `Saída em ${departureLabel}` : null,
+        price ? `A partir de ${formatBRL(price)}` : null,
+      ].filter((detail): detail is string => Boolean(detail)),
+    )
+    : description;
   const keywords = isProductPage
     ? normalizedText(
       product?.metaKeywords,
@@ -169,7 +247,7 @@ export function buildStorefrontMetadata(
     "@context": "https://schema.org",
     "@type": isProductPage ? "Product" : "TravelAgency",
     name: isProductPage ? product?.name : store.name,
-    description,
+    description: descriptionWithProductDetails,
     url: canonicalUrl,
     ...(imageUrl ? { image: imageUrl } : {}),
     ...(isProductPage ? { brand: { "@type": "Brand", name: store.name } } : {}),
@@ -180,7 +258,7 @@ export function buildStorefrontMetadata(
 
   return {
     title,
-    description,
+    description: descriptionWithProductDetails,
     keywords,
     canonicalUrl,
     faviconUrl,

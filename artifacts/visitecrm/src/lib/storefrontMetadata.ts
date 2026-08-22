@@ -1,4 +1,5 @@
 import { PublicStore, StoreProduct } from "./storeApi";
+import { formatCurrency } from "./utils";
 
 const DEFAULT_TITLE = "VisiteCRM — CRM para Agências de Viagem";
 const DEFAULT_DESCRIPTION =
@@ -16,6 +17,61 @@ function plainText(value: string | null | undefined): string | null | undefined 
 
 function firstImage(...values: Array<string | null | undefined>): string | null {
   return values.find((value) => typeof value === "string" && value.trim().length > 0) ?? null;
+}
+
+function validTime(value: string | Date | null | undefined): number | null | undefined {
+  if (!value) return undefined;
+  const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function activeProductPrice(
+  product: Pick<StoreProduct, "price" | "onSale" | "salePrice" | "saleStartsAt" | "saleEndsAt">,
+  now = Date.now(),
+): number | null {
+  const basePrice = Number(product.price);
+  if (!Number.isFinite(basePrice) || basePrice <= 0) return null;
+
+  if (product.onSale && product.salePrice != null) {
+    const salePrice = Number(product.salePrice);
+    const startsAt = validTime(product.saleStartsAt);
+    const endsAt = validTime(product.saleEndsAt);
+    const saleWindowIsValid =
+      startsAt !== null
+      && endsAt !== null
+      && (startsAt === undefined || startsAt <= now)
+      && (endsAt === undefined || endsAt > now);
+    if (saleWindowIsValid && Number.isFinite(salePrice) && salePrice > 0) {
+      return salePrice;
+    }
+  }
+
+  return basePrice;
+}
+
+function upcomingDepartureLabel(value: string | null | undefined, now = new Date()): string | null {
+  if (!value) return null;
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const date = new Date(dateOnly ? `${value}T12:00:00Z` : value);
+  if (!Number.isFinite(date.getTime())) return null;
+
+  const dateKeyFormatter = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" });
+  if (dateKeyFormatter.format(date) < dateKeyFormatter.format(now)) return null;
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
+function withProductDetails(description: string, details: string[]): string {
+  const suffix = details.length > 0 ? ` ${details.join(" · ")}` : "";
+  if (!suffix) return description;
+  const availableDescriptionLength = 180 - suffix.length;
+  if (availableDescriptionLength < 20) return suffix.trim().slice(0, 180);
+  return `${description.slice(0, availableDescriptionLength).trim()}${suffix}`;
 }
 
 function absoluteUrl(value: string | null | undefined): string | null {
@@ -81,7 +137,8 @@ export function applyStorefrontMetadata(
   product?: Pick<
     StoreProduct,
     "name" | "description" | "shortDescription" | "thumbnail" | "images" | "gallery"
-    | "metaTitle" | "metaDescription" | "metaKeywords"
+    | "metaTitle" | "metaDescription" | "metaKeywords" | "price" | "onSale" | "salePrice"
+    | "saleStartsAt" | "saleEndsAt" | "startDate" | "departureDate"
   > | null,
 ): () => void {
   const storeDescription = text(
@@ -100,6 +157,19 @@ export function applyStorefrontMetadata(
       180,
     )
     : storeDescription;
+  const departureLabel = isProductPage
+    ? upcomingDepartureLabel(product?.departureDate) ?? upcomingDepartureLabel(product?.startDate)
+    : null;
+  const price = isProductPage && product ? activeProductPrice(product) : null;
+  const descriptionWithProductDetails = isProductPage
+    ? withProductDetails(
+      description,
+      [
+        departureLabel ? `Saída em ${departureLabel}` : null,
+        price ? `A partir de ${formatCurrency(price)}` : null,
+      ].filter((detail): detail is string => Boolean(detail)),
+    )
+    : description;
   const keywords = isProductPage
     ? text(product?.metaKeywords, `${product?.name ?? store.name}, ${store.seoKeywords ?? "agência de viagens, turismo, viagens, pacotes de viagem"}`, 400)
     : text(store.seoKeywords, `${store.name}, agência de viagens, turismo, viagens, pacotes de viagem`, 400);
@@ -113,7 +183,7 @@ export function applyStorefrontMetadata(
   const faviconUrl = absoluteUrl(store.faviconUrl) ?? `${window.location.origin}/favicon.svg`;
 
   document.title = title;
-  setMeta("page-description", "name", "description", description);
+  setMeta("page-description", "name", "description", descriptionWithProductDetails);
   setMeta("page-keywords", "name", "keywords", keywords);
   setMeta("page-category", "name", "category", "Agência de viagens");
   setLink("page-canonical", "canonical", canonicalUrl);
@@ -121,13 +191,13 @@ export function applyStorefrontMetadata(
   setMeta("page-og-type", "property", "og:type", "website");
   setMeta("page-og-site-name", "property", "og:site_name", title);
   setMeta("page-og-title", "property", "og:title", title);
-  setMeta("page-og-description", "property", "og:description", description);
+  setMeta("page-og-description", "property", "og:description", descriptionWithProductDetails);
   setMeta("page-og-url", "property", "og:url", canonicalUrl);
   setMeta("page-og-image", "property", "og:image", imageUrl);
   setMeta("page-og-image-alt", "property", "og:image:alt", imageUrl ? `Imagem de ${isProductPage ? product?.name : store.name}` : null);
   setMeta("page-twitter-card", "name", "twitter:card", imageUrl ? "summary_large_image" : "summary");
   setMeta("page-twitter-title", "name", "twitter:title", title);
-  setMeta("page-twitter-description", "name", "twitter:description", description);
+  setMeta("page-twitter-description", "name", "twitter:description", descriptionWithProductDetails);
   setMeta("page-twitter-image", "name", "twitter:image", imageUrl);
 
   const structuredData = document.getElementById("storefront-structured-data");
@@ -136,7 +206,7 @@ export function applyStorefrontMetadata(
       "@context": "https://schema.org",
       "@type": isProductPage ? "Product" : "TravelAgency",
       name: isProductPage ? product?.name : store.name,
-      description,
+      description: descriptionWithProductDetails,
       url: canonicalUrl,
       ...(imageUrl ? { image: imageUrl } : {}),
       ...(isProductPage ? { brand: { "@type": "Brand", name: store.name } } : {}),

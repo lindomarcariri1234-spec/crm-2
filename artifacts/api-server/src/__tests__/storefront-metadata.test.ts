@@ -125,15 +125,47 @@ describe("storefront sharing metadata", () => {
         metaTitle: "Roteiro Cariri Completo — 5 dias",
         metaDescription: "Conheça o Cariri em cinco dias com roteiro completo.",
         metaKeywords: "Cariri, viagem, Chapada do Araripe",
+        price: "1299.90",
+        onSale: true,
+        salePrice: "999.90",
+        saleStartsAt: "2000-01-01T00:00:00.000Z",
+        saleEndsAt: "2099-12-31T23:59:59.000Z",
+        departureDate: "not-a-date",
+        startDate: "2099-09-15",
       },
     );
 
     expect(metadata.title).toBe("Roteiro Cariri Completo — 5 dias");
-    expect(metadata.description).toBe("Conheça o Cariri em cinco dias com roteiro completo.");
+    expect(metadata.description).toContain("Conheça o Cariri em cinco dias com roteiro completo.");
+    expect(metadata.description).toContain("Saída em 15/09/2099");
+    expect(metadata.description).toContain("A partir de");
+    expect(metadata.description).toContain("999,90");
     expect(metadata.keywords).toBe("Cariri, viagem, Chapada do Araripe");
     expect(metadata.imageUrl).toBe("https://utfs.io/f/roteiro-cariri.jpg");
     expect(metadata.jsonLd).toContain('"@type":"Product"');
     expect(metadata.jsonLd).toContain('"name":"Roteiro Cariri Completo"');
+  });
+
+  it("does not advertise expired promotions or past departures", () => {
+    const metadata = buildStorefrontMetadata(
+      store,
+      "/loja/visite-cariri-cearense-receptivo/produtos/roteiro-antigo",
+      "visitecrm.com",
+      {
+        name: "Roteiro Histórico",
+        description: "Uma viagem com roteiro cultural.",
+        price: "1299.90",
+        onSale: true,
+        salePrice: "899.90",
+        saleEndsAt: "2000-01-01T00:00:00.000Z",
+        departureDate: "2000-01-01",
+      },
+    );
+
+    expect(metadata.description).toContain("A partir de");
+    expect(metadata.description).toContain("1.299,90");
+    expect(metadata.description).not.toContain("899,90");
+    expect(metadata.description).not.toContain("Saída em");
   });
 
   it("only selects a package slug from an exact product route", () => {

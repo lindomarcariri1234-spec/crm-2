@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import { clerkMiddleware, getAuth } from "@clerk/express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { and, eq } from "drizzle-orm";
-import { db, storeProductsTable, storesTable } from "@workspace/db";
+import { db, storeProductsTable, storesTable, tripsTable } from "@workspace/db";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { requestId, errorHandler } from "./middlewares/errorHandler";
 import router from "./routes";
@@ -534,8 +534,16 @@ if (!isDev) {
             metaTitle: storeProductsTable.metaTitle,
             metaDescription: storeProductsTable.metaDescription,
             metaKeywords: storeProductsTable.metaKeywords,
+            price: storeProductsTable.price,
+            onSale: storeProductsTable.onSale,
+            salePrice: storeProductsTable.salePrice,
+            saleStartsAt: storeProductsTable.saleStartsAt,
+            saleEndsAt: storeProductsTable.saleEndsAt,
+            startDate: storeProductsTable.startDate,
+            departureDate: tripsTable.departureDate,
           })
           .from(storeProductsTable)
+          .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
           .where(and(
             eq(storeProductsTable.storeId, store.id),
             eq(storeProductsTable.slug, productSlug),
