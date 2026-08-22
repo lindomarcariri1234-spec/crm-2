@@ -193,7 +193,7 @@ async function formatReservation(r: typeof reservationsTable.$inferSelect) {
 // Batch-format a page of reservations without per-row queries (avoids N+1):
 // fetches all related trips, clients, auto-retry email logs and vehicle layouts
 // in at most four queries regardless of page size.
-async function batchFormatReservations(
+export async function batchFormatReservations(
   rows: (typeof reservationsTable.$inferSelect)[],
   tenantId: string,
 ) {
