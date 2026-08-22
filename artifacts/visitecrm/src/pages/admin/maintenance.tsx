@@ -317,6 +317,37 @@ interface BackfillResult {
   total: number;
 }
 
+const REFERRAL_PENDING_BACKFILL_CACHE_KEY = "backfill_referral_pending_zero";
+export const REFERRAL_PENDING_BACKFILL_CACHE_TTL_MS = 15 * 60 * 1000;
+
+interface ReferralPendingBackfillCacheEntry {
+  value: "1";
+  timestamp: number;
+}
+
+function hasFreshZeroCountCache(): boolean {
+  const cachedValue = sessionStorage.getItem(REFERRAL_PENDING_BACKFILL_CACHE_KEY);
+  if (!cachedValue) return false;
+
+  try {
+    const cacheEntry = JSON.parse(cachedValue) as Partial<ReferralPendingBackfillCacheEntry>;
+    const age = Date.now() - (cacheEntry.timestamp ?? NaN);
+    const isFresh =
+      cacheEntry.value === "1" &&
+      Number.isFinite(cacheEntry.timestamp) &&
+      age >= 0 &&
+      age < REFERRAL_PENDING_BACKFILL_CACHE_TTL_MS;
+
+    if (!isFresh) {
+      sessionStorage.removeItem(REFERRAL_PENDING_BACKFILL_CACHE_KEY);
+    }
+    return isFresh;
+  } catch {
+    sessionStorage.removeItem(REFERRAL_PENDING_BACKFILL_CACHE_KEY);
+    return false;
+  }
+}
+
 function ReferralPendingBackfillSection() {
   const { toast } = useToast();
   const [running, setRunning] = useState(false);
@@ -328,11 +359,9 @@ function ReferralPendingBackfillSection() {
   const [dryRunCount, setDryRunCount] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  const CACHE_KEY = "backfill_referral_pending_zero";
-
   useEffect(() => {
-    // Skip the fetch if a prior dry-run already returned zero this session.
-    if (sessionStorage.getItem(CACHE_KEY) === "1") {
+    // Skip the fetch while a prior zero-count dry-run is still fresh.
+    if (hasFreshZeroCountCache()) {
       setDryRunCount(0);
       return;
     }
@@ -344,7 +373,10 @@ function ReferralPendingBackfillSection() {
         const count = data.count ?? 0;
         setDryRunCount(count);
         if (count === 0) {
-          sessionStorage.setItem(CACHE_KEY, "1");
+          sessionStorage.setItem(
+            REFERRAL_PENDING_BACKFILL_CACHE_KEY,
+            JSON.stringify({ value: "1", timestamp: Date.now() }),
+          );
         }
       })
       .catch(() => setDryRunCount(0));
@@ -354,7 +386,7 @@ function ReferralPendingBackfillSection() {
 
   async function runBackfill() {
     // Clear the zero-count cache so the next mount re-checks after a manual run.
-    sessionStorage.removeItem(CACHE_KEY);
+    sessionStorage.removeItem(REFERRAL_PENDING_BACKFILL_CACHE_KEY);
     setRunning(true);
     setResult(null);
     try {
@@ -414,7 +446,7 @@ function ReferralPendingBackfillSection() {
                 variant="ghost"
                 size="sm"
                 className="text-xs h-7 px-2 text-green-700 hover:text-green-900 hover:bg-green-100 mt-1"
-                onClick={() => { sessionStorage.removeItem(CACHE_KEY); setExpanded(true); }}
+                onClick={() => { sessionStorage.removeItem(REFERRAL_PENDING_BACKFILL_CACHE_KEY); setExpanded(true); }}
               >
                 {expanded ? (
                   <ChevronUp className="w-3 h-3 mr-1.5" />
