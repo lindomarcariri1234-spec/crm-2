@@ -14,6 +14,18 @@ type StorefrontMetadataStore = {
   domainVerified?: boolean;
 };
 
+type StorefrontMetadataProduct = {
+  name: string;
+  description?: string | null;
+  shortDescription?: string | null;
+  thumbnail?: string | null;
+  images?: string[] | null;
+  gallery?: string[] | null;
+  metaTitle?: string | null;
+  metaDescription?: string | null;
+  metaKeywords?: string | null;
+};
+
 export type StorefrontMetadata = {
   title: string;
   description: string;
@@ -32,6 +44,10 @@ const FALLBACK_KEYWORDS = "agência de viagens, turismo, viagens, pacotes de via
 function normalizedText(value: string | null | undefined, fallback: string, maxLength: number): string {
   const text = value?.replace(/\s+/g, " ").trim();
   return (text || fallback).slice(0, maxLength);
+}
+
+function plainText(value: string | null | undefined): string | null | undefined {
+  return value?.replace(/<[^>]*>/g, " ");
 }
 
 function escapeHtml(value: string): string {
@@ -77,6 +93,28 @@ function absoluteAssetUrl(value: string | null | undefined, origin: string): str
   }
 }
 
+function firstAsset(...values: Array<string | null | undefined>): string | null {
+  return values.find((value) => typeof value === "string" && value.trim().length > 0) ?? null;
+}
+
+export function productSlugFromStorefrontPath(pathname: string, storeSlug: string): string | null {
+  const parts = pathname.split("/").filter(Boolean);
+  if (
+    parts.length !== 4
+    || parts[0] !== "loja"
+    || parts[1] !== storeSlug
+    || parts[2] !== "produtos"
+  ) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(parts[3] ?? "") || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Builds the public metadata used by social crawlers. The request host is only
  * accepted when it matches a verified custom domain, preventing host-header
@@ -86,30 +124,58 @@ export function buildStorefrontMetadata(
   store: StorefrontMetadataStore,
   requestPath: string,
   requestHost?: string,
+  product?: StorefrontMetadataProduct | null,
 ): StorefrontMetadata {
   const publicOrigin = verifiedCustomOrigin(store, requestHost) ?? configuredPublicOrigin();
   const canonicalUrl = new URL(safePath(requestPath), publicOrigin).toString();
-  const title = normalizedText(store.metaTitle, store.name, 120);
-  const description = normalizedText(
+  const storeDescription = normalizedText(
     store.metaDescription,
-    normalizedText(store.tagline, normalizedText(store.description, FALLBACK_DESCRIPTION, 180), 180),
+    normalizedText(store.tagline, normalizedText(plainText(store.description), FALLBACK_DESCRIPTION, 180), 180),
     180,
   );
-  const keywords = normalizedText(
-    store.metaKeywords,
-    `${store.name}, ${FALLBACK_KEYWORDS}`,
-    400,
+  const isProductPage = Boolean(product);
+  const title = isProductPage
+    ? normalizedText(product?.metaTitle, product?.name ?? store.name, 120)
+    : normalizedText(store.metaTitle, store.name, 120);
+  const description = isProductPage
+    ? normalizedText(
+      product?.metaDescription,
+      normalizedText(
+        product?.shortDescription,
+        normalizedText(plainText(product?.description), storeDescription, 180),
+        180,
+      ),
+      180,
+    )
+    : storeDescription;
+  const keywords = isProductPage
+    ? normalizedText(
+      product?.metaKeywords,
+      `${product?.name ?? store.name}, ${store.metaKeywords ?? FALLBACK_KEYWORDS}`,
+      400,
+    )
+    : normalizedText(store.metaKeywords, `${store.name}, ${FALLBACK_KEYWORDS}`, 400);
+  const productImage = firstAsset(
+    product?.thumbnail,
+    ...(product?.images ?? []),
+    ...(product?.gallery ?? []),
   );
-  const imageUrl = absoluteAssetUrl(store.bannerHome ?? store.bannerMobile ?? store.logo, publicOrigin);
+  const imageUrl = absoluteAssetUrl(
+    productImage ?? store.bannerHome ?? store.bannerMobile ?? store.logo,
+    publicOrigin,
+  );
   const faviconUrl = absoluteAssetUrl(store.favicon, publicOrigin) ?? `${publicOrigin}/favicon.svg`;
   const jsonLd = JSON.stringify({
     "@context": "https://schema.org",
-    "@type": "TravelAgency",
-    name: store.name,
+    "@type": isProductPage ? "Product" : "TravelAgency",
+    name: isProductPage ? product?.name : store.name,
     description,
     url: canonicalUrl,
     ...(imageUrl ? { image: imageUrl } : {}),
-    ...(absoluteAssetUrl(store.logo, publicOrigin) ? { logo: absoluteAssetUrl(store.logo, publicOrigin) } : {}),
+    ...(isProductPage ? { brand: { "@type": "Brand", name: store.name } } : {}),
+    ...(!isProductPage && absoluteAssetUrl(store.logo, publicOrigin)
+      ? { logo: absoluteAssetUrl(store.logo, publicOrigin) }
+      : {}),
   }).replace(/</g, "\\u003c");
 
   return {
@@ -119,7 +185,7 @@ export function buildStorefrontMetadata(
     canonicalUrl,
     faviconUrl,
     imageUrl,
-    imageAlt: imageUrl ? `Imagem de ${store.name}` : null,
+    imageAlt: imageUrl ? `Imagem de ${isProductPage ? product?.name : store.name}` : null,
     jsonLd,
   };
 }

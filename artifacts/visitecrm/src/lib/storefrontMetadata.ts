@@ -1,4 +1,4 @@
-import { PublicStore } from "./storeApi";
+import { PublicStore, StoreProduct } from "./storeApi";
 
 const DEFAULT_TITLE = "VisiteCRM — CRM para Agências de Viagem";
 const DEFAULT_DESCRIPTION =
@@ -8,6 +8,14 @@ const DEFAULT_KEYWORDS = "CRM, agências de viagem, turismo, reservas";
 function text(value: string | null | undefined, fallback: string, maxLength: number): string {
   const normalized = value?.replace(/\s+/g, " ").trim();
   return (normalized || fallback).slice(0, maxLength);
+}
+
+function plainText(value: string | null | undefined): string | null | undefined {
+  return value?.replace(/<[^>]*>/g, " ");
+}
+
+function firstImage(...values: Array<string | null | undefined>): string | null {
+  return values.find((value) => typeof value === "string" && value.trim().length > 0) ?? null;
 }
 
 function absoluteUrl(value: string | null | undefined): string | null {
@@ -67,20 +75,41 @@ function restoreDefaultMetadata(): void {
   document.getElementById("storefront-structured-data")?.replaceChildren();
 }
 
-export function applyStorefrontMetadata(store: PublicStore, pathname: string): () => void {
-  const title = text(store.seoTitle, store.name, 120);
-  const description = text(
+export function applyStorefrontMetadata(
+  store: PublicStore,
+  pathname: string,
+  product?: Pick<
+    StoreProduct,
+    "name" | "description" | "shortDescription" | "thumbnail" | "images" | "gallery"
+    | "metaTitle" | "metaDescription" | "metaKeywords"
+  > | null,
+): () => void {
+  const storeDescription = text(
     store.seoDescription,
-    text(store.tagline, text(store.description, "Conheça nossas viagens, pacotes e experiências.", 180), 180),
+    text(store.tagline, text(plainText(store.description), "Conheça nossas viagens, pacotes e experiências.", 180), 180),
     180,
   );
-  const keywords = text(
-    store.seoKeywords,
-    `${store.name}, agência de viagens, turismo, viagens, pacotes de viagem`,
-    400,
-  );
+  const isProductPage = Boolean(product);
+  const title = isProductPage
+    ? text(product?.metaTitle, product?.name ?? store.name, 120)
+    : text(store.seoTitle, store.name, 120);
+  const description = isProductPage
+    ? text(
+      product?.metaDescription,
+      text(product?.shortDescription, text(plainText(product?.description), storeDescription, 180), 180),
+      180,
+    )
+    : storeDescription;
+  const keywords = isProductPage
+    ? text(product?.metaKeywords, `${product?.name ?? store.name}, ${store.seoKeywords ?? "agência de viagens, turismo, viagens, pacotes de viagem"}`, 400)
+    : text(store.seoKeywords, `${store.name}, agência de viagens, turismo, viagens, pacotes de viagem`, 400);
   const canonicalUrl = new URL(pathname, window.location.origin).toString();
-  const imageUrl = absoluteUrl(store.bannerUrl ?? store.bannerMobileUrl ?? store.logoUrl);
+  const productImage = firstImage(
+    product?.thumbnail,
+    ...(product?.images ?? []),
+    ...(product?.gallery ?? []),
+  );
+  const imageUrl = absoluteUrl(productImage ?? store.bannerUrl ?? store.bannerMobileUrl ?? store.logoUrl);
   const faviconUrl = absoluteUrl(store.faviconUrl) ?? `${window.location.origin}/favicon.svg`;
 
   document.title = title;
@@ -95,7 +124,7 @@ export function applyStorefrontMetadata(store: PublicStore, pathname: string): (
   setMeta("page-og-description", "property", "og:description", description);
   setMeta("page-og-url", "property", "og:url", canonicalUrl);
   setMeta("page-og-image", "property", "og:image", imageUrl);
-  setMeta("page-og-image-alt", "property", "og:image:alt", imageUrl ? `Imagem de ${store.name}` : null);
+  setMeta("page-og-image-alt", "property", "og:image:alt", imageUrl ? `Imagem de ${isProductPage ? product?.name : store.name}` : null);
   setMeta("page-twitter-card", "name", "twitter:card", imageUrl ? "summary_large_image" : "summary");
   setMeta("page-twitter-title", "name", "twitter:title", title);
   setMeta("page-twitter-description", "name", "twitter:description", description);
@@ -105,12 +134,13 @@ export function applyStorefrontMetadata(store: PublicStore, pathname: string): (
   if (structuredData) {
     structuredData.textContent = JSON.stringify({
       "@context": "https://schema.org",
-      "@type": "TravelAgency",
-      name: store.name,
+      "@type": isProductPage ? "Product" : "TravelAgency",
+      name: isProductPage ? product?.name : store.name,
       description,
       url: canonicalUrl,
       ...(imageUrl ? { image: imageUrl } : {}),
-      ...(absoluteUrl(store.logoUrl) ? { logo: absoluteUrl(store.logoUrl) } : {}),
+      ...(isProductPage ? { brand: { "@type": "Brand", name: store.name } } : {}),
+      ...(!isProductPage && absoluteUrl(store.logoUrl) ? { logo: absoluteUrl(store.logoUrl) } : {}),
     }).replace(/</g, "\\u003c");
   }
 

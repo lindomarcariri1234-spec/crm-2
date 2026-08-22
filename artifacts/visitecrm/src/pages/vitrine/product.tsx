@@ -37,6 +37,7 @@ import {
   Video,
 } from "lucide-react";
 import { useFavorites } from "@/contexts/FavoritesContext";
+import { applyStorefrontMetadata } from "@/lib/storefrontMetadata";
 
 function GalleryThumb({
   src,
@@ -365,6 +366,10 @@ export default function VitrineProduct({
       .catch(() => setNotFound(true))
       .finally(() => setLoading(false));
   }, [slug, productSlug]);
+
+  useEffect(() => {
+    if (product) applyStorefrontMetadata(store, window.location.pathname, product);
+  }, [product, store]);
 
   useEffect(() => {
     if (!product) return;

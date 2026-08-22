@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildStorefrontMetadata,
   injectStorefrontMetadata,
+  productSlugFromStorefrontPath,
 } from "../lib/storefront-metadata.js";
 
 const store = {
@@ -106,5 +107,47 @@ describe("storefront sharing metadata", () => {
     expect(html).not.toContain('<script>alert("xss")</script>');
     expect(html).toContain("&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;");
     expect(html).toContain("\\u003cscript>");
+  });
+
+  it("uses an active package's SEO and image for a product URL", () => {
+    vi.stubEnv("STORE_PUBLIC_URL", "https://visitecrm.com");
+    const metadata = buildStorefrontMetadata(
+      store,
+      "/loja/visite-cariri-cearense-receptivo/produtos/roteiro-cariri",
+      "visitecrm.com",
+      {
+        name: "Roteiro Cariri Completo",
+        description: "<p>Uma viagem com cultura, natureza e fé.</p>",
+        shortDescription: "Conheça o melhor do Cariri.",
+        thumbnail: null,
+        images: ["https://utfs.io/f/roteiro-cariri.jpg"],
+        gallery: ["https://utfs.io/f/gallery.jpg"],
+        metaTitle: "Roteiro Cariri Completo — 5 dias",
+        metaDescription: "Conheça o Cariri em cinco dias com roteiro completo.",
+        metaKeywords: "Cariri, viagem, Chapada do Araripe",
+      },
+    );
+
+    expect(metadata.title).toBe("Roteiro Cariri Completo — 5 dias");
+    expect(metadata.description).toBe("Conheça o Cariri em cinco dias com roteiro completo.");
+    expect(metadata.keywords).toBe("Cariri, viagem, Chapada do Araripe");
+    expect(metadata.imageUrl).toBe("https://utfs.io/f/roteiro-cariri.jpg");
+    expect(metadata.jsonLd).toContain('"@type":"Product"');
+    expect(metadata.jsonLd).toContain('"name":"Roteiro Cariri Completo"');
+  });
+
+  it("only selects a package slug from an exact product route", () => {
+    expect(productSlugFromStorefrontPath(
+      "/loja/visite-cariri-cearense-receptivo/produtos/roteiro%20cariri",
+      "visite-cariri-cearense-receptivo",
+    )).toBe("roteiro cariri");
+    expect(productSlugFromStorefrontPath(
+      "/loja/visite-cariri-cearense-receptivo/produtos",
+      "visite-cariri-cearense-receptivo",
+    )).toBeNull();
+    expect(productSlugFromStorefrontPath(
+      "/loja/visite-cariri-cearense-receptivo/indicacao",
+      "visite-cariri-cearense-receptivo",
+    )).toBeNull();
   });
 });

@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import { clerkMiddleware, getAuth } from "@clerk/express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { and, eq } from "drizzle-orm";
-import { db, storesTable } from "@workspace/db";
+import { db, storeProductsTable, storesTable } from "@workspace/db";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { requestId, errorHandler } from "./middlewares/errorHandler";
 import router from "./routes";
@@ -17,6 +17,7 @@ import { handleStripeWebhook } from "./lib/stripeWebhookHandler";
 import {
   buildStorefrontMetadata,
   injectStorefrontMetadata,
+  productSlugFromStorefrontPath,
 } from "./lib/storefront-metadata";
 
 const app: Express = express();
@@ -496,6 +497,7 @@ if (!isDev) {
 
       const [store] = await db
         .select({
+          id: storesTable.id,
           name: storesTable.name,
           slug: storesTable.slug,
           tagline: storesTable.tagline,
@@ -519,7 +521,29 @@ if (!isDev) {
         return;
       }
 
-      const metadata = buildStorefrontMetadata(store, req.path, req.get("host"));
+      const productSlug = productSlugFromStorefrontPath(req.path, slug);
+      const [product] = productSlug
+        ? await db
+          .select({
+            name: storeProductsTable.name,
+            description: storeProductsTable.description,
+            shortDescription: storeProductsTable.shortDescription,
+            thumbnail: storeProductsTable.thumbnail,
+            images: storeProductsTable.images,
+            gallery: storeProductsTable.gallery,
+            metaTitle: storeProductsTable.metaTitle,
+            metaDescription: storeProductsTable.metaDescription,
+            metaKeywords: storeProductsTable.metaKeywords,
+          })
+          .from(storeProductsTable)
+          .where(and(
+            eq(storeProductsTable.storeId, store.id),
+            eq(storeProductsTable.slug, productSlug),
+            eq(storeProductsTable.status, "active"),
+          ))
+          .limit(1)
+        : [];
+      const metadata = buildStorefrontMetadata(store, req.path, req.get("host"), product);
       const html = injectStorefrontMetadata(await getStorefrontIndexHtml(), metadata);
       res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
       res.type("html").send(html);
