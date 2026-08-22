@@ -144,6 +144,7 @@ export const publicStoreApi = {
     return {
       ...raw,
       logoUrl: (raw.logoUrl ?? raw.logo) as string | null,
+      faviconUrl: (raw.faviconUrl ?? raw.favicon) as string | null,
       bannerUrl: (raw.bannerUrl ?? raw.bannerHome) as string | null,
       bannerMobileUrl: (raw.bannerMobileUrl ?? raw.bannerMobile) as string | null,
       contactEmail: (raw.contactEmail ?? raw.email) as string | null,
@@ -153,6 +154,9 @@ export const publicStoreApi = {
       socialInstagram: (raw.socialInstagram ?? raw.instagramUrl) as string | null,
       socialFacebook: (raw.socialFacebook ?? raw.facebookUrl) as string | null,
       socialYoutube: (raw.socialYoutube ?? raw.youtubeUrl) as string | null,
+      seoTitle: (raw.seoTitle ?? raw.metaTitle) as string | null,
+      seoDescription: (raw.seoDescription ?? raw.metaDescription) as string | null,
+      seoKeywords: (raw.seoKeywords ?? raw.metaKeywords) as string | null,
       paymentMethods: Array.isArray(raw.paymentMethods) ? raw.paymentMethods as string[] : [],
     } as PublicStore;
   },
@@ -361,8 +365,10 @@ export interface PublicStore {
   id: string;
   name: string;
   slug: string;
+  tagline?: string | null;
   description?: string | null;
   logoUrl?: string | null;
+  faviconUrl?: string | null;
   bannerUrl?: string | null;
   bannerMobileUrl?: string | null;
   primaryColor: string;
@@ -377,6 +383,7 @@ export interface PublicStore {
   socialYoutube?: string | null;
   seoTitle?: string | null;
   seoDescription?: string | null;
+  seoKeywords?: string | null;
   paymentMethods: string[];
   stripeEnabled: boolean;
   stripePublicKey?: string | null;

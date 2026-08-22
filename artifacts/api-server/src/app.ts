@@ -4,13 +4,20 @@ import helmet from "helmet";
 import pinoHttp from "pino-http";
 import cookieParser from "cookie-parser";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { clerkMiddleware, getAuth } from "@clerk/express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { and, eq } from "drizzle-orm";
+import { db, storesTable } from "@workspace/db";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { requestId, errorHandler } from "./middlewares/errorHandler";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { handleStripeWebhook } from "./lib/stripeWebhookHandler";
+import {
+  buildStorefrontMetadata,
+  injectStorefrontMetadata,
+} from "./lib/storefront-metadata";
 
 const app: Express = express();
 
@@ -471,10 +478,62 @@ app.use("/api", router);
 
 if (!isDev) {
   const frontendDist = path.join(process.cwd(), "artifacts/visitecrm/dist/public");
+  const storefrontIndexPath = path.join(frontendDist, "index.html");
+  let storefrontIndexHtml: Promise<string> | null = null;
+
+  const getStorefrontIndexHtml = (): Promise<string> => {
+    storefrontIndexHtml ??= readFile(storefrontIndexPath, "utf8");
+    return storefrontIndexHtml;
+  };
+
+  const serveStorefront = async (req: Request, res: Response, next: express.NextFunction): Promise<void> => {
+    try {
+      const slug = req.params["slug"];
+      if (typeof slug !== "string") {
+        res.sendFile(storefrontIndexPath);
+        return;
+      }
+
+      const [store] = await db
+        .select({
+          name: storesTable.name,
+          slug: storesTable.slug,
+          tagline: storesTable.tagline,
+          description: storesTable.description,
+          logo: storesTable.logo,
+          favicon: storesTable.favicon,
+          bannerHome: storesTable.bannerHome,
+          bannerMobile: storesTable.bannerMobile,
+          metaTitle: storesTable.metaTitle,
+          metaDescription: storesTable.metaDescription,
+          metaKeywords: storesTable.metaKeywords,
+          customDomain: storesTable.customDomain,
+          domainVerified: storesTable.domainVerified,
+        })
+        .from(storesTable)
+        .where(and(eq(storesTable.slug, slug), eq(storesTable.isActive, true)))
+        .limit(1);
+
+      if (!store) {
+        res.sendFile(storefrontIndexPath);
+        return;
+      }
+
+      const metadata = buildStorefrontMetadata(store, req.path, req.get("host"));
+      const html = injectStorefrontMetadata(await getStorefrontIndexHtml(), metadata);
+      res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+      res.type("html").send(html);
+    } catch (error) {
+      next(error);
+    }
+  };
+
   app.use(express.static(frontendDist));
+  app.get("/loja/:slug", serveStorefront);
+  app.get("/loja/:slug/{*splat}", serveStorefront);
   app.get("/{*splat}", (req: Request, res: Response, next: express.NextFunction) => {
     if (req.path.startsWith("/api/")) return next();
-    res.sendFile(path.join(frontendDist, "index.html"));
+    res.sendFile(storefrontIndexPath);
   });
 }
 

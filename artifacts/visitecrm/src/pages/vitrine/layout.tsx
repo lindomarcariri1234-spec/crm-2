@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { NotificationBell } from "@/components/vitrine/NotificationBell";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { applyStorefrontMetadata } from "@/lib/storefrontMetadata";
 
 export default function VitrineLayout({
   children,
@@ -32,7 +33,7 @@ export default function VitrineLayout({
   slug: string;
   store: PublicStore;
 }) {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const { colors } = useVitrineTheme();
   const { isSignedIn } = useUser();
   const { signOut } = useClerk();
@@ -44,6 +45,8 @@ export default function VitrineLayout({
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const profileDropdownRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => applyStorefrontMetadata(store, location), [store, location]);
 
   useEffect(() => {
     if (!profileDropdownOpen) return;
