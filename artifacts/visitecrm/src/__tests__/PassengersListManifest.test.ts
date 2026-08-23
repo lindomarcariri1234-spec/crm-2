@@ -328,3 +328,77 @@ describe("printPassengersManifest — coluna Poltrona com seatNumber=null", () =
     expect(getHtml()).toContain("Bebê");
   });
 });
+
+describe("printPassengersManifest — colunas financeiras", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("imprime os valores financeiros formatados quando as colunas estão visíveis", () => {
+    const { getHtml } = setupWindowOpenCapture();
+
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [makeAdult({
+        totalValue: "1234.5",
+        paidValue: "800",
+        balance: "434.5",
+      })],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+      [],
+      { totalValue: true, paidValue: true, balance: true },
+    );
+
+    const html = getHtml();
+    expect(html).toContain('<th class="num">Valor Total</th>');
+    expect(html).toContain('<th class="num">Valor Pago</th>');
+    expect(html).toContain('<th class="num">Saldo</th>');
+    expect(html).toContain("R$ 1.234,50");
+    expect(html).toContain("R$ 800,00");
+    expect(html).toContain("R$ 434,50");
+  });
+
+  it("não imprime os cabeçalhos financeiros quando as colunas estão ocultas", () => {
+    const { getHtml } = setupWindowOpenCapture();
+
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [makeAdult()],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+      [],
+      { totalValue: false, paidValue: false, balance: false },
+    );
+
+    const html = getHtml();
+    expect(html).not.toContain('<th class="num">Valor Total</th>');
+    expect(html).not.toContain('<th class="num">Valor Pago</th>');
+    expect(html).not.toContain('<th class="num">Saldo</th>');
+  });
+
+  it("imprime — nas três colunas financeiras para gratuidades cadastradas à parte", () => {
+    const { getHtml } = setupWindowOpenCapture();
+
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+      [makeFreePassenger()],
+      { totalValue: true, paidValue: true, balance: true },
+    );
+
+    const html = getHtml();
+    expect(html).toContain('<th class="num">Valor Total</th>');
+    expect(html).toContain('<th class="num">Valor Pago</th>');
+    expect(html).toContain('<th class="num">Saldo</th>');
+    expect(html.match(/<td class="num">—<\/td>/g)).toHaveLength(3);
+  });
+});
