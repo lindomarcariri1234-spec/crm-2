@@ -43,6 +43,7 @@ import {
   Award,
   X,
   Menu,
+  MapPin,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -214,6 +215,7 @@ const AGENCY_NAVIGATION: NavItem[] = [
     href: "/analytics",
     icon: BarChart2,
     children: [
+      { name: "Visão geral", href: "/analytics", icon: BarChart2 },
       { name: "Vendedores", href: "/analytics/vendedores", icon: UserCheck },
       { name: "Insights", href: "/insights", icon: BrainCircuit },
       { name: "Gêmeo Digital", href: "/gemeo", icon: Activity, roles: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN] },
@@ -347,7 +349,7 @@ function NavLink({
   );
 }
 
-function NavigationMenu({
+export function NavigationMenu({
   items,
   location,
   userRole,
@@ -366,7 +368,7 @@ function NavigationMenu({
 
   return (
     <nav aria-label="Navegação principal" className="flex flex-col gap-0.5" onClick={(event) => {
-      if ((event.target as HTMLElement).closest("a")) onNavigate?.();
+      if (event.target instanceof Element && event.target.closest("a")) onNavigate?.();
     }}>
       {visibleItems.map((item) => (
         <NavLink key={item.name} item={item} location={location} userRole={userRole} />
@@ -414,7 +416,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const tenantLogoUrl: string | undefined = me?.tenant?.logoUrl ?? undefined;
   const tenantPrimaryColor: string = me?.tenant?.primaryColor ?? "#3B82F6";
   const userRole: string | undefined = me?.role;
-  const tenantInitial = tenantName.charAt(0).toUpperCase();
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
 
   const tenantSettings = (me?.tenant?.settings ?? {}) as Record<string, unknown>;
   const referralsEnabled = tenantSettings.referralsEnabled !== false;
@@ -454,31 +456,15 @@ export default function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen bg-muted/30">
-      {/* Sidebar */}
-      <div className="w-60 bg-sidebar border-r flex flex-col shrink-0">
-        {/* Tenant branding */}
-        <div className="px-4 py-3 flex items-center gap-3 border-b border-sidebar-border">
-          <div
-            className="w-8 h-8 rounded-md flex items-center justify-center text-white font-bold text-sm shrink-0 overflow-hidden"
-            style={{ background: tenantPrimaryColor }}
-          >
-            {tenantLogoUrl ? (
-              <img src={tenantLogoUrl} alt="" className="w-full h-full object-contain" />
-            ) : (
-              <span>{tenantInitial}</span>
-            )}
-          </div>
-          <div className="flex flex-col min-w-0">
-            <span className="font-bold text-sm text-sidebar-foreground truncate">{tenantName}</span>
-            <span className="text-xs text-sidebar-foreground/50">CRM Turismo</span>
-          </div>
-        </div>
+      <aside className="hidden w-64 bg-sidebar border-r md:flex flex-col shrink-0">
+        <TenantBrand
+          tenantName={tenantName}
+          tenantLogoUrl={tenantLogoUrl}
+          tenantPrimaryColor={tenantPrimaryColor}
+        />
 
-        {/* Navigation */}
-        <div className="flex-1 overflow-y-auto py-3 px-2 flex flex-col gap-0.5">
-          {navItems.map((item) => (
-              <NavLink key={item.name} item={item} location={location} userRole={userRole} />
-            ))}
+        <div className="flex-1 overflow-y-auto py-3 px-2">
+          <NavigationMenu items={navItems} location={location} userRole={userRole} />
         </div>
 
         {/* User block */}
@@ -509,26 +495,59 @@ export default function Layout({ children }: { children: ReactNode }) {
             </button>
           </div>
         </div>
-      </div>
+      </aside>
+
+      <Sheet open={mobileNavigationOpen} onOpenChange={setMobileNavigationOpen}>
+        <SheetContent side="left" className="w-[min(18rem,85vw)] bg-sidebar p-0 text-sidebar-foreground">
+          <SheetHeader className="sr-only">
+            <SheetTitle>Menu principal</SheetTitle>
+          </SheetHeader>
+          <div className="flex h-full flex-col">
+            <TenantBrand
+              tenantName={tenantName}
+              tenantLogoUrl={tenantLogoUrl}
+              tenantPrimaryColor={tenantPrimaryColor}
+            />
+            <div className="flex-1 overflow-y-auto py-3 px-2">
+              <NavigationMenu
+                items={navItems}
+                location={location}
+                userRole={userRole}
+                onNavigate={() => setMobileNavigationOpen(false)}
+              />
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Main area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
         <header
-          className="h-13 bg-background border-b px-6 flex items-center justify-between shrink-0"
+          className="h-13 bg-background border-b px-4 md:px-6 flex items-center justify-between shrink-0"
           style={{ minHeight: "52px" }}
         >
           {/* Current section / breadcrumb */}
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex min-w-0 items-center gap-2 text-sm">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="md:hidden shrink-0"
+              aria-label="Abrir menu principal"
+              onClick={() => setMobileNavigationOpen(true)}
+            >
+              <Menu className="w-5 h-5" aria-hidden="true" />
+            </Button>
             {currentSection ? (
               <>
-                <currentSection.icon className="w-4 h-4 text-muted-foreground" />
-                <span className="font-medium text-foreground">{currentSection.name}</span>
+                <currentSection.icon className="w-4 h-4 text-muted-foreground shrink-0" />
+                <span className="font-medium text-foreground truncate">{currentSection.name}</span>
               </>
             ) : (
               <>
-                <Building2 className="w-4 h-4 text-muted-foreground" />
-                <span className="font-medium text-foreground">{tenantName}</span>
+                <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                <span className="font-medium text-foreground truncate">{tenantName}</span>
               </>
             )}
           </div>
