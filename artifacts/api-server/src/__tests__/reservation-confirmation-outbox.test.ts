@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WhatsAppOutboxStatus } from "@workspace/db";
 
 const mockInsert = vi.fn();
 const mockSelect = vi.fn();
@@ -53,6 +54,7 @@ vi.mock("../lib/logger.js", () => ({
 
 import {
   scheduleReservationConfirmedWhatsApp,
+  retryPendingReservationConfirmedWhatsApps,
   resetStaleReservationConfirmedWhatsApps,
 } from "../services/checkout/reservation-confirmation-outbox.js";
 
@@ -159,6 +161,49 @@ describe("reservation confirmation WhatsApp outbox", () => {
     expect(updates).toContainEqual(expect.objectContaining({ status: "sent", sentAt: expect.any(Date) }));
   });
 
+  it("releases a stale processing claim and delivers it once on the next retry run", async () => {
+    const outbox = {
+      id: "outbox-1",
+      tenantId: "tenant-1",
+      reservationId: "res-1",
+      sentAt: null,
+    };
+    insertResults = [[]]; // retry resumes the existing durable record
+    selectResults = [
+      [{ reservationId: "res-1", tenantId: "tenant-1" }], // retry finds the reset row
+      [{ id: outbox.id, sentAt: null }], // schedule locates the existing record
+      [outbox], // direct delivery reads it before claiming
+    ];
+    claimResults = [
+      [{ id: outbox.id }], // stale processing → pending reset
+      [{ id: outbox.id }], // pending → processing claim
+    ];
+
+    await retryPendingReservationConfirmedWhatsApps();
+
+    expect(mockDispatchReservationConfirmed).toHaveBeenCalledTimes(1);
+    expect(mockDispatchReservationConfirmed).toHaveBeenCalledWith({
+      reservationId: "res-1",
+      tenantId: "tenant-1",
+      delivery: "direct",
+    });
+    expect(updates.map((update) => update.status)).toEqual([
+      "pending",
+      "processing",
+      "sent",
+    ]);
+    expect(updates[0]).toMatchObject({
+      status: "pending",
+      lastError: "processing_timeout",
+      updatedAt: expect.any(Date),
+    });
+    expect(updates[2]).toMatchObject({
+      status: "sent",
+      sentAt: expect.any(Date),
+      lastError: null,
+    });
+  });
+
   it("skips delivery when another worker already holds the processing claim", async () => {
     const pending = { id: "outbox-1", tenantId: "tenant-1", reservationId: "res-1", sentAt: null };
 
@@ -230,5 +275,16 @@ describe("reservation confirmation WhatsApp outbox", () => {
 
     expect(resetCount).toBe(0);
     expect(mockLoggerWarn).not.toHaveBeenCalled();
+  });
+
+  it("keeps every production outbox status type-safe", () => {
+    const productionStatuses: WhatsAppOutboxStatus[] = [
+      "pending",
+      "enqueued",
+      "processing",
+      "sent",
+    ];
+
+    expect(productionStatuses).toContain("processing");
   });
 });
