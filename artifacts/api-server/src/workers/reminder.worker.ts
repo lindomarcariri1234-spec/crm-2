@@ -273,6 +273,7 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
       and(
         eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
         sql`${reservationsTable.balance}::numeric > 0`,
+        isNotNull(tripsTable.departureDate),
         gte(tripsTable.departureDate, windowStart),
         lt(tripsTable.departureDate, windowEnd),
       ),

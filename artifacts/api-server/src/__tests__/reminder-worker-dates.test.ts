@@ -119,4 +119,24 @@ describe("reminder worker Brazil calendar dates", () => {
       remainingBalance: 175.5,
     }));
   });
+
+  it("does not dispatch a pending-payment reminder for a trip without a departure date", async () => {
+    mockSelect.mockReturnValueOnce(selectRows([{
+      reservationId: "reservation-without-departure",
+      tenantId: "tenant-1",
+      balance: "175.50",
+      tripName: "Excursão em rascunho",
+      tripDestination: "Maceió",
+      departureDate: null,
+      agencyName: "Agência Teste",
+    }]));
+    mockNotificationSettings.mockResolvedValue({
+      pagamentoPendente: true,
+      pagamentoPendenteDaysBeforeTrip: 1,
+    });
+
+    await processWhatsAppPagamentoPendente();
+
+    expect(mockDispatchPagamentoPendente).not.toHaveBeenCalled();
+  });
 });
