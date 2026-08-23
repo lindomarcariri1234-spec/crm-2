@@ -31,7 +31,7 @@
 
 import pino from "pino";
 import { ROLES } from "@workspace/permissions";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
@@ -93,7 +93,7 @@ vi.mock("../lib/pricing.js", () => ({ roundMoney: vi.fn((v: number) => v) }));
 // Import route + error handler AFTER all mocks are registered
 // ---------------------------------------------------------------------------
 
-import insightsRouter from "../routes/insights.js";
+import insightsRouter, { getPeriodRange } from "../routes/insights.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
 // ---------------------------------------------------------------------------
@@ -756,4 +756,31 @@ describe("GET /api/insights/sales-cycle — role gating", () => {
     const res = await request(buildApp()).get("/api/insights/sales-cycle?period=12m");
     expect(res.status).toBe(200);
   });
+});
+
+describe("getPeriodRange — Brazil calendar boundaries", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // 01:30 UTC is 22:30 on the previous calendar day in Brasília.
+    vi.setSystemTime(new Date("2026-01-01T01:30:00.000Z"));
+    mockLocalToday.mockReturnValue("2026-01-01");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ["month", "2026-01-01T03:00:00.000Z", "2025-12-01T03:00:00.000Z"],
+    ["quarter", "2025-11-01T03:00:00.000Z", "2025-08-01T03:00:00.000Z"],
+    ["year", "2026-01-01T03:00:00.000Z", "2025-01-01T03:00:00.000Z"],
+  ] as const)(
+    "uses the Brazil calendar for the %s period",
+    (period, expectedStart, expectedPreviousStart) => {
+      const range = getPeriodRange(period);
+
+      expect(range.start).toEqual(new Date(expectedStart));
+      expect(range.prevStart).toEqual(new Date(expectedPreviousStart));
+    },
+  );
 });

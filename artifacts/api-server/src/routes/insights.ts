@@ -50,7 +50,7 @@ interface PeriodRange {
   yoyPrevStart: Date; yoyPrevEnd: Date;
 }
 
-function getPeriodRange(period: string): PeriodRange {
+export function getPeriodRange(period: string): PeriodRange {
   const now = new Date();
   // Use Brazil calendar date — server clock is UTC, Brazil is UTC-3
   const todayBR = localToday(); // "YYYY-MM-DD" in America/Sao_Paulo
