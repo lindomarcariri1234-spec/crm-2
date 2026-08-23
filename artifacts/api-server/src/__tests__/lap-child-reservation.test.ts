@@ -26,22 +26,34 @@ const {
   mockFrom,
   mockSelect,
   mockTransaction,
+  mockDbUpdate,
+  mockDbUpdateSet,
+  capturedPassengerUpdates,
 } = vi.hoisted(() => {
   const capturedPassengerInserts: unknown[] = [];
   const capturedTripUpdates: Record<string, unknown>[] = [];
+  const capturedPassengerUpdates: Record<string, unknown>[] = [];
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
   const mockTransaction = vi.fn();
+  const mockDbUpdateSet = vi.fn((values: Record<string, unknown>) => {
+    capturedPassengerUpdates.push(values);
+    return { where: vi.fn().mockResolvedValue([]) };
+  });
+  const mockDbUpdate = vi.fn(() => ({ set: mockDbUpdateSet }));
   return {
     capturedPassengerInserts,
     capturedTripUpdates,
+    capturedPassengerUpdates,
     mockLimit,
     mockWhere,
     mockFrom,
     mockSelect,
     mockTransaction,
+    mockDbUpdate,
+    mockDbUpdateSet,
   };
 });
 
@@ -53,9 +65,7 @@ vi.mock("@workspace/db", () => ({
   db: {
     select: mockSelect,
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
-    update: vi.fn(() => ({
-      set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
-    })),
+    update: mockDbUpdate,
     delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
     transaction: mockTransaction,
   },
@@ -200,6 +210,8 @@ vi.mock("../lib/reservation-number.js", () => ({
 vi.mock("../lib/passenger.js", () => ({
   deriveAgeCategory: vi.fn(() => "adult"),
   getAgeYears: vi.fn(() => 30),
+  resolveChildAgeCategory: vi.fn((seatNumber: string | null) => seatNumber ? "child" : "baby"),
+  syncIsChildUnder7: vi.fn((ageCategory: string) => ageCategory === "child" || ageCategory === "baby"),
 }));
 
 vi.mock("../lib/client-notifications.js", () => ({
@@ -376,7 +388,7 @@ function buildTxMock() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("POST /api/reservations — isOnLap=true (criança de colo)", () => {
+describe("POST /api/reservations — child age category", () => {
   const requireAuthMock = vi.mocked(requireAuth);
 
   beforeEach(() => {
@@ -384,6 +396,7 @@ describe("POST /api/reservations — isOnLap=true (criança de colo)", () => {
     mockLimit.mockReset();
     capturedPassengerInserts.length = 0;
     capturedTripUpdates.length = 0;
+    capturedPassengerUpdates.length = 0;
 
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
 
@@ -414,9 +427,18 @@ describe("POST /api/reservations — isOnLap=true (criança de colo)", () => {
     seats: [] as string[],
     totalValue: 500,
     isOnLap: true,
+    isChildUnder7: true,
   };
 
-  it("creates the primary passenger with ageCategory='baby', seatNumber=null, isChildUnder7=true", async () => {
+  const SEATED_CHILD_BODY = {
+    tripId: "trip-001",
+    clientId: "client-001",
+    seats: ["3"],
+    totalValue: 500,
+    isChildUnder7: true,
+  };
+
+  it("with isOnLap=true and isChildUnder7=true creates the primary passenger as ageCategory='baby'", async () => {
     const app = buildApp();
     arrangeSelectSequence();
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
@@ -475,5 +497,80 @@ describe("POST /api/reservations — isOnLap=true (criança de colo)", () => {
     expect(res.status).toBe(201);
     // Response includes the reservation id
     expect(res.body.id).toBeDefined();
+  });
+
+  it("creates a seated child-under-7 passenger with ageCategory='child', not 'adult'", async () => {
+    const app = buildApp();
+    arrangeSelectSequence();
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+      cb(buildTxMock()),
+    );
+
+    const res = await request(app)
+      .post("/api/reservations")
+      .send(SEATED_CHILD_BODY);
+
+    expect(res.status).toBe(201);
+    expect(capturedPassengerInserts).toHaveLength(1);
+
+    const pax = capturedPassengerInserts[0] as Record<string, unknown>;
+    expect(pax.ageCategory).toBe("child");
+    expect(pax.ageCategory).not.toBe("adult");
+    expect(pax.seatNumber).toBe("3");
+    expect(pax.isChildUnder7).toBe(true);
+  });
+});
+
+describe("PATCH /api/reservations/:reservationId/passengers/:id — child-under-7 category", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLimit.mockReset();
+    capturedPassengerUpdates.length = 0;
+    requireAuthMock.mockResolvedValue(FAKE_USER as never);
+
+    mockSelect.mockReturnValue({ from: mockFrom });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockWhere.mockReturnValue({ limit: mockLimit });
+  });
+
+  it("updates ageCategory to 'child' when isChildUnder7=true and seatNumber='X'", async () => {
+    const app = buildApp();
+    const updatedPassenger = {
+      id: "pax-001",
+      reservationId: FAKE_RESERVATION.id,
+      name: "Criança Silva",
+      cpf: null,
+      rg: null,
+      birthDate: null,
+      ageCategory: "child",
+      seatNumber: "X",
+      isChildUnder7: true,
+      checkedInAt: null,
+    };
+
+    // Slot 1: requireReservationAccess; slot 2: passenger after the update.
+    mockLimit
+      .mockResolvedValueOnce([FAKE_RESERVATION])
+      .mockResolvedValueOnce([updatedPassenger]);
+
+    const res = await request(app)
+      .patch("/api/reservations/gen-id/passengers/pax-001")
+      .send({ isChildUnder7: true, seatNumber: "X" });
+
+    expect(res.status).toBe(200);
+    expect(mockDbUpdateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ageCategory: "child",
+        isChildUnder7: true,
+        seatNumber: "X",
+      }),
+    );
+    expect(res.body).toMatchObject({
+      ageCategory: "child",
+      seatNumber: "X",
+      isChildUnder7: true,
+    });
   });
 });
