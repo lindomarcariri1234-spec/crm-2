@@ -60,6 +60,7 @@ export function calculateReferralCommercialAnalytics(
   rows: CommercialReferralRow[],
   tenantId: string,
   since: Date,
+  until?: Date,
 ): {
   summary: ReferralCommercialSummary;
   ranking: ReferralCommercialRankingEntry[];
@@ -80,6 +81,7 @@ export function calculateReferralCommercialAnalytics(
       VALID_REFERRAL_STATUSES.has(row.status) &&
       convertedAt !== null &&
       convertedAt >= since &&
+      (until === undefined || convertedAt <= until) &&
       row.reservationStatus !== "cancelled";
     if (!isValid) continue;
 

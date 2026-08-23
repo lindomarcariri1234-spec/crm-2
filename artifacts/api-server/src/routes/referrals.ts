@@ -1005,6 +1005,7 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
       commercialRows,
       me.tenantId,
       since,
+      new Date(),
     );
 
     res.json({
@@ -1175,6 +1176,7 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
       commercialRows,
       me.tenantId,
       since,
+      until,
     );
 
     const CHANNEL_LABEL_MAP: Record<string, string> = {
