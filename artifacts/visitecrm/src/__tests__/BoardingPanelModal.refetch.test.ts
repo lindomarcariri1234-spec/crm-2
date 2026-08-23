@@ -37,7 +37,8 @@ import {
 // Hoisted mock handles (created before vi.mock factory closures run)
 // ---------------------------------------------------------------------------
 
-const { mockRefetch } = vi.hoisted(() => ({
+const { mockGetTripBoardingPanel, mockRefetch } = vi.hoisted(() => ({
+  mockGetTripBoardingPanel: vi.fn(),
   mockRefetch: vi.fn().mockResolvedValue({}),
 }));
 
@@ -88,11 +89,7 @@ vi.mock("@/hooks/use-toast", () => ({
 // useGetTripBoardingPanel must return `mockRefetch` so the component's
 // useEffect can call it when eventCount advances.
 vi.mock("@workspace/api-client-react", () => ({
-  useGetTripBoardingPanel: vi.fn(() => ({
-    data: null,
-    isLoading: false,
-    refetch: mockRefetch,
-  })),
+  useGetTripBoardingPanel: mockGetTripBoardingPanel,
   useListReservations: vi.fn(() => ({ data: null })),
   useCheckInPassenger: vi.fn(() => ({
     mutateAsync: vi.fn().mockResolvedValue({}),
@@ -131,6 +128,36 @@ function makeProps(tripId: string, open: boolean) {
   return { tripId, tripName: "Test Trip", open, onClose: vi.fn() };
 }
 
+function gratuityPanelData() {
+  return {
+    data: {
+      tripId: "trip-1",
+      tripName: "Test Trip",
+      totalPassengers: 1,
+      checkedIn: 0,
+      passengers: [{
+        id: "passenger-gratuidade-001",
+        reservationId: "reservation-001",
+        reservationNumber: "RES-001",
+        voucherCode: "VCHR-001",
+        clientName: "Cliente Teste",
+        name: "Passageiro Gratuito",
+        seatNumber: "12",
+        cpf: null,
+        checkedInAt: null,
+        boardingLocationId: null,
+        observations: null,
+        specialNeeds: null,
+        isGratuidade: true,
+      }],
+      freePassengers: [],
+      boardingPoints: [],
+    },
+    isLoading: false,
+    refetch: mockRefetch,
+  };
+}
+
 async function renderModal(tripId: string, open: boolean) {
   return renderComponent(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -152,6 +179,11 @@ async function emitSeatEvent(tripId: string): Promise<void> {
 beforeEach(() => {
   installMockEventSource();
   vi.clearAllMocks();
+  mockGetTripBoardingPanel.mockReturnValue({
+    data: null,
+    isLoading: false,
+    refetch: mockRefetch,
+  });
   // Restore the resolved value after clearAllMocks resets call counts
   mockRefetch.mockResolvedValue({});
 });
@@ -166,6 +198,18 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("BoardingPanelModal — actual component SSE auto-refresh wiring", () => {
+  it("renders the Gratuidade badge for a paid passenger marked as gratuity", async () => {
+    mockGetTripBoardingPanel.mockReturnValue(gratuityPanelData());
+
+    const { container } = await renderModal("trip-1", true);
+
+    const passengerName = Array.from(container.querySelectorAll("span")).find(
+      span => span.textContent === "Passageiro Gratuito",
+    );
+    expect(passengerName).toBeTruthy();
+    expect(passengerName?.parentElement?.textContent).toContain("Gratuidade");
+  });
+
   it("calls refetch() once when the first SSE event arrives while the modal is open", async () => {
     await renderModal("trip-1", true);
 

@@ -318,6 +318,23 @@ describe("PassengersList — coluna Poltrona para bebê de colo (seatNumber=null
   });
 });
 
+describe("PassengersList — badge de Gratuidade", () => {
+  it("exibe o badge 'Gratuidade' na linha de um passageiro pago marcado como gratuito", async () => {
+    mockGetTripBoardingPanel.mockReturnValue(
+      panelData([{ ...makeAdultPassenger(), isGratuidade: true }]),
+    );
+
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+
+    const firstRow = container.querySelector("tbody tr");
+    expect(firstRow).not.toBeNull();
+    expect(firstRow!.textContent).toContain("João Adulto");
+    expect(firstRow!.textContent).toContain("Gratuidade");
+  });
+});
+
 describe("PassengersList — aviso de lembrete pelo WhatsApp", () => {
   it("sinaliza de forma acessível o passageiro sem contato válido para lembretes", async () => {
     const { container } = await renderComponent(
