@@ -163,6 +163,28 @@ describe("syncReservationCommission — commission revival", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  it("uses the discounted totalValue as the commission base amount", async () => {
+    const discountedReservation = makeReservation({
+      totalValue: "850.00",
+      discountTotal: "150.00",
+    });
+
+    selectQueue.push(
+      [discountedReservation], // reservation fetch: original value was 1000.00
+      [makeSeller()],       // seller validation
+      [],                   // no existing commissions
+    );
+
+    await syncReservationCommission(RESERVATION_ID, TENANT_ID);
+
+    expect(mockInsert).toHaveBeenCalledTimes(1);
+    const insertedCommission = mockInsert.mock.results[0].value.values.mock.calls[0][0] as Record<string, unknown>;
+    expect(Number(insertedCommission.baseAmount)).toBe(Number(discountedReservation.totalValue));
+    expect(Number(insertedCommission.baseAmount)).not.toBe(
+      Number(discountedReservation.totalValue) + Number(discountedReservation.discountTotal),
+    );
+  });
+
   it("does NOT touch an approved commission when the reservation is reopened", async () => {
     selectQueue.push(
       [makeReservation()],
