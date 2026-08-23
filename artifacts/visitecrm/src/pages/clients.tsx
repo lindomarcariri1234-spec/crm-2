@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { formatDateBR, localToday } from "@workspace/shared";
+import { formatDateBR, localToday, isValidBrazilWhatsAppPhone } from "@workspace/shared";
 import { useToast } from "@/hooks/use-toast";
 import { SeatMapPicker } from "@/components/SeatMapPicker";
 import { PlanLimitWall, usePlanLimitError } from "@/components/plan-limit-wall";
@@ -441,6 +441,8 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const isEditing = !!editClient;
   const isPending = createClient.isPending || updateClient.isPending || createDeal.isPending || createReservation.isPending;
   const set = (key: keyof ClientFormData) => (val: string) => setForm(prev => ({ ...prev, [key]: val }));
+  const whatsappHasInvalidFormat =
+    form.whatsapp.length > 0 && !isValidBrazilWhatsAppPhone(form.whatsapp);
 
   const trips = tripsData?.data ?? [];
   const users = usersData ?? [];
@@ -734,6 +736,12 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
               <div className="space-y-2">
                 <Label>WhatsApp *</Label>
                 <Input placeholder="+55 31 99999-9999" value={form.whatsapp} onChange={e => set("whatsapp")(e.target.value)} />
+                {whatsappHasInvalidFormat && (
+                  <p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400" role="status">
+                    <AlertCircle className="w-3 h-3 shrink-0" />
+                    Número fora do padrão do WhatsApp brasileiro (12–13 dígitos com o código 55). A mensagem não será enviada até corrigi-lo.
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>CPF {!isEditing && <span className="text-destructive">*</span>}</Label>

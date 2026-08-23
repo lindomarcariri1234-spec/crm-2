@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { isValidBrazilWhatsAppPhone } from "@workspace/shared";
 
 vi.mock("@/lib/tripDuration", () => ({
   calculateTripDuration: vi.fn(() => null),
@@ -36,6 +37,22 @@ describe("formatCurrency", () => {
   it("formats a fractional value with two decimal places", () => {
     const result = formatCurrency(9.9);
     expect(result).toMatch(/9,90/);
+  });
+});
+
+describe("isValidBrazilWhatsAppPhone", () => {
+  it("accepts local Brazilian mobile and landline formats", () => {
+    expect(isValidBrazilWhatsAppPhone("(31) 99999-9999")).toBe(true);
+    expect(isValidBrazilWhatsAppPhone("(31) 3333-4444")).toBe(true);
+  });
+
+  it("accepts E.164 numbers with the Brazil country code", () => {
+    expect(isValidBrazilWhatsAppPhone("+55 31 99999-9999")).toBe(true);
+  });
+
+  it("rejects numbers that are too short or too long after normalization", () => {
+    expect(isValidBrazilWhatsAppPhone("319999999")).toBe(false);
+    expect(isValidBrazilWhatsAppPhone("553199999999999")).toBe(false);
   });
 });
 

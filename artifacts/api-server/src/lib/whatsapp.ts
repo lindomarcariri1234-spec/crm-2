@@ -3,24 +3,7 @@ import { db, tenantIntegrationsTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { decryptCredential } from "./crypto";
 import { ssrfSafeFetchBounded } from "./ssrf";
-
-/**
- * Normalises a Brazilian phone number to E.164 format (no "+").
- * Accepts numbers with or without the country code (55).
- * Returns null when the number is clearly invalid (too short/long for Brazil).
- */
-function toE164Brazil(phone: string): string | null {
-  const digits = phone.replace(/\D/g, "");
-  let normalized = digits;
-  if (digits.startsWith("55") && digits.length >= 12) {
-    normalized = digits;
-  } else {
-    normalized = `55${digits}`;
-  }
-  // Valid Brazilian numbers: 55 + DDD (2) + subscriber (8-9) = 12–13 digits total
-  if (normalized.length < 12 || normalized.length > 13) return null;
-  return normalized;
-}
+import { normalizeBrazilPhone } from "@workspace/shared";
 
 export interface WhatsAppSendResult {
   success: boolean;
@@ -45,7 +28,7 @@ export async function sendWhatsAppMessage(
     return { success: false, error: "credentials_not_configured" };
   }
 
-  const e164 = toE164Brazil(phone);
+  const e164 = normalizeBrazilPhone(phone);
   if (!e164) {
     logger.warn({ phone }, "[whatsapp] Invalid Brazilian phone number — skipping send");
     return { success: false, error: "invalid_phone" };
@@ -108,7 +91,7 @@ export async function sendTenantWhatsAppMessage(
       const apiKey = secrets.apiKey?.trim();
 
       if (baseUrl && instanceName && apiKey) {
-        const e164 = toE164Brazil(phone);
+        const e164 = normalizeBrazilPhone(phone);
         if (!e164) {
           logger.warn({ phone, tenantId }, "[whatsapp] Invalid Brazilian phone number — skipping Evolution send");
           return { success: false, error: "invalid_phone" };

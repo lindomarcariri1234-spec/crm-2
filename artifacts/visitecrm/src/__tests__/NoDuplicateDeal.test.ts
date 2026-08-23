@@ -349,6 +349,37 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservationId)", () => {
+  it("shows an inline WhatsApp warning without blocking save for an invalid number", async () => {
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: null,
+        onSave: vi.fn(),
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    const nameInput = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input"),
+    ).find((el) => el.placeholder?.includes("Maria"));
+    const whatsappInput = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input"),
+    ).find((el) => el.placeholder?.includes("+55"));
+
+    await flushAct(() => {
+      if (nameInput) setNativeInputValue(nameInput, "Maria Silva");
+      if (whatsappInput) setNativeInputValue(whatsappInput, "319999999");
+    });
+
+    expect(container.textContent).toContain("Número fora do padrão do WhatsApp brasileiro");
+    const submitBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("Criar"),
+    );
+    expect(submitBtn?.disabled).toBe(false);
+  });
+
   /**
    * HAPPY PATH — primary regression check.
    *
