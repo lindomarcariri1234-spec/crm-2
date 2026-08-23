@@ -295,6 +295,8 @@ export interface ReferralCampaign {
   publicRanking: boolean;
   commissionType: "none" | "fixed" | "bonus_percentage";
   commissionValue: number;
+  commissionRecipientType: "ambassador" | "partner";
+  eligiblePartnerIds: string[];
 }
 
 export interface CreateReferralCampaignBody {
@@ -313,6 +315,8 @@ export interface CreateReferralCampaignBody {
   publicRanking?: boolean;
   commissionType?: "none" | "fixed" | "bonus_percentage";
   commissionValue?: number;
+  commissionRecipientType?: "ambassador" | "partner";
+  eligiblePartnerIds?: string[];
 }
 
 export const useListReferralCampaigns = (): UseQueryResult<ReferralCampaign[], ErrorType> =>
@@ -363,6 +367,8 @@ export interface UpdateReferralCampaignBody {
   publicRanking?: boolean;
   commissionType?: "none" | "fixed" | "bonus_percentage";
   commissionValue?: number;
+  commissionRecipientType?: "ambassador" | "partner";
+  eligiblePartnerIds?: string[];
 }
 
 export const useUpdateReferralCampaign = (): UseMutationResult<ReferralCampaign, ErrorType, UpdateReferralCampaignBody> =>
@@ -398,6 +404,30 @@ export interface CommissionReportTotals {
 export interface CommissionReport {
   totals: CommissionReportTotals;
   counts: CommissionReportTotals;
+  entries: Array<{
+    id: string;
+    referralId: string;
+    campaignId: string | null;
+    recipientType: "ambassador" | "partner";
+    recipientId: string;
+    recipientName: string;
+    amount: number;
+    basis: string;
+    status: "pending" | "approved" | "paid" | "reversed";
+    approvedAt: string | null;
+    paidAt: string | null;
+    reversedAt: string | null;
+    createdAt: string;
+  }>;
+  partnerTotals: Array<{
+    partnerId: string;
+    partnerName: string;
+    pending: number;
+    approved: number;
+    paid: number;
+    reversed: number;
+    total: number;
+  }>;
 }
 
 export const useGetReferralCommissionReport = (): UseQueryResult<CommissionReport, ErrorType> =>

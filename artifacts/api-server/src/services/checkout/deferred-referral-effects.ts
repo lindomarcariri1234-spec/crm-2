@@ -12,6 +12,10 @@ interface PendingReferral {
   discountValue: number;
   discountType: string;
   cookieId?: string | null;
+  /** Contractually eligible active partners represented by the paid order. */
+  partnerIds?: string[];
+  /** Store products captured at checkout for deferred campaign policy evaluation. */
+  storeProductIds?: string[];
   /** ID of the PENDING referral row already inserted at checkout time (by persistCheckoutOrder).
    * When present, recordReferralConversion will UPDATE this row instead of inserting a new one. */
   referralId?: string | null;
@@ -161,6 +165,8 @@ export async function applyDeferredOrderCredits(orderId: string): Promise<Deferr
         // Link to the PENDING row inserted at checkout time (if present) so
         // recordReferralConversion can UPDATE it instead of inserting a duplicate.
         existingReferralId: ref.referralId ?? null,
+        storeProductIds: ref.storeProductIds ?? [],
+        partnerIds: ref.partnerIds ?? [],
       });
 
       result = {

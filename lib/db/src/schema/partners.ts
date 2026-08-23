@@ -16,6 +16,8 @@ export const partnersTable = pgTable("partners", {
   logo: text("logo"),
   status: text("status").notNull().default("pending"),
   commissionPct: numeric("commission_pct", { precision: 5, scale: 2 }).notNull().default("30"),
+  /** Explicit contract opt-in for referral campaigns; active catalog status alone is not enough. */
+  referralCommissionEligible: boolean("referral_commission_eligible").notNull().default(false),
   passwordHash: text("password_hash"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

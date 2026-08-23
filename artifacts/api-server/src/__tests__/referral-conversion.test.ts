@@ -19,6 +19,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@workspace/db", () => ({
   referralsTable:         { id: "id", tenantId: "tenant_id", status: "status" },
+  referralCommissionsTable: { id: "id" },
+  partnersTable: { id: "id", tenantId: "tenant_id", status: "status", referralCommissionEligible: "referral_commission_eligible" },
   referralSettingsTable:  { tenantId: "tenant_id" },
   referralTrackingTable:  { tenantId: "tenant_id", cookieId: "cookie_id", referralCode: "referral_code" },
   storeOrdersTable:       { tenantId: "tenant_id", clientId: "client_id", createdAt: "created_at", ipAddress: "ip_address" },
@@ -31,6 +33,9 @@ vi.mock("@workspace/db", () => ({
     successfulReferrals: "successful_referrals",
     totalReferrals: "total_referrals",
     referralEarnings: "referral_earnings",
+    status: "status",
+    ambassadorOptIn: "ambassador_opt_in",
+    referralCodeStatus: "referral_code_status",
   },
   loyaltyMembersTable:       { id: "id", tenantId: "tenant_id", clientId: "client_id", programId: "program_id", totalPoints: "total_points", availablePoints: "available_points" },
   loyaltyTransactionsTable:  { id: "id", tenantId: "tenant_id", memberId: "member_id", referenceId: "reference_id", referenceType: "reference_type" },
@@ -122,7 +127,7 @@ function makeTx() {
     const ins: Record<string, unknown> = {};
     ins.values = vi.fn((vals: Record<string, unknown>) => {
       insertValueCalls.push(vals);
-      return Promise.resolve([]);
+      return { onConflictDoNothing: vi.fn(() => Promise.resolve([])) };
     });
     return ins;
   });
@@ -148,6 +153,9 @@ const REF_SETTINGS = {
 const REFERRER = {
   successfulReferrals: 2,
   email: "referrer@example.com",
+  status: "active",
+  ambassadorOptIn: false,
+  referralCodeStatus: "active",
 };
 
 const BASE_ARGS = {
@@ -350,5 +358,74 @@ describe("recordReferralConversion — shared invariants", () => {
 
     expect(result.tierUpgraded).toBe(false);
     expect(result.newTierLevel).toBe("bronze");
+  });
+});
+
+describe("recordReferralConversion — contractual commission eligibility", () => {
+  it("credits an opted-in ambassador while keeping the promotional bonus separate", async () => {
+    queueCommonSelects();
+    selectQueue[1] = [{ ...REFERRER, ambassadorOptIn: true }];
+    mockApplyActiveCampaignBonus.mockResolvedValue({
+      adjustedBase: 10,
+      fixedExtra: 0,
+      campaignId: "campaign-1",
+      commissionType: "fixed",
+      commissionValue: 7.5,
+      commissionRecipientType: "ambassador",
+    });
+
+    await recordReferralConversion(makeTx(), { ...BASE_ARGS, existingReferralId: "referral-1" });
+
+    expect(insertValueCalls).toContainEqual(expect.objectContaining({
+      campaignId: "campaign-1",
+      recipientType: "ambassador",
+      recipientId: "referrer-001",
+      referrerId: "referrer-001",
+      amount: "7.50",
+      status: "pending",
+    }));
+  });
+
+  it("does not pay commission to a client who has not opted into ambassador terms", async () => {
+    queueCommonSelects();
+    mockApplyActiveCampaignBonus.mockResolvedValue({
+      adjustedBase: 10,
+      fixedExtra: 0,
+      campaignId: "campaign-1",
+      commissionType: "fixed",
+      commissionValue: 7.5,
+      commissionRecipientType: "ambassador",
+    });
+
+    await recordReferralConversion(makeTx(), { ...BASE_ARGS, existingReferralId: "referral-1" });
+
+    expect(insertValueCalls).not.toContainEqual(expect.objectContaining({ recipientType: "ambassador" }));
+  });
+
+  it("credits only the active contract-eligible partner represented by the paid order", async () => {
+    queueCommonSelects();
+    selectQueue.push([{ id: "partner-1" }]);
+    mockApplyActiveCampaignBonus.mockResolvedValue({
+      adjustedBase: 10,
+      fixedExtra: 0,
+      campaignId: "campaign-1",
+      commissionType: "bonus_percentage",
+      commissionValue: 10,
+      commissionRecipientType: "partner",
+      eligiblePartnerIds: ["partner-1"],
+    });
+
+    await recordReferralConversion(makeTx(), {
+      ...BASE_ARGS,
+      existingReferralId: "referral-1",
+      partnerIds: ["partner-1", "partner-not-contractually-eligible"],
+    });
+
+    expect(insertValueCalls).toContainEqual(expect.objectContaining({
+      recipientType: "partner",
+      recipientId: "partner-1",
+      amount: "1.00",
+      status: "pending",
+    }));
   });
 });

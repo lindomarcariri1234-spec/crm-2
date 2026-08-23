@@ -251,6 +251,10 @@ export const storeOrdersTable = pgTable("store_orders", {
      *  applyDeferredOrderCredits to UPDATE (not re-insert) the row at payment
      *  confirmation. Absent for orders placed before this field was introduced. */
     referralId?: string | null;
+    /** Active, contractually eligible partners represented by the order. */
+    partnerIds?: string[];
+    /** Store product IDs captured at checkout for campaign product eligibility. */
+    storeProductIds?: string[];
   }>(),
   pendingCreditSpend: json("pending_credit_spend").$type<Array<{ id: string; consumedAmount: number }>>(),
   referralEffectsAppliedAt: timestamp("referral_effects_applied_at", { withTimezone: true }),

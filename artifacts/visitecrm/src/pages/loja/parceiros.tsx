@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
@@ -19,7 +20,7 @@ import { Plus, Pencil, Download, CheckCircle, XCircle, Clock, Building2, Package
 interface Partner {
   id: string; name: string; email: string; cnpj: string | null;
   slug: string; description: string | null; phone: string | null;
-  status: string; commissionPct: string; createdAt: string;
+  status: string; commissionPct: string; referralCommissionEligible: boolean; createdAt: string;
 }
 interface PartnerProduct {
   id: string; partnerId: string; type: string; title: string; slug: string;
@@ -55,7 +56,7 @@ function fmt(v: number) {
 // ─── Create Partner Dialog ────────────────────────────────────────────────────
 function CreatePartnerDialog({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", cnpj: "", phone: "", description: "", commissionPct: "30", password: "" });
+  const [form, setForm] = useState({ name: "", email: "", cnpj: "", phone: "", description: "", commissionPct: "30", referralCommissionEligible: false, password: "" });
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
@@ -74,14 +75,14 @@ function CreatePartnerDialog({ onCreated }: { onCreated: () => void }) {
       }
       toast({ title: "Parceiro cadastrado com sucesso!" });
       setOpen(false);
-      setForm({ name: "", email: "", cnpj: "", phone: "", description: "", commissionPct: "30", password: "" });
+      setForm({ name: "", email: "", cnpj: "", phone: "", description: "", commissionPct: "30", referralCommissionEligible: false, password: "" });
       onCreated();
     } catch (err) {
       toast({ title: "Erro", description: (err as Error).message, variant: "destructive" });
     } finally { setSaving(false); }
   }
 
-  function set(k: string, v: string) { setForm(f => ({ ...f, [k]: v })); }
+  function set(k: string, v: string | boolean) { setForm(f => ({ ...f, [k]: v })); }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -126,6 +127,13 @@ function CreatePartnerDialog({ onCreated }: { onCreated: () => void }) {
             <Label>Descrição</Label>
             <Textarea value={form.description} onChange={e => set("description", e.target.value)} rows={2} />
           </div>
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <Label>Elegível para comissão de indicação</Label>
+              <p className="text-xs text-muted-foreground">Permite que campanhas paguem comissão por vendas atribuídas a este parceiro.</p>
+            </div>
+            <Switch checked={form.referralCommissionEligible} onCheckedChange={v => set("referralCommissionEligible", v)} />
+          </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={saving}>{saving ? "Salvando..." : "Cadastrar"}</Button>
@@ -142,6 +150,7 @@ function EditPartnerDialog({ partner, onSaved }: { partner: Partner; onSaved: ()
   const [form, setForm] = useState({
     status: partner.status,
     commissionPct: partner.commissionPct,
+    referralCommissionEligible: partner.referralCommissionEligible,
     password: "",
     phone: partner.phone ?? "",
     description: partner.description ?? "",
@@ -156,6 +165,7 @@ function EditPartnerDialog({ partner, onSaved }: { partner: Partner; onSaved: ()
       const payload: Record<string, unknown> = {
         status: form.status,
         commissionPct: Number(form.commissionPct),
+        referralCommissionEligible: form.referralCommissionEligible,
         phone: form.phone || null,
         description: form.description || null,
       };
@@ -177,7 +187,7 @@ function EditPartnerDialog({ partner, onSaved }: { partner: Partner; onSaved: ()
     } finally { setSaving(false); }
   }
 
-  function set(k: string, v: string) { setForm(f => ({ ...f, [k]: v })); }
+  function set(k: string, v: string | boolean) { setForm(f => ({ ...f, [k]: v })); }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -211,6 +221,13 @@ function EditPartnerDialog({ partner, onSaved }: { partner: Partner; onSaved: ()
           <div>
             <Label>Telefone</Label>
             <Input value={form.phone} onChange={e => set("phone", e.target.value)} />
+          </div>
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <Label>Elegível para comissão de indicação</Label>
+              <p className="text-xs text-muted-foreground">Exige parceiro ativo e contrato comercial habilitado.</p>
+            </div>
+            <Switch checked={form.referralCommissionEligible} onCheckedChange={v => set("referralCommissionEligible", v)} />
           </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>

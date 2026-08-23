@@ -333,6 +333,8 @@ export default function Indicacoes() {
     publicRanking: true,
     commissionType: "none" as "none" | "fixed" | "bonus_percentage",
     commissionValue: "0",
+    commissionRecipientType: "ambassador" as "ambassador" | "partner",
+    eligiblePartnerIds: "",
   });
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const { data: campaigns = [], refetch: refetchCampaigns } = useListReferralCampaigns();
@@ -634,7 +636,7 @@ export default function Indicacoes() {
   }
 
   async function handleSaveCampaign() {
-    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, publicRanking, commissionType, commissionValue } = campaignFormData;
+    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, publicRanking, commissionType, commissionValue, commissionRecipientType, eligiblePartnerIds } = campaignFormData;
     if (!name.trim() || !startsAt || !endsAt) {
       toast({ title: "Preencha todos os campos obrigatórios", variant: "destructive" }); return;
     }
@@ -663,6 +665,8 @@ export default function Indicacoes() {
       publicRanking,
       commissionType,
       commissionValue: commissionType === "none" ? 0 : cVal,
+      commissionRecipientType,
+      eligiblePartnerIds: eligiblePartnerIds.split(",").map(s => s.trim()).filter(Boolean),
     };
 
     try {
@@ -677,7 +681,8 @@ export default function Indicacoes() {
       setCampaignFormData({
         name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "",
         eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "",
-        shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0"
+        shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0",
+        commissionRecipientType: "ambassador", eligiblePartnerIds: ""
       });
       setShowCampaignForm(false);
       refetchCampaigns();
@@ -709,6 +714,8 @@ export default function Indicacoes() {
       publicRanking: c.publicRanking ?? true,
       commissionType: c.commissionType as any || "none",
       commissionValue: String(c.commissionValue || 0),
+      commissionRecipientType: c.commissionRecipientType ?? "ambassador",
+      eligiblePartnerIds: (c.eligiblePartnerIds ?? []).join(", "),
     });
     setEditingCampaignId(c.id);
     setShowCampaignForm(true);
@@ -1360,6 +1367,58 @@ export default function Indicacoes() {
               </CardContent>
             </Card>
           </div>
+          {commissionReport.partnerTotals.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Total contratado por parceiro</CardTitle>
+                <CardDescription>Valores de indicação separados do repasse dos produtos do parceiro.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                {commissionReport.partnerTotals.map((partner) => (
+                  <div key={partner.partnerId} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="truncate">{partner.partnerName}</span>
+                    <span className="font-medium shrink-0">{fmtCurrency(partner.total)}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+          {commissionReport.entries.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Lançamentos de comissão</CardTitle>
+                <CardDescription>Beneficiário, cálculo e status de cada comissão de indicação.</CardDescription>
+              </CardHeader>
+              <CardContent className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Beneficiário</TableHead>
+                      <TableHead>Tipo</TableHead>
+                      <TableHead>Base de cálculo</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Valor</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {commissionReport.entries.slice(0, 10).map((entry) => (
+                      <TableRow key={entry.id}>
+                        <TableCell className="font-medium">{entry.recipientName}</TableCell>
+                        <TableCell>{entry.recipientType === "partner" ? "Parceiro" : "Divulgador"}</TableCell>
+                        <TableCell className="max-w-[280px] truncate" title={entry.basis}>{entry.basis}</TableCell>
+                        <TableCell>
+                          <Badge variant={entry.status === "reversed" ? "destructive" : entry.status === "paid" ? "default" : "outline"}>
+                            {entry.status === "reversed" ? "Revertida" : entry.status === "approved" ? "Aprovada" : entry.status === "paid" ? "Paga" : "Pendente"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">{fmtCurrency(entry.amount)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -3184,7 +3243,7 @@ export default function Indicacoes() {
             <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
               <div className="flex items-center justify-between">
                 <p className="font-semibold text-sm">Nova campanha</p>
-                <Button variant="ghost" size="sm" onClick={() => { setShowCampaignForm(false); setEditingCampaignId(null); setCampaignFormData({ name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "", eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "", shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0" }); }}>
+                <Button variant="ghost" size="sm" onClick={() => { setShowCampaignForm(false); setEditingCampaignId(null); setCampaignFormData({ name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "", eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "", shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0", commissionRecipientType: "ambassador", eligiblePartnerIds: "" }); }}>
                   <XCircle className="w-4 h-4" />
                 </Button>
               </div>
@@ -3383,6 +3442,36 @@ export default function Indicacoes() {
                     </div>
                   )}
                 </div>
+                {campaignFormData.commissionType !== "none" && (
+                  <>
+                    <div className="space-y-1">
+                      <Label>Beneficiário da comissão</Label>
+                      <Select
+                        value={campaignFormData.commissionRecipientType}
+                        onValueChange={(v) => setCampaignFormData((f) => ({ ...f, commissionRecipientType: v as "ambassador" | "partner" }))}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ambassador">Divulgador elegível</SelectItem>
+                          <SelectItem value="partner">Parceiro elegível do produto vendido</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground">
+                        Divulgadores precisam ter adesão ao programa e código ativo. Parceiros precisam estar ativos e habilitados no contrato.
+                      </p>
+                    </div>
+                    {campaignFormData.commissionRecipientType === "partner" && (
+                      <div className="space-y-1">
+                        <Label>Parceiros participantes (opcional)</Label>
+                        <Input
+                          value={campaignFormData.eligiblePartnerIds}
+                          onChange={(e) => setCampaignFormData((f) => ({ ...f, eligiblePartnerIds: e.target.value }))}
+                          placeholder="IDs separados por vírgula; vazio aceita qualquer parceiro elegível do pedido"
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -3451,7 +3540,12 @@ export default function Indicacoes() {
                       <div className="flex flex-wrap gap-1 mt-2">
                         {c.commissionType && c.commissionType !== "none" && (
                           <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-blue-200 text-blue-700 bg-blue-50/50">
-                            Comissão: {c.commissionType === "fixed" ? fmtCurrency(Number(c.commissionValue)) : `${Number(c.commissionValue)}% do bônus`}
+                            Comissão: {c.commissionType === "fixed" ? fmtCurrency(Number(c.commissionValue)) : `${Number(c.commissionValue)}% do bônus`} · {c.commissionRecipientType === "partner" ? "parceiro" : "divulgador"}
+                          </Badge>
+                        )}
+                        {c.commissionRecipientType === "partner" && c.eligiblePartnerIds?.length > 0 && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-blue-200 text-blue-700 bg-blue-50/50">
+                            {c.eligiblePartnerIds.length} parceiro{c.eligiblePartnerIds.length !== 1 ? "s" : ""} selecionado{c.eligiblePartnerIds.length !== 1 ? "s" : ""}
                           </Badge>
                         )}
                         {c.eligibleTierLevels && c.eligibleTierLevels.length > 0 && (

@@ -449,6 +449,7 @@ router.post("/parceiros", async (req, res, next: NextFunction): Promise<void> =>
       description: z.string().max(1000).nullable().optional(),
       phone: z.string().max(30).nullable().optional(),
       commissionPct: z.number().min(0).max(100).default(30),
+      referralCommissionEligible: z.boolean().optional(),
       password: z.string().min(6),
     }).safeParse(req.body);
     if (!body.success) { next(new ValidationError(String(body.error.message))); return; }
@@ -464,6 +465,7 @@ router.post("/parceiros", async (req, res, next: NextFunction): Promise<void> =>
       description: body.data.description ?? null,
       phone: body.data.phone ?? null,
       commissionPct: body.data.commissionPct.toFixed(2),
+      referralCommissionEligible: body.data.referralCommissionEligible ?? false,
       passwordHash: hashPassword(body.data.password),
       status: "active",
     });
@@ -616,6 +618,7 @@ router.get("/parceiros/:id", async (req, res, next: NextFunction): Promise<void>
       logo: partnersTable.logo,
       status: partnersTable.status,
       commissionPct: partnersTable.commissionPct,
+      referralCommissionEligible: partnersTable.referralCommissionEligible,
       createdAt: partnersTable.createdAt,
     }).from(partnersTable)
       .where(and(eq(partnersTable.id, req.params.id!), eq(partnersTable.tenantId, me.tenantId)))
@@ -643,6 +646,7 @@ router.put("/parceiros/:id", async (req, res, next: NextFunction): Promise<void>
       phone: z.string().max(30).nullable().optional(),
       status: z.enum(["pending", "active", "suspended"]).optional(),
       commissionPct: z.number().min(0).max(100).optional(),
+      referralCommissionEligible: z.boolean().optional(),
       password: z.string().min(6).optional(),
     }).safeParse(req.body);
     if (!body.success) { next(new ValidationError(String(body.error.message))); return; }
@@ -653,6 +657,7 @@ router.put("/parceiros/:id", async (req, res, next: NextFunction): Promise<void>
     if (body.data.phone !== undefined) updates.phone = body.data.phone;
     if (body.data.status !== undefined) updates.status = body.data.status;
     if (body.data.commissionPct !== undefined) updates.commissionPct = body.data.commissionPct.toFixed(2);
+    if (body.data.referralCommissionEligible !== undefined) updates.referralCommissionEligible = body.data.referralCommissionEligible;
     if (body.data.password) updates.passwordHash = hashPassword(body.data.password);
     await db.update(partnersTable).set(updates).where(eq(partnersTable.id, existing.id));
     res.status(204).end();

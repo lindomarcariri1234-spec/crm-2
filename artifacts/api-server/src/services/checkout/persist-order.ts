@@ -90,7 +90,7 @@ async function writePartnerCommissions(
   orderId: string,
   orderItemsData: PersistedOrderItem[],
   fetchedProducts: Map<string, typeof storeProductsTable.$inferSelect>,
-): Promise<void> {
+): Promise<string[]> {
   const partnerProductTotals = new Map<string, number>();
   for (const item of orderItemsData) {
     const product = fetchedProducts.get(item.productId);
@@ -98,19 +98,32 @@ async function writePartnerCommissions(
     if (!ppId) continue;
     partnerProductTotals.set(ppId, (partnerProductTotals.get(ppId) ?? 0) + Number(item.total));
   }
-  if (partnerProductTotals.size === 0) return;
+  if (partnerProductTotals.size === 0) return [];
 
   const ppIds = [...partnerProductTotals.keys()];
   const partnerProducts = await tx
     .select({ id: partnerProductsTable.id, partnerId: partnerProductsTable.partnerId })
     .from(partnerProductsTable)
-    .where(inArray(partnerProductsTable.id, ppIds));
+    .where(and(
+      inArray(partnerProductsTable.id, ppIds),
+      eq(partnerProductsTable.tenantId, tenantId),
+      eq(partnerProductsTable.status, "active"),
+    ));
 
   const partnerIds = [...new Set(partnerProducts.map((p) => p.partnerId))];
+  if (partnerIds.length === 0) return [];
   const partners = await tx
-    .select({ id: partnersTable.id, commissionPct: partnersTable.commissionPct })
+    .select({
+      id: partnersTable.id,
+      commissionPct: partnersTable.commissionPct,
+      referralCommissionEligible: partnersTable.referralCommissionEligible,
+    })
     .from(partnersTable)
-    .where(inArray(partnersTable.id, partnerIds));
+    .where(and(
+      inArray(partnersTable.id, partnerIds),
+      eq(partnersTable.tenantId, tenantId),
+      eq(partnersTable.status, "active"),
+    ));
 
   const partnerMap = new Map(partners.map((p) => [p.id, p]));
   // Use Brazil calendar month so partner commissions are attributed to the correct period at night
@@ -142,6 +155,9 @@ async function writePartnerCommissions(
       period,
     });
   }
+  return partners
+    .filter((partner) => partner.referralCommissionEligible)
+    .map((partner) => partner.id);
 }
 
 async function writeOrderAndItems(tx: Tx, args: PersistOrderArgs, reservationClientId: string | null, pendingReferralId?: string): Promise<void> {
@@ -187,6 +203,7 @@ async function writeOrderAndItems(tx: Tx, args: PersistOrderArgs, reservationCli
         // ID of the already-inserted pending referral row so applyDeferredOrderCredits
         // can UPDATE it to completed instead of inserting a duplicate.
         referralId: pendingReferralId ?? null,
+        storeProductIds: orderItemsData.map((item) => item.productId),
       },
     }),
     ...(args.creditSpend && args.creditSpend.length > 0 && {
@@ -260,7 +277,23 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
     }
 
     await writeOrderAndItems(tx, args, null, pendingReferralId);
-    await writePartnerCommissions(tx, args.store.tenantId, args.orderId, args.orderItemsData, args.fetchedProducts);
+    const eligibleReferralPartnerIds = await writePartnerCommissions(
+      tx, args.store.tenantId, args.orderId, args.orderItemsData, args.fetchedProducts,
+    );
+    if (args.appliedReferralCode && args.appliedReferralReferrerId) {
+      await tx.update(storeOrdersTable).set({
+        pendingReferral: {
+          code: args.appliedReferralCode,
+          referrerId: args.appliedReferralReferrerId,
+          discountValue: args.appliedReferralDiscountValue,
+          discountType: args.appliedReferralDiscountType,
+          cookieId: args.data.referralCookieId ?? null,
+          referralId: pendingReferralId ?? null,
+          storeProductIds: args.orderItemsData.map((item) => item.productId),
+          partnerIds: eligibleReferralPartnerIds,
+        },
+      }).where(eq(storeOrdersTable.id, args.orderId));
+    }
 
     // Reservations are NOT created here. They are created after payment confirmation
     // (Stripe webhook or manual payment entry) to prevent anonymous users from holding

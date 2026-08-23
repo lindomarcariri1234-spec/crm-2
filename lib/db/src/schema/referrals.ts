@@ -149,6 +149,9 @@ export const referralCampaignsTable = pgTable("referral_campaigns", {
   publicRanking: boolean("public_ranking").notNull().default(false),
   commissionType: text("commission_type").notNull().default("none"),
   commissionValue: numeric("commission_value", { precision: 10, scale: 4 }).notNull().default("0"),
+  /** A campaign pays either its eligible ambassador or its eligible product partner, never both. */
+  commissionRecipientType: text("commission_recipient_type").notNull().default("ambassador"),
+  eligiblePartnerIds: jsonb("eligible_partner_ids").$type<string[]>().notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -162,6 +165,8 @@ export const referralCommissionsTable = pgTable("referral_commissions", {
   referralId: text("referral_id").notNull().unique(),
   referrerId: text("referrer_id").notNull(),
   campaignId: text("campaign_id"),
+  recipientType: text("recipient_type").notNull().default("ambassador"),
+  recipientId: text("recipient_id").notNull(),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   basis: text("basis").notNull(),
   status: text("status").notNull().default("pending"),

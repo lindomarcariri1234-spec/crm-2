@@ -1,5 +1,5 @@
 import { Router, type NextFunction } from "express";
-import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable } from "@workspace/db";
+import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable } from "@workspace/db";
 import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
@@ -27,6 +27,8 @@ const CampaignConfig = z.object({
   publicRanking: z.boolean().optional(),
   commissionType: z.enum(["none", "fixed", "bonus_percentage"]).optional(),
   commissionValue: z.number().nonnegative().optional(),
+  commissionRecipientType: z.enum(["ambassador", "partner"]).optional(),
+  eligiblePartnerIds: z.array(z.string().min(1)).max(500).optional(),
 });
 
 const CreateReferralBody = z.object({
@@ -1734,7 +1736,57 @@ router.get("/referrals/commissions/report", async (req, res, next: NextFunction)
         counts[status] = Number(row.count);
       }
     }
-    res.json({ totals, counts });
+    const entries = await db.select({
+      id: referralCommissionsTable.id,
+      referralId: referralCommissionsTable.referralId,
+      campaignId: referralCommissionsTable.campaignId,
+      recipientType: referralCommissionsTable.recipientType,
+      recipientId: referralCommissionsTable.recipientId,
+      amount: referralCommissionsTable.amount,
+      basis: referralCommissionsTable.basis,
+      status: referralCommissionsTable.status,
+      approvedAt: referralCommissionsTable.approvedAt,
+      paidAt: referralCommissionsTable.paidAt,
+      reversedAt: referralCommissionsTable.reversedAt,
+      createdAt: referralCommissionsTable.createdAt,
+      partnerName: partnersTable.name,
+      ambassadorName: clientsTable.name,
+    }).from(referralCommissionsTable)
+      .leftJoin(partnersTable, and(
+        eq(referralCommissionsTable.recipientType, "partner"),
+        eq(partnersTable.id, referralCommissionsTable.recipientId),
+        eq(partnersTable.tenantId, me.tenantId),
+      ))
+      .leftJoin(clientsTable, and(
+        eq(referralCommissionsTable.recipientType, "ambassador"),
+        eq(clientsTable.id, referralCommissionsTable.recipientId),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(eq(referralCommissionsTable.tenantId, me.tenantId))
+      .orderBy(desc(referralCommissionsTable.createdAt));
+    const partnerTotals = new Map<string, { partnerId: string; partnerName: string; pending: number; approved: number; paid: number; reversed: number; total: number }>();
+    for (const entry of entries) {
+      if (entry.recipientType !== "partner") continue;
+      const item = partnerTotals.get(entry.recipientId) ?? {
+        partnerId: entry.recipientId,
+        partnerName: entry.partnerName ?? "Parceiro removido",
+        pending: 0, approved: 0, paid: 0, reversed: 0, total: 0,
+      };
+      const amount = Number(entry.amount);
+      item.total += amount;
+      if (entry.status in item) item[entry.status as "pending" | "approved" | "paid" | "reversed"] += amount;
+      partnerTotals.set(entry.recipientId, item);
+    }
+    res.json({
+      totals,
+      counts,
+      entries: entries.map(({ partnerName, ambassadorName, amount, ...entry }) => ({
+        ...entry,
+        amount: Number(amount),
+        recipientName: partnerName ?? ambassadorName ?? "Beneficiário removido",
+      })),
+      partnerTotals: [...partnerTotals.values()],
+    });
   } catch (err) {
     next(err);
   }
@@ -1899,6 +1951,8 @@ router.post("/referrals/campaigns", async (req, res, next: NextFunction): Promis
       publicRanking: parsed.data.publicRanking ?? false,
       commissionType: parsed.data.commissionType ?? "none",
       commissionValue: (parsed.data.commissionValue ?? 0).toFixed(4),
+      commissionRecipientType: parsed.data.commissionRecipientType ?? "ambassador",
+      eligiblePartnerIds: parsed.data.eligiblePartnerIds ?? [],
     });
 
     const [campaign] = await db.select().from(referralCampaignsTable)
@@ -2012,6 +2066,8 @@ router.patch("/referrals/campaigns/:id", async (req, res, next: NextFunction): P
     if (parsed.data.publicRanking !== undefined) updates.publicRanking = parsed.data.publicRanking;
     if (parsed.data.commissionType !== undefined) updates.commissionType = parsed.data.commissionType;
     if (parsed.data.commissionValue !== undefined) updates.commissionValue = parsed.data.commissionValue.toFixed(4);
+    if (parsed.data.commissionRecipientType !== undefined) updates.commissionRecipientType = parsed.data.commissionRecipientType;
+    if (parsed.data.eligiblePartnerIds !== undefined) updates.eligiblePartnerIds = parsed.data.eligiblePartnerIds;
 
     await db.update(referralCampaignsTable)
       .set(updates)

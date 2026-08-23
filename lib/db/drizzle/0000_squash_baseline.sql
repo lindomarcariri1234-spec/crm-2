@@ -676,6 +676,8 @@ CREATE TABLE IF NOT EXISTS "referral_campaigns" (
         "public_ranking" boolean DEFAULT false NOT NULL,
         "commission_type" text DEFAULT 'none' NOT NULL,
         "commission_value" numeric(10, 4) DEFAULT '0' NOT NULL,
+        "commission_recipient_type" text DEFAULT 'ambassador' NOT NULL,
+        "eligible_partner_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
         "created_at" timestamp with time zone DEFAULT now() NOT NULL,
         "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );;
@@ -686,6 +688,8 @@ CREATE TABLE IF NOT EXISTS "referral_commissions" (
         "referral_id" text NOT NULL UNIQUE,
         "referrer_id" text NOT NULL,
         "campaign_id" text,
+        "recipient_type" text DEFAULT 'ambassador' NOT NULL,
+        "recipient_id" text NOT NULL,
         "amount" numeric(12, 2) NOT NULL,
         "basis" text NOT NULL,
         "status" text DEFAULT 'pending' NOT NULL,
@@ -1748,6 +1752,7 @@ CREATE TABLE IF NOT EXISTS "partners" (
         "logo" text,
         "status" text DEFAULT 'pending' NOT NULL,
         "commission_pct" numeric(5, 2) DEFAULT '30' NOT NULL,
+        "referral_commission_eligible" boolean DEFAULT false NOT NULL,
         "password_hash" text,
         "created_at" timestamp with time zone DEFAULT now() NOT NULL,
         "updated_at" timestamp with time zone DEFAULT now() NOT NULL

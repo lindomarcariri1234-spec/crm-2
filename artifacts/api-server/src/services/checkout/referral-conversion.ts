@@ -8,8 +8,9 @@ import {
   loyaltyTransactionsTable,
   loyaltyProgramsTable,
   referralCommissionsTable,
+  partnersTable,
 } from "@workspace/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { applyActiveCampaignBonus } from "../../lib/referral-campaigns";
 import { generateId } from "../../lib/id";
 import type { Tx } from "./tx";
@@ -48,6 +49,8 @@ export interface RecordReferralArgs {
   existingReferralId?: string | null;
   /** Optional store products for Phase 2 campaign eligibility; omitted preserves legacy behavior. */
   storeProductIds?: string[];
+  /** Active partner IDs represented by the paid order's partner products. */
+  partnerIds?: string[];
 }
 
 export interface ReferralConversionResult {
@@ -90,6 +93,9 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
     .select({
       successfulReferrals: clientsTable.successfulReferrals,
       email: clientsTable.email,
+      status: clientsTable.status,
+      ambassadorOptIn: clientsTable.ambassadorOptIn,
+      referralCodeStatus: clientsTable.referralCodeStatus,
     })
     .from(clientsTable)
     .where(and(eq(clientsTable.id, referrerId), eq(clientsTable.tenantId, tenantId)))
@@ -185,31 +191,6 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
     });
   }
 
-  // Commercial commission is a distinct ledger entry, never a referral bonus
-  // or wallet/loyalty transaction. The referral unique constraint makes retries
-  // and deferred checkout replays idempotent.
-  const commissionValue = Number(campaignPolicy.commissionValue ?? 0);
-  const commissionAmount = campaignPolicy.commissionType === "fixed"
-    ? commissionValue
-    : campaignPolicy.commissionType === "bonus_percentage"
-      ? roundMoney(bonusAmount * commissionValue / 100)
-      : 0;
-  if (campaignPolicy.campaignId && commissionAmount > 0) {
-    const basis = campaignPolicy.commissionType === "fixed"
-      ? `fixed campaign commission (${commissionValue.toFixed(2)})`
-      : `${commissionValue.toFixed(4)}% of promotional bonus ${bonusAmount.toFixed(2)}`;
-    await tx.insert(referralCommissionsTable).values({
-      id: generateId(),
-      tenantId,
-      referralId,
-      referrerId,
-      campaignId: campaignPolicy.campaignId,
-      amount: commissionAmount.toFixed(2),
-      basis,
-      status: "pending",
-    }).onConflictDoNothing();
-  }
-
   const trackingWhere = referralCookieId
     ? and(eq(referralTrackingTable.tenantId, tenantId), eq(referralTrackingTable.cookieId, referralCookieId))
     : and(eq(referralTrackingTable.tenantId, tenantId), eq(referralTrackingTable.referralCode, referralCode));
@@ -243,6 +224,64 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
     await tx.update(referralsTable)
       .set({ fraudFlag: true, fraudReason: fraud.reason, updatedAt: new Date() })
       .where(eq(referralsTable.id, referralId));
+  }
+
+  // A contractual commission is its own ledger entry. It is never credited to
+  // a normal client just because that client received a promotional bonus:
+  // ambassadors must opt in and keep an active referral code; partners must
+  // be active, contractually enabled, and represented by this paid order.
+  let recipient: { type: "ambassador" | "partner"; id: string } | null = null;
+  if (campaignPolicy.commissionRecipientType === "ambassador") {
+    if (
+      referrer?.status === "active"
+      && referrer.ambassadorOptIn === true
+      && referrer.referralCodeStatus === "active"
+    ) {
+      recipient = { type: "ambassador", id: referrerId };
+    }
+  } else if (campaignPolicy.commissionRecipientType === "partner") {
+    const partnerIds = [...new Set(args.partnerIds ?? [])];
+    const configuredPartnerIds = campaignPolicy.eligiblePartnerIds ?? [];
+    const candidateIds = configuredPartnerIds.length > 0
+      ? partnerIds.filter((id) => configuredPartnerIds.includes(id))
+      : partnerIds;
+    if (candidateIds.length > 0) {
+      const [partner] = await tx
+        .select({ id: partnersTable.id })
+        .from(partnersTable)
+        .where(and(
+          eq(partnersTable.tenantId, tenantId),
+          eq(partnersTable.status, "active"),
+          eq(partnersTable.referralCommissionEligible, true),
+          inArray(partnersTable.id, candidateIds),
+        ))
+        .limit(1);
+      if (partner) recipient = { type: "partner", id: partner.id };
+    }
+  }
+
+  const commissionValue = Number(campaignPolicy.commissionValue ?? 0);
+  const commissionAmount = campaignPolicy.commissionType === "fixed"
+    ? commissionValue
+    : campaignPolicy.commissionType === "bonus_percentage"
+      ? roundMoney(bonusAmount * commissionValue / 100)
+      : 0;
+  if (!fraud.flagged && recipient && campaignPolicy.campaignId && commissionAmount > 0) {
+    const calculation = campaignPolicy.commissionType === "fixed"
+      ? `fixed campaign commission (${commissionValue.toFixed(2)})`
+      : `${commissionValue.toFixed(4)}% of promotional bonus ${bonusAmount.toFixed(2)}`;
+    await tx.insert(referralCommissionsTable).values({
+      id: generateId(),
+      tenantId,
+      referralId,
+      referrerId,
+      campaignId: campaignPolicy.campaignId,
+      recipientType: recipient.type,
+      recipientId: recipient.id,
+      amount: commissionAmount.toFixed(2),
+      basis: `${calculation}; ${recipient.type} eligible at conversion`,
+      status: "pending",
+    }).onConflictDoNothing();
   }
 
   // Compute tier BEFORE increment to detect upgrade

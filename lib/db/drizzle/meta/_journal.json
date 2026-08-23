@@ -351,6 +351,13 @@
       "when": 1805800000000,
       "tag": "0049_fix_child_passenger_age_category",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1805900000000,
+      "tag": "0050_referral_commission_recipients",
+      "breakpoints": true
     }
   ]
 }

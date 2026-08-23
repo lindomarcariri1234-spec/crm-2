@@ -13,6 +13,8 @@ export interface CampaignBonusResult {
   campaignId?: string;
   commissionType?: "none" | "fixed" | "bonus_percentage";
   commissionValue?: number;
+  commissionRecipientType?: "ambassador" | "partner";
+  eligiblePartnerIds?: string[];
 }
 
 export interface CampaignPolicyContext {
@@ -49,6 +51,8 @@ export async function applyActiveCampaignBonus(
       budgetAmount: referralCampaignsTable.budgetAmount,
       commissionType: referralCampaignsTable.commissionType,
       commissionValue: referralCampaignsTable.commissionValue,
+      commissionRecipientType: referralCampaignsTable.commissionRecipientType,
+      eligiblePartnerIds: referralCampaignsTable.eligiblePartnerIds,
       startsAt: referralCampaignsTable.startsAt,
       endsAt: referralCampaignsTable.endsAt,
     })
@@ -95,28 +99,34 @@ export async function applyActiveCampaignBonus(
   }
 
   const campaignVal = Number(activeCampaign.bonusValue);
+  const commission = {
+    commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"],
+    commissionValue: Number(activeCampaign.commissionValue),
+    commissionRecipientType: activeCampaign.commissionRecipientType as "ambassador" | "partner",
+    eligiblePartnerIds: activeCampaign.eligiblePartnerIds ?? [],
+  };
 
   if (activeCampaign.bonusType === "multiplier") {
     return {
       adjustedBase: Math.max(baseBonusValue, baseBonusValue * campaignVal),
       fixedExtra: 0,
       rewardOutcome: "multiplier",
-      campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue),
+      campaignId: activeCampaign.id, ...commission,
     };
   }
 
   if (activeCampaign.bonusType === "no_reward") {
-    return { adjustedBase: 0, fixedExtra: 0, rewardOutcome: "no_reward", campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue) };
+    return { adjustedBase: 0, fixedExtra: 0, rewardOutcome: "no_reward", campaignId: activeCampaign.id, ...commission };
   }
   if (activeCampaign.bonusType === "fixed_bonus") {
-    return { adjustedBase: 0, fixedExtra: Math.max(0, campaignVal), rewardOutcome: "fixed_bonus", campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue) };
+    return { adjustedBase: 0, fixedExtra: Math.max(0, campaignVal), rewardOutcome: "fixed_bonus", campaignId: activeCampaign.id, ...commission };
   }
   if (activeCampaign.bonusType === "percentage_bonus") {
     return {
       adjustedBase: Math.max(0, baseBonusValue * campaignVal / 100),
       fixedExtra: 0,
       rewardOutcome: "percentage_bonus",
-      campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue),
+      campaignId: activeCampaign.id, ...commission,
     };
   }
   if (activeCampaign.bonusType === "reduced_bonus") {
@@ -124,8 +134,8 @@ export async function applyActiveCampaignBonus(
       adjustedBase: Math.max(0, baseBonusValue * campaignVal),
       fixedExtra: 0,
       rewardOutcome: "reduced_bonus",
-      campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue),
+      campaignId: activeCampaign.id, ...commission,
     };
   }
-  return { adjustedBase: baseBonusValue, fixedExtra: Math.max(0, campaignVal), rewardOutcome: "fixed_extra", campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue) };
+  return { adjustedBase: baseBonusValue, fixedExtra: Math.max(0, campaignVal), rewardOutcome: "fixed_extra", campaignId: activeCampaign.id, ...commission };
 }
