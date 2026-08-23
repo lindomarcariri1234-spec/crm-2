@@ -674,7 +674,7 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
 
     // ── 4. Monthly trend (last 12 months, regardless of period filter) ─────────
     const trendStart = new Date(now.getTime() - 365 * 86400000);
-    const channelFilter = channel ? sql` AND COALESCE(origin, 'Outros') = ${channel}` : sql``;
+    const channelFilter = channel ? sql` AND COALESCE(c.origin, 'Outros') = ${channel}` : sql``;
     const sellerFilter = seller ? sql` AND cs.seller_id = ${seller}` : sql``;
     const trendRows = await db.execute(sql`
       WITH
@@ -691,7 +691,7 @@ router.get("/insights/sales-cycle", async (req, res, next: NextFunction): Promis
         SELECT c.id, c.created_at, COALESCE(c.origin, 'Outros') AS origin
         FROM clients c
         ${seller ? sql`JOIN client_seller cs ON cs.client_id = c.id` : sql``}
-        WHERE tenant_id = ${tenantId}
+        WHERE c.tenant_id = ${tenantId}
           AND c.created_at >= ${trendStart}
           ${sellerFilter}
           ${channelFilter}

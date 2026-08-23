@@ -420,22 +420,29 @@ describe("sales-cycle CTEs — channel breakdown (real DB)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Helper: run the trend CTE with an optional channel filter
+// Helper: run the trend CTE with optional channel and seller filters
 // ---------------------------------------------------------------------------
 
-async function runTrendCte(tenantId: string, windowStart: string, channel?: string) {
-  const channelClause = channel
-    ? `AND COALESCE(origin, 'Outros') = '${channel.replace(/'/g, "''")}'`
-    : "";
-
+async function runTrendCte(tenantId: string, windowStart: string, channel?: string, seller?: string) {
   const result = await pool.query(
     `WITH
+     client_seller AS (
+       SELECT DISTINCT ON (r.client_id)
+         r.client_id,
+         r.seller_id
+       FROM reservations r
+       WHERE r.tenant_id = $1
+         AND r.seller_id IS NOT NULL
+       ORDER BY r.client_id, r.created_at ASC
+     ),
      all_clients AS (
-       SELECT id, created_at
-       FROM clients
-       WHERE tenant_id = $1
-         AND created_at >= $2::timestamptz
-         ${channelClause}
+       SELECT c.id, c.created_at
+       FROM clients c
+       LEFT JOIN client_seller cs ON cs.client_id = c.id
+       WHERE c.tenant_id = $1
+         AND c.created_at >= $2::timestamptz
+         AND ($3::text IS NULL OR cs.seller_id = $3)
+         AND ($4::text IS NULL OR COALESCE(c.origin, 'Outros') = $4)
      ),
      first_payments AS (
        SELECT r.client_id, MIN(p.paid_at) AS first_paid_at
@@ -468,7 +475,7 @@ async function runTrendCte(tenantId: string, windowStart: string, channel?: stri
      LEFT JOIN first_trips ft ON ft.client_id = c.id
      GROUP BY 1
      ORDER BY 1`,
-    [tenantId, windowStart],
+    [tenantId, windowStart, seller ?? null, channel ?? null],
   );
   return result.rows as Array<Record<string, string | null>>;
 }
@@ -533,6 +540,23 @@ describe("sales-cycle CTEs — trend with channel filter (real DB)", () => {
     // Using a different tenantId for the same origin value should return nothing.
     const rows = await runTrendCte("other-tenant-id", WIN_START, "Instagram");
     expect(rows).toHaveLength(0);
+  });
+
+  it("seller=Seller A: only includes clients assigned to Seller A", async () => {
+    const rows = await runTrendCte(T, WIN_START, undefined, U_A);
+    expect(rows.map((row) => row.month)).toEqual(["2026-06", "2026-08"]);
+
+    const june = rows.find((row) => row.month === "2026-06")!;
+    expect(Number(june.avg_days_to_payment)).toBe(35.0);
+    expect(Number(june.avg_days_to_trip)).toBe(95.0);
+  });
+
+  it("seller and channel combine to restrict the trend to matching clients", async () => {
+    const rows = await runTrendCte(T, WIN_START, "Instagram", U_A);
+    expect(rows.map((row) => row.month)).toEqual(["2026-06", "2026-08"]);
+
+    const june = rows.find((row) => row.month === "2026-06")!;
+    expect(Number(june.avg_days_to_payment)).toBe(35.0);
   });
 });
 

@@ -712,6 +712,14 @@ paths:
             aggregates and byChannel breakdown are always unfiltered.
           schema:
             type: string
+        - name: seller
+          in: query
+          description: |
+            Optional seller identifier to scope the trend series. When omitted
+            the trend covers all sellers. The overall aggregates and breakdowns
+            are always unfiltered.
+          schema:
+            type: string
       responses:
         "200":
           description: Sales cycle data

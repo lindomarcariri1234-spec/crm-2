@@ -933,7 +933,7 @@ function SalesCycleTab() {
                     </SelectContent>
                   </Select>
                 )}
-                {(data?.bySeller?.length > 0 || cycleSeller !== undefined) && (
+                {((data?.bySeller?.length ?? 0) > 0 || cycleSeller !== undefined) && (
                   <Select
                     value={cycleSeller ?? "__all__"}
                     onValueChange={(v) => updateCycleFilters({ seller: v === "__all__" ? undefined : v })}
