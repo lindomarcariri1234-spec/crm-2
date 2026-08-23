@@ -1,4 +1,4 @@
-import { Router, type NextFunction } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import multer, { memoryStorage } from "multer";
 import { utapi } from "../lib/uploadthing";
 import { requireAuth, MANAGEMENT_ROLES } from "../lib/tenant";
@@ -8,6 +8,7 @@ import { and, eq } from "drizzle-orm";
 import { generateId } from "../lib/id";
 
 const router = Router();
+const MAX_MULTI_IMAGE_COUNT = 10;
 
 const imageUpload = multer({
   storage: memoryStorage(),
@@ -40,6 +41,46 @@ const documentUpload = multer({
   },
 });
 
+function uploadErrorHandler(
+  err: unknown,
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      res.status(413).json({
+        error: "Arquivo muito grande. Verifique o limite permitido.",
+        code: "PAYLOAD_TOO_LARGE",
+      });
+      return;
+    }
+
+    if (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE") {
+      const maxFiles = req.path === "/images" ? MAX_MULTI_IMAGE_COUNT : 1;
+      res.status(400).json({
+        error: `Muitos arquivos enviados. Máximo permitido: ${maxFiles}.`,
+        code: "TOO_MANY_FILES",
+      });
+      return;
+    }
+  }
+
+  if (
+    err instanceof Error &&
+    (err.message === "Apenas imagens são permitidas" ||
+      err.message === "Tipo de arquivo não permitido")
+  ) {
+    res.status(400).json({
+      error: err.message,
+      code: "INVALID_FILE_TYPE",
+    });
+    return;
+  }
+
+  next(err);
+}
+
 router.post("/image", imageUpload.single("file"), async (req, res, next: NextFunction) => {
   try {
     const me = await requireAuth(req, res);
@@ -71,7 +112,7 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
     const result = await utapi.uploadFiles(file);
 
     if (result.error) {
-      req.log?.error({ err: result.error }, "[upload] utapi.uploadFiles failed (video)");
+      req.log?.error({ err: result.error }, "[upload] utapi.uploadFiles failed (image)");
       res.status(500).json({ error: result.error.message });
       return;
     }
@@ -104,7 +145,7 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
           tripId,
           tenantId: me.tenantId,
           url: result.data.ufsUrl,
-          type: "video",
+          type: "image",
           caption,
           uploadedByUserId: me.id,
         });
@@ -112,13 +153,13 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
         try { await utapi.deleteFiles(result.data.key); } catch { /* best-effort */ }
         throw insertErr;
       }
-      req.log?.info({ id, tripId, tenantId: me.tenantId }, "[upload] trip video media record created");
+      req.log?.info({ id, tripId, tenantId: me.tenantId }, "[upload] trip image media record created");
       res.status(201).json({
         id,
         url: result.data.ufsUrl,
         key: result.data.key,
         name: result.data.name,
-        type: "video",
+        type: "image",
         caption,
         createdAt: createdAt.toISOString(),
         size: result.data.size,
@@ -139,7 +180,7 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
   }
 });
 
-router.post("/document", documentUpload.single("file"), async (req, res, next: NextFunction) => {
+router.post("/images", imageUpload.array("files", MAX_MULTI_IMAGE_COUNT), async (req, res, next: NextFunction) => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
@@ -173,7 +214,13 @@ router.post("/document", documentUpload.single("file"), async (req, res, next: N
       return;
     }
 
-    res.json(results.map((r) => ({ url: r.data!.ufsUrl, key: r.data!.key, name: r.data!.name })));
+    res.json(results.map((r, index) => ({
+      url: r.data!.ufsUrl,
+      key: r.data!.key,
+      name: r.data!.name,
+      size: r.data!.size,
+      mimeType: files[index]?.mimetype,
+    })));
   } catch (err) {
     next(err);
   }
@@ -315,5 +362,7 @@ router.post("/document", documentUpload.single("file"), async (req, res, next: N
     next(err);
   }
 });
+
+router.use(uploadErrorHandler);
 
 export default router;

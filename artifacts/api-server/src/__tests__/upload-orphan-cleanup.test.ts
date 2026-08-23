@@ -1,8 +1,8 @@
 /**
  * upload-orphan-cleanup.test.ts
  *
- * Regression guard for the orphan-file cleanup path in POST /upload/image
- * and POST /upload/video.
+ * Regression guard for the upload routes, including orphan-file cleanup in
+ * POST /upload/image and POST /upload/video.
  *
  * When a tripId is supplied the endpoint:
  *   1. Calls utapi.uploadFiles → file lands in UploadThing
@@ -246,6 +246,187 @@ describe("POST /upload/image with tripId — orphan cleanup", () => {
     expect(mockDeleteFiles).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
     expect(res.body.url).toBe(FILE_URL);
+  });
+});
+
+describe("POST /upload/images — gallery uploads", () => {
+  it("accepts the frontend files field and returns one result for each image", async () => {
+    mockUploadFiles.mockResolvedValueOnce([
+      {
+        data: { ufsUrl: "https://utfs.io/f/image-one", key: "image-one", name: "one.jpg", size: 101 },
+        error: null,
+      },
+      {
+        data: { ufsUrl: "https://utfs.io/f/image-two", key: "image-two", name: "two.webp", size: 202 },
+        error: null,
+      },
+    ]);
+
+    const res = await request(app)
+      .post("/upload/images")
+      .attach("files", Buffer.from("first-image"), {
+        filename: "one.jpg",
+        contentType: "image/jpeg",
+      })
+      .attach("files", Buffer.from("second-image"), {
+        filename: "two.webp",
+        contentType: "image/webp",
+      });
+
+    expect(vi.mocked(requireAuth)).toHaveBeenCalledOnce();
+    expect(mockUploadFiles).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      {
+        url: "https://utfs.io/f/image-one",
+        key: "image-one",
+        name: "one.jpg",
+        size: 101,
+        mimeType: "image/jpeg",
+      },
+      {
+        url: "https://utfs.io/f/image-two",
+        key: "image-two",
+        name: "two.webp",
+        size: 202,
+        mimeType: "image/webp",
+      },
+    ]);
+  });
+
+  it("rejects a request without gallery files", async () => {
+    const res = await request(app).post("/upload/images");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Nenhum arquivo enviado");
+    expect(mockUploadFiles).not.toHaveBeenCalled();
+  });
+
+  it("requires an authenticated user before uploading gallery files", async () => {
+    vi.mocked(requireAuth).mockImplementationOnce(async (_req, res) => {
+      res.status(401).json({ error: "Não autenticado" });
+      return null;
+    });
+
+    const res = await request(app)
+      .post("/upload/images")
+      .attach("files", Buffer.from("image-data"), {
+        filename: "image.jpg",
+        contentType: "image/jpeg",
+      });
+
+    expect(res.status).toBe(401);
+    expect(mockUploadFiles).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-image gallery files with a useful 400 response", async () => {
+    const res = await request(app)
+      .post("/upload/images")
+      .attach("files", Buffer.from("not an image"), {
+        filename: "notes.txt",
+        contentType: "text/plain",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: "Apenas imagens são permitidas",
+      code: "INVALID_FILE_TYPE",
+    });
+    expect(mockUploadFiles).not.toHaveBeenCalled();
+  });
+
+  it("rejects more than ten gallery files before sending anything to UploadThing", async () => {
+    let requestBuilder = request(app).post("/upload/images");
+    for (let index = 0; index < 11; index++) {
+      requestBuilder = requestBuilder.attach("files", Buffer.from(`image-${index}`), {
+        filename: `image-${index}.jpg`,
+        contentType: "image/jpeg",
+      });
+    }
+
+    const res = await requestBuilder;
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("TOO_MANY_FILES");
+    expect(mockUploadFiles).not.toHaveBeenCalled();
+  });
+
+  it("enforces the gallery size limit supplied by the frontend", async () => {
+    const res = await request(app)
+      .post("/upload/images")
+      .field("maxSizeMB", "0.000001")
+      .attach("files", Buffer.from("image-data"), {
+        filename: "oversized.jpg",
+        contentType: "image/jpeg",
+      });
+
+    expect(res.status).toBe(413);
+    expect(res.body.error).toContain("Arquivo");
+    expect(mockUploadFiles).not.toHaveBeenCalled();
+  });
+
+  it("returns the UploadThing error instead of a successful gallery payload", async () => {
+    mockUploadFiles.mockResolvedValueOnce([
+      { data: null, error: { message: "UploadThing indisponível" } },
+    ]);
+
+    const res = await request(app)
+      .post("/upload/images")
+      .attach("files", Buffer.from("image-data"), {
+        filename: "image.jpg",
+        contentType: "image/jpeg",
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("UploadThing indisponível");
+  });
+});
+
+describe("POST /upload/document", () => {
+  it("accepts the singular file field used by the client document uploader", async () => {
+    mockUploadFiles.mockResolvedValueOnce({
+      data: {
+        ufsUrl: "https://utfs.io/f/document-pdf",
+        key: "document-pdf",
+        name: "contract.pdf",
+        size: 777,
+      },
+      error: null,
+    });
+
+    const res = await request(app)
+      .post("/upload/document")
+      .attach("file", Buffer.from("pdf-data"), {
+        filename: "contract.pdf",
+        contentType: "application/pdf",
+      });
+
+    expect(vi.mocked(requireAuth)).toHaveBeenCalledOnce();
+    expect(mockUploadFiles).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      url: "https://utfs.io/f/document-pdf",
+      key: "document-pdf",
+      name: "contract.pdf",
+      size: 777,
+      mimeType: "application/pdf",
+    });
+  });
+
+  it("rejects unsupported document types with a useful 400 response", async () => {
+    const res = await request(app)
+      .post("/upload/document")
+      .attach("file", Buffer.from("plain text"), {
+        filename: "notes.txt",
+        contentType: "text/plain",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: "Tipo de arquivo não permitido",
+      code: "INVALID_FILE_TYPE",
+    });
+    expect(mockUploadFiles).not.toHaveBeenCalled();
   });
 });
 

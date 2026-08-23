@@ -29,9 +29,10 @@ async function resolveAgencyMiddleware(userId: string) {
 
 export const uploadRouter = {
   // NOTE: tripCoverImage and tripGalleryImages are defined here for completeness but the
-  // CRM frontend uses the custom /api/upload/image|images routes (which now support the
-  // optional tripId parameter for atomic trip_media insertion). These UploadThing SDK
-  // routes have the correct tenantId middleware in place if ever needed.
+  // CRM frontend uses the custom /api/upload/image|images routes. The singular image
+  // route supports optional tripId for atomic trip_media insertion; gallery uploads
+  // return generic image references consumed by the form. These SDK routes have the
+  // correct tenantId middleware in place if ever needed.
   tripCoverImage: f({ image: { maxFileSize: "4MB", maxFileCount: 1 } })
     .middleware(async ({ req }) => {
       const { userId } = getAuth(req);
