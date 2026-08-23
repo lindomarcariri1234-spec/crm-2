@@ -454,6 +454,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
 
     let reservationClientId: string | null = null;
     let reservationTotalValue: string | null = null;
+    let reservationBalance: number | null = null;
     if (parsed.data.reservationId) {
       const [reservation] = await db.select().from(reservationsTable)
         .where(and(eq(reservationsTable.id, parsed.data.reservationId), eq(reservationsTable.tenantId, me.tenantId)))
@@ -461,6 +462,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       if (!reservation) { next(new NotFoundError("Reservation not found or not in tenant", "RESERVATION_NOT_FOUND")); return; }
       reservationClientId = reservation.clientId;
       reservationTotalValue = reservation.totalValue;
+      reservationBalance = Number(reservation.balance);
     }
     if (parsed.data.clientId) {
       const [client] = await db.select().from(clientsTable)
@@ -475,6 +477,16 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
     const canSetPaymentStatus = MANAGEMENT_ROLES.includes(me.role);
     const explicitStatus = canSetPaymentStatus && parsed.data.status != null ? parsePaymentStatus(parsed.data.status) : undefined;
     const explicitPaidAt = canSetPaymentStatus && parsed.data.paidAt ? new Date(parsed.data.paidAt) : undefined;
+    const isReceivedPayment = explicitStatus === PAYMENT_STATUS.PAID || explicitStatus === PAYMENT_STATUS.APPROVED;
+    if (
+      parsed.data.reservationId &&
+      isReceivedPayment &&
+      reservationBalance != null &&
+      roundMoney(parsed.data.amount) > roundMoney(Math.max(0, reservationBalance))
+    ) {
+      next(new ValidationError("O valor do pagamento não pode ser maior do que o saldo devedor da reserva.", "PAYMENT_EXCEEDS_BALANCE"));
+      return;
+    }
 
     for (let i = 1; i <= installments; i++) {
       const dueDate = new Date(parsed.data.dueDate);

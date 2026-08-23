@@ -23,6 +23,8 @@ export interface Reservation {
   paidValue: number;
   balance: number;
   /** @nullable */
+  depositAmount?: number | null;
+  /** @nullable */
   paymentMethod?: string | null;
   installments: number;
   /** @nullable */

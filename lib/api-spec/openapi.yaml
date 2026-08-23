@@ -6113,6 +6113,9 @@ components:
           type: number
         balance:
           type: number
+        depositAmount:
+          type: ["number", "null"]
+          description: Amount paid as the initial deposit for an online reservation
         paymentMethod:
           type: ["string", "null"]
         installments:

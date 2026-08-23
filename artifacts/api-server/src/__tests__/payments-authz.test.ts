@@ -208,6 +208,32 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
       .send({ clientId: "client-001", amount: 100 });
     expect(res.status).toBe(403);
   });
+
+  it("POST /payments rejects a received reservation payment above its remaining balance", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.rows = [{
+      id: "reservation-001",
+      clientId: "client-001",
+      totalValue: "500.00",
+      balance: "410.00",
+    }];
+
+    const res = await request(buildApp(paymentsRouter))
+      .post("/api/payments")
+      .send({
+        reservationId: "reservation-001",
+        type: "receivable",
+        category: "reservation",
+        amount: 410.01,
+        paymentMethod: "pix",
+        dueDate: "2026-08-23",
+        status: "paid",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("saldo devedor");
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
 });
 
 describe("expenses authorization — FINANCIAL permission enforcement", () => {

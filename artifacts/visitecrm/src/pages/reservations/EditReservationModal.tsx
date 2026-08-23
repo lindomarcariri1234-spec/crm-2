@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { DollarSign, Receipt, ArrowDown, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, type ReservationStatus } from "@workspace/permissions";
@@ -115,6 +116,10 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
 
   // Derived balance from current state
   const currentBalance = Math.max(0, (parseFloat(totalValue) || 0) - (parseFloat(paidValue) || 0));
+  const isDepositOnly = data?.depositAmount != null
+    && data.depositAmount > 0
+    && data.depositAmount < data.totalValue
+    && data.balance > 0;
 
   // Load existing data when modal opens / data refreshes
   useEffect(() => {
@@ -258,10 +263,26 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
             {/* ── Main edit form ── */}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="p-3 bg-muted/50 rounded-lg text-sm">
-                <span className="text-muted-foreground">Reserva: </span>
-                <span className="font-mono font-semibold">{data.voucherCode}</span>
-                <span className="text-muted-foreground ml-3">Cliente: </span>
-                <span className="font-medium">{data.client?.name}</span>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>
+                    <span className="text-muted-foreground">Reserva: </span>
+                    <span className="font-mono font-semibold">{data.voucherCode}</span>
+                  </span>
+                  <span>
+                    <span className="text-muted-foreground">Cliente: </span>
+                    <span className="font-medium">{data.client?.name}</span>
+                  </span>
+                  {isDepositOnly && (
+                    <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
+                      Entrada paga · saldo pendente
+                    </Badge>
+                  )}
+                </div>
+                {isDepositOnly && (
+                  <p className="mt-1.5 text-xs text-amber-800">
+                    Entrada: {fmt(data.depositAmount!)} · Restante: {fmt(data.balance)}
+                  </p>
+                )}
               </div>
 
               {/* Viagem / Cliente — oculto por design (não permite troca no editar) */}

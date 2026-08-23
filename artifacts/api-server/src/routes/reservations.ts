@@ -113,6 +113,7 @@ function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: Res
     totalValue: Number(r.totalValue),
     paidValue: Number(r.paidValue),
     balance: Number(r.balance),
+    depositAmount: r.depositAmount != null ? Number(r.depositAmount) : null,
     paymentMethod: r.paymentMethod,
     installments: r.installments,
     commissionPercentage: r.commissionPercentage ? Number(r.commissionPercentage) : null,
