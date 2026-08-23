@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "build": "tsc --build && node scripts/compact-dts.mjs"
+  },
   "dependencies": {
     "zod": "catalog:"
   }
