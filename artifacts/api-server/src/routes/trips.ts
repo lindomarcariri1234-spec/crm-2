@@ -38,6 +38,7 @@ import {
 } from "../lib/manifest-helpers.js";
 import { RESERVATION_STATUS, REFERRAL_STATUS, TRIP_STATUS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
 import { parseTripStatus } from "../lib/status-validators";
+import { getPassengerExportFinancialValues } from "../lib/passenger-export";
 
 import { AppError, ForbiddenError, NotFoundError, UnprocessableEntityError, ValidationError } from "../lib/errors";
 
@@ -1494,6 +1495,7 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
         .where(inArray(passengersTable.reservationId, reservationIds));
 
       const reservationMap = new Map(reservations.map(r => [r.id, r]));
+      const emittedReservationIds = new Set<string>();
 
       rows = passengers.map(p => {
         const reservation = reservationMap.get(p.reservationId);
@@ -1501,8 +1503,14 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
         const boardingName = effectiveBoardingLocationId ? (bpMap.get(effectiveBoardingLocationId) ?? blMap.get(effectiveBoardingLocationId) ?? effectiveBoardingLocationId) : "";
         const birthDateStr = p.birthDate ? p.birthDate.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "";
         const checkInStr = p.checkedInAt ? "Sim" : "Não";
+        const totalValue = Number(reservation?.totalValue ?? 0);
+        const discount = Number(reservation?.discountTotal ?? 0);
+        const financialValues = reservation
+          ? getPassengerExportFinancialValues(reservation.id, totalValue, discount, emittedReservationIds)
+          : ["0.00", "0.00", "0.00"] as [string, string, string];
         return [
           p.name,
+          reservation?.reservationNumber ?? reservation?.voucherCode ?? "",
           p.cpf ?? "",
           p.rg ?? "",
           birthDateStr,
@@ -1511,6 +1519,7 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
           boardingName,
           checkInStr,
           "",
+          ...financialValues,
         ];
       });
     }
@@ -1519,6 +1528,7 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
     const freeRoleLabel: Record<string, string> = { organizer: "Organizador", guide: "Guia de Turismo" };
     const freeRows: string[][] = freePassengersData.map(fp => [
       fp.name,
+      "",
       fp.cpf ?? "",
       "",
       "",
@@ -1527,9 +1537,15 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
       "",
       "—",
       freeRoleLabel[fp.role] ?? fp.role,
+      "0.00",
+      "0.00",
+      "0.00",
     ]);
 
-    const header = ["Passageiro", "CPF", "RG", "Data Nasc.", "Categoria", "Assento", "Local de Embarque", "Check-in", "Função"];
+    const header = [
+      "Passageiro", "Nº Reserva", "CPF", "RG", "Data Nasc.", "Categoria", "Assento",
+      "Local de Embarque", "Check-in", "Função", "Valor Total", "Valor Base", "Desconto",
+    ];
     const csvLines = [header, ...rows, ...freeRows].map(r =>
       r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")
     );
