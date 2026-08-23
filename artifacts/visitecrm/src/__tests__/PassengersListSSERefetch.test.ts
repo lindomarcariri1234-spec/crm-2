@@ -82,6 +82,10 @@ vi.mock("../pages/trips/PassengersListShareDialog.js", () => ({
   PassengersListShareDialog: () => null,
 }));
 
+vi.mock("../pages/trips/WhatsAppBroadcastModal.js", () => ({
+  WhatsAppBroadcastModal: () => null,
+}));
+
 vi.mock("@/lib/utils", () => ({
   formatCpf: (s: string) => s,
   formatDate: (s: string) => s,

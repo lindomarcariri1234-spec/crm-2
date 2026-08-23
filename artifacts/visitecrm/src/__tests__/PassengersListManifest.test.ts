@@ -379,6 +379,41 @@ describe("printPassengersManifest — colunas financeiras", () => {
     expect(html).not.toContain('<th class="num">Valor Total</th>');
     expect(html).not.toContain('<th class="num">Valor Pago</th>');
     expect(html).not.toContain('<th class="num">Saldo</th>');
+    expect(html).not.toContain('class="financial-totals"');
+  });
+
+  it("inclui os totais financeiros no rodapé e ignora gratuidades", () => {
+    const { getHtml } = setupWindowOpenCapture();
+
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [
+        makeAdult({ totalValue: "100", paidValue: "25", balance: "75" }),
+        makeAdult({
+          id: "adult-free",
+          isGratuidade: true,
+          totalValue: "999",
+          paidValue: "999",
+          balance: "0",
+        }),
+      ],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+      [],
+      { totalValue: true, paidValue: true, balance: true },
+    );
+
+    const html = getHtml();
+    expect(html).toContain('<tfoot><tr class="financial-totals">');
+    expect(html).toContain("Totais");
+    expect(html).toContain("R$ 100,00");
+    expect(html).toContain("R$ 25,00");
+    expect(html).toContain("R$ 75,00");
+    expect(html).toContain('class="num positive-balance"');
+    const totalsFooter = html.match(/<tfoot>[\s\S]*?<\/tfoot>/)?.[0] ?? "";
+    expect(totalsFooter).not.toContain("R$ 999,00");
   });
 
   it("imprime — nas três colunas financeiras para gratuidades cadastradas à parte", () => {

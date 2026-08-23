@@ -170,6 +170,7 @@ import {
   PassengersList,
   filterPassengers,
 } from "../pages/trips/PassengersList.js";
+import { sumPassengerFinancials } from "../pages/trips/passengerFinancials.js";
 import type { GetTripBoardingPanelPassenger } from "@workspace/api-client-react";
 
 // ---------------------------------------------------------------------------
@@ -300,6 +301,38 @@ describe("PassengersList — filtro de categoria: lógica pura (filterPassengers
   });
 });
 
+describe("PassengersList — totais financeiros", () => {
+  it("soma os valores dos passageiros filtrados e ignora gratuidades", () => {
+    const result = sumPassengerFinancials([
+      makeAdult({ totalValue: "100.10", paidValue: "25.05", balance: "75.05" }),
+      makeAdult({ id: "adult-2", totalValue: "50.20", paidValue: "50.20", balance: "0.00" }),
+      makeAdult({
+        id: "free-1",
+        isGratuidade: true,
+        totalValue: "999.99",
+        paidValue: "999.99",
+        balance: "0.00",
+      }),
+    ]);
+
+    expect(result).toEqual({
+      totalValue: 150.3,
+      paidValue: 75.25,
+      balance: 75.05,
+    });
+  });
+
+  it("trata valores ausentes ou inválidos como zero", () => {
+    expect(sumPassengerFinancials([
+      makeAdult({ totalValue: null, paidValue: "", balance: "não informado" }),
+    ])).toEqual({
+      totalValue: 0,
+      paidValue: 0,
+      balance: 0,
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Pure predicate tests — text search filter (nome/CPF).
 // ---------------------------------------------------------------------------
@@ -425,6 +458,40 @@ describe("PassengersList — filtro de categoria: integração no componente", (
     const rows = container.querySelectorAll("tbody tr");
     expect(rows).toHaveLength(2);
     expect(container.textContent).not.toContain("Nenhum passageiro encontrado");
+  });
+
+  it("mostra totais financeiros e atualiza o resumo com o filtro", async () => {
+    mockGetTripBoardingPanel.mockReturnValue(panelData([
+      makeAdult({ id: "adult-1", name: "João Adulto", totalValue: "100", paidValue: "25", balance: "75" }),
+      makeAdult({ id: "adult-2", name: "Maria Adulta", totalValue: "50", paidValue: "50", balance: "0" }),
+    ]));
+
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+
+    for (const label of ["Valor Total", "Valor Pago", "Saldo"]) {
+      const checkbox = Array.from(container.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
+        .find(input => input.parentElement?.textContent?.includes(label));
+      expect(checkbox).toBeDefined();
+      await flushAct(() => { checkbox!.click(); });
+    }
+
+    let totalsRow = container.querySelector('[data-testid="passenger-financial-totals"]');
+    expect(totalsRow).toBeTruthy();
+    expect(totalsRow?.textContent).toContain("Totais");
+    expect(totalsRow?.textContent).toMatch(/R\$\s*150,00/);
+    expect(totalsRow?.textContent).toMatch(/R\$\s*75,00/);
+
+    const triggerSearch = inputRegistry.get(0);
+    expect(triggerSearch).toBeDefined();
+    await flushAct(() => { triggerSearch!({ target: { value: "Maria" } }); });
+
+    totalsRow = container.querySelector('[data-testid="passenger-financial-totals"]');
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
+    expect(totalsRow?.textContent).toMatch(/R\$\s*50,00/);
+    expect(totalsRow?.textContent).toMatch(/R\$\s*0,00/);
+    expect(totalsRow?.textContent).not.toMatch(/R\$\s*150,00/);
   });
 
   it("exclui bebê de colo ao filtrar por 'adult' — apenas adulto fica visível", async () => {

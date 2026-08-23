@@ -25,6 +25,7 @@ import {
 import { PassengerObsModal } from "./PassengerObsModal";
 import type { BoardingPoint } from "./types";
 import { printPassengersManifest } from "./PassengersListManifest";
+import { sumPassengerFinancials } from "./passengerFinancials";
 import { PassengersListShareDialog } from "./PassengersListShareDialog";
 import { WhatsAppBroadcastModal } from "./WhatsAppBroadcastModal";
 
@@ -85,6 +86,8 @@ const DEFAULT_COLS: Record<ColKey, boolean> = {
   totalValue: false, paidValue: false, balance: false,
   obsDoc: false, assinatura: false,
 };
+
+const FINANCIAL_COL_KEYS: ColKey[] = ["totalValue", "paidValue", "balance"];
 
 export function PassengersList({ tripId }: { tripId: string }) {
   const { toast } = useToast();
@@ -183,6 +186,8 @@ export function PassengersList({ tripId }: { tripId: string }) {
     () => filterPassengers(allPassengers, { search, categoryFilter, boardingStatusFilter }),
     [allPassengers, search, categoryFilter, boardingStatusFilter],
   );
+  const financialTotals = useMemo(() => sumPassengerFinancials(filtered), [filtered]);
+  const showFinancialTotals = FINANCIAL_COL_KEYS.some(key => visibleCols[key]);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -580,6 +585,33 @@ export function PassengersList({ tripId }: { tripId: string }) {
                     </tr>
                   );
                 })
+              )}
+              {!isLoading && showFinancialTotals && (
+                <tr data-testid="passenger-financial-totals" className="border-t-2 bg-muted/30 font-semibold">
+                  {PASSENGER_COLS.filter(col => visibleCols[col.key]).map((col, index) => {
+                    const isFinancial = FINANCIAL_COL_KEYS.includes(col.key);
+                    const value = isFinancial
+                      ? financialTotals[col.key as keyof typeof financialTotals]
+                      : 0;
+                    const isBalance = col.key === "balance";
+                    return (
+                      <td
+                        key={col.key}
+                        className={`p-3 ${isFinancial ? "text-right text-xs tabular-nums whitespace-nowrap" : "text-left"}`}
+                      >
+                        {isFinancial ? (
+                          <span className={isBalance && value > 0 ? "text-red-600" : isBalance ? "text-green-700" : undefined}>
+                            {index === 0 && <span className="mr-2 text-muted-foreground">Totais:</span>}
+                            {formatCurrency(value)}
+                          </span>
+                        ) : index === 0 ? (
+                          "Totais"
+                        ) : null}
+                      </td>
+                    );
+                  })}
+                  <td className="p-3" aria-hidden="true" />
+                </tr>
               )}
             </tbody>
           </table>

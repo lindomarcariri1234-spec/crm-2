@@ -1,5 +1,6 @@
 import type { BoardingPassenger, FreePassenger } from "@workspace/api-client-react";
 import { formatBRLPlain } from "@workspace/shared";
+import { sumPassengerFinancials } from "./passengerFinancials";
 
 const BRAZIL_TZ = "America/Sao_Paulo";
 
@@ -266,6 +267,32 @@ export function printPassengersManifest(
 
   const rows = orderedRows.join("");
 
+  const financialTotals = sumPassengerFinancials(allPassengers);
+  const showFinancialTotals = ["totalValue", "paidValue", "balance"].some(show);
+  const firstVisibleColumn = [
+    "seatNumber", "nome", "cpf", "birthDate", "ageCategory",
+    "boardingLocation", "whatsapp", "checkedInAt", "totalValue",
+    "paidValue", "balance", "obsDoc", "assinatura",
+  ].find(show);
+  const totalsLabel = (column: string) => firstVisibleColumn === column ? "Totais" : "";
+  const financialTotalsRow = showFinancialTotals
+    ? `<tr class="financial-totals">
+       ${show("seatNumber") ? `<td class="totals-label">${totalsLabel("seatNumber")}</td>` : ""}
+       ${show("nome") ? `<td class="totals-label">${totalsLabel("nome")}</td>` : ""}
+       ${show("cpf") ? `<td class="totals-label">${totalsLabel("cpf")}</td>` : ""}
+       ${show("birthDate") ? `<td class="totals-label">${totalsLabel("birthDate")}</td>` : ""}
+       ${show("ageCategory") ? `<td class="totals-label">${totalsLabel("ageCategory")}</td>` : ""}
+       ${show("boardingLocation") ? `<td class="totals-label">${totalsLabel("boardingLocation")}</td>` : ""}
+       ${show("whatsapp") ? `<td class="totals-label">${totalsLabel("whatsapp")}</td>` : ""}
+       ${show("checkedInAt") ? `<td class="totals-label">${totalsLabel("checkedInAt")}</td>` : ""}
+       ${show("totalValue") ? `<td class="num">${totalsLabel("totalValue") ? `<strong>${totalsLabel("totalValue")}: </strong>` : ""}${formatBRLPlain(financialTotals.totalValue)}</td>` : ""}
+       ${show("paidValue") ? `<td class="num">${totalsLabel("paidValue") ? `<strong>${totalsLabel("paidValue")}: </strong>` : ""}${formatBRLPlain(financialTotals.paidValue)}</td>` : ""}
+       ${show("balance") ? `<td class="num ${financialTotals.balance > 0 ? "positive-balance" : ""}">${totalsLabel("balance") ? `<strong>${totalsLabel("balance")}: </strong>` : ""}${formatBRLPlain(financialTotals.balance)}</td>` : ""}
+       ${show("obsDoc") ? `<td class="totals-label">${totalsLabel("obsDoc")}</td>` : ""}
+       ${show("assinatura") ? `<td class="totals-label">${totalsLabel("assinatura")}</td>` : ""}
+     </tr>`
+    : "";
+
   const totalsRow = catOrder
     .filter(c => categoryCounts[c])
     .map(c => `<span><strong>${catLabel[c] ?? c}:</strong> ${categoryCounts[c]}</span>`)
@@ -331,6 +358,9 @@ export function printPassengersManifest(
   .free-row { background: #fffde7; }
   .free-row td { font-style: italic; }
   .empty-row td { color: #bbb; }
+  .financial-totals td { background: #f3f4f6; border-top: 2px solid #000; font-weight: bold; }
+  .financial-totals .totals-label { text-align: left; }
+  .financial-totals .positive-balance { color: #dc2626; }
   .free-role { font-size: 7pt; color: #555; font-style: normal; }
   @media print { body { padding: 8mm; } }
 </style>
@@ -364,7 +394,8 @@ ${crewRows ? `<div class="section"><div class="section-title">Tripulação</div>
     <thead>
       <tr>${theadCols}</tr>
     </thead>
-    <tbody>${rows}</tbody>
+     <tbody>${rows}</tbody>
+     ${financialTotalsRow ? `<tfoot>${financialTotalsRow}</tfoot>` : ""}
   </table>
 </div>
 <div class="sig-block">
