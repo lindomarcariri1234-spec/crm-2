@@ -11,7 +11,7 @@ import {
   partnersTable,
 } from "@workspace/db";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { applyActiveCampaignBonus } from "../../lib/referral-campaigns";
+import { applyActiveCampaignBonus, normalizeReferralChannel, referralActivitySegment } from "../../lib/referral-campaigns";
 import { generateId } from "../../lib/id";
 import type { Tx } from "./tx";
 import { REFERRAL_STATUS } from "@workspace/permissions";
@@ -102,6 +102,24 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
     .limit(1);
 
   const currentCompleted = referrer?.successfulReferrals ?? 0;
+  // A referral code can have many tracking records. Only a server-issued cookie
+  // identifies one of them, so a conversion without that cookie is deliberately
+  // attributed to the direct channel instead of borrowing another visitor's UTM.
+  const trackingWhere = referralCookieId
+    ? and(eq(referralTrackingTable.tenantId, tenantId), eq(referralTrackingTable.cookieId, referralCookieId))
+    : null;
+  const [trackingRow] = trackingWhere
+    ? await tx
+      .select({
+        firstVisit: referralTrackingTable.firstVisit,
+        utmSource: referralTrackingTable.utmSource,
+        utmMedium: referralTrackingTable.utmMedium,
+      })
+      .from(referralTrackingTable)
+      .where(trackingWhere)
+      .limit(1)
+    : [];
+  const attributionChannel = normalizeReferralChannel(trackingRow?.utmSource, trackingRow?.utmMedium);
 
   // Enforce maxReferralsPerUser cap — if limit is reached (and > 0), skip conversion gracefully
   if (maxReferralsPerUser > 0 && currentCompleted >= maxReferralsPerUser) {
@@ -121,7 +139,12 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   // absent product data retains the legacy all-products behavior for old checkout callers.
   const campaignPolicy = await applyActiveCampaignBonus(
     tx, tenantId, baseBonusValue, conversionAt,
-    { productIds: storeProductIds, referrerTierLevel: tier.level },
+    {
+      productIds: storeProductIds,
+      referrerTierLevel: tier.level,
+      activitySegment: referralActivitySegment(currentCompleted),
+      attributionChannel,
+    },
   );
   const { adjustedBase, fixedExtra } = campaignPolicy;
   const bonusAmount = roundMoney(adjustedBase * tier.bonusMultiplier + fixedExtra);
@@ -155,6 +178,8 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
         expiresAt,
         ...(conversionIp && { ipAddress: conversionIp }),
         ...(reservationId && { reservationId }),
+        campaignId: campaignPolicy.campaignId ?? null,
+        attributionChannel,
         updatedAt: new Date(),
       })
       .where(eq(referralsTable.id, existingReferralId));
@@ -188,18 +213,10 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
       expiresAt,
       ipAddress: conversionIp ?? null,
       reservationId: reservationId ?? null,
+      campaignId: campaignPolicy.campaignId ?? null,
+      attributionChannel,
     });
   }
-
-  const trackingWhere = referralCookieId
-    ? and(eq(referralTrackingTable.tenantId, tenantId), eq(referralTrackingTable.cookieId, referralCookieId))
-    : and(eq(referralTrackingTable.tenantId, tenantId), eq(referralTrackingTable.referralCode, referralCode));
-
-  const [trackingRow] = await tx
-    .select({ firstVisit: referralTrackingTable.firstVisit })
-    .from(referralTrackingTable)
-    .where(trackingWhere!)
-    .limit(1);
 
   const [lastReferrerOrder] = await tx
     .select({ ipAddress: storeOrdersTable.ipAddress })
@@ -319,13 +336,6 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
       .where(and(
         eq(referralTrackingTable.tenantId, tenantId),
         eq(referralTrackingTable.cookieId, referralCookieId),
-      ));
-  } else {
-    await tx.update(referralTrackingTable)
-      .set(conversionUpdate)
-      .where(and(
-        eq(referralTrackingTable.tenantId, tenantId),
-        eq(referralTrackingTable.referralCode, referralCode),
       ));
   }
 

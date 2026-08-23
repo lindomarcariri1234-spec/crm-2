@@ -6,6 +6,7 @@ vi.mock("@workspace/db", () => ({
   referralCampaignsTable: {
     id: "id", tenantId: "tenant_id", bonusType: "bonus_type", bonusValue: "bonus_value",
     eligibleStoreProductIds: "eligible_products", eligibleTierLevels: "eligible_tiers",
+    eligibleActivitySegments: "eligible_activity_segments", eligibleChannels: "eligible_channels",
     startsAt: "starts_at", endsAt: "ends_at",
   },
 }));
@@ -16,7 +17,7 @@ vi.mock("drizzle-orm", () => ({
   sql: Object.assign(vi.fn(() => "sql"), { raw: vi.fn() }),
 }));
 
-import { applyActiveCampaignBonus } from "../lib/referral-campaigns.js";
+import { applyActiveCampaignBonus, referralActivitySegment } from "../lib/referral-campaigns.js";
 
 function queryRunner() {
   return {
@@ -53,5 +54,36 @@ describe("referral campaign policy", () => {
     }]);
     await expect(applyActiveCampaignBonus(queryRunner(), "tenant-a", 10))
       .resolves.toMatchObject({ adjustedBase: 0, fixedExtra: 0, rewardOutcome: "no_reward" });
+  });
+
+  it("requires the configured participant activity and tracked channel", async () => {
+    selectResult.mockResolvedValue([{
+      id: "campaign-activity-channel", bonusType: "fixed_bonus", bonusValue: "15",
+      eligibleStoreProductIds: [], eligibleTierLevels: [],
+      eligibleActivitySegments: ["active"], eligibleChannels: ["instagram:story"],
+    }]);
+    await expect(applyActiveCampaignBonus(queryRunner(), "tenant-a", 10, new Date(), {
+      activitySegment: "active", attributionChannel: "instagram:story",
+    })).resolves.toMatchObject({ rewardOutcome: "fixed_bonus", fixedExtra: 15 });
+    await expect(applyActiveCampaignBonus(queryRunner(), "tenant-a", 10, new Date(), {
+      activitySegment: "occasional", attributionChannel: "instagram:story",
+    })).resolves.toMatchObject({ rewardOutcome: "base", adjustedBase: 10 });
+    await expect(applyActiveCampaignBonus(queryRunner(), "tenant-a", 10, new Date(), {
+      activitySegment: "active", attributionChannel: "whatsapp",
+    })).resolves.toMatchObject({ rewardOutcome: "base", adjustedBase: 10 });
+  });
+
+  it("assigns CRM reservations to the same activity segment with a direct channel", async () => {
+    selectResult.mockResolvedValue([{
+      id: "campaign-crm", bonusType: "fixed_bonus", bonusValue: "20",
+      eligibleStoreProductIds: [], eligibleTierLevels: [],
+      eligibleActivitySegments: ["active"], eligibleChannels: ["direct"],
+    }]);
+    await expect(applyActiveCampaignBonus(queryRunner(), "tenant-a", 10, new Date(), {
+      activitySegment: referralActivitySegment(3), attributionChannel: "direct",
+    })).resolves.toMatchObject({ campaignId: "campaign-crm", rewardOutcome: "fixed_bonus", fixedExtra: 20 });
+    await expect(applyActiveCampaignBonus(queryRunner(), "tenant-a", 10, new Date(), {
+      activitySegment: referralActivitySegment(2), attributionChannel: "direct",
+    })).resolves.toMatchObject({ campaignId: "campaign-crm", rewardOutcome: "base", adjustedBase: 10 });
   });
 });

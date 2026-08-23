@@ -20,7 +20,7 @@ import { broadcastSeatUpdate } from "../lib/realtime";
 import { sendPushNotification } from "../lib/push-notifications";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { applyDiscounts, computeBalance, computeEffectiveLoyaltyPoints, roundMoney } from "../lib/pricing";
-import { applyActiveCampaignBonus } from "../lib/referral-campaigns";
+import { applyActiveCampaignBonus, referralActivitySegment } from "../lib/referral-campaigns";
 import { calculateTier, loyaltyAwardPointsForReservation } from "../lib/loyalty-helpers";
 import { ROLES, RESERVATION_STATUS, REFERRAL_STATUS, COMMISSION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type ReservationStatus } from "@workspace/permissions";
 import { parseReservationStatus } from "../lib/status-validators";
@@ -875,11 +875,19 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
     let serverReferralDiscountPct = 5;
     let serverReferralReferrerId: string | null = null;
     let serverReferralConversionAt: Date = new Date();
+    let serverReferralCampaignId: string | null = null;
+    // CRM-created reservations have no public referral cookie. Treat them as an
+    // explicitly direct channel instead of silently bypassing channel policy.
+    const serverReferralAttributionChannel = "direct";
 
     if (parsed.data.discountReferralCode) {
       const upperCode = parsed.data.discountReferralCode.toUpperCase();
       // Look up referrer by permanent client referral code
-      const [referrer] = await db.select({ id: clientsTable.id, name: clientsTable.name })
+      const [referrer] = await db.select({
+        id: clientsTable.id,
+        name: clientsTable.name,
+        successfulReferrals: clientsTable.successfulReferrals,
+      })
         .from(clientsTable)
         .where(and(
           eq(clientsTable.tenantId, me.tenantId),
@@ -910,8 +918,18 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
       // Apply active campaign bonus; capture timestamp for convertedAt consistency.
       // fixed_extra is a flat add-on; multiplier adjusts the base.
       serverReferralConversionAt = new Date();
-      const campaignResult = await applyActiveCampaignBonus(db, me.tenantId, serverReferralBonusValue, serverReferralConversionAt);
+      const campaignResult = await applyActiveCampaignBonus(
+        db,
+        me.tenantId,
+        serverReferralBonusValue,
+        serverReferralConversionAt,
+        {
+          activitySegment: referralActivitySegment(referrer.successfulReferrals ?? 0),
+          attributionChannel: serverReferralAttributionChannel,
+        },
+      );
       serverReferralBonusValue = campaignResult.adjustedBase + campaignResult.fixedExtra;
+      serverReferralCampaignId = campaignResult.campaignId ?? null;
     }
 
     // Apply discounts in priority order: coupon → loyalty → referral
@@ -1119,6 +1137,8 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
           discountAmount: appliedReferralAmount.toFixed(2),
           bonusAmount: serverReferralBonusValue.toFixed(2),
           convertedAt: serverReferralConversionAt,
+          campaignId: serverReferralCampaignId,
+          attributionChannel: serverReferralAttributionChannel,
         });
         // Update referrer client stats (earnings += referrer bonus)
         await tx.update(clientsTable)

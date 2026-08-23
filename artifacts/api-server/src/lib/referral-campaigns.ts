@@ -20,6 +20,24 @@ export interface CampaignBonusResult {
 export interface CampaignPolicyContext {
   productIds?: string[];
   referrerTierLevel?: string | null;
+  /** Derived from valid conversions before the current checkout. */
+  activitySegment?: "active" | "occasional" | "inactive";
+  /** Normalized source or source:medium attribution captured in the referral cookie. */
+  attributionChannel?: string | null;
+}
+
+export function normalizeReferralChannel(source?: string | null, medium?: string | null): string {
+  const normalize = (value?: string | null) => value?.trim().toLowerCase().replace(/\s+/g, "_") ?? "";
+  const normalizedSource = normalize(source);
+  const normalizedMedium = normalize(medium);
+  if (!normalizedSource) return "direct";
+  return normalizedMedium ? `${normalizedSource}:${normalizedMedium}` : normalizedSource;
+}
+
+export function referralActivitySegment(successfulReferrals: number): "active" | "occasional" | "inactive" {
+  if (successfulReferrals >= 3) return "active";
+  if (successfulReferrals >= 1) return "occasional";
+  return "inactive";
 }
 
 /**
@@ -47,6 +65,8 @@ export async function applyActiveCampaignBonus(
       id: referralCampaignsTable.id,
       eligibleStoreProductIds: referralCampaignsTable.eligibleStoreProductIds,
       eligibleTierLevels: referralCampaignsTable.eligibleTierLevels,
+      eligibleActivitySegments: referralCampaignsTable.eligibleActivitySegments,
+      eligibleChannels: referralCampaignsTable.eligibleChannels,
       conversionCap: referralCampaignsTable.conversionCap,
       budgetAmount: referralCampaignsTable.budgetAmount,
       commissionType: referralCampaignsTable.commissionType,
@@ -69,6 +89,8 @@ export async function applyActiveCampaignBonus(
 
   const eligibleProducts = activeCampaign.eligibleStoreProductIds ?? [];
   const eligibleTiers = activeCampaign.eligibleTierLevels ?? [];
+  const eligibleActivitySegments = activeCampaign.eligibleActivitySegments ?? [];
+  const eligibleChannels = activeCampaign.eligibleChannels ?? [];
   const productEligible = eligibleProducts.length === 0
     // Older checkout paths do not yet expose line-item IDs; retain their
     // historic campaign behavior until they opt into policy context.
@@ -76,7 +98,14 @@ export async function applyActiveCampaignBonus(
     || context.productIds.some((id) => eligibleProducts.includes(id));
   const tierEligible = eligibleTiers.length === 0
     || (!!context.referrerTierLevel && eligibleTiers.includes(context.referrerTierLevel));
-  if (!productEligible || !tierEligible) {
+  const activityEligible = eligibleActivitySegments.length === 0
+    || (!!context.activitySegment && eligibleActivitySegments.includes(context.activitySegment));
+  const normalizedChannel = context.attributionChannel?.trim().toLowerCase() ?? "direct";
+  const channelEligible = eligibleChannels.length === 0
+    || eligibleChannels.map((channel) => channel.trim().toLowerCase()).some((channel) =>
+      channel === normalizedChannel || normalizedChannel.startsWith(`${channel}:`),
+    );
+  if (!productEligible || !tierEligible || !activityEligible || !channelEligible) {
     return { adjustedBase: baseBonusValue, fixedExtra: 0, rewardOutcome: "base", campaignId: activeCampaign.id };
   }
 

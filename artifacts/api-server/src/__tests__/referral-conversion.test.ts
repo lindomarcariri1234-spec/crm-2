@@ -57,6 +57,8 @@ vi.mock("@workspace/permissions", () => ({
 const mockApplyActiveCampaignBonus = vi.fn();
 vi.mock("../lib/referral-campaigns.js", () => ({
   applyActiveCampaignBonus: (...args: unknown[]) => mockApplyActiveCampaignBonus(...args),
+  normalizeReferralChannel: (source?: string, medium?: string) => source ? (medium ? `${source}:${medium}` : source) : "direct",
+  referralActivitySegment: (successfulReferrals: number) => successfulReferrals >= 3 ? "active" : successfulReferrals >= 1 ? "occasional" : "inactive",
 }));
 
 const mockComputeReferralTier = vi.fn();
@@ -168,7 +170,7 @@ const BASE_ARGS = {
   discountAmount:    10,
   discountValue:     5,
   discountType:      "percentage",
-  referralCookieId:  undefined,  // use code-based tracking update
+  referralCookieId:  undefined,  // direct attribution; never select a tracking row by shared code
   conversionIp:      null,
 };
 
@@ -190,16 +192,14 @@ beforeEach(() => {
 // Helpers — queue the selects that every path needs
 //   1. referralSettingsTable
 //   2. clientsTable (referrer)
-//   3. referralTrackingTable (fraud detection)
-//   4. storeOrdersTable (last referrer order, fraud)
+//   3. storeOrdersTable (last referrer order, fraud)
 // ---------------------------------------------------------------------------
 
 function queueCommonSelects() {
   selectQueue.push(
     [REF_SETTINGS],  // 1. referral settings
     [REFERRER],      // 2. referrer client row
-    [],              // 3. referralTrackingTable — no prior tracking row (no fraud signal)
-    [],              // 4. storeOrdersTable — no prior order (no fraud signal)
+    [],              // 3. storeOrdersTable — no prior order (no fraud signal)
   );
 }
 
@@ -316,6 +316,29 @@ describe("recordReferralConversion — INSERT path (existingReferralId null)", (
 // ---------------------------------------------------------------------------
 
 describe("recordReferralConversion — shared invariants", () => {
+  it("uses direct attribution without a cookie instead of another visitor's tracking UTM", async () => {
+    selectQueue.push(
+      [REF_SETTINGS],
+      [REFERRER],
+      // This would be an unrelated visitor's tracking row if the implementation
+      // still queried by referral code. It must never reach campaign policy.
+      [{ utmSource: "whatsapp", utmMedium: "paid" }],
+    );
+    const tx = makeTx();
+
+    await recordReferralConversion(tx, { ...BASE_ARGS, existingReferralId: "referral-direct" });
+
+    expect(mockApplyActiveCampaignBonus).toHaveBeenCalledWith(
+      tx,
+      "tenant-001",
+      10,
+      expect.any(Date),
+      expect.objectContaining({ attributionChannel: "direct", activitySegment: "occasional" }),
+    );
+    // settings + referrer + last referrer order; no selection by referralCode.
+    expect((tx.select as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(3);
+  });
+
   it("increments the referrer's successfulReferrals regardless of UPDATE or INSERT path", async () => {
     for (const existingReferralId of ["existing-ref-row-1", null]) {
       vi.clearAllMocks();

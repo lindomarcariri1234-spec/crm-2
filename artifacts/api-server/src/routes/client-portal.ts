@@ -1371,6 +1371,12 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
       return;
     }
 
+    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    if (!client) {
+      res.json(null);
+      return;
+    }
+
     const now = new Date();
     const [campaign] = await db
       .select({
@@ -1383,6 +1389,7 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
         bannerText: referralCampaignsTable.bannerText,
         shareMessage: referralCampaignsTable.shareMessage,
         materialUrl: referralCampaignsTable.materialUrl,
+        eligibleActivitySegments: referralCampaignsTable.eligibleActivitySegments,
       })
       .from(referralCampaignsTable)
       .where(and(
@@ -1398,7 +1405,19 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
       return;
     }
 
-    res.json({ ...campaign, bonusValue: Number(campaign.bonusValue) });
+    const activitySegment = client.successfulReferrals >= 3
+      ? "active"
+      : client.successfulReferrals >= 1 ? "occasional" : "inactive";
+    const eligibleSegments = campaign.eligibleActivitySegments ?? [];
+    if (eligibleSegments.length > 0 && !eligibleSegments.includes(activitySegment)) {
+      // The portal must not advertise a reward the client cannot earn. Campaign
+      // channel eligibility is evaluated when the public link is tracked.
+      res.json(null);
+      return;
+    }
+
+    const { eligibleActivitySegments: _internalSegmentPolicy, ...safeCampaign } = campaign;
+    res.json({ ...safeCampaign, bonusValue: Number(campaign.bonusValue) });
   } catch (err) {
     next(err);
   }

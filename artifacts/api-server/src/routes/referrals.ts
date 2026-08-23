@@ -25,6 +25,8 @@ const CampaignConfig = z.object({
   shareMessage: z.string().max(2000).nullable().optional(),
   materialUrl: z.string().url().max(2000).nullable().optional(),
   publicRanking: z.boolean().optional(),
+  eligibleActivitySegments: z.array(z.enum(["active", "occasional", "inactive"])).max(3).optional(),
+  eligibleChannels: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
   commissionType: z.enum(["none", "fixed", "bonus_percentage"]).optional(),
   commissionValue: z.number().nonnegative().optional(),
   commissionRecipientType: z.enum(["ambassador", "partner"]).optional(),
@@ -1949,6 +1951,8 @@ router.post("/referrals/campaigns", async (req, res, next: NextFunction): Promis
       shareMessage: parsed.data.shareMessage ?? null,
       materialUrl: parsed.data.materialUrl ?? null,
       publicRanking: parsed.data.publicRanking ?? false,
+      eligibleActivitySegments: parsed.data.eligibleActivitySegments ?? [],
+      eligibleChannels: parsed.data.eligibleChannels?.map((channel) => channel.toLowerCase()) ?? [],
       commissionType: parsed.data.commissionType ?? "none",
       commissionValue: (parsed.data.commissionValue ?? 0).toFixed(4),
       commissionRecipientType: parsed.data.commissionRecipientType ?? "ambassador",
@@ -2064,6 +2068,8 @@ router.patch("/referrals/campaigns/:id", async (req, res, next: NextFunction): P
     if (parsed.data.shareMessage !== undefined) updates.shareMessage = parsed.data.shareMessage;
     if (parsed.data.materialUrl !== undefined) updates.materialUrl = parsed.data.materialUrl;
     if (parsed.data.publicRanking !== undefined) updates.publicRanking = parsed.data.publicRanking;
+    if (parsed.data.eligibleActivitySegments !== undefined) updates.eligibleActivitySegments = parsed.data.eligibleActivitySegments;
+    if (parsed.data.eligibleChannels !== undefined) updates.eligibleChannels = parsed.data.eligibleChannels.map((channel) => channel.toLowerCase());
     if (parsed.data.commissionType !== undefined) updates.commissionType = parsed.data.commissionType;
     if (parsed.data.commissionValue !== undefined) updates.commissionValue = parsed.data.commissionValue.toFixed(4);
     if (parsed.data.commissionRecipientType !== undefined) updates.commissionRecipientType = parsed.data.commissionRecipientType;

@@ -331,6 +331,8 @@ export default function Indicacoes() {
     shareMessage: "",
     materialUrl: "",
     publicRanking: true,
+    eligibleActivitySegments: [] as Array<"active" | "occasional" | "inactive">,
+    eligibleChannels: "",
     commissionType: "none" as "none" | "fixed" | "bonus_percentage",
     commissionValue: "0",
     commissionRecipientType: "ambassador" as "ambassador" | "partner",
@@ -636,7 +638,7 @@ export default function Indicacoes() {
   }
 
   async function handleSaveCampaign() {
-    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, publicRanking, commissionType, commissionValue, commissionRecipientType, eligiblePartnerIds } = campaignFormData;
+    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, publicRanking, eligibleActivitySegments, eligibleChannels, commissionType, commissionValue, commissionRecipientType, eligiblePartnerIds } = campaignFormData;
     if (!name.trim() || !startsAt || !endsAt) {
       toast({ title: "Preencha todos os campos obrigatórios", variant: "destructive" }); return;
     }
@@ -663,6 +665,8 @@ export default function Indicacoes() {
       shareMessage: shareMessage.trim() || null,
       materialUrl: materialUrl.trim() || null,
       publicRanking,
+      eligibleActivitySegments,
+      eligibleChannels: eligibleChannels.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
       commissionType,
       commissionValue: commissionType === "none" ? 0 : cVal,
       commissionRecipientType,
@@ -681,7 +685,7 @@ export default function Indicacoes() {
       setCampaignFormData({
         name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "",
         eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "",
-        shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0",
+        shareMessage: "", materialUrl: "", publicRanking: true, eligibleActivitySegments: [], eligibleChannels: "", commissionType: "none", commissionValue: "0",
         commissionRecipientType: "ambassador", eligiblePartnerIds: ""
       });
       setShowCampaignForm(false);
@@ -712,6 +716,8 @@ export default function Indicacoes() {
       shareMessage: c.shareMessage ?? "",
       materialUrl: c.materialUrl ?? "",
       publicRanking: c.publicRanking ?? true,
+      eligibleActivitySegments: c.eligibleActivitySegments ?? [],
+      eligibleChannels: (c.eligibleChannels ?? []).join(", "),
       commissionType: c.commissionType as any || "none",
       commissionValue: String(c.commissionValue || 0),
       commissionRecipientType: c.commissionRecipientType ?? "ambassador",
@@ -3243,7 +3249,7 @@ export default function Indicacoes() {
             <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
               <div className="flex items-center justify-between">
                 <p className="font-semibold text-sm">Nova campanha</p>
-                <Button variant="ghost" size="sm" onClick={() => { setShowCampaignForm(false); setEditingCampaignId(null); setCampaignFormData({ name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "", eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "", shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0", commissionRecipientType: "ambassador", eligiblePartnerIds: "" }); }}>
+                <Button variant="ghost" size="sm" onClick={() => { setShowCampaignForm(false); setEditingCampaignId(null); setCampaignFormData({ name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "", eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "", shareMessage: "", materialUrl: "", publicRanking: true, eligibleActivitySegments: [], eligibleChannels: "", commissionType: "none", commissionValue: "0", commissionRecipientType: "ambassador", eligiblePartnerIds: "" }); }}>
                   <XCircle className="w-4 h-4" />
                 </Button>
               </div>
@@ -3381,6 +3387,42 @@ export default function Indicacoes() {
                   onChange={(e) => setCampaignFormData((f) => ({ ...f, eligibleStoreProductIds: e.target.value }))}
                   placeholder="prod_1, prod_2 (separados por vírgula)"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Atividade dos participantes</Label>
+                <p className="text-xs text-muted-foreground">Sem seleção, todos participam. Ativo: 3+ conversões; ocasional: 1–2; inativo: nenhuma.</p>
+                <div className="flex flex-wrap gap-3">
+                  {([
+                    ["active", "Ativos"],
+                    ["occasional", "Ocasionais"],
+                    ["inactive", "Inativos"],
+                  ] as const).map(([segment, label]) => (
+                    <div key={segment} className="flex items-center space-x-1">
+                      <Checkbox
+                        id={`activity-${segment}`}
+                        checked={campaignFormData.eligibleActivitySegments.includes(segment)}
+                        onCheckedChange={(checked) => setCampaignFormData((f) => ({
+                          ...f,
+                          eligibleActivitySegments: checked
+                            ? [...f.eligibleActivitySegments, segment]
+                            : f.eligibleActivitySegments.filter((item) => item !== segment),
+                        }))}
+                      />
+                      <Label htmlFor={`activity-${segment}`} className="text-xs">{label}</Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Canais elegíveis</Label>
+                <Input
+                  value={campaignFormData.eligibleChannels}
+                  onChange={(e) => setCampaignFormData((f) => ({ ...f, eligibleChannels: e.target.value }))}
+                  placeholder="instagram, whatsapp, instagram:story"
+                />
+                <p className="text-xs text-muted-foreground">Use origem ou origem:meio. Sem canais, links diretos e todos os UTMs são aceitos.</p>
               </div>
 
               <div className="space-y-1">

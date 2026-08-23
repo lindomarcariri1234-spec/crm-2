@@ -38,6 +38,10 @@ export const referralsTable = pgTable("referrals", {
   utmSource: text("utm_source"),
   utmMedium: text("utm_medium"),
   utmCampaign: text("utm_campaign"),
+  /** Campaign policy selected when this referral converted; immutable attribution. */
+  campaignId: text("campaign_id"),
+  /** Normalized tracking channel (source or source:medium) carried from the referral cookie. */
+  attributionChannel: text("attribution_channel"),
   visitsCount: integer("visits_count").notNull().default(0),
   firstVisit: timestamp("first_visit", { withTimezone: true }),
   lastVisit: timestamp("last_visit", { withTimezone: true }),
@@ -147,6 +151,13 @@ export const referralCampaignsTable = pgTable("referral_campaigns", {
   shareMessage: text("share_message"),
   materialUrl: text("material_url"),
   publicRanking: boolean("public_ranking").notNull().default(false),
+  /**
+   * Empty means every activity level. Active: 3+ valid conversions; occasional:
+   * 1-2 valid conversions; inactive: no valid conversion yet.
+   */
+  eligibleActivitySegments: jsonb("eligible_activity_segments").$type<string[]>().notNull().default([]),
+  /** Empty means every source. Values are normalized sources or source:medium pairs. */
+  eligibleChannels: jsonb("eligible_channels").$type<string[]>().notNull().default([]),
   commissionType: text("commission_type").notNull().default("none"),
   commissionValue: numeric("commission_value", { precision: 10, scale: 4 }).notNull().default("0"),
   /** A campaign pays either its eligible ambassador or its eligible product partner, never both. */

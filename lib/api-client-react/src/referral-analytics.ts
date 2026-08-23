@@ -293,6 +293,8 @@ export interface ReferralCampaign {
   shareMessage: string | null;
   materialUrl: string | null;
   publicRanking: boolean;
+  eligibleActivitySegments: Array<"active" | "occasional" | "inactive">;
+  eligibleChannels: string[];
   commissionType: "none" | "fixed" | "bonus_percentage";
   commissionValue: number;
   commissionRecipientType: "ambassador" | "partner";
@@ -313,6 +315,8 @@ export interface CreateReferralCampaignBody {
   shareMessage?: string | null;
   materialUrl?: string | null;
   publicRanking?: boolean;
+  eligibleActivitySegments?: Array<"active" | "occasional" | "inactive">;
+  eligibleChannels?: string[];
   commissionType?: "none" | "fixed" | "bonus_percentage";
   commissionValue?: number;
   commissionRecipientType?: "ambassador" | "partner";
@@ -365,6 +369,8 @@ export interface UpdateReferralCampaignBody {
   shareMessage?: string | null;
   materialUrl?: string | null;
   publicRanking?: boolean;
+  eligibleActivitySegments?: Array<"active" | "occasional" | "inactive">;
+  eligibleChannels?: string[];
   commissionType?: "none" | "fixed" | "bonus_percentage";
   commissionValue?: number;
   commissionRecipientType?: "ambassador" | "partner";
