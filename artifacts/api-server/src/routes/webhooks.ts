@@ -17,7 +17,7 @@ import { PAYMENT_STATUS, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_S
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
 import { roundMoney } from "../lib/pricing";
 import { ValidationError, AppError } from "../lib/errors";
-import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
+import { adjustOrderSettlement, recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 
 const router = Router();
 
@@ -238,7 +238,17 @@ async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise
     const amount = Number(obj["amount"] ?? 0);
     const amountRefunded = Number(obj["amount_refunded"] ?? 0);
     if (amount > 0 && amountRefunded < amount) {
-      logger.info({ paymentIntentId, amount, amountRefunded }, "[webhooks/stripe] Partial refund — order/reservation untouched");
+      await db.transaction(async (tx) => {
+        const [order] = await tx.select({ id: storeOrdersTable.id, tenantId: storeOrdersTable.tenantId })
+          .from(storeOrdersTable)
+          .where(and(eq(storeOrdersTable.paymentIntentId, paymentIntentId), eq(storeOrdersTable.tenantId, store.tenantId)))
+          .limit(1);
+        if (order) await adjustOrderSettlement(tx as unknown as DbExecutor, {
+          tenantId: order.tenantId, orderId: order.id, amount: amountRefunded,
+          totalAmount: amount, eventKey: `partial-refund:stripe:${paymentIntentId}:${amountRefunded}`,
+          occurredAt: new Date(), reason: "Reembolso parcial Stripe",
+        });
+      });
       return;
     }
     await db.transaction(async (tx) => {
@@ -620,6 +630,7 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       gateway,
       transactionId,
       occurredAt: paidAt,
+      receivedAmount: args.amount,
     });
   }
 

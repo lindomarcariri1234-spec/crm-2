@@ -110,6 +110,7 @@ vi.mock("@workspace/permissions", () => ({
   STORE_PAYMENT_STATUS: { PAID: "paid" },
 }));
 vi.mock("../services/settlements/financial-ledger.js", () => ({
+  adjustOrderSettlement: vi.fn().mockResolvedValue(undefined),
   recordOrderPaymentSettlement: vi.fn().mockResolvedValue(undefined),
   reverseOrderSettlement: vi.fn().mockResolvedValue(undefined),
 }));

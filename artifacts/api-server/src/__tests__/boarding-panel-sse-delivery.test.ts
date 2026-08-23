@@ -138,6 +138,11 @@ vi.mock("../services/checkout/post-booking.js", () => ({
 vi.mock("../services/checkout/persist-order.js", () => ({
   applyOrderInventoryEffects: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../services/settlements/financial-ledger.js", () => ({
+  adjustOrderSettlement: vi.fn().mockResolvedValue(undefined),
+  recordOrderPaymentSettlement: vi.fn().mockResolvedValue(undefined),
+  reverseOrderSettlement: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("../queues/email-helpers.js", () => ({
   enqueueNewBookingNotificationEmail: vi.fn().mockResolvedValue(undefined),
@@ -314,7 +319,7 @@ async function deliverPaymentEvent() {
   const rawBody = JSON.stringify(paymentSucceededEvent());
   return request(buildApp())
     .post("/api/webhooks/stripe/loja-sse")
-    .set("x-signature", makeStripeSignature(rawBody))
+    .set("stripe-signature", makeStripeSignature(rawBody))
     .set("content-type", "application/json")
     .send(rawBody);
 }
@@ -324,10 +329,10 @@ let _savedMpWebhookSecret: string | undefined;
 
 describe("Stripe payment seat updates reach boarding clients", () => {
   beforeEach(() => {
-    // The production Stripe handler reads MP_WEBHOOK_SECRET from process.env.
+    // The production Stripe handler reads STRIPE_WEBHOOK_SECRET from process.env.
     // Set it to the test secret before each test and restore it afterward.
-    _savedMpWebhookSecret = process.env["MP_WEBHOOK_SECRET"];
-    process.env["MP_WEBHOOK_SECRET"] = WEBHOOK_SECRET;
+    _savedMpWebhookSecret = process.env["STRIPE_WEBHOOK_SECRET"];
+    process.env["STRIPE_WEBHOOK_SECRET"] = WEBHOOK_SECRET;
 
     vi.clearAllMocks();
     txSelectResults = [];
@@ -354,12 +359,12 @@ describe("Stripe payment seat updates reach boarding clients", () => {
   afterEach(() => {
     removeSeatClient(TRIP_ID, transport.res as Response);
 
-    // Restore MP_WEBHOOK_SECRET to its original value (or remove it if it
+    // Restore STRIPE_WEBHOOK_SECRET to its original value (or remove it if it
     // was not set before the test ran).
     if (_savedMpWebhookSecret === undefined) {
-      delete process.env["MP_WEBHOOK_SECRET"];
+      delete process.env["STRIPE_WEBHOOK_SECRET"];
     } else {
-      process.env["MP_WEBHOOK_SECRET"] = _savedMpWebhookSecret;
+      process.env["STRIPE_WEBHOOK_SECRET"] = _savedMpWebhookSecret;
     }
   });
 

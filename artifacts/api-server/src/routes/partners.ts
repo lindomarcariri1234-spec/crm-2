@@ -436,7 +436,7 @@ router.get("/partner/settlement", async (req, res, next: NextFunction): Promise<
     const totals = entries.reduce((acc, entry) => {
       const value = Number(entry.amount) * (entry.direction === "debit" ? -1 : 1);
       acc.net += value;
-      if (entry.settlementStatus === "available") acc.available += value;
+      if (entry.settlementStatus !== "settled") acc.available += value;
       if (entry.settlementStatus === "settled") acc.settled += value;
       return acc;
     }, { net: 0, available: 0, settled: 0 });

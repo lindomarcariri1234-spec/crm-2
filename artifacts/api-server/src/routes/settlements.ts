@@ -118,9 +118,19 @@ router.post("/financial/benefits", async (req, res, next: NextFunction): Promise
     }
 
     await db.transaction(async (tx) => {
+      const idempotencyKey = `manual-benefit:${parsed.data.idempotencyKey}`;
+      const [existingEntry] = await tx.select({ id: financialLedgerEntriesTable.id })
+        .from(financialLedgerEntriesTable)
+        .where(and(
+          eq(financialLedgerEntriesTable.tenantId, me.tenantId),
+          eq(financialLedgerEntriesTable.idempotencyKey, idempotencyKey),
+        ))
+        .limit(1);
+      if (existingEntry) return;
       const [client] = await tx.select({ id: clientsTable.id })
         .from(clientsTable)
         .where(and(eq(clientsTable.id, parsed.data.clientId), eq(clientsTable.tenantId, me.tenantId)))
+        .for("update")
         .limit(1);
       if (!client) throw new NotFoundError("Cliente não encontrado", "NOT_FOUND");
 
@@ -137,7 +147,7 @@ router.post("/financial/benefits", async (req, res, next: NextFunction): Promise
         direction: parsed.data.operation,
         amount: parsed.data.amount,
         eventType: `manual_${parsed.data.category}_${parsed.data.operation}`,
-        idempotencyKey: `manual-benefit:${parsed.data.idempotencyKey}`,
+        idempotencyKey,
         description: parsed.data.description,
         expiresAt: parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : null,
       });
