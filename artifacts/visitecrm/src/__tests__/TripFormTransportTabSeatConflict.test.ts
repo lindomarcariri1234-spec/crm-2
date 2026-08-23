@@ -58,6 +58,7 @@ afterEach(async () => {
   await cleanupRoots();
 });
 
+
 describe("TripFormTransportTab — conflito de assento", () => {
   it("destaca o assento ocupado e exibe os avisos do conflito", async () => {
     const seatConflictMessage =
@@ -102,5 +103,62 @@ describe("TripFormTransportTab — conflito de assento", () => {
     );
     expect(alertBanner).toBeDefined();
     expect(alertBanner?.textContent).toContain(seatConflictMessage);
+  });
+
+  it("remove o destaque, o aviso do campo e o banner após corrigir o assento", async () => {
+    const seatConflictMessage =
+      "Os assentos 12 já estão ocupados por reservas ativas. Escolha outros assentos.";
+    const conflictingForm: TripFormData = {
+      ...EMPTY_FORM,
+      freePassengers: [
+        {
+          id: "free-passenger-1",
+          name: "Maria da Silva",
+          cpf: "",
+          whatsapp: "",
+          role: "organizer",
+          seatNumber: "12",
+        },
+      ],
+    };
+    const { container, rerender } = await renderComponent(
+      createElement(TripFormTransportTab, {
+        form: conflictingForm,
+        setForm: vi.fn(),
+        conflictingSeats: ["12"],
+        seatConflictMessage,
+      }),
+    );
+
+    const availableForm: TripFormData = {
+      ...conflictingForm,
+      freePassengers: [{ ...conflictingForm.freePassengers[0], seatNumber: "13" }],
+    };
+    await rerender(
+      createElement(TripFormTransportTab, {
+        form: availableForm,
+        setForm: vi.fn(),
+        conflictingSeats: [],
+        seatConflictMessage: null,
+      }),
+    );
+
+    const seatInput = container.querySelector(
+      'input[placeholder="Ex: 12"]',
+    ) as HTMLInputElement | null;
+    expect(seatInput).not.toBeNull();
+    expect(seatInput?.value).toBe("13");
+    expect(seatInput?.className).not.toContain("border-destructive");
+    expect(container.textContent).not.toContain(
+      "Assento 13 já está ocupado por uma reserva ativa.",
+    );
+    expect(container.textContent).not.toContain(seatConflictMessage);
+    expect(
+      Array.from(container.querySelectorAll("div")).find(
+        (element) =>
+          element.className.includes("bg-destructive/10") &&
+          element.textContent?.includes(seatConflictMessage),
+      ),
+    ).toBeUndefined();
   });
 });
