@@ -3,7 +3,10 @@
  *
  * Verifies:
  *  - 403 for any role other than SUPER_ADMIN
- *  - 200 with { orphansFixed: N } for SUPER_ADMIN
+ *  - 200 with independent orphan and seat-repair counts for SUPER_ADMIN
+ *  - orphan cleanup is invoked only once by the combined repair
+ *  - the combined repair does not call the full reconciliation cron, which
+ *    performs orphan cleanup internally
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
@@ -13,11 +16,22 @@ import { ROLES } from "@workspace/permissions";
 // ---------------------------------------------------------------------------
 // Hoisted mocks
 // ---------------------------------------------------------------------------
-const { mockRequireAuth, mockCleanupOrphanDeals, mockRepairSeatDriftOnly } = vi.hoisted(() => {
+const {
+  mockRequireAuth,
+  mockCleanupOrphanDeals,
+  mockRepairSeatDriftOnly,
+  mockRunSeatReconciliationCron,
+} = vi.hoisted(() => {
   const mockRequireAuth = vi.fn();
   const mockCleanupOrphanDeals = vi.fn();
   const mockRepairSeatDriftOnly = vi.fn();
-  return { mockRequireAuth, mockCleanupOrphanDeals, mockRepairSeatDriftOnly };
+  const mockRunSeatReconciliationCron = vi.fn();
+  return {
+    mockRequireAuth,
+    mockCleanupOrphanDeals,
+    mockRepairSeatDriftOnly,
+    mockRunSeatReconciliationCron,
+  };
 });
 
 vi.mock("../lib/tenant.js", () => ({
@@ -33,6 +47,7 @@ vi.mock("../lib/seat-reconciliation.js", () => ({
   getOrphanDealsCount: vi.fn().mockResolvedValue(0),
   getClientFinancialDriftCount: vi.fn().mockResolvedValue(0),
   repairSeatDriftOnly: mockRepairSeatDriftOnly,
+  runSeatReconciliationCron: mockRunSeatReconciliationCron,
 }));
 
 vi.mock("../lib/redis.js", () => ({
@@ -160,7 +175,7 @@ describe("POST /admin/system-health/repair", () => {
     expect(mockRepairSeatDriftOnly).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 200 with correct counts for SUPER_ADMIN when both orphans and drift exist", async () => {
+  it("runs each repair pass once and returns independent orphan and seat counts", async () => {
     mockRequireAuth.mockResolvedValue(makeSuperAdmin());
     mockCleanupOrphanDeals.mockResolvedValue({ orphansFixed: 3 });
     mockRepairSeatDriftOnly.mockResolvedValue({ fixed: 5, skipped: 1 });
@@ -169,8 +184,11 @@ describe("POST /admin/system-health/repair", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ orphansFixed: 3, tripsCorrected: 5 });
+    // The combined repair must not invoke a helper that performs orphan cleanup
+    // a second time, and tripsCorrected must come from seat repair's `fixed`.
     expect(mockCleanupOrphanDeals).toHaveBeenCalledTimes(1);
     expect(mockRepairSeatDriftOnly).toHaveBeenCalledTimes(1);
+    expect(mockRunSeatReconciliationCron).not.toHaveBeenCalled();
   });
 
   it("propagates errors to the error handler when cleanupOrphanDeals throws unexpectedly", async () => {
