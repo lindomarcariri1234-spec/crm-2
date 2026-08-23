@@ -1475,6 +1475,67 @@ function IntegrationCard({ type }: { type: string }) {
   );
 }
 
+interface DistributionHealth {
+  enabled: boolean;
+  environment: string;
+  status: string;
+  lastError: string | null;
+  lastSyncAt: string | null;
+  operations: number;
+  successful: number;
+  failed: number;
+  averageLatencyMs: number | null;
+  lastOperationAt: string | null;
+}
+
+function DistributionHealthCard() {
+  const { data: me } = useGetMe();
+  const canManage = me?.role === ROLES.AGENCY_ADMIN || me?.role === ROLES.SUPER_ADMIN;
+  const [health, setHealth] = useState<DistributionHealth | null>(null);
+
+  useEffect(() => {
+    if (!canManage) return;
+    let active = true;
+    void fetch(`${BASE}/api/distribution/health`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: DistributionHealth | null) => {
+        if (active) setHealth(data);
+      })
+      .catch(() => {
+        if (active) setHealth(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [canManage]);
+
+  if (!canManage) return null;
+  return (
+    <Card className="border-dashed">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Saúde da distribuição turística</CardTitle>
+        <CardDescription>
+          Monitoramento do adaptador de referência. Ele funciona somente em teste e não chama fornecedores reais.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!health ? (
+          <p className="text-sm text-muted-foreground">Ative a integração de referência para consultar a saúde.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+            <div><p className="text-muted-foreground text-xs">Operações</p><p className="font-semibold">{health.operations}</p></div>
+            <div><p className="text-muted-foreground text-xs">Sucesso</p><p className="font-semibold text-emerald-700">{health.successful}</p></div>
+            <div><p className="text-muted-foreground text-xs">Falhas</p><p className="font-semibold text-red-700">{health.failed}</p></div>
+            <div><p className="text-muted-foreground text-xs">Latência média</p><p className="font-semibold">{health.averageLatencyMs === null ? "—" : `${health.averageLatencyMs} ms`}</p></div>
+          </div>
+        )}
+        {health?.lastError && <p className="mt-3 text-xs text-red-700">{health.lastError}</p>}
+        {health?.lastOperationAt && <p className="mt-3 text-xs text-muted-foreground">Última operação: {new Date(health.lastOperationAt).toLocaleString("pt-BR")}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 /* ──────────────────── Integrations Tab ──────────────────────────────────── */
 
 function IntegrationsTab() {
@@ -1487,7 +1548,9 @@ function IntegrationsTab() {
         <IntegrationCard type="stripe_account" />
         <IntegrationCard type="mercadopago" />
         <IntegrationCard type="google_analytics" />
+        <IntegrationCard type="distribution_reference" />
       </div>
+      <DistributionHealthCard />
     </div>
   );
 }

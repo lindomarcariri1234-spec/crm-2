@@ -274,7 +274,7 @@ beforeEach(() => {
 // ─── GET /api/integrations ────────────────────────────────────────────────────
 
 describe("GET /api/integrations — list all integration types", () => {
-  it("returns 200 with all 4 registry types", async () => {
+  it("returns 200 with all registered integration types", async () => {
     asAdmin();
     // mockWhere resolves to [] by default; route fills gaps from REGISTRY
 
@@ -282,13 +282,14 @@ describe("GET /api/integrations — list all integration types", () => {
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body).toHaveLength(4);
+    expect(res.body).toHaveLength(5);
 
     const types = res.body.map((r: { type: string }) => r.type);
     expect(types).toContain("whatsapp_evolution");
     expect(types).toContain("stripe_account");
     expect(types).toContain("mercadopago");
     expect(types).toContain("google_analytics");
+    expect(types).toContain("distribution_reference");
   });
 
   it("response items include type, label, status, and enabled — no secret fields", async () => {

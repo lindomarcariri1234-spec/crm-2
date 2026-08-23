@@ -121,6 +121,31 @@ interface RegistryEntry {
 }
 
 const REGISTRY: Record<string, RegistryEntry> = {
+  // ── Reference tourism distribution adapter ─────────────────────────────────
+  // This adapter never calls a real supplier. It exists to validate the
+  // normalized distribution contract before a tenant adds commercial credentials.
+  distribution_reference: {
+    label: "Distribuição turística (referência)",
+    fields: [
+      {
+        key: "rateLimitPerMinute",
+        label: "Limite de operações por minuto",
+        secret: false,
+        optional: true,
+      },
+    ],
+    async testConnection(config) {
+      const rate = config.rateLimitPerMinute?.trim();
+      if (rate && (!/^\d+$/.test(rate) || Number(rate) < 1 || Number(rate) > 120)) {
+        return { ok: false, message: "O limite deve ser um número entre 1 e 120." };
+      }
+      return {
+        ok: true,
+        message: "Adaptador de referência pronto para o ambiente de teste. Nenhuma API externa será chamada.",
+      };
+    },
+  },
+
   // ── WhatsApp via Evolution API ──────────────────────────────────────────────
   whatsapp_evolution: {
     label: "WhatsApp (Evolution API)",
@@ -531,6 +556,13 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
     const enabled = body.enabled ?? existing?.enabled ?? false;
     const environment = body.environment ?? existing?.environment ?? "production";
     const name = body.name ?? existing?.name ?? null;
+    if (type === "distribution_reference" && enabled && environment !== "test") {
+      next(new ValidationError(
+        "O adaptador de referência só pode ser ativado no ambiente de teste.",
+        "REFERENCE_ADAPTER_TEST_ONLY",
+      ));
+      return;
+    }
 
     // Merge non-secret config fields with existing config.
     const configFields = entry.fields.filter((f) => !f.secret);
@@ -591,9 +623,9 @@ router.put("/integrations/:type", async (req, res, next: NextFunction): Promise<
 
     // Auto-verify the saved config so the persisted status always reflects the
     // stored credentials. Never auto-test disabled integrations (stale status).
-    if (enabled && newSecretsEncrypted) {
+    if (enabled && (newSecretsEncrypted || secretFields.length === 0)) {
       try {
-        const secrets = decryptSecrets(newSecretsEncrypted);
+        const secrets = newSecretsEncrypted ? decryptSecrets(newSecretsEncrypted) : {};
         const testResult = await entry.testConnection(resolvedConfig, secrets);
         if (testResult.ok) {
           await db

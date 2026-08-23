@@ -54,6 +54,7 @@ import gemeoRouter from "./gemeo";
 import webhooksRouter from "./webhooks";
 import npsPublicRouter from "./nps";
 import whatsappNotificationsRouter from "./whatsapp-notifications";
+import distributionRouter from "./distribution";
 
 const router: IRouter = Router();
 
@@ -114,6 +115,7 @@ router.use(gemeoRouter);
 router.use(webhooksRouter);
 router.use(npsPublicRouter);
 router.use(whatsappNotificationsRouter);
+router.use(distributionRouter);
 router.use("/uploadthing", uploadthingRouter);
 router.use("/upload", uploadRouter);
 
