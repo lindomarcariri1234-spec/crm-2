@@ -13,6 +13,8 @@ export interface CommercialReferralRow {
   discountAmount: string | number | null;
   reservationStatus: string | null;
   reservationPaidValue: string | number | null;
+  commissionAmount?: string | number | null;
+  commissionStatus?: string | null;
 }
 
 export interface ReferralCommercialSummary {
@@ -21,6 +23,8 @@ export interface ReferralCommercialSummary {
   rewardsPaid: number;
   rewardsPending: number;
   discountGiven: number;
+  /** Contractual commissions; intentionally excluded from promotional CAC. */
+  commissions: number;
   acquisitionCost: number;
   cac: number;
   roiPercent: number;
@@ -40,6 +44,7 @@ const VALID_REFERRAL_STATUSES = new Set<string>([
   REFERRAL_STATUS.COMPLETED,
   REFERRAL_STATUS.CONVERTED,
 ]);
+const VALID_COMMISSION_STATUSES = new Set(["pending", "approved", "paid"]);
 
 function dateAt(value: Date | string | null): Date | null {
   if (!value) return null;
@@ -71,6 +76,7 @@ export function calculateReferralCommercialAnalytics(
     rewardsPaid: 0,
     rewardsPending: 0,
     discountGiven: 0,
+    commissions: 0,
   };
   const ranking = new Map<string, ReferralCommercialRankingEntry>();
 
@@ -89,6 +95,12 @@ export function calculateReferralCommercialAnalytics(
     const creditUsed = Math.min(bonusAmount, Math.max(0, Number(row.bonusCreditUsedAmount ?? 0)));
     const revenue = Math.max(0, Number(row.reservationPaidValue ?? 0));
     const discount = Math.max(0, Number(row.discountAmount ?? 0));
+    // A ledger commission remains a commission, rather than a promotional
+    // reward. Only an unreversed ledger entry attached to this valid
+    // conversion is reportable.
+    const commission = row.commissionStatus && VALID_COMMISSION_STATUSES.has(row.commissionStatus)
+      ? Math.max(0, Number(row.commissionAmount ?? 0))
+      : 0;
     const pendingReward = row.bonusPaid ? 0 : Math.max(0, bonusAmount - creditUsed);
 
     summary.validReferrals += 1;
@@ -96,6 +108,7 @@ export function calculateReferralCommercialAnalytics(
     summary.rewardsPaid += row.bonusPaid ? bonusAmount : 0;
     summary.rewardsPending += pendingReward;
     summary.discountGiven += discount;
+    summary.commissions += commission;
 
     const entry = ranking.get(row.referrerId) ?? {
       referrerId: row.referrerId,
@@ -103,13 +116,12 @@ export function calculateReferralCommercialAnalytics(
       conversions: 0,
       attributedRevenue: 0,
       rewardsPaid: 0,
-      // Partner commissions are outside the current program; returning this
-      // explicitly avoids presenting a promotional bonus as a commission.
       commissionAmount: 0,
     };
     entry.conversions += 1;
     entry.attributedRevenue += revenue;
     entry.rewardsPaid += row.bonusPaid ? bonusAmount : 0;
+    entry.commissionAmount += commission;
     ranking.set(row.referrerId, entry);
   }
 
@@ -127,6 +139,7 @@ export function calculateReferralCommercialAnalytics(
       rewardsPaid: money(summary.rewardsPaid),
       rewardsPending: money(summary.rewardsPending),
       discountGiven: money(summary.discountGiven),
+      commissions: money(summary.commissions),
       acquisitionCost: money(acquisitionCost),
       cac: money(cac),
       roiPercent: money(roiPercent),
@@ -137,6 +150,7 @@ export function calculateReferralCommercialAnalytics(
         ...entry,
         attributedRevenue: money(entry.attributedRevenue),
         rewardsPaid: money(entry.rewardsPaid),
+        commissionAmount: money(entry.commissionAmount),
       }))
       .sort(
         (a, b) =>

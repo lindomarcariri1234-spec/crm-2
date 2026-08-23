@@ -140,11 +140,41 @@ export const referralCampaignsTable = pgTable("referral_campaigns", {
   bonusType: text("bonus_type").notNull().default("multiplier"),
   bonusValue: numeric("bonus_value", { precision: 10, scale: 4 }).notNull().default("2"),
   bannerText: text("banner_text"),
+  eligibleStoreProductIds: jsonb("eligible_store_product_ids").$type<string[]>().notNull().default([]),
+  eligibleTierLevels: jsonb("eligible_tier_levels").$type<string[]>().notNull().default([]),
+  conversionCap: integer("conversion_cap"),
+  budgetAmount: numeric("budget_amount", { precision: 12, scale: 2 }),
+  shareMessage: text("share_message"),
+  materialUrl: text("material_url"),
+  publicRanking: boolean("public_ranking").notNull().default(false),
+  commissionType: text("commission_type").notNull().default("none"),
+  commissionValue: numeric("commission_value", { precision: 10, scale: 4 }).notNull().default("0"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type ReferralCampaign = typeof referralCampaignsTable.$inferSelect;
+
+/** Commercial commission, intentionally separate from the promotional referral bonus. */
+export const referralCommissionsTable = pgTable("referral_commissions", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  referralId: text("referral_id").notNull().unique(),
+  referrerId: text("referrer_id").notNull(),
+  campaignId: text("campaign_id"),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  basis: text("basis").notNull(),
+  status: text("status").notNull().default("pending"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
+  reversedAt: timestamp("reversed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const insertReferralCommissionSchema = createInsertSchema(referralCommissionsTable).omit({ createdAt: true, updatedAt: true });
+export type InsertReferralCommission = z.infer<typeof insertReferralCommissionSchema>;
+export type ReferralCommission = typeof referralCommissionsTable.$inferSelect;
 
 export const referralAttemptLogsTable = pgTable("referral_attempt_logs", {
   id: text("id").primaryKey(),

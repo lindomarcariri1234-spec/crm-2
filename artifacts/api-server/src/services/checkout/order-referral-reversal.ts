@@ -1,4 +1,4 @@
-import { referralsTable, clientsTable } from "@workspace/db";
+import { referralsTable, clientsTable, referralCommissionsTable } from "@workspace/db";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { REFERRAL_STATUS } from "@workspace/permissions";
 import { logger } from "../../lib/logger";
@@ -142,6 +142,13 @@ export async function reverseProductOnlyOrderReferral(
       updatedAt: reversalNow,
     })
     .where(eq(referralsTable.id, referral.id));
+  await tx.update(referralCommissionsTable)
+    .set({ status: "reversed", reversedAt: reversalNow, updatedAt: reversalNow })
+    .where(and(
+      eq(referralCommissionsTable.tenantId, tenantId),
+      eq(referralCommissionsTable.referralId, referral.id),
+      inArray(referralCommissionsTable.status, ["pending", "approved"]),
+    ));
 
   logger.info(
     { tenantId, orderId, referralCode, referralId: referral.id, bonusToReverse, reversalReason },
@@ -235,6 +242,13 @@ export async function reverseTripOrderReferrals(
         updatedAt: reversalNow,
       })
       .where(eq(referralsTable.id, ref.id));
+    await tx.update(referralCommissionsTable)
+      .set({ status: "reversed", reversedAt: reversalNow, updatedAt: reversalNow })
+      .where(and(
+        eq(referralCommissionsTable.tenantId, tenantId),
+        eq(referralCommissionsTable.referralId, ref.id),
+        inArray(referralCommissionsTable.status, ["pending", "approved"]),
+      ));
 
     reversedIds.push(ref.id);
   }

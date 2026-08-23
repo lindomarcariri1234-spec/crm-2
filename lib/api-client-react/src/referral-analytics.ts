@@ -278,7 +278,7 @@ export interface ReferralCampaign {
   name: string;
   startsAt: string;
   endsAt: string;
-  bonusType: "multiplier" | "fixed_extra";
+  bonusType: "multiplier" | "fixed_extra" | "fixed_bonus" | "percentage_bonus" | "reduced_bonus" | "no_reward";
   bonusValue: number;
   bannerText: string | null;
   createdAt: string;
@@ -286,15 +286,33 @@ export interface ReferralCampaign {
   referralsCount?: number;
   bonusPaidCount?: number;
   bonusPaidAmount?: number;
+  eligibleStoreProductIds: string[];
+  eligibleTierLevels: string[];
+  conversionCap: number | null;
+  budgetAmount: number | null;
+  shareMessage: string | null;
+  materialUrl: string | null;
+  publicRanking: boolean;
+  commissionType: "none" | "fixed" | "bonus_percentage";
+  commissionValue: number;
 }
 
 export interface CreateReferralCampaignBody {
   name: string;
   startsAt: string;
   endsAt: string;
-  bonusType: "multiplier" | "fixed_extra";
+  bonusType: "multiplier" | "fixed_extra" | "fixed_bonus" | "percentage_bonus" | "reduced_bonus" | "no_reward";
   bonusValue: number;
   bannerText?: string;
+  eligibleStoreProductIds?: string[];
+  eligibleTierLevels?: string[];
+  conversionCap?: number | null;
+  budgetAmount?: number | null;
+  shareMessage?: string | null;
+  materialUrl?: string | null;
+  publicRanking?: boolean;
+  commissionType?: "none" | "fixed" | "bonus_percentage";
+  commissionValue?: number;
 }
 
 export const useListReferralCampaigns = (): UseQueryResult<ReferralCampaign[], ErrorType> =>
@@ -333,9 +351,18 @@ export interface UpdateReferralCampaignBody {
   name?: string;
   startsAt?: string;
   endsAt?: string;
-  bonusType?: "multiplier" | "fixed_extra";
+  bonusType?: "multiplier" | "fixed_extra" | "fixed_bonus" | "percentage_bonus" | "reduced_bonus" | "no_reward";
   bonusValue?: number;
   bannerText?: string | null;
+  eligibleStoreProductIds?: string[];
+  eligibleTierLevels?: string[];
+  conversionCap?: number | null;
+  budgetAmount?: number | null;
+  shareMessage?: string | null;
+  materialUrl?: string | null;
+  publicRanking?: boolean;
+  commissionType?: "none" | "fixed" | "bonus_percentage";
+  commissionValue?: number;
 }
 
 export const useUpdateReferralCampaign = (): UseMutationResult<ReferralCampaign, ErrorType, UpdateReferralCampaignBody> =>
@@ -361,3 +388,30 @@ export const getReferralExportUrl = (filters: ReferralExportFilters = {}) => {
   const qs = params.toString();
   return qs ? `/api/referrals/export?${qs}` : `/api/referrals/export`;
 };
+
+export interface CommissionReportTotals {
+  pending: number;
+  approved: number;
+  paid: number;
+}
+
+export interface CommissionReport {
+  totals: CommissionReportTotals;
+  counts: CommissionReportTotals;
+}
+
+export const useGetReferralCommissionReport = (): UseQueryResult<CommissionReport, ErrorType> =>
+  useQuery({
+    queryKey: ["referrals", "commissions", "report"],
+    queryFn: () => customFetch<CommissionReport>("/api/referrals/commissions/report"),
+  });
+
+export const useUpdateReferralCommissionStatus = (): UseMutationResult<void, ErrorType, { id: string; status: "pending" | "approved" | "paid" }> =>
+  useMutation({
+    mutationFn: ({ id, status }) =>
+      customFetch<void>(`/api/referrals/commissions/${id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      }),
+  });

@@ -1,5 +1,5 @@
-import { referralCampaignsTable, db } from "@workspace/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { referralCampaignsTable, referralsTable, db } from "@workspace/db";
+import { and, count, desc, eq, sql } from "drizzle-orm";
 
 type QueryRunner = Pick<typeof db, "select">;
 
@@ -8,6 +8,16 @@ export interface CampaignBonusResult {
   adjustedBase: number;
   /** Fixed R$ extra added on top of the tier-multiplied base; 0 when no campaign or campaign is a multiplier. */
   fixedExtra: number;
+  /** Explicit policy decision; callers can distinguish an ineligible/no-reward campaign. */
+  rewardOutcome: "base" | "multiplier" | "fixed_extra" | "fixed_bonus" | "percentage_bonus" | "reduced_bonus" | "no_reward";
+  campaignId?: string;
+  commissionType?: "none" | "fixed" | "bonus_percentage";
+  commissionValue?: number;
+}
+
+export interface CampaignPolicyContext {
+  productIds?: string[];
+  referrerTierLevel?: string | null;
 }
 
 /**
@@ -26,11 +36,21 @@ export async function applyActiveCampaignBonus(
   tenantId: string,
   baseBonusValue: number,
   asOf: Date = new Date(),
+  context: CampaignPolicyContext = {},
 ): Promise<CampaignBonusResult> {
   const [activeCampaign] = await qr
     .select({
       bonusType: referralCampaignsTable.bonusType,
       bonusValue: referralCampaignsTable.bonusValue,
+      id: referralCampaignsTable.id,
+      eligibleStoreProductIds: referralCampaignsTable.eligibleStoreProductIds,
+      eligibleTierLevels: referralCampaignsTable.eligibleTierLevels,
+      conversionCap: referralCampaignsTable.conversionCap,
+      budgetAmount: referralCampaignsTable.budgetAmount,
+      commissionType: referralCampaignsTable.commissionType,
+      commissionValue: referralCampaignsTable.commissionValue,
+      startsAt: referralCampaignsTable.startsAt,
+      endsAt: referralCampaignsTable.endsAt,
     })
     .from(referralCampaignsTable)
     .where(and(
@@ -41,7 +61,38 @@ export async function applyActiveCampaignBonus(
     .orderBy(desc(referralCampaignsTable.startsAt))
     .limit(1);
 
-  if (!activeCampaign) return { adjustedBase: baseBonusValue, fixedExtra: 0 };
+  if (!activeCampaign) return { adjustedBase: baseBonusValue, fixedExtra: 0, rewardOutcome: "base" };
+
+  const eligibleProducts = activeCampaign.eligibleStoreProductIds ?? [];
+  const eligibleTiers = activeCampaign.eligibleTierLevels ?? [];
+  const productEligible = eligibleProducts.length === 0
+    // Older checkout paths do not yet expose line-item IDs; retain their
+    // historic campaign behavior until they opt into policy context.
+    || context.productIds === undefined
+    || context.productIds.some((id) => eligibleProducts.includes(id));
+  const tierEligible = eligibleTiers.length === 0
+    || (!!context.referrerTierLevel && eligibleTiers.includes(context.referrerTierLevel));
+  if (!productEligible || !tierEligible) {
+    return { adjustedBase: baseBonusValue, fixedExtra: 0, rewardOutcome: "base", campaignId: activeCampaign.id };
+  }
+
+  // Campaigns do not overlap. Aggregate historical conversions in its window so
+  // old referral rows remain compatible without a campaign_id column.
+  if (activeCampaign.conversionCap || activeCampaign.budgetAmount) {
+    const [usage] = await qr.select({
+      conversions: count(),
+      bonusCost: sql<string>`COALESCE(SUM(${referralsTable.bonusAmount}), 0)`,
+    }).from(referralsTable).where(and(
+      eq(referralsTable.tenantId, tenantId),
+      eq(referralsTable.status, "completed"),
+      sql`${referralsTable.convertedAt} >= ${activeCampaign.startsAt}`,
+      sql`${referralsTable.convertedAt} < ${activeCampaign.endsAt}`,
+    ));
+    if ((activeCampaign.conversionCap && Number(usage?.conversions ?? 0) >= activeCampaign.conversionCap)
+      || (activeCampaign.budgetAmount && Number(usage?.bonusCost ?? 0) >= Number(activeCampaign.budgetAmount))) {
+      return { adjustedBase: 0, fixedExtra: 0, rewardOutcome: "no_reward", campaignId: activeCampaign.id };
+    }
+  }
 
   const campaignVal = Number(activeCampaign.bonusValue);
 
@@ -49,8 +100,32 @@ export async function applyActiveCampaignBonus(
     return {
       adjustedBase: Math.max(baseBonusValue, baseBonusValue * campaignVal),
       fixedExtra: 0,
+      rewardOutcome: "multiplier",
+      campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue),
     };
   }
 
-  return { adjustedBase: baseBonusValue, fixedExtra: Math.max(0, campaignVal) };
+  if (activeCampaign.bonusType === "no_reward") {
+    return { adjustedBase: 0, fixedExtra: 0, rewardOutcome: "no_reward", campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue) };
+  }
+  if (activeCampaign.bonusType === "fixed_bonus") {
+    return { adjustedBase: 0, fixedExtra: Math.max(0, campaignVal), rewardOutcome: "fixed_bonus", campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue) };
+  }
+  if (activeCampaign.bonusType === "percentage_bonus") {
+    return {
+      adjustedBase: Math.max(0, baseBonusValue * campaignVal / 100),
+      fixedExtra: 0,
+      rewardOutcome: "percentage_bonus",
+      campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue),
+    };
+  }
+  if (activeCampaign.bonusType === "reduced_bonus") {
+    return {
+      adjustedBase: Math.max(0, baseBonusValue * campaignVal),
+      fixedExtra: 0,
+      rewardOutcome: "reduced_bonus",
+      campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue),
+    };
+  }
+  return { adjustedBase: baseBonusValue, fixedExtra: Math.max(0, campaignVal), rewardOutcome: "fixed_extra", campaignId: activeCampaign.id, commissionType: activeCampaign.commissionType as CampaignBonusResult["commissionType"], commissionValue: Number(activeCampaign.commissionValue) };
 }

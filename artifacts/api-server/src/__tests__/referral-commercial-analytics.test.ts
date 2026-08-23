@@ -21,6 +21,8 @@ describe("calculateReferralCommercialAnalytics", () => {
           discountAmount: "5.00",
           reservationStatus: "confirmed",
           reservationPaidValue: "100.00",
+          commissionAmount: "12.50",
+          commissionStatus: "approved",
         },
         {
           tenantId: "tenant-a",
@@ -35,6 +37,8 @@ describe("calculateReferralCommercialAnalytics", () => {
           discountAmount: "10.00",
           reservationStatus: "cancelled",
           reservationPaidValue: "300.00",
+          commissionAmount: "99.00",
+          commissionStatus: "approved",
         },
         {
           tenantId: "tenant-a",
@@ -49,6 +53,8 @@ describe("calculateReferralCommercialAnalytics", () => {
           discountAmount: "20.00",
           reservationStatus: "confirmed",
           reservationPaidValue: "500.00",
+          commissionAmount: "99.00",
+          commissionStatus: "reversed",
         },
         {
           tenantId: "tenant-b",
@@ -63,6 +69,8 @@ describe("calculateReferralCommercialAnalytics", () => {
           discountAmount: "25.00",
           reservationStatus: "confirmed",
           reservationPaidValue: "900.00",
+          commissionAmount: "99.00",
+          commissionStatus: "paid",
         },
         {
           tenantId: "tenant-a",
@@ -77,6 +85,8 @@ describe("calculateReferralCommercialAnalytics", () => {
           discountAmount: "15.00",
           reservationStatus: "confirmed",
           reservationPaidValue: "250.00",
+          commissionAmount: "99.00",
+          commissionStatus: "paid",
         },
       ],
       "tenant-a",
@@ -89,6 +99,7 @@ describe("calculateReferralCommercialAnalytics", () => {
       rewardsPaid: 10,
       rewardsPending: 0,
       discountGiven: 5,
+      commissions: 12.5,
       acquisitionCost: 15,
       cac: 15,
       roiPercent: 566.67,
@@ -101,7 +112,7 @@ describe("calculateReferralCommercialAnalytics", () => {
         conversions: 1,
         attributedRevenue: 100,
         rewardsPaid: 10,
-        commissionAmount: 0,
+        commissionAmount: 12.5,
       },
     ]);
   });
@@ -115,11 +126,61 @@ describe("calculateReferralCommercialAnalytics", () => {
       rewardsPaid: 0,
       rewardsPending: 0,
       discountGiven: 0,
+      commissions: 0,
       acquisitionCost: 0,
       cac: 0,
       roiPercent: 0,
       roiMultiple: 0,
     });
     expect(ranking).toEqual([]);
+  });
+
+  it("reports only unreversed ledger commissions without adding them to promotional acquisition cost", () => {
+    const { summary, ranking } = calculateReferralCommercialAnalytics(
+      [
+        {
+          tenantId: "tenant-a",
+          referrerId: "referrer-1",
+          referrerName: "Ana",
+          status: REFERRAL_STATUS.COMPLETED,
+          convertedAt: new Date("2026-08-12T12:00:00.000Z"),
+          bonusAmount: "10.00",
+          bonusPaid: true,
+          bonusPaidAt: null,
+          bonusCreditUsedAmount: null,
+          discountAmount: "5.00",
+          reservationStatus: "confirmed",
+          reservationPaidValue: "100.00",
+          commissionAmount: "30.00",
+          commissionStatus: "paid",
+        },
+        {
+          tenantId: "tenant-a",
+          referrerId: "referrer-1",
+          referrerName: "Ana",
+          status: REFERRAL_STATUS.COMPLETED,
+          convertedAt: new Date("2026-08-13T12:00:00.000Z"),
+          bonusAmount: "0.00",
+          bonusPaid: false,
+          bonusPaidAt: null,
+          bonusCreditUsedAmount: null,
+          discountAmount: "0.00",
+          reservationStatus: "confirmed",
+          reservationPaidValue: "200.00",
+          commissionAmount: "99.00",
+          commissionStatus: "reversed",
+        },
+      ],
+      "tenant-a",
+      since,
+    );
+
+    expect(summary.commissions).toBe(30);
+    expect(summary.acquisitionCost).toBe(15);
+    expect(ranking).toEqual([expect.objectContaining({
+      referrerId: "referrer-1",
+      conversions: 2,
+      commissionAmount: 30,
+    })]);
   });
 });

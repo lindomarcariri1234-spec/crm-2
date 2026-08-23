@@ -1,5 +1,5 @@
 import { Router, type NextFunction } from "express";
-import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable } from "@workspace/db";
+import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable } from "@workspace/db";
 import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
@@ -16,6 +16,18 @@ import { formatBRL, localToday } from "@workspace/shared";
 import { calculateReferralCommercialAnalytics } from "../lib/referral-commercial-analytics";
 
 const router = Router();
+const CampaignBonusType = z.enum(["multiplier", "fixed_extra", "fixed_bonus", "percentage_bonus", "reduced_bonus", "no_reward"]);
+const CampaignConfig = z.object({
+  eligibleStoreProductIds: z.array(z.string().min(1)).max(500).optional(),
+  eligibleTierLevels: z.array(z.string().min(1).max(80)).max(50).optional(),
+  conversionCap: z.number().int().positive().nullable().optional(),
+  budgetAmount: z.number().nonnegative().nullable().optional(),
+  shareMessage: z.string().max(2000).nullable().optional(),
+  materialUrl: z.string().url().max(2000).nullable().optional(),
+  publicRanking: z.boolean().optional(),
+  commissionType: z.enum(["none", "fixed", "bonus_percentage"]).optional(),
+  commissionValue: z.number().nonnegative().optional(),
+});
 
 const CreateReferralBody = z.object({
   referrerId: z.string(),
@@ -967,6 +979,8 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
         discountAmount: referralsTable.discountAmount,
         reservationStatus: reservationsTable.status,
         reservationPaidValue: reservationsTable.paidValue,
+        commissionAmount: referralCommissionsTable.amount,
+        commissionStatus: referralCommissionsTable.status,
       })
         .from(referralsTable)
         .leftJoin(
@@ -981,6 +995,13 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
           and(
             eq(clientsTable.id, referralsTable.referrerId),
             eq(clientsTable.tenantId, me.tenantId),
+          ),
+        )
+        .leftJoin(
+          referralCommissionsTable,
+          and(
+            eq(referralCommissionsTable.referralId, referralsTable.id),
+            eq(referralCommissionsTable.tenantId, me.tenantId),
           ),
         )
         .where(and(
@@ -1149,6 +1170,8 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
         discountAmount: referralsTable.discountAmount,
         reservationStatus: reservationsTable.status,
         reservationPaidValue: reservationsTable.paidValue,
+        commissionAmount: referralCommissionsTable.amount,
+        commissionStatus: referralCommissionsTable.status,
       })
         .from(referralsTable)
         .leftJoin(
@@ -1163,6 +1186,13 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
           and(
             eq(clientsTable.id, referralsTable.referrerId),
             eq(clientsTable.tenantId, me.tenantId),
+          ),
+        )
+        .leftJoin(
+          referralCommissionsTable,
+          and(
+            eq(referralCommissionsTable.referralId, referralsTable.id),
+            eq(referralCommissionsTable.tenantId, me.tenantId),
           ),
         )
         .where(and(
@@ -1230,6 +1260,7 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
     wsRoi.addRow(["Bônus promocionais pagos (R$)", commercialAnalytics.summary.rewardsPaid.toFixed(2)]);
     wsRoi.addRow(["Bônus promocionais pendentes (R$)", commercialAnalytics.summary.rewardsPending.toFixed(2)]);
     wsRoi.addRow(["Descontos concedidos (R$)", commercialAnalytics.summary.discountGiven.toFixed(2)]);
+    wsRoi.addRow(["Comissões contratuais (R$)", commercialAnalytics.summary.commissions.toFixed(2)]);
     wsRoi.addRow(["Custo de aquisição (R$)", commercialAnalytics.summary.acquisitionCost.toFixed(2)]);
     wsRoi.addRow(["CAC (R$)", commercialAnalytics.summary.cac.toFixed(2)]);
     wsRoi.addRow(["ROI (%)", commercialAnalytics.summary.roiPercent.toFixed(2)]);
@@ -1237,8 +1268,8 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
     wsRoi.getColumn(1).width = 36;
     wsRoi.getColumn(2).width = 20;
 
-    // Sheet 4: commercial ranking. Commission is explicitly zero until the
-    // contractual commission product is introduced.
+    // Sheet 4: commercial ranking. Contractual commissions are ledger-backed
+    // and remain distinct from promotional bonuses.
     const wsRanking = wb.addWorksheet("Ranking Comercial");
     const rankingHeaders = ["Posição", "Indicador", "Conversões", "Receita atribuída (R$)", "Bônus pagos (R$)", "Comissão (R$)"];
     wsRanking.addRow(rankingHeaders).font = { bold: true };
@@ -1682,6 +1713,68 @@ router.patch("/referral-settings", async (req, res, next: NextFunction): Promise
   }
 });
 
+router.get("/referrals/commissions/report", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const rows = await db.select({
+      status: referralCommissionsTable.status,
+      total: sql<string>`COALESCE(SUM(${referralCommissionsTable.amount}), 0)`,
+      count: count(),
+    }).from(referralCommissionsTable)
+      .where(eq(referralCommissionsTable.tenantId, me.tenantId))
+      .groupBy(referralCommissionsTable.status);
+    const totals: Record<"pending" | "approved" | "paid", number> = { pending: 0, approved: 0, paid: 0 };
+    const counts: Record<"pending" | "approved" | "paid", number> = { pending: 0, approved: 0, paid: 0 };
+    for (const row of rows) {
+      if (row.status in totals) {
+        const status = row.status as keyof typeof totals;
+        totals[status] = Number(row.total);
+        counts[status] = Number(row.count);
+      }
+    }
+    res.json({ totals, counts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/referrals/commissions/:id/status", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = z.object({ status: z.enum(["approved", "paid", "reversed"]) }).safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+    const [commission] = await db.select().from(referralCommissionsTable)
+      .where(and(eq(referralCommissionsTable.id, req.params.id), eq(referralCommissionsTable.tenantId, me.tenantId))).limit(1);
+    if (!commission) { next(new NotFoundError("Comissão não encontrada", "NOT_FOUND")); return; }
+    const allowed: Record<string, string[]> = {
+      pending: ["approved", "reversed"],
+      approved: ["paid", "reversed"],
+      paid: [],
+      reversed: [],
+    };
+    if (!allowed[commission.status]?.includes(parsed.data.status)) {
+      next(new AppError("Transição de status da comissão não permitida", 422, "INVALID_STATUS_TRANSITION"));
+      return;
+    }
+    const now = new Date();
+    const updates: Record<string, unknown> = { status: parsed.data.status, updatedAt: now };
+    if (parsed.data.status === "approved") updates.approvedAt = now;
+    if (parsed.data.status === "paid") updates.paidAt = now;
+    if (parsed.data.status === "reversed") updates.reversedAt = now;
+    await db.update(referralCommissionsTable).set(updates)
+      .where(and(eq(referralCommissionsTable.id, commission.id), eq(referralCommissionsTable.tenantId, me.tenantId)));
+    const [updated] = await db.select().from(referralCommissionsTable)
+      .where(and(eq(referralCommissionsTable.id, commission.id), eq(referralCommissionsTable.tenantId, me.tenantId))).limit(1);
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/referrals/campaigns", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -1753,12 +1846,18 @@ router.post("/referrals/campaigns", async (req, res, next: NextFunction): Promis
       name: z.string().min(1).max(120),
       startsAt: z.string().datetime(),
       endsAt: z.string().datetime(),
-      bonusType: z.enum(["multiplier", "fixed_extra"]),
-      bonusValue: z.number().positive(),
+      bonusType: CampaignBonusType,
+      bonusValue: z.number().nonnegative(),
       bannerText: z.string().max(500).optional(),
-    }).refine(
+    }).extend(CampaignConfig.shape).refine(
       (d) => d.bonusType !== "multiplier" || d.bonusValue >= 1,
       { message: "Multiplicador deve ser ≥ 1 para não reduzir o bônus base", path: ["bonusValue"] },
+    ).refine(
+      (d) => d.commissionType !== "none" || (d.commissionValue ?? 0) === 0,
+      { message: "Comissão 'none' deve ter valor zero", path: ["commissionValue"] },
+    ).refine(
+      (d) => d.commissionType !== undefined && d.commissionType !== "none" ? (d.commissionValue ?? 0) > 0 : true,
+      { message: "Comissão deve ser maior que zero", path: ["commissionValue"] },
     ).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
 
@@ -1791,6 +1890,15 @@ router.post("/referrals/campaigns", async (req, res, next: NextFunction): Promis
       bonusType: parsed.data.bonusType,
       bonusValue: parsed.data.bonusValue.toFixed(4),
       bannerText: parsed.data.bannerText ?? null,
+      eligibleStoreProductIds: parsed.data.eligibleStoreProductIds ?? [],
+      eligibleTierLevels: parsed.data.eligibleTierLevels ?? [],
+      conversionCap: parsed.data.conversionCap ?? null,
+      budgetAmount: parsed.data.budgetAmount?.toFixed(2) ?? null,
+      shareMessage: parsed.data.shareMessage ?? null,
+      materialUrl: parsed.data.materialUrl ?? null,
+      publicRanking: parsed.data.publicRanking ?? false,
+      commissionType: parsed.data.commissionType ?? "none",
+      commissionValue: (parsed.data.commissionValue ?? 0).toFixed(4),
     });
 
     const [campaign] = await db.select().from(referralCampaignsTable)
@@ -1850,16 +1958,23 @@ router.patch("/referrals/campaigns/:id", async (req, res, next: NextFunction): P
       name: z.string().min(1).max(120).optional(),
       startsAt: z.string().datetime().optional(),
       endsAt: z.string().datetime().optional(),
-      bonusType: z.enum(["multiplier", "fixed_extra"]).optional(),
-      bonusValue: z.number().positive().optional(),
+      bonusType: CampaignBonusType.optional(),
+      bonusValue: z.number().nonnegative().optional(),
       bannerText: z.string().max(500).nullable().optional(),
-    }).refine(
+    }).extend(CampaignConfig.shape).refine(
       (d) => {
         const effectiveType = d.bonusType ?? existing.bonusType;
         const effectiveVal = d.bonusValue ?? Number(existing.bonusValue);
         return effectiveType !== "multiplier" || effectiveVal >= 1;
       },
       { message: "Multiplicador deve ser ≥ 1 para não reduzir o bônus base", path: ["bonusValue"] },
+    ).refine(
+      (d) => {
+        const type = d.commissionType ?? existing.commissionType;
+        const value = d.commissionValue ?? Number(existing.commissionValue);
+        return type === "none" ? value === 0 : value > 0;
+      },
+      { message: "Configuração de comissão inválida", path: ["commissionValue"] },
     ).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
 
@@ -1888,6 +2003,15 @@ router.patch("/referrals/campaigns/:id", async (req, res, next: NextFunction): P
     if (parsed.data.bonusType !== undefined) updates.bonusType = parsed.data.bonusType;
     if (parsed.data.bonusValue !== undefined) updates.bonusValue = parsed.data.bonusValue.toFixed(4);
     if (parsed.data.bannerText !== undefined) updates.bannerText = parsed.data.bannerText;
+    if (parsed.data.eligibleStoreProductIds !== undefined) updates.eligibleStoreProductIds = parsed.data.eligibleStoreProductIds;
+    if (parsed.data.eligibleTierLevels !== undefined) updates.eligibleTierLevels = parsed.data.eligibleTierLevels;
+    if (parsed.data.conversionCap !== undefined) updates.conversionCap = parsed.data.conversionCap;
+    if (parsed.data.budgetAmount !== undefined) updates.budgetAmount = parsed.data.budgetAmount?.toFixed(2) ?? null;
+    if (parsed.data.shareMessage !== undefined) updates.shareMessage = parsed.data.shareMessage;
+    if (parsed.data.materialUrl !== undefined) updates.materialUrl = parsed.data.materialUrl;
+    if (parsed.data.publicRanking !== undefined) updates.publicRanking = parsed.data.publicRanking;
+    if (parsed.data.commissionType !== undefined) updates.commissionType = parsed.data.commissionType;
+    if (parsed.data.commissionValue !== undefined) updates.commissionValue = parsed.data.commissionValue.toFixed(4);
 
     await db.update(referralCampaignsTable)
       .set(updates)
@@ -2072,6 +2196,13 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
         .where(and(
           eq(referralsTable.id, existing.id),
           eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
+        ));
+      await tx.update(referralCommissionsTable)
+        .set({ status: "reversed", reversedAt: reversalNow, updatedAt: reversalNow })
+        .where(and(
+          eq(referralCommissionsTable.tenantId, me.tenantId),
+          eq(referralCommissionsTable.referralId, existing.id),
+          inArray(referralCommissionsTable.status, ["pending", "approved"]),
         ));
 
       return { referrerId, referredId, bonusAmountStr };

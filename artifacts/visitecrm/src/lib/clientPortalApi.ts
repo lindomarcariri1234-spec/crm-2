@@ -72,6 +72,18 @@ export interface ClientReferral {
   loyaltyPoints: number | null;
 }
 
+export interface ClientReferralCampaign {
+  id: string;
+  name: string;
+  startsAt: string;
+  endsAt: string;
+  bonusType: "multiplier" | "fixed_extra" | "fixed_bonus" | "percentage_bonus" | "reduced_bonus" | "no_reward";
+  bonusValue: number;
+  bannerText: string | null;
+  shareMessage: string | null;
+  materialUrl: string | null;
+}
+
 export interface ClientPortalProfile {
   user: {
     id: string;
@@ -290,6 +302,7 @@ export const clientPortalApi = {
     birthDate?: string | null;
   }) => apiReq<ClientPortalProfile["client"]>("PATCH", "/client/me", data),
   getMyReferrals: () => apiReq<{ data: ClientReferral[] }>("GET", "/client/me/referrals"),
+  getActiveReferralCampaign: () => apiReq<ClientReferralCampaign | null>("GET", "/client/me/referral-campaign"),
   deleteMyAccount: () => apiReq<void>("DELETE", "/users/me"),
   getNotifications: () => apiReq<ClientNotificationsResponse>("GET", "/client/notifications"),
   markAllNotificationsRead: () => apiReq<void>("POST", "/client/notifications/read-all"),

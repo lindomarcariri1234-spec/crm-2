@@ -11,6 +11,7 @@ import {
   usersTable,
   referralsTable,
   referralSettingsTable,
+  referralCampaignsTable,
   tenantsTable,
   loyaltyProgramsTable,
   loyaltyMembersTable,
@@ -1350,6 +1351,54 @@ router.get("/client/me/referrals", async (req, res, next: NextFunction): Promise
         nextTierLabel: nextTier?.label ?? null,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Client-safe projection of the currently active referral campaign.
+ * Commercial controls such as budget, caps and commission policy deliberately
+ * remain available only through the staff campaign endpoints.
+ */
+router.get("/client/me/referral-campaign", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+
+    if (me.role !== ROLES.CLIENT) {
+      next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const now = new Date();
+    const [campaign] = await db
+      .select({
+        id: referralCampaignsTable.id,
+        name: referralCampaignsTable.name,
+        startsAt: referralCampaignsTable.startsAt,
+        endsAt: referralCampaignsTable.endsAt,
+        bonusType: referralCampaignsTable.bonusType,
+        bonusValue: referralCampaignsTable.bonusValue,
+        bannerText: referralCampaignsTable.bannerText,
+        shareMessage: referralCampaignsTable.shareMessage,
+        materialUrl: referralCampaignsTable.materialUrl,
+      })
+      .from(referralCampaignsTable)
+      .where(and(
+        eq(referralCampaignsTable.tenantId, me.tenantId),
+        sql`${referralCampaignsTable.startsAt} <= ${now}`,
+        sql`${referralCampaignsTable.endsAt} > ${now}`,
+      ))
+      .orderBy(desc(referralCampaignsTable.startsAt))
+      .limit(1);
+
+    if (!campaign) {
+      res.json(null);
+      return;
+    }
+
+    res.json({ ...campaign, bonusValue: Number(campaign.bonusValue) });
   } catch (err) {
     next(err);
   }

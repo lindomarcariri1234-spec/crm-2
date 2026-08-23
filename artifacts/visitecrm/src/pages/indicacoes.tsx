@@ -24,6 +24,7 @@ import {
   useUpdateReferralCampaign,
   useTestWhatsAppMessage,
   useGetCurrentSubscription,
+  useGetReferralCommissionReport,
 } from "@workspace/api-client-react";
 import type { Referral, ReferralSettings, ReferralTierConfig, ReferralAnalyticsPeriod, ReferralCampaign } from "@workspace/api-client-react";
 import { REFERRAL_STATUS, ROLES } from "@workspace/permissions";
@@ -211,6 +212,7 @@ export default function Indicacoes() {
   const { data: referralsResponse, refetch } = useListReferrals();
   const referrals = ((referralsResponse as { data?: EnrichedReferral[] } | undefined)?.data ?? (Array.isArray(referralsResponse) ? referralsResponse as EnrichedReferral[] : [])) as EnrichedReferral[];
   const { data: stats } = useGetReferralStats();
+  const { data: commissionReport } = useGetReferralCommissionReport();
   const { data: settings, refetch: refetchSettings } = useGetReferralSettings();
   const updateReferral = useUpdateReferral();
   const updateSettings = useUpdateReferralSettings();
@@ -320,8 +322,17 @@ export default function Indicacoes() {
   const [showCampaignForm, setShowCampaignForm] = useState(false);
   const [campaignFormData, setCampaignFormData] = useState({
     name: "", startsAt: "", endsAt: "",
-    bonusType: "multiplier" as "multiplier" | "fixed_extra",
+    bonusType: "multiplier" as "multiplier" | "fixed_extra" | "fixed_bonus" | "percentage_bonus" | "reduced_bonus" | "no_reward",
     bonusValue: "2", bannerText: "",
+    eligibleStoreProductIds: "",
+    eligibleTierLevels: [] as string[],
+    conversionCap: "",
+    budgetAmount: "",
+    shareMessage: "",
+    materialUrl: "",
+    publicRanking: true,
+    commissionType: "none" as "none" | "fixed" | "bonus_percentage",
+    commissionValue: "0",
   });
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const { data: campaigns = [], refetch: refetchCampaigns } = useListReferralCampaigns();
@@ -623,39 +634,51 @@ export default function Indicacoes() {
   }
 
   async function handleSaveCampaign() {
-    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText } = campaignFormData;
+    const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, publicRanking, commissionType, commissionValue } = campaignFormData;
     if (!name.trim() || !startsAt || !endsAt) {
       toast({ title: "Preencha todos os campos obrigatórios", variant: "destructive" }); return;
     }
     const bonusNum = parseFloat(bonusValue);
-    if (isNaN(bonusNum) || bonusNum <= 0) {
+    if (bonusType !== "no_reward" && (isNaN(bonusNum) || bonusNum <= 0)) {
       toast({ title: "Valor do bônus inválido", variant: "destructive" }); return;
     }
+    const cVal = parseFloat(commissionValue) || 0;
+    if (commissionType !== "none" && cVal <= 0) {
+      toast({ title: "Valor da comissão inválido", variant: "destructive" }); return;
+    }
+
+    const payload = {
+      name: name.trim(),
+      startsAt: new Date(startsAt).toISOString(),
+      endsAt: new Date(endsAt).toISOString(),
+      bonusType,
+      bonusValue: bonusType === "no_reward" ? 0 : bonusNum,
+      bannerText: bannerText.trim() || undefined,
+      eligibleStoreProductIds: eligibleStoreProductIds.split(",").map(s => s.trim()).filter(Boolean),
+      eligibleTierLevels: eligibleTierLevels,
+      conversionCap: conversionCap ? parseInt(conversionCap, 10) : null,
+      budgetAmount: budgetAmount ? parseFloat(budgetAmount) : null,
+      shareMessage: shareMessage.trim() || null,
+      materialUrl: materialUrl.trim() || null,
+      publicRanking,
+      commissionType,
+      commissionValue: commissionType === "none" ? 0 : cVal,
+    };
+
     try {
       if (editingCampaignId) {
-        await updateCampaign.mutateAsync({
-          id: editingCampaignId,
-          name: name.trim(),
-          startsAt: new Date(startsAt).toISOString(),
-          endsAt: new Date(endsAt).toISOString(),
-          bonusType,
-          bonusValue: bonusNum,
-          bannerText: bannerText.trim() || null,
-        });
+        await updateCampaign.mutateAsync({ id: editingCampaignId, ...payload, bannerText: payload.bannerText ?? null });
         toast({ title: "Campanha atualizada com sucesso!" });
         setEditingCampaignId(null);
       } else {
-        await createCampaign.mutateAsync({
-          name: name.trim(),
-          startsAt: new Date(startsAt).toISOString(),
-          endsAt: new Date(endsAt).toISOString(),
-          bonusType,
-          bonusValue: bonusNum,
-          bannerText: bannerText.trim() || undefined,
-        });
+        await createCampaign.mutateAsync(payload);
         toast({ title: "Campanha criada com sucesso!" });
       }
-      setCampaignFormData({ name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "" });
+      setCampaignFormData({
+        name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "",
+        eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "",
+        shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0"
+      });
       setShowCampaignForm(false);
       refetchCampaigns();
     } catch (err: unknown) {
@@ -674,9 +697,18 @@ export default function Indicacoes() {
       name: c.name,
       startsAt: toLocalDatetime(c.startsAt),
       endsAt: toLocalDatetime(c.endsAt),
-      bonusType: c.bonusType as "multiplier" | "fixed_extra",
+      bonusType: c.bonusType as any,
       bonusValue: String(c.bonusValue),
       bannerText: c.bannerText ?? "",
+      eligibleStoreProductIds: (c.eligibleStoreProductIds || []).join(", "),
+      eligibleTierLevels: c.eligibleTierLevels || [],
+      conversionCap: c.conversionCap ? String(c.conversionCap) : "",
+      budgetAmount: c.budgetAmount ? String(c.budgetAmount) : "",
+      shareMessage: c.shareMessage ?? "",
+      materialUrl: c.materialUrl ?? "",
+      publicRanking: c.publicRanking ?? true,
+      commissionType: c.commissionType as any || "none",
+      commissionValue: String(c.commissionValue || 0),
     });
     setEditingCampaignId(c.id);
     setShowCampaignForm(true);
@@ -1285,6 +1317,51 @@ export default function Indicacoes() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Commission Report Summary */}
+      {commissionReport && (
+        <div className="space-y-2" aria-label="Resumo de Comissões">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Relatório de Comissões de Campanhas</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card className="bg-amber-50/40 border-amber-200 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2 text-amber-800">
+                  <Clock className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  Comissões Pendentes
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-amber-900">{fmtCurrency(commissionReport.totals.pending)}</p>
+                <p className="text-xs text-amber-700 mt-1">{commissionReport.counts.pending} indicações</p>
+              </CardContent>
+            </Card>
+            <Card className="bg-blue-50/40 border-blue-200 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2 text-blue-800">
+                  <CheckSquare2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  Comissões Aprovadas
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-blue-900">{fmtCurrency(commissionReport.totals.approved)}</p>
+                <p className="text-xs text-blue-700 mt-1">{commissionReport.counts.approved} indicações</p>
+              </CardContent>
+            </Card>
+            <Card className="bg-green-50/40 border-green-200 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2 text-green-800">
+                  <Wallet className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  Comissões Pagas
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-green-900">{fmtCurrency(commissionReport.totals.paid)}</p>
+                <p className="text-xs text-green-700 mt-1">{commissionReport.counts.paid} indicações</p>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
 
       {/* Analytics Charts Section */}
       {analyticsData ? (
@@ -3107,7 +3184,7 @@ export default function Indicacoes() {
             <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
               <div className="flex items-center justify-between">
                 <p className="font-semibold text-sm">Nova campanha</p>
-                <Button variant="ghost" size="sm" onClick={() => { setShowCampaignForm(false); setEditingCampaignId(null); setCampaignFormData({ name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "" }); }}>
+                <Button variant="ghost" size="sm" onClick={() => { setShowCampaignForm(false); setEditingCampaignId(null); setCampaignFormData({ name: "", startsAt: "", endsAt: "", bonusType: "multiplier", bonusValue: "2", bannerText: "", eligibleStoreProductIds: "", eligibleTierLevels: [], conversionCap: "", budgetAmount: "", shareMessage: "", materialUrl: "", publicRanking: true, commissionType: "none", commissionValue: "0" }); }}>
                   <XCircle className="w-4 h-4" />
                 </Button>
               </div>
@@ -3145,31 +3222,166 @@ export default function Indicacoes() {
                   <Label>Tipo de bônus *</Label>
                   <Select
                     value={campaignFormData.bonusType}
-                    onValueChange={(v) => setCampaignFormData((f) => ({ ...f, bonusType: v as "multiplier" | "fixed_extra" }))}
+                    onValueChange={(v) => setCampaignFormData((f) => ({ ...f, bonusType: v as any }))}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="multiplier">Multiplicador (×) — ex: 2× o bônus base</SelectItem>
-                      <SelectItem value="fixed_extra">Valor extra (R$) — ex: +R$ 20 ao bônus</SelectItem>
+                      <SelectItem value="multiplier">Multiplicador (×)</SelectItem>
+                      <SelectItem value="fixed_extra">Bônus Fixo Extra (+R$)</SelectItem>
+                      <SelectItem value="fixed_bonus">Bônus Fixo (R$)</SelectItem>
+                      <SelectItem value="percentage_bonus">Bônus Percentual (%)</SelectItem>
+                      <SelectItem value="reduced_bonus">Bônus Reduzido</SelectItem>
+                      <SelectItem value="no_reward">Sem Recompensa</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                {campaignFormData.bonusType !== "no_reward" && (
+                  <div className="space-y-1">
+                    <Label>
+                      {campaignFormData.bonusType === "multiplier" ? "Multiplicador *" : "Valor/Percentual *"}
+                    </Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={campaignFormData.bonusValue}
+                      onChange={(e) => setCampaignFormData((f) => ({ ...f, bonusValue: e.target.value }))}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <Label>
-                    {campaignFormData.bonusType === "multiplier" ? "Multiplicador *" : "Valor extra (R$) *"}
-                  </Label>
+                  <Label>Teto de conversões</Label>
                   <Input
                     type="number"
-                    min={campaignFormData.bonusType === "multiplier" ? 1 : 0.5}
-                    step={campaignFormData.bonusType === "multiplier" ? 0.1 : 0.5}
-                    value={campaignFormData.bonusValue}
-                    onChange={(e) => setCampaignFormData((f) => ({ ...f, bonusValue: e.target.value }))}
+                    min="1"
+                    placeholder="Ex: 100"
+                    value={campaignFormData.conversionCap}
+                    onChange={(e) => setCampaignFormData((f) => ({ ...f, conversionCap: e.target.value }))}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    {campaignFormData.bonusType === "multiplier"
-                      ? `Bônus base × ${campaignFormData.bonusValue || "?"} durante a campanha`
-                      : `Bônus base + R$ ${campaignFormData.bonusValue || "?"} durante a campanha`}
-                  </p>
+                </div>
+                <div className="space-y-1">
+                  <Label>Orçamento (R$)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="Ex: 5000.00"
+                    value={campaignFormData.budgetAmount}
+                    onChange={(e) => setCampaignFormData((f) => ({ ...f, budgetAmount: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Níveis elegíveis (Tiers)</Label>
+                <Select
+                  value={campaignFormData.eligibleTierLevels.length === 0 ? "all" : "custom"}
+                  onValueChange={(v) => setCampaignFormData((f) => ({ ...f, eligibleTierLevels: v === "all" ? [] : ["bronze"] }))}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os níveis</SelectItem>
+                    <SelectItem value="custom">Níveis específicos</SelectItem>
+                  </SelectContent>
+                </Select>
+                {campaignFormData.eligibleTierLevels.length > 0 && (
+                  <div className="flex gap-2 flex-wrap mt-2">
+                    {[
+                      { id: "bronze", label: "Bronze" },
+                      { id: "silver", label: "Prata" },
+                      { id: "gold", label: "Ouro" },
+                      { id: "diamond", label: "Diamante" }
+                    ].map((t) => (
+                      <div key={t.id} className="flex items-center space-x-1">
+                        <Checkbox
+                          id={`tier-${t.id}`}
+                          checked={campaignFormData.eligibleTierLevels.includes(t.id)}
+                          onCheckedChange={(checked) => {
+                            setCampaignFormData((f) => {
+                              const list = checked
+                                ? [...f.eligibleTierLevels, t.id]
+                                : f.eligibleTierLevels.filter((x) => x !== t.id);
+                              return { ...f, eligibleTierLevels: list };
+                            });
+                          }}
+                        />
+                        <Label htmlFor={`tier-${t.id}`} className="text-xs">{t.label}</Label>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <Label>ID dos produtos elegíveis da loja</Label>
+                <Input
+                  value={campaignFormData.eligibleStoreProductIds}
+                  onChange={(e) => setCampaignFormData((f) => ({ ...f, eligibleStoreProductIds: e.target.value }))}
+                  placeholder="prod_1, prod_2 (separados por vírgula)"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label>Material da campanha (URL)</Label>
+                <Input
+                  value={campaignFormData.materialUrl}
+                  onChange={(e) => setCampaignFormData((f) => ({ ...f, materialUrl: e.target.value }))}
+                  placeholder="Link para banners ou imagens"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label>Mensagem de compartilhamento específica</Label>
+                <Input
+                  value={campaignFormData.shareMessage}
+                  onChange={(e) => setCampaignFormData((f) => ({ ...f, shareMessage: e.target.value }))}
+                  placeholder="Texto sugerido para o cliente enviar"
+                />
+              </div>
+
+              <div className="flex items-center justify-between border rounded-lg p-3 bg-white">
+                <div>
+                  <Label>Ranking público</Label>
+                  <p className="text-xs text-muted-foreground">Exibir ranking dos melhores indicadores para os clientes</p>
+                </div>
+                <Switch
+                  checked={campaignFormData.publicRanking}
+                  onCheckedChange={(v) => setCampaignFormData((f) => ({ ...f, publicRanking: v }))}
+                />
+              </div>
+
+              <div className="space-y-2 border rounded-lg p-3 bg-white">
+                <p className="font-semibold text-sm">Comissionamento de Parceiros</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label>Tipo de comissão</Label>
+                    <Select
+                      value={campaignFormData.commissionType}
+                      onValueChange={(v) => setCampaignFormData((f) => ({ ...f, commissionType: v as any }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sem comissão</SelectItem>
+                        <SelectItem value="fixed">Valor Fixo (R$)</SelectItem>
+                        <SelectItem value="bonus_percentage">Percentual do Bônus (%)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {campaignFormData.commissionType !== "none" && (
+                    <div className="space-y-1">
+                      <Label>Valor/Percentual</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={campaignFormData.commissionValue}
+                        onChange={(e) => setCampaignFormData((f) => ({ ...f, commissionValue: e.target.value }))}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -3226,13 +3438,48 @@ export default function Indicacoes() {
                         {new Date(c.endsAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
                       </p>
                       <p className="text-xs mt-0.5 font-medium">
-                        {c.bonusType === "multiplier"
-                          ? `× ${Number(c.bonusValue).toFixed(2).replace(".00","")} no bônus`
-                          : `+ ${fmtCurrency(Number(c.bonusValue))} de bônus extra`}
+                        {c.bonusType === "multiplier" && `× ${Number(c.bonusValue).toFixed(2).replace(".00","")} no bônus`}
+                        {c.bonusType === "fixed_extra" && `+ ${fmtCurrency(Number(c.bonusValue))} de bônus extra`}
+                        {c.bonusType === "fixed_bonus" && `Bônus fixo de ${fmtCurrency(Number(c.bonusValue))}`}
+                        {c.bonusType === "percentage_bonus" && `Bônus de ${Number(c.bonusValue).toFixed(1)}%`}
+                        {c.bonusType === "reduced_bonus" && `Bônus reduzido: ${fmtCurrency(Number(c.bonusValue))}`}
+                        {c.bonusType === "no_reward" && "Sem recompensa"}
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {c.referralsCount ?? 0} conversão{(c.referralsCount ?? 0) !== 1 ? "ões" : ""} · {fmtCurrency(c.bonusPaidAmount ?? 0)} pagos
                       </p>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {c.commissionType && c.commissionType !== "none" && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-blue-200 text-blue-700 bg-blue-50/50">
+                            Comissão: {c.commissionType === "fixed" ? fmtCurrency(Number(c.commissionValue)) : `${Number(c.commissionValue)}% do bônus`}
+                          </Badge>
+                        )}
+                        {c.eligibleTierLevels && c.eligibleTierLevels.length > 0 && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-amber-200 text-amber-700 bg-amber-50/50">
+                            Tiers: {c.eligibleTierLevels.map(t => ({ bronze: "Bronze", silver: "Prata", gold: "Ouro", diamond: "Diamante" }[t] || t)).join(", ")}
+                          </Badge>
+                        )}
+                        {c.conversionCap && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5">
+                            Máx: {c.conversionCap} conv.
+                          </Badge>
+                        )}
+                        {c.materialUrl && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 text-purple-700 border-purple-200 bg-purple-50/50">
+                            Com material
+                          </Badge>
+                        )}
+                        {c.shareMessage && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 text-indigo-700 border-indigo-200 bg-indigo-50/50">
+                            Mensagem custom.
+                          </Badge>
+                        )}
+                        {c.publicRanking && (
+                          <Badge variant="outline" className="text-[10px] h-5 px-1.5 text-emerald-700 border-emerald-200 bg-emerald-50/50">
+                            Ranking público
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <Button

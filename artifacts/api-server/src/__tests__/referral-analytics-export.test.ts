@@ -43,6 +43,7 @@ vi.mock("@workspace/db", () => {
     clientsTable: table(),
     emailLogsTable: table(),
     referralCampaignsTable: table(),
+    referralCommissionsTable: table(),
     referralSettingsTable: table(),
     referralTrackingTable: table(),
     referralsTable: table(),
@@ -144,6 +145,8 @@ function commercialRow(overrides: Record<string, unknown> = {}) {
     discountAmount: "5.00",
     reservationStatus: "confirmed",
     reservationPaidValue: "100.00",
+    commissionAmount: "12.00",
+    commissionStatus: "approved",
     ...overrides,
   };
 }
@@ -173,6 +176,8 @@ describe("GET /api/referrals/analytics/export", () => {
         bonusCreditUsedAmount: "5.00",
         discountAmount: "10.00",
         reservationPaidValue: "300.00",
+          commissionAmount: "30.00",
+          commissionStatus: "paid",
       }),
       commercialRow({
         referrerId: "referrer-c",
@@ -182,6 +187,8 @@ describe("GET /api/referrals/analytics/export", () => {
         reservationPaidValue: "500.00",
         bonusAmount: "40.00",
         discountAmount: "20.00",
+        commissionAmount: "40.00",
+        commissionStatus: "reversed",
       }),
       commercialRow({
         referrerId: "referrer-d",
@@ -195,6 +202,8 @@ describe("GET /api/referrals/analytics/export", () => {
         convertedAt: withinPeriodLate,
         reservationStatus: "cancelled",
         reservationPaidValue: "700.00",
+        commissionAmount: "70.00",
+        commissionStatus: "approved",
       }),
     ];
 
@@ -226,16 +235,17 @@ describe("GET /api/referrals/analytics/export", () => {
     expect(resultSheet?.getCell("B4").value).toBe("10.00");
     expect(resultSheet?.getCell("B5").value).toBe("15.00");
     expect(resultSheet?.getCell("B6").value).toBe("15.00");
-    expect(resultSheet?.getCell("B7").value).toBe("25.00");
-    expect(resultSheet?.getCell("B8").value).toBe("12.50");
-    expect(resultSheet?.getCell("B9").value).toBe("1500.00");
-    expect(resultSheet?.getCell("B10").value).toBe("16.00");
+    expect(resultSheet?.getCell("B7").value).toBe("42.00");
+    expect(resultSheet?.getCell("B8").value).toBe("25.00");
+    expect(resultSheet?.getCell("B9").value).toBe("12.50");
+    expect(resultSheet?.getCell("B10").value).toBe("1500.00");
+    expect(resultSheet?.getCell("B11").value).toBe("16.00");
 
     const rankingSheet = workbook.getWorksheet("Ranking Comercial");
     expect(rankingSheet?.getRow(2).getCell(2).value).toBe("Bruno");
     expect(rankingSheet?.getRow(2).getCell(4).value).toBe("300.00");
     expect(rankingSheet?.getRow(2).getCell(5).value).toBe("0.00");
-    expect(rankingSheet?.getRow(2).getCell(6).value).toBe("0.00");
+    expect(rankingSheet?.getRow(2).getCell(6).value).toBe("30.00");
     expect(rankingSheet?.getRow(3).getCell(2).value).toBe("Ana");
     expect(rankingSheet?.rowCount).toBe(3);
 
@@ -264,6 +274,7 @@ describe("GET /api/referrals/analytics/export", () => {
       rewardsPaid: 10,
       rewardsPending: 15,
       discountGiven: 15,
+      commissions: 42,
       acquisitionCost: 25,
       cac: 12.5,
       roiPercent: 1500,
@@ -276,7 +287,7 @@ describe("GET /api/referrals/analytics/export", () => {
         conversions: 1,
         attributedRevenue: 300,
         rewardsPaid: 0,
-        commissionAmount: 0,
+        commissionAmount: 30,
       },
       {
         referrerId: "referrer-a",
@@ -284,7 +295,7 @@ describe("GET /api/referrals/analytics/export", () => {
         conversions: 1,
         attributedRevenue: 100,
         rewardsPaid: 10,
-        commissionAmount: 0,
+        commissionAmount: 12,
       },
     ]);
   });
@@ -303,8 +314,8 @@ describe("GET /api/referrals/analytics/export", () => {
     await workbook.xlsx.load(response.body as unknown as Buffer);
     const resultSheet = workbook.getWorksheet("Resultado Comercial");
     expect(resultSheet?.getCell("B2").value).toBe(0);
-    expect(resultSheet?.getCell("B7").value).toBe("0.00");
-    expect(resultSheet?.getCell("B10").value).toBe("—");
+    expect(resultSheet?.getCell("B8").value).toBe("0.00");
+    expect(resultSheet?.getCell("B11").value).toBe("—");
     expect(workbook.getWorksheet("Ranking Comercial")?.rowCount).toBe(1);
   });
 });

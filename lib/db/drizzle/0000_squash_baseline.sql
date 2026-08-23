@@ -667,6 +667,31 @@ CREATE TABLE IF NOT EXISTS "referral_campaigns" (
         "bonus_type" text DEFAULT 'multiplier' NOT NULL,
         "bonus_value" numeric(10, 4) DEFAULT '2' NOT NULL,
         "banner_text" text,
+        "eligible_store_product_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
+        "eligible_tier_levels" jsonb DEFAULT '[]'::jsonb NOT NULL,
+        "conversion_cap" integer,
+        "budget_amount" numeric(12, 2),
+        "share_message" text,
+        "material_url" text,
+        "public_ranking" boolean DEFAULT false NOT NULL,
+        "commission_type" text DEFAULT 'none' NOT NULL,
+        "commission_value" numeric(10, 4) DEFAULT '0' NOT NULL,
+        "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+        "updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);;
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "referral_commissions" (
+        "id" text PRIMARY KEY NOT NULL,
+        "tenant_id" text NOT NULL,
+        "referral_id" text NOT NULL UNIQUE,
+        "referrer_id" text NOT NULL,
+        "campaign_id" text,
+        "amount" numeric(12, 2) NOT NULL,
+        "basis" text NOT NULL,
+        "status" text DEFAULT 'pending' NOT NULL,
+        "approved_at" timestamp with time zone,
+        "paid_at" timestamp with time zone,
+        "reversed_at" timestamp with time zone,
         "created_at" timestamp with time zone DEFAULT now() NOT NULL,
         "updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );;

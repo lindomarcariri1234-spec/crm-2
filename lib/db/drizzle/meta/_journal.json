@@ -330,6 +330,20 @@
       "when": 1805500000000,
       "tag": "0046_stripe_webhook_events",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1805600000000,
+      "tag": "0047_referral_phase_two",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1805700000000,
+      "tag": "0048_referral_phase_two_column_coverage",
+      "breakpoints": true
     }
   ]
 }

@@ -7,6 +7,7 @@ import {
   loyaltyMembersTable,
   loyaltyTransactionsTable,
   loyaltyProgramsTable,
+  referralCommissionsTable,
 } from "@workspace/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { applyActiveCampaignBonus } from "../../lib/referral-campaigns";
@@ -45,6 +46,8 @@ export interface RecordReferralArgs {
    * row is inserted as before.
    */
   existingReferralId?: string | null;
+  /** Optional store products for Phase 2 campaign eligibility; omitted preserves legacy behavior. */
+  storeProductIds?: string[];
 }
 
 export interface ReferralConversionResult {
@@ -61,7 +64,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   const {
     tenantId, referrerId, referralCode, referredClientId,
     customerEmail, customerName, discountAmount, discountValue, discountType,
-    referralCookieId, conversionIp, reservationId, existingReferralId,
+    referralCookieId, conversionIp, reservationId, existingReferralId, storeProductIds,
   } = args;
 
   const [refSettings] = await tx
@@ -83,18 +86,13 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   const maxReferralsPerUser = refSettings?.maxReferralsPerUser != null ? Number(refSettings.maxReferralsPerUser) : 0;
   const conversionAt = new Date();
 
-  // Apply active campaign bonus using the same timestamp that will be
-  // persisted as convertedAt to avoid clock drift at window boundaries.
-  // fixed_extra is added after tier multiplication; multiplier adjusts base before tier.
-  const { adjustedBase, fixedExtra } = await applyActiveCampaignBonus(tx, tenantId, baseBonusValue, conversionAt);
-
   const [referrer] = await tx
     .select({
       successfulReferrals: clientsTable.successfulReferrals,
       email: clientsTable.email,
     })
     .from(clientsTable)
-    .where(eq(clientsTable.id, referrerId))
+    .where(and(eq(clientsTable.id, referrerId), eq(clientsTable.tenantId, tenantId)))
     .limit(1);
 
   const currentCompleted = referrer?.successfulReferrals ?? 0;
@@ -113,6 +111,13 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   }
 
   const { tier } = computeReferralTier(currentCompleted, refSettings?.tiersConfig ?? null);
+  // Optional context lets Phase 2 campaigns constrain products and referrer tiers;
+  // absent product data retains the legacy all-products behavior for old checkout callers.
+  const campaignPolicy = await applyActiveCampaignBonus(
+    tx, tenantId, baseBonusValue, conversionAt,
+    { productIds: storeProductIds, referrerTierLevel: tier.level },
+  );
+  const { adjustedBase, fixedExtra } = campaignPolicy;
   const bonusAmount = roundMoney(adjustedBase * tier.bonusMultiplier + fixedExtra);
 
   // When a pending row was already inserted at checkout time (existingReferralId is
@@ -178,6 +183,31 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
       ipAddress: conversionIp ?? null,
       reservationId: reservationId ?? null,
     });
+  }
+
+  // Commercial commission is a distinct ledger entry, never a referral bonus
+  // or wallet/loyalty transaction. The referral unique constraint makes retries
+  // and deferred checkout replays idempotent.
+  const commissionValue = Number(campaignPolicy.commissionValue ?? 0);
+  const commissionAmount = campaignPolicy.commissionType === "fixed"
+    ? commissionValue
+    : campaignPolicy.commissionType === "bonus_percentage"
+      ? roundMoney(bonusAmount * commissionValue / 100)
+      : 0;
+  if (campaignPolicy.campaignId && commissionAmount > 0) {
+    const basis = campaignPolicy.commissionType === "fixed"
+      ? `fixed campaign commission (${commissionValue.toFixed(2)})`
+      : `${commissionValue.toFixed(4)}% of promotional bonus ${bonusAmount.toFixed(2)}`;
+    await tx.insert(referralCommissionsTable).values({
+      id: generateId(),
+      tenantId,
+      referralId,
+      referrerId,
+      campaignId: campaignPolicy.campaignId,
+      amount: commissionAmount.toFixed(2),
+      basis,
+      status: "pending",
+    }).onConflictDoNothing();
   }
 
   const trackingWhere = referralCookieId

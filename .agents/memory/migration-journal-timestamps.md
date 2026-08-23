@@ -24,11 +24,19 @@ history skip it, while empty DBs (no watermark) apply it. Verified: fresh DB →
 93 tables; existing DB → skipped, untouched; idempotent on push-only DBs.
 
 **How to apply going forward:**
-- NEVER mutate `0000_squash_baseline` or its `when`. To change schema, edit
-  `src/schema/` then `pnpm --filter @workspace/db generate` (new idx 1+).
+- Keep `0000_squash_baseline` aligned with the current schema so a fresh
+  database is complete, and add the same change through a new idx 1+
+  incremental migration for existing databases. Do not change the baseline's
+  `when`.
 - A truly empty DB never occurs in normal Replit use (checkpoints carry schema
   forward); to test fresh-rebuild, `CREATE DATABASE` a throwaway DB and point
   `DATABASE_URL` at it (build URL via bash param-expansion, don't print secret).
+
+**Coverage-validator caveat:** the table validator only recognizes the first
+`ADD COLUMN` in a grouped `ALTER TABLE` statement. When several fields are
+added at once, use one `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statement per
+column (or an idempotent coverage migration) and run `validate-coverage` plus
+`validate-tables` before merging.
 
 # Migration journal timestamps must strictly increase
 
