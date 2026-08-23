@@ -13,6 +13,7 @@ import { sendTenantWhatsAppMessage, interpolateWhatsAppMessage } from "../lib/wh
 import { DEFAULT_TIERS as DEFAULT_TIERS_CONFIG, computeReferralTier } from "../lib/referral-tiers";
 import type { ReferralTier } from "../lib/referral-tiers";
 import { formatBRL, localToday } from "@workspace/shared";
+import { calculateReferralCommercialAnalytics } from "../lib/referral-commercial-analytics";
 
 const router = Router();
 
@@ -849,14 +850,12 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
       seriesRows,
       funnelRow_,
       prevRow_,
-      discountRow_,
       monthlyRows,
       channelRows,
-      roiBonusRow_,
-      roiRevenueRow_,
       currentMonthRow_,
       prevMonthRow_,
       trackingFunnelRow_,
+      commercialRows,
     ] = await Promise.all([
       // Weekly series for selected period (existing behaviour)
       db.select({
@@ -888,15 +887,6 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
           sql`${referralsTable.createdAt} < ${since}`,
         )),
 
-      // Discount given in period
-      db.select({ total: sql<number>`COALESCE(SUM(${referralsTable.discountAmount}), 0)` })
-        .from(referralsTable)
-        .where(and(
-          eq(referralsTable.tenantId, me.tenantId),
-          eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
-          sql`${referralsTable.createdAt} >= ${since}`,
-        )),
-
       // Monthly time series — last 12 months (Brazil timezone so BRT-midnight records land in the correct month)
       db.select({
         month: sql<string>`to_char(${referralsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
@@ -921,20 +911,6 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
         .groupBy(sql`COALESCE(NULLIF(${referralTrackingTable.utmSource}, ''), 'direto')`)
         .orderBy(sql`COUNT(DISTINCT ${referralTrackingTable.cookieId}) DESC`)
         .limit(8),
-
-      // ROI — total bonus paid out (all time for tenant)
-      db.select({ total: sql<number>`COALESCE(SUM(${referralsTable.bonusAmount}), 0)` })
-        .from(referralsTable)
-        .where(and(eq(referralsTable.tenantId, me.tenantId), eq(referralsTable.bonusPaid, true))),
-
-      // ROI — revenue from referred reservations (discountReferralCode present, not cancelled)
-      db.select({ total: sql<number>`COALESCE(SUM(${reservationsTable.totalValue}), 0)` })
-        .from(reservationsTable)
-        .where(and(
-          eq(reservationsTable.tenantId, me.tenantId),
-          sql`${reservationsTable.discountReferralCode} IS NOT NULL`,
-          sql`${reservationsTable.status} != 'cancelled'`,
-        )),
 
       // Current calendar month
       db.select({
@@ -974,13 +950,47 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
           eq(referralTrackingTable.tenantId, me.tenantId),
           sql`${referralTrackingTable.createdAt} >= ${since}`,
         )),
+
+      // Commercial result uses the referral-to-reservation linkage instead of
+      // every reservation with a code. The helper additionally excludes
+      // cancelled and reversed conversions before deriving CAC and ROI.
+      db.select({
+        tenantId: referralsTable.tenantId,
+        referrerId: referralsTable.referrerId,
+        referrerName: clientsTable.name,
+        status: referralsTable.status,
+        convertedAt: referralsTable.convertedAt,
+        bonusAmount: referralsTable.bonusAmount,
+        bonusPaid: referralsTable.bonusPaid,
+        bonusPaidAt: referralsTable.bonusPaidAt,
+        bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+        discountAmount: referralsTable.discountAmount,
+        reservationStatus: reservationsTable.status,
+        reservationPaidValue: reservationsTable.paidValue,
+      })
+        .from(referralsTable)
+        .leftJoin(
+          reservationsTable,
+          and(
+            eq(reservationsTable.id, referralsTable.reservationId),
+            eq(reservationsTable.tenantId, me.tenantId),
+          ),
+        )
+        .leftJoin(
+          clientsTable,
+          and(
+            eq(clientsTable.id, referralsTable.referrerId),
+            eq(clientsTable.tenantId, me.tenantId),
+          ),
+        )
+        .where(and(
+          eq(referralsTable.tenantId, me.tenantId),
+          sql`${referralsTable.convertedAt} >= ${since}`,
+        )),
     ]);
 
     const [funnelRow] = funnelRow_;
     const [prevRow] = prevRow_;
-    const [discountRow] = discountRow_;
-    const [roiBonusRow] = roiBonusRow_;
-    const [roiRevenueRow] = roiRevenueRow_;
     const [currentMonthRow] = currentMonthRow_;
     const [prevMonthRow] = prevMonthRow_;
     const [trackingFunnelRow] = trackingFunnelRow_;
@@ -991,6 +1001,11 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
     const prevCreated = Number(prevRow?.created ?? 0);
     const prevConverted = Number(prevRow?.converted ?? 0);
     const prevConversionRate = prevCreated > 0 ? Math.round((prevConverted / prevCreated) * 100) : 0;
+    const commercialAnalytics = calculateReferralCommercialAnalytics(
+      commercialRows,
+      me.tenantId,
+      since,
+    );
 
     res.json({
       series: seriesRows.map(r => ({ week: r.week, created: Number(r.created), converted: Number(r.converted) })),
@@ -1017,9 +1032,11 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
         converted: Number(r.converted),
       })),
       roi: {
-        totalBonusPaid: Number(roiBonusRow?.total ?? 0),
-        totalReferredRevenue: Number(roiRevenueRow?.total ?? 0),
+        totalBonusPaid: commercialAnalytics.summary.rewardsPaid,
+        totalReferredRevenue: commercialAnalytics.summary.attributedRevenue,
       },
+      summary: commercialAnalytics.summary,
+      ranking: commercialAnalytics.ranking,
       currentMonth: {
         referrals: Number(currentMonthRow?.referrals ?? 0),
         conversions: Number(currentMonthRow?.conversions ?? 0),
@@ -1034,7 +1051,7 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
       },
       conversionRate,
       prevConversionRate,
-      discountGiven: Number(discountRow?.total ?? 0),
+      discountGiven: commercialAnalytics.summary.discountGiven,
     });
   } catch (err) {
     next(err);
@@ -1085,7 +1102,7 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
     const _brMid2 = (y: number, m1: number, d: number) => new Date(Date.UTC(y, m1 - 1, d, 3, 0, 0, 0));
     const twelveMonthsAgo = _brMid2(_r2Y, _r2M1 - 11, 1);
 
-    const [monthlyRows, channelRows, roiBonusRow_, roiRevenueRow_] = await Promise.all([
+    const [monthlyRows, channelRows, commercialRows] = await Promise.all([
       // Monthly series for the selected date window — Brazil timezone to avoid wrong-month at 21h-midnight BRT
       db.select({
         month: sql<string>`to_char(${referralsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
@@ -1116,30 +1133,49 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
         .groupBy(sql`COALESCE(NULLIF(${referralTrackingTable.utmSource}, ''), 'direto')`)
         .orderBy(sql`COUNT(DISTINCT ${referralTrackingTable.cookieId}) DESC`),
 
-      // ROI — bonus paid in the window
-      db.select({ total: sql<number>`COALESCE(SUM(${referralsTable.bonusAmount}), 0)` })
+      // Export the same linked, reversible commercial result used by the
+      // dashboard; do not infer attribution from a reservation code.
+      db.select({
+        tenantId: referralsTable.tenantId,
+        referrerId: referralsTable.referrerId,
+        referrerName: clientsTable.name,
+        status: referralsTable.status,
+        convertedAt: referralsTable.convertedAt,
+        bonusAmount: referralsTable.bonusAmount,
+        bonusPaid: referralsTable.bonusPaid,
+        bonusPaidAt: referralsTable.bonusPaidAt,
+        bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+        discountAmount: referralsTable.discountAmount,
+        reservationStatus: reservationsTable.status,
+        reservationPaidValue: reservationsTable.paidValue,
+      })
         .from(referralsTable)
+        .leftJoin(
+          reservationsTable,
+          and(
+            eq(reservationsTable.id, referralsTable.reservationId),
+            eq(reservationsTable.tenantId, me.tenantId),
+          ),
+        )
+        .leftJoin(
+          clientsTable,
+          and(
+            eq(clientsTable.id, referralsTable.referrerId),
+            eq(clientsTable.tenantId, me.tenantId),
+          ),
+        )
         .where(and(
           eq(referralsTable.tenantId, me.tenantId),
-          eq(referralsTable.bonusPaid, true),
-          sql`${referralsTable.bonusPaidAt} >= ${since}`,
-          sql`${referralsTable.bonusPaidAt} <= ${until}`,
-        )),
-
-      // ROI — revenue from referred reservations in the window
-      db.select({ total: sql<number>`COALESCE(SUM(${reservationsTable.totalValue}), 0)` })
-        .from(reservationsTable)
-        .where(and(
-          eq(reservationsTable.tenantId, me.tenantId),
-          sql`${reservationsTable.discountReferralCode} IS NOT NULL`,
-          sql`${reservationsTable.status} != 'cancelled'`,
-          sql`${reservationsTable.createdAt} >= ${since}`,
-          sql`${reservationsTable.createdAt} <= ${until}`,
+          sql`${referralsTable.convertedAt} >= ${since}`,
+          sql`${referralsTable.convertedAt} <= ${until}`,
         )),
     ]);
 
-    const [roiBonusRow] = roiBonusRow_;
-    const [roiRevenueRow] = roiRevenueRow_;
+    const commercialAnalytics = calculateReferralCommercialAnalytics(
+      commercialRows,
+      me.tenantId,
+      since,
+    );
 
     const CHANNEL_LABEL_MAP: Record<string, string> = {
       whatsapp: "WhatsApp", qr_code: "QR Code", qrcode: "QR Code",
@@ -1184,17 +1220,39 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
     }
     channelHeaders.forEach((_, i) => { wsChannels.getColumn(i + 1).width = Math.max(channelHeaders[i].length, 16) + 2; });
 
-    // Sheet 3: ROI summary
-    const wsRoi = wb.addWorksheet("ROI");
+    // Sheet 3: Commercial result
+    const wsRoi = wb.addWorksheet("Resultado Comercial");
     wsRoi.addRow(["Métrica", "Valor"]).font = { bold: true };
-    wsRoi.addRow(["Bônus total pago (R$)", Number(roiBonusRow?.total ?? 0).toFixed(2)]);
-    wsRoi.addRow(["Receita gerada por indicações (R$)", Number(roiRevenueRow?.total ?? 0).toFixed(2)]);
-    const roiRatio = Number(roiBonusRow?.total ?? 0) > 0
-      ? (Number(roiRevenueRow?.total ?? 0) / Number(roiBonusRow?.total ?? 0)).toFixed(2)
-      : "—";
-    wsRoi.addRow(["ROI (receita / bônus)", roiRatio]);
+    wsRoi.addRow(["Conversões válidas", commercialAnalytics.summary.validReferrals]);
+    wsRoi.addRow(["Receita atribuída / valor pago (R$)", commercialAnalytics.summary.attributedRevenue.toFixed(2)]);
+    wsRoi.addRow(["Bônus promocionais pagos (R$)", commercialAnalytics.summary.rewardsPaid.toFixed(2)]);
+    wsRoi.addRow(["Bônus promocionais pendentes (R$)", commercialAnalytics.summary.rewardsPending.toFixed(2)]);
+    wsRoi.addRow(["Descontos concedidos (R$)", commercialAnalytics.summary.discountGiven.toFixed(2)]);
+    wsRoi.addRow(["Custo de aquisição (R$)", commercialAnalytics.summary.acquisitionCost.toFixed(2)]);
+    wsRoi.addRow(["CAC (R$)", commercialAnalytics.summary.cac.toFixed(2)]);
+    wsRoi.addRow(["ROI (%)", commercialAnalytics.summary.roiPercent.toFixed(2)]);
+    wsRoi.addRow(["ROI (múltiplo)", commercialAnalytics.summary.acquisitionCost > 0 ? commercialAnalytics.summary.roiMultiple.toFixed(2) : "—"]);
     wsRoi.getColumn(1).width = 36;
     wsRoi.getColumn(2).width = 20;
+
+    // Sheet 4: commercial ranking. Commission is explicitly zero until the
+    // contractual commission product is introduced.
+    const wsRanking = wb.addWorksheet("Ranking Comercial");
+    const rankingHeaders = ["Posição", "Indicador", "Conversões", "Receita atribuída (R$)", "Bônus pagos (R$)", "Comissão (R$)"];
+    wsRanking.addRow(rankingHeaders).font = { bold: true };
+    commercialAnalytics.ranking.forEach((row, index) => {
+      wsRanking.addRow([
+        index + 1,
+        row.referrerName,
+        row.conversions,
+        row.attributedRevenue.toFixed(2),
+        row.rewardsPaid.toFixed(2),
+        row.commissionAmount.toFixed(2),
+      ]);
+    });
+    rankingHeaders.forEach((header, index) => {
+      wsRanking.getColumn(index + 1).width = Math.max(header.length, 18) + 2;
+    });
 
     const dateStr = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 10);
     const filename = `analytics-indicacoes-${dateStr}.xlsx`;

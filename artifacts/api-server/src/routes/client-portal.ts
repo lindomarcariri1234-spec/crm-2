@@ -1,5 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { computeReferralTier } from "../lib/referral-tiers";
+import { calculateReferralWallet } from "../lib/referral-wallet";
 import { localToday } from "@workspace/shared";
 import { db } from "@workspace/db";
 import {
@@ -120,8 +121,17 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       tierProgress: number;
       nextTierMin: number | null;
       nextTierLabel: string | null;
+       nextTierRemaining: number | null;
+       nextTierMultiplier: number | null;
       pointsPerReferral: number;
       bonusValidityDays: number;
+       wallet: {
+         availableCredit: number;
+         pendingCredit: number;
+         usedCredit: number;
+         expiringCredit: number;
+         expiringOn: string | null;
+       };
     } = {
       code: client?.referralCode ?? null,
       referralCodeStatus: client?.referralCodeStatus ?? "active",
@@ -137,8 +147,17 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       tierProgress: 0,
       nextTierMin: 5,
       nextTierLabel: "Prata",
+       nextTierRemaining: 5,
+       nextTierMultiplier: 1.25,
       pointsPerReferral: 0,
       bonusValidityDays: 30,
+       wallet: {
+         availableCredit: 0,
+         pendingCredit: 0,
+         usedCredit: 0,
+         expiringCredit: 0,
+         expiringOn: null,
+       },
     };
     let stats = { totalSpent: 0 };
     let loyalty: unknown = null;
@@ -284,33 +303,38 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
         if (row.status === REFERRAL_STATUS.PENDING) pendingReferrals = Number(row.cnt);
       }
 
-      const [refCreditRow] = await db
-        .select({
-          balance: sql<string>`COALESCE(SUM(${referralsTable.bonusAmount} - COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)), '0')`,
-        })
-        .from(referralsTable)
-        .where(
-          and(
-            eq(referralsTable.tenantId, me.tenantId),
-            eq(referralsTable.referrerId, client.id),
-            inArray(referralsTable.status, [REFERRAL_STATUS.COMPLETED, REFERRAL_STATUS.CONVERTED]),
-            eq(referralsTable.bonusPaid, false),
-            // Rows that still have remaining credit (not yet fully consumed)
-            sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
-          ),
-        );
-      const referralCreditBalance = Math.max(0, Number(refCreditRow?.balance ?? 0));
-
       const [refSettings] = await db
         .select({
           shareMessage: referralSettingsTable.shareMessage,
           tiersConfig: referralSettingsTable.tiersConfig,
           pointsPerReferral: referralSettingsTable.pointsPerReferral,
           bonusValidityDays: referralSettingsTable.bonusValidityDays,
+          gracePeriodDays: referralSettingsTable.gracePeriodDays,
         })
         .from(referralSettingsTable)
         .where(eq(referralSettingsTable.tenantId, me.tenantId))
         .limit(1);
+
+      const walletRows = await db
+        .select({
+          status: referralsTable.status,
+          bonusAmount: referralsTable.bonusAmount,
+          bonusPaid: referralsTable.bonusPaid,
+          bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+          convertedAt: referralsTable.convertedAt,
+          expiresAt: referralsTable.expiresAt,
+        })
+        .from(referralsTable)
+        .where(
+          and(
+            eq(referralsTable.tenantId, me.tenantId),
+            eq(referralsTable.referrerId, client.id),
+          ),
+        );
+      const referralWallet = calculateReferralWallet(
+        walletRows,
+        refSettings?.gracePeriodDays ?? 30,
+      );
 
       const { tier: currentTier, nextTier, progress: tierProgress } = computeReferralTier(
         completedReferrals,
@@ -324,7 +348,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
         completedReferrals,
         pendingReferrals,
         totalEarnings: totalEarnings.toFixed(2),
-        creditBalance: referralCreditBalance.toFixed(2),
+        creditBalance: referralWallet.availableCredit.toFixed(2),
         shareMessage: refSettings?.shareMessage ?? null,
         currentTierLevel: currentTier.level,
         currentTierLabel: currentTier.label,
@@ -332,8 +356,16 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
         tierProgress,
         nextTierMin: nextTier?.minReferrals ?? null,
         nextTierLabel: nextTier?.label ?? null,
+        nextTierRemaining: nextTier
+          ? Math.max(0, nextTier.minReferrals - completedReferrals)
+          : null,
+        nextTierMultiplier: nextTier?.bonusMultiplier ?? null,
         pointsPerReferral: refSettings?.pointsPerReferral ?? 0,
         bonusValidityDays: refSettings?.bonusValidityDays ?? 30,
+        wallet: {
+          ...referralWallet,
+          expiringOn: referralWallet.expiringOn?.toISOString() ?? null,
+        },
       };
 
       const [loyaltyProgram] = await db

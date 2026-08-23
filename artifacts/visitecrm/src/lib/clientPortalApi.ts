@@ -131,7 +131,16 @@ export interface ClientPortalProfile {
     tierProgress: number;
     nextTierMin: number | null;
     nextTierLabel: string | null;
+    nextTierRemaining: number | null;
+    nextTierMultiplier: number | null;
     pointsPerReferral: number;
+    wallet: {
+      availableCredit: number;
+      pendingCredit: number;
+      usedCredit: number;
+      expiringCredit: number;
+      expiringOn: string | null;
+    };
   };
   stats: {
     totalSpent: number;

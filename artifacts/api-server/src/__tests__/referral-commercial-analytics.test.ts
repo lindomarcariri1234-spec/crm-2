@@ -1,0 +1,125 @@
+import { describe, expect, it } from "vitest";
+import { REFERRAL_STATUS } from "@workspace/permissions";
+import { calculateReferralCommercialAnalytics } from "../lib/referral-commercial-analytics.js";
+
+describe("calculateReferralCommercialAnalytics", () => {
+  const since = new Date("2026-08-01T00:00:00.000Z");
+
+  it("uses only valid conversions for the selected tenant and period", () => {
+    const { summary, ranking } = calculateReferralCommercialAnalytics(
+      [
+        {
+          tenantId: "tenant-a",
+          referrerId: "referrer-1",
+          referrerName: "Ana",
+          status: REFERRAL_STATUS.COMPLETED,
+          convertedAt: new Date("2026-08-12T12:00:00.000Z"),
+          bonusAmount: "10.00",
+          bonusPaid: true,
+          bonusPaidAt: new Date("2026-08-13T12:00:00.000Z"),
+          bonusCreditUsedAmount: null,
+          discountAmount: "5.00",
+          reservationStatus: "confirmed",
+          reservationPaidValue: "100.00",
+        },
+        {
+          tenantId: "tenant-a",
+          referrerId: "referrer-2",
+          referrerName: "Bruno",
+          status: REFERRAL_STATUS.COMPLETED,
+          convertedAt: new Date("2026-08-13T12:00:00.000Z"),
+          bonusAmount: "20.00",
+          bonusPaid: false,
+          bonusPaidAt: null,
+          bonusCreditUsedAmount: "5.00",
+          discountAmount: "10.00",
+          reservationStatus: "cancelled",
+          reservationPaidValue: "300.00",
+        },
+        {
+          tenantId: "tenant-a",
+          referrerId: "referrer-3",
+          referrerName: "Carla",
+          status: REFERRAL_STATUS.REVERSED,
+          convertedAt: new Date("2026-08-14T12:00:00.000Z"),
+          bonusAmount: "40.00",
+          bonusPaid: true,
+          bonusPaidAt: new Date("2026-08-15T12:00:00.000Z"),
+          bonusCreditUsedAmount: null,
+          discountAmount: "20.00",
+          reservationStatus: "confirmed",
+          reservationPaidValue: "500.00",
+        },
+        {
+          tenantId: "tenant-b",
+          referrerId: "referrer-4",
+          referrerName: "Outra agência",
+          status: REFERRAL_STATUS.COMPLETED,
+          convertedAt: new Date("2026-08-14T12:00:00.000Z"),
+          bonusAmount: "50.00",
+          bonusPaid: true,
+          bonusPaidAt: new Date("2026-08-15T12:00:00.000Z"),
+          bonusCreditUsedAmount: null,
+          discountAmount: "25.00",
+          reservationStatus: "confirmed",
+          reservationPaidValue: "900.00",
+        },
+        {
+          tenantId: "tenant-a",
+          referrerId: "referrer-5",
+          referrerName: "Conversão antiga",
+          status: REFERRAL_STATUS.COMPLETED,
+          convertedAt: new Date("2026-07-31T23:59:00.000Z"),
+          bonusAmount: "30.00",
+          bonusPaid: true,
+          bonusPaidAt: new Date("2026-08-01T12:00:00.000Z"),
+          bonusCreditUsedAmount: null,
+          discountAmount: "15.00",
+          reservationStatus: "confirmed",
+          reservationPaidValue: "250.00",
+        },
+      ],
+      "tenant-a",
+      since,
+    );
+
+    expect(summary).toEqual({
+      validReferrals: 1,
+      attributedRevenue: 100,
+      rewardsPaid: 10,
+      rewardsPending: 0,
+      discountGiven: 5,
+      acquisitionCost: 15,
+      cac: 15,
+      roiPercent: 566.67,
+      roiMultiple: 6.67,
+    });
+    expect(ranking).toEqual([
+      {
+        referrerId: "referrer-1",
+        referrerName: "Ana",
+        conversions: 1,
+        attributedRevenue: 100,
+        rewardsPaid: 10,
+        commissionAmount: 0,
+      },
+    ]);
+  });
+
+  it("keeps empty periods safe from divide-by-zero values", () => {
+    const { summary, ranking } = calculateReferralCommercialAnalytics([], "tenant-a", since);
+
+    expect(summary).toEqual({
+      validReferrals: 0,
+      attributedRevenue: 0,
+      rewardsPaid: 0,
+      rewardsPending: 0,
+      discountGiven: 0,
+      acquisitionCost: 0,
+      cac: 0,
+      roiPercent: 0,
+      roiMultiple: 0,
+    });
+    expect(ranking).toEqual([]);
+  });
+});

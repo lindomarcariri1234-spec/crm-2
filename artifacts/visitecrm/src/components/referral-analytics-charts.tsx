@@ -9,9 +9,9 @@ import type {
 import React, { useState } from "react";
 import type { ReferralAnalyticsData, ReferralAnalyticsPeriod, ReferralAnalyticsChannel } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, TrendingDown, Minus, ArrowRight, Download, BarChart3 } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Download, BarChart3, Trophy, Medal } from "lucide-react";
 import { formatCurrencyBRL as fmtCurrency } from "@/lib/utils";
 
 // Recharts ships class components whose context types pre-date React 19's stricter
@@ -31,22 +31,6 @@ function MonthLabel(month: string) {
   const [y, m] = month.split("-");
   const date = new Date(Number(y), Number(m) - 1, 1);
   return date.toLocaleDateString("pt-BR", { month: "short", year: "2-digit", timeZone: "America/Sao_Paulo" }).replace(" de ", "/");
-}
-
-function DeltaBadge({ current, prev, suffix = "" }: { current: number; prev: number; suffix?: string }) {
-  if (prev === 0 && current === 0) return <span className="text-xs text-muted-foreground">—</span>;
-  const delta = current - prev;
-  if (delta === 0) return <span className="text-xs text-muted-foreground flex items-center gap-1"><Minus className="w-3 h-3" />igual ao mês anterior</span>;
-  if (delta > 0) return (
-    <span className="text-xs text-green-600 flex items-center gap-1">
-      <TrendingUp className="w-3 h-3" />+{delta}{suffix} vs. mês anterior
-    </span>
-  );
-  return (
-    <span className="text-xs text-red-500 flex items-center gap-1">
-      <TrendingDown className="w-3 h-3" />{delta}{suffix} vs. mês anterior
-    </span>
-  );
 }
 
 const CHANNEL_COLORS = ["#3B82F6", "#10B981", "#8B5CF6", "#F59E0B", "#EF4444", "#EC4899", "#14B8A6", "#F97316"];
@@ -96,62 +80,77 @@ export function ReferralAnalyticsCharts({ data, period, analyticsExportUrl }: Pr
   }));
 
   const channels = data.channels ?? [];
-  const roi = data.roi ?? { totalBonusPaid: 0, totalReferredRevenue: 0 };
-  const currentMonth = data.currentMonth ?? { referrals: 0, conversions: 0, bonusPaid: 0 };
-  const prevMonth = data.prevMonth ?? { referrals: 0, conversions: 0, bonusPaid: 0 };
 
-  const roiRatio = roi.totalBonusPaid > 0 && roi.totalReferredRevenue > 0
-    ? (roi.totalReferredRevenue / roi.totalBonusPaid).toFixed(1)
-    : null;
+  const summary = data.summary;
+  const ranking = data.ranking;
+  const roiLabel = summary.acquisitionCost > 0
+    ? `${summary.roiMultiple.toFixed(1)}× do investimento`
+    : "Aguardando custo de aquisição";
 
   return (
-    <div className="space-y-4">
-      {/* Month comparison cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Este mês — indicações</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold">{currentMonth.referrals}</p>
-            <DeltaBadge current={currentMonth.referrals} prev={prevMonth.referrals} />
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <Card className="shadow-sm">
+          <CardContent className="p-5">
+            <p className="text-sm font-medium text-muted-foreground mb-1">Receita Atribuída</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-emerald-600">{fmtCurrency(summary.attributedRevenue)}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              ROI: <strong className="text-emerald-700">{roiLabel}</strong>
+            </p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Este mês — conversões</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold text-green-600">{currentMonth.conversions}</p>
-            <DeltaBadge current={currentMonth.conversions} prev={prevMonth.conversions} />
+
+        <Card className="shadow-sm">
+          <CardContent className="p-5">
+            <p className="text-sm font-medium text-muted-foreground mb-1">Conversões</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold">{summary.validReferrals}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Taxa de conversão: <strong className="text-foreground">{data.conversionRate}%</strong>
+            </p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Este mês — bônus pagos</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-3xl font-bold text-amber-600">{fmtCurrency(currentMonth.bonusPaidAmount)}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{currentMonth.bonusPaid} pagamentos</p>
-            <DeltaBadge current={currentMonth.bonusPaidAmount} prev={prevMonth.bonusPaidAmount} suffix=" R$" />
+
+        <Card className="shadow-sm">
+          <CardContent className="p-5">
+            <p className="text-sm font-medium text-muted-foreground mb-1">Custo de Recompensas</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-amber-600">{fmtCurrency(summary.rewardsPaid)}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              CAC Médio: <strong className="text-foreground">{fmtCurrency(summary.cac)}</strong> por venda
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-sm">
+          <CardContent className="p-5">
+            <p className="text-sm font-medium text-muted-foreground mb-1">Crédito Pendente (Passivo)</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xl font-bold text-blue-600">{fmtCurrency(summary.rewardsPending)}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Aguardando resgate ou aprovação
+            </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Monthly bar chart + channel donut side by side on larger screens */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Monthly bar chart */}
-        <Card className="lg:col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <Card className="lg:col-span-2 shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
-                <CardTitle className="text-base">Indicações por mês (12 meses)</CardTitle>
-                <CardDescription>Criadas vs. convertidas mês a mês</CardDescription>
+                <CardTitle className="text-base">Evolução Mensal</CardTitle>
+                <CardDescription>Volume de indicações e conversões nos últimos meses</CardDescription>
               </div>
               <Button variant="outline" size="sm" asChild>
                 <a href={analyticsExportUrl} target="_blank" rel="noopener noreferrer">
                   <Download className="w-3.5 h-3.5 mr-1.5" />
-                  Exportar relatório
+                  Exportar Dados
                 </a>
               </Button>
             </div>
@@ -160,41 +159,40 @@ export function ReferralAnalyticsCharts({ data, period, analyticsExportUrl }: Pr
             {monthlyData.length === 0 ? (
               <div className="h-52 flex flex-col items-center justify-center text-muted-foreground gap-2">
                 <BarChart3 className="w-8 h-8 opacity-30" />
-                <p className="text-sm">Sem dados de indicações para os últimos 12 meses</p>
+                <p className="text-sm">Sem dados suficientes para exibição</p>
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={monthlyData} margin={{ top: 4, right: 8, bottom: 4, left: -20 }} barGap={2}>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={monthlyData} margin={{ top: 12, right: 12, bottom: 4, left: -20 }} barGap={2}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
                   <Tooltip
                     contentStyle={{ borderRadius: 8, border: "1px solid #e5e7eb", fontSize: 12 }}
                     cursor={{ fill: "#f9fafb" }}
                   />
-                  <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
-                  <Bar dataKey="created" name="Criadas" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} maxBarSize={28} />
-                  <Bar dataKey="converted" name="Convertidas" fill="#10B981" radius={[3, 3, 0, 0]} maxBarSize={28} />
+                  <Legend wrapperStyle={{ fontSize: 11, paddingTop: 12 }} />
+                  <Bar dataKey="created" name="Indicações" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} maxBarSize={28} />
+                  <Bar dataKey="converted" name="Conversões" fill="#10B981" radius={[3, 3, 0, 0]} maxBarSize={28} />
                 </BarChart>
               </ResponsiveContainer>
             )}
           </CardContent>
         </Card>
 
-        {/* Channel donut chart */}
-        <Card>
+        <Card className="shadow-sm">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Canal de origem</CardTitle>
-            <CardDescription>Conversões por canal de compartilhamento</CardDescription>
+            <CardTitle className="text-base">Canais de Conversão</CardTitle>
+            <CardDescription>Onde os links estão sendo compartilhados</CardDescription>
           </CardHeader>
           <CardContent>
             {channels.length === 0 ? (
-              <div className="h-52 flex flex-col items-center justify-center text-muted-foreground gap-2">
+              <div className="h-[260px] flex flex-col items-center justify-center text-muted-foreground gap-2">
                 <BarChart3 className="w-8 h-8 opacity-30" />
-                <p className="text-sm text-center">Sem dados de canal. Compartilhe com UTM sources para ver a distribuição.</p>
+                <p className="text-sm text-center px-4">Utilize UTM sources para monitorar a origem dos links.</p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <ResponsiveContainer width="100%" height={160}>
                   <PieChart>
                     <Pie
@@ -203,8 +201,8 @@ export function ReferralAnalyticsCharts({ data, period, analyticsExportUrl }: Pr
                       nameKey="source"
                       cx="50%"
                       cy="50%"
-                      innerRadius={40}
-                      outerRadius={72}
+                      innerRadius={45}
+                      outerRadius={75}
                       paddingAngle={2}
                       labelLine={false}
                       label={CustomPieLabel}
@@ -223,20 +221,15 @@ export function ReferralAnalyticsCharts({ data, period, analyticsExportUrl }: Pr
                     />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {channels.slice(0, 5).map((ch: ReferralAnalyticsChannel, idx: number) => (
                     <div key={ch.source} className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
                         <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: CHANNEL_COLORS[idx % CHANNEL_COLORS.length] }} />
-                        <span className="text-muted-foreground truncate max-w-[100px]">{channelLabel(ch.source)}</span>
+                        <span className="text-muted-foreground font-medium truncate max-w-[120px]">{channelLabel(ch.source)}</span>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className="font-medium">{ch.converted} conv.</span>
-                        {ch.visitors > 0 && (
-                          <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4">
-                            {ch.visitors} vis.
-                          </Badge>
-                        )}
+                        <span className="font-semibold">{ch.converted} conv.</span>
                       </div>
                     </div>
                   ))}
@@ -247,48 +240,61 @@ export function ReferralAnalyticsCharts({ data, period, analyticsExportUrl }: Pr
         </Card>
       </div>
 
-      {/* ROI card */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">ROI do programa de indicações</CardTitle>
-          <CardDescription>Retorno sobre o investimento em bônus pagos</CardDescription>
+      <Card className="shadow-sm">
+        <CardHeader className="pb-3 border-b bg-muted/20">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Trophy className="w-5 h-5 text-amber-500" />
+            Top Embaixadores
+          </CardTitle>
+          <CardDescription>
+            Clientes que geraram o maior volume de vendas através de indicações
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">Bônus pago (custo)</p>
-              <p className="text-2xl font-bold text-red-500">{fmtCurrency(roi.totalBonusPaid)}</p>
-              <p className="text-xs text-muted-foreground mt-1">total de bônus quitados</p>
-            </div>
-            <div className="flex flex-col items-center justify-center">
-              <ArrowRight className="w-5 h-5 text-muted-foreground" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">Receita gerada por indicações</p>
-              <p className="text-2xl font-bold text-green-600">{fmtCurrency(roi.totalReferredRevenue)}</p>
-              <p className="text-xs text-muted-foreground mt-1">valor de reservas originadas por indicação</p>
-            </div>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader className="bg-muted/10">
+                <TableRow>
+                  <TableHead className="w-16 text-center font-semibold">Pos</TableHead>
+                  <TableHead className="font-semibold">Indicador</TableHead>
+                  <TableHead className="text-right font-semibold">Conversões</TableHead>
+                  <TableHead className="text-right font-semibold">Receita Gerada</TableHead>
+                  <TableHead className="text-right font-semibold">Recompensas</TableHead>
+                  <TableHead className="text-right font-semibold">Comissão</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {ranking.length > 0 ? (
+                  ranking.map((row, i) => {
+                    return (
+                      <TableRow key={row.referrerId} className="hover:bg-muted/30">
+                        <TableCell className="text-center font-medium">
+                          {i === 0 ? <Medal className="w-5 h-5 text-yellow-500 mx-auto" /> :
+                           i === 1 ? <Medal className="w-5 h-5 text-slate-400 mx-auto" /> :
+                           i === 2 ? <Medal className="w-5 h-5 text-amber-700 mx-auto" /> :
+                           <span className="text-muted-foreground">{i + 1}º</span>}
+                        </TableCell>
+                        <TableCell className="font-medium text-foreground">{row.referrerName}</TableCell>
+                        <TableCell className="text-right font-semibold">{row.conversions}</TableCell>
+                        <TableCell className="text-right text-emerald-600 font-semibold">{fmtCurrency(row.attributedRevenue)}</TableCell>
+                        <TableCell className="text-right text-amber-600 font-medium">{fmtCurrency(row.rewardsPaid)}</TableCell>
+                        <TableCell className="text-right text-muted-foreground text-sm">{fmtCurrency(row.commissionAmount)}</TableCell>
+                      </TableRow>
+                    );
+                  })
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-10">
+                      <div className="flex flex-col items-center gap-2">
+                        <Trophy className="w-8 h-8 opacity-20" />
+                        <p>Nenhuma conversão registrada neste período.</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
           </div>
-          {roiRatio && (
-            <div className="mt-4 pt-4 border-t">
-              <div className="flex items-center gap-3">
-                <div className="flex-1 bg-muted rounded-full h-3">
-                  <div
-                    className="bg-green-500 h-3 rounded-full transition-all"
-                    style={{ width: `${Math.min(100, (roi.totalReferredRevenue / (roi.totalReferredRevenue + roi.totalBonusPaid)) * 100).toFixed(1)}%` }}
-                  />
-                </div>
-                <span className="text-sm font-semibold whitespace-nowrap">
-                  {roiRatio}× ROI — para cada R$1 em bônus, R${roiRatio} em receita
-                </span>
-              </div>
-            </div>
-          )}
-          {roi.totalBonusPaid === 0 && roi.totalReferredRevenue === 0 && (
-            <p className="text-sm text-muted-foreground mt-2">
-              Os dados de ROI aparecerão após o primeiro bônus pago e as primeiras reservas via indicação.
-            </p>
-          )}
         </CardContent>
       </Card>
     </div>

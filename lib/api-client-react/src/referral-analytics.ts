@@ -43,6 +43,31 @@ export interface ReferralAnalyticsMonthStats {
   bonusPaidAmount: number;
 }
 
+export interface ReferralAnalyticsCommercialSummary {
+  validReferrals: number;
+  attributedRevenue: number;
+  rewardsPaid: number;
+  rewardsPending: number;
+  discountGiven: number;
+  acquisitionCost: number;
+  cac: number;
+  roiPercent: number;
+  roiMultiple: number;
+}
+
+export interface ReferralAnalyticsRankingEntry {
+  referrerId: string;
+  referrerName: string;
+  conversions: number;
+  attributedRevenue: number;
+  rewardsPaid: number;
+  /**
+   * Contractual partner commissions are outside the current program. This
+   * explicit zero keeps the UI from mistaking promotional bonus for commission.
+   */
+  commissionAmount: number;
+}
+
 export interface ReferralAnalyticsTrackingFunnel {
   uniqueVisitors: number;
   checkoutStarts: number;
@@ -58,6 +83,8 @@ export interface ReferralAnalyticsData {
   roi: ReferralAnalyticsROI;
   currentMonth: ReferralAnalyticsMonthStats;
   prevMonth: ReferralAnalyticsMonthStats;
+  summary: ReferralAnalyticsCommercialSummary;
+  ranking: ReferralAnalyticsRankingEntry[];
   conversionRate: number;
   prevConversionRate: number;
   discountGiven: number;

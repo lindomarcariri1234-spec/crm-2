@@ -786,64 +786,6 @@ export default function Indicacoes() {
 
   const pendingBonusCount = referrals.filter(r => r.status === REFERRAL_STATUS.COMPLETED && !r.bonusPaid).length;
 
-  type RankEntry = {
-    name: string; email: string | null; whatsapp: string | null;
-    code: string; total: number; conversions: number; earnings: number; paidEarnings: number;
-  };
-  const rankMap = new Map<string, RankEntry>();
-  for (const r of referrals) {
-    const key = r.referrerId;
-    const ex = rankMap.get(key);
-    const bonus = parseFloat(String(r.bonusAmount ?? "0")) || 0;
-    const isPaid = r.bonusPaid;
-    if (ex) {
-      ex.total += 1;
-      if (r.status === REFERRAL_STATUS.COMPLETED) {
-        ex.conversions += 1; ex.earnings += bonus;
-        if (isPaid) ex.paidEarnings += bonus;
-      }
-    } else {
-      rankMap.set(key, {
-        name: r.referrerName ?? r.referrerId.slice(0, 8),
-        email: r.referrerEmail ?? null,
-        whatsapp: (r as EnrichedReferral).referrerWhatsapp ?? null,
-        code: r.code, total: 1,
-        conversions: r.status === REFERRAL_STATUS.COMPLETED ? 1 : 0,
-        earnings: r.status === REFERRAL_STATUS.COMPLETED ? bonus : 0,
-        paidEarnings: r.status === REFERRAL_STATUS.COMPLETED && isPaid ? bonus : 0,
-      });
-    }
-  }
-  const ranked = Array.from(rankMap.values())
-    .sort((a, b) => b.conversions - a.conversions || b.total - a.total)
-    .slice(0, 10);
-
-  function exportRankingCsv() {
-    const headers = ["#", "Nome", "Código", "E-mail", "WhatsApp", "Indicações", "Convertidas", "Bônus Total (R$)", "Já Pago (R$)", "A Pagar (R$)"];
-    const rows = ranked.map((r, i) => [
-      i + 1, r.name, r.code, r.email ?? "", r.whatsapp ?? "",
-      r.total, r.conversions,
-      r.earnings.toFixed(2), r.paidEarnings.toFixed(2), (r.earnings - r.paidEarnings).toFixed(2),
-    ]);
-    const csv = [headers, ...rows]
-      .map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ranking-indicadores-${localToday()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  const rankIcon = (i: number) => {
-    if (i === 0) return <Trophy className="w-4 h-4 text-yellow-500" />;
-    if (i === 1) return <Medal className="w-4 h-4 text-gray-400" />;
-    if (i === 2) return <Medal className="w-4 h-4 text-orange-400" />;
-    return <span className="text-xs font-bold text-muted-foreground w-4 text-center">{i + 1}</span>;
-  };
-
   const pendingBonusReferrals = filtered.filter(r => r.status === REFERRAL_STATUS.COMPLETED && !r.bonusPaid);
   const allBonusSelected = pendingBonusReferrals.length > 0 && pendingBonusReferrals.every(r => selectedBonusIds.has(r.id));
   const selectedBonusTotal = referrals
@@ -1443,97 +1385,6 @@ export default function Indicacoes() {
             </div>
           </CardContent>
         </Card>
-      )}
-
-      {/* Top Referrers Ranking */}
-      {ranked.length > 0 && (
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between flex-wrap gap-2">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Trophy className="w-4 h-4 text-yellow-500" />
-                    Ranking de Top Indicadores
-                  </CardTitle>
-                  <CardDescription>Clientes que mais geraram conversões</CardDescription>
-                </div>
-                <Button variant="outline" size="sm" onClick={exportRankingCsv}>
-                  <Download className="w-3.5 h-3.5 mr-1.5" />
-                  Exportar CSV
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-8">#</TableHead>
-                    <TableHead>Indicador</TableHead>
-                    <TableHead>Código</TableHead>
-                    <TableHead className="text-center">Indicações</TableHead>
-                    <TableHead className="text-center">Convertidas</TableHead>
-                    <TableHead className="text-right">Bônus total</TableHead>
-                    <TableHead className="text-right">Já pago</TableHead>
-                    <TableHead className="text-right">A pagar</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {ranked.map((r, i) => {
-                    const pendingEarnings = r.earnings - r.paidEarnings;
-                    return (
-                      <TableRow key={r.code + i}>
-                        <TableCell className="py-2">{rankIcon(i)}</TableCell>
-                        <TableCell className="py-2">
-                          <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
-                            <p className="font-medium leading-tight">{r.name}</p>
-                            {(() => {
-                              const t = computeAdminTier(r.conversions, settings?.tiersConfig);
-                              return <ReferralTierBadge level={t.level} label={t.label} />;
-                            })()}
-                          </div>
-                          {r.email && (
-                            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                              <Mail className="w-2.5 h-2.5" />
-                              {r.email}
-                            </p>
-                          )}
-                          {r.whatsapp && (
-                            <a
-                              href={`https://wa.me/55${fmtWhatsapp(r.whatsapp)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-green-600 flex items-center gap-1 mt-0.5 hover:underline"
-                            >
-                              <MessageCircle className="w-2.5 h-2.5" />
-                              {r.whatsapp}
-                            </a>
-                          )}
-                        </TableCell>
-                        <TableCell className="font-mono text-primary py-2">{r.code}</TableCell>
-                        <TableCell className="text-center py-2">{r.total}</TableCell>
-                        <TableCell className="text-center py-2">
-                          <Badge variant={r.conversions > 0 ? "default" : "secondary"}>{r.conversions}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right py-2 text-green-600 font-medium">{fmtCurrency(r.earnings)}</TableCell>
-                        <TableCell className="text-right py-2">
-                          {r.paidEarnings > 0
-                            ? <span className="text-green-700 font-medium">{fmtCurrency(r.paidEarnings)}</span>
-                            : <span className="text-muted-foreground text-xs">—</span>
-                          }
-                        </TableCell>
-                        <TableCell className="text-right py-2">
-                          {pendingEarnings > 0
-                            ? <span className="text-amber-600 font-medium">{fmtCurrency(pendingEarnings)}</span>
-                            : <span className="text-muted-foreground text-xs">—</span>
-                          }
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
       )}
 
       {/* Referrals Table */}
@@ -2919,7 +2770,7 @@ export default function Indicacoes() {
             <div className="space-y-3 border rounded-lg p-3 bg-green-50/50">
               <div className="flex items-center justify-between">
                 <Label className="flex items-center gap-1.5 font-semibold text-green-800">
-                  <span className="text-base">📱</span>
+                  <Phone className="w-4 h-4" />
                   Notificações WhatsApp
                 </Label>
                 <Switch
