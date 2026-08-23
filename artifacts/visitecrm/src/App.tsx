@@ -629,7 +629,7 @@ function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
 
   if (!clerkPubKey) {
-    return <div className="p-8 text-red-500">Missing VITE_CLERK_PUBLISHABLE_KEY</div>;
+    return <div className="p-8 text-red-500">Configuração de autenticação ausente.</div>;
   }
 
   return (
