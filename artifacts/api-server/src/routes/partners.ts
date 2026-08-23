@@ -11,6 +11,7 @@ import {
   storeOrderItemsTable,
   storeProductsTable,
   storesTable,
+  financialLedgerEntriesTable,
 } from "@workspace/db";
 import { eq, and, desc, sql, inArray, ne } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -416,6 +417,30 @@ router.get("/partner/commissions", async (req, res, next: NextFunction): Promise
       { gross: 0, partner: 0, agency: 0, pending: 0, paid: 0 },
     );
     res.json({ data: commissions, totals });
+  } catch (err) { next(err); }
+});
+
+// GET /api/partner/settlement — immutable statement of the partner's own claims.
+router.get("/partner/settlement", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const auth = await requirePartnerAuth(req, res, next);
+    if (!auth) return;
+    const entries = await db.select().from(financialLedgerEntriesTable)
+      .where(and(
+        eq(financialLedgerEntriesTable.tenantId, auth.tenantId),
+        eq(financialLedgerEntriesTable.participantType, "partner"),
+        eq(financialLedgerEntriesTable.participantId, auth.partnerId),
+      ))
+      .orderBy(desc(financialLedgerEntriesTable.occurredAt))
+      .limit(250);
+    const totals = entries.reduce((acc, entry) => {
+      const value = Number(entry.amount) * (entry.direction === "debit" ? -1 : 1);
+      acc.net += value;
+      if (entry.settlementStatus === "available") acc.available += value;
+      if (entry.settlementStatus === "settled") acc.settled += value;
+      return acc;
+    }, { net: 0, available: 0, settled: 0 });
+    res.json({ data: entries, totals });
   } catch (err) { next(err); }
 });
 

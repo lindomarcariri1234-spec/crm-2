@@ -138,7 +138,27 @@ function PaymentMethodChart({ payments }: { payments: Array<{ paymentMethod?: st
   );
 }
 
-const VALID_TABS = ["receivable", "payable", "expenses", "commissions", "rules"];
+const VALID_TABS = ["receivable", "payable", "expenses", "commissions", "settlement", "rules"];
+
+type SettlementData = {
+  summary: {
+    agencyNet: number;
+    partnerPayable: number;
+    walletOutstanding: number;
+    cashbackOutstanding: number;
+    reversals: number;
+  };
+  entries: Array<{
+    id: string;
+    participantType: string;
+    category: string;
+    direction: string;
+    amount: number;
+    settlementStatus: string;
+    eventType: string;
+    occurredAt: string;
+  }>;
+};
 
 export default function Financial() {
   const searchStr = useSearch();
@@ -180,6 +200,8 @@ export default function Financial() {
     amount: number; clientName: string | null; tripName: string | null; voucherCode: string | null;
   }>>([]);
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
+  const [settlement, setSettlement] = useState<SettlementData | null>(null);
+  const [loadingSettlement, setLoadingSettlement] = useState(false);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isExpenseOpen, setIsExpenseOpen] = useState(false);
   const [isRuleOpen, setIsRuleOpen] = useState(false);
@@ -201,6 +223,25 @@ export default function Financial() {
       if (res.ok) setUpcomingInstallments(await res.json());
     } catch { /* ignore */ } finally { setLoadingUpcoming(false); }
   }, []);
+
+  const fetchSettlement = useCallback(async () => {
+    setLoadingSettlement(true);
+    try {
+      const params = new URLSearchParams();
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      const response = await fetch(`${BASE}/api/financial/settlement${params.size ? `?${params}` : ""}`, {
+        credentials: "include",
+      });
+      if (response.ok) setSettlement(await response.json() as SettlementData);
+    } finally {
+      setLoadingSettlement(false);
+    }
+  }, [dateFrom, dateTo]);
+
+  useEffect(() => {
+    if (tab === "settlement") void fetchSettlement();
+  }, [tab, fetchSettlement]);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -527,6 +568,7 @@ export default function Financial() {
               <TabsTrigger value="payable">A Pagar</TabsTrigger>
               <TabsTrigger value="expenses">Despesas</TabsTrigger>
               <TabsTrigger value="commissions">Comissões</TabsTrigger>
+              <TabsTrigger value="settlement">Liquidação</TabsTrigger>
               <TabsTrigger value="rules">Regras</TabsTrigger>
             </TabsList>
           </div>
@@ -900,6 +942,56 @@ export default function Financial() {
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="settlement" className="mt-4 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Livro de liquidação por participante. Valores de carteira, cashback e comissão não se misturam.
+            </p>
+            <Button size="sm" variant="outline" onClick={() => void fetchSettlement()} disabled={loadingSettlement}>
+              Atualizar
+            </Button>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <KpiCard icon={DollarSign} label="Receita da agência" value={fmt(settlement?.summary.agencyNet ?? 0)} color="text-emerald-600" />
+            <KpiCard icon={TrendingDown} label="Repasse a parceiros" value={fmt(settlement?.summary.partnerPayable ?? 0)} color="text-blue-600" />
+            <KpiCard icon={DollarSign} label="Carteira em aberto" value={fmt(settlement?.summary.walletOutstanding ?? 0)} color="text-violet-600" />
+            <KpiCard icon={DollarSign} label="Cashback em aberto" value={fmt(settlement?.summary.cashbackOutstanding ?? 0)} color="text-amber-600" />
+            <KpiCard icon={AlertCircle} label="Estornos e disputas" value={fmt(settlement?.summary.reversals ?? 0)} color="text-red-600" />
+          </div>
+          <div className="rounded-lg border overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Data</TableHead>
+                  <TableHead>Participante</TableHead>
+                  <TableHead>Categoria</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Valor</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loadingSettlement ? (
+                  Array.from({ length: 4 }).map((_, index) => (
+                    <TableRow key={index}>{Array.from({ length: 5 }).map((__, cell) => <TableCell key={cell}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                  ))
+                ) : !settlement?.entries.length ? (
+                  <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Nenhum lançamento de liquidação no período.</TableCell></TableRow>
+                ) : settlement.entries.map((entry) => (
+                  <TableRow key={entry.id}>
+                    <TableCell className="text-sm">{formatDate(entry.occurredAt)}</TableCell>
+                    <TableCell className="capitalize text-sm">{entry.participantType}</TableCell>
+                    <TableCell className="text-sm">{entry.category.replace(/_/g, " ")}</TableCell>
+                    <TableCell><Badge variant={entry.settlementStatus === "reversed" ? "destructive" : "secondary"}>{entry.settlementStatus}</Badge></TableCell>
+                    <TableCell className={`text-right font-medium ${entry.direction === "debit" ? "text-red-600" : "text-emerald-600"}`}>
+                      {entry.direction === "debit" ? "−" : "+"}{fmt(entry.amount)}
                     </TableCell>
                   </TableRow>
                 ))}

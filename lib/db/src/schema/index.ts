@@ -45,3 +45,4 @@ export * from "./trip-checkins";
 export * from "./gemeo";
 export * from "./insights-chat";
 export * from "./stripe-events";
+export * from "./settlements";

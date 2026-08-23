@@ -32,6 +32,7 @@ import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
 import { encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
+import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
 // links point at the Vitrine; the unsubscribe link points at the public API,
@@ -824,6 +825,13 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
         // without leaving a PAID order whose effects cannot be retried.
         await applyOrderInventoryEffects(lockedOrder.id, tx as unknown as Parameters<typeof applyOrderInventoryEffects>[1]);
         await tx.update(storeOrdersTable).set(updates).where(eq(storeOrdersTable.id, lockedOrder.id));
+        await recordOrderPaymentSettlement(tx as unknown as Parameters<typeof recordOrderPaymentSettlement>[0], {
+          tenantId: lockedOrder.tenantId,
+          orderId: lockedOrder.id,
+          gateway: "manual",
+          transactionId: `manual:${lockedOrder.id}`,
+          occurredAt: new Date(),
+        });
         order = { ...lockedOrder, ...updates } as typeof storeOrdersTable.$inferSelect;
         didTransitionToPaid = true;
       });
@@ -999,6 +1007,14 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
         await cancelPartnerOrderItems(tx as unknown as Parameters<typeof cancelPartnerOrderItems>[0], {
           orderId: currentOrder.id,
           tenantId: me.tenantId,
+          reason: "Pedido cancelado pela agência",
+        });
+        await reverseOrderSettlement(tx as unknown as Parameters<typeof reverseOrderSettlement>[0], {
+          tenantId: me.tenantId,
+          orderId: currentOrder.id,
+          eventType: "order_cancelled",
+          eventKey: `manual-cancellation:${currentOrder.id}`,
+          occurredAt: new Date(),
           reason: "Pedido cancelado pela agência",
         });
       });

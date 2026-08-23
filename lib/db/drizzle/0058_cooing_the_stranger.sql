@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "financial_ledger_one_reversal_per_entry" ON "financial_ledger_entries" USING btree ("reversal_of_entry_id");

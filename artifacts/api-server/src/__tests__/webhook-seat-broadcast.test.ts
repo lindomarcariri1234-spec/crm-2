@@ -109,6 +109,10 @@ vi.mock("@workspace/permissions", () => ({
   STORE_ORDER_STATUS: { CONFIRMED: "confirmed" },
   STORE_PAYMENT_STATUS: { PAID: "paid" },
 }));
+vi.mock("../services/settlements/financial-ledger.js", () => ({
+  recordOrderPaymentSettlement: vi.fn().mockResolvedValue(undefined),
+  reverseOrderSettlement: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("../lib/realtime.js", () => ({
   broadcastSeatUpdate: (...a: unknown[]) => mockBroadcastSeatUpdate(...a),

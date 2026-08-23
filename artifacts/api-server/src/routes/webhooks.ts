@@ -17,6 +17,7 @@ import { PAYMENT_STATUS, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_S
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
 import { roundMoney } from "../lib/pricing";
 import { ValidationError, AppError } from "../lib/errors";
+import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 
 const router = Router();
 
@@ -120,7 +121,9 @@ router.post("/webhooks/stripe/:storeSlug", async (req, res, next: NextFunction):
     // Prefer the per-store webhook secret; fall back to the global env var for
     // backward compatibility with deployments that have not yet migrated to
     // per-store secrets.
-    const secret = process.env["MP_WEBHOOK_SECRET"];
+    const secret = store.stripeWebhookSecret
+      ? decryptOrPassthrough(store.stripeWebhookSecret)
+      : process.env["STRIPE_WEBHOOK_SECRET"];
 
     if (!secret) {
       logger.warn(
@@ -137,7 +140,7 @@ router.post("/webhooks/stripe/:storeSlug", async (req, res, next: NextFunction):
       return;
     }
 
-    const sigHeader = req.header("x-signature");
+    const sigHeader = req.header("stripe-signature");
     if (!verifyStripeSignature(rawBody, sigHeader, secret)) {
       logger.warn(
         { sigHeader: sigHeader ? "present" : "missing", slug: store.slug },
@@ -242,6 +245,21 @@ async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise
       await markOrderRefunded(tx as unknown as DbExecutor, store, paymentIntentId, "stripe");
     });
     return;
+  }
+
+  if (event.type === "charge.dispute.created") {
+    const paymentIntentId = String(obj["payment_intent"] ?? "");
+    if (!paymentIntentId) return;
+    await db.transaction(async (tx) => {
+      await markOrderRefunded(
+        tx as unknown as DbExecutor,
+        store,
+        paymentIntentId,
+        "stripe",
+        "order_charged_back",
+        "Contestação de pagamento registrada",
+      );
+    });
   }
 }
 
@@ -596,6 +614,13 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
   // orders already marked paid by the manual-payment admin path.
   if (didTransitionToPaid) {
     await applyOrderInventoryEffects(order.id, tx);
+    await recordOrderPaymentSettlement(tx, {
+      tenantId: order.tenantId,
+      orderId: order.id,
+      gateway,
+      transactionId,
+      occurredAt: paidAt,
+    });
   }
 
   // Find the reservations linked to this order via storeOrderId == orderNumber
@@ -743,6 +768,8 @@ async function markOrderRefunded(
   store: StoreScope,
   paymentIntentId: string,
   gateway: string,
+  eventType: "order_refunded" | "order_charged_back" = "order_refunded",
+  reason = "Pedido reembolsado",
 ): Promise<void> {
   const [order] = await tx
     .select({
@@ -772,7 +799,16 @@ async function markOrderRefunded(
   await cancelPartnerOrderItems(tx, {
     orderId: order.id,
     tenantId: order.tenantId,
-    reason: "Pedido reembolsado",
+    reason,
+  });
+
+  await reverseOrderSettlement(tx, {
+    tenantId: order.tenantId,
+    orderId: order.id,
+    eventType,
+    eventKey: `${eventType}:${gateway}:${paymentIntentId}`,
+    occurredAt: now,
+    reason,
   });
 
   // Demote previously-paid Payment rows to refunded so any subsequent

@@ -24,6 +24,7 @@ import {
   tripMediaTable,
   clientAchievementsTable,
   clientDreamDestinationsTable,
+  financialLedgerEntriesTable,
 } from "@workspace/db";
 import { eq, and, desc, asc, sql, inArray, gt, count, isNull, lt } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -39,6 +40,7 @@ import { addClientSseConnection, removeClientSseConnection } from "../lib/client
 import { getRecentNotifications, getUnreadCount, markAllRead } from "../lib/client-notifications";
 import { areWorkersEnabled } from "../lib/redis";
 import { logger } from "../lib/logger";
+import { expireClientBenefits, getClientBenefitBalances } from "../services/settlements/financial-ledger";
 
 const router = Router();
 
@@ -713,6 +715,51 @@ router.get("/client/me/loyalty/transactions", async (req, res, next: NextFunctio
       })),
       hasMore: offset + limit < total,
       total,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Wallet and cashback deliberately use the financial ledger, not the loyalty
+// points ledger. Reading a statement also records any expired credits as an
+// immutable compensating entry before the balance is calculated.
+router.get("/client/me/benefits", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (me.role !== ROLES.CLIENT) {
+      next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    if (!client) {
+      res.json({ balances: { wallet: 0, cashback: 0 }, data: [] });
+      return;
+    }
+
+    let balances = { wallet: 0, cashback: 0 };
+    await db.transaction(async (tx) => {
+      await expireClientBenefits(tx as never, { tenantId: me.tenantId, clientId: client.id });
+      balances = await getClientBenefitBalances(tx as never, { tenantId: me.tenantId, clientId: client.id });
+    });
+    const entries = await db.select().from(financialLedgerEntriesTable)
+      .where(and(
+        eq(financialLedgerEntriesTable.tenantId, me.tenantId),
+        eq(financialLedgerEntriesTable.clientId, client.id),
+      ))
+      .orderBy(desc(financialLedgerEntriesTable.occurredAt))
+      .limit(100);
+    res.json({
+      balances,
+      data: entries
+        .filter((entry) => entry.category === "wallet" || entry.category === "cashback")
+        .map((entry) => ({
+          ...entry,
+          amount: Number(entry.amount),
+          occurredAt: entry.occurredAt.toISOString(),
+          expiresAt: entry.expiresAt?.toISOString() ?? null,
+        })),
     });
   } catch (err) {
     next(err);

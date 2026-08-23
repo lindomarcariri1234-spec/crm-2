@@ -11,6 +11,7 @@ import {
   partnerAvailabilityTable,
   partnerCommissionsTable,
   referralsTable,
+  settlementItemsTable,
 } from "@workspace/db";
 import { and, eq, ne, sql, inArray } from "drizzle-orm";
 import type { DbExecutor } from "../../lib/reservation-payments";
@@ -102,34 +103,71 @@ async function writePartnerCommissions(
     if (!ppId) continue;
     partnerProductTotals.set(ppId, (partnerProductTotals.get(ppId) ?? 0) + Number(item.total));
   }
-  if (partnerProductTotals.size === 0) return [];
-
   const ppIds = [...partnerProductTotals.keys()];
-  const partnerProducts = await tx
-    .select({ id: partnerProductsTable.id, partnerId: partnerProductsTable.partnerId })
-    .from(partnerProductsTable)
-    .where(and(
-      inArray(partnerProductsTable.id, ppIds),
-      eq(partnerProductsTable.tenantId, tenantId),
-      eq(partnerProductsTable.status, "active"),
-    ));
+  const partnerProducts = ppIds.length > 0
+    ? await tx
+      .select({ id: partnerProductsTable.id, partnerId: partnerProductsTable.partnerId })
+      .from(partnerProductsTable)
+      .where(and(
+        inArray(partnerProductsTable.id, ppIds),
+        eq(partnerProductsTable.tenantId, tenantId),
+        eq(partnerProductsTable.status, "active"),
+      ))
+    : [];
 
   const partnerIds = [...new Set(partnerProducts.map((p) => p.partnerId))];
-  if (partnerIds.length === 0) return [];
-  const partners = await tx
-    .select({
-      id: partnersTable.id,
-      commissionPct: partnersTable.commissionPct,
-      referralCommissionEligible: partnersTable.referralCommissionEligible,
-    })
-    .from(partnersTable)
-    .where(and(
-      inArray(partnersTable.id, partnerIds),
-      eq(partnersTable.tenantId, tenantId),
-      eq(partnersTable.status, "active"),
-    ));
+  const partners = partnerIds.length > 0
+    ? await tx
+      .select({
+        id: partnersTable.id,
+        name: partnersTable.name,
+        commissionPct: partnersTable.commissionPct,
+        referralCommissionEligible: partnersTable.referralCommissionEligible,
+      })
+      .from(partnersTable)
+      .where(and(
+        inArray(partnersTable.id, partnerIds),
+        eq(partnersTable.tenantId, tenantId),
+        eq(partnersTable.status, "active"),
+      ))
+    : [];
 
   const partnerMap = new Map(partners.map((p) => [p.id, p]));
+  const partnerProductMap = new Map(partnerProducts.map((product) => [product.id, product]));
+
+  // Snapshot every line while the checkout rules are still known. The later
+  // settlement ledger reads this immutable record instead of re-evaluating a
+  // partner's current commission rate or product ownership after an edit.
+  for (const item of orderItemsData) {
+    const product = fetchedProducts.get(item.productId);
+    const partnerProductId = (product as typeof storeProductsTable.$inferSelect & { partnerProductId?: string | null }).partnerProductId;
+    const partnerProduct = partnerProductId ? partnerProductMap.get(partnerProductId) : undefined;
+    const partner = partnerProduct ? partnerMap.get(partnerProduct.partnerId) : undefined;
+    const grossAmount = roundMoney(Number(item.total));
+    const commissionRate = partner ? Number(partner.commissionPct) : 0;
+    const commissionAmount = partner ? roundMoney(grossAmount * commissionRate / 100) : 0;
+    const sellerNetAmount = roundMoney(grossAmount - commissionAmount);
+
+    await tx.insert(settlementItemsTable).values({
+      id: generateId(),
+      tenantId,
+      orderId,
+      orderItemId: item.id,
+      sellerType: partner ? "partner" : "agency",
+      sellerId: partner?.id ?? null,
+      sellerName: partner?.name ?? item.sellerName ?? "Agência",
+      source: partner ? "partner_catalog" : "store_catalog",
+      grossAmount: grossAmount.toFixed(2),
+      discountAmount: Number(item.discount).toFixed(2),
+      taxAmount: "0",
+      feeAmount: "0",
+      commissionRate: commissionRate.toFixed(4),
+      commissionAmount: commissionAmount.toFixed(2),
+      sellerNetAmount: sellerNetAmount.toFixed(2),
+      settlementStatus: "pending",
+    });
+  }
+
   // Use Brazil calendar month so partner commissions are attributed to the correct period at night
   const period = localToday().slice(0, 7); // "YYYY-MM" in America/Sao_Paulo
 

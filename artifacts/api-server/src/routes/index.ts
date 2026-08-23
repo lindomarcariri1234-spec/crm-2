@@ -55,6 +55,7 @@ import webhooksRouter from "./webhooks";
 import npsPublicRouter from "./nps";
 import whatsappNotificationsRouter from "./whatsapp-notifications";
 import distributionRouter from "./distribution";
+import settlementsRouter from "./settlements";
 
 const router: IRouter = Router();
 
@@ -116,6 +117,7 @@ router.use(webhooksRouter);
 router.use(npsPublicRouter);
 router.use(whatsappNotificationsRouter);
 router.use(distributionRouter);
+router.use(settlementsRouter);
 router.use("/uploadthing", uploadthingRouter);
 router.use("/upload", uploadRouter);
 

@@ -68,6 +68,10 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 
 vi.mock("../services/checkout/post-booking.js", () => ({ runPostPaymentSideEffects: vi.fn() }));
 vi.mock("../services/checkout/persist-order.js", () => ({ applyOrderInventoryEffects: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../services/settlements/financial-ledger.js", () => ({
+  recordOrderPaymentSettlement: vi.fn().mockResolvedValue(undefined),
+  reverseOrderSettlement: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../queues/email-helpers.js", () => ({ enqueueNewBookingNotificationEmail: vi.fn() }));
 vi.mock("../lib/crypto.js", () => ({ decryptOrPassthrough: vi.fn((v: string) => v) }));
 vi.mock("../lib/id.js", () => ({ generateId: vi.fn(() => "pay-id") }));
