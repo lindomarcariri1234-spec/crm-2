@@ -248,10 +248,14 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
                     )}
                     <div>
                       <span className="font-medium text-sm">{item.productName}</span>
+                      {item.sellerName && <Badge variant="outline" className="ml-2 text-[10px]">Parceiro: {item.sellerName}</Badge>}
+                      {item.itemStatus && <Badge variant="outline" className="ml-1 text-[10px]">{item.itemStatus}</Badge>}
                       {item.variantLabel && (
                         <span className="text-xs text-muted-foreground ml-2">({item.variantLabel})</span>
                       )}
                       <span className="text-xs text-muted-foreground ml-2">x{item.quantity}</span>
+                      {item.voucherCode && <span className="text-xs text-muted-foreground ml-2">Voucher: {item.voucherCode}</span>}
+                      {item.cancellationReason && <span className="text-xs text-red-600 ml-2">Cancelado: {item.cancellationReason}</span>}
                     </div>
                   </div>
                   <span className="text-sm font-medium">

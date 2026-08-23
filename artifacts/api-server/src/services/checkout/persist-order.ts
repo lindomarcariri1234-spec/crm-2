@@ -8,10 +8,11 @@ import {
   storeCouponsTable,
   partnersTable,
   partnerProductsTable,
+  partnerAvailabilityTable,
   partnerCommissionsTable,
   referralsTable,
 } from "@workspace/db";
-import { and, eq, sql, inArray } from "drizzle-orm";
+import { and, eq, ne, sql, inArray } from "drizzle-orm";
 import type { DbExecutor } from "../../lib/reservation-payments";
 import { generateId } from "../../lib/id";
 import { roundMoney } from "../../lib/pricing";
@@ -33,6 +34,9 @@ export interface PersistedOrderItem {
   discount: string;
   total: string;
   metadata: Record<string, unknown> | null;
+  partnerId?: string | null;
+  partnerProductId?: string | null;
+  sellerName?: string | null;
 }
 
 export interface PersistOrderArgs {
@@ -232,6 +236,40 @@ async function writeOrderAndItems(tx: Tx, args: PersistOrderArgs, reservationCli
   }
 }
 
+/**
+ * Claims dated partner inventory atomically. The `spots_total - spots_used`
+ * predicate is evaluated while PostgreSQL holds the row lock, preventing two
+ * concurrent checkouts from selling the final same seat.
+ */
+async function reservePartnerAvailability(
+  tx: DbExecutor,
+  items: Array<Pick<PersistedOrderItem, "partnerProductId" | "metadata" | "quantity" | "productName">>,
+): Promise<void> {
+  for (const item of items) {
+    if (!item.partnerProductId) continue;
+    const partnerDate = item.metadata?.["partnerDate"];
+    if (typeof partnerDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(partnerDate)) {
+      continue; // Transfers do not use dated capacity.
+    }
+    const updated = await tx.update(partnerAvailabilityTable)
+      .set({
+        spotsUsed: sql`${partnerAvailabilityTable.spotsUsed} + ${item.quantity}`,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(partnerAvailabilityTable.productId, item.partnerProductId),
+        eq(partnerAvailabilityTable.date, partnerDate),
+        sql`${partnerAvailabilityTable.spotsTotal} - ${partnerAvailabilityTable.spotsUsed} >= ${item.quantity}`,
+      ))
+      .returning({ id: partnerAvailabilityTable.id });
+    if (updated.length === 0) {
+      const error = new Error("partner_availability_unavailable") as Error & { productName?: string };
+      error.productName = item.productName;
+      throw error;
+    }
+  }
+}
+
 
 export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<PersistOrderResult> {
   await db.transaction(async (tx) => {
@@ -239,7 +277,6 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
       fetchedProducts: args.fetchedProducts,
       quantityByProductId: args.quantityByProductId,
     });
-
     // CRM client upsert is intentionally NOT performed here. An anonymous
     // caller does not need to be authenticated to submit a checkout form, so
     // creating or updating a clientsTable row at this point would let unpaid
@@ -299,7 +336,7 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
     // (Stripe webhook or manual payment entry) to prevent anonymous users from holding
     // trip inventory without paying. See createReservationsForOrder in create-reservations.ts.
 
-    // Stock decrement, coupon usageCount increment, and totalOrders increment are
+    // Stock decrement, dated partner availability, coupon usageCount increment, and totalOrders increment are
     // intentionally NOT performed here. They are deferred to applyOrderInventoryEffects,
     // which is called from payment-confirmation paths (gateway webhook + manual payment)
     // so that anonymous unpaid checkout submissions cannot drain inventory, exhaust
@@ -346,10 +383,21 @@ export async function applyOrderInventoryEffects(orderId: string, tx: DbExecutor
   if (!order) return;
 
   const items = await tx
-    .select({ productId: storeOrderItemsTable.productId, quantity: storeOrderItemsTable.quantity })
+    .select({
+      productId: storeOrderItemsTable.productId,
+      quantity: storeOrderItemsTable.quantity,
+      partnerProductId: storeOrderItemsTable.partnerProductId,
+      productName: storeOrderItemsTable.productName,
+      metadata: storeOrderItemsTable.metadata,
+    })
     .from(storeOrderItemsTable)
-    .where(eq(storeOrderItemsTable.orderId, orderId));
+    .where(and(
+      eq(storeOrderItemsTable.orderId, orderId),
+      ne(storeOrderItemsTable.itemStatus, "cancelled"),
+    ));
   if (items.length === 0) return;
+
+  await reservePartnerAvailability(tx, items);
 
   const quantityByProductId = new Map<string, number>();
   for (const item of items) {

@@ -10,6 +10,7 @@ import { createReservationsForOrder } from "../services/checkout/create-reservat
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { applyOrderInventoryEffects } from "../services/checkout/persist-order";
+import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
 import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
 import { decryptOrPassthrough } from "../lib/crypto";
 import { PAYMENT_STATUS, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
@@ -767,6 +768,12 @@ async function markOrderRefunded(
     .update(storeOrdersTable)
     .set({ paymentStatus: STORE_PAYMENT_STATUS.REFUNDED, refundedAt: now, status: STORE_ORDER_STATUS.CANCELLED, cancelledAt: now })
     .where(eq(storeOrdersTable.id, order.id));
+
+  await cancelPartnerOrderItems(tx, {
+    orderId: order.id,
+    tenantId: order.tenantId,
+    reason: "Pedido reembolsado",
+  });
 
   // Demote previously-paid Payment rows to refunded so any subsequent
   // recomputation of reservation balances reflects the reversal.

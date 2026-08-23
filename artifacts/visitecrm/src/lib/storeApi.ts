@@ -389,6 +389,7 @@ export interface PublicStore {
   stripePublicKey?: string | null;
   shippingPolicy?: string | null;
   returnPolicy?: string | null;
+  cancellationPolicy?: string | null;
   privacyPolicy?: string | null;
   termsOfService?: string | null;
   isActive: boolean;
@@ -486,6 +487,7 @@ export interface StoreProduct {
   createdAt: string;
   updatedAt: string;
   partnerProductId?: string | null;
+  sellerName?: string | null;
 }
 
 export interface PartnerProductInfo {
@@ -497,6 +499,10 @@ export interface PartnerProductInfo {
   durationMinutes?: number | null;
   maxCapacity?: number | null;
   cancellationPolicy?: string | null;
+  origin?: string | null;
+  locationUrl?: string | null;
+  seller?: { name: string; slug: string; description?: string | null; logo?: string | null } | null;
+  faq?: Array<{ question: string; answer: string }>;
   availability?: Array<{ date: string; spotsTotal: number; spotsUsed: number }>;
 }
 
@@ -509,6 +515,15 @@ export interface StoreOrderItem {
   quantity: number;
   unitPrice: number;
   variantLabel?: string | null;
+  partnerId?: string | null;
+  partnerProductId?: string | null;
+  sellerName?: string | null;
+  itemStatus?: string;
+  voucherCode?: string | null;
+  cancellationReason?: string | null;
+  cancellationRequestedAt?: string | null;
+  cancelledAt?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface StoreOrder {
@@ -698,7 +713,7 @@ export interface CreateOrderInput {
     quantity: number;
     unitPrice: number;
     variantLabel?: string;
-
+    metadata?: Record<string, unknown>;
   }>;
 
   couponCode?: string;

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import DOMPurify from "dompurify";
 import { useLocation } from "wouter";
-import { publicStoreApi, PublicStore, StoreProduct, StoreReview } from "@/lib/storeApi";
+import { publicStoreApi, PublicStore, StoreProduct, StoreReview, PartnerProductInfo } from "@/lib/storeApi";
 import { calculateTripDuration } from "@/lib/tripDuration";
 import { getTripVideoEmbedUrl } from "@/lib/tripVideoEmbed";
 import { formatCurrency } from "@/lib/utils";
@@ -320,6 +320,7 @@ export default function VitrineProduct({
   const { colors } = useVitrineTheme();
   const { isFavorited, toggleFavorite } = useFavorites();
   const [product, setProduct] = useState<(StoreProduct & { reviews: StoreReview[] }) | null>(null);
+  const [partnerInfo, setPartnerInfo] = useState<PartnerProductInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [imgIndex, setImgIndex] = useState(0);
@@ -344,6 +345,9 @@ export default function VitrineProduct({
       .getProduct(slug, productSlug)
       .then((p) => {
         setProduct(p);
+        publicStoreApi.getPartnerInfo(slug, productSlug)
+          .then((info) => setPartnerInfo(info.hasPartner ? info : null))
+          .catch(() => setPartnerInfo(null));
         // AI-assisted recommendations (best-effort); fall back to a plain
         // product listing if the endpoint is unavailable.
         publicStoreApi.getRecommendations(slug, productSlug, 3)
@@ -704,6 +708,31 @@ export default function VitrineProduct({
               <p className="text-sm text-muted-foreground leading-relaxed">{product.shortDescription}</p>
             )}
 
+            {(product.sellerName || partnerInfo?.seller) && (
+              <div className="rounded-xl border bg-muted/30 p-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Vendido por</p>
+                <div className="flex items-center gap-2 mt-1">
+                  {partnerInfo?.seller?.logo && <img src={partnerInfo.seller.logo} alt="" className="w-7 h-7 rounded-full object-cover border" />}
+                  <p className="text-sm font-semibold">{partnerInfo?.seller?.name ?? product.sellerName}</p>
+                </div>
+                {partnerInfo?.seller?.description && <p className="text-xs text-muted-foreground mt-1.5 line-clamp-2">{partnerInfo.seller.description}</p>}
+              </div>
+            )}
+
+            {partnerInfo?.availability && partnerInfo.availability.length > 0 && (
+              <div className="rounded-xl border bg-muted/30 p-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-2">Próximas disponibilidades</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {partnerInfo.availability.slice(0, 4).map((slot) => (
+                    <Badge key={slot.date} variant="outline">
+                      {new Date(`${slot.date}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", timeZone: "America/Sao_Paulo" })}
+                      {" · "}{slot.spotsTotal - slot.spotsUsed} vaga(s)
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {hasInfoGrid && (
               <div className="grid grid-cols-2 gap-3">
                 {(product.departureDate ?? product.startDate) && (
@@ -886,6 +915,36 @@ export default function VitrineProduct({
           </div>
         </div>
       </div>
+
+      {/* What's included / excluded */}
+      {partnerInfo?.hasPartner && (
+        <div className="mt-12 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-2xl border p-5">
+            <h2 className="font-semibold flex items-center gap-2"><MapPin className="w-5 h-5" /> Localização e origem</h2>
+            {partnerInfo.origin && <p className="text-sm text-muted-foreground mt-3">Origem: {partnerInfo.origin}</p>}
+            {partnerInfo.meetingPoint && <p className="text-sm text-muted-foreground mt-2">Encontro: {partnerInfo.meetingPoint}</p>}
+            {partnerInfo.locationUrl && <a href={partnerInfo.locationUrl} target="_blank" rel="noreferrer" className="inline-flex text-sm font-medium text-primary mt-3 hover:underline">Abrir no mapa</a>}
+          </div>
+          <div className="rounded-2xl border p-5">
+            <h2 className="font-semibold flex items-center gap-2"><ShieldCheck className="w-5 h-5" /> Política do parceiro</h2>
+            <p className="text-sm text-muted-foreground mt-3">{partnerInfo.cancellationPolicy ?? store.cancellationPolicy ?? "Consulte as condições de cancelamento antes de finalizar a reserva."}</p>
+          </div>
+          <div className="rounded-2xl border p-5 sm:col-span-2">
+            <h2 className="font-semibold">Perguntas frequentes</h2>
+            <div className="grid gap-3 mt-3 sm:grid-cols-2">
+              {(partnerInfo.faq?.length ? partnerInfo.faq : [
+                { question: "Como confirmo minha reserva?", answer: "Após o pagamento, você receberá a confirmação e as instruções do parceiro." },
+                { question: "Onde é o ponto de encontro?", answer: partnerInfo.meetingPoint ?? "O parceiro enviará as orientações antes da atividade." },
+              ]).map((entry) => (
+                <div key={entry.question} className="rounded-lg bg-muted/40 p-3">
+                  <p className="text-sm font-medium">{entry.question}</p>
+                  <p className="text-sm text-muted-foreground mt-1">{entry.answer}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* What's included / excluded */}
       {(includes.length > 0 || excludes.length > 0) && (

@@ -95,6 +95,7 @@ import
   vehicleLayoutsTable,
   partnerProductsTable,
   partnerAvailabilityTable,
+  partnersTable,
   priceAlertSubscriptionsTable,
   referralAttemptLogsTable,
 }
@@ -637,6 +638,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
       trackInventory: storeProductsTable.trackInventory,
       stockQuantity: storeProductsTable.stockQuantity,
       publishedAt: storeProductsTable.publishedAt,
+      sellerName: partnersTable.name,
       availableSeats: tripsTable.availableSeats,
       totalCapacity: tripsTable.totalCapacity,
       departureDate: tripsTable.departureDate,
@@ -659,13 +661,19 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
     const [countResult, products] = await Promise.all([
       db.select({ count: sql<number>`COUNT(*)` }).from(storeProductsTable)
         .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+        .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+        .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
         .where(whereClause),
       limit
         ? db.select(selectFields).from(storeProductsTable)
             .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+            .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+            .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
             .where(whereClause).orderBy(orderBy).limit(limit).offset(offset)
         : db.select(selectFields).from(storeProductsTable)
             .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+            .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+            .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
             .where(whereClause).orderBy(orderBy),
     ]);
     const processedProducts = products.map(p => ({
@@ -735,6 +743,7 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
       status: storeProductsTable.status,
       order: storeProductsTable.order,
       partnerProductId: storeProductsTable.partnerProductId,
+      sellerName: partnersTable.name,
       createdAt: storeProductsTable.createdAt,
       updatedAt: storeProductsTable.updatedAt,
       availableSeats: tripsTable.availableSeats,
@@ -755,6 +764,8 @@ router.get("/public/store/:slug/products/:productSlug", async (req, res, next: N
     })
       .from(storeProductsTable)
       .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+      .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+      .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
       .where(and(
         eq(storeProductsTable.storeId, store.id),
         eq(storeProductsTable.slug, req.params.productSlug),
@@ -821,13 +832,23 @@ router.get("/public/store/:slug/products/:productSlug/partner-info", async (req,
       type: partnerProductsTable.type,
       title: partnerProductsTable.title,
       meetingPoint: partnerProductsTable.meetingPoint,
+      origin: partnerProductsTable.origin,
+      locationUrl: partnerProductsTable.locationUrl,
       durationMinutes: partnerProductsTable.durationMinutes,
       maxCapacity: partnerProductsTable.maxCapacity,
       cancellationPolicy: partnerProductsTable.cancellationPolicy,
+      faq: partnerProductsTable.faq,
+      sellerName: partnersTable.name,
+      sellerSlug: partnersTable.slug,
+      sellerDescription: partnersTable.description,
+      sellerLogo: partnersTable.logo,
     }).from(partnerProductsTable)
+      .innerJoin(partnersTable, eq(partnersTable.id, partnerProductsTable.partnerId))
       .where(and(
         eq(partnerProductsTable.id, product.partnerProductId),
         eq(partnerProductsTable.status, "active"),
+        eq(partnerProductsTable.tenantId, store.tenantId),
+        eq(partnersTable.status, "active"),
       )).limit(1);
 
     if (!pp) { res.json({ hasPartner: false }); return; }
@@ -847,6 +868,12 @@ router.get("/public/store/:slug/products/:productSlug/partner-info", async (req,
     res.json({
       hasPartner: true,
       ...pp,
+      seller: {
+        name: pp.sellerName,
+        slug: pp.sellerSlug,
+        description: pp.sellerDescription,
+        logo: pp.sellerLogo,
+      },
       availability: availability.filter((a) => a.spotsTotal - a.spotsUsed > 0),
     });
   } catch (err) {
@@ -1575,6 +1602,9 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         }
         if (txErr.message === "trip_not_found") {
           next(new NotFoundError(`Viagem vinculada ao produto "${tagged.productName ?? ""}" não encontrada`, "TRIP_NOT_FOUND")); return;
+        }
+        if (txErr.message === "partner_availability_unavailable") {
+          next(new ConflictError(`A data escolhida não possui mais vagas para "${tagged.productName ?? ""}".`, "PARTNER_AVAILABILITY_UNAVAILABLE")); return;
         }
         // Concurrent double-submit: two requests carrying the same
         // idempotencyKey both passed the pre-check and raced to insert. The

@@ -21,13 +21,14 @@ import request from "supertest";
 // vi.hoisted: shared mocks that must exist before any vi.mock() factory
 // ---------------------------------------------------------------------------
 
-const { mockReverseProductOnly, mockReverseTripOrder, selectQueue, mockUpdateReturning } = vi.hoisted(() => {
+const { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, selectQueue, mockUpdateReturning } = vi.hoisted(() => {
   const selectQueue: Array<unknown[]> = [];
   // Default returns true / [] to avoid mock noise
   const mockReverseProductOnly = vi.fn().mockResolvedValue(true);
   const mockReverseTripOrder = vi.fn().mockResolvedValue([]);
+  const mockCancelPartnerItems = vi.fn().mockResolvedValue(undefined);
   const mockUpdateReturning = vi.fn();
-  return { mockReverseProductOnly, mockReverseTripOrder, selectQueue, mockUpdateReturning };
+  return { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, selectQueue, mockUpdateReturning };
 });
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,11 @@ vi.mock("@workspace/db", () => {
   }));
 
   return {
-    db: { select: mockSelect, update: mockUpdate },
+    db: {
+      select: mockSelect,
+      update: mockUpdate,
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({})),
+    },
     storesTable: {},
     storeOrdersTable: {},
     storeOrderItemsTable: {},
@@ -135,6 +140,10 @@ vi.mock("../lib/tenant.js", () => ({
 vi.mock("../services/checkout/order-referral-reversal.js", () => ({
   reverseProductOnlyOrderReferral: mockReverseProductOnly,
   reverseTripOrderReferrals: mockReverseTripOrder,
+}));
+
+vi.mock("../services/checkout/cancel-partner-items.js", () => ({
+  cancelPartnerOrderItems: mockCancelPartnerItems,
 }));
 
 // Stub every other service that the route imports
@@ -256,6 +265,7 @@ beforeEach(() => {
   // Reset default return values after clearAllMocks()
   mockReverseProductOnly.mockResolvedValue(true);
   mockReverseTripOrder.mockResolvedValue([]);
+    mockCancelPartnerItems.mockResolvedValue(undefined);
   // Default update returns [{id}] (1 row updated)
   mockUpdateReturning.mockResolvedValue([{ id: "order-001" }]);
 });
@@ -266,6 +276,26 @@ beforeEach(() => {
 
 describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reversal", () => {
   describe("product-only order (no linked reservations)", () => {
+    it("reverses paid partner items when the agency cancels the order", async () => {
+      selectQueue.push([FAKE_STORE]);
+      selectQueue.push([FAKE_PAID_ORDER_WITH_REFERRAL]);
+      selectQueue.push([]);
+
+      const res = await request(buildApp())
+        .put("/api/store/orders/order-001/status")
+        .send({ status: "cancelled" });
+
+      expect(res.status).toBe(200);
+      expect(mockCancelPartnerItems).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          orderId: "order-001",
+          tenantId: "tenant-001",
+          reason: "Pedido cancelado pela agência",
+        }),
+      );
+    });
+
     it("calls reverseProductOnlyOrderReferral and NOT reverseTripOrderReferrals", async () => {
       // DB selects: [store, order, reservations=empty]
       selectQueue.push([FAKE_STORE]);            // getStoreForTenant
@@ -274,7 +304,7 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
 
       const res = await request(buildApp())
         .put("/api/store/orders/order-001/status")
-        .send({ status: "completed" });
+        .send({ status: "cancelled" });
 
       expect(res.status).toBe(200);
       expect(mockReverseProductOnly).toHaveBeenCalledTimes(1);

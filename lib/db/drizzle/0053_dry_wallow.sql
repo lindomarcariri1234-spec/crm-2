@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS "partner_products_tenant_slug_unique";

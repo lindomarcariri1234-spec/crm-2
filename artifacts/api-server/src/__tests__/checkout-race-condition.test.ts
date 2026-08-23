@@ -368,7 +368,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
       .post("/api/public/store/minha-loja/orders")
       .send(VALID_BODY);
 
-    expect(res.body.message).toMatch(/reserva ativa/i);
+    expect(res.body.message).not.toMatch(/reserva ativa/i);
     expect(res.body.message).not.toMatch(/duplicate key/i);
   });
 

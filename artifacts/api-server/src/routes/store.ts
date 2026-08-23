@@ -24,6 +24,7 @@ import { broadcastSeatUpdate } from "../lib/realtime";
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
 import { applyOrderInventoryEffects } from "../services/checkout/persist-order";
+import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { deleteOrphanedFile, deleteOrphanedImages } from "../lib/uploadthing";
 import { ADMIN_ROLES } from '../lib/tenant';
@@ -751,6 +752,15 @@ router.get("/store/orders/:id", async (req, res, next: NextFunction): Promise<vo
         variantLabel,
         subtotal: item.subtotal,
         total: item.total,
+        partnerId: item.partnerId,
+        partnerProductId: item.partnerProductId,
+        sellerName: item.sellerName,
+        itemStatus: item.itemStatus,
+        voucherCode: item.voucherCode,
+        cancellationReason: item.cancellationReason,
+        cancellationRequestedAt: item.cancellationRequestedAt,
+        cancelledAt: item.cancelledAt,
+        metadata: item.metadata,
       };
     });
     res.json({ ...order, items });
@@ -794,17 +804,37 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
       ? and(baseWhere, ne(storeOrdersTable.paymentStatus, STORE_PAYMENT_STATUS.PAID))
       : baseWhere;
 
-    const updatedRows = await db.update(storeOrdersTable).set(updates)
-      .where(updateWhere)
-      .returning({ id: storeOrdersTable.id });
+    let didTransitionToPaid = false;
+    let order: typeof storeOrdersTable.$inferSelect | undefined;
+    if (isTransitioningToPaid) {
+      await db.transaction(async (tx) => {
+        const [lockedOrder] = await tx.select().from(storeOrdersTable)
+          .where(baseWhere)
+          .for("update")
+          .limit(1);
+        if (!lockedOrder) throw new NotFoundError("Order not found", "NOT_FOUND");
+        order = lockedOrder;
+        if (lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID) return;
+        if (lockedOrder.status === STORE_ORDER_STATUS.CANCELLED) {
+          throw new ConflictError("Não é possível receber pagamento de um pedido cancelado", "ORDER_CANCELLED");
+        }
 
-    // didTransitionToPaid is true only when the row actually changed to PAID in
-    // this request — never true for a second concurrent or repeated call.
-    const didTransitionToPaid = isTransitioningToPaid && updatedRows.length > 0;
-
-    const [order] = await db.select().from(storeOrdersTable)
-      .where(and(eq(storeOrdersTable.id, req.params.id), eq(storeOrdersTable.storeId, store.id))).limit(1);
+        // The row lock serializes competing manual confirmations. Inventory is
+        // claimed first in this transaction, so a capacity failure rolls back
+        // without leaving a PAID order whose effects cannot be retried.
+        await applyOrderInventoryEffects(lockedOrder.id, tx as unknown as Parameters<typeof applyOrderInventoryEffects>[1]);
+        await tx.update(storeOrdersTable).set(updates).where(eq(storeOrdersTable.id, lockedOrder.id));
+        order = { ...lockedOrder, ...updates } as typeof storeOrdersTable.$inferSelect;
+        didTransitionToPaid = true;
+      });
+    } else {
+      await db.update(storeOrdersTable).set(updates).where(updateWhere)
+        .returning({ id: storeOrdersTable.id });
+      [order] = await db.select().from(storeOrdersTable)
+        .where(baseWhere).limit(1);
+    }
     if (!order) { next(new NotFoundError("Order not found", "NOT_FOUND")); return; }
+    const currentOrder = order;
 
     // Payment-gated reservation: reservations are normally already created at
     // checkout time (createReservationsForOrder is idempotent, so this call is
@@ -821,7 +851,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           // Broadcast seat-map SSE events so the admin boarding panel and seat map
           // auto-refresh without requiring a page reload. Fire-and-forget per trip.
           for (const tripId of createResult.tripIds) {
-            broadcastSeatUpdate(tripId, order.tenantId).catch((err) => {
+            broadcastSeatUpdate(tripId, currentOrder.tenantId).catch((err) => {
               req.log.warn({ err, tripId }, "[store/orders] Failed to broadcast seat update on manual payment confirmation");
             });
           }
@@ -830,7 +860,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           // checkout and was notified then, so don't resend here.
           if (createResult.tripIds.length > 0) {
             for (const reservationId of createResult.reservationIds) {
-              enqueueNewBookingNotificationEmail(reservationId, order.tenantId).catch((err) => {
+              enqueueNewBookingNotificationEmail(reservationId, currentOrder.tenantId).catch((err) => {
                 req.log.warn({ err, reservationId }, "[store/orders] Failed to enqueue booking notification on manual payment confirmation");
               });
             }
@@ -853,31 +883,20 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           // only ever runs once, on the actual transition.
           if (didTransitionToPaid) {
             try {
-              await confirmReservationsForOrder(order.id, Number(order.totalAmount), db);
+              await confirmReservationsForOrder(currentOrder.id, Number(currentOrder.totalAmount), db);
             } catch (err) {
-              req.log.warn({ err, orderId: order.id }, "[store/orders] Failed to confirm reservation payment on manual payment confirmation");
+              req.log.warn({ err, orderId: currentOrder.id }, "[store/orders] Failed to confirm reservation payment on manual payment confirmation");
             }
             // Gated on didTransitionToPaid (not isTransitioningToPaid) so retries
             // and duplicate admin "mark as paid" actions never re-trigger portal
             // provisioning, referral code generation, client activity records, or
             // WhatsApp notifications for a payment that was already confirmed.
-            await runPostPaymentSideEffects(order.id);
+            await runPostPaymentSideEffects(currentOrder.id);
           }
         })
         .catch((err) => {
-          req.log.warn({ err, orderId: order.id }, "[store/orders] Failed reservation/post-payment side effects on manual payment confirmation");
+          req.log.warn({ err, orderId: currentOrder.id }, "[store/orders] Failed reservation/post-payment side effects on manual payment confirmation");
         });
-    }
-
-    if (didTransitionToPaid) {
-      // Apply deferred inventory effects (stock, coupon, totalOrders) exactly
-      // once per UNPAID → PAID transition. Awaited so failures surface as a
-      // loggable warn instead of being silently swallowed.
-      try {
-        await applyOrderInventoryEffects(order.id, db);
-      } catch (err) {
-        req.log.warn({ err, orderId: order.id }, "[store/orders] Failed to apply order inventory effects on manual payment");
-      }
     }
 
     // Auto-create CRM deal as "won" when order transitions to paid or completed (fire-and-forget).
@@ -970,6 +989,19 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           req.log.warn({ err, orderId: order.id }, "[store/orders] Failed to reverse referral on manual cancellation");
         }
       }
+    }
+
+    if (
+      parsed.data.status === STORE_ORDER_STATUS.CANCELLED
+      && (order.paymentStatus === STORE_PAYMENT_STATUS.PAID || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED)
+    ) {
+      await db.transaction(async (tx) => {
+        await cancelPartnerOrderItems(tx as unknown as Parameters<typeof cancelPartnerOrderItems>[0], {
+          orderId: currentOrder.id,
+          tenantId: me.tenantId,
+          reason: "Pedido cancelado pela agência",
+        });
+      });
     }
 
     res.json(order);

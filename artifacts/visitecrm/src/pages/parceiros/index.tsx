@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import {
   Store, Package, Calendar, DollarSign, LogOut, Plus, Pencil, Trash2,
-  ChevronRight, TrendingUp, Clock, CheckCircle, AlertCircle, Eye,
+  ChevronRight, TrendingUp, Clock, CheckCircle, AlertCircle, Eye, ClipboardList,
 } from "lucide-react";
 
 const STORAGE_KEY = "parceiro_token";
@@ -34,12 +34,21 @@ interface PartnerProduct {
   id: string; type: string; title: string; slug: string; description: string | null;
   price: string; maxCapacity: number; durationMinutes: number | null;
   meetingPoint: string | null; cancellationPolicy: string | null;
+  origin: string | null; locationUrl: string | null;
+  faq: Array<{ question: string; answer: string }>;
   images: string[]; status: string; createdAt: string;
 }
+type PartnerProductInput = Omit<Partial<PartnerProduct>, "price"> & { price?: number };
 interface Commission {
   id: string; orderId: string; grossAmount: string; partnerAmount: string;
   status: string; period: string; createdAt: string;
   order: { orderNumber: string; customerName: string; totalAmount: string; status: string } | null;
+}
+interface PartnerOrderItem {
+  id: string; orderId: string; productName: string; quantity: number; total: string;
+  itemStatus: string; voucherCode: string | null; cancellationReason: string | null;
+  metadata: Record<string, unknown> | null; orderNumber: string; customerName: string;
+  customerEmail: string; paymentStatus: string; orderStatus: string; createdAt: string;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -142,18 +151,21 @@ function ProductForm({
   initial, onSave, onCancel,
 }: {
   initial?: Partial<PartnerProduct>;
-  onSave: (data: Partial<PartnerProduct>) => void;
+  onSave: (data: PartnerProductInput) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState({
     type: initial?.type ?? "passeio",
     title: initial?.title ?? "",
     description: initial?.description ?? "",
+    origin: initial?.origin ?? "",
     price: initial?.price ?? "",
     maxCapacity: initial?.maxCapacity ?? 10,
     durationMinutes: initial?.durationMinutes ?? "",
     meetingPoint: initial?.meetingPoint ?? "",
+    locationUrl: initial?.locationUrl ?? "",
     cancellationPolicy: initial?.cancellationPolicy ?? "",
+    faqText: (initial?.faq ?? []).map((item) => `${item.question} | ${item.answer}`).join("\n"),
   });
   function set(k: string, v: unknown) { setForm(f => ({ ...f, [k]: v })); }
   return (
@@ -192,12 +204,24 @@ function ProductForm({
         </div>
       </div>
       <div>
+        <Label>Origem</Label>
+        <Input value={form.origin} onChange={e => set("origin", e.target.value)} placeholder="Ex.: Centro de Juazeiro do Norte" />
+      </div>
+      <div>
         <Label>Ponto de encontro / Embarque</Label>
         <Input value={form.meetingPoint} onChange={e => set("meetingPoint", e.target.value)} />
       </div>
       <div>
+        <Label>Link do mapa</Label>
+        <Input type="url" value={form.locationUrl} onChange={e => set("locationUrl", e.target.value)} placeholder="https://maps.google.com/..." />
+      </div>
+      <div>
         <Label>Política de cancelamento</Label>
         <Textarea rows={2} value={form.cancellationPolicy} onChange={e => set("cancellationPolicy", e.target.value)} />
+      </div>
+      <div>
+        <Label>FAQ (uma por linha: pergunta | resposta)</Label>
+        <Textarea rows={3} value={form.faqText} onChange={e => set("faqText", e.target.value)} placeholder="O que levar? | Documento com foto e água." />
       </div>
       <div className="flex gap-2 justify-end">
         <Button variant="outline" onClick={onCancel}>Cancelar</Button>
@@ -205,11 +229,14 @@ function ProductForm({
           type: form.type,
           title: form.title,
           description: form.description || null,
-          price: form.price.toString(),
+          origin: form.origin || null,
+          price: Number(form.price),
           maxCapacity: Number(form.maxCapacity),
           durationMinutes: form.durationMinutes ? Number(form.durationMinutes) : null,
           meetingPoint: form.meetingPoint || null,
+          locationUrl: form.locationUrl || null,
           cancellationPolicy: form.cancellationPolicy || null,
+          faq: form.faqText.split("\n").map(line => line.split("|").map(part => part.trim())).filter(([question, answer]) => question && answer).map(([question, answer]) => ({ question, answer })),
         })}>Salvar</Button>
       </div>
     </div>
@@ -220,6 +247,7 @@ function ProductForm({
 function PartnerDashboard({ profile, onLogout }: { profile: PartnerProfile; onLogout: () => void }) {
   const [products, setProducts] = useState<PartnerProduct[]>([]);
   const [commissions, setCommissions] = useState<Commission[]>([]);
+  const [orders, setOrders] = useState<PartnerOrderItem[]>([]);
   const [availability, setAvailability] = useState<{ id: string; date: string; spotsTotal: number; spotsUsed: number }[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [avDate, setAvDate] = useState("");
@@ -244,6 +272,12 @@ function PartnerDashboard({ profile, onLogout }: { profile: PartnerProfile; onLo
       setCommissions(res.data);
     } catch { /* ignore */ } finally { setLoadingCommissions(false); }
   }, []);
+  const loadOrders = useCallback(async () => {
+    try {
+      const res = await partnerFetch<{ data: PartnerOrderItem[] }>("/partner/orders");
+      setOrders(res.data);
+    } catch { /* visible sections remain usable if a request fails */ }
+  }, []);
 
   const loadAvailability = useCallback(async (productId: string) => {
     try {
@@ -252,10 +286,10 @@ function PartnerDashboard({ profile, onLogout }: { profile: PartnerProfile; onLo
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { void loadProducts(); void loadCommissions(); }, [loadProducts, loadCommissions]);
+  useEffect(() => { void loadProducts(); void loadCommissions(); void loadOrders(); }, [loadProducts, loadCommissions, loadOrders]);
   useEffect(() => { if (selectedProductId) void loadAvailability(selectedProductId); }, [selectedProductId, loadAvailability]);
 
-  async function saveProduct(data: Partial<PartnerProduct>) {
+  async function saveProduct(data: PartnerProductInput) {
     try {
       if (productDialog.product) {
         await partnerFetch(`/partner/products/${productDialog.product.id}`, { method: "PUT", body: JSON.stringify(data) });
@@ -293,6 +327,15 @@ function PartnerDashboard({ profile, onLogout }: { profile: PartnerProfile; onLo
       void loadAvailability(selectedProductId);
     } catch (err) {
       toast({ title: "Erro", description: (err as Error).message, variant: "destructive" });
+    }
+  }
+  async function updateOrderItem(item: PartnerOrderItem, data: Record<string, unknown>) {
+    try {
+      await partnerFetch(`/partner/order-items/${item.id}`, { method: "PUT", body: JSON.stringify(data) });
+      toast({ title: data.status === "cancelled" ? "Item cancelado" : "Item atualizado" });
+      void loadOrders();
+    } catch (err) {
+      toast({ title: "Erro ao atualizar item", description: (err as Error).message, variant: "destructive" });
     }
   }
 
@@ -338,6 +381,7 @@ function PartnerDashboard({ profile, onLogout }: { profile: PartnerProfile; onLo
             <TabsTrigger value="dashboard"><TrendingUp className="w-4 h-4 mr-1.5" />Resumo</TabsTrigger>
             <TabsTrigger value="products"><Package className="w-4 h-4 mr-1.5" />Produtos</TabsTrigger>
             <TabsTrigger value="availability"><Calendar className="w-4 h-4 mr-1.5" />Disponibilidade</TabsTrigger>
+            <TabsTrigger value="orders"><ClipboardList className="w-4 h-4 mr-1.5" />Pedidos</TabsTrigger>
             <TabsTrigger value="commissions"><DollarSign className="w-4 h-4 mr-1.5" />Comissões</TabsTrigger>
           </TabsList>
 
@@ -559,6 +603,59 @@ function PartnerDashboard({ profile, onLogout }: { profile: PartnerProfile; onLo
                 </CardContent>
               </Card>
             </div>
+          </TabsContent>
+
+          {/* ── Operational orders: only the authenticated partner's items ── */}
+          <TabsContent value="orders">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h2 className="text-lg font-semibold">Meus pedidos operacionais</h2>
+                <p className="text-sm text-muted-foreground">Itens vendidos por você; pedidos mistos continuam separados.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void loadOrders()}>Atualizar</Button>
+            </div>
+            {orders.length === 0 ? (
+              <Card className="text-center py-12"><ClipboardList className="w-10 h-10 mx-auto mb-3 text-muted-foreground" /><p className="text-muted-foreground">Nenhum item vendido ainda.</p></Card>
+            ) : (
+              <div className="space-y-3">
+                {orders.map(item => (
+                  <Card key={item.id}>
+                    <CardContent className="py-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <div className="flex gap-2 items-center flex-wrap">
+                            <span className="font-semibold">{item.productName}</span>
+                            <Badge variant="outline">{item.itemStatus}</Badge>
+                            <Badge variant="outline">{item.paymentStatus}</Badge>
+                          </div>
+                          <p className="text-sm text-muted-foreground mt-1">{item.orderNumber} · {item.customerName} · {item.quantity} un. · {formatCurrency(Number(item.total))}</p>
+                          {typeof item.metadata?.["partnerDate"] === "string" && <p className="text-xs text-muted-foreground mt-1">Data escolhida: {String(item.metadata.partnerDate)}</p>}
+                          {item.voucherCode && <p className="text-xs font-medium mt-1">Voucher: {item.voucherCode}</p>}
+                          {item.cancellationReason && <p className="text-xs text-red-600 mt-1">Cancelado: {item.cancellationReason}</p>}
+                        </div>
+                        {item.itemStatus !== "cancelled" && item.paymentStatus === "paid" && (
+                          <div className="flex gap-2 flex-wrap">
+                            <Button size="sm" variant="outline" onClick={() => {
+                              const voucherCode = prompt("Código do voucher:", item.voucherCode ?? "");
+                              if (voucherCode) void updateOrderItem(item, { voucherCode, status: "confirmed" });
+                            }}>Voucher</Button>
+                            {item.itemStatus === "pending" && <Button size="sm" onClick={() => void updateOrderItem(item, { status: "confirmed" })}>Confirmar</Button>}
+                            {item.itemStatus === "confirmed" && <Button size="sm" onClick={() => void updateOrderItem(item, { status: "fulfilled" })}>Concluir</Button>}
+                            <Button size="sm" variant="destructive" onClick={() => {
+                              const cancellationReason = prompt("Motivo do cancelamento:");
+                              if (cancellationReason) void updateOrderItem(item, { status: "cancelled", cancellationReason });
+                            }}>Cancelar item</Button>
+                          </div>
+                        )}
+                        {item.itemStatus !== "cancelled" && item.paymentStatus !== "paid" && (
+                          <p className="text-xs text-muted-foreground">Aguardando pagamento para liberar ações operacionais.</p>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
           </TabsContent>
 
           {/* ── Commissions ── */}

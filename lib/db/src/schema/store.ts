@@ -343,8 +343,22 @@ export const storeOrderItemsTable = pgTable("store_order_items", {
 
   metadata: json("metadata").$type<Record<string, unknown>>(),
 
+  // Snapshot seller attribution at checkout so historical mixed orders remain
+  // correctly partitioned even if a product is later reassigned or edited.
+  partnerId: text("partner_id"),
+  partnerProductId: text("partner_product_id"),
+  sellerName: text("seller_name"),
+  itemStatus: text("item_status").notNull().default("pending"),
+  voucherCode: text("voucher_code"),
+  cancellationReason: text("cancellation_reason"),
+  cancellationRequestedAt: timestamp("cancellation_requested_at", { withTimezone: true }),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  index("store_order_items_partner_id_idx").on(table.partnerId),
+  index("store_order_items_partner_product_id_idx").on(table.partnerProductId),
+]);
 
 export const insertStoreOrderItemSchema = createInsertSchema(storeOrderItemsTable).omit({ createdAt: true });
 export type InsertStoreOrderItem = z.infer<typeof insertStoreOrderItemSchema>;

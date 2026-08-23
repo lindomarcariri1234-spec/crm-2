@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, numeric, integer, json } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, numeric, integer, json, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -35,16 +35,21 @@ export const partnerProductsTable = pgTable("partner_products", {
   title: text("title").notNull(),
   slug: text("slug").notNull(),
   description: text("description"),
+  origin: text("origin"),
   price: numeric("price", { precision: 10, scale: 2 }).notNull().default("0"),
   maxCapacity: integer("max_capacity").notNull().default(10),
   durationMinutes: integer("duration_minutes"),
   meetingPoint: text("meeting_point"),
+  locationUrl: text("location_url"),
   cancellationPolicy: text("cancellation_policy"),
+  faq: json("faq").$type<Array<{ question: string; answer: string }>>().notNull().default([]),
   images: json("images").$type<string[]>().notNull().default([]),
   status: text("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
-});
+}, (table) => [
+  uniqueIndex("partner_products_partner_slug_unique").on(table.partnerId, table.slug),
+]);
 
 export const insertPartnerProductSchema = createInsertSchema(partnerProductsTable).omit({ createdAt: true, updatedAt: true });
 export type InsertPartnerProduct = z.infer<typeof insertPartnerProductSchema>;
@@ -58,7 +63,9 @@ export const partnerAvailabilityTable = pgTable("partner_availability", {
   spotsUsed: integer("spots_used").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
-});
+}, (table) => [
+  uniqueIndex("partner_availability_product_date_unique").on(table.productId, table.date),
+]);
 
 export const insertPartnerAvailabilitySchema = createInsertSchema(partnerAvailabilityTable).omit({ createdAt: true, updatedAt: true });
 export type InsertPartnerAvailability = z.infer<typeof insertPartnerAvailabilitySchema>;

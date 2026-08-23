@@ -1,5 +1,5 @@
 import { db } from "@workspace/db";
-import { storeProductsTable, tripsTable } from "@workspace/db";
+import { storeProductsTable, tripsTable, partnerProductsTable, partnersTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { ValidationError, ConflictError } from "../../lib/errors";
 import { generateId } from "../../lib/id";
@@ -19,6 +19,7 @@ export interface PreparedCheckoutItems {
   fetchedProducts: Map<string, typeof storeProductsTable.$inferSelect>;
   quantityByProductId: Map<string, number>;
   tripLinkedProducts: Map<string, { product: typeof storeProductsTable.$inferSelect; totalQty: number; totalValue: number }>;
+  partnerAttributions: Map<string, { partnerId: string; partnerProductId: string; sellerName: string }>;
 }
 
 export async function prepareCheckoutItems(args: {
@@ -37,6 +38,7 @@ export async function prepareCheckoutItems(args: {
   const orderItemsData: PersistedOrderItem[] = [];
   const fetchedProducts = new Map<string, typeof storeProductsTable.$inferSelect>();
   const tripLinkedProducts = new Map<string, { product: typeof storeProductsTable.$inferSelect; totalQty: number; totalValue: number }>();
+  const partnerAttributions = new Map<string, { partnerId: string; partnerProductId: string; sellerName: string }>();
 
   for (const item of items) {
     if (!fetchedProducts.has(item.productId)) {
@@ -55,6 +57,36 @@ export async function prepareCheckoutItems(args: {
         if (available < totalRequested) {
           throw new ConflictError(`Estoque insuficiente para "${product.name}". Disponível: ${available}`, "INSUFFICIENT_STOCK");
         }
+      }
+      if (product.partnerProductId) {
+        const [partnerOffer] = await db.select({
+          partnerId: partnerProductsTable.partnerId,
+          partnerProductId: partnerProductsTable.id,
+          sellerName: partnersTable.name,
+          offerStatus: partnerProductsTable.status,
+          partnerStatus: partnersTable.status,
+          type: partnerProductsTable.type,
+        }).from(partnerProductsTable)
+          .innerJoin(partnersTable, eq(partnersTable.id, partnerProductsTable.partnerId))
+          .where(and(
+            eq(partnerProductsTable.id, product.partnerProductId),
+            eq(partnerProductsTable.tenantId, tenantId),
+          ))
+          .limit(1);
+        if (!partnerOffer || partnerOffer.offerStatus !== "active" || partnerOffer.partnerStatus !== "active") {
+          throw new ConflictError(`A oferta de parceiro "${product.name}" não está disponível`, "PARTNER_OFFER_UNAVAILABLE");
+        }
+        if (partnerOffer.type === "passeio" || partnerOffer.type === "experiencia") {
+          const partnerDate = item.metadata?.["partnerDate"];
+          if (typeof partnerDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(partnerDate)) {
+            throw new ValidationError(`Selecione uma data válida para "${product.name}"`, "PARTNER_DATE_REQUIRED");
+          }
+        }
+        partnerAttributions.set(product.id, {
+          partnerId: partnerOffer.partnerId,
+          partnerProductId: partnerOffer.partnerProductId,
+          sellerName: partnerOffer.sellerName,
+        });
       }
       fetchedProducts.set(product.id, product);
     }
@@ -76,6 +108,7 @@ export async function prepareCheckoutItems(args: {
       discount: "0",
       total: lineTotal.toFixed(2),
       metadata: item.metadata || null,
+      ...partnerAttributions.get(product.id),
     });
   }
 
@@ -106,5 +139,5 @@ export async function prepareCheckoutItems(args: {
     }
   }
 
-  return { subtotal, orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts };
+  return { subtotal, orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts, partnerAttributions };
 }

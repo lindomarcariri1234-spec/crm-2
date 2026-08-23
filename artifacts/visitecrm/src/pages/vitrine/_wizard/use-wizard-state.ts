@@ -444,6 +444,9 @@ export function useWizardState({
             quantity: qty,
             unitPrice,
             variantLabel: selectedVariant?.label,
+            ...(partnerInfo?.hasPartner && form.partnerSelectedDate
+              ? { metadata: { partnerDate: form.partnerSelectedDate, partnerTime: form.partnerSelectedTime || undefined } }
+              : {}),
           },
         ],
         couponCode: couponResult?.valid ? form.couponCode : undefined,

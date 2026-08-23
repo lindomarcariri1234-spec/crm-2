@@ -12,11 +12,13 @@ import {
   storeProductsTable,
   storesTable,
 } from "@workspace/db";
-import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, ne } from "drizzle-orm";
 import { z } from "zod/v4";
 import { requireAuth, MANAGEMENT_ROLES } from "../lib/tenant";
-import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { generateId } from "../lib/id";
+import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
 
 const router = Router();
 
@@ -230,15 +232,37 @@ router.post("/partner/products", async (req, res, next: NextFunction): Promise<v
       title: z.string().min(1).max(200),
       slug: z.string().min(1).max(200).optional(),
       description: z.string().max(2000).nullable().optional(),
+      origin: z.string().max(200).nullable().optional(),
       price: z.number().nonnegative(),
       maxCapacity: z.number().int().min(1).default(10),
       durationMinutes: z.number().int().positive().nullable().optional(),
       meetingPoint: z.string().max(500).nullable().optional(),
+      locationUrl: z.string().url().max(1000).nullable().optional(),
       cancellationPolicy: z.string().max(1000).nullable().optional(),
+      faq: z.array(z.object({
+        question: z.string().min(1).max(300),
+        answer: z.string().min(1).max(1500),
+      })).max(12).default([]),
       images: z.array(z.string()).default([]),
     }).safeParse(req.body);
     if (!body.success) { next(new ValidationError(String(body.error.message))); return; }
-    const slug = body.data.slug ?? body.data.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 100);
+    const requestedSlug = body.data.slug ?? body.data.title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 100);
+    let slug = requestedSlug || `oferta-${generateId()}`;
+    for (let suffix = 2; ; suffix += 1) {
+      const [existingSlug] = await db.select({ id: partnerProductsTable.id })
+        .from(partnerProductsTable)
+        .where(and(
+          eq(partnerProductsTable.partnerId, auth.partnerId),
+          eq(partnerProductsTable.slug, slug),
+        ))
+        .limit(1);
+      if (!existingSlug) break;
+      if (body.data.slug) {
+        throw new ConflictError("Você já possui uma oferta com este slug", "PARTNER_PRODUCT_SLUG_EXISTS");
+      }
+      const suffixText = `-${suffix}`;
+      slug = `${requestedSlug.slice(0, Math.max(1, 100 - suffixText.length))}${suffixText}`;
+    }
     const id = generateId();
     await db.insert(partnerProductsTable).values({
       id,
@@ -248,11 +272,14 @@ router.post("/partner/products", async (req, res, next: NextFunction): Promise<v
       title: body.data.title,
       slug,
       description: body.data.description ?? null,
+      origin: body.data.origin ?? null,
       price: body.data.price.toFixed(2),
       maxCapacity: body.data.maxCapacity,
       durationMinutes: body.data.durationMinutes ?? null,
       meetingPoint: body.data.meetingPoint ?? null,
+      locationUrl: body.data.locationUrl ?? null,
       cancellationPolicy: body.data.cancellationPolicy ?? null,
+      faq: body.data.faq,
       images: body.data.images,
       status: "pending",
     });
@@ -273,22 +300,31 @@ router.put("/partner/products/:id", async (req, res, next: NextFunction): Promis
     const body = z.object({
       title: z.string().min(1).max(200).optional(),
       description: z.string().max(2000).nullable().optional(),
+      origin: z.string().max(200).nullable().optional(),
       price: z.number().nonnegative().optional(),
       maxCapacity: z.number().int().min(1).optional(),
       durationMinutes: z.number().int().positive().nullable().optional(),
       meetingPoint: z.string().max(500).nullable().optional(),
+      locationUrl: z.string().url().max(1000).nullable().optional(),
       cancellationPolicy: z.string().max(1000).nullable().optional(),
+      faq: z.array(z.object({
+        question: z.string().min(1).max(300),
+        answer: z.string().min(1).max(1500),
+      })).max(12).optional(),
       images: z.array(z.string()).optional(),
     }).safeParse(req.body);
     if (!body.success) { next(new ValidationError(String(body.error.message))); return; }
     const updates: Record<string, unknown> = { updatedAt: new Date(), status: "pending" };
     if (body.data.title !== undefined) updates.title = body.data.title;
     if (body.data.description !== undefined) updates.description = body.data.description;
+    if (body.data.origin !== undefined) updates.origin = body.data.origin;
     if (body.data.price !== undefined) updates.price = body.data.price.toFixed(2);
     if (body.data.maxCapacity !== undefined) updates.maxCapacity = body.data.maxCapacity;
     if (body.data.durationMinutes !== undefined) updates.durationMinutes = body.data.durationMinutes;
     if (body.data.meetingPoint !== undefined) updates.meetingPoint = body.data.meetingPoint;
+    if (body.data.locationUrl !== undefined) updates.locationUrl = body.data.locationUrl;
     if (body.data.cancellationPolicy !== undefined) updates.cancellationPolicy = body.data.cancellationPolicy;
+    if (body.data.faq !== undefined) updates.faq = body.data.faq;
     if (body.data.images !== undefined) updates.images = body.data.images;
     await db.update(partnerProductsTable).set(updates).where(eq(partnerProductsTable.id, existing.id));
     res.status(204).end();
@@ -338,23 +374,22 @@ router.put("/partner/products/:id/availability", async (req, res, next: NextFunc
       spotsTotal: z.number().int().min(0),
     }).safeParse(req.body);
     if (!body.success) { next(new ValidationError(String(body.error.message))); return; }
-    const [existing] = await db.select({ id: partnerAvailabilityTable.id, spotsUsed: partnerAvailabilityTable.spotsUsed })
-      .from(partnerAvailabilityTable)
-      .where(and(eq(partnerAvailabilityTable.productId, product.id), eq(partnerAvailabilityTable.date, body.data.date)))
-      .limit(1);
-    if (existing) {
-      await db.update(partnerAvailabilityTable)
-        .set({ spotsTotal: body.data.spotsTotal, updatedAt: new Date() })
-        .where(eq(partnerAvailabilityTable.id, existing.id));
-    } else {
-      await db.insert(partnerAvailabilityTable).values({
-        id: generateId(),
-        productId: product.id,
-        date: body.data.date,
-        spotsTotal: body.data.spotsTotal,
-        spotsUsed: 0,
-      });
-    }
+    // The unique product/date constraint makes this a true upsert. Keep the
+    // configured total at or above already-booked seats when checkout races a
+    // partner editing the day's capacity.
+    await db.insert(partnerAvailabilityTable).values({
+      id: generateId(),
+      productId: product.id,
+      date: body.data.date,
+      spotsTotal: body.data.spotsTotal,
+      spotsUsed: 0,
+    }).onConflictDoUpdate({
+      target: [partnerAvailabilityTable.productId, partnerAvailabilityTable.date],
+      set: {
+        spotsTotal: sql`GREATEST(EXCLUDED.spots_total, ${partnerAvailabilityTable.spotsUsed})`,
+        updatedAt: new Date(),
+      },
+    });
     res.status(204).end();
   } catch (err) { next(err); }
 });
@@ -389,32 +424,105 @@ router.get("/partner/orders", async (req, res, next: NextFunction): Promise<void
   try {
     const auth = await requirePartnerAuth(req, res, next);
     if (!auth) return;
-    const commissions = await db.select({
-      orderId: partnerCommissionsTable.orderId,
-      grossAmount: partnerCommissionsTable.grossAmount,
-      partnerAmount: partnerCommissionsTable.partnerAmount,
-      status: partnerCommissionsTable.status,
-      period: partnerCommissionsTable.period,
-      createdAt: partnerCommissionsTable.createdAt,
-    }).from(partnerCommissionsTable)
-      .where(eq(partnerCommissionsTable.partnerId, auth.partnerId))
-      .orderBy(desc(partnerCommissionsTable.createdAt))
-      .limit(100);
-    if (!commissions.length) { res.json({ data: [] }); return; }
-    const orderIds = [...new Set(commissions.map(c => c.orderId))];
-    const orders = await db.select({
-      id: storeOrdersTable.id,
+    const rows = await db.select({
+      id: storeOrderItemsTable.id,
+      orderId: storeOrderItemsTable.orderId,
+      productName: storeOrderItemsTable.productName,
+      quantity: storeOrderItemsTable.quantity,
+      total: storeOrderItemsTable.total,
+      itemStatus: storeOrderItemsTable.itemStatus,
+      voucherCode: storeOrderItemsTable.voucherCode,
+      cancellationReason: storeOrderItemsTable.cancellationReason,
+      metadata: storeOrderItemsTable.metadata,
       orderNumber: storeOrdersTable.orderNumber,
       customerName: storeOrdersTable.customerName,
       customerEmail: storeOrdersTable.customerEmail,
-      totalAmount: storeOrdersTable.totalAmount,
-      status: storeOrdersTable.status,
       paymentStatus: storeOrdersTable.paymentStatus,
+      orderStatus: storeOrdersTable.status,
       createdAt: storeOrdersTable.createdAt,
-    }).from(storeOrdersTable).where(inArray(storeOrdersTable.id, orderIds));
-    const orderMap = new Map(orders.map(o => [o.id, o]));
-    const data = commissions.map(c => ({ ...c, order: orderMap.get(c.orderId) ?? null }));
+    }).from(storeOrderItemsTable)
+      .innerJoin(storeOrdersTable, eq(storeOrdersTable.id, storeOrderItemsTable.orderId))
+      .where(and(
+        eq(storeOrderItemsTable.partnerId, auth.partnerId),
+        eq(storeOrdersTable.tenantId, auth.tenantId),
+      ))
+      .orderBy(desc(storeOrdersTable.createdAt))
+      .limit(100);
+    const data = rows;
     res.json({ data });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/partner/order-items/:id — never changes another seller's item.
+router.put("/partner/order-items/:id", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const auth = await requirePartnerAuth(req, res, next);
+    if (!auth) return;
+    const body = z.object({
+      status: z.enum(["pending", "confirmed", "fulfilled", "cancelled"]).optional(),
+      voucherCode: z.string().min(1).max(120).nullable().optional(),
+      cancellationReason: z.string().min(3).max(1000).optional(),
+    }).refine((value) => value.status !== "cancelled" || !!value.cancellationReason, {
+      message: "Informe o motivo do cancelamento",
+    }).safeParse(req.body);
+    if (!body.success) { next(new ValidationError(String(body.error.message))); return; }
+
+    await db.transaction(async (tx) => {
+      const [current] = await tx.select({
+        id: storeOrderItemsTable.id,
+        orderId: storeOrderItemsTable.orderId,
+        quantity: storeOrderItemsTable.quantity,
+        total: storeOrderItemsTable.total,
+        partnerProductId: storeOrderItemsTable.partnerProductId,
+        metadata: storeOrderItemsTable.metadata,
+        itemStatus: storeOrderItemsTable.itemStatus,
+        paymentStatus: storeOrdersTable.paymentStatus,
+        orderStatus: storeOrdersTable.status,
+      }).from(storeOrderItemsTable)
+        .innerJoin(storeOrdersTable, eq(storeOrdersTable.id, storeOrderItemsTable.orderId))
+        .where(and(
+          eq(storeOrderItemsTable.id, req.params.id!),
+          eq(storeOrderItemsTable.partnerId, auth.partnerId),
+          eq(storeOrdersTable.tenantId, auth.tenantId),
+          ne(storeOrderItemsTable.itemStatus, "cancelled"),
+        ))
+        .limit(1);
+      if (!current) throw new NotFoundError("Item do pedido não encontrado", "NOT_FOUND");
+      if (current.paymentStatus !== STORE_PAYMENT_STATUS.PAID || current.orderStatus === STORE_ORDER_STATUS.CANCELLED) {
+        throw new ConflictError("O pedido precisa estar pago e ativo antes de ser operado", "ORDER_NOT_READY");
+      }
+      const isCancellation = body.data.status === "cancelled";
+      if (body.data.status && body.data.status !== current.itemStatus) {
+        const allowedTransitions: Record<string, string[]> = {
+          pending: ["confirmed", "cancelled"],
+          confirmed: ["fulfilled", "cancelled"],
+        };
+        if (!allowedTransitions[current.itemStatus]?.includes(body.data.status)) {
+          throw new ValidationError("Transição de status do item não permitida", "INVALID_ITEM_STATUS_TRANSITION");
+        }
+      }
+      if (isCancellation) {
+        await cancelPartnerOrderItems(tx as unknown as Parameters<typeof cancelPartnerOrderItems>[0], {
+          orderId: current.orderId,
+          tenantId: auth.tenantId,
+          itemId: current.id,
+          reason: body.data.cancellationReason!,
+          rejectSettledCommission: true,
+        });
+        return;
+      }
+      const transitioned = await tx.update(storeOrderItemsTable).set({
+        ...(body.data.status && { itemStatus: body.data.status }),
+        ...(body.data.voucherCode !== undefined && { voucherCode: body.data.voucherCode }),
+      }).where(and(
+        eq(storeOrderItemsTable.id, current.id),
+        ne(storeOrderItemsTable.itemStatus, "cancelled"),
+      )).returning({ id: storeOrderItemsTable.id });
+      if (transitioned.length === 0) {
+        throw new NotFoundError("Item do pedido não encontrado", "NOT_FOUND");
+      }
+    });
+    res.status(204).end();
   } catch (err) { next(err); }
 });
 
