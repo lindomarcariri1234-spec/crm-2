@@ -1518,10 +1518,10 @@ export default function Pipeline() {
 
   return (
     <div className="space-y-5 flex flex-col" style={{ height: "calc(100vh - 120px)" }}>
-      <div className="flex items-center justify-between flex-shrink-0 gap-3 flex-wrap">
+      <div className="flex flex-col gap-3 flex-shrink-0 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3 flex-wrap flex-1 min-w-0">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Pipeline de Vendas</h1>
+            <h1 className="text-xl font-bold tracking-tight sm:text-2xl">Pipeline de Vendas</h1>
             <p className="text-muted-foreground text-sm">
               {filteredDeals.length} leads · {formatCurrency(totalValue)} no funil
             </p>
@@ -1533,7 +1533,7 @@ export default function Pipeline() {
                 value={selectedPipelineId ?? ""}
                 onValueChange={val => { setSelectedPipelineId(val); setFilterStageId("all"); }}
               >
-                <SelectTrigger className="w-52 h-9 font-medium">
+                <SelectTrigger className="h-9 w-full font-medium sm:w-52">
                   <SelectValue placeholder="Selecionar pipeline" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1615,7 +1615,7 @@ export default function Pipeline() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
           {isAdmin && (pipelines?.length ?? 0) > 0 && (
             <Button
               variant="outline"

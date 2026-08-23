@@ -31,6 +31,7 @@ import {
   X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Trash2, Copy,
   GitMerge, ChevronDown, ChevronUp, Loader2, ShieldAlert,
 } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
 import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { formatDateBR, localToday, isValidBrazilWhatsAppPhone } from "@workspace/shared";
@@ -717,7 +718,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
         )}
 
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="grid w-full grid-cols-6 text-xs">
+          <TabsList className="flex w-full justify-start overflow-x-auto text-xs">
             <TabsTrigger value="personal">Pessoal</TabsTrigger>
             <TabsTrigger value="trip">Viagem</TabsTrigger>
             <TabsTrigger value="financial">Financeiro</TabsTrigger>
@@ -1660,12 +1661,11 @@ export default function Clients() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Clientes</h1>
-          <p className="text-muted-foreground text-sm">Gerencie sua carteira de clientes.</p>
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Clientes"
+        description="Gerencie sua carteira de clientes."
+        actions={
+          <>
           {isAdmin && (
             <Button
               variant="outline"
@@ -1697,10 +1697,11 @@ export default function Clients() {
           <Button size="sm" onClick={() => { setEditClient(null); setIsCreateOpen(true); }}>
             <Plus className="w-4 h-4 mr-1" /> Novo Cliente
           </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
-      <div className="grid gap-3 grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[
           { icon: Users, color: "bg-blue-100 text-blue-600", label: "Total", value: stats.total },
           { icon: UserCheck, color: "bg-green-100 text-green-600", label: "Ativos", value: stats.active },

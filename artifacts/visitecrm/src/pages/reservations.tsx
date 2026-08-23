@@ -13,6 +13,7 @@ import { NewReservationWizard } from "./reservations/NewReservationWizard";
 import { EditReservationModal } from "./reservations/EditReservationModal";
 import { ReservationsTable } from "./reservations/ReservationsTable";
 import { VoucherModal } from "./reservations/VoucherModal";
+import { PageHeader } from "@/components/page-header";
 export { VoucherModal };
 
 export default function Reservations() {
@@ -69,13 +70,15 @@ export default function Reservations() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Reservas</h1>
-          <p className="text-muted-foreground text-sm">Gerencie todas as reservas de excursões</p>
-        </div>
-        <Button onClick={() => setIsCreateOpen(true)}><Plus className="w-4 h-4 mr-2" /> Nova Reserva</Button>
-      </div>
+      <PageHeader
+        title="Reservas"
+        description="Gerencie todas as reservas de excursões"
+        actions={
+          <Button onClick={() => setIsCreateOpen(true)} className="w-full sm:w-auto">
+            <Plus className="w-4 h-4 mr-2" /> Nova Reserva
+          </Button>
+        }
+      />
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <StatCard icon={CalendarCheck} label="Total de Reservas" value={stats?.total ?? "—"} color="text-blue-600" />

@@ -41,7 +41,7 @@ vi.mock("@workspace/api-client-react", () => ({
   getGetCalendarStatusQueryKey: () => ["calendar-status"],
 }));
 
-import { NavigationMenu } from "../components/layout.js";
+import { getNavigationContext, NavigationMenu } from "../components/layout.js";
 
 afterEach(async () => {
   await cleanupRoots();
@@ -108,5 +108,33 @@ describe("NavigationMenu", () => {
     });
 
     expect(onNavigate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("getNavigationContext", () => {
+  const items = [
+    {
+      name: "Viagens",
+      href: "/trips",
+      icon: Map,
+      children: [
+        { name: "Todas as viagens", href: "/trips", icon: Map },
+        { name: "Calendário", href: "/trips/calendar", icon: Map },
+      ],
+    },
+  ];
+
+  it("keeps the most specific child visible in the breadcrumb context", () => {
+    const context = getNavigationContext(items, "/trips/calendar");
+
+    expect(context.parent?.name).toBe("Viagens");
+    expect(context.current?.name).toBe("Calendário");
+  });
+
+  it("keeps a parent context for a dynamic deep link", () => {
+    const context = getNavigationContext(items, "/trips/trip-123/passengers");
+
+    expect(context.parent).toBeUndefined();
+    expect(context.current?.name).toBe("Viagens");
   });
 });

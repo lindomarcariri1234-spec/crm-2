@@ -51,6 +51,7 @@ import {
   Mail,
   AlertTriangle,
 } from "lucide-react";
+import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import type { MessageTemplate, Message } from "@workspace/api-client-react";
@@ -373,14 +374,11 @@ export default function Communication() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Comunicação</h1>
-          <p className="text-muted-foreground mt-1">
-            Envie mensagens e gerencie templates omnicanal.
-          </p>
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Comunicação"
+        description="Envie mensagens e gerencie templates omnicanal."
+        actions={
+          <>
           <Dialog
             open={isTemplateOpen}
             onOpenChange={(o) => {
@@ -587,11 +585,12 @@ export default function Communication() {
               </form>
             </DialogContent>
           </Dialog>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
+        <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="conversations">Conversas</TabsTrigger>
           <TabsTrigger value="messages">Mensagens Enviadas</TabsTrigger>
           <TabsTrigger value="templates">Templates</TabsTrigger>

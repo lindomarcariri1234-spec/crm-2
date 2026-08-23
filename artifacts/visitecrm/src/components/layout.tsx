@@ -57,6 +57,13 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 
 const CALENDAR_CAN_CONNECT_ROLES: string[] = [ROLES.AGENCY_ADMIN, ROLES.SALES, ROLES.SUPER_ADMIN];
 
@@ -136,13 +143,34 @@ function TrialExpiryBanner({ trialDaysLeft, userRole }: { trialDaysLeft?: number
   );
 }
 
-interface NavItem {
+export interface NavItem {
   name: string;
   href: string;
   roles?: string[];
   hiddenFor?: string[];
   icon: React.ComponentType<{ className?: string }>;
   children?: NavItem[];
+}
+
+export function getNavigationContext(items: NavItem[], location: string): { current?: NavItem; parent?: NavItem } {
+  let bestMatch: { current?: NavItem; parent?: NavItem; score: number } = { score: -1 };
+
+  const visitNavigation = (entries: NavItem[], parent?: NavItem) => {
+    for (const item of entries) {
+      const exact = location === item.href;
+      const nested = item.href !== "/" && location.startsWith(`${item.href}/`);
+      if (exact || nested) {
+        const score = item.href.length + (exact ? 1000 : 0);
+        if (score > bestMatch.score) {
+          bestMatch = { current: item, parent, score };
+        }
+      }
+      if (item.children) visitNavigation(item.children, item);
+    }
+  };
+
+  visitNavigation(items);
+  return { current: bestMatch.current, parent: bestMatch.parent };
 }
 
 const AGENCY_NAVIGATION: NavItem[] = [
@@ -436,23 +464,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
   const navItems = userRole === ROLES.SALES ? VENDOR_NAVIGATION : agencyNav;
 
-  // Find current nav item (including children)
-  let currentSection: NavItem | undefined;
-  for (const item of navItems) {
-    if (location === item.href || (item.href !== "/" && location.startsWith(item.href))) {
-      currentSection = item;
-      break;
-    }
-    if (item.children) {
-      const child = item.children.find(
-        (c) => location === c.href || (c.href !== "/" && location.startsWith(c.href))
-      );
-      if (child) {
-        currentSection = child;
-        break;
-      }
-    }
-  }
+  const { current: currentSection, parent: parentSection } = getNavigationContext(navItems, location);
 
   return (
     <div className="flex h-screen bg-muted/30">
@@ -524,11 +536,10 @@ export default function Layout({ children }: { children: ReactNode }) {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top bar */}
         <header
-          className="h-13 bg-background border-b px-4 md:px-6 flex items-center justify-between shrink-0"
-          style={{ minHeight: "52px" }}
+          className="min-h-[52px] bg-background border-b px-4 py-2 md:px-6 flex items-center justify-between gap-3 shrink-0"
         >
           {/* Current section / breadcrumb */}
-          <div className="flex min-w-0 items-center gap-2 text-sm">
+          <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
             <Button
               type="button"
               variant="ghost"
@@ -539,17 +550,31 @@ export default function Layout({ children }: { children: ReactNode }) {
             >
               <Menu className="w-5 h-5" aria-hidden="true" />
             </Button>
-            {currentSection ? (
-              <>
-                <currentSection.icon className="w-4 h-4 text-muted-foreground shrink-0" />
-                <span className="font-medium text-foreground truncate">{currentSection.name}</span>
-              </>
-            ) : (
-              <>
-                <Building2 className="w-4 h-4 text-muted-foreground shrink-0" />
-                <span className="font-medium text-foreground truncate">{tenantName}</span>
-              </>
-            )}
+            <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
+              <BreadcrumbList className="flex-nowrap overflow-x-auto whitespace-nowrap py-1 text-xs sm:text-sm">
+                {parentSection && (
+                  <>
+                    <BreadcrumbItem>
+                      <span className="text-muted-foreground">{parentSection.name}</span>
+                    </BreadcrumbItem>
+                    <BreadcrumbSeparator />
+                  </>
+                )}
+                <BreadcrumbItem className="min-w-0">
+                  {currentSection ? (
+                    <BreadcrumbPage className="flex min-w-0 items-center gap-1.5 truncate font-medium">
+                      <currentSection.icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <span className="truncate">{currentSection.name}</span>
+                    </BreadcrumbPage>
+                  ) : (
+                    <BreadcrumbPage className="flex min-w-0 items-center gap-1.5 truncate font-medium">
+                      <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <span className="truncate">{tenantName}</span>
+                    </BreadcrumbPage>
+                  )}
+                </BreadcrumbItem>
+              </BreadcrumbList>
+            </Breadcrumb>
           </div>
 
           {/* Right side: alerts bell + user dropdown */}
@@ -615,7 +640,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         <TrialExpiryBanner trialDaysLeft={me?.trialDaysLeft} userRole={userRole} />
 
         {/* Main content */}
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
       </div>
     </div>
   );

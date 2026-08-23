@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS } from "@/lib/labels";
+import { PageHeader } from "@/components/page-header";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -379,12 +380,11 @@ export default function Financial() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Financeiro</h1>
-          <p className="text-muted-foreground text-sm">Controle receitas, despesas, comissões e fluxo de caixa</p>
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Financeiro"
+        description="Controle receitas, despesas, comissões e fluxo de caixa"
+        actions={
+          <>
           <Link href="/financeiro/commissions">
             <Button variant="ghost" size="sm">
               <ExternalLink className="w-4 h-4 mr-1.5" /> Comissões
@@ -401,8 +401,9 @@ export default function Financial() {
           <Button onClick={() => setIsPaymentOpen(true)}>
             <Plus className="w-4 h-4 mr-2" /> Novo Lançamento
           </Button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <KpiCard
@@ -521,7 +522,7 @@ export default function Financial() {
       <Tabs value={tab} onValueChange={t => { setTab(t); setStatusFilter(""); setCategoryFilter(""); setDateFrom(""); setDateTo(""); }}>
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <TabsList>
+            <TabsList className="w-full justify-start overflow-x-auto sm:w-auto">
               <TabsTrigger value="receivable">A Receber</TabsTrigger>
               <TabsTrigger value="payable">A Pagar</TabsTrigger>
               <TabsTrigger value="expenses">Despesas</TabsTrigger>

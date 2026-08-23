@@ -24,6 +24,7 @@ import {
 import { formatCurrency } from "@/lib/utils";
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/labels";
 import { COMMISSION_STATUS, EXPENSE_STATUS, TRIP_STATUS } from "@workspace/permissions";
+import { PageHeader } from "@/components/page-header";
 
 const fmt = (v: number) => formatCurrency(v);
 const fmtCompact = (v: number) => {
@@ -257,12 +258,11 @@ export default function Analytics() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Analiticos</h1>
-          <p className="text-muted-foreground text-sm">Desempenho e receita da agencia</p>
-        </div>
-        <div className="flex items-center gap-2">
+      <PageHeader
+        title="Analíticos"
+        description="Desempenho e receita da agência"
+        actions={
+          <>
           <Link href="/analytics/revenue">
             <Button variant="ghost" size="sm">
               <ExternalLink className="w-4 h-4 mr-1.5" /> Analise de Receita
@@ -277,8 +277,9 @@ export default function Analytics() {
             <SelectItem value="12m">Últimos 12 meses</SelectItem>
           </SelectContent>
           </Select>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <KpiCard icon={DollarSign} label="Receita Total" value={fmtCompact(totalRevenue)} sub={`${fmtCompact(summary?.revenueThisMonth ?? 0)} este mês`} color="text-green-600" loading={isLoading} />
@@ -292,7 +293,7 @@ export default function Analytics() {
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList>
+        <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="overview">Visao Geral</TabsTrigger>
           <TabsTrigger value="trips">Top Viagens</TabsTrigger>
           <TabsTrigger value="sellers">Ranking Vendedores</TabsTrigger>

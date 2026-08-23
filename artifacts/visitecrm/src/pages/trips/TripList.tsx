@@ -19,6 +19,7 @@ import { BoardingPanelModal } from "./BoardingPanelModal";
 import { TripCard, PublishToStoreDialog } from "./TripCard";
 import { useTrips } from "@/hooks/useTrips";
 import { useGetMe, useGetTenant } from "@workspace/api-client-react";
+import { PageHeader } from "@/components/page-header";
 
 export function TripList() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -48,14 +49,13 @@ export function TripList() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Viagens</h1>
-          <p className="text-muted-foreground text-sm">
-            {isVendedor ? "Visualize as excursões e pacotes disponíveis" : "Gerencie excursões e pacotes da agência"}
-          </p>
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        title="Viagens"
+        description={
+          isVendedor ? "Visualize as excursões e pacotes disponíveis" : "Gerencie excursões e pacotes da agência"
+        }
+        actions={
+          <>
           <Link href="/trips/calendar"><Button variant="outline"><Calendar className="w-4 h-4 mr-2" />Calendário</Button></Link>
           {!isVendedor && (
             <Link href="/trips/media"><Button variant="outline"><Images className="w-4 h-4 mr-2" />Mídia</Button></Link>
@@ -63,8 +63,9 @@ export function TripList() {
           {!isVendedor && (
             <Link href="/trips/new"><Button><Plus className="w-4 h-4 mr-2" />Nova Viagem</Button></Link>
           )}
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {isVendedor && (
         <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800 text-sm">
