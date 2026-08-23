@@ -5,6 +5,12 @@ import { publicStoreApi, PublicStore, StoreProduct, CouponValidation, PartnerPro
 import { clientPortalApi } from "@/lib/clientPortalApi";
 import { validateCpf, validatePhone } from "@/lib/utils";
 import { useSeatStream } from "@/hooks/useSeatStream";
+import {
+  clearStorefrontReferralCode,
+  getStorefrontReferralCode,
+  getStorefrontReferralCookie,
+  setStorefrontReferralCode,
+} from "@/lib/storefrontAttribution";
 import type { LayoutSeatMap, Step } from "./constants";
 import { CLICKABLE_SEAT_TYPES, STEP_ORDER } from "./constants";
 
@@ -140,7 +146,7 @@ export function useWizardState({
     }
   }, [product?.boardingPoints]);
 
-  const [referralCode, setReferralCode] = useState(() => localStorage.getItem("referral_code") ?? "");
+  const [referralCode, setReferralCode] = useState(() => getStorefrontReferralCode(slug) ?? "");
   const [referralApplied, setReferralApplied] = useState(false);
   const [referralDiscountPct, setReferralDiscountPct] = useState(5);
   const [referralDiscountType, setReferralDiscountType] = useState<"percentage" | "fixed">("percentage");
@@ -190,7 +196,7 @@ export function useWizardState({
   }, [slug, product?.tripId]);
 
   useEffect(() => {
-    const savedCode = localStorage.getItem("referral_code");
+    const savedCode = getStorefrontReferralCode(slug);
     if (savedCode) {
       publicStoreApi
         .validateReferral(slug, savedCode)
@@ -289,7 +295,7 @@ export function useWizardState({
         setReferralDiscountType(rType);
         setReferralDiscountValue(rVal);
         setReferralDiscountPct(rType === "percentage" ? rVal : 0);
-        localStorage.setItem("referral_code", referralCode.trim().toUpperCase());
+        setStorefrontReferralCode(slug, referralCode);
       } else {
         alert(res.error ?? "Código inválido");
       }
@@ -301,6 +307,7 @@ export function useWizardState({
   function removeReferral() {
     setReferralApplied(false);
     setReferralCode("");
+    clearStorefrontReferralCode(slug);
   }
 
   function toggleSeat(n: number) {
@@ -452,7 +459,7 @@ export function useWizardState({
         couponCode: couponResult?.valid ? form.couponCode : undefined,
         referralCode: referralApplied ? referralCode.trim().toUpperCase() : undefined,
         referralCookieId: referralApplied
-          ? (localStorage.getItem("referral_server_cookie_id") ?? undefined)
+          ? getStorefrontReferralCookie(slug)
           : undefined,
         referralCreditUsed: referralCreditApplied > 0 ? referralCreditApplied : undefined,
         paymentMethod: form.paymentMethod,
@@ -483,10 +490,7 @@ export function useWizardState({
           }));
         } catch { /* ignore quota errors */ }
       }
-      localStorage.removeItem("referral_code");
-      localStorage.removeItem("referral_code_expiry");
-      localStorage.removeItem("referral_referrer_name");
-      localStorage.removeItem("referral_server_cookie_id");
+      clearStorefrontReferralCode(slug);
       setShowConfetti(true);
       setTimeout(() => setShowConfetti(false), 5000);
       setStep("confirmado");

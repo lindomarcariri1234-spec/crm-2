@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { SectionHeader } from "@/components/vitrine/SectionHeader";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { FlashSaleCountdown } from "@/components/vitrine/FlashSaleCountdown";
+import { getStoredValue } from "./utils/storage";
 import {
   MapPin,
   Star,
@@ -61,7 +62,7 @@ function ReferralWelcomeBanner({
 
     setVisible(true);
 
-    const storedName = localStorage.getItem("referral_referrer_name");
+    const storedName = getStoredValue("referral_referrer_name");
     if (storedName) setReferrerName(storedName);
 
     publicStoreApi
@@ -157,6 +158,8 @@ export default function VitrineHome({
   const [destino, setDestino] = useState("");
   const [dataIda, setDataIda] = useState("");
   const [passageiros, setPassageiros] = useState("");
+  const [tipo, setTipo] = useState("");
+  const [orcamento, setOrcamento] = useState("");
   const todayStr = localToday(); // Brazil calendar date (America/Sao_Paulo)
 
   useEffect(() => {
@@ -253,6 +256,8 @@ export default function VitrineHome({
     }
     if (dataIda) qs.set("departureFrom", dataIda);
     if (passageiros) qs.set("minSeats", passageiros);
+    if (tipo) qs.set("type", tipo);
+    if (orcamento) qs.set("maxPrice", orcamento);
     const str = qs.toString();
     navigate(`/loja/${slug}/produtos${str ? `?${str}` : ""}`);
   }
@@ -371,6 +376,51 @@ export default function VitrineHome({
                 </span>
               </label>
 
+              <span className="hidden h-9 w-px bg-border lg:block" />
+
+              <label className="flex items-center gap-2 px-3 py-2 md:py-1">
+                <Sparkles className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <span className="flex flex-col">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Experiência
+                  </span>
+                  <select
+                    value={tipo}
+                    onChange={(e) => setTipo(e.target.value)}
+                    className="bg-transparent text-sm text-foreground outline-none"
+                  >
+                    <option value="">Todos os tipos</option>
+                    <option value="package">Pacotes</option>
+                    <option value="tour">Passeios</option>
+                    <option value="hotel">Hospedagem</option>
+                    <option value="service">Serviços</option>
+                    <option value="cruise">Cruzeiros</option>
+                  </select>
+                </span>
+              </label>
+
+              <span className="hidden h-9 w-px bg-border lg:block" />
+
+              <label className="flex items-center gap-2 px-3 py-2 md:py-1">
+                <CreditCard className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <span className="flex flex-col">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Orçamento
+                  </span>
+                  <select
+                    value={orcamento}
+                    onChange={(e) => setOrcamento(e.target.value)}
+                    className="bg-transparent text-sm text-foreground outline-none"
+                  >
+                    <option value="">Qualquer valor</option>
+                    <option value="500">Até R$ 500</option>
+                    <option value="1000">Até R$ 1.000</option>
+                    <option value="2500">Até R$ 2.500</option>
+                    <option value="5000">Até R$ 5.000</option>
+                  </select>
+                </span>
+              </label>
+
               <span className="hidden h-9 w-px bg-border md:block" />
 
               <label className="flex items-center gap-2 px-3 py-2 md:py-1">
@@ -416,6 +466,18 @@ export default function VitrineHome({
             Ver todos os pacotes
             <ArrowRight className="h-4 w-4" />
           </button>
+
+          {store.contactWhatsapp && (
+            <a
+              href={`https://wa.me/${store.contactWhatsapp.replace(/\D/g, "")}?text=${encodeURIComponent("Olá! Quero ajuda para escolher uma experiência de viagem.")}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-white/90 underline-offset-4 hover:underline"
+            >
+              <Headphones className="h-4 w-4" />
+              Falar com um especialista
+            </a>
+          )}
 
           {avgRating !== null && (
             <div className="mt-8 inline-flex items-center gap-2 rounded-full bg-white/15 px-4 py-1.5 text-sm backdrop-blur">

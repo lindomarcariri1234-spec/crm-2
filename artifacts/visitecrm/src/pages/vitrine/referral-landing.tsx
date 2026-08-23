@@ -7,21 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Gift, Tag, Users, ArrowRight, CheckCircle, AlertTriangle } from "lucide-react";
 import { ROLES } from "@workspace/permissions";
+import { setStorefrontReferralCode } from "@/lib/storefrontAttribution";
 
 interface Props {
   slug: string;
   store: PublicStore;
 }
 
-const SERVER_COOKIE_KEY = "referral_server_cookie_id";
-
 function getUrlParams() {
   const params = new URLSearchParams(window.location.search);
   return {
     code: params.get("code") ?? params.get("ref") ?? null,
-    utmSource: params.get("utm_source") ?? undefined,
-    utmMedium: params.get("utm_medium") ?? undefined,
-    utmCampaign: params.get("utm_campaign") ?? undefined,
   };
 }
 
@@ -35,7 +31,7 @@ export default function ReferralLanding({ slug, store }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [isSuspended, setIsSuspended] = useState(false);
 
-  const { code, utmSource, utmMedium, utmCampaign } = getUrlParams();
+  const { code } = getUrlParams();
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -47,28 +43,12 @@ export default function ReferralLanding({ slug, store }: Props) {
   const primaryColor = store.primaryColor ?? "#6366f1";
   const secondaryColor = store.secondaryColor ?? "#4f46e5";
 
-  const trackVisit = useCallback(async (code: string) => {
-    try {
-      // Send previously server-issued ID if we have one (for return visitors)
-      const existingServerCookieId = localStorage.getItem(SERVER_COOKIE_KEY) ?? undefined;
-      const result = await publicStoreApi.trackReferral(slug, {
-        code,
-        serverCookieId: existingServerCookieId,
-        landingPage: window.location.href,
-        utmSource,
-        utmMedium,
-        utmCampaign,
-      });
-      setTracked(true);
-      // Persist the code and the server-issued cookie ID in localStorage
-      localStorage.setItem("referral_code", code);
-      if (result?.cookieId) {
-        localStorage.setItem(SERVER_COOKIE_KEY, result.cookieId);
-      }
-    } catch {
-      // Non-critical: tracking failure shouldn't block the page
-    }
-  }, [slug, utmSource, utmMedium, utmCampaign]);
+  const trackVisit = useCallback((code: string) => {
+    // VitrineLayout owns the network event for every page. This landing only
+    // stores the validated code so that owner can emit a single safe event.
+    setStorefrontReferralCode(slug, code);
+    setTracked(true);
+  }, [slug]);
 
   useEffect(() => {
     if (!code) {

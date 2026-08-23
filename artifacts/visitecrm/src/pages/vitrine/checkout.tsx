@@ -31,6 +31,13 @@ import {
   Gift,
 } from "lucide-react";
 import { PAYMENT_METHOD_LABELS as PAYMENT_LABELS } from "@/lib/labels";
+import {
+  clearStorefrontReferralCode,
+  getStorefrontReferralCode,
+  getStorefrontReferralCookie,
+  setStorefrontReferralCode,
+} from "@/lib/storefrontAttribution";
+import { removeStoredValue, setStoredValue } from "./utils/storage";
 
 type Step = "dados" | "revisao" | "pagamento" | "confirmado";
 
@@ -340,7 +347,7 @@ export default function VitrineCheckout({
   const [useReferralCredit, setUseReferralCredit] = useState(false);
 
   const [form, setFormState] = useState(() => {
-    const savedCode = localStorage.getItem("referral_code") ?? "";
+    const savedCode = getStorefrontReferralCode(slug) ?? "";
     return {
       customerName: "",
       customerEmail: "",
@@ -378,7 +385,7 @@ export default function VitrineCheckout({
 
   // Auto-validate referral code from localStorage on mount
   useEffect(() => {
-    const savedCode = localStorage.getItem("referral_code");
+    const savedCode = getStorefrontReferralCode(slug);
     if (savedCode && !referralResult) {
       publicStoreApi.validateReferral(slug, savedCode).then((res) => {
         if (res.valid) setReferralResult(res);
@@ -389,26 +396,6 @@ export default function VitrineCheckout({
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: runs once on mount to restore a saved
   // referral code from localStorage. Omitting referralResult prevents an infinite loop (validate → set →
   // revalidate); omitting slug/publicStoreApi avoids spurious re-runs on stable references.
-  }, []);
-
-  // Track checkout page visit for referral analytics funnel (once per session per code)
-  useEffect(() => {
-    const savedCode = localStorage.getItem("referral_code");
-    if (!savedCode) return;
-    const sessionKey = `referral_checkout_tracked_${savedCode}`;
-    if (sessionStorage.getItem(sessionKey)) return;
-    const existingCookieId = localStorage.getItem("referral_server_cookie_id") ?? undefined;
-    publicStoreApi.trackReferral(slug, {
-      code: savedCode,
-      serverCookieId: existingCookieId,
-      landingPage: window.location.href,
-    }).then((res) => {
-      if (res.cookieId) localStorage.setItem("referral_server_cookie_id", res.cookieId);
-      sessionStorage.setItem(sessionKey, "1");
-    }).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: fires once per session to record the
-  // checkout funnel entry. slug and publicStoreApi are stable within the component lifetime; re-running on
-  // every render would duplicate analytics events and defeat the sessionStorage dedup guard.
   }, []);
 
   function set(field: string, value: string) {
@@ -462,6 +449,7 @@ export default function VitrineCheckout({
     try {
       const res = await publicStoreApi.validateReferral(slug, form.referralCode);
       setReferralResult(res);
+      if (res.valid) setStorefrontReferralCode(slug, form.referralCode);
     } catch {
       setReferralResult({ valid: false, error: "Código de indicação inválido" });
     } finally {
@@ -471,6 +459,7 @@ export default function VitrineCheckout({
 
   function removeReferral() {
     setReferralResult(null);
+    clearStorefrontReferralCode(slug);
     setFormState((p) => ({ ...p, referralCode: "" }));
   }
 
@@ -504,7 +493,7 @@ export default function VitrineCheckout({
         couponCode: couponResult?.valid ? form.couponCode : undefined,
         referralCode: referralResult?.valid && !couponResult?.valid ? form.referralCode : undefined,
         referralCookieId: referralResult?.valid && !couponResult?.valid
-          ? (localStorage.getItem("referral_server_cookie_id") ?? undefined)
+          ? getStorefrontReferralCookie(slug)
           : undefined,
         referralCreditUsed: referralCreditApplied > 0 ? referralCreditApplied : undefined,
         paymentMethod: form.paymentMethod,
@@ -531,7 +520,7 @@ export default function VitrineCheckout({
       }
       if (order.reservationExpiresAt) {
         setReservationExpiresAt(order.reservationExpiresAt);
-        localStorage.setItem("pending_order", JSON.stringify({
+        setStoredValue("pending_order", JSON.stringify({
           orderNumber: order.orderNumber,
           reservationExpiresAt: order.reservationExpiresAt,
           storeSlug: slug,
@@ -579,7 +568,7 @@ export default function VitrineCheckout({
       if (diff <= 0) {
         setExpiryCountdown("00:00");
         setReservationExpired(true);
-        localStorage.removeItem("pending_order");
+        removeStoredValue("pending_order");
         clearInterval(timer);
         return;
       }

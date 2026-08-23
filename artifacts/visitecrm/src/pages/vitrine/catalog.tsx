@@ -22,6 +22,7 @@ import { Loader2, Search, MapPin, SlidersHorizontal, X, ArrowUpDown } from "luci
 import { ProductQuickView } from "@/components/vitrine/ProductQuickView";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
+import { getStoredValue, removeStoredValue } from "./utils/storage";
 
 interface Filters {
   search: string;
@@ -46,6 +47,8 @@ const EMPTY_FILTERS: Filters = {
   minSeats: "",
   sort: "default",
 };
+
+const STOREFRONT_PRODUCT_TYPES = new Set(["package", "tour", "hotel", "service", "cruise"]);
 
 function FilterPanel({
   filters,
@@ -274,6 +277,13 @@ export default function VitrineCatalog({
   const initialDestination = params.get("destination") ?? "all";
   const initialDepartureFrom = params.get("departureFrom") ?? "";
   const initialMinSeats = params.get("minSeats") ?? "";
+  const requestedType = params.get("type") ?? "";
+  const initialType = STOREFRONT_PRODUCT_TYPES.has(requestedType) ? requestedType : "all";
+  const requestedMaxPrice = params.get("maxPrice") ?? "";
+  const initialMaxPrice = /^\d+(\.\d{1,2})?$/.test(requestedMaxPrice)
+    && Number(requestedMaxPrice) > 0
+    ? requestedMaxPrice
+    : "";
 
   const [products, setProducts] = useState<StoreProduct[]>([]);
   const [categories, setCategories] = useState<StoreCategory[]>([]);
@@ -289,6 +299,8 @@ export default function VitrineCatalog({
     search: initialSearch,
     category: initialCategory,
     destination: initialDestination,
+    type: initialType,
+    maxPrice: initialMaxPrice,
     departureFrom: initialDepartureFrom,
     minSeats: initialMinSeats,
   });
@@ -301,17 +313,17 @@ export default function VitrineCatalog({
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem("pending_order");
+      const raw = getStoredValue("pending_order");
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (parsed.storeSlug !== slug) return;
       if (new Date(parsed.reservationExpiresAt).getTime() <= Date.now()) {
-        localStorage.removeItem("pending_order");
+        removeStoredValue("pending_order");
         return;
       }
       setPendingOrder(parsed);
     } catch {
-      localStorage.removeItem("pending_order");
+      removeStoredValue("pending_order");
     }
   }, [slug]);
 
@@ -323,7 +335,7 @@ export default function VitrineCatalog({
       if (diff <= 0) {
         setPendingCountdown("00:00");
         setPendingExpired(true);
-        localStorage.removeItem("pending_order");
+        removeStoredValue("pending_order");
         clearInterval(timer);
         return;
       }
@@ -340,7 +352,7 @@ export default function VitrineCatalog({
     setPendingOrder(null);
     setPendingCountdown(null);
     setPendingExpired(false);
-    localStorage.removeItem("pending_order");
+    removeStoredValue("pending_order");
   }
 
   async function load() {

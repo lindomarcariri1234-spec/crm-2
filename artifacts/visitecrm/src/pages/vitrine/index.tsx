@@ -51,48 +51,23 @@ class WizardErrorBoundary extends Component<{ children: ReactNode }, WizardError
 }
 
 import { saveReferralToStorage } from "./utils/storage";
-
-const SERVER_COOKIE_KEY = "referral_server_cookie_id";
+import { setStorefrontReferralCode } from "@/lib/storefrontAttribution";
 
 function ReferralCapture({ slug, code }: { slug: string; code: string }) {
   const [, navigate] = useLocation();
 
   useEffect(() => {
     const upperCode = code.toUpperCase();
-    const params = new URLSearchParams(window.location.search);
-    const utmSource = params.get("utm_source") ?? undefined;
-    const utmMedium = params.get("utm_medium") ?? undefined;
-    const utmCampaign = params.get("utm_campaign") ?? undefined;
-    const existingCookieId = localStorage.getItem(SERVER_COOKIE_KEY) ?? undefined;
-
     async function captureAndRedirect() {
       try {
-        const [trackResult, infoResult] = await Promise.allSettled([
-          publicStoreApi.trackReferral(slug, {
-            code: upperCode,
-            serverCookieId: existingCookieId,
-            landingPage: window.location.href,
-            utmSource,
-            utmMedium,
-            utmCampaign,
-          }),
-          publicStoreApi.getReferralInfo(slug, upperCode),
-        ]);
-
-        if (trackResult.status === "fulfilled" && trackResult.value?.cookieId) {
-          localStorage.setItem(SERVER_COOKIE_KEY, trackResult.value.cookieId);
-        }
-
-        const referrerName = infoResult.status === "fulfilled"
-          ? infoResult.value?.referrerName
-          : undefined;
-
+        const info = await publicStoreApi.getReferralInfo(slug, upperCode);
+        const referrerName = info?.referrerName;
         saveReferralToStorage(upperCode, referrerName);
+        setStorefrontReferralCode(slug, upperCode);
+        navigate(`/loja/${slug}?ref=${encodeURIComponent(upperCode)}&welcome=true`, { replace: true });
       } catch {
-        saveReferralToStorage(upperCode);
+        navigate(`/loja/${slug}`, { replace: true });
       }
-
-      navigate(`/loja/${slug}?ref=${encodeURIComponent(upperCode)}&welcome=true`, { replace: true });
     }
 
     captureAndRedirect();

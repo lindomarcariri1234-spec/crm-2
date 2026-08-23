@@ -23,6 +23,38 @@ import {
 import { NotificationBell } from "@/components/vitrine/NotificationBell";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { applyStorefrontMetadata } from "@/lib/storefrontMetadata";
+import { publicStoreApi } from "@/lib/storeApi";
+import {
+  captureStorefrontAttribution,
+  getStorefrontReferralCookie,
+  setStorefrontReferralCode,
+  setStorefrontReferralCookie,
+} from "@/lib/storefrontAttribution";
+
+function getTrackingSession(key: string): string | null {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function setTrackingSession(key: string, value: string): boolean {
+  try {
+    sessionStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearTrackingSession(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // Session storage is only a deduplication enhancement.
+  }
+}
 
 export default function VitrineLayout({
   children,
@@ -47,6 +79,55 @@ export default function VitrineLayout({
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => applyStorefrontMetadata(store, location), [store, location]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function trackValidatedReferral() {
+      const params = new URLSearchParams(window.location.search);
+      const requestedCode = (params.get("ref") ?? params.get("code"))?.trim();
+      let attribution = captureStorefrontAttribution(slug);
+
+      // A code supplied through the URL has not earned a local attribution
+      // record yet. Validate it first so arbitrary links cannot pollute the
+      // tenant's conversion analytics.
+      if (requestedCode && requestedCode.toUpperCase() !== attribution.referralCode) {
+        try {
+          await publicStoreApi.getReferralInfo(slug, requestedCode);
+          if (cancelled) return;
+          setStorefrontReferralCode(slug, requestedCode);
+          attribution = captureStorefrontAttribution(slug);
+        } catch {
+          return;
+        }
+      }
+
+      if (!attribution.referralCode || cancelled) return;
+      const pageKey = `storefront-referral-tracked:${slug}:${attribution.referralCode}:${location}`;
+      if (getTrackingSession(pageKey)) return;
+      // Claim synchronously so React effects or route transitions cannot create
+      // parallel tracking writes for the same page.
+      const wasClaimed = setTrackingSession(pageKey, "pending");
+      try {
+        const result = await publicStoreApi.trackReferral(slug, {
+          code: attribution.referralCode,
+          serverCookieId: getStorefrontReferralCookie(slug),
+          landingPage: window.location.pathname,
+          utmSource: attribution.utmSource,
+          utmMedium: attribution.utmMedium,
+          utmCampaign: attribution.utmCampaign,
+        });
+        if (result.cookieId) setStorefrontReferralCookie(slug, result.cookieId);
+        if (wasClaimed) setTrackingSession(pageKey, "done");
+      } catch {
+        if (wasClaimed) clearTrackingSession(pageKey);
+        // Attribution is best-effort and must not interrupt the public journey.
+      }
+    }
+
+    void trackValidatedReferral();
+    return () => { cancelled = true; };
+  }, [location, slug]);
 
   useEffect(() => {
     if (!profileDropdownOpen) return;
