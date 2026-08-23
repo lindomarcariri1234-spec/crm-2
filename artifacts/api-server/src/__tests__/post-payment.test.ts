@@ -267,6 +267,51 @@ describe("runPostPaymentSideEffects", () => {
     });
   });
 
+  it("uses each reservation's own paidValue when one order contains multiple reservations", async () => {
+    installSelectQueue([
+      [ORDER], // order lookup
+      [ADMIN_USER], // admin user for writeClientActivity
+      [
+        { id: "res-1", clientId: "client-1", tripId: "trip-1" },
+        { id: "res-2", clientId: "client-1", tripId: "trip-2" },
+      ], // reservations for order
+      [ADMIN_USER], // actor user for overlap-detection IIFE
+      [
+        {
+          id: "res-1",
+          status: "confirmed",
+          paidValue: "125.50",
+          balance: "374.50",
+        },
+        {
+          id: "res-2",
+          status: "confirmed",
+          paidValue: "80.25",
+          balance: "219.75",
+        },
+      ], // confirmed reservations for WhatsApp IIFE
+      [STORE], // store lookup
+    ]);
+
+    await runPostPaymentSideEffects("order-1");
+    await vi.waitFor(() =>
+      expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenCalledTimes(2),
+    );
+
+    expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenNthCalledWith(1, {
+      reservationId: "res-1",
+      tenantId: "tenant-1",
+      amount: 125.5,
+      remainingBalance: 374.5,
+    });
+    expect(mockDispatchWhatsAppPaymentReceived).toHaveBeenNthCalledWith(2, {
+      reservationId: "res-2",
+      tenantId: "tenant-1",
+      amount: 80.25,
+      remainingBalance: 219.75,
+    });
+  });
+
   it("schedules one durable reservation confirmation while still notifying each payment", async () => {
     installSelectQueue([
       // Deposit payment

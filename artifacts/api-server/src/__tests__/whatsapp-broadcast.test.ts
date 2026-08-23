@@ -491,6 +491,22 @@ describe("dispatchWhatsAppPaymentReceived", () => {
     );
   });
 
+  it("sends the payment notification to every passenger with a distinct phone", async () => {
+    setQueue([
+      SETTINGS_DEFAULT,
+      [TENANT_ROW],
+      [PASSENGER_A, PASSENGER_B],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
+
+    expect(mockSendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(sentPhones()).toEqual([PASSENGER_A.phone, PASSENGER_B.phone]);
+    expect(mockInterpolate).toHaveBeenCalledTimes(2);
+  });
+
   it("deduplicates payment notifications for passengers sharing a phone", async () => {
     const duplicatePhone = {
       id: "p2",
@@ -539,6 +555,25 @@ describe("dispatchWhatsAppPaymentReceived", () => {
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
     expect(mockSendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("uses the opted-in client as fallback when the passenger has no phone", async () => {
+    setQueue([
+      SETTINGS_DEFAULT,
+      [TENANT_ROW],
+      [PASSENGER_NO_PHONE],
+      [RESERVATION_CLIENT],
+      [CLIENT_OPTED_IN],
+    ]);
+
+    await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
+
+    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(sentPhones()[0]).toBe(CLIENT_OPTED_IN.whatsapp);
+    expect(mockInterpolate).toHaveBeenCalledWith(
+      expect.stringContaining("{valor}"),
+      expect.objectContaining({ nome: PASSENGER_NO_PHONE.name }),
+    );
   });
 
   it("respects client opt-out when payment has no passenger phone", async () => {
