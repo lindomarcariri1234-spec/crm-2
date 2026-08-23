@@ -104,6 +104,7 @@ import {
   Save,
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
+import { interpolateWhatsAppPreview, renderWhatsAppPreview } from "@/lib/whatsappPreview";
 import { ROLES, INVOICE_STATUS } from "@workspace/permissions";
 import { FeaturesTab } from "./FeaturesTab";
 
@@ -2595,6 +2596,17 @@ function WhatsAppNotificationsSection() {
                 onChange={(e) => update({ [t.msgKey]: e.target.value || null })}
                 className="text-sm resize-none font-mono"
               />
+              <div className="space-y-1.5" aria-label={`Pré-visualização de ${t.label}`}>
+                <p className="text-xs font-medium text-muted-foreground">Pré-visualização</p>
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm leading-relaxed text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-50">
+                  {renderWhatsAppPreview(
+                    interpolateWhatsAppPreview(settings[t.msgKey] || t.defaultMsg),
+                  )}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Exemplo com dados de um passageiro. A mensagem acima é atualizada enquanto você digita.
+                </p>
+              </div>
               {settings[t.msgKey] && (
                 <button
                   type="button"
