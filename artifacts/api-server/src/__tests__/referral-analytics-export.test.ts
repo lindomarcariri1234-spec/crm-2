@@ -118,6 +118,18 @@ function buildApp() {
   return app;
 }
 
+function parseBinaryResponse(
+  response: NodeJS.ReadableStream,
+  callback: (error: Error | null, body: Buffer) => void,
+) {
+  const chunks: Buffer[] = [];
+  response.on("data", (chunk: Buffer | Uint8Array) => {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  });
+  response.on("end", () => callback(null, Buffer.concat(chunks)));
+  response.on("error", (error) => callback(error as Error, Buffer.alloc(0)));
+}
+
 function commercialRow(overrides: Record<string, unknown> = {}) {
   return {
     tenantId: "tenant-a",
@@ -144,6 +156,48 @@ beforeEach(() => {
 
 describe("GET /api/referrals/analytics/export", () => {
   it("keeps the XLSX commercial result aligned with valid linked conversions", async () => {
+    const periodEnd = new Date();
+    const periodStart = new Date(periodEnd.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const withinPeriodEarly = new Date(periodEnd.getTime() - 20 * 24 * 60 * 60 * 1000);
+    const withinPeriodLate = new Date(periodEnd.getTime() - 10 * 24 * 60 * 60 * 1000);
+    const afterPeriod = new Date(periodEnd.getTime() + 24 * 60 * 60 * 1000);
+    const commercialRows = [
+      commercialRow({ convertedAt: withinPeriodEarly }),
+      commercialRow({
+        referrerId: "referrer-b",
+        referrerName: "Bruno",
+        convertedAt: withinPeriodLate,
+        bonusAmount: "20.00",
+        bonusPaid: false,
+        bonusPaidAt: null,
+        bonusCreditUsedAmount: "5.00",
+        discountAmount: "10.00",
+        reservationPaidValue: "300.00",
+      }),
+      commercialRow({
+        referrerId: "referrer-c",
+        referrerName: "Carla",
+        status: "reversed",
+        convertedAt: withinPeriodLate,
+        reservationPaidValue: "500.00",
+        bonusAmount: "40.00",
+        discountAmount: "20.00",
+      }),
+      commercialRow({
+        referrerId: "referrer-d",
+        referrerName: "Depois do período",
+        convertedAt: afterPeriod,
+        reservationPaidValue: "900.00",
+      }),
+      commercialRow({
+        referrerId: "referrer-e",
+        referrerName: "Reserva cancelada",
+        convertedAt: withinPeriodLate,
+        reservationStatus: "cancelled",
+        reservationPaidValue: "700.00",
+      }),
+    ];
+
     selectQueue.push(
       [
         { month: "2026-08", created: 4, converted: 2, bonusPaid: 1, bonusTotal: "10.00" },
@@ -151,50 +205,19 @@ describe("GET /api/referrals/analytics/export", () => {
       [
         { source: "whatsapp", visitors: 4, converted: 2 },
       ],
-      [
-        commercialRow(),
-        commercialRow({
-          referrerId: "referrer-b",
-          referrerName: "Bruno",
-          convertedAt: new Date("2026-08-20T12:00:00.000Z"),
-          bonusAmount: "20.00",
-          bonusPaid: false,
-          bonusPaidAt: null,
-          bonusCreditUsedAmount: "5.00",
-          discountAmount: "10.00",
-          reservationPaidValue: "300.00",
-        }),
-        commercialRow({
-          referrerId: "referrer-c",
-          referrerName: "Carla",
-          status: "reversed",
-          reservationPaidValue: "500.00",
-          bonusAmount: "40.00",
-          discountAmount: "20.00",
-        }),
-        commercialRow({
-          referrerId: "referrer-d",
-          referrerName: "Depois do período",
-          convertedAt: new Date("2026-09-01T12:00:00.000Z"),
-          reservationPaidValue: "900.00",
-        }),
-        commercialRow({
-          referrerId: "referrer-e",
-          referrerName: "Reserva cancelada",
-          reservationStatus: "cancelled",
-          reservationPaidValue: "700.00",
-        }),
-      ],
+      commercialRows,
     );
 
     const response = await request(buildApp())
       .get("/api/referrals/analytics/export")
-      .query({ startDate: "2026-08-01T00:00:00.000Z", endDate: "2026-08-31T23:59:59.000Z" })
+      .query({ startDate: periodStart.toISOString(), endDate: periodEnd.toISOString() })
+      .buffer(true)
+      .parse(parseBinaryResponse)
       .expect(200);
 
     expect(response.headers["content-type"]).toContain("spreadsheetml");
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(Buffer.from(response.body));
+    await workbook.xlsx.load(response.body as unknown as Buffer);
 
     const resultSheet = workbook.getWorksheet("Resultado Comercial");
     expect(resultSheet).toBeDefined();
@@ -215,6 +238,55 @@ describe("GET /api/referrals/analytics/export", () => {
     expect(rankingSheet?.getRow(2).getCell(6).value).toBe("0.00");
     expect(rankingSheet?.getRow(3).getCell(2).value).toBe("Ana");
     expect(rankingSheet?.rowCount).toBe(3);
+
+    // The dashboard runs nine aggregate queries before its commercial query.
+    // Feed the same commercial fixture to confirm both routes derive one result.
+    selectQueue.push(
+      [],
+      [{ created: 0, visited: 0, converted: 0, bonusPaid: 0 }],
+      [{ created: 0, converted: 0 }],
+      [],
+      [],
+      [{ referrals: 0, conversions: 0, bonusPaid: 0, bonusPaidAmount: "0" }],
+      [{ referrals: 0, conversions: 0, bonusPaid: 0, bonusPaidAmount: "0" }],
+      [{ uniqueVisitors: 0, checkoutStarts: 0, converted: 0 }],
+      commercialRows,
+    );
+
+    const dashboard = await request(buildApp())
+      .get("/api/referrals/analytics")
+      .query({ period: "30" })
+      .expect(200);
+
+    expect(dashboard.body.summary).toEqual({
+      validReferrals: 2,
+      attributedRevenue: 400,
+      rewardsPaid: 10,
+      rewardsPending: 15,
+      discountGiven: 15,
+      acquisitionCost: 25,
+      cac: 12.5,
+      roiPercent: 1500,
+      roiMultiple: 16,
+    });
+    expect(dashboard.body.ranking).toEqual([
+      {
+        referrerId: "referrer-b",
+        referrerName: "Bruno",
+        conversions: 1,
+        attributedRevenue: 300,
+        rewardsPaid: 0,
+        commissionAmount: 0,
+      },
+      {
+        referrerId: "referrer-a",
+        referrerName: "Ana",
+        conversions: 1,
+        attributedRevenue: 100,
+        rewardsPaid: 10,
+        commissionAmount: 0,
+      },
+    ]);
   });
 
   it("exports safe zero values when the selected period has no valid conversions", async () => {
@@ -223,10 +295,12 @@ describe("GET /api/referrals/analytics/export", () => {
     const response = await request(buildApp())
       .get("/api/referrals/analytics/export")
       .query({ startDate: "2026-08-01T00:00:00.000Z", endDate: "2026-08-31T23:59:59.000Z" })
+      .buffer(true)
+      .parse(parseBinaryResponse)
       .expect(200);
 
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(Buffer.from(response.body));
+    await workbook.xlsx.load(response.body as unknown as Buffer);
     const resultSheet = workbook.getWorksheet("Resultado Comercial");
     expect(resultSheet?.getCell("B2").value).toBe(0);
     expect(resultSheet?.getCell("B7").value).toBe("0.00");
