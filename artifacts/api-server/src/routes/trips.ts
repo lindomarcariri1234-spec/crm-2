@@ -537,7 +537,20 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
     // Free-passenger seat conflict check
     if (parsed.data.freePassengers !== undefined) {
       const newFpList = parsed.data.freePassengers;
-      const fpSeats = newFpList.map(fp => fp.seatNumber).filter((s): s is string => s != null);
+      const fpSeats = newFpList
+        .map(fp => fp.seatNumber?.trim() ?? null)
+        .filter((s): s is string => s != null && s !== "");
+      const duplicateSeats = [...new Set(
+        fpSeats.filter((seat, index) => fpSeats.indexOf(seat) !== index),
+      )];
+      if (duplicateSeats.length > 0) {
+        next(new UnprocessableEntityError(
+          "O mesmo assento não pode ser atribuído a mais de um passageiro gratuito",
+          "DUPLICATE_FREE_PASSENGER_SEAT",
+          { conflictingSeats: duplicateSeats },
+        ));
+        return;
+      }
       if (fpSeats.length > 0) {
         const activeResRows = await db
           .select({ seats: reservationsTable.seats })

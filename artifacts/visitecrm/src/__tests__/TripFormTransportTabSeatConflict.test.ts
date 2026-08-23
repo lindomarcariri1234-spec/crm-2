@@ -58,7 +58,6 @@ afterEach(async () => {
   await cleanupRoots();
 });
 
-
 describe("TripFormTransportTab — conflito de assento", () => {
   it("destaca o assento ocupado e exibe os avisos do conflito", async () => {
     const seatConflictMessage =
@@ -103,6 +102,49 @@ describe("TripFormTransportTab — conflito de assento", () => {
     );
     expect(alertBanner).toBeDefined();
     expect(alertBanner?.textContent).toContain(seatConflictMessage);
+  });
+
+  it("destaca assentos duplicados entre passageiros gratuitos", async () => {
+    const form: TripFormData = {
+      ...EMPTY_FORM,
+      freePassengers: [
+        {
+          id: "free-passenger-1",
+          name: "Maria da Silva",
+          cpf: "",
+          whatsapp: "",
+          role: "organizer",
+          seatNumber: "12",
+        },
+        {
+          id: "free-passenger-2",
+          name: "João da Silva",
+          cpf: "",
+          whatsapp: "",
+          role: "guide",
+          seatNumber: " 12 ",
+        },
+      ],
+    };
+
+    const { container } = await renderComponent(
+      createElement(TripFormTransportTab, {
+        form,
+        setForm: vi.fn(),
+      }),
+    );
+
+    const seatInputs = Array.from(container.querySelectorAll(
+      'input[placeholder="Ex: 12"]',
+    )) as HTMLInputElement[];
+    expect(seatInputs).toHaveLength(2);
+    expect(seatInputs.every(input => input.className.includes("border-destructive"))).toBe(true);
+    expect(container.textContent).toContain(
+      "Assento 12 já está atribuído a outro passageiro gratuito.",
+    );
+    expect(container.textContent).toContain(
+      "Assento  12  já está atribuído a outro passageiro gratuito.",
+    );
   });
 
   it("remove o destaque, o aviso do campo e o banner após corrigir o assento", async () => {

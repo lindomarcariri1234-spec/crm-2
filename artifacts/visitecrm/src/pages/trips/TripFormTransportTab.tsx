@@ -197,6 +197,11 @@ export function TripFormTransportTab({ form, setForm, conflictingSeats = [], sea
           <div className="space-y-4">
             {form.freePassengers.map((fp, idx) => {
               const isConflicting = fp.seatNumber.trim() !== "" && conflictingSeats.includes(fp.seatNumber.trim());
+              const normalizedSeatNumber = fp.seatNumber.trim();
+              const isDuplicateFreePassengerSeat = normalizedSeatNumber !== "" && form.freePassengers.some(
+                other => other.id !== fp.id && other.seatNumber.trim() === normalizedSeatNumber,
+              );
+              const hasSeatError = isConflicting || isDuplicateFreePassengerSeat;
               return (
                 <div key={fp.id} className="border rounded-lg p-4 space-y-3">
                   <div className="flex items-center justify-between">
@@ -258,11 +263,16 @@ export function TripFormTransportTab({ form, setForm, conflictingSeats = [], sea
                         placeholder="Ex: 12"
                         value={fp.seatNumber}
                         onChange={e => updateFP(fp.id, { seatNumber: e.target.value })}
-                        className={isConflicting ? "border-destructive ring-1 ring-destructive focus-visible:ring-destructive" : ""}
+                        className={hasSeatError ? "border-destructive ring-1 ring-destructive focus-visible:ring-destructive" : ""}
                       />
                       {isConflicting && (
                         <p className="text-xs text-destructive font-medium">
                           Assento {fp.seatNumber} já está ocupado por uma reserva ativa.
+                        </p>
+                      )}
+                      {!isConflicting && isDuplicateFreePassengerSeat && (
+                        <p className="text-xs text-destructive font-medium">
+                          Assento {fp.seatNumber} já está atribuído a outro passageiro gratuito.
                         </p>
                       )}
                     </div>

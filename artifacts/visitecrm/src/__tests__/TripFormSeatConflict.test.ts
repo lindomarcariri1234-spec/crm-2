@@ -308,4 +308,51 @@ describe("TripForm — conflito de assento ao salvar", () => {
     );
     expect(alertBanner).toBeDefined();
   });
+
+  it("bloqueia o salvamento quando passageiros gratuitos compartilham um assento", async () => {
+    mockGetTrip.mockReturnValue({
+      data: {
+        ...makeTrip(),
+        freePassengers: [
+          {
+            id: "free-passenger-1",
+            name: "Maria da Silva",
+            cpf: "",
+            whatsapp: "",
+            role: "organizer",
+            seatNumber: "12",
+            checkedInAt: null,
+          },
+          {
+            id: "free-passenger-2",
+            name: "João da Silva",
+            cpf: "",
+            whatsapp: "",
+            role: "guide",
+            seatNumber: " 12 ",
+            checkedInAt: null,
+          },
+        ],
+      },
+    });
+
+    const { container } = await renderComponent(
+      createElement(TripForm, { tripId: "trip-1" }),
+    );
+    await flushAct(() => {});
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Salvar como Rascunho"),
+    );
+    await flushAct(() => {
+      saveButton?.click();
+    });
+
+    expect(mockUpdateTrip).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-active-tab="transporte"]')).not.toBeNull();
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "O assento 12 está atribuído a mais de um passageiro gratuito. Escolha assentos diferentes.",
+      variant: "destructive",
+    });
+  });
 });

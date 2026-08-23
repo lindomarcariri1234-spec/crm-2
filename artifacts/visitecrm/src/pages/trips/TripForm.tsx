@@ -187,6 +187,19 @@ export function TripForm({ tripId }: { tripId?: string }) {
     const statusToSave: TripStatus = publish ? TRIP_STATUS.ACTIVE : form.status;
     const itineraryToSave = form.itinerary.filter(d => d.title || d.description);
     const boardingPointsToSave = form.boardingPoints.filter(bp => bp.name);
+    const duplicateFreePassengerSeats = [...new Set(
+      form.freePassengers
+        .map(fp => fp.seatNumber.trim())
+        .filter((seatNumber, index, seats) => seatNumber !== "" && seats.indexOf(seatNumber) !== index),
+    )];
+    if (duplicateFreePassengerSeats.length > 0) {
+      const conflictMsg = duplicateFreePassengerSeats.length === 1
+        ? `O assento ${duplicateFreePassengerSeats[0]} está atribuído a mais de um passageiro gratuito. Escolha assentos diferentes.`
+        : `Os assentos ${duplicateFreePassengerSeats.join(", ")} estão atribuídos a mais de um passageiro gratuito. Escolha assentos diferentes.`;
+      setTab("transporte");
+      toast({ title: conflictMsg, variant: "destructive" });
+      return;
+    }
     const freePassengersPayload = form.freePassengers.map(fp => ({
       id: fp.id,
       name: fp.name,
@@ -272,14 +285,19 @@ export function TripForm({ tripId }: { tripId?: string }) {
         setTripLimitError({ resource: limitInfo.resource ?? "trips", current: limitInfo.current, limit: limitInfo.limit });
         return;
       }
-      // Handle seat conflict from freePassengers
-      if (responseData["code"] === "SEAT_CONFLICT") {
+      // Handle seat conflicts from freePassengers
+      if (responseData["code"] === "SEAT_CONFLICT" || responseData["code"] === "DUPLICATE_FREE_PASSENGER_SEAT") {
         const seats = (responseData["conflictingSeats"] as string[] | undefined) ?? [];
         setConflictingSeats(seats);
+        const isDuplicateFreePassengerSeat = responseData["code"] === "DUPLICATE_FREE_PASSENGER_SEAT";
         const seatList = seats.join(", ");
-        const conflictMsg = seats.length > 0
-          ? `Os assentos ${seatList} já estão ocupados por reservas ativas. Escolha outros assentos.`
-          : "Um ou mais assentos estão ocupados por reservas ativas. Escolha outros assentos.";
+        const conflictMsg = isDuplicateFreePassengerSeat
+          ? (seats.length > 0
+            ? `Os assentos ${seatList} estão atribuídos a mais de um passageiro gratuito. Escolha assentos diferentes.`
+            : "Um ou mais assentos estão atribuídos a mais de um passageiro gratuito. Escolha assentos diferentes.")
+          : (seats.length > 0
+            ? `Os assentos ${seatList} já estão ocupados por reservas ativas. Escolha outros assentos.`
+            : "Um ou mais assentos estão ocupados por reservas ativas. Escolha outros assentos.");
         setSeatConflictMessage(conflictMsg);
         setTab("transporte");
         toast({ title: conflictMsg, variant: "destructive" });

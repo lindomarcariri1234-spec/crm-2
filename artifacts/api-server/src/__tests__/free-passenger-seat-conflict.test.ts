@@ -321,6 +321,29 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
     expect(res.body.conflictingSeats).toContain("12");
   });
 
+  it("returns 422 when two free passengers are assigned the same seat", async () => {
+    const app = buildApp();
+
+    selectQueue.push(
+      [TENANT_ROW],
+      [PLAN_ROW],
+    );
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({
+        freePassengers: [
+          { id: "fp-duplicate-1", name: "João Guia", cpf: "111.222.333-44", whatsapp: "11999990000", role: "guide", seatNumber: "12" },
+          { id: "fp-duplicate-2", name: "Ana Organizadora", cpf: "555.666.777-88", whatsapp: "11988880000", role: "organizer", seatNumber: " 12 " },
+        ],
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("DUPLICATE_FREE_PASSENGER_SEAT");
+    expect(res.body.conflictingSeats).toEqual(["12"]);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
   it("returns 200 when free passenger seats are clear of all active reservations", async () => {
     const app = buildApp();
 
