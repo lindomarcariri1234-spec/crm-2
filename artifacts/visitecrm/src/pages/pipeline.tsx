@@ -36,6 +36,7 @@ import { ptBR } from "date-fns/locale";
 import { DEAL_STATUS, ROLES } from "@workspace/permissions";
 import { formatCurrency } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { mergePipelineDeals } from "./pipeline-deals";
 
 const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -1213,8 +1214,17 @@ export default function Pipeline() {
   });
 
   const { data: stages, isLoading: loadingStages, refetch: refetchStages } = useListPipelineStages();
-  const { data: deals, isLoading: loadingDeals, refetch: refetchDeals } = useListDeals({ status: DEAL_STATUS.OPEN });
+  // Confirmed reservations are represented by won deals. They still belong on
+  // the board (usually in "Reserva Criada"), so load them alongside open deals
+  // instead of dropping them from the pipeline view.
+  const { data: openDeals, isLoading: loadingOpenDeals, refetch: refetchOpenDeals } = useListDeals({ status: DEAL_STATUS.OPEN });
+  const { data: wonDeals, isLoading: loadingWonDeals, refetch: refetchWonDeals } = useListDeals({ status: DEAL_STATUS.WON });
   const { data: lostDealsData, refetch: refetchLostDeals } = useListDeals({ status: DEAL_STATUS.LOST });
+  const deals = useMemo(() => mergePipelineDeals(openDeals, wonDeals), [openDeals, wonDeals]);
+  const loadingDeals = loadingOpenDeals || loadingWonDeals;
+  const refetchDeals = async () => {
+    await Promise.all([refetchOpenDeals(), refetchWonDeals()]);
+  };
   const { data: allClients, refetch: refetchClients } = useListClients({ limit: 500, page: 1 });
   const { data: tripsData } = useListTrips({ limit: 200 });
   const moveDeal = useMoveDeal();
