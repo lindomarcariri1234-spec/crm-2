@@ -13,7 +13,12 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createElement } from "react";
-import { renderComponent, cleanupRoots } from "./eventSourceHarness.js";
+import {
+  renderComponent,
+  cleanupRoots,
+  installMockEventSource,
+  restoreEventSource,
+} from "./eventSourceHarness.js";
 
 // ---------------------------------------------------------------------------
 // Controllable hook return values — hoisted so vi.mock factories can close over them.
@@ -56,6 +61,10 @@ vi.mock("../pages/trips/PassengersListManifest.js", () => ({
 
 vi.mock("../pages/trips/PassengersListShareDialog.js", () => ({
   PassengersListShareDialog: () => null,
+}));
+
+vi.mock("../pages/trips/WhatsAppBroadcastModal.js", () => ({
+  WhatsAppBroadcastModal: () => null,
 }));
 
 // Radix Dialog uses portals + focus management that jsdom doesn't support.
@@ -128,7 +137,10 @@ vi.mock("lucide-react", async (importOriginal) => {
   return { ...actual };
 });
 
-import { PassengersList } from "../pages/trips/PassengersList.js";
+import {
+  PassengersList,
+  lacksValidWhatsAppReminderContact,
+} from "../pages/trips/PassengersList.js";
 
 // ---------------------------------------------------------------------------
 // DOM helpers
@@ -218,6 +230,7 @@ function panelData(passengers: ReturnType<typeof makeLapPassenger>[]) {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
+  installMockEventSource();
   mockGetTrip.mockReturnValue({ data: undefined });
   mockGetTripBoardingPanel.mockReturnValue(panelData([makeLapPassenger()]));
   mockToast.mockReturnValue(undefined);
@@ -226,6 +239,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await cleanupRoots();
+  restoreEventSource();
   vi.clearAllMocks();
 });
 
@@ -301,5 +315,38 @@ describe("PassengersList — coluna Poltrona para bebê de colo (seatNumber=null
     );
 
     expect(container.textContent).toContain("Bebê Silva");
+  });
+});
+
+describe("PassengersList — aviso de lembrete pelo WhatsApp", () => {
+  it("sinaliza de forma acessível o passageiro sem contato válido para lembretes", async () => {
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+
+    expect(
+      container.querySelector('[aria-label="Sem lembrete pelo WhatsApp: contato inválido"]'),
+    ).toBeTruthy();
+    expect(container.textContent).toContain("Sem lembrete WhatsApp");
+  });
+
+  it("considera o telefone próprio do passageiro antes do contato do titular", () => {
+    expect(
+      lacksValidWhatsAppReminderContact({
+        passengerPhone: "(31) 99999-9999",
+        whatsapp: "319999999",
+        phone: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("sinaliza um telefone próprio inválido mesmo quando o titular tem WhatsApp válido", () => {
+    expect(
+      lacksValidWhatsAppReminderContact({
+        passengerPhone: "319999999",
+        whatsapp: "(31) 99999-9999",
+        phone: null,
+      }),
+    ).toBe(true);
   });
 });

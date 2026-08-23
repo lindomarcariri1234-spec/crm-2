@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   ArrowLeft, Search, Download, RefreshCw, Share2, Loader2, MapPin, Calendar,
   MessageSquare, Pencil, RotateCcw, LogIn, CheckCircle, Mail, MessageCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { PassengerObsModal } from "./PassengerObsModal";
 import type { BoardingPoint } from "./types";
@@ -29,6 +30,7 @@ import { WhatsAppBroadcastModal } from "./WhatsAppBroadcastModal";
 
 import { formatCpf, formatDate, formatCurrency, formatBRLPlain } from "@/lib/utils";
 import { AGE_CATEGORY_LABELS } from "@/lib/labels";
+import { isValidBrazilWhatsAppPhone } from "@workspace/shared";
 
 type ColKey = "nome" | "cpf" | "birthDate" | "seatNumber" | "ageCategory" | "whatsapp" | "checkedInAt" | "boardingLocation" | "totalValue" | "paidValue" | "balance" | "obsDoc" | "assinatura";
 
@@ -48,6 +50,17 @@ export function filterPassengers(
     if (boardingStatusFilter === "pendente" && p.checkedInAt) return false;
     return true;
   });
+}
+
+/**
+ * Boarding reminders use the passenger's direct contact when present, then
+ * fall back to the booking client's WhatsApp/phone contact.
+ */
+export function lacksValidWhatsAppReminderContact(
+  passenger: Pick<BoardingPassenger, "passengerPhone" | "whatsapp" | "phone">,
+): boolean {
+  const reminderContact = passenger.passengerPhone || passenger.whatsapp || passenger.phone || "";
+  return !isValidBrazilWhatsAppPhone(reminderContact);
 }
 
 const PASSENGER_COLS: { key: ColKey; label: string }[] = [
@@ -408,6 +421,7 @@ export function PassengersList({ tripId }: { tripId: string }) {
               ) : (
                 filtered.map((p, i) => {
                   const embarcou = !!p.checkedInAt;
+                  const lacksReminderContact = lacksValidWhatsAppReminderContact(p);
                   return (
                     <tr key={p.id} className={`border-b hover:bg-muted/30 ${embarcou ? "bg-green-50/40" : ""}`}>
                       {visibleCols.nome && (
@@ -425,6 +439,16 @@ export function PassengersList({ tripId }: { tripId: string }) {
                             {p.isGratuidade && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 text-xs font-normal">
                                 Gratuidade
+                              </span>
+                            )}
+                            {lacksReminderContact && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 cursor-help text-xs font-normal"
+                                aria-label="Sem lembrete pelo WhatsApp: contato inválido"
+                                title="Este passageiro não receberá lembretes pelo WhatsApp até que o contato seja corrigido."
+                              >
+                                <AlertTriangle className="w-3 h-3" aria-hidden="true" />
+                                Sem lembrete WhatsApp
                               </span>
                             )}
                             {!!(p.observations || p.specialNeeds) && (
