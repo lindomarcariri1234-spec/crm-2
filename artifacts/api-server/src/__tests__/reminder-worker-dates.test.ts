@@ -6,12 +6,16 @@ const {
   mockDispatchBoarding,
   mockDispatchPagamentoPendente,
   mockNotificationSettings,
+  mockGte,
+  mockLt,
 } = vi.hoisted(() => ({
   mockSelect: vi.fn(),
   mockLocalToday: vi.fn(),
   mockDispatchBoarding: vi.fn(),
   mockDispatchPagamentoPendente: vi.fn(),
   mockNotificationSettings: vi.fn(),
+  mockGte: vi.fn(),
+  mockLt: vi.fn(),
 }));
 
 vi.mock("@workspace/db", async (importOriginal) => {
@@ -25,6 +29,21 @@ vi.mock("@workspace/db", async (importOriginal) => {
 vi.mock("@workspace/shared", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@workspace/shared")>();
   return { ...actual, localToday: mockLocalToday };
+});
+
+vi.mock("drizzle-orm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("drizzle-orm")>();
+  return {
+    ...actual,
+    gte: (column: unknown, value: unknown) => {
+      mockGte(column, value);
+      return actual.gte(column as never, value as never);
+    },
+    lt: (column: unknown, value: unknown) => {
+      mockLt(column, value);
+      return actual.lt(column as never, value as never);
+    },
+  };
 });
 
 vi.mock("../queues/whatsapp-helpers.js", () => ({
@@ -51,6 +70,7 @@ function selectRows(rows: unknown[]) {
 }
 
 const departureAtBrazilMidnight = new Date("2026-08-23T03:00:00.000Z");
+const departureAtBrazilD7 = new Date("2026-08-29T03:00:00.000Z");
 
 describe("reminder worker Brazil calendar dates", () => {
   beforeEach(() => {
@@ -91,6 +111,67 @@ describe("reminder worker Brazil calendar dates", () => {
       tripName: "Maceió",
       departureDate: "23/08/2026",
     }));
+  });
+
+  it("fires a D-7 boarding reminder when the tenant configures day 7", async () => {
+    mockSelect.mockReturnValueOnce(selectRows([{
+      reservationId: "reservation-d7",
+      tenantId: "tenant-1",
+      tripName: "Excursão",
+      tripDestination: "Maceió",
+      departureDate: departureAtBrazilD7,
+      boardingPoints: [],
+      clientEmail: null,
+      agencyName: "Agência Teste",
+    }]));
+    mockNotificationSettings.mockResolvedValue({
+      boardingReminderDaysBeforeTrip: [7],
+    });
+
+    await processBoardingReminders();
+
+    expect(mockDispatchBoarding).toHaveBeenCalledWith(expect.objectContaining({
+      reservationId: "reservation-d7",
+      tenantId: "tenant-1",
+      tripName: "Maceió",
+      departureDate: "29/08/2026",
+    }));
+  });
+
+  it("skips a D-7 boarding reminder when the tenant only configures day 1", async () => {
+    mockSelect.mockReturnValueOnce(selectRows([{
+      reservationId: "reservation-d7-skipped",
+      tenantId: "tenant-1",
+      tripName: "Excursão",
+      tripDestination: "Maceió",
+      departureDate: departureAtBrazilD7,
+      boardingPoints: [],
+      clientEmail: null,
+      agencyName: "Agência Teste",
+    }]));
+    mockNotificationSettings.mockResolvedValue({
+      boardingReminderDaysBeforeTrip: [1],
+    });
+
+    await processBoardingReminders();
+
+    expect(mockDispatchBoarding).not.toHaveBeenCalled();
+  });
+
+  it("queries only the D-1 through D-14 window, excluding reservations from D-15 onward", async () => {
+    mockSelect.mockReturnValueOnce(selectRows([]));
+
+    await processBoardingReminders();
+
+    expect(mockGte).toHaveBeenCalledWith(
+      expect.anything(),
+      new Date("2026-08-23T03:00:00.000Z"),
+    );
+    expect(mockLt).toHaveBeenCalledWith(
+      expect.anything(),
+      new Date("2026-09-06T03:00:00.000Z"),
+    );
+    expect(mockDispatchBoarding).not.toHaveBeenCalled();
   });
 
   it("fires the pending-payment reminder for the next Brazil calendar day", async () => {
