@@ -59,7 +59,7 @@ function escapeHtml(str: string | null | undefined): string {
 // D-1 Boarding reminder
 // ────────────────────────────────────────────────────────────
 
-async function processBoardingReminders(): Promise<void> {
+export async function processBoardingReminders(): Promise<void> {
   // Query a wide window (D-1 through D-14) so configurable reminder days are covered.
   // Per-tenant settings determine which days actually trigger.
   const MAX_BOARDING_REMINDER_DAYS = 14;
@@ -250,7 +250,7 @@ async function processBoardingReminders(): Promise<void> {
 // WhatsApp pending-payment reminder (configurable N days before trip)
 // ────────────────────────────────────────────────────────────
 
-async function processWhatsAppPagamentoPendente(): Promise<void> {
+export async function processWhatsAppPagamentoPendente(): Promise<void> {
   // Query confirmed reservations with outstanding balance departing in D-1..D-30
   const MAX_DAYS = 30;
   const { start: windowStart } = brazilDayWindow(1);
