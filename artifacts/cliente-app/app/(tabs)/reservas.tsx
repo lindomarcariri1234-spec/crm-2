@@ -8,6 +8,7 @@ import React from "react";
 import {
   ActivityIndicator,
   Alert,
+  LayoutChangeEvent,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -37,6 +38,60 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: "#dc2626",
   processing: "#7c3aed",
 };
+
+const ACTIVE_RESERVATION_STATUSES = new Set(["pending", "confirmed"]);
+
+export type OverlappingReservationPair = [
+  ClientPortalReservation,
+  ClientPortalReservation,
+];
+
+function reservationDateRange(
+  reservation: ClientPortalReservation
+): { start: string; end: string } | null {
+  const start = reservation.tripDepartureDate?.slice(0, 10);
+  if (!start || !/^\d{4}-\d{2}-\d{2}$/.test(start)) return null;
+
+  const returnDate = reservation.tripReturnDate?.slice(0, 10);
+  const end =
+    returnDate && /^\d{4}-\d{2}-\d{2}$/.test(returnDate) && returnDate >= start
+      ? returnDate
+      : start;
+
+  return { start, end };
+}
+
+/**
+ * Mirrors the CRM overlap rule: pending and confirmed bookings on different
+ * trips conflict when their inclusive date ranges intersect.
+ */
+export function findOverlappingReservations(
+  reservations: ClientPortalReservation[]
+): OverlappingReservationPair[] {
+  const active = reservations.filter((reservation) =>
+    ACTIVE_RESERVATION_STATUSES.has(reservation.status)
+  );
+  const overlapping: OverlappingReservationPair[] = [];
+
+  for (let index = 0; index < active.length; index += 1) {
+    const first = active[index];
+    const firstRange = reservationDateRange(first);
+    if (!firstRange) continue;
+
+    for (let nextIndex = index + 1; nextIndex < active.length; nextIndex += 1) {
+      const second = active[nextIndex];
+      if (first.tripId === second.tripId) continue;
+      const secondRange = reservationDateRange(second);
+      if (!secondRange) continue;
+
+      if (firstRange.start <= secondRange.end && firstRange.end >= secondRange.start) {
+        overlapping.push([first, second]);
+      }
+    }
+  }
+
+  return overlapping;
+}
 
 function StatusBadge({ status, colors }: { status: string; colors: ReturnType<typeof useColors> }) {
   const label = STATUS_LABELS[status] ?? status;
@@ -113,21 +168,95 @@ async function openVoucherPdf(
   }
 }
 
+function OverlapNotice({
+  pair,
+  colors,
+  onReservationPress,
+}: {
+  pair: OverlappingReservationPair;
+  colors: ReturnType<typeof useColors>;
+  onReservationPress: (reservationId: string) => void;
+}) {
+  return (
+    <View
+      style={[
+        styles.overlapNotice,
+        {
+          backgroundColor: colors.warning + "12",
+          borderColor: colors.warning + "55",
+        },
+      ]}
+      accessibilityRole="alert"
+    >
+      <View style={styles.overlapNoticeHeader}>
+        <Feather name="alert-triangle" size={18} color={colors.warning} />
+        <Text style={[styles.overlapNoticeTitle, { color: colors.warning }]}>
+          Viagens no mesmo período
+        </Text>
+      </View>
+      <Text style={[styles.overlapNoticeText, { color: colors.foreground }]}>
+        Você tem duas viagens reservadas em datas que se sobrepõem. Confira abaixo
+        e fale com a agência se precisar ajustar alguma delas.
+      </Text>
+      <View style={styles.overlapLinks}>
+        {pair.map((reservation) => (
+          <Pressable
+            key={reservation.id}
+            testID={`overlap-reservation-${reservation.id}`}
+            accessibilityRole="link"
+            accessibilityLabel={`Ver reserva ${reservation.tripName}`}
+            style={({ pressed }) => [
+              styles.overlapLink,
+              {
+                backgroundColor: colors.card,
+                borderColor: colors.warning + "55",
+                opacity: pressed ? 0.7 : 1,
+              },
+            ]}
+            onPress={() => onReservationPress(reservation.id)}
+          >
+            <View style={styles.overlapLinkCopy}>
+              <Text
+                style={[styles.overlapLinkName, { color: colors.foreground }]}
+                numberOfLines={1}
+              >
+                {reservation.tripName}
+              </Text>
+              <Text style={[styles.overlapLinkDate, { color: colors.mutedForeground }]}>
+                {fmtDate(reservation.tripDepartureDate)}
+                {reservation.tripReturnDate
+                  ? ` – ${fmtDate(reservation.tripReturnDate)}`
+                  : ""}
+              </Text>
+            </View>
+            <Feather name="arrow-down" size={15} color={colors.warning} />
+          </Pressable>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function ReservationCard({
   r,
   token,
   colors,
+  onLayout,
 }: {
   r: ClientPortalReservation;
   token: string | null;
   colors: ReturnType<typeof useColors>;
+  onLayout?: (event: LayoutChangeEvent) => void;
 }) {
   const days = daysUntil(r.tripDepartureDate);
   const isUpcoming = days !== null && days >= 0 && days <= 30;
   const isToday = days === 0;
 
   return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+    <View
+      onLayout={onLayout}
+      style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}
+    >
       <View style={styles.cardHeader}>
         <View style={styles.cardTitleRow}>
           <Text style={[styles.tripName, { color: colors.foreground }]} numberOfLines={1}>
@@ -257,6 +386,19 @@ export default function ReservasScreen() {
   const reservations = data?.reservations ?? [];
   const active = reservations.filter((r) => r.status !== "cancelled" && r.status !== "completed");
   const past = reservations.filter((r) => r.status === "completed" || r.status === "cancelled");
+  const overlappingReservations = React.useMemo(
+    () => findOverlappingReservations(reservations),
+    [reservations]
+  );
+  const scrollRef = React.useRef<ScrollView>(null);
+  const reservationOffsets = React.useRef<Record<string, number>>({});
+
+  const scrollToReservation = React.useCallback((reservationId: string) => {
+    const offset = reservationOffsets.current[reservationId];
+    if (offset !== undefined) {
+      scrollRef.current?.scrollTo({ y: Math.max(offset - 16, 0), animated: true });
+    }
+  }, []);
 
   if (isLoading) {
     return (
@@ -303,6 +445,7 @@ export default function ReservasScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={{ backgroundColor: colors.background }}
       contentContainerStyle={[
         styles.scroll,
@@ -333,8 +476,24 @@ export default function ReservasScreen() {
               <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
                 Ativas ({active.length})
               </Text>
+              {overlappingReservations.map((pair) => (
+                <OverlapNotice
+                  key={`${pair[0].id}-${pair[1].id}`}
+                  pair={pair}
+                  colors={colors}
+                  onReservationPress={scrollToReservation}
+                />
+              ))}
               {active.map((r) => (
-                <ReservationCard key={r.id} r={r} token={token} colors={colors} />
+                <ReservationCard
+                  key={r.id}
+                  r={r}
+                  token={token}
+                  colors={colors}
+                  onLayout={(event) => {
+                    reservationOffsets.current[r.id] = event.nativeEvent.layout.y;
+                  }}
+                />
               ))}
             </View>
           ) : null}
@@ -344,7 +503,15 @@ export default function ReservasScreen() {
                 Histórico ({past.length})
               </Text>
               {past.map((r) => (
-                <ReservationCard key={r.id} r={r} token={token} colors={colors} />
+                <ReservationCard
+                  key={r.id}
+                  r={r}
+                  token={token}
+                  colors={colors}
+                  onLayout={(event) => {
+                    reservationOffsets.current[r.id] = event.nativeEvent.layout.y;
+                  }}
+                />
               ))}
             </View>
           ) : null}
@@ -374,6 +541,50 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
     marginBottom: 2,
+  },
+  overlapNotice: {
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 14,
+    gap: 10,
+  },
+  overlapNoticeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  overlapNoticeTitle: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+  },
+  overlapNoticeText: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    lineHeight: 19,
+  },
+  overlapLinks: {
+    gap: 8,
+  },
+  overlapLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 8,
+  },
+  overlapLinkCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  overlapLinkName: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
+  overlapLinkDate: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
   },
   card: {
     borderRadius: 14,

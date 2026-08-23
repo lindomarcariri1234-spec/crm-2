@@ -1,5 +1,6 @@
 export interface ClientPortalReservation {
   id: string;
+  tripId: string;
   reservationNumber: string | null;
   status: string;
   voucherCode: string;

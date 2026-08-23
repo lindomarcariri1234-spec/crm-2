@@ -173,6 +173,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       const rows = await db
         .select({
           id: reservationsTable.id,
+          tripId: reservationsTable.tripId,
           reservationNumber: reservationsTable.reservationNumber,
           status: reservationsTable.status,
           voucherCode: reservationsTable.voucherCode,
