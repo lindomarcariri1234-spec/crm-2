@@ -1,11 +1,12 @@
 import { db, whatsappNotificationOutboxTable } from "@workspace/db";
-import { and, eq, isNull, ne, not } from "drizzle-orm";
+import { and, eq, isNull, lt, not, or } from "drizzle-orm";
 import { generateId } from "../../lib/id";
 import { logger } from "../../lib/logger";
 import { getWhatsAppQueue } from "../../queues/index";
 import { dispatchWhatsAppReservationConfirmed } from "../../queues/whatsapp-helpers";
 
 const RESERVATION_CONFIRMED = "reservation_confirmed" as const;
+const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
  * Creates (or resumes) the one durable reservation-confirmation notification.
@@ -90,7 +91,7 @@ export async function deliverReservationConfirmedWhatsApp(outboxId: string): Pro
   // the conditional update returns 0 rows and we bail out to avoid duplicate delivery.
   const claimed = await db
     .update(whatsappNotificationOutboxTable)
-    .set({ status: "processing" })
+    .set({ status: "processing", updatedAt: new Date() })
     .where(
       and(
         eq(whatsappNotificationOutboxTable.id, outbox.id),
@@ -126,8 +127,43 @@ export async function deliverReservationConfirmedWhatsApp(outboxId: string): Pro
   return true;
 }
 
+/**
+ * Releases claims left behind by a worker that crashed during delivery.
+ * updatedAt is advanced explicitly because the claim update must start the
+ * timeout window even when the ORM's $onUpdate hook is not involved.
+ */
+export async function resetStaleReservationConfirmedWhatsApps(): Promise<number> {
+  const staleBefore = new Date(Date.now() - PROCESSING_TIMEOUT_MS);
+  const reset = await db
+    .update(whatsappNotificationOutboxTable)
+    .set({
+      status: "pending",
+      lastError: "processing_timeout",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(whatsappNotificationOutboxTable.type, RESERVATION_CONFIRMED),
+        eq(whatsappNotificationOutboxTable.status, "processing"),
+        lt(whatsappNotificationOutboxTable.updatedAt, staleBefore),
+        isNull(whatsappNotificationOutboxTable.sentAt),
+      ),
+    )
+    .returning({ id: whatsappNotificationOutboxTable.id });
+
+  if (reset.length > 0) {
+    logger.warn(
+      { count: reset.length, staleBefore },
+      "[whatsapp-outbox] Reset stale processing rows for retry",
+    );
+  }
+  return reset.length;
+}
+
 /** Retries durable notifications left pending by a queue or provider failure. */
 export async function retryPendingReservationConfirmedWhatsApps(): Promise<void> {
+  await resetStaleReservationConfirmedWhatsApps();
+
   const pending = await db
     .select({
       reservationId: whatsappNotificationOutboxTable.reservationId,
@@ -137,7 +173,10 @@ export async function retryPendingReservationConfirmedWhatsApps(): Promise<void>
     .where(
       and(
         eq(whatsappNotificationOutboxTable.type, RESERVATION_CONFIRMED),
-        ne(whatsappNotificationOutboxTable.status, "sent"),
+        or(
+          eq(whatsappNotificationOutboxTable.status, "pending"),
+          eq(whatsappNotificationOutboxTable.status, "enqueued"),
+        ),
       ),
     )
     .limit(100);

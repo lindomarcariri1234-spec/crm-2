@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockInsert = vi.fn();
 const mockSelect = vi.fn();
 const mockUpdate = vi.fn();
+const mockLoggerWarn = vi.fn();
 
 vi.mock("@workspace/db", () => ({
   db: {
@@ -19,6 +20,7 @@ vi.mock("@workspace/db", () => ({
     enqueuedAt: "enqueued_at",
     sentAt: "sent_at",
     lastError: "last_error",
+    updatedAt: "updated_at",
   },
 }));
 
@@ -26,8 +28,9 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
   eq: vi.fn(),
   isNull: vi.fn(),
+  lt: vi.fn(),
   not: vi.fn(() => "not"),
-  ne: vi.fn(() => "ne"),
+  or: vi.fn(),
 }));
 
 const mockGenerateId = vi.fn(() => "outbox-1");
@@ -45,11 +48,12 @@ vi.mock("../queues/whatsapp-helpers.js", () => ({
 }));
 
 vi.mock("../lib/logger.js", () => ({
-  logger: { warn: vi.fn(), info: vi.fn() },
+  logger: { warn: (...args: unknown[]) => mockLoggerWarn(...args), info: vi.fn() },
 }));
 
 import {
   scheduleReservationConfirmedWhatsApp,
+  resetStaleReservationConfirmedWhatsApps,
 } from "../services/checkout/reservation-confirmation-outbox.js";
 
 let insertResults: object[][] = [];
@@ -151,6 +155,7 @@ describe("reservation confirmation WhatsApp outbox", () => {
       delivery: "direct",
     });
     expect(updates).toContainEqual(expect.objectContaining({ status: "pending", lastError: "delivery_failed" }));
+    expect(updates).toContainEqual(expect.objectContaining({ status: "processing", updatedAt: expect.any(Date) }));
     expect(updates).toContainEqual(expect.objectContaining({ status: "sent", sentAt: expect.any(Date) }));
   });
 
@@ -199,5 +204,31 @@ describe("reservation confirmation WhatsApp outbox", () => {
       { jobId: "reservation-confirmed:outbox-1" },
     );
     expect(mockDispatchReservationConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("resets processing rows older than 15 minutes and logs the recovered count", async () => {
+    claimResults = [[{ id: "stuck-outbox-1" }]];
+
+    const resetCount = await resetStaleReservationConfirmedWhatsApps();
+
+    expect(resetCount).toBe(1);
+    expect(updates).toContainEqual({
+      status: "pending",
+      lastError: "processing_timeout",
+      updatedAt: expect.any(Date),
+    });
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 1, staleBefore: expect.any(Date) }),
+      "[whatsapp-outbox] Reset stale processing rows for retry",
+    );
+  });
+
+  it("does not log when no processing rows are stale", async () => {
+    claimResults = [[]];
+
+    const resetCount = await resetStaleReservationConfirmedWhatsApps();
+
+    expect(resetCount).toBe(0);
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
   });
 });
