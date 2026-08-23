@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useUser, useClerk } from "@clerk/react";
 import { useGetMe, useGetCalendarStatus, getGetCalendarStatusQueryKey } from "@workspace/api-client-react";
@@ -42,6 +42,7 @@ import {
   Wallet,
   Award,
   X,
+  Menu,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -54,6 +55,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 const CALENDAR_CAN_CONNECT_ROLES: string[] = [ROLES.AGENCY_ADMIN, ROLES.SALES, ROLES.SUPER_ADMIN];
 
@@ -146,17 +148,67 @@ const AGENCY_NAVIGATION: NavItem[] = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { name: "Pipeline", href: "/pipeline", icon: Trello },
   { name: "Clientes", href: "/clients", icon: Users },
-  { name: "Viagens", href: "/trips", icon: Map },
+  {
+    name: "Viagens",
+    href: "/trips",
+    icon: Map,
+    children: [
+      { name: "Todas as viagens", href: "/trips", icon: Map },
+      { name: "Calendário", href: "/trips/calendar", icon: CalendarCheck },
+      { name: "Nova viagem", href: "/trips/new", icon: Map, roles: [ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER, ROLES.SUPPORT, ROLES.SUPER_ADMIN] },
+      { name: "Mídias", href: "/trips/media", icon: FolderOpen, roles: [ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER, ROLES.SUPPORT, ROLES.SUPER_ADMIN] },
+    ],
+  },
   { name: "Reservas", href: "/reservations", icon: CalendarCheck },
   { name: "Vouchers", href: "/vouchers", icon: QrCode },
-  { name: "Financeiro", href: "/financeiro", icon: DollarSign, hiddenFor: [ROLES.SUPPORT] },
-  { name: "Comunicação", href: "/comunicacao", icon: MessageSquare },
-  { name: "Campanhas", href: "/comunicacao/campanhas", icon: Megaphone },
-  { name: "Automações", href: "/automacoes", icon: Zap },
-  { name: "Marketing", href: "/marketing", icon: Target },
-  { name: "Fidelidade", href: "/fidelidade", icon: Star },
-  { name: "NPS", href: "/nps", icon: TrendingUp },
-  { name: "Cadastros", href: "/cadastros", icon: BookOpen },
+  {
+    name: "Financeiro",
+    href: "/financeiro",
+    icon: DollarSign,
+    hiddenFor: [ROLES.SUPPORT],
+    children: [
+      { name: "Visão geral", href: "/financeiro", icon: DollarSign },
+      { name: "Comissões", href: "/financeiro/commissions", icon: Award },
+      { name: "Despesas", href: "/financeiro/expenses", icon: Wallet },
+    ],
+  },
+  {
+    name: "Comunicação",
+    href: "/comunicacao",
+    icon: MessageSquare,
+    children: [
+      { name: "Central de comunicação", href: "/comunicacao", icon: MessageSquare },
+      { name: "Campanhas", href: "/comunicacao/campanhas", icon: Megaphone },
+      { name: "Automações", href: "/automacoes", icon: Zap, roles: [ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER, ROLES.SUPPORT, ROLES.SUPER_ADMIN] },
+    ],
+  },
+  {
+    name: "Relacionamento",
+    href: "/marketing",
+    icon: Target,
+    children: [
+      { name: "Marketing", href: "/marketing", icon: Target },
+      { name: "Fidelidade", href: "/fidelidade", icon: Star },
+      { name: "NPS", href: "/nps", icon: TrendingUp },
+      { name: "Indicações", href: "/indicacoes", icon: Share2 },
+      { name: "Embaixadores", href: "/embaixadores", icon: Award },
+    ],
+  },
+  {
+    name: "Cadastros",
+    href: "/cadastros",
+    icon: BookOpen,
+    children: [
+      { name: "Visão geral", href: "/cadastros", icon: BookOpen },
+      { name: "Fornecedores", href: "/cadastros/fornecedores", icon: Building2 },
+      { name: "Veículos", href: "/cadastros/veiculos", icon: Map },
+      { name: "Hospedagens", href: "/cadastros/hospedagens", icon: Building2 },
+      { name: "Destinos", href: "/cadastros/destinos", icon: Map },
+      { name: "Produtos", href: "/cadastros/produtos", icon: Package },
+      { name: "Layouts", href: "/cadastros/layouts", icon: FolderOpen },
+      { name: "Locais de embarque", href: "/cadastros/locais-embarque", icon: MapPin },
+    ],
+  },
   {
     name: "Analíticos",
     href: "/analytics",
@@ -164,9 +216,9 @@ const AGENCY_NAVIGATION: NavItem[] = [
     children: [
       { name: "Vendedores", href: "/analytics/vendedores", icon: UserCheck },
       { name: "Insights", href: "/insights", icon: BrainCircuit },
-      { name: "Gêmeo Digital", href: "/gemeo", icon: Activity },
+      { name: "Gêmeo Digital", href: "/gemeo", icon: Activity, roles: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN] },
       { name: "Histórico Comparativo", href: "/analytics/historico-comparativo", icon: History },
-      { name: "Receita", href: "/analytics/revenue", icon: Wallet },
+      { name: "Receita", href: "/analytics/revenue", icon: Wallet, roles: [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER] },
     ],
   },
   {
@@ -183,15 +235,21 @@ const AGENCY_NAVIGATION: NavItem[] = [
       { name: "Parceiros", href: "/loja/parceiros", icon: Building2 },
     ],
   },
-  { name: "Indicações", href: "/indicacoes", icon: Share2 },
-  { name: "Embaixadores", href: "/embaixadores", icon: Award },
   { name: "Downloads", href: "/downloads", icon: Download },
   { name: "Configurações", href: "/configuracoes", icon: Settings },
 ];
 
 const VENDOR_NAVIGATION: NavItem[] = [
   { name: "Meu Painel", href: "/meu-painel", icon: Gauge },
-  { name: "Viagens", href: "/trips", icon: Map },
+  {
+    name: "Viagens",
+    href: "/trips",
+    icon: Map,
+    children: [
+      { name: "Todas as viagens", href: "/trips", icon: Map },
+      { name: "Calendário", href: "/trips/calendar", icon: CalendarCheck },
+    ],
+  },
   { name: "Reservas", href: "/reservations", icon: CalendarCheck },
   { name: "Vouchers", href: "/vouchers", icon: QrCode },
   { name: "Clientes", href: "/clients", icon: Users },
@@ -220,7 +278,9 @@ function NavLink({
   depth?: number;
 }) {
   const visibleChildren = item.children?.filter(
-    (c) => (!c.hiddenFor || (userRole && !c.hiddenFor.includes(userRole)))
+    (c) =>
+      (!c.hiddenFor || (userRole && !c.hiddenFor.includes(userRole))) &&
+      (!c.roles || (!!userRole && c.roles.includes(userRole)))
   );
   const isActive =
     location === item.href ||
@@ -229,34 +289,117 @@ function NavLink({
   const childActive = visibleChildren?.some(
     (c) => location === c.href || (c.href !== "/" && location.startsWith(c.href))
   );
+  const [open, setOpen] = useState(Boolean(isActive || childActive));
+
+  useEffect(() => {
+    if (isActive || childActive) setOpen(true);
+  }, [isActive, childActive]);
 
   return (
     <div>
-      <Link
-        href={item.href}
-        className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-          depth > 0 ? "pl-7" : ""
-        } ${
-          isActive || childActive
-            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-            : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
-        }`}
-      >
-        <item.icon className="w-4 h-4 shrink-0" />
-        {item.name}
-        {hasChildren && (
-          <ChevronRight
-            className={`w-3 h-3 ml-auto transition-transform ${childActive ? "rotate-90" : ""}`}
-          />
-        )}
-      </Link>
-      {hasChildren && (isActive || childActive) && (
-        <div className="mt-0.5 space-y-0.5">
-          {visibleChildren!.map((child) => (
-            <NavLink key={child.href} item={child} location={location} userRole={userRole} depth={depth + 1} />
-          ))}
-        </div>
+      {hasChildren ? (
+        <>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={`submenu-${item.href.replace(/[^a-z0-9]/gi, "-")}`}
+            className={`flex w-full items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+              depth > 0 ? "pl-7" : ""
+            } ${
+              isActive || childActive
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+            }`}
+            onClick={() => setOpen((current) => !current)}
+          >
+            <item.icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">{item.name}</span>
+            <ChevronRight
+              className={`w-3 h-3 ml-auto transition-transform ${open ? "rotate-90" : ""}`}
+              aria-hidden="true"
+            />
+          </button>
+          {open && (
+            <div id={`submenu-${item.href.replace(/[^a-z0-9]/gi, "-")}`} className="mt-0.5 space-y-0.5">
+              {visibleChildren!.map((child) => (
+                <NavLink key={child.href} item={child} location={location} userRole={userRole} depth={depth + 1} />
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <Link
+          href={item.href}
+          aria-current={isActive ? "page" : undefined}
+          className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring ${
+            depth > 0 ? "pl-7" : ""
+          } ${
+            isActive
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-accent-foreground"
+          }`}
+        >
+          <item.icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">{item.name}</span>
+        </Link>
       )}
+    </div>
+  );
+}
+
+function NavigationMenu({
+  items,
+  location,
+  userRole,
+  onNavigate,
+}: {
+  items: NavItem[];
+  location: string;
+  userRole?: string;
+  onNavigate?: () => void;
+}) {
+  const visibleItems = items.filter(
+    (item) =>
+      (!item.hiddenFor || (userRole && !item.hiddenFor.includes(userRole))) &&
+      (!item.roles || (!!userRole && item.roles.includes(userRole)))
+  );
+
+  return (
+    <nav aria-label="Navegação principal" className="flex flex-col gap-0.5" onClick={(event) => {
+      if ((event.target as HTMLElement).closest("a")) onNavigate?.();
+    }}>
+      {visibleItems.map((item) => (
+        <NavLink key={item.name} item={item} location={location} userRole={userRole} />
+      ))}
+    </nav>
+  );
+}
+
+function TenantBrand({
+  tenantName,
+  tenantLogoUrl,
+  tenantPrimaryColor,
+}: {
+  tenantName: string;
+  tenantLogoUrl?: string;
+  tenantPrimaryColor: string;
+}) {
+  return (
+    <div className="px-4 py-3 flex items-center gap-3 border-b border-sidebar-border">
+      <div
+        className="w-8 h-8 rounded-md flex items-center justify-center text-white font-bold text-sm shrink-0 overflow-hidden"
+        style={{ background: tenantPrimaryColor }}
+      >
+        {tenantLogoUrl ? (
+          <img src={tenantLogoUrl} alt="" className="w-full h-full object-contain" />
+        ) : (
+          <span>{tenantName.charAt(0).toUpperCase()}</span>
+        )}
+      </div>
+      <div className="flex flex-col min-w-0">
+        <span className="font-bold text-sm text-sidebar-foreground truncate">{tenantName}</span>
+        <span className="text-xs text-sidebar-foreground/50">CRM Turismo</span>
+      </div>
     </div>
   );
 }
