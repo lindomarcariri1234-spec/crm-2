@@ -35,6 +35,7 @@ import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js
 const createClientMock = vi.hoisted(() => vi.fn());
 const createReservationMock = vi.hoisted(() => vi.fn());
 const createDealMock = vi.hoisted(() => vi.fn());
+const calculateCommissionMock = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => vi.fn());
 
 // Stable data fixtures — MUST be hoisted and reused across renders.
@@ -62,7 +63,9 @@ const STAGES_FIXTURE = vi.hoisted(() => ({
   data: [{ id: "stage-lead", name: "Lead", pipelineId: "pipe-1" }],
 }));
 
-const USERS_FIXTURE = vi.hoisted(() => ({ data: [] as unknown[] }));
+const USERS_FIXTURE = vi.hoisted(() => ({
+  data: [{ id: "seller-1", name: "Vendedor de Teste" }],
+}));
 
 // selectRegistry captures onValueChange handlers from every Select instance
 // in the order they are rendered to the DOM. Handlers from initial render:
@@ -90,7 +93,16 @@ vi.mock("@workspace/api-client-react", () => ({
   useUpdateClient: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCreateDeal: () => ({ mutateAsync: createDealMock, isPending: false }),
   useCreateReservation: () => ({ mutateAsync: createReservationMock, isPending: false }),
-  useCalculateCommission: () => ({ data: null }),
+  useCalculateCommission: (params: unknown) => {
+    calculateCommissionMock(params);
+    return {
+      data: {
+        commissionAmount: "85",
+        commissionType: "percentage",
+        commissionRate: "10",
+      },
+    };
+  },
   useListPayments: () => ({ data: { data: [] }, isLoading: false }),
   useDeleteClient: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -338,6 +350,7 @@ beforeEach(() => {
   createReservationMock.mockResolvedValue({ id: "res-456" });
   // Default: deal creation succeeds (only relevant when guard allows it through)
   createDealMock.mockResolvedValue({ id: "deal-789" });
+  calculateCommissionMock.mockClear();
 });
 
 afterEach(async () => {
@@ -349,6 +362,53 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservationId)", () => {
+  it("passes the discounted reservation amount to the commission preview", async () => {
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: null,
+        onSave: vi.fn(),
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    // Capture the initial handlers before state changes append handlers from
+    // subsequent renders. With no boarding points, the financial selects are:
+    // [7] payment method and [8] consultant/seller.
+    const tripIdHandler = selectRegistry.handlers[4];
+    const consultantHandler = selectRegistry.handlers[8];
+    expect(tripIdHandler).toBeDefined();
+    expect(consultantHandler).toBeDefined();
+
+    const numberInputs = () =>
+      Array.from(container.querySelectorAll<HTMLInputElement>('input[type="number"]'));
+    const quantityInput = numberInputs().find(input => input.placeholder === "1");
+    const discountInput = numberInputs().filter(input => input.placeholder === "0,00")[1];
+    expect(quantityInput).toBeDefined();
+    expect(discountInput).toBeDefined();
+
+    await flushAct(() => {
+      tripIdHandler?.("trip-1");
+      consultantHandler?.("seller-1");
+    });
+
+    // Ticket price comes from the selected trip (R$500), then the form sets
+    // quantity to 2 and applies a R$150 discount: 500 × 2 − 150 = R$850.
+    await flushAct(() => {
+      if (quantityInput) setNativeInputValue(quantityInput, "2");
+      if (discountInput) setNativeInputValue(discountInput, "150");
+    });
+
+    const latestCall = calculateCommissionMock.mock.calls.at(-1);
+    expect(latestCall?.[0]).toMatchObject({
+      sellerId: "seller-1",
+      saleAmount: 850,
+      tripId: "trip-1",
+    });
+  });
+
   it("shows an inline WhatsApp warning without blocking save for an invalid number", async () => {
     const { container } = await renderComponent(
       createElement(ClientModal, {
