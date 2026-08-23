@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createElement } from "react";
+import { act, createElement } from "react";
 import {
   renderComponent,
   cleanupRoots,
@@ -27,6 +27,23 @@ const mockGetTripBoardingPanel = vi.hoisted(() => vi.fn());
 const mockGetTrip = vi.hoisted(() => vi.fn());
 const mockRefetch = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 const mockToast = vi.hoisted(() => vi.fn());
+const mockCreateObjectURL = vi.hoisted(() => vi.fn(() => "blob:passengers-csv"));
+const mockRevokeObjectURL = vi.hoisted(() => vi.fn());
+
+function readBlobAsText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+}
+
+function parseCsvLine(line: string): string[] {
+  return line
+    .split(",")
+    .map(value => value.slice(1, -1).replace(/""/g, '"'));
+}
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -209,7 +226,17 @@ function makeAdultPassenger() {
   };
 }
 
-function panelData(passengers: ReturnType<typeof makeLapPassenger>[]) {
+function panelData(
+  passengers: ReturnType<typeof makeLapPassenger>[],
+  freePassengers: Array<{
+    id: string;
+    name: string;
+    cpf: string | null;
+    whatsapp: string | null;
+    role: string;
+    seatNumber: string | null;
+  }> = [],
+) {
   return {
     data: {
       tripId: "trip-1",
@@ -217,7 +244,7 @@ function panelData(passengers: ReturnType<typeof makeLapPassenger>[]) {
       departureDate: null,
       totalPassengers: passengers.length,
       passengers,
-      freePassengers: [],
+      freePassengers,
       boardingPoints: [],
     },
     isLoading: false,
@@ -231,6 +258,17 @@ function panelData(passengers: ReturnType<typeof makeLapPassenger>[]) {
 
 beforeEach(() => {
   installMockEventSource();
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    writable: true,
+    value: mockCreateObjectURL,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    writable: true,
+    value: mockRevokeObjectURL,
+  });
   mockGetTrip.mockReturnValue({ data: undefined });
   mockGetTripBoardingPanel.mockReturnValue(panelData([makeLapPassenger()]));
   mockToast.mockReturnValue(undefined);
@@ -240,6 +278,7 @@ beforeEach(() => {
 afterEach(async () => {
   await cleanupRoots();
   restoreEventSource();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -332,6 +371,58 @@ describe("PassengersList — badge de Gratuidade", () => {
     expect(firstRow).not.toBeNull();
     expect(firstRow!.textContent).toContain("João Adulto");
     expect(firstRow!.textContent).toContain("Gratuidade");
+  });
+});
+
+describe("PassengersList — exportação CSV da coluna Gratuidade", () => {
+  it("inclui 'Sim' para passageiros gratuitos, deixa regulares vazios e marca freePassengers", async () => {
+    const flaggedPassenger = {
+      ...makeAdultPassenger(),
+      name: "Passageiro Gratuito",
+      isGratuidade: true,
+    };
+    const regularPassenger = {
+      ...makeAdultPassenger(),
+      id: "pax-adult-002",
+      reservationId: "res-003",
+      name: "Passageiro Regular",
+      isGratuidade: false,
+    };
+    const freePassenger = {
+      id: "free-guide-001",
+      name: "Guia Gratuito",
+      cpf: null,
+      whatsapp: null,
+      role: "guide",
+      seatNumber: "1A",
+    };
+    mockGetTripBoardingPanel.mockReturnValue(
+      panelData([flaggedPassenger, regularPassenger], [freePassenger]),
+    );
+
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+    const csvButton = Array.from(container.querySelectorAll("button")).find(
+      button => button.textContent?.trim() === "CSV",
+    );
+    expect(csvButton).not.toBeUndefined();
+
+    await act(async () => {
+      csvButton!.click();
+    });
+
+    expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
+    const blob = mockCreateObjectURL.mock.calls[0][0] as Blob;
+    const csv = (await readBlobAsText(blob)).replace(/^\uFEFF/, "");
+    const lines = csv.split("\n");
+    const header = parseCsvLine(lines[0]);
+    const gratitudeIndex = header.indexOf("Gratuidade");
+
+    expect(gratitudeIndex).toBeGreaterThanOrEqual(0);
+    expect(parseCsvLine(lines[1])[gratitudeIndex]).toBe("Sim");
+    expect(parseCsvLine(lines[2])[gratitudeIndex]).toBe("");
+    expect(parseCsvLine(lines[3])[gratitudeIndex]).toBe("Sim");
   });
 });
 
