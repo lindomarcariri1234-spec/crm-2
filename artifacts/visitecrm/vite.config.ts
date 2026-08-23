@@ -10,19 +10,19 @@ const port = rawPort ? Number(rawPort) : 5173;
 const basePath = process.env.BASE_PATH ?? "/";
 
 
-// In development, force the test Clerk publishable key so Clerk does NOT try to
-// load clerk.browser.js from clerk.visitecrm.com (the production FAPI custom
-// domain). That domain only exists in prod. The plain CLERK_PUBLISHABLE_KEY dev
-// env var holds the test key; we fall back to the literal in case it is unset.
-const clerkKeyOverride =
-  process.env.NODE_ENV !== "production"
-    ? {
-        "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(
-          process.env.CLERK_PUBLISHABLE_KEY ??
-            "pk_test_ZWFnZXItZ3JhY2tsZS0yOC5jbGVyay5hY2NvdW50cy5kZXYk",
-        ),
-      }
-    : {};
+// Replit provisions CLERK_PUBLISHABLE_KEY for the active Clerk environment:
+// the development tenant for workspace previews and the production tenant for
+// published deployments. Keeping this mapping at build time prevents an old
+// VITE_ key from pointing the preview at a different Clerk instance, whose
+// redirect URLs would not be managed for the current replit.dev domain.
+//
+// Do not add a hard-coded key or temporary preview URL here. Replit registers
+// the active preview redirect URLs automatically for its managed Clerk tenant.
+const clerkKeyOverride = {
+  "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(
+    process.env.CLERK_PUBLISHABLE_KEY ?? "",
+  ),
+};
 
 export default defineConfig({
   base: basePath,
