@@ -4,12 +4,16 @@ const {
   mockDbSelect,
   mockDbInsert,
   mockSendReservationCancellationEmail,
+  mockSendReminderHtmlEmail,
   mockGetCancellationEmailQueue,
+  mockInsertClientNotification,
 } = vi.hoisted(() => ({
   mockDbSelect: vi.fn(),
   mockDbInsert: vi.fn(),
   mockSendReservationCancellationEmail: vi.fn(),
+  mockSendReminderHtmlEmail: vi.fn(),
   mockGetCancellationEmailQueue: vi.fn(),
+  mockInsertClientNotification: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -47,7 +51,7 @@ vi.mock("@workspace/email", () => ({
   sendReferralWelcomeEmail: vi.fn(),
   sendReferralTierUpgradeEmail: vi.fn(),
   sendReferralReversedEmail: vi.fn(),
-  sendReminderHtmlEmail: vi.fn(),
+  sendReminderHtmlEmail: mockSendReminderHtmlEmail,
   sendReferralCodeSuspendedEmail: vi.fn(),
   sendAgencySuspendedEmail: vi.fn(),
   sendAgencyReactivatedEmail: vi.fn(),
@@ -75,14 +79,17 @@ vi.mock("../lib/redis.js", () => ({
 }));
 
 vi.mock("../lib/client-notifications.js", () => ({
-  insertClientNotification: vi.fn(),
+  insertClientNotification: mockInsertClientNotification,
 }));
 
 vi.mock("../queues/whatsapp-helpers.js", () => ({
   dispatchWhatsAppReferralReversed: vi.fn(),
 }));
 
-import { enqueueReservationCancellationEmail } from "../queues/email-helpers.js";
+import {
+  dispatchTripRestorationNotification,
+  enqueueReservationCancellationEmail,
+} from "../queues/email-helpers.js";
 
 function makeSelectQuery(row: Record<string, unknown>) {
   const query = {
@@ -132,6 +139,7 @@ beforeEach(() => {
   });
 });
 
+
 describe("enqueueReservationCancellationEmail", () => {
   it("sends the cancellation email with Portuguese date formatting and agency details", async () => {
     setReservationRow();
@@ -169,6 +177,57 @@ describe("enqueueReservationCancellationEmail", () => {
     ).resolves.toBeUndefined();
 
     expect(mockSendReservationCancellationEmail).not.toHaveBeenCalled();
+    expect(mockDbInsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("dispatchTripRestorationNotification", () => {
+  function setTripRestorationRow(overrides: Record<string, unknown> = {}) {
+    const row = {
+      reservationNumber: "RES-2026-0042",
+      voucherCode: "VCHR-0042",
+      clientId: "client-1",
+      clientName: "João da Silva",
+      clientEmail: "joao@example.com",
+      tripName: "Rota das Falésias",
+      destination: "Canoa Quebrada",
+      departureDate: new Date("2026-08-01T12:00:00.000Z"),
+      agencyName: "Cariri Turismo",
+      ...overrides,
+    };
+    mockDbSelect.mockReturnValue(makeSelectQuery(row));
+  }
+
+  it("writes the portal notice and sends an email that says the old booking remains cancelled", async () => {
+    setTripRestorationRow();
+    mockSendReminderHtmlEmail.mockResolvedValue({ success: true, messageId: "message-2" });
+
+    await dispatchTripRestorationNotification("reservation-1", "tenant-1");
+
+    expect(mockInsertClientNotification).toHaveBeenCalledWith("client-1", "tenant-1", "trip_restored", {
+      title: "Viagem retomada — faça uma nova reserva",
+      tripName: "Rota das Falésias",
+      destination: "Canoa Quebrada",
+      departureDate: "01/08/2026",
+      reservationNumber: "RES-2026-0042",
+      agencyName: "Cariri Turismo",
+    });
+    expect(mockSendReminderHtmlEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "joao@example.com",
+      subject: "Viagem retomada — Rota das Falésias",
+      fromName: "Cariri Turismo",
+      html: expect.stringContaining("continua cancelada e não foi reativada automaticamente"),
+    }));
+    expect(mockDbInsert).toHaveBeenCalledWith(expect.anything());
+  });
+
+  it("keeps the portal notice when the client has no email address", async () => {
+    setTripRestorationRow({ clientEmail: null });
+
+    await dispatchTripRestorationNotification("reservation-without-email", "tenant-1");
+
+    expect(mockInsertClientNotification).toHaveBeenCalledOnce();
+    expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
     expect(mockDbInsert).not.toHaveBeenCalled();
   });
 });

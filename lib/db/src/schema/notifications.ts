@@ -10,6 +10,7 @@ export type ClientNotificationType =
   | "referral_bonus_paid"
   | "referral_link_clicked"
   | "reservation_cancelled"
+  | "trip_restored"
   | "loyalty_tier_upgraded";
 
 export interface ClientNotificationPayload {
@@ -17,6 +18,11 @@ export interface ClientNotificationPayload {
   referralCode?: string;
   bonusAmount?: number;
   agencyName?: string;
+  title?: string;
+  tripName?: string;
+  destination?: string;
+  departureDate?: string;
+  reservationNumber?: string;
   voucherCode?: string;
   loyaltyPointsRefunded?: number;
   // loyalty_tier_upgraded

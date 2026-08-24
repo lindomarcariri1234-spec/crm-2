@@ -179,7 +179,10 @@ export type ClientNotificationType =
   | "referral_converted"
   | "referral_bonus_released"
   | "referral_bonus_paid"
-  | "referral_link_clicked";
+  | "referral_link_clicked"
+  | "reservation_cancelled"
+  | "trip_restored"
+  | "loyalty_tier_upgraded";
 
 export interface ClientNotification {
   id: string;
@@ -189,6 +192,11 @@ export interface ClientNotification {
     referralCode?: string;
     bonusAmount?: number;
     agencyName?: string;
+    title?: string;
+    tripName?: string;
+    destination?: string;
+    departureDate?: string;
+    reservationNumber?: string;
   };
   readAt: string | null;
   createdAt: string;

@@ -18,7 +18,11 @@ import { CreateTripBody, UpdateTripBody } from "@workspace/api-zod";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { scheduleCalendarSyncTrip, scheduleCalendarDeleteEventsForTrip } from "../lib/google-calendar/schedule-sync";
 import { sendManifestEmail } from "@workspace/email";
-import { dispatchReferralReversedEmail, enqueueReservationCancellationEmail } from "../queues/email-helpers";
+import {
+  dispatchReferralReversedEmail,
+  enqueueReservationCancellationEmail,
+  dispatchTripRestorationNotification,
+} from "../queues/email-helpers";
 import { cancelDealOnReservationCancellation } from "../services/pipeline-automation";
 import { getPdfQueue } from "../queues/index";
 import { areWorkersEnabled } from "../lib/redis";
@@ -516,6 +520,38 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
     if (parsed.data.coverImage !== undefined) updates.coverImage = parsed.data.coverImage ?? null;
     if (parsed.data.seatLayout !== undefined) updates.seatLayout = parsed.data.seatLayout ?? null;
     if (parsed.data.layoutId !== undefined) updates.layoutId = parsed.data.layoutId ?? null;
+
+    // Cancelling a trip also cancels its reservations. Restoring the trip must
+    // not silently make those reservations active again: keep them cancelled
+    // and notify each affected client that they need to book again.
+    const isRestoringCancelledTrip =
+      parsed.data.status != null &&
+      (
+        parsed.data.status === TRIP_STATUS.PUBLISHED ||
+        parsed.data.status === TRIP_STATUS.CONFIRMED ||
+        parsed.data.status === TRIP_STATUS.ACTIVE
+      );
+    const restoredReservations: Array<{ id: string; clientId: string | null }> = [];
+    if (isRestoringCancelledTrip) {
+      const [currentTrip] = await db
+        .select({ status: tripsTable.status })
+        .from(tripsTable)
+        .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!currentTrip) { next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND")); return; }
+
+      if (currentTrip.status === TRIP_STATUS.CANCELLED) {
+        const affectedReservations = await db
+          .select({ id: reservationsTable.id, clientId: reservationsTable.clientId })
+          .from(reservationsTable)
+          .where(and(
+            eq(reservationsTable.tripId, req.params.id),
+            eq(reservationsTable.tenantId, me.tenantId),
+            eq(reservationsTable.status, RESERVATION_STATUS.CANCELLED),
+          ));
+        restoredReservations.push(...affectedReservations);
+      }
+    }
     const [patchTenantRow] = await db
       .select({ planId: tenantsTable.planId })
       .from(tenantsTable)
@@ -799,6 +835,19 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
     }
     res.json(formatTrip(trip));
     scheduleCalendarSyncTrip(req.params.id).catch((err) => logger.warn({ err }, "[trips] calendar sync (update) failed"));
+    if (isRestoringCancelledTrip && restoredReservations.length > 0) {
+      // The reservation status intentionally remains cancelled. This is a
+      // best-effort notification path after the trip update has committed.
+      for (const reservation of restoredReservations) {
+        if (reservation.clientId) {
+          dispatchTripRestorationNotification(reservation.id, me.tenantId)
+            .catch((err) => req.log.error(
+              { err, reservationId: reservation.id },
+              "[trips] Error notifying client after trip restoration",
+            ));
+        }
+      }
+    }
     // When free-passenger seats change, push an SSE seat-map update so the
     // seat map page and PassengersList auto-refresh without a manual reload.
     // (broadcastSeatUpdate reads tripsTable.freePassengers, so must fire

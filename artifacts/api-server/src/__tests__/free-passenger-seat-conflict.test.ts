@@ -5,11 +5,12 @@ import request from "supertest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
-const { selectQueue, mockSelect, mockUpdate } = vi.hoisted(() => {
+const { selectQueue, mockSelect, mockUpdate, mockDispatchTripRestorationNotification } = vi.hoisted(() => {
   const selectQueue: unknown[][] = [];
   const mockSelect = vi.fn();
   const mockUpdate = vi.fn();
-  return { selectQueue, mockSelect, mockUpdate };
+  const mockDispatchTripRestorationNotification = vi.fn().mockResolvedValue(undefined);
+  return { selectQueue, mockSelect, mockUpdate, mockDispatchTripRestorationNotification };
 });
 
 vi.mock("@workspace/db", () => ({
@@ -126,6 +127,7 @@ vi.mock("../queues/email-helpers.js", () => ({
   enqueueReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined),
   enqueueReservationCancellationEmail: vi.fn().mockResolvedValue(undefined),
   enqueueNewBookingNotificationEmail: vi.fn().mockResolvedValue(undefined),
+  dispatchTripRestorationNotification: mockDispatchTripRestorationNotification,
 }));
 
 vi.mock("../queues/commission-sync-helper.js", () => ({
@@ -145,6 +147,7 @@ vi.mock("../routes/payments.js", () => ({
 import { requireAuth } from "../lib/tenant.js";
 import { addSeatClient, removeSeatClient } from "../lib/seat-sse.js";
 import { broadcastSeatUpdate } from "../lib/realtime.js";
+import { dispatchTripRestorationNotification } from "../queues/email-helpers.js";
 import { eq } from "drizzle-orm";
 import tripsRouter from "../routes/trips.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
@@ -263,6 +266,7 @@ const PLAN_ROW = { supportedFeatures: [] };
 describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
   const requireAuthMock = vi.mocked(requireAuth);
   const broadcastSeatUpdateMock = vi.mocked(broadcastSeatUpdate);
+  const tripRestorationNotificationMock = vi.mocked(dispatchTripRestorationNotification);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -407,6 +411,69 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
 
     expect(res.status).toBe(200);
     expect(broadcastSeatUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("notifies clients with cancelled reservations when a cancelled trip is restored", async () => {
+    const app = buildApp();
+
+    selectQueue.push(
+      [{ status: "cancelled" }],
+      [{ id: "res-cancelled-1", clientId: "client-001" }, { id: "res-cancelled-2", clientId: null }],
+      [TENANT_ROW],
+      [PLAN_ROW],
+      [{ ...FAKE_TRIP, status: "active" }],
+    );
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({ status: "active" });
+
+    expect(res.status).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(tripRestorationNotificationMock).toHaveBeenCalledOnce();
+    });
+    expect(tripRestorationNotificationMock).toHaveBeenCalledWith("res-cancelled-1", FAKE_USER.tenantId);
+  });
+
+  it("also notifies clients when a cancelled trip is restored as confirmed", async () => {
+    const app = buildApp();
+
+    selectQueue.push(
+      [{ status: "cancelled" }],
+      [{ id: "res-cancelled-1", clientId: "client-001" }],
+      [TENANT_ROW],
+      [PLAN_ROW],
+      [{ ...FAKE_TRIP, status: "confirmed" }],
+    );
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({ status: "confirmed" });
+
+    expect(res.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(tripRestorationNotificationMock).toHaveBeenCalledOnce();
+    });
+    expect(tripRestorationNotificationMock).toHaveBeenCalledWith("res-cancelled-1", FAKE_USER.tenantId);
+  });
+
+  it("does not notify clients when a trip was already live", async () => {
+    const app = buildApp();
+
+    selectQueue.push(
+      [{ status: "active" }],
+      [TENANT_ROW],
+      [PLAN_ROW],
+      [FAKE_TRIP],
+    );
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({ status: "published" });
+
+    expect(res.status).toBe(200);
+    expect(tripRestorationNotificationMock).not.toHaveBeenCalled();
   });
 
   it("returns 200 when freePassengers have no seatNumber set (null)", async () => {

@@ -19,6 +19,10 @@ function notificationLabel(type: ClientNotification["type"], payload: ClientNoti
         : "Seu bônus de indicação foi pago!";
     case "referral_link_clicked":
       return "Alguém acessou sua página via link de indicação!";
+    case "trip_restored":
+      return payload.tripName
+        ? `A viagem ${payload.tripName} foi retomada. Faça uma nova reserva.`
+        : "A viagem foi retomada. Faça uma nova reserva.";
     default:
       return "Nova notificação";
   }

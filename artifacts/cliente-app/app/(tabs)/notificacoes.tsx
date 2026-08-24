@@ -34,6 +34,7 @@ function notificationTitle(notification: ClientNotification): string {
     referral_bonus_paid: "Cashback liberado",
     referral_link_clicked: "Seu link de indicação foi acessado",
     loyalty_tier_upgraded: "Você subiu de nível",
+    trip_restored: "Viagem retomada — faça uma nova reserva",
   };
   return labels[notification.type] ?? "Atualização da sua viagem";
 }

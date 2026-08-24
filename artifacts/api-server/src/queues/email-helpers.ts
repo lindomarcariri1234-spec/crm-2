@@ -162,6 +162,131 @@ export async function enqueueReservationCancellationEmail(
   }
 }
 
+/**
+ * Notifies a client that a previously cancelled trip is available again.
+ *
+ * Trip cancellation deliberately leaves its reservations cancelled, so this
+ * notification must never imply that the old booking was reinstated. The
+ * in-app notification is useful even when the client has no email address;
+ * email delivery is best-effort and is recorded in email_logs.
+ */
+export async function dispatchTripRestorationNotification(
+  reservationId: string,
+  tenantId: string,
+): Promise<void> {
+  const [row] = await db
+    .select({
+      reservationNumber: reservationsTable.reservationNumber,
+      voucherCode: reservationsTable.voucherCode,
+      clientId: reservationsTable.clientId,
+      clientName: clientsTable.name,
+      clientEmail: clientsTable.email,
+      tripName: tripsTable.name,
+      destination: tripsTable.destination,
+      departureDate: tripsTable.departureDate,
+      agencyName: tenantsTable.name,
+    })
+    .from(reservationsTable)
+    .innerJoin(clientsTable, eq(reservationsTable.clientId, clientsTable.id))
+    .innerJoin(tripsTable, eq(reservationsTable.tripId, tripsTable.id))
+    .innerJoin(tenantsTable, eq(reservationsTable.tenantId, tenantsTable.id))
+    .where(and(
+      eq(reservationsTable.id, reservationId),
+      eq(reservationsTable.tenantId, tenantId),
+      eq(reservationsTable.status, "cancelled"),
+    ))
+    .limit(1);
+
+  if (!row?.clientId) {
+    logger.warn({ reservationId, tenantId }, "[trip-restoration] Reservation/client not found — skipping");
+    return;
+  }
+
+  const departureDate = row.departureDate
+    ? new Date(row.departureDate).toLocaleDateString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      timeZone: "America/Sao_Paulo",
+    })
+    : "A confirmar";
+  const reservationNumber = row.reservationNumber ?? row.voucherCode ?? "";
+  const agencyName = row.agencyName ?? "Agência";
+  const tripName = row.tripName ?? "sua viagem";
+  const safe = (value: string) => escapeHtmlEmail(value);
+
+  try {
+    await insertClientNotification(row.clientId, tenantId, "trip_restored", {
+      title: "Viagem retomada — faça uma nova reserva",
+      tripName,
+      destination: row.destination ?? "",
+      departureDate,
+      reservationNumber,
+      agencyName,
+    });
+  } catch (err) {
+    logger.warn({ err, reservationId, tenantId }, "[trip-restoration] In-app notification failed");
+  }
+
+  if (!row.clientEmail) {
+    logger.info({ reservationId, tenantId }, "[trip-restoration] Client has no email — in-app notification only");
+    return;
+  }
+
+  const subject = `Viagem retomada — ${tripName}`;
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;padding:24px;">
+      <h2 style="color:#166534;">A viagem está disponível novamente</h2>
+      <p>Olá, <strong>${safe(row.clientName ?? row.clientEmail)}</strong>!</p>
+      <p>A agência <strong>${safe(agencyName)}</strong> retomou a viagem abaixo.</p>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:20px 0;">
+        <p style="margin:0 0 8px;"><strong>${safe(tripName)}</strong></p>
+        <p style="margin:4px 0;">Destino: ${safe(row.destination ?? "A confirmar")}</p>
+        <p style="margin:4px 0;">Saída: ${safe(departureDate)}</p>
+      </div>
+      <p><strong>Atenção:</strong> sua reserva anterior (${safe(reservationNumber)}) continua cancelada e não foi reativada automaticamente.</p>
+      <p>Entre em contato com a agência ou acesse o portal para fazer uma nova reserva, caso ainda queira viajar.</p>
+      <p style="font-size:12px;color:#6b7280;margin-top:28px;">Esta mensagem foi enviada porque você tinha uma reserva nesta viagem.</p>
+    </div>`;
+
+  const emailLogId = generateId();
+  try {
+    const result = await sendReminderHtmlEmail({
+      to: row.clientEmail,
+      subject,
+      html,
+      fromName: agencyName,
+    });
+    await db.insert(emailLogsTable).values({
+      id: emailLogId,
+      tenantId,
+      reservationId,
+      recipient: row.clientEmail,
+      subject,
+      status: result.success ? "sent" : "failed",
+      messageId: result.messageId ?? null,
+      errorMessage: result.error ?? null,
+    });
+    logger.info({ emailLogId, reservationId, tenantId, success: result.success }, "[trip-restoration] Email processed");
+  } catch (err) {
+    logger.warn({ err, reservationId, tenantId }, "[trip-restoration] Email send failed");
+    try {
+      await db.insert(emailLogsTable).values({
+        id: emailLogId,
+        tenantId,
+        reservationId,
+        recipient: row.clientEmail,
+        subject,
+        status: "failed",
+        messageId: null,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
+    } catch (logErr) {
+      logger.warn({ err: logErr, reservationId, tenantId }, "[trip-restoration] Failed to record email failure");
+    }
+  }
+}
+
 async function buildCancellationEmailPropsFromReservation(
   reservationId: string,
   tenantId: string,
