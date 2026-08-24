@@ -237,6 +237,31 @@ describe("use-wizard-state — DUPLICATE_RESERVATION handling", () => {
 
     expect(result.current.submitError).toBeNull();
   });
+
+  it("clears submitError when going back from the payment step", async () => {
+    const { useWizardState } = await import(
+      "../pages/vitrine/_wizard/use-wizard-state.js"
+    );
+    const store = makeStore();
+    const { result } = await renderHook(() =>
+      useWizardState({ slug: "loja-teste", productSlug: "viagem-teste", store }),
+    );
+
+    await flushAct(() => {
+      result.current.setStep("pagamento");
+      result.current.setSubmitError("Reserva duplicada.");
+    });
+
+    expect(result.current.step).toBe("pagamento");
+    expect(result.current.submitError).toBe("Reserva duplicada.");
+
+    await flushAct(() => {
+      result.current.goBack();
+    });
+
+    expect(result.current.step).toBe("assento");
+    expect(result.current.submitError).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

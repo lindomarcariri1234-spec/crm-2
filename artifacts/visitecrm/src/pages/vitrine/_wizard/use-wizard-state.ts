@@ -66,7 +66,7 @@ export function useWizardState({
   const [loadingProduct, setLoadingProduct] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
-  const [step, setStep] = useState<Step>("dados");
+  const [step, setStepState] = useState<Step>("dados");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [completedOrder, setCompletedOrder] = useState<CompletedOrder | null>(null);
@@ -220,6 +220,13 @@ export function useWizardState({
 
   function set(field: keyof WizardForm, value: string) {
     setFormState((p) => ({ ...p, [field]: value }));
+  }
+
+  function setStep(nextStep: Step) {
+    if (nextStep !== "pagamento") {
+      setSubmitError(null);
+    }
+    setStepState(nextStep);
   }
 
   const basePrice = product ? parseFloat(product.salePrice ?? product.price) : 0;
