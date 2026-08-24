@@ -2,7 +2,7 @@ import { Router, type NextFunction } from "express";
 import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { getRedisStatus, fetchUpstashDailyStats, areWorkersEnabled } from "../lib/redis";
-import { getWebhookAuditStatus, recheckWebhookAudit } from "../lib/stripeSync";
+import { getStripeSyncTablesStatus, getWebhookAuditStatus, recheckWebhookAudit } from "../lib/stripeSync";
 import { getDriftSnapshot, getOrphanDealsCount, getClientFinancialDriftCount, cleanupOrphanDeals, repairSeatDriftOnly } from "../lib/seat-reconciliation";
 import { ROLES } from "@workspace/permissions";
 
@@ -17,10 +17,11 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 
-    const [redisStatus, dailyStats, webhookAudit, driftSnapshot, orphanDeals, clientFinancialDrift] = await Promise.all([
+    const [redisStatus, dailyStats, webhookAudit, stripeSyncTables, driftSnapshot, orphanDeals, clientFinancialDrift] = await Promise.all([
       Promise.resolve(getRedisStatus()),
       fetchUpstashDailyStats(),
       Promise.resolve(getWebhookAuditStatus()),
+      Promise.resolve(getStripeSyncTablesStatus()),
       getDriftSnapshot(),
       getOrphanDealsCount(),
       getClientFinancialDriftCount(),
@@ -49,6 +50,7 @@ router.get("/admin/system-health", async (req, res, next: NextFunction): Promise
         endpoints: webhookAudit.endpoints,
         checkedAt: webhookAudit.checkedAt,
       },
+      stripeSyncTables,
       seatDrift: {
         tripsChecked: driftSnapshot.tripsChecked,
         tripsWithDrift: driftSnapshot.tripsWithDrift,

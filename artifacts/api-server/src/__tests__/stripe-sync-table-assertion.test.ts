@@ -93,7 +93,11 @@ vi.mock("../lib/id.js", () => ({
 
 // ─── Import AFTER mocks ───────────────────────────────────────────────────────
 
-import { initStripeSync, _resetDuplicateWebhookAlertStateForTesting } from "../lib/stripeSync.js";
+import {
+  getStripeSyncTablesStatus,
+  initStripeSync,
+  _resetDuplicateWebhookAlertStateForTesting,
+} from "../lib/stripeSync.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -131,6 +135,10 @@ describe("initStripeSync — boot-time stripe.* table assertion", () => {
     expect(errors.some((m) => m.includes("build.mjs"))).toBe(true);
     // Must NOT log the success info line
     expect(infoMessages().some((m) => m.includes("stripe.accounts table verified"))).toBe(false);
+    expect(getStripeSyncTablesStatus()).toEqual({
+      ok: false,
+      checkedAt: expect.any(String),
+    });
   });
 
   it("logs logger.info confirming the table and does NOT log an error when stripe.accounts exists", async () => {
@@ -140,6 +148,10 @@ describe("initStripeSync — boot-time stripe.* table assertion", () => {
 
     expect(infoMessages().some((m) => m.includes("stripe.accounts table verified"))).toBe(true);
     expect(errorMessages().some((m) => m.includes("CRITICAL"))).toBe(false);
+    expect(getStripeSyncTablesStatus()).toEqual({
+      ok: true,
+      checkedAt: expect.any(String),
+    });
   });
 
   it("logs logger.warn (not error) and does not crash when the assertion query itself throws", async () => {
@@ -149,5 +161,9 @@ describe("initStripeSync — boot-time stripe.* table assertion", () => {
 
     expect(warnMessages().some((m) => m.includes("Could not verify stripe.* table existence"))).toBe(true);
     expect(errorMessages().some((m) => m.includes("CRITICAL"))).toBe(false);
+    expect(getStripeSyncTablesStatus()).toEqual({
+      ok: null,
+      checkedAt: expect.any(String),
+    });
   });
 });

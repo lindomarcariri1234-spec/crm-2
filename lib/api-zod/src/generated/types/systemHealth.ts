@@ -7,6 +7,7 @@
  */
 import type { SystemHealthRedis } from "./systemHealthRedis";
 import type { SystemHealthStripeWebhookAudit } from "./systemHealthStripeWebhookAudit";
+import type { SystemHealthStripeSyncTables } from "./systemHealthStripeSyncTables";
 
 export interface SystemHealthSeatDrift {
   tripsChecked: number;
@@ -27,6 +28,7 @@ export interface SystemHealthClientFinancialDrift {
 export interface SystemHealth {
   redis: SystemHealthRedis;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
+  stripeSyncTables: SystemHealthStripeSyncTables;
   seatDrift?: SystemHealthSeatDrift;
   pipelineOrphans?: SystemHealthPipelineOrphans;
   clientFinancialDrift?: SystemHealthClientFinancialDrift;

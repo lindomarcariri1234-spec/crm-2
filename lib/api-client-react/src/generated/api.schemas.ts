@@ -63,6 +63,11 @@ export interface SystemHealthStripeWebhookAudit {
   checkedAt: string | null;
 }
 
+export interface SystemHealthStripeSyncTables {
+  ok: boolean | null;
+  checkedAt: string | null;
+}
+
 export interface SystemHealthSeatDrift {
   tripsChecked: number;
   tripsWithDrift: number;
@@ -83,6 +88,7 @@ export interface SystemHealth {
   redis: SystemHealthRedis;
   workers: SystemHealthWorkers;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
+  stripeSyncTables: SystemHealthStripeSyncTables;
   seatDrift?: SystemHealthSeatDrift;
   pipelineOrphans?: SystemHealthPipelineOrphans;
   clientFinancialDrift?: SystemHealthClientFinancialDrift;

@@ -18,16 +18,19 @@ import { ROLES } from "@workspace/permissions";
 // ---------------------------------------------------------------------------
 const {
   mockRequireAuth,
+  mockGetStripeSyncTablesStatus,
   mockCleanupOrphanDeals,
   mockRepairSeatDriftOnly,
   mockRunSeatReconciliationCron,
 } = vi.hoisted(() => {
   const mockRequireAuth = vi.fn();
+  const mockGetStripeSyncTablesStatus = vi.fn();
   const mockCleanupOrphanDeals = vi.fn();
   const mockRepairSeatDriftOnly = vi.fn();
   const mockRunSeatReconciliationCron = vi.fn();
   return {
     mockRequireAuth,
+    mockGetStripeSyncTablesStatus,
     mockCleanupOrphanDeals,
     mockRepairSeatDriftOnly,
     mockRunSeatReconciliationCron,
@@ -57,6 +60,7 @@ vi.mock("../lib/redis.js", () => ({
 }));
 
 vi.mock("../lib/stripeSync.js", () => ({
+  getStripeSyncTablesStatus: mockGetStripeSyncTablesStatus,
   getWebhookAuditStatus: vi.fn(() => ({
     status: "ok",
     duplicateCount: 0,
@@ -212,5 +216,27 @@ describe("POST /admin/system-health/repair", () => {
     const res = await request(buildApp()).post("/admin/system-health/repair");
 
     expect(res.status).toBe(500);
+  });
+});
+
+describe("GET /admin/system-health", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("includes the Stripe Sync table assertion status for SUPER_ADMIN", async () => {
+    mockRequireAuth.mockResolvedValue(makeSuperAdmin());
+    mockGetStripeSyncTablesStatus.mockReturnValue({
+      ok: false,
+      checkedAt: "2026-08-24T12:00:00.000Z",
+    });
+
+    const res = await request(buildApp()).get("/admin/system-health");
+
+    expect(res.status).toBe(200);
+    expect(res.body.stripeSyncTables).toEqual({
+      ok: false,
+      checkedAt: "2026-08-24T12:00:00.000Z",
+    });
   });
 });

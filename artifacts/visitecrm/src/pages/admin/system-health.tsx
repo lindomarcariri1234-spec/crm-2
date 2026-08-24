@@ -142,6 +142,7 @@ export default function SystemHealthPage() {
   const seatDrift = data?.seatDrift;
   const orphans = data?.pipelineOrphans;
   const clientDrift = data?.clientFinancialDrift;
+  const stripeSyncTables = data?.stripeSyncTables;
 
   const seatStatus: StatusLevel = isLoading
     ? "loading"
@@ -159,6 +160,14 @@ export default function SystemHealthPage() {
     ? "loading"
     : clientDrift
     ? (clientDrift.status as StatusLevel)
+    : "unknown";
+
+  const stripeSyncTablesStatus: StatusLevel = isLoading
+    ? "loading"
+    : stripeSyncTables?.ok === true
+    ? "ok"
+    : stripeSyncTables?.ok === false
+    ? "degraded"
     : "unknown";
 
   return (
@@ -182,6 +191,41 @@ export default function SystemHealthPage() {
           </Button>
         </div>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Database className="w-4 h-4 text-primary" />
+            Integração Stripe
+          </CardTitle>
+          <CardDescription>
+            Verifica se as tabelas usadas pelo sincronismo de cobranças estão disponíveis.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="divide-y divide-border -mt-2">
+          <MetricRow
+            icon={DollarSign}
+            label="Tabelas do Stripe Sync"
+            description={
+              stripeSyncTables?.ok === false
+                ? "Tabelas ausentes — o sincronismo de cobranças não funcionará até a correção."
+                : stripeSyncTables?.ok === true
+                ? "stripe.accounts verificada com sucesso"
+                : "Aguardando verificação no startup..."
+            }
+            status={stripeSyncTablesStatus}
+            value={
+              stripeSyncTables?.checkedAt
+                ? `Verificado: ${new Date(stripeSyncTables.checkedAt).toLocaleTimeString("pt-BR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}`
+                : undefined
+            }
+          />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-2">

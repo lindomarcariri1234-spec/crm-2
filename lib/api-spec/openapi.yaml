@@ -8128,6 +8128,15 @@ components:
           nullable: true
       required: [status, duplicateCount, endpoints, checkedAt]
 
+    SystemHealthStripeSyncTables:
+      type: object
+      properties:
+        ok:
+          type: ["boolean", "null"]
+        checkedAt:
+          type: ["string", "null"]
+      required: [ok, checkedAt]
+
     SystemHealth:
       type: object
       properties:
@@ -8135,7 +8144,9 @@ components:
           $ref: "#/components/schemas/SystemHealthRedis"
         stripeWebhookAudit:
           $ref: "#/components/schemas/SystemHealthStripeWebhookAudit"
-      required: [redis, stripeWebhookAudit]
+        stripeSyncTables:
+          $ref: "#/components/schemas/SystemHealthStripeSyncTables"
+      required: [redis, stripeWebhookAudit, stripeSyncTables]
 
     RepairSystemHealth:
       type: object
@@ -17982,6 +17993,15 @@ components:
           nullable: true
       required: [status, duplicateCount, endpoints, checkedAt]
 
+    SystemHealthStripeSyncTables:
+      type: object
+      properties:
+        ok:
+          type: ["boolean", "null"]
+        checkedAt:
+          type: ["string", "null"]
+      required: [ok, checkedAt]
+
     SystemHealth:
       type: object
       properties:
@@ -17989,7 +18009,9 @@ components:
           $ref: "#/components/schemas/SystemHealthRedis"
         stripeWebhookAudit:
           $ref: "#/components/schemas/SystemHealthStripeWebhookAudit"
-      required: [redis, stripeWebhookAudit]
+        stripeSyncTables:
+          $ref: "#/components/schemas/SystemHealthStripeSyncTables"
+      required: [redis, stripeWebhookAudit, stripeSyncTables]
 
     # ─── TENANT ────────────────────────────────────────────────────
     AdminStats:

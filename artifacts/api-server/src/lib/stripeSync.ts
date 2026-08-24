@@ -9,6 +9,24 @@ import { generateId } from "./id";
 
 let _stripeSyncInstance: StripeSync | null = null;
 
+export interface StripeSyncTablesStatus {
+  ok: boolean | null;
+  checkedAt: string | null;
+}
+
+// null means the table assertion has not completed yet (or could not be
+// evaluated). Keep the timestamp separately so the health dashboard can show
+// when an attempted check last ran, even when its result is unknown.
+let _stripeSyncTablesOk: boolean | null = null;
+let _stripeSyncTablesCheckedAt: string | null = null;
+
+export function getStripeSyncTablesStatus(): StripeSyncTablesStatus {
+  return {
+    ok: _stripeSyncTablesOk,
+    checkedAt: _stripeSyncTablesCheckedAt,
+  };
+}
+
 /**
  * Tracks whether initStripeSync() has finished running (success OR failure).
  *
@@ -197,6 +215,8 @@ export function _resetDuplicateWebhookAlertStateForTesting(): void {
   _lastDuplicateWebhookAlertSentAt = null;
   _initCompleted = false;
   _stripeSyncInstance = null;
+  _stripeSyncTablesOk = null;
+  _stripeSyncTablesCheckedAt = null;
   _cachedManagedWebhookSecret = null;
   _lastWebhookAudit = {
     status: "unknown",
@@ -471,6 +491,8 @@ export async function initStripeSync(): Promise<void> {
       );
       const stripeSyncTablesExist =
         (assertResult.rows[0] as { exists?: boolean } | undefined)?.exists === true;
+      _stripeSyncTablesOk = stripeSyncTablesExist;
+      _stripeSyncTablesCheckedAt = new Date().toISOString();
       if (stripeSyncTablesExist) {
         logger.info("[stripe-sync] stripe.accounts table verified — schema migration successful");
       } else {
@@ -482,6 +504,8 @@ export async function initStripeSync(): Promise<void> {
         );
       }
     } catch (assertErr) {
+      _stripeSyncTablesOk = null;
+      _stripeSyncTablesCheckedAt = new Date().toISOString();
       logger.warn({ err: assertErr }, "[stripe-sync] Could not verify stripe.* table existence");
     }
 

@@ -233,6 +233,7 @@ export * from "./systemHealthRedisStatus";
 export * from "./systemHealthStripeWebhookAudit";
 export * from "./systemHealthStripeWebhookAuditEndpoint";
 export * from "./systemHealthStripeWebhookAuditStatus";
+export * from "./systemHealthStripeSyncTables";
 export * from "./tenant";
 export * from "./tenantDetails";
 export * from "./tenantWithCount";

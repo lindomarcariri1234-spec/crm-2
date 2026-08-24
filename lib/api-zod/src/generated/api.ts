@@ -79,6 +79,10 @@ export const GetSystemHealthResponse = zod.object({
     ),
     checkedAt: zod.string().nullable(),
   }),
+  stripeSyncTables: zod.object({
+    ok: zod.boolean().nullable(),
+    checkedAt: zod.string().nullable(),
+  }),
   seatDrift: zod.object({
     tripsChecked: zod.number(),
     tripsWithDrift: zod.number(),
