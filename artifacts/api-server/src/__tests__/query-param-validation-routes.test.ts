@@ -450,27 +450,29 @@ type ExportQueryChain = {
 };
 
 function makeExportQuery(rows: Record<string, unknown>[]): ExportQueryChain {
-  let result = rows;
+  let filteredRows = rows;
+  let limitValue = rows.length;
+  let offsetValue = 0;
   const chain = {} as ExportQueryChain;
   Object.assign(chain, {
     from: () => chain,
     where: () => {
       // Simulate the database applying the tenant predicate that the route
       // must provide, while keeping .limit() observable to this regression test.
-      result = rows.filter((row) => row.tenantId === agencyAdmin.tenantId);
+      filteredRows = rows.filter((row) => row.tenantId === agencyAdmin.tenantId);
       return chain;
     },
     orderBy: () => chain,
     limit: (value: number) => {
-      result = result.slice(0, value);
+      limitValue = value;
       return chain;
     },
     offset: (value: number) => {
-      result = result.slice(value);
+      offsetValue = value;
       return chain;
     },
     then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve(result).then(resolve, reject),
+      Promise.resolve(filteredRows.slice(offsetValue, offsetValue + limitValue)).then(resolve, reject),
   });
   return chain;
 }
@@ -542,31 +544,33 @@ function makeExportTrip(id: string, tenantId: string): Record<string, unknown> {
 describe("GET /trips/export — complete tenant backup", () => {
   beforeEach(() => {
     mockRequireAuth.mockResolvedValue(agencyAdmin);
+    mockSelect.mockClear();
   });
 
-  it("returns all tenant trips beyond the list safety cap without leaking another tenant", async () => {
-    const ownTrips = Array.from({ length: 501 }, (_, index) =>
+  it("streams every tenant trip in batches without leaking another tenant", async () => {
+    const ownTrips = Array.from({ length: 1_251 }, (_, index) =>
       makeExportTrip(`tenant-trip-${index + 1}`, agencyAdmin.tenantId),
     );
     const otherTenantTrips = [
       makeExportTrip("other-tenant-trip-1", "tenant-other"),
       makeExportTrip("other-tenant-trip-2", "tenant-other"),
     ];
-    mockSelect.mockImplementationOnce(() => makeExportQuery([...ownTrips, ...otherTenantTrips]));
+    const allTrips = [...ownTrips, ...otherTenantTrips];
+    mockSelect
+      .mockImplementationOnce(() => makeExportQuery(allTrips))
+      .mockImplementationOnce(() => makeExportQuery(allTrips))
+      .mockImplementationOnce(() => makeExportQuery(allTrips));
 
-    const res = await request(app).get("/trips/export");
+    const res = await request(app).get("/trips/export").query({ format: "ndjson" });
+    const lines = res.text.trim().split("\n");
 
     expect(res.status).toBe(200);
-    expect(res.body.total).toBe(501);
-    expect(res.body.data).toHaveLength(501);
-    expect(res.body.data[0].id).toBe("tenant-trip-1");
-    expect(res.body.data[500].id).toBe("tenant-trip-501");
-    expect(res.body.data).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "other-tenant-trip-1" }),
-        expect.objectContaining({ id: "other-tenant-trip-2" }),
-      ]),
-    );
+    expect(res.headers["content-type"]).toContain("application/x-ndjson");
+    expect(mockSelect).toHaveBeenCalledTimes(3);
+    expect(lines).toHaveLength(1_251);
+    expect(JSON.parse(lines[0])).toMatchObject({ id: "tenant-trip-1" });
+    expect(JSON.parse(lines[1_250])).toMatchObject({ id: "tenant-trip-1251" });
+    expect(lines.some((line) => line.includes("other-tenant-trip"))).toBe(false);
   });
 });
 

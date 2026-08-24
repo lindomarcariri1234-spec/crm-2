@@ -21,7 +21,7 @@ import { useTrips } from "@/hooks/useTrips";
 import { useGetMe, useGetTenant } from "@workspace/api-client-react";
 import { PageHeader } from "@/components/page-header";
 import { TripCsvImportModal } from "./TripCsvImportModal";
-import { buildTripsCsv } from "@/lib/trip-csv-import";
+import { buildTripCsvHeader, buildTripCsvRows } from "@/lib/trip-csv-import";
 import { useToast } from "@/hooks/use-toast";
 
 export function TripList() {
@@ -56,14 +56,17 @@ export function TripList() {
     });
 
     try {
-      const tripsToExport = await exportTrips();
-      if (tripsToExport.length === 0) {
+      const csvParts: BlobPart[] = [`\uFEFF${buildTripCsvHeader()}\n`];
+      const exportedCount = await exportTrips((batch) => {
+        csvParts.push(`${buildTripCsvRows(batch)}\n`);
+      });
+
+      if (exportedCount === 0) {
         toast({ title: "Nenhuma viagem para exportar." });
         return;
       }
 
-      const csv = buildTripsCsv(tripsToExport);
-      const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+      const url = URL.createObjectURL(new Blob(csvParts, { type: "text/csv;charset=utf-8" }));
       const link = document.createElement("a");
       link.href = url;
       link.download = `viagens-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -71,7 +74,7 @@ export function TripList() {
       URL.revokeObjectURL(url);
       toast({
         title: "Exportação concluída",
-        description: `${tripsToExport.length} viagem(ns) incluída(s) no CSV.`,
+        description: `${exportedCount} viagem(ns) incluída(s) no CSV.`,
       });
     } catch (error) {
       toast({

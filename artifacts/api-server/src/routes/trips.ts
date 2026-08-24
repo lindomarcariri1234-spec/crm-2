@@ -1,4 +1,4 @@
-import { Router, type NextFunction } from "express";
+import { Router, type NextFunction, type Response } from "express";
 import sanitizeHtml from "sanitize-html";
 import { db } from "@workspace/db";
 import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
@@ -56,6 +56,12 @@ const ListTripsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(500).default(20),
 });
+
+const ExportTripsQuery = z.object({
+  format: z.enum(["json", "ndjson"]).default("json"),
+});
+
+const EXPORT_TRIPS_BATCH_SIZE = 500;
 
 type SeatMapEntry = { row: number; col: number; floor?: number; status: string; type?: string };
 
@@ -202,6 +208,34 @@ function generateSeatMapFromLayout(
 
 const router = Router();
 
+async function writeExportChunk(res: Response, chunk: string): Promise<void> {
+  if (res.write(chunk)) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      res.off("drain", onDrain);
+      res.off("close", onClose);
+      res.off("error", onError);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Export client disconnected"));
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+
+    res.once("drain", onDrain);
+    res.once("close", onClose);
+    res.once("error", onError);
+  });
+}
+
 function formatTrip(t: typeof tripsTable.$inferSelect) {
   return {
     id: t.id,
@@ -320,8 +354,9 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
   }
 });
 
-// Exportação completa — não usa o limite da listagem paginada.
-// Deve ficar antes de /trips/:id para que "export" não seja tratado como um id.
+// Exportação completa — processa a consulta em lotes, sem usar o limite da
+// listagem paginada. Deve ficar antes de /trips/:id para que "export" não seja
+// tratado como um id.
 router.get("/trips/export", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -331,11 +366,62 @@ router.get("/trips/export", async (req, res, next: NextFunction): Promise<void> 
       return;
     }
 
-    const trips = await db.select().from(tripsTable)
-      .where(eq(tripsTable.tenantId, me.tenantId))
-      .orderBy(asc(tripsTable.departureDate));
+    const parsedQuery = ExportTripsQuery.safeParse(req.query);
+    if (!parsedQuery.success) {
+      next(new ValidationError("Formato de exportação inválido", "VALIDATION_ERROR"));
+      return;
+    }
 
-    res.json({ data: trips.map(formatTrip), total: trips.length });
+    const { format: exportFormat } = parsedQuery.data;
+    res.status(200);
+    res.setHeader(
+      "Content-Type",
+      exportFormat === "ndjson"
+        ? "application/x-ndjson; charset=utf-8"
+        : "application/json; charset=utf-8",
+    );
+    res.setHeader("Cache-Control", "no-store");
+
+    if (exportFormat === "json") {
+      await writeExportChunk(res, '{"data":[');
+    }
+
+    let exportedCount = 0;
+    let offset = 0;
+
+    while (true) {
+      // Keep the tenant predicate in every batch query. Besides enforcing
+      // isolation, this means no tenant-wide result set is materialized.
+      const batch = await db.select().from(tripsTable)
+        .where(eq(tripsTable.tenantId, me.tenantId))
+        .orderBy(asc(tripsTable.departureDate))
+        .limit(EXPORT_TRIPS_BATCH_SIZE)
+        .offset(offset);
+
+      if (batch.length === 0) break;
+
+      for (const trip of batch) {
+        const formattedTrip = formatTrip(trip);
+        if (exportFormat === "ndjson") {
+          await writeExportChunk(res, `${JSON.stringify(formattedTrip)}\n`);
+        } else {
+          await writeExportChunk(
+            res,
+            `${exportedCount > 0 ? "," : ""}${JSON.stringify(formattedTrip)}`,
+          );
+        }
+        exportedCount++;
+      }
+
+      offset += batch.length;
+      if (batch.length < EXPORT_TRIPS_BATCH_SIZE) break;
+    }
+
+    if (exportFormat === "json") {
+      res.end(`],"total":${exportedCount}}`);
+    } else {
+      res.end();
+    }
   } catch (err) {
     next(err);
   }

@@ -9,7 +9,8 @@ const mockGetMe = vi.hoisted(() => vi.fn());
 const mockGetTenant = vi.hoisted(() => vi.fn());
 const mockExportTrips = vi.hoisted(() => vi.fn());
 const mockToast = vi.hoisted(() => vi.fn());
-const mockBuildTripsCsv = vi.hoisted(() => vi.fn());
+const mockBuildTripCsvHeader = vi.hoisted(() => vi.fn());
+const mockBuildTripCsvRows = vi.hoisted(() => vi.fn());
 const mockCreateObjectURL = vi.hoisted(() => vi.fn(() => "blob:test"));
 const mockRevokeObjectURL = vi.hoisted(() => vi.fn());
 const mockAnchorClick = vi.hoisted(() => vi.fn());
@@ -159,7 +160,8 @@ vi.mock("../pages/trips/TripCsvImportModal.js", () => ({
 }));
 
 vi.mock("@/lib/trip-csv-import", () => ({
-  buildTripsCsv: mockBuildTripsCsv,
+  buildTripCsvHeader: mockBuildTripCsvHeader,
+  buildTripCsvRows: mockBuildTripCsvRows,
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
@@ -190,8 +192,10 @@ beforeEach(() => {
   mockGetTenant.mockReturnValue(makeTenantData(false));
   mockExportTrips.mockReset();
   mockToast.mockReset();
-  mockBuildTripsCsv.mockReset();
-  mockBuildTripsCsv.mockReturnValue("Nome\nViagem Teste");
+  mockBuildTripCsvHeader.mockReset();
+  mockBuildTripCsvHeader.mockReturnValue("Nome");
+  mockBuildTripCsvRows.mockReset();
+  mockBuildTripCsvRows.mockReturnValue("Viagem Teste");
   mockCreateObjectURL.mockClear();
   mockRevokeObjectURL.mockClear();
   Object.defineProperty(URL, "createObjectURL", {
@@ -242,8 +246,8 @@ function getExportButton(container: HTMLElement): HTMLButtonElement {
 
 describe("TripList — complete CSV export", () => {
   it("shows the preparation state while the complete export is being fetched", async () => {
-    let resolveExport!: (trips: unknown[]) => void;
-    const pendingExport = new Promise<unknown[]>((resolve) => {
+    let resolveExport!: (count: number) => void;
+    const pendingExport = new Promise<number>((resolve) => {
       resolveExport = resolve;
     });
     mockExportTrips.mockReturnValue(pendingExport);
@@ -268,15 +272,19 @@ describe("TripList — complete CSV export", () => {
 
   it("generates the download with the shared import CSV builder", async () => {
     const exportedTrips = [{ id: "trip-exported", name: "Viagem completa" }];
-    mockExportTrips.mockResolvedValue(exportedTrips);
+    mockExportTrips.mockImplementation(async (onBatch: (trips: unknown[]) => void) => {
+      onBatch(exportedTrips);
+      return exportedTrips.length;
+    });
 
     const { container } = await renderComponent(createElement(TripList));
     await flushAct(() => {
       getExportButton(container).click();
     });
 
-    expect(mockBuildTripsCsv).toHaveBeenCalledTimes(1);
-    expect(mockBuildTripsCsv).toHaveBeenCalledWith(exportedTrips);
+    expect(mockBuildTripCsvHeader).toHaveBeenCalledTimes(1);
+    expect(mockBuildTripCsvRows).toHaveBeenCalledTimes(1);
+    expect(mockBuildTripCsvRows).toHaveBeenCalledWith(exportedTrips);
     expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
     expect(mockRevokeObjectURL).toHaveBeenCalledTimes(1);
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({

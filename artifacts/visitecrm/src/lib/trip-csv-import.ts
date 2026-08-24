@@ -33,6 +33,10 @@ function escapeCsvCell(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
+export function buildTripCsvHeader(): string {
+  return TRIP_CSV_HEADERS.map(escapeCsvCell).join(",");
+}
+
 export function buildTripCsvRow(trip: Trip): string[] {
   return [
     trip.name,
@@ -63,10 +67,16 @@ export function buildTripCsvRow(trip: Trip): string[] {
   ];
 }
 
-export function buildTripsCsv(trips: Trip[]): string {
-  return [TRIP_CSV_HEADERS, ...trips.map(buildTripCsvRow)]
+export function buildTripCsvRows(trips: Trip[]): string {
+  return trips
+    .map(buildTripCsvRow)
     .map((row) => row.map(escapeCsvCell).join(","))
     .join("\n");
+}
+
+export function buildTripsCsv(trips: Trip[]): string {
+  const rows = buildTripCsvRows(trips);
+  return rows ? `${buildTripCsvHeader()}\n${rows}` : buildTripCsvHeader();
 }
 
 function parseBrazilianNumber(value: string): number | undefined {

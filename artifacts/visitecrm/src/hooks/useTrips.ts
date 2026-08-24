@@ -8,6 +8,9 @@ import type { Trip } from "@workspace/api-client-react";
 import { ROLES } from "@workspace/permissions";
 
 const PAGE_SIZE = 12;
+const EXPORT_BATCH_SIZE = 500;
+
+type ExportTripsBatchHandler = (trips: Trip[]) => void;
 
 export function useTrips() {
   const searchStr = useSearch();
@@ -55,17 +58,48 @@ export function useTrips() {
   const deleteTrip = useDeleteTrip();
   const { data: upcomingTrips = [] } = useGetDashboardUpcomingTrips();
 
-  const exportTrips = useCallback(async (): Promise<Trip[]> => {
-    const response = await fetch("/api/trips/export", { credentials: "include" });
-    const payload = await response.json().catch(() => null) as
-      | { data?: Trip[]; error?: string; message?: string }
-      | null;
-
+  const exportTrips = useCallback(async (onBatch: ExportTripsBatchHandler): Promise<number> => {
+    const response = await fetch("/api/trips/export?format=ndjson", { credentials: "include" });
     if (!response.ok) {
+      const payload = await response.json().catch(() => null) as
+        | { error?: string; message?: string }
+        | null;
       throw new Error(payload?.error ?? payload?.message ?? "Não foi possível preparar a exportação.");
     }
 
-    return payload?.data ?? [];
+    if (!response.body) {
+      throw new Error("O navegador não oferece suporte à exportação progressiva.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let pendingLine = "";
+    let batch: Trip[] = [];
+    let total = 0;
+
+    const processLine = (line: string) => {
+      if (!line.trim()) return;
+      const trip = JSON.parse(line) as Trip;
+      batch.push(trip);
+      total++;
+      if (batch.length >= EXPORT_BATCH_SIZE) {
+        onBatch(batch);
+        batch = [];
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      pendingLine += decoder.decode(value, { stream: !done });
+      const lines = pendingLine.split("\n");
+      pendingLine = lines.pop() ?? "";
+      for (const line of lines) processLine(line);
+      if (done) break;
+    }
+
+    if (pendingLine) processLine(pendingLine);
+    if (batch.length > 0) onBatch(batch);
+    return total;
   }, []);
 
   const trips = useMemo(() => {
