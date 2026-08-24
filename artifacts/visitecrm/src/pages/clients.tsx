@@ -40,6 +40,13 @@ import { SeatMapPicker } from "@/components/SeatMapPicker";
 import { PlanLimitWall, usePlanLimitError } from "@/components/plan-limit-wall";
 
 import { formatCurrency } from "@/lib/utils";
+import {
+  generatedImportedClientEmail,
+  getClientCsvValue,
+  parseBrazilianCsvDate,
+  parseClientCsv,
+  splitClientCsvList,
+} from "@/lib/client-csv-import";
 import { ROLES, PAYMENT_STATUS, ADMIN_ROLES } from "@workspace/permissions";
 
 function cleanCPF(cpf: string): string {
@@ -109,28 +116,12 @@ function CsvImportModal({ open, onClose, onImported }: CsvImportModalProps) {
   const [progress, setProgress] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
 
-  const CSV_COLUMNS = ["nome", "email", "whatsapp", "telefone", "cpf", "cidade", "estado", "instagram", "observacoes"];
-
-  function parseCsv(text: string): string[][] {
-    return text.split("\n").filter(l => l.trim()).map(line => {
-      const cells: string[] = [];
-      let inside = false, cell = "";
-      for (const ch of line) {
-        if (ch === '"') { inside = !inside; }
-        else if (ch === "," && !inside) { cells.push(cell.trim()); cell = ""; }
-        else { cell += ch; }
-      }
-      cells.push(cell.trim());
-      return cells;
-    });
-  }
-
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const rows = parseCsv(reader.result as string);
+      const rows = parseClientCsv(reader.result as string);
       if (rows.length < 2) { toast({ title: "CSV inválido", variant: "destructive" }); return; }
       setHeaders(rows[0]);
       setPreview(rows.slice(1, 6));
@@ -139,25 +130,41 @@ function CsvImportModal({ open, onClose, onImported }: CsvImportModalProps) {
     reader.readAsText(file, "UTF-8");
   }
 
-  function colIdx(h: string) { return headers.findIndex(x => x.toLowerCase().includes(h)); }
-
   async function handleImport() {
     if (!inputRef.current?.files?.[0]) return;
     const reader = new FileReader();
     reader.onload = async () => {
-      const rows = parseCsv(reader.result as string).slice(1).filter(r => r.some(c => c.trim()));
+      const rows = parseClientCsv(reader.result as string).slice(1).filter(r => r.some(c => c.trim()));
       setImporting(true); setProgress(0); setErrors([]);
       const errs: string[] = [];
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
-        const get = (h: string) => { const idx = colIdx(h); return idx >= 0 ? (r[idx] ?? "").trim() : ""; };
-        const name = get("nome"); const email = get("email"); const whatsapp = get("whatsapp") || get("celular") || get("tel");
+        const get = (...aliases: string[]) => getClientCsvValue(headers, r, aliases);
+        const name = get("nome", "name");
+        const rawEmail = get("email", "emailaddress");
+        const whatsapp = get("whatsapp", "celular", "telefonecelular") || get("telefone", "phone");
         const rawCpf = get("cpf");
         const cpfDigits = cleanCPF(rawCpf);
-        if (!name || !email || !whatsapp) { errs.push(`Linha ${i + 2}: nome, e-mail e WhatsApp são obrigatórios`); setProgress(Math.round(((i + 1) / rows.length) * 100)); continue; }
+        if (!name || !whatsapp) { errs.push(`Linha ${i + 2}: nome e WhatsApp são obrigatórios`); setProgress(Math.round(((i + 1) / rows.length) * 100)); continue; }
         if (!cpfDigits || !isValidCPF(cpfDigits)) { errs.push(`Linha ${i + 2}: ${name} — CPF inválido ou ausente`); setProgress(Math.round(((i + 1) / rows.length) * 100)); continue; }
         try {
-          await createClient.mutateAsync({ data: { name, email, whatsapp, phone: get("telefone") || undefined, cpf: cpfDigits, addressCity: get("cidade") || undefined, addressState: get("estado") || undefined, observations: get("observacoes") || undefined } });
+          await createClient.mutateAsync({
+            data: {
+              name,
+              email: rawEmail || generatedImportedClientEmail(cpfDigits),
+              whatsapp,
+              phone: get("telefone", "phone") || undefined,
+              cpf: cpfDigits,
+              birthDate: parseBrazilianCsvDate(get("nascimento", "datanascimento", "birthdate")),
+              gender: get("genero", "gender") || undefined,
+              instagram: get("instagram") || undefined,
+              addressCity: get("cidade", "city") || undefined,
+              addressState: get("estado", "state") || undefined,
+              observations: get("observacoes", "observacao", "notes") || undefined,
+              tags: splitClientCsvList(get("tags")),
+              dreamDestinations: splitClientCsvList(get("destinossonhados", "destinos", "dreamdestinations")),
+            },
+          });
         } catch (err: unknown) {
           const rd = (err as { data?: Record<string, unknown> })?.data
             ?? (err as { response?: { data?: Record<string, unknown> } })?.response?.data;
@@ -184,7 +191,7 @@ function CsvImportModal({ open, onClose, onImported }: CsvImportModalProps) {
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Importar Clientes via CSV</DialogTitle>
-          <DialogDescription>O arquivo deve ter cabeçalhos: Nome, Email, WhatsApp, CPF (obrigatórios) + Telefone, Cidade, Estado, Instagram, Observacoes.</DialogDescription>
+          <DialogDescription>O arquivo deve ter cabeçalhos Nome, WhatsApp e CPF (obrigatórios). E-mail é opcional; quando estiver vazio, será criado apenas um identificador interno sem entrega de mensagens.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-muted/20 transition-colors" onClick={() => inputRef.current?.click()}>
