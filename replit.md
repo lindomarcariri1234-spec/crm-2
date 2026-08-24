@@ -27,6 +27,13 @@ VisiteCRM is built as a pnpm workspace monorepo utilizing TypeScript.
 - **`artifacts/visitecrm`**: React frontend, port 19951, accessible at `/`
 - **`artifacts/api-server`**: Express API server, port 8080, routes at `/api`
 
+### Replit Development Setup
+
+- **Runtime**: Node.js 24 and pnpm workspaces. Install the locked dependency tree with `pnpm install --frozen-lockfile`.
+- **Web preview**: run the `artifacts/visitecrm: web` workflow (Vite on port 19951). It proxies `/api` requests to the local API.
+- **API**: run the `artifacts/api-server: API Server` workflow (Express on port 8080). It requires `CLERK_SECRET_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, and Replit-provided `DATABASE_URL`; the development Clerk publishable key is configured as an environment variable.
+- **Optional integrations**: uploads require `UPLOADTHING_TOKEN`; email delivery requires `RESEND_API_KEY`; Redis-backed queues require `REDIS_URL`. The API starts without these optional services, using its documented development fallbacks.
+
 ### Core Features and Design Patterns
 - **Multi-tenancy**: Each agency operates as a distinct tenant with isolated data.
 - **Role-Based Access Control (RBAC)**: Supports roles like `superadmin`, `agencia`, `vendedor`, and `cliente` with fine-grained permissions enforced at the API level.

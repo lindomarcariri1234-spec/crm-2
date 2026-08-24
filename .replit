@@ -69,6 +69,9 @@ task = "shell.exec"
 args = "pnpm --filter @workspace/api-server run dev"
 waitForPort = 8080
 
+[workflows.workflow.tasks.env]
+PORT = "8080"
+
 [[workflows.workflow]]
 name = "artifacts/mockup-sandbox: Component Preview Server"
 author = "agent"
