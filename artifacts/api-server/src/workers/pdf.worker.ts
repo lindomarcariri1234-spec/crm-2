@@ -6,8 +6,73 @@ import { db, auditLogsTable } from "@workspace/db";
 import { generateId } from "../lib/id";
 import { sendManifestEmail } from "@workspace/email";
 import type { PdfJobData } from "../queues/index";
+import { generateManifestHtml, generateManifestPdf, loadManifestPanelForTenant } from "../lib/manifest-helpers";
 
 let _worker: Worker<PdfJobData> | null = null;
+
+export async function processPdfJob(data: PdfJobData, jobId?: string | number): Promise<void> {
+  const { type, tenantId, userId, ipAddress, userAgent } = data;
+
+  logger.info({ jobId, type }, "[pdf-worker] Processing job");
+
+  if (type === "manifest") {
+    const { tripId, recipientEmail } = data;
+    const panel = await loadManifestPanelForTenant(tenantId, tripId);
+    if (!panel) {
+      throw new Error("Manifest trip or tenant no longer belongs to the queued tenant");
+    }
+
+    const [htmlContent, pdfBuffer] = await Promise.all([
+      Promise.resolve(generateManifestHtml(panel)),
+      generateManifestPdf(panel),
+    ]);
+
+    const result = await sendManifestEmail({
+      to: recipientEmail,
+      tripName: panel.tripName,
+      manifestNumber: panel.manifestNumber,
+      agencyName: panel.tenantName || "VisiteCRM",
+      htmlContent,
+      pdfAttachment: pdfBuffer,
+    });
+
+    if (!result.success) {
+      throw new Error(result.error ?? "sendManifestEmail failed");
+    }
+
+    await db.insert(auditLogsTable).values({
+      id: generateId(),
+      tenantId,
+      userId,
+      action: "manifest_sent",
+      entityType: "trip",
+      entityId: tripId,
+      after: { channel: "email", to: recipientEmail.replace(/(.{2}).+(@.+)/, "$1***$2") },
+      ipAddress: ipAddress ?? null,
+      userAgent: userAgent ?? null,
+    });
+
+    logger.info({ tripId, recipient: recipientEmail.replace(/(.{2}).+(@.+)/, "$1***$2") }, "[pdf-worker] Manifest email sent");
+  } else if (type === "voucher") {
+    const { reservationId } = data;
+
+    await db.insert(auditLogsTable).values({
+      id: generateId(),
+      tenantId,
+      userId,
+      action: "voucher_downloaded",
+      entityType: "reservation",
+      entityId: reservationId,
+      after: { channel: "download" },
+      ipAddress: ipAddress ?? null,
+      userAgent: userAgent ?? null,
+    });
+
+    logger.info({ reservationId }, "[pdf-worker] Voucher download logged");
+  } else {
+    logger.warn({ type }, "[pdf-worker] Unknown PDF job type");
+  }
+}
 
 export function startPdfWorker(): Worker<PdfJobData> | null {
   const conn = getRedisConnection();
@@ -20,61 +85,7 @@ export function startPdfWorker(): Worker<PdfJobData> | null {
 
   _worker = new Worker<PdfJobData>(
     "pdfs",
-    async (job) => {
-      const { type, tenantId, userId, ipAddress, userAgent } = job.data;
-
-      logger.info({ jobId: job.id, type }, "[pdf-worker] Processing job");
-
-      if (type === "manifest") {
-        const { tripId, tripName, manifestNumber, agencyName, recipientEmail, htmlContent, pdfBase64 } = job.data;
-        const pdfBuffer = Buffer.from(pdfBase64, "base64");
-
-        const result = await sendManifestEmail({
-          to: recipientEmail,
-          tripName,
-          manifestNumber: manifestNumber ?? null,
-          agencyName,
-          htmlContent,
-          pdfAttachment: pdfBuffer,
-        });
-
-        if (!result.success) {
-          throw new Error(result.error ?? "sendManifestEmail failed");
-        }
-
-        await db.insert(auditLogsTable).values({
-          id: generateId(),
-          tenantId,
-          userId,
-          action: "manifest_sent",
-          entityType: "trip",
-          entityId: tripId,
-          after: { channel: "email", to: recipientEmail.replace(/(.{2}).+(@.+)/, "$1***$2") },
-          ipAddress: ipAddress ?? null,
-          userAgent: userAgent ?? null,
-        });
-
-        logger.info({ tripId, recipient: recipientEmail.replace(/(.{2}).+(@.+)/, "$1***$2") }, "[pdf-worker] Manifest email sent");
-      } else if (type === "voucher") {
-        const { reservationId } = job.data;
-
-        await db.insert(auditLogsTable).values({
-          id: generateId(),
-          tenantId,
-          userId,
-          action: "voucher_downloaded",
-          entityType: "reservation",
-          entityId: reservationId,
-          after: { channel: "download" },
-          ipAddress: ipAddress ?? null,
-          userAgent: userAgent ?? null,
-        });
-
-        logger.info({ reservationId }, "[pdf-worker] Voucher download logged");
-      } else {
-        logger.warn({ type }, "[pdf-worker] Unknown PDF job type");
-      }
-    },
+    async (job) => processPdfJob(job.data, job.id),
     isDev
       ? { connection: conn, concurrency: 1, stalledInterval: 60_000, drainDelay: 30 }
       : { connection: conn, concurrency: 2, stalledInterval: 15_000 },

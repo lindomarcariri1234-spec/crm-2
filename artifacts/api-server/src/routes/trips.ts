@@ -2082,23 +2082,13 @@ router.post("/trips/:id/manifest/send", async (req, res, next: NextFunction): Pr
     const auditMeta: Record<string, string> = { channel, to: channel === "whatsapp" ? to : to.replace(/(.{2}).+(@.+)/, "$1***$2") };
 
     if (channel === "email") {
-      const [html, pdfBuffer] = await Promise.all([
-        Promise.resolve(generateManifestHtml(panel)),
-        generateManifestPdf(panel),
-      ]);
-
       const pdfQueue = getPdfQueue();
       if (pdfQueue) {
         await pdfQueue.add("manifest", {
           type: "manifest",
           tenantId: me.tenantId,
           tripId: trip.id,
-          tripName: trip.name,
-          manifestNumber: trip.manifestNumber ?? null,
-          agencyName: tenant?.name ?? "VisiteCRM",
           recipientEmail: to,
-          htmlContent: html,
-          pdfBase64: pdfBuffer.toString("base64"),
           userId: me.id,
           ipAddress: req.ip ?? null,
           userAgent: req.headers["user-agent"] ?? null,
@@ -2113,6 +2103,11 @@ router.post("/trips/:id/manifest/send", async (req, res, next: NextFunction): Pr
           "[workers-disabled] ENABLE_WORKERS=false — sending manifest PDF directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
         );
       }
+
+      const [html, pdfBuffer] = await Promise.all([
+        Promise.resolve(generateManifestHtml(panel)),
+        generateManifestPdf(panel),
+      ]);
 
       const result = await sendManifestEmail({
         to,

@@ -21,7 +21,7 @@ import { runMigrations } from "@workspace/db";
 import { initStripeSync } from "./lib/stripeSync";
 import { backfillEncryptedCredentials } from "./lib/credential-backfill";
 import { seedPlansIfMissing } from "./lib/seed-plans";
-import cron from "node-cron";
+import { runScheduledJob, scheduleDistributedCron } from "./lib/distributed-scheduler";
 import path from "path";
 import { fileURLToPath } from "url";
 import { runBirthdayCron } from "./lib/birthday";
@@ -269,64 +269,60 @@ applyMigrations()
   .then(() => {
     // ── Background: cron + BullMQ workers (non-fatal if Redis is unavailable) ──
     void (async () => {
-      // Birthday cron (node-cron, runs in-process, no Redis required)
-      cron.schedule("0 0 * * *", () => {
+      // All node-cron work is lease-protected across API replicas.
+      scheduleDistributedCron("birthday", "0 0 * * *", async () => {
         logger.info("[birthday] Daily cron triggered");
-        runBirthdayCron().catch((err) => logger.error({ err }, "[birthday] Cron failed"));
+        await runBirthdayCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 2 * * *", () => {
+      scheduleDistributedCron("pipeline-trip-ended", "0 2 * * *", async () => {
         logger.info("[pipeline-trip-ended] Daily cron triggered");
-        runPipelineTripEndedCron().catch((err) => logger.error({ err }, "[pipeline-trip-ended] Cron failed"));
+        await runPipelineTripEndedCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 3 * * *", () => {
+      scheduleDistributedCron("client-scores", "0 3 * * *", async () => {
         logger.info("[client-scores] Daily scores cron triggered");
-        calculateScoresForAllTenants().catch((err) => logger.error({ err }, "[client-scores] Cron failed"));
+        await calculateScoresForAllTenants();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 6 * * *", () => {
+      scheduleDistributedCron("gemeo-alerts", "0 6 * * *", async () => {
         logger.info("[gemeo-alerts] Daily alerts cron triggered");
-        runGemeoAlertsCron().catch((err) => logger.error({ err }, "[gemeo-alerts] Cron failed"));
+        await runGemeoAlertsCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 7 * * 1", () => {
+      scheduleDistributedCron("gemeo-opportunities", "0 7 * * 1", async () => {
         logger.info("[gemeo-opportunities] Weekly opportunities cron triggered");
-        runGemeoOpportunitiesCron().catch((err) => logger.error({ err }, "[gemeo-opportunities] Cron failed"));
+        await runGemeoOpportunitiesCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 10 * * *", () => {
+      scheduleDistributedCron("favorite-alerts", "0 10 * * *", async () => {
         logger.info("[favorite-alerts] Daily low-availability alert cron triggered");
-        runFavoriteLowAvailabilityAlertCron().catch((err) => logger.error({ err }, "[favorite-alerts] Cron failed"));
+        await runFavoriteLowAvailabilityAlertCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 5 * * *", () => {
+      scheduleDistributedCron("abandoned-referrals", "0 5 * * *", async () => {
         logger.info("[abandoned-referrals] Daily sweep triggered");
-        runAbandonedOrderReferralCleanup().catch((err) => logger.error({ err }, "[abandoned-referrals] Cron failed"));
+        await runAbandonedOrderReferralCleanup();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 4 * * *", () => {
+      scheduleDistributedCron("seat-reconciliation", "0 4 * * *", async () => {
         logger.info("[seat-reconciliation] Daily seat counter reconciliation triggered");
-        runSeatReconciliationCron().catch((err) => logger.error({ err }, "[seat-reconciliation] Cron failed"));
+        await runSeatReconciliationCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 8 * * *", () => {
+      scheduleDistributedCron("stripe-health", "0 8 * * *", async () => {
         logger.info("[stripe-health] Daily Stripe price health-check triggered");
-        runStripeHealthCheckCron().catch((err) => logger.error({ err }, "[stripe-health] Cron failed"));
+        await runStripeHealthCheckCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      cron.schedule("0 * * * *", () => {
+      scheduleDistributedCron("campaign-automation", "0 * * * *", async () => {
         logger.info("[campaign-automation] Daily automation cron triggered");
-        runCampaignAutomationCron().catch((err) => logger.error({ err }, "[campaign-automation] Cron failed"));
+        await runCampaignAutomationCron();
       }, { timezone: "America/Sao_Paulo" });
 
-      retryPendingReservationConfirmedWhatsApps().catch((err) =>
-        logger.error({ err }, "[whatsapp-outbox] Startup retry failed"),
-      );
-      cron.schedule("*/5 * * * *", () => {
-        retryPendingReservationConfirmedWhatsApps().catch((err) =>
-          logger.error({ err }, "[whatsapp-outbox] Pending retry failed"),
-        );
+      void runScheduledJob("whatsapp-outbox-startup", retryPendingReservationConfirmedWhatsApps);
+      scheduleDistributedCron("whatsapp-outbox", "*/5 * * * *", async () => {
+        await retryPendingReservationConfirmedWhatsApps();
       }, { timezone: "America/Sao_Paulo" });
 
       // ── Seat-map SSE pub/sub fan-out (non-fatal, no-op when Redis absent) ──
@@ -365,13 +361,9 @@ applyMigrations()
       // Polls usage once per hour and emails the superadmin when the configured
       // threshold is crossed. The alert itself is rate-limited to 1/hour inside
       // maybeSendDailyLimitAlert() so duplicate cron runs never flood the inbox.
-      cron.schedule("0 * * * *", () => {
-        fetchUpstashDailyStats()
-          .then((stats) => {
-            if (!stats) return;
-            maybeSendDailyLimitAlert(stats);
-          })
-          .catch((err) => logger.warn({ err }, "[redis-daily-limit] Hourly check failed"));
+      scheduleDistributedCron("redis-daily-limit", "0 * * * *", async () => {
+        const stats = await fetchUpstashDailyStats();
+        if (stats) maybeSendDailyLimitAlert(stats);
       });
 
       // ENABLE_WORKERS: opt-in flag for BullMQ worker initialization.
@@ -386,56 +378,56 @@ applyMigrations()
       if (!workersEnabled) {
         logger.info("[queue] ENABLE_WORKERS is false — skipping BullMQ worker initialization");
 
-        cron.schedule("*/5 * * * *", () => {
+        scheduleDistributedCron("expired-reservations", "*/5 * * * *", () => {
           runExpiredReservationsCron().catch((err) =>
             logger.error({ err }, "[expired-reservations] Cron failed"),
           );
         });
         logger.info("[expired-reservations] node-cron fallback registered (every 5 minutes)");
 
-        cron.schedule("*/15 * * * *", () => {
+        scheduleDistributedCron("email-retry", "*/15 * * * *", () => {
           retryFailedBookingEmails().catch((err) =>
             logger.error({ err }, "[email-retry] node-cron fallback failed"),
           );
         });
         logger.info("[email-retry] node-cron fallback registered (every 15 minutes)");
 
-        cron.schedule("*/15 * * * *", () => {
+        scheduleDistributedCron("expiry-warning-retry", "*/15 * * * *", () => {
           retryFailedExpiryWarningEmails().catch((err) =>
             logger.error({ err }, "[expiry-warning-retry] node-cron fallback failed"),
           );
         });
         logger.info("[expiry-warning-retry] node-cron fallback registered (every 15 minutes)");
 
-        cron.schedule("30 * * * *", () => {
+        scheduleDistributedCron("nps-dispatch", "30 * * * *", () => {
           processNpsDispatch().catch((err) =>
             logger.error({ err }, "[nps-dispatch] node-cron fallback failed"),
           );
         });
         logger.info("[nps-dispatch] node-cron fallback registered (every hour at :30)");
 
-        cron.schedule("0 8 * * *", () => {
+        scheduleDistributedCron("installment-due-reminder", "0 8 * * *", () => {
           processInstallmentDueReminders().catch((err) =>
             logger.error({ err }, "[installment-due-reminder] node-cron fallback failed"),
           );
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[installment-due-reminder] node-cron fallback registered (daily 08:00)");
 
-        cron.schedule("0 9 * * *", () => {
+        scheduleDistributedCron("trial-expiry", "0 9 * * *", () => {
           processTrialExpiryNotifications().catch((err) =>
             logger.error({ err }, "[trial-expiry] node-cron fallback failed"),
           );
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[trial-expiry] node-cron fallback registered (daily 09:00)");
 
-        cron.schedule("0 2 * * *", () => {
+        scheduleDistributedCron("uploadthing-orphan", "0 2 * * *", () => {
           runUploadThingOrphanCleanup().catch((err) =>
             logger.error({ err }, "[uploadthing-orphan] node-cron fallback failed"),
           );
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[uploadthing-orphan] node-cron fallback registered (nightly 02:00)");
 
-        cron.schedule("*/5 * * * *", () => {
+        scheduleDistributedCron("chatbot-delivery", "*/5 * * * *", () => {
           retryPendingAttendanceReplies().catch((err) =>
             logger.error({ err }, "[chatbot-delivery] node-cron retry failed"),
           );
@@ -566,42 +558,42 @@ applyMigrations()
       } else {
         logger.warn("[queue] REDIS_URL not set — BullMQ workers not started, emails sent synchronously");
 
-        cron.schedule("*/5 * * * *", () => {
+        scheduleDistributedCron("expired-reservations", "*/5 * * * *", () => {
           runExpiredReservationsCron().catch((err) =>
             logger.error({ err }, "[expired-reservations] Cron failed"),
           );
         });
         logger.info("[expired-reservations] node-cron fallback registered (every 5 minutes)");
 
-        cron.schedule("*/15 * * * *", () => {
+        scheduleDistributedCron("email-retry", "*/15 * * * *", () => {
           retryFailedBookingEmails().catch((err) =>
             logger.error({ err }, "[email-retry] node-cron fallback failed"),
           );
         });
         logger.info("[email-retry] node-cron fallback registered (every 15 minutes)");
 
-        cron.schedule("*/15 * * * *", () => {
+        scheduleDistributedCron("expiry-warning-retry", "*/15 * * * *", () => {
           retryFailedExpiryWarningEmails().catch((err) =>
             logger.error({ err }, "[expiry-warning-retry] node-cron fallback failed"),
           );
         });
         logger.info("[expiry-warning-retry] node-cron fallback registered (every 15 minutes)");
 
-        cron.schedule("0 9 * * *", () => {
+        scheduleDistributedCron("trial-expiry", "0 9 * * *", () => {
           processTrialExpiryNotifications().catch((err) =>
             logger.error({ err }, "[trial-expiry] node-cron fallback failed"),
           );
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[trial-expiry] node-cron fallback registered (daily 09:00)");
 
-        cron.schedule("0 2 * * *", () => {
+        scheduleDistributedCron("uploadthing-orphan", "0 2 * * *", () => {
           runUploadThingOrphanCleanup().catch((err) =>
             logger.error({ err }, "[uploadthing-orphan] node-cron fallback failed"),
           );
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[uploadthing-orphan] node-cron fallback registered (nightly 02:00)");
 
-        cron.schedule("*/5 * * * *", () => {
+        scheduleDistributedCron("chatbot-delivery", "*/5 * * * *", () => {
           retryPendingAttendanceReplies().catch((err) =>
             logger.error({ err }, "[chatbot-delivery] node-cron retry failed"),
           );

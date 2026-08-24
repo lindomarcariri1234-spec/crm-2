@@ -1051,7 +1051,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
               </div>
               <div className="space-y-2">
                 <Label>Parcelas</Label>
-                <Input type="number" min="1" max="12" defaultValue="1" value={form.installments} onChange={e => set("installments")(e.target.value)} />
+                <Input type="number" min="1" max="12" value={form.installments} onChange={e => set("installments")(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label>Comissão (R$)</Label>

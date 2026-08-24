@@ -1,7 +1,9 @@
 import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import PDFDocument from "pdfkit";
-import type { FreePassenger } from "@workspace/db";
+import { db, tripsTable, reservationsTable, passengersTable, tenantsTable, vehicleLayoutsTable, type FreePassenger } from "@workspace/db";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { RESERVATION_STATUS } from "@workspace/permissions";
 
 export type ManifestPassenger = {
   name: string;
@@ -44,6 +46,86 @@ export type ManifestPanel = {
   destinationState?: string;
   numberingType?: string | null;
 };
+
+/**
+ * Loads manifest data at send time. The tenant condition on the trip is
+ * intentional: a delayed job must never use data after its trip is moved or
+ * otherwise no longer belongs to the queued tenant.
+ */
+export async function loadManifestPanelForTenant(tenantId: string, tripId: string): Promise<ManifestPanel | null> {
+  const [trip] = await db.select().from(tripsTable)
+    .where(and(eq(tripsTable.id, tripId), eq(tripsTable.tenantId, tenantId)))
+    .limit(1);
+  if (!trip) return null;
+
+  const reservations = await db.select().from(reservationsTable)
+    .where(and(
+      eq(reservationsTable.tripId, trip.id),
+      eq(reservationsTable.tenantId, tenantId),
+      sql`${reservationsTable.status} NOT IN (${RESERVATION_STATUS.CANCELLED}, ${RESERVATION_STATUS.REFUNDED})`,
+    ));
+  const reservationIds = reservations.map((reservation) => reservation.id);
+  const [passengers, [tenant], [layoutRow]] = await Promise.all([
+    reservationIds.length > 0
+      ? db.select().from(passengersTable).where(inArray(passengersTable.reservationId, reservationIds))
+      : Promise.resolve([]),
+    db.select({ name: tenantsTable.name, cnpj: tenantsTable.cnpj }).from(tenantsTable)
+      .where(eq(tenantsTable.id, tenantId)).limit(1),
+    trip.layoutId
+      ? db.select({ numberingType: vehicleLayoutsTable.numberingType }).from(vehicleLayoutsTable)
+        .where(eq(vehicleLayoutsTable.id, trip.layoutId)).limit(1)
+      : Promise.resolve([undefined]),
+  ]);
+
+  // Do not send a manifest if the tenant was removed while the job waited.
+  if (!tenant) return null;
+
+  const reservationMap = new Map(reservations.map((reservation) => [reservation.id, reservation]));
+  const manifestPassengers: ManifestPassenger[] = passengers.map((passenger) => {
+    const reservation = reservationMap.get(passenger.reservationId);
+    return {
+      name: passenger.name,
+      cpf: passenger.cpf ?? null,
+      birthDate: passenger.birthDate?.toISOString() ?? null,
+      ageCategory: passenger.ageCategory,
+      seatNumber: passenger.seatNumber ?? null,
+      boardingLocationId: passenger.boardingLocationId ?? reservation?.boardingLocationId ?? null,
+      documentType: passenger.documentType ?? null,
+      specialNeeds: passenger.specialNeeds ?? null,
+      observations: passenger.observations ?? null,
+    };
+  });
+
+  return {
+    tripName: trip.name,
+    departureDate: trip.departureDate.toISOString(),
+    departureTime: trip.departureTime ?? null,
+    tenantName: tenant.name,
+    tenantCnpj: tenant.cnpj ?? null,
+    manifestNumber: trip.manifestNumber ?? null,
+    vehiclePlate: trip.vehiclePlate ?? null,
+    vehicleType: trip.vehicleType ?? null,
+    driverName: trip.driverName ?? null,
+    driver1Cpf: trip.driver1Cpf ?? null,
+    driver1Cnh: trip.driver1Cnh ?? null,
+    driver1CnhCategory: trip.driver1CnhCategory ?? null,
+    driver1CnhExpiry: trip.driver1CnhExpiry ?? null,
+    driver2Name: trip.driver2Name ?? null,
+    driver2Cpf: trip.driver2Cpf ?? null,
+    driver2Cnh: trip.driver2Cnh ?? null,
+    driver2CnhCategory: trip.driver2CnhCategory ?? null,
+    driver2CnhExpiry: trip.driver2CnhExpiry ?? null,
+    tourGuide: trip.tourGuide ?? null,
+    tourGuideCpf: trip.tourGuideCpf ?? null,
+    tourGuideRegistration: trip.tourGuideRegistration ?? null,
+    boardingPoints: (trip.boardingPoints ?? []) as Array<{ id: string; name: string; time?: string }>,
+    passengers: manifestPassengers,
+    freePassengers: Array.isArray(trip.freePassengers) ? trip.freePassengers as FreePassenger[] : [],
+    destinationCity: trip.destinationCity,
+    destinationState: trip.destinationState,
+    numberingType: layoutRow?.numberingType ?? null,
+  };
+}
 
 export const AGE_CATEGORY_LABELS_SERVER: Record<string, string> = {
   adult: "Adulto",

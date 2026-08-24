@@ -38,6 +38,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -644,6 +645,9 @@ export function CardPaymentModal({ invoice, clientSecret, publishableKey, onClos
             <CreditCard className="w-5 h-5 text-primary" />
             Pagamento com Cartão
           </DialogTitle>
+          <DialogDescription>
+            Informe os dados do cartão para pagar esta fatura com segurança.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="text-center">

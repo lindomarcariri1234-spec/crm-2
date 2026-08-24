@@ -20,7 +20,7 @@ O arquivo `lib/db/drizzle/0000_squash_baseline.sql` é histórico e **nunca deve
 
    ```bash
    pnpm --filter @workspace/db check
-   pnpm --filter @workspace/db validate-coverage
+   pnpm --filter @workspace/db validate-coverage # audita colunas pós-baseline
    pnpm --filter @workspace/db validate-columns
    pnpm --filter @workspace/db validate-tables
    ```
@@ -29,12 +29,36 @@ Não execute alterações destrutivas em produção sem confirmação explícita
 
 ## Validação recomendada
 
+O hook automático `scripts/post-merge.sh` instala exatamente as dependências
+registradas no lockfile (`pnpm install --frozen-lockfile`), aplica migrations,
+executa o seed idempotente de planos e confirma a estrutura do banco. Em seguida,
+executa as validações estáticas abaixo para impedir drift de schema.
+
 ```bash
-pnpm --filter @workspace/visitecrm run typecheck
-pnpm --filter @workspace/visitecrm run build
-pnpm --filter @workspace/api-server run build
-pnpm --filter @workspace/cliente-app run typecheck
-pnpm --filter @workspace/guide-app run typecheck
+pnpm --filter @workspace/db run check
+pnpm --filter @workspace/db run validate-coverage
+pnpm --filter @workspace/db run validate-columns
+pnpm --filter @workspace/db run validate-tables
+pnpm --filter @workspace/db run verify-db
+```
+
+Antes de abrir uma alteração, execute a validação completa:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @workspace/db run check
+pnpm --filter @workspace/db run validate-coverage
+pnpm --filter @workspace/db run validate-columns
+pnpm --filter @workspace/db run validate-tables
+pnpm run build
+pnpm test
+```
+
+Para alterações de banco, aplique a migration localmente conforme a seção acima e,
+quando houver um banco de desenvolvimento disponível, execute também:
+
+```bash
+pnpm --filter @workspace/db run verify-db
 ```
 
 Execute os testes do pacote alterado em lotes quando a suite for grande.

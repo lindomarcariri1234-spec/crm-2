@@ -24,6 +24,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -57,6 +58,11 @@ const journalPath = resolve(
   here,
   "../../../../lib/db/drizzle/meta/_journal.json",
 );
+const coverageScriptPath = resolve(
+  here,
+  "../../../../lib/db/scripts/validate-coverage.mjs",
+);
+const postMergeScriptPath = resolve(here, "../../../../scripts/post-merge.sh");
 
 function loadJournal(): Journal {
   return JSON.parse(readFileSync(journalPath, "utf8")) as Journal;
@@ -100,5 +106,28 @@ describe("drizzle migration journal ordering", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+
+  it("accepts and reports idempotent columns added after the immutable baseline", () => {
+    const output = execFileSync(process.execPath, [coverageScriptPath], {
+      encoding: "utf8",
+    });
+
+    expect(output).toContain("Columns added after the immutable squash baseline");
+    expect(output).toContain("[0061_trip_import_fingerprint.sql]  trips.import_fingerprint");
+  });
+
+  it("keeps post-merge validation lockfile-pinned and reconciles the live schema", () => {
+    const script = readFileSync(postMergeScriptPath, "utf8");
+
+    expect(script).toContain("pnpm install --frozen-lockfile");
+    expect(script).toContain("pnpm --filter @workspace/db run check");
+    expect(script).toContain("pnpm --filter @workspace/db run validate-coverage");
+    expect(script).toContain("pnpm --filter @workspace/db run validate-columns");
+    expect(script).toContain("pnpm --filter @workspace/db run validate-tables");
+    expect(script).toContain("pnpm --filter @workspace/db run migrate");
+    expect(script).toContain("pnpm --filter @workspace/scripts seed:plans");
+    expect(script).toContain("pnpm --filter @workspace/db run verify-db");
+    expect(script).not.toMatch(/pnpm\s+install\s+--no-frozen-lockfile/);
   });
 });

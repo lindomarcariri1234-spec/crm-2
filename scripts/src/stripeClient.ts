@@ -59,6 +59,9 @@ export async function getStripePublishableKey(): Promise<string> {
 export async function getUncachableStripeClient(): Promise<Stripe> {
   const { secretKey } = await getCredentials();
   return new Stripe(secretKey, {
-    apiVersion: "2025-08-27.basil" as Stripe.LatestApiVersion,
+    // Stripe v22 types only its newest API version; preserve the product's
+    // explicitly pinned version until the Stripe integration is upgraded.
+    // @ts-expect-error The pinned API version is intentionally older than the SDK union.
+    apiVersion: "2025-08-27.basil",
   });
 }
