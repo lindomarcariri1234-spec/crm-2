@@ -1,4 +1,4 @@
-modules = ["web", "bash", "nodejs-24"]
+modules = ["web", "bash", "nodejs-24", "postgresql-16"]
 
   [[artifacts]]
   id = "artifacts/visitecrm"
