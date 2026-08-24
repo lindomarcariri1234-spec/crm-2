@@ -333,10 +333,10 @@ describe("GET /trips — page, limit, status query param validation", () => {
     expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
-  it("rejects limit=101 (above max) with 400", async () => {
+  it("rejects limit=501 (above max) with 400", async () => {
     const res = await request(app)
       .get("/trips")
-      .query({ limit: "101" });
+      .query({ limit: "501" });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
@@ -437,6 +437,140 @@ describe("GET /trips — page, limit, status query param validation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /trips/export — complete tenant backup
+// ---------------------------------------------------------------------------
+
+type ExportQueryChain = {
+  from: () => ExportQueryChain;
+  where: () => ExportQueryChain;
+  orderBy: () => ExportQueryChain;
+  limit: (value: number) => ExportQueryChain;
+  offset: (value: number) => ExportQueryChain;
+  then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) => unknown;
+};
+
+function makeExportQuery(rows: Record<string, unknown>[]): ExportQueryChain {
+  let result = rows;
+  const chain = {} as ExportQueryChain;
+  Object.assign(chain, {
+    from: () => chain,
+    where: () => {
+      // Simulate the database applying the tenant predicate that the route
+      // must provide, while keeping .limit() observable to this regression test.
+      result = rows.filter((row) => row.tenantId === agencyAdmin.tenantId);
+      return chain;
+    },
+    orderBy: () => chain,
+    limit: (value: number) => {
+      result = result.slice(0, value);
+      return chain;
+    },
+    offset: (value: number) => {
+      result = result.slice(value);
+      return chain;
+    },
+    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve(result).then(resolve, reject),
+  });
+  return chain;
+}
+
+function makeExportTrip(id: string, tenantId: string): Record<string, unknown> {
+  return {
+    id,
+    tenantId,
+    name: `Viagem ${id}`,
+    slug: `viagem-${id}`,
+    description: null,
+    destination: "Fortaleza",
+    destinationCity: "Fortaleza",
+    destinationState: "CE",
+    type: "excursao",
+    category: "standard",
+    departureDate: new Date("2026-09-01T12:00:00.000Z"),
+    returnDate: null,
+    totalCapacity: 46,
+    availableSeats: 46,
+    reservedSeats: 0,
+    confirmedSeats: 0,
+    priceAdult: "100",
+    priceChild: null,
+    priceSenior: null,
+    inclusions: [],
+    exclusions: [],
+    coverImage: null,
+    gallery: [],
+    videos: [],
+    itinerary: [],
+    boardingPoints: [],
+    status: "draft",
+    isPublic: false,
+    isFeatured: false,
+    vehiclePlate: null,
+    vehicleType: null,
+    driverName: null,
+    tourGuide: null,
+    tripOrganizer: null,
+    driver1Cpf: null,
+    driver1Cnh: null,
+    driver1CnhCategory: null,
+    driver1CnhExpiry: null,
+    driver2Name: null,
+    driver2Cpf: null,
+    driver2Cnh: null,
+    driver2CnhCategory: null,
+    driver2CnhExpiry: null,
+    tourGuideCpf: null,
+    tourGuideRegistration: null,
+    manifestNumber: null,
+    seatLayout: "2x2",
+    layoutId: null,
+    showSeatMap: true,
+    fixedCosts: [],
+    variableCosts: [],
+    freeOrganizers: null,
+    freeGuides: null,
+    originCity: null,
+    originState: null,
+    departureTime: null,
+    returnTime: null,
+    createdAt: new Date("2026-01-01T12:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T12:00:00.000Z"),
+  };
+}
+
+describe("GET /trips/export — complete tenant backup", () => {
+  beforeEach(() => {
+    mockRequireAuth.mockResolvedValue(agencyAdmin);
+  });
+
+  it("returns all tenant trips beyond the list safety cap without leaking another tenant", async () => {
+    const ownTrips = Array.from({ length: 501 }, (_, index) =>
+      makeExportTrip(`tenant-trip-${index + 1}`, agencyAdmin.tenantId),
+    );
+    const otherTenantTrips = [
+      makeExportTrip("other-tenant-trip-1", "tenant-other"),
+      makeExportTrip("other-tenant-trip-2", "tenant-other"),
+    ];
+    mockSelect.mockImplementationOnce(() => makeExportQuery([...ownTrips, ...otherTenantTrips]));
+
+    const res = await request(app).get("/trips/export");
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(501);
+    expect(res.body.data).toHaveLength(501);
+    expect(res.body.data[0].id).toBe("tenant-trip-1");
+    expect(res.body.data[500].id).toBe("tenant-trip-501");
+    expect(res.body.data).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "other-tenant-trip-1" }),
+        expect.objectContaining({ id: "other-tenant-trip-2" }),
+      ]),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /clients — page/limit/sortBy/sortOrder validation
 // ---------------------------------------------------------------------------
 
@@ -454,10 +588,10 @@ describe("GET /clients — page, limit, sortBy, sortOrder validation", () => {
     expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
-  it("rejects limit=200 (above max 100) with 400", async () => {
+  it("rejects limit=501 (above max 500) with 400", async () => {
     const res = await request(app)
       .get("/clients")
-      .query({ limit: "200" });
+      .query({ limit: "501" });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
