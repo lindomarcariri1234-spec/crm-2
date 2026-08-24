@@ -387,16 +387,28 @@ router.get("/trips/export", async (req, res, next: NextFunction): Promise<void> 
     }
 
     let exportedCount = 0;
-    let offset = 0;
+    let cursor: { departureDate: Date; id: string } | undefined;
 
     while (true) {
       // Keep the tenant predicate in every batch query. Besides enforcing
       // isolation, this means no tenant-wide result set is materialized.
+      const cursorCondition = cursor
+        ? or(
+            gt(tripsTable.departureDate, cursor.departureDate),
+            and(
+              eq(tripsTable.departureDate, cursor.departureDate),
+              gt(tripsTable.id, cursor.id),
+            ),
+          )
+        : undefined;
       const batch = await db.select().from(tripsTable)
-        .where(eq(tripsTable.tenantId, me.tenantId))
-        .orderBy(asc(tripsTable.departureDate))
-        .limit(EXPORT_TRIPS_BATCH_SIZE)
-        .offset(offset);
+        .where(
+          cursorCondition
+            ? and(eq(tripsTable.tenantId, me.tenantId), cursorCondition)
+            : eq(tripsTable.tenantId, me.tenantId),
+        )
+        .orderBy(asc(tripsTable.departureDate), asc(tripsTable.id))
+        .limit(EXPORT_TRIPS_BATCH_SIZE);
 
       if (batch.length === 0) break;
 
@@ -413,7 +425,11 @@ router.get("/trips/export", async (req, res, next: NextFunction): Promise<void> 
         exportedCount++;
       }
 
-      offset += batch.length;
+      const lastTrip = batch[batch.length - 1];
+      cursor = {
+        departureDate: lastTrip.departureDate,
+        id: lastTrip.id,
+      };
       if (batch.length < EXPORT_TRIPS_BATCH_SIZE) break;
     }
 

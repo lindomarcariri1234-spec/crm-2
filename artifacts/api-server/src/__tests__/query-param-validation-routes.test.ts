@@ -443,16 +443,20 @@ describe("GET /trips — page, limit, status query param validation", () => {
 type ExportQueryChain = {
   from: () => ExportQueryChain;
   where: () => ExportQueryChain;
-  orderBy: () => ExportQueryChain;
+  orderBy: (...expressions: unknown[]) => ExportQueryChain;
   limit: (value: number) => ExportQueryChain;
-  offset: (value: number) => ExportQueryChain;
   then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) => unknown;
 };
 
-function makeExportQuery(rows: Record<string, unknown>[]): ExportQueryChain {
+type ExportCursor = { departureDate: Date; id: string } | null;
+
+function makeExportQuery(
+  rows: Record<string, unknown>[],
+  state: { cursor: ExportCursor },
+  orderByArgumentCounts: number[],
+): ExportQueryChain {
   let filteredRows = rows;
   let limitValue = rows.length;
-  let offsetValue = 0;
   const chain = {} as ExportQueryChain;
   Object.assign(chain, {
     from: () => chain,
@@ -462,17 +466,41 @@ function makeExportQuery(rows: Record<string, unknown>[]): ExportQueryChain {
       filteredRows = rows.filter((row) => row.tenantId === agencyAdmin.tenantId);
       return chain;
     },
-    orderBy: () => chain,
+    orderBy: (...expressions: unknown[]) => {
+      orderByArgumentCounts.push(expressions.length);
+      return chain;
+    },
     limit: (value: number) => {
       limitValue = value;
       return chain;
     },
-    offset: (value: number) => {
-      offsetValue = value;
-      return chain;
-    },
     then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve(filteredRows.slice(offsetValue, offsetValue + limitValue)).then(resolve, reject),
+      Promise.resolve(
+        [...filteredRows]
+          .sort((left, right) => {
+            const leftDate = (left.departureDate as Date).getTime();
+            const rightDate = (right.departureDate as Date).getTime();
+            if (leftDate !== rightDate) return leftDate - rightDate;
+            return String(left.id).localeCompare(String(right.id));
+          })
+          .filter((row) => {
+            if (!state.cursor) return true;
+            const departureDate = row.departureDate as Date;
+            return departureDate > state.cursor.departureDate
+              || (departureDate.getTime() === state.cursor.departureDate.getTime()
+                && String(row.id) > state.cursor.id);
+          })
+          .slice(0, limitValue),
+      ).then((batch) => {
+        if (batch.length > 0) {
+          const lastTrip = batch[batch.length - 1];
+          state.cursor = {
+            departureDate: lastTrip.departureDate as Date,
+            id: String(lastTrip.id),
+          };
+        }
+        return resolve(batch);
+      }, reject),
   });
   return chain;
 }
@@ -556,21 +584,45 @@ describe("GET /trips/export — complete tenant backup", () => {
       makeExportTrip("other-tenant-trip-2", "tenant-other"),
     ];
     const allTrips = [...ownTrips, ...otherTenantTrips];
+    const state = { cursor: null as ExportCursor };
+    const orderByArgumentCounts: number[] = [];
     mockSelect
-      .mockImplementationOnce(() => makeExportQuery(allTrips))
-      .mockImplementationOnce(() => makeExportQuery(allTrips))
-      .mockImplementationOnce(() => makeExportQuery(allTrips));
+      .mockImplementationOnce(() => makeExportQuery(allTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(allTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(allTrips, state, orderByArgumentCounts));
 
     const res = await request(app).get("/trips/export").query({ format: "ndjson" });
     const lines = res.text.trim().split("\n");
+    const exportedIds = lines.map((line) => JSON.parse(line).id as string);
 
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toContain("application/x-ndjson");
     expect(mockSelect).toHaveBeenCalledTimes(3);
     expect(lines).toHaveLength(1_251);
-    expect(JSON.parse(lines[0])).toMatchObject({ id: "tenant-trip-1" });
-    expect(JSON.parse(lines[1_250])).toMatchObject({ id: "tenant-trip-1251" });
+    expect(new Set(exportedIds)).toEqual(new Set(ownTrips.map((trip) => trip.id)));
+    expect(orderByArgumentCounts).toEqual([2, 2, 2]);
     expect(lines.some((line) => line.includes("other-tenant-trip"))).toBe(false);
+  });
+
+  it("does not duplicate or skip trips when departure dates repeat at a batch boundary", async () => {
+    const ownTrips = Array.from({ length: 1_001 }, (_, index) =>
+      makeExportTrip(`same-date-trip-${String(index + 1).padStart(4, "0")}`, agencyAdmin.tenantId),
+    ).reverse();
+    const state = { cursor: null as ExportCursor };
+    const orderByArgumentCounts: number[] = [];
+    mockSelect
+      .mockImplementationOnce(() => makeExportQuery(ownTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(ownTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(ownTrips, state, orderByArgumentCounts));
+
+    const res = await request(app).get("/trips/export").query({ format: "ndjson" });
+    const exportedIds = res.text.trim().split("\n").map((line) => JSON.parse(line).id as string);
+    const expectedIds = ownTrips.map((trip) => trip.id).sort();
+
+    expect(res.status).toBe(200);
+    expect(exportedIds).toEqual(expectedIds);
+    expect(new Set(exportedIds)).toHaveLength(ownTrips.length);
+    expect(orderByArgumentCounts).toEqual([2, 2, 2]);
   });
 });
 
