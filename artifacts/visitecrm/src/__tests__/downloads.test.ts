@@ -11,7 +11,27 @@
  *   - downloadXlsx   — SheetJS call shape
  *   - downloadPdf    — jsPDF + autoTable call shape
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createElement } from "react";
+
+import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js";
+
+// --------------------------------------------------------------------------
+// Downloads page component mocks
+// --------------------------------------------------------------------------
+const downloadsApiMocks = vi.hoisted(() => ({
+  useListReferrals: vi.fn(() => ({ data: { data: [] } })),
+  useListCommissions: vi.fn(() => ({ data: [] })),
+  useListDeals: vi.fn(() => ({ data: [] })),
+}));
+
+const mockToast = vi.hoisted(() => vi.fn());
+
+vi.mock("@workspace/api-client-react", () => downloadsApiMocks);
+
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: mockToast }),
+}));
 
 // --------------------------------------------------------------------------
 // XLSX mock — factory uses vi.fn() directly (safe to hoist)
@@ -62,6 +82,7 @@ import {
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import Downloads from "../pages/downloads.js";
 
 // --------------------------------------------------------------------------
 // Shared helpers — minimal fixture factories
@@ -761,5 +782,90 @@ describe("fmtCur", () => {
 
   it("formats a string number correctly", () => {
     expect(fmtCur("800.50")).toMatch(/800,50/);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Downloads page — empty filtered result
+// --------------------------------------------------------------------------
+
+const fetchHost = globalThis as unknown as { fetch?: unknown };
+let originalFetch: unknown;
+
+function getQuickDownloadButton(
+  container: HTMLElement,
+  cardLabel: string,
+  format: "XLSX" | "PDF",
+): HTMLButtonElement {
+  const title = Array.from(container.querySelectorAll("div")).find(
+    (element) => element.textContent?.trim() === cardLabel,
+  );
+  const card = title?.closest(".rounded-xl");
+  const button = Array.from(card?.querySelectorAll("button") ?? []).find(
+    (element) => element.textContent?.trim() === format,
+  );
+
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Could not find ${format} quick-download button for ${cardLabel}`);
+  }
+  return button;
+}
+
+describe("Downloads — empty quick-download result", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-06-20T12:00:00Z"));
+    mockToast.mockClear();
+    vi.mocked(XLSX.writeFile).mockClear();
+    vi.mocked(jsPDF).mockClear();
+
+    originalFetch = fetchHost.fetch;
+    fetchHost.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => ({
+        data: [{ id: "client-outside-range", createdAt: "2024-01-15T00:00:00Z" }],
+        total: 1,
+      }),
+    });
+  });
+
+  afterEach(async () => {
+    await cleanupRoots();
+    fetchHost.fetch = originalFetch;
+    vi.useRealTimers();
+  });
+
+  it("shows the empty-state toast and does not start XLSX or PDF downloads", async () => {
+    const { container } = await renderComponent(createElement(Downloads));
+
+    const xlsxButton = getQuickDownloadButton(container, "Clientes", "XLSX");
+    await flushAct(async () => {
+      xlsxButton.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockToast).toHaveBeenNthCalledWith(1, {
+      title: "Sem dados de Clientes para exportar no período",
+    });
+    expect(vi.mocked(XLSX.writeFile)).not.toHaveBeenCalled();
+
+    const pdfButton = getQuickDownloadButton(container, "Clientes", "PDF");
+    await flushAct(async () => {
+      pdfButton.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockToast).toHaveBeenNthCalledWith(2, {
+      title: "Sem dados de Clientes para exportar no período",
+    });
+    expect(vi.mocked(jsPDF)).not.toHaveBeenCalled();
+    const createdPdfDocs = vi.mocked(jsPDF).mock.results.map(
+      (result) => result.value as { save: ReturnType<typeof vi.fn> },
+    );
+    expect(createdPdfDocs.every((doc) => !doc.save.mock.calls.length)).toBe(true);
   });
 });
