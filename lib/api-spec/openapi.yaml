@@ -1556,6 +1556,14 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: departureDateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: departureDateTo
+          in: query
+          schema:
+            type: ["string", "null"]
         - name: commissionSyncStatus
           in: query
           schema:
@@ -11379,6 +11387,14 @@ paths:
           schema:
             type: ["string", "null"]
         - name: dateTo
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: departureDateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: departureDateTo
           in: query
           schema:
             type: ["string", "null"]

@@ -676,7 +676,11 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
     const me = await requireAuth(req, res);
     if (!me) return;
 
-    const { tripId, clientId, status, search, createdById, dateFrom, dateTo, commissionSyncStatus, hasAutoRetry, page = "1", limit = "20" } = req.query as Record<string, string>;
+    const {
+      tripId, clientId, status, search, createdById, dateFrom, dateTo,
+      departureDateFrom, departureDateTo, commissionSyncStatus, hasAutoRetry,
+      page = "1", limit = "20",
+    } = req.query as Record<string, string>;
     const pageNum = parseInt(page) || 1;
     const limitNum = Math.min(parseInt(limit) || 20, 500);
     const offset = (pageNum - 1) * limitNum;
@@ -684,6 +688,8 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
     const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
     if (dateFrom && !ISO_DATE.test(dateFrom)) { next(new ValidationError("dateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
     if (dateTo && !ISO_DATE.test(dateTo)) { next(new ValidationError("dateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (departureDateFrom && !ISO_DATE.test(departureDateFrom)) { next(new ValidationError("departureDateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (departureDateTo && !ISO_DATE.test(departureDateTo)) { next(new ValidationError("departureDateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
 
     const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
     if (tripId) conditions.push(eq(reservationsTable.tripId, tripId));
@@ -697,6 +703,8 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
     }
     if (dateFrom) conditions.push(sql`${reservationsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
     if (dateTo) conditions.push(sql`${reservationsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
+    if (departureDateFrom) conditions.push(sql`${tripsTable.departureDate} >= ${departureDateFrom}::date` as ReturnType<typeof eq>);
+    if (departureDateTo) conditions.push(sql`${tripsTable.departureDate} <= (${departureDateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
     if (search) {
       const term = `%${search}%`;
       const matchingClients = await db
@@ -755,13 +763,35 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
       conditions.push(eq(reservationsTable.clientId, clientId));
     }
 
-    const reservations = await db.select().from(reservationsTable)
-      .where(and(...conditions))
-      .orderBy(desc(reservationsTable.createdAt))
-      .limit(limitNum).offset(offset);
+    const hasDepartureDateFilter = Boolean(departureDateFrom || departureDateTo);
+    let reservations: (typeof reservationsTable.$inferSelect)[];
+    if (hasDepartureDateFilter) {
+      const reservationRows = await db.select().from(reservationsTable)
+        .innerJoin(
+          tripsTable,
+          and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, reservationsTable.tenantId)),
+        )
+        .where(and(...conditions))
+        .orderBy(desc(reservationsTable.createdAt))
+        .limit(limitNum).offset(offset);
+      reservations = reservationRows.map(({ reservations: reservation }) => reservation);
+    } else {
+      reservations = await db.select().from(reservationsTable)
+        .where(and(...conditions))
+        .orderBy(desc(reservationsTable.createdAt))
+        .limit(limitNum).offset(offset);
+    }
 
-    const [countResult] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationsTable).where(and(...conditions));
+    const [countResult] = hasDepartureDateFilter
+      ? await db.select({ count: sql<number>`count(*)` })
+        .from(reservationsTable)
+        .innerJoin(
+          tripsTable,
+          and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, reservationsTable.tenantId)),
+        )
+        .where(and(...conditions))
+      : await db.select({ count: sql<number>`count(*)` })
+        .from(reservationsTable).where(and(...conditions));
 
     const data = await batchFormatReservations(reservations, me.tenantId);
     res.json({ data, total: Number(countResult?.count ?? 0), page: pageNum, limit: limitNum });

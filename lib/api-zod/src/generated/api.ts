@@ -2144,6 +2144,8 @@ export const ListReservationsQueryParams = zod.object({
   createdById: zod.coerce.string().nullish(),
   dateFrom: zod.coerce.string().nullish(),
   dateTo: zod.coerce.string().nullish(),
+  departureDateFrom: zod.coerce.string().nullish(),
+  departureDateTo: zod.coerce.string().nullish(),
   commissionSyncStatus: zod.coerce.string().nullish(),
   page: zod.coerce.number().default(listReservationsQueryPageDefault),
   limit: zod.coerce.number().default(listReservationsQueryLimitDefault),

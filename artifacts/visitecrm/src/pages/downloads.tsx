@@ -145,8 +145,11 @@ export default function Downloads() {
   }
 
   async function _prepareManifest() {
-    // Manifest filters by trip departure date client-side
-    const all = await fetchAllPages("/api/reservations", {});
+    // Manifest filters by trip departure date on the server
+    const all = await fetchAllPages("/api/reservations", {
+      departureDateFrom: quickStart,
+      departureDateTo: quickEnd,
+    });
     return prepareManifest(all as Parameters<typeof prepareManifest>[0], quickStart, quickEnd);
   }
 

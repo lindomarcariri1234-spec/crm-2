@@ -3664,6 +3664,14 @@ export type ListReservationsParams = {
   /**
    * @nullable
    */
+  departureDateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  departureDateTo?: string | null;
+  /**
+   * @nullable
+   */
   commissionSyncStatus?: string | null;
   /**
    * @nullable

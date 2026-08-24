@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
 
-const { mockSelect, mockSelectDistinct, mockNotInArray, selectQueue, selectDistinctQueue } = vi.hoisted(() => ({
+const { mockSelect, mockSelectDistinct, mockNotInArray, mockInnerJoin, selectQueue, selectDistinctQueue } = vi.hoisted(() => ({
   mockSelect: vi.fn(),
   mockSelectDistinct: vi.fn(),
   mockNotInArray: vi.fn((column: unknown, values: unknown[]) => ({ column, values })),
+  mockInnerJoin: vi.fn(),
   selectQueue: [] as unknown[][],
   selectDistinctQueue: [] as unknown[][],
 }));
@@ -161,15 +162,20 @@ type QueryChain = Promise<unknown[]> & {
   innerJoin: (...args: unknown[]) => QueryChain;
   where: (...args: unknown[]) => QueryChain;
   limit: (...args: unknown[]) => QueryChain;
+  offset: (...args: unknown[]) => QueryChain;
   orderBy: (...args: unknown[]) => QueryChain;
 };
 
 function makeChain(data: unknown[]): QueryChain {
   const chain = Promise.resolve(data) as QueryChain;
   chain.from = () => chain;
-  chain.innerJoin = () => chain;
+  chain.innerJoin = (...args) => {
+    mockInnerJoin(...args);
+    return chain;
+  };
   chain.where = () => chain;
   chain.limit = () => chain;
+  chain.offset = () => chain;
   chain.orderBy = () => chain;
   return chain;
 }
@@ -431,6 +437,32 @@ describe("GET /api/reservations/trip-overlap", () => {
       )).toBe(true);
     },
   );
+});
+
+describe("GET /api/reservations departure date filters", () => {
+  it("joins trips for both the result page and total when filtering by departure date", async () => {
+    const trip = makeBatchTrip("trip-target", "2026-08-15");
+    const reservation = makeReservation();
+    selectQueue.push(
+      [{ reservations: reservation, trips: trip }],
+      [{ count: 1 }],
+      [trip],
+      [{ id: CLIENT_ID, tenantId: USER.tenantId, name: "Client", email: "client@example.com", whatsapp: "5511999999999", cpf: null, birthDate: null }],
+      [],
+      [],
+    );
+    selectDistinctQueue.push([]);
+
+    const response = await request(buildApp())
+      .get("/api/reservations?departureDateFrom=2026-08-01&departureDateTo=2026-08-31");
+
+    expect(response.status).toBe(200);
+    expect(response.body.total).toBe(1);
+    expect(response.body.data).toHaveLength(1);
+    // The page and count queries must join trips; batch formatting may add
+    // an additional joined query to check conflicting reservations.
+    expect(mockInnerJoin.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("batchFormatReservations conflict detection", () => {
