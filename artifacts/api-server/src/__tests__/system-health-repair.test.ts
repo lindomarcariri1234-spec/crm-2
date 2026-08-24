@@ -175,15 +175,17 @@ describe("POST /admin/system-health/repair", () => {
     expect(mockRepairSeatDriftOnly).toHaveBeenCalledTimes(1);
   });
 
-  it("runs each repair pass once and returns independent orphan and seat counts", async () => {
+  it("returns both orphan legs from cleanup and the independent seat count", async () => {
     mockRequireAuth.mockResolvedValue(makeSuperAdmin());
-    mockCleanupOrphanDeals.mockResolvedValue({ orphansFixed: 3 });
+    // cleanupOrphanDeals covers both the direct reservation link and the
+    // pre-linkage client+trip fallback before returning this total.
+    mockCleanupOrphanDeals.mockResolvedValue({ orphansFixed: 2 });
     mockRepairSeatDriftOnly.mockResolvedValue({ fixed: 5, skipped: 1 });
 
     const res = await request(buildApp()).post("/admin/system-health/repair");
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ orphansFixed: 3, tripsCorrected: 5 });
+    expect(res.body).toEqual({ orphansFixed: 2, tripsCorrected: 5 });
     // The combined repair must not invoke a helper that performs orphan cleanup
     // a second time, and tripsCorrected must come from seat repair's `fixed`.
     expect(mockCleanupOrphanDeals).toHaveBeenCalledTimes(1);

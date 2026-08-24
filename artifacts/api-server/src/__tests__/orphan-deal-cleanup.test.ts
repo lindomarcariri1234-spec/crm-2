@@ -36,6 +36,7 @@
  *  - Applies same r.client_id guard in leg-1 and both Guards in leg-2 (count/repair contract)
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 const { mockDbExecute, mockCancelDeal, mockLogError, mockLogInfo } = vi.hoisted(() => {
   const mockDbExecute = vi.fn();
@@ -61,9 +62,10 @@ vi.mock("@workspace/db", () => ({
   pipelineStagesTable: {},
 }));
 
-vi.mock("drizzle-orm", async () => {
+vi.mock("drizzle-orm", async (importOriginal) => {
   const { makeDrizzleOrmMock } = await import("./helpers/drizzle-mock.js");
-  return makeDrizzleOrmMock();
+  const actual = await importOriginal<typeof import("drizzle-orm")>();
+  return { ...makeDrizzleOrmMock(), sql: actual.sql };
 });
 
 vi.mock("../services/pipeline-automation.js", () => ({
@@ -239,6 +241,87 @@ describe("getOrphanDealsCount()", () => {
 
     expect(count).toBe(5);
     expect(mockDbExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts exactly the two repairable legs and keeps their exclusion guards aligned", async () => {
+    const linkedOrphan = {
+      id: "deal-linked",
+      tenantId: "tenant-abc",
+      reservationId: "res-linked-cancelled",
+    };
+    const unlinkedOrphan = {
+      id: "deal-pre-linkage",
+      tenantId: "tenant-abc",
+      reservationId: "res-unlinked-cancelled",
+    };
+
+    // The count query aggregates one eligible deal from each leg. Cleanup then
+    // returns those same two legs independently, while its SQL guards exclude
+    // completed same-trip history and active reservations on any trip.
+    mockDbExecute
+      .mockResolvedValueOnce({ rows: [{ cnt: "2" }] })
+      .mockResolvedValueOnce({ rows: [linkedOrphan] })
+      .mockResolvedValueOnce({ rows: [unlinkedOrphan] });
+    mockCancelDeal.mockResolvedValue(true);
+
+    const count = await getOrphanDealsCount();
+    const repair = await cleanupOrphanDeals();
+
+    expect(count).toBe(2);
+    expect(repair).toEqual({ orphansFixed: 2 });
+    expect(mockCancelDeal).toHaveBeenCalledTimes(2);
+    expect(mockCancelDeal).toHaveBeenCalledWith({
+      tenantId: linkedOrphan.tenantId,
+      reservationId: linkedOrphan.reservationId,
+    });
+    expect(mockCancelDeal).toHaveBeenCalledWith({
+      tenantId: unlinkedOrphan.tenantId,
+      reservationId: unlinkedOrphan.reservationId,
+    });
+
+    const dialect = new PgDialect();
+    const renderQuery = (callIndex: number) =>
+      dialect.sqlToQuery(mockDbExecute.mock.calls[callIndex]?.[0] as never).sql;
+    const countQuery = renderQuery(0);
+    const linkedCleanupQuery = renderQuery(1);
+    const unlinkedCleanupQuery = renderQuery(2);
+
+    const linkedLegClauses = [
+      /d\.status\s*=\s*'open'/i,
+      /d\.reservation_id\s+IS\s+NOT\s+NULL/i,
+      /r\.status\s+IN\s*\('cancelled',\s*'refunded'\)/i,
+      /r\.client_id\s+IS\s+NOT\s+NULL/i,
+      /ar\.client_id\s*=\s*r\.client_id/i,
+      /ar\.tenant_id\s*=\s*d\.tenant_id/i,
+      /ar\.status\s+IN\s*\('pending',\s*'confirmed'\)/i,
+    ];
+    const unlinkedLegClauses = [
+      /d\.status\s*=\s*'open'/i,
+      /d\.reservation_id\s+IS\s+NULL/i,
+      /d\.client_id\s+IS\s+NOT\s+NULL/i,
+      /d\.trip_id\s+IS\s+NOT\s+NULL/i,
+      /r\.status\s+IN\s*\('cancelled',\s*'refunded'\)/i,
+      /sr\.client_id\s*=\s*d\.client_id/i,
+      /sr\.trip_id\s*=\s*d\.trip_id/i,
+      /sr\.tenant_id\s*=\s*d\.tenant_id/i,
+      /sr\.status\s+NOT\s+IN\s*\('cancelled',\s*'refunded'\)/i,
+      /ar\.client_id\s*=\s*d\.client_id/i,
+      /ar\.tenant_id\s*=\s*d\.tenant_id/i,
+      /ar\.status\s+IN\s*\('pending',\s*'confirmed'\)/i,
+    ];
+
+    // The dashboard count and each cleanup leg must carry the same eligibility
+    // predicates. These assertions protect the cases where the count would
+    // include a deal that the repair helper intentionally leaves open.
+    for (const clause of linkedLegClauses) {
+      expect(countQuery).toMatch(clause);
+      expect(linkedCleanupQuery).toMatch(clause);
+    }
+    for (const clause of unlinkedLegClauses) {
+      expect(countQuery).toMatch(clause);
+      expect(unlinkedCleanupQuery).toMatch(clause);
+    }
+    expect(countQuery).toMatch(/COUNT\(DISTINCT d\.id\)/i);
   });
 
   it("returns 0 when there are no orphans", async () => {
