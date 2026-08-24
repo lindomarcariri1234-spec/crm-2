@@ -8,7 +8,7 @@ import { format, parseISO } from "date-fns";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
-import type { Client, Trip, Referral, Commission } from "@workspace/api-client-react";
+import type { Client, Trip, Referral, Commission, Deal } from "@workspace/api-client-react";
 
 // --------------------------------------------------------------------------
 // Formatters
@@ -133,6 +133,34 @@ export function prepareManifest(
   return { headers, rows, count: rows.length };
 }
 
+export function prepareReservations(
+  all: ReservationItem[],
+  quickStart: string,
+  quickEnd: string,
+): { headers: string[]; rows: string[][]; count: number } {
+  const reservations = all.filter((r) => inDateRange(r.createdAt, quickStart, quickEnd));
+  const headers = [
+    "ID", "Cliente", "Viagem", "Saída", "Status", "Assentos",
+    "Valor Total (R$)", "Valor Pago (R$)", "Saldo (R$)", "Forma de Pagamento",
+    "Parcelas", "Criado em",
+  ];
+  const rows = reservations.map((r) => [
+    r.id,
+    r.client?.name ?? "",
+    r.trip?.name ?? "",
+    fmtDate(r.trip?.departureDate),
+    r.status,
+    String(r.seats?.length ?? 0),
+    fmtCur(r.totalValue),
+    fmtCur(r.paidValue),
+    fmtCur(r.balance),
+    r.paymentMethod ?? "",
+    String(r.installments ?? 1),
+    fmtDate(r.createdAt),
+  ]);
+  return { headers, rows, count: reservations.length };
+}
+
 export function prepareReferrals(
   all: Referral[],
   quickStart: string,
@@ -171,6 +199,33 @@ export function prepareCommissions(
     fmtDate(c.paidAt ?? undefined), fmtDate(c.createdAt),
   ]);
   return { headers, rows, count: commissions.length };
+}
+
+export function preparePipeline(
+  all: Deal[],
+  quickStart: string,
+  quickEnd: string,
+): { headers: string[]; rows: string[][]; count: number } {
+  const deals = all.filter((d) => inDateRange(d.createdAt, quickStart, quickEnd));
+  const headers = [
+    "Título", "Status", "Estágio", "Valor (R$)", "Motivo de Perda",
+    "Cliente / Lead", "WhatsApp", "Viagem", "Data de Fechamento Esperada",
+    "Origem", "Criado em",
+  ];
+  const rows = deals.map((d) => [
+    d.title,
+    d.status === "lost" ? "Perdido" : d.status === "won" ? "Ganho" : "Aberto",
+    d.stageName ?? "",
+    fmtCur(d.value),
+    d.lostReason ?? "",
+    d.clientName ?? d.leadName ?? "",
+    d.leadWhatsapp ?? "",
+    d.tripId ?? "",
+    fmtDate(d.expectedCloseDate ?? undefined),
+    d.source ?? "",
+    fmtDate(d.createdAt),
+  ]);
+  return { headers, rows, count: deals.length };
 }
 
 // --------------------------------------------------------------------------

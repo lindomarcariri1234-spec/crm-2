@@ -6,8 +6,10 @@
  *   - prepareClients  — date filter on createdAt
  *   - prepareTrips    — date filter on departureDate
  *   - prepareManifest — date filter on trip.departureDate; seat expansion
+ *   - prepareReservations — date filter on createdAt
  *   - prepareReferrals — date filter on createdAt; bonusPaid label
  *   - prepareCommissions — date filter on createdAt; sellerName vs userId
+ *   - preparePipeline — date filter on createdAt
  *   - downloadXlsx   — SheetJS call shape
  *   - downloadPdf    — jsPDF + autoTable call shape
  */
@@ -73,8 +75,10 @@ import {
   prepareClients,
   prepareTrips,
   prepareManifest,
+  prepareReservations,
   prepareReferrals,
   prepareCommissions,
+  preparePipeline,
   downloadXlsx,
   downloadPdf,
 } from "../pages/downloads-utils.js";
@@ -190,6 +194,48 @@ function makeCommission(overrides?: Record<string, unknown>) {
     status: "pending",
     paidAt: null,
     createdAt: "2025-04-10T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeDeal(overrides?: Record<string, unknown>) {
+  return {
+    id: "deal1",
+    stageId: "stage1",
+    title: "Pacote Bahia",
+    description: null,
+    value: 1600,
+    clientId: "c1",
+    leadName: null,
+    leadEmail: null,
+    leadWhatsapp: null,
+    tripId: "t1",
+    reservationId: null,
+    ownerId: "u1",
+    expectedCloseDate: null,
+    status: "open",
+    lostReason: null,
+    source: "manual",
+    autoCreated: false,
+    seats: [],
+    reservationNumber: null,
+    createdAt: "2025-04-10T00:00:00Z",
+    updatedAt: "2025-04-10T00:00:00Z",
+    stageName: "Novo",
+    stageColor: null,
+    clientName: "Ana Costa",
+    ownerName: "Consultor",
+    travelReason: null,
+    followUpNote: null,
+    clientEmail: "ana@test.com",
+    clientWhatsapp: "11999990001",
+    clientPhone: null,
+    clientCpf: null,
+    clientCity: null,
+    clientState: null,
+    clientClassification: null,
+    clientOutstandingBalance: null,
+    customerCode: null,
     ...overrides,
   };
 }
@@ -406,6 +452,44 @@ describe("prepareManifest", () => {
 });
 
 // --------------------------------------------------------------------------
+// prepareReservations
+// --------------------------------------------------------------------------
+
+describe("prepareReservations", () => {
+  const RANGE_START = "2025-04-01";
+  const RANGE_END = "2025-04-30";
+
+  it("filters reservations by createdAt", () => {
+    const inRange = makeReservation({ id: "r1", createdAt: "2025-04-10T00:00:00Z" });
+    const outRange = makeReservation({ id: "r2", createdAt: "2025-05-01T00:00:00Z" });
+
+    const { rows, count } = prepareReservations([inRange, outRange] as any[], RANGE_START, RANGE_END);
+
+    expect(count).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0][0]).toBe("r1");
+  });
+
+  it("returns empty rows when all reservations fall outside the range", () => {
+    const before = makeReservation({ id: "r1", createdAt: "2025-03-31T00:00:00Z" });
+    const after = makeReservation({ id: "r2", createdAt: "2025-05-01T00:00:00Z" });
+
+    const { rows, count } = prepareReservations([before, after] as any[], RANGE_START, RANGE_END);
+
+    expect(count).toBe(0);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("includes the expected reservation fields", () => {
+    const { headers } = prepareReservations([], RANGE_START, RANGE_END);
+
+    expect(headers).toContain("Cliente");
+    expect(headers).toContain("Valor Total (R$)");
+    expect(headers).toContain("Criado em");
+  });
+});
+
+// --------------------------------------------------------------------------
 // prepareReferrals
 // --------------------------------------------------------------------------
 
@@ -524,6 +608,52 @@ describe("prepareCommissions", () => {
     expect(headers).toContain("Vendedor");
     expect(headers).toContain("ID da Reserva");
     expect(headers).toContain("Valor Comissão (R$)");
+  });
+});
+
+// --------------------------------------------------------------------------
+// preparePipeline
+// --------------------------------------------------------------------------
+
+describe("preparePipeline", () => {
+  const RANGE_START = "2025-04-01";
+  const RANGE_END = "2025-04-30";
+
+  it("filters pipeline deals by createdAt", () => {
+    const inRange = makeDeal({ id: "deal1", createdAt: "2025-04-10T00:00:00Z" });
+    const outRange = makeDeal({ id: "deal2", createdAt: "2025-05-01T00:00:00Z" });
+
+    const { rows, count } = preparePipeline([inRange, outRange] as any[], RANGE_START, RANGE_END);
+
+    expect(count).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0][0]).toBe("Pacote Bahia");
+  });
+
+  it("returns empty rows when all deals fall outside the range", () => {
+    const before = makeDeal({ id: "deal1", createdAt: "2025-03-31T00:00:00Z" });
+    const after = makeDeal({ id: "deal2", createdAt: "2025-05-01T00:00:00Z" });
+
+    const { rows, count } = preparePipeline([before, after] as any[], RANGE_START, RANGE_END);
+
+    expect(count).toBe(0);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("maps lost deals to the Portuguese status label", () => {
+    const lost = makeDeal({ status: "lost", createdAt: "2025-04-10T00:00:00Z" });
+
+    const { rows } = preparePipeline([lost] as any[], RANGE_START, RANGE_END);
+
+    expect(rows[0][1]).toBe("Perdido");
+  });
+
+  it("includes the expected pipeline fields", () => {
+    const { headers } = preparePipeline([], RANGE_START, RANGE_END);
+
+    expect(headers).toContain("Título");
+    expect(headers).toContain("Motivo de Perda");
+    expect(headers).toContain("Criado em");
   });
 });
 

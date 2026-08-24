@@ -13,12 +13,13 @@ import { format, startOfMonth } from "date-fns";
 import {
   fmtDate,
   fmtCur,
-  inDateRange,
   prepareClients,
   prepareTrips,
   prepareManifest,
+  prepareReservations,
   prepareReferrals,
   prepareCommissions,
+  preparePipeline,
   downloadXlsx,
   downloadPdf,
 } from "./downloads-utils.js";
@@ -158,23 +159,17 @@ export default function Downloads() {
     return Promise.resolve(prepareCommissions(commissionsData ?? [], quickStart, quickEnd));
   }
 
-  async function prepareReservations() {
+  async function _prepareReservations() {
     const all = await fetchAllPages<{
       id: string; client?: { name?: string } | null; trip?: { name?: string; departureDate?: string } | null;
       status: string; seats?: unknown[] | null; totalValue?: number; paidValue?: number; balance?: number;
       paymentMethod?: string | null; installments?: number | null; createdAt: string;
     }>("/api/reservations", { dateFrom: quickStart, dateTo: quickEnd });
-    const headers = ["ID", "Cliente", "Viagem", "Saída", "Status", "Assentos", "Valor Total (R$)", "Valor Pago (R$)", "Saldo (R$)", "Forma de Pagamento", "Parcelas", "Criado em"];
-    const rows = all.map(r => [
-      r.id, r.client?.name ?? "", r.trip?.name ?? "",
-      fmtDate(r.trip?.departureDate),
-      r.status, String(r.seats?.length ?? 0),
-      fmtCur(r.totalValue), fmtCur(r.paidValue),
-      fmtCur(r.balance),
-      r.paymentMethod ?? "", String(r.installments ?? 1),
-      fmtDate(r.createdAt),
-    ]);
-    return { headers, rows, count: all.length };
+    return prepareReservations(
+      all as Parameters<typeof prepareReservations>[0],
+      quickStart,
+      quickEnd,
+    );
   }
 
   async function preparePayments() {
@@ -195,25 +190,12 @@ export default function Downloads() {
     return { headers, rows, count: all.length };
   }
 
-  function preparePipeline() {
+  function _preparePipeline() {
     const open = openDealsData ?? [];
     const lost = lostDealsData ?? [];
-    const allDeals = [...open, ...lost].filter(d => inDateRange(d.createdAt, quickStart, quickEnd));
-    const headers = ["Título", "Status", "Estágio", "Valor (R$)", "Motivo de Perda", "Cliente / Lead", "WhatsApp", "Viagem", "Data de Fechamento Esperada", "Origem", "Criado em"];
-    const rows = allDeals.map(d => [
-      d.title,
-      d.status === "lost" ? "Perdido" : d.status === "won" ? "Ganho" : "Aberto",
-      d.stageName ?? "",
-      fmtCur(d.value),
-      d.lostReason ?? "",
-      d.clientName ?? d.leadName ?? "",
-      d.leadWhatsapp ?? "",
-      d.tripId ?? "",
-      fmtDate(d.expectedCloseDate ?? undefined),
-      d.source ?? "",
-      fmtDate(d.createdAt),
-    ]);
-    return Promise.resolve({ headers, rows, count: allDeals.length });
+    return Promise.resolve(
+      preparePipeline([...open, ...lost], quickStart, quickEnd),
+    );
   }
 
   function makeFormats(
@@ -264,7 +246,7 @@ export default function Downloads() {
       label: "Reservas",
       description: "Relatório de reservas com status e valores",
       icon: CalendarCheck,
-      formats: makeFormats("Reservas", prepareReservations, "reservas"),
+      formats: makeFormats("Reservas", _prepareReservations, "reservas"),
     },
     {
       label: "Relatório Financeiro",
@@ -294,7 +276,7 @@ export default function Downloads() {
       label: "Pipeline de Negócios",
       description: "Leads, negócios abertos e perdidos com motivo de perda",
       icon: BarChart2,
-      formats: makeFormats("Pipeline", preparePipeline, "pipeline"),
+      formats: makeFormats("Pipeline", _preparePipeline, "pipeline"),
     },
   ];
 
