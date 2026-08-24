@@ -54,7 +54,7 @@ export function useTrips() {
   const createTrip = useCreateTrip();
   const deleteTrip = useDeleteTrip();
   const { data: upcomingTrips = [] } = useGetDashboardUpcomingTrips();
-  const { data: allTrips } = useListTrips({ limit: 100 });
+  const { data: allTrips } = useListTrips({ limit: 500 });
 
   const trips = useMemo(() => {
     let data = tripsData?.data ?? [];
@@ -121,7 +121,7 @@ export function useTrips() {
   };
 
   return {
-    trips, isLoading, totalPages, upcomingTrips, stats, me, isVendedor,
+    trips, allTrips: allTrips?.data ?? [], isLoading, totalPages, upcomingTrips, stats, me, isVendedor,
     search, setSearch,
     statusFilter, setStatusFilter,
     typeFilter, setTypeFilter,

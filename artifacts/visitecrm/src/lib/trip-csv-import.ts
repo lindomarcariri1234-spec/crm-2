@@ -5,8 +5,69 @@ import {
   parseClientCsv,
   splitClientCsvList,
 } from "./client-csv-import";
+import { formatBRLPlain } from "@workspace/shared";
+import type { Trip } from "@workspace/api-client-react";
 
 export { parseClientCsv as parseTripCsv };
+
+export const TRIP_CSV_HEADERS = [
+  "Nome", "Destino", "Cidade de Destino", "Estado de Destino", "Data de Saída",
+  "Data de Retorno", "Horário de Saída", "Horário de Retorno", "Preço Adulto",
+  "Preço Criança", "Preço Sênior", "Capacidade", "Tipo", "Categoria",
+  "Cidade de Origem", "Estado de Origem", "Pontos de Embarque", "Inclusões",
+  "Exclusões", "Tipo de Veículo", "Placa", "Motorista", "Guia", "Organizador", "Status",
+];
+
+function formatCsvDate(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = value.split("T")[0];
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : date;
+}
+
+function formatCsvMoney(value: number | null | undefined): string {
+  return value == null ? "" : formatBRLPlain(value);
+}
+
+function escapeCsvCell(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+export function buildTripCsvRow(trip: Trip): string[] {
+  return [
+    trip.name,
+    trip.destination,
+    trip.destinationCity,
+    trip.destinationState,
+    formatCsvDate(trip.departureDate),
+    formatCsvDate(trip.returnDate),
+    trip.departureTime ?? "",
+    trip.returnTime ?? "",
+    formatCsvMoney(trip.priceAdult),
+    formatCsvMoney(trip.priceChild),
+    formatCsvMoney(trip.priceSenior),
+    String(trip.totalCapacity),
+    trip.type,
+    trip.category,
+    trip.originCity ?? "",
+    trip.originState ?? "",
+    (trip.boardingPoints ?? []).map((point) => point.name).join("; "),
+    trip.inclusions.join("; "),
+    trip.exclusions.join("; "),
+    trip.vehicleType ?? "",
+    trip.vehiclePlate ?? "",
+    trip.driverName ?? "",
+    trip.tourGuide ?? "",
+    trip.tripOrganizer ?? "",
+    trip.status,
+  ];
+}
+
+export function buildTripsCsv(trips: Trip[]): string {
+  return [TRIP_CSV_HEADERS, ...trips.map(buildTripCsvRow)]
+    .map((row) => row.map(escapeCsvCell).join(","))
+    .join("\n");
+}
 
 function parseBrazilianNumber(value: string): number | undefined {
   const normalized = value.trim().replace(/[R$\s]/g, "");

@@ -4,21 +4,13 @@ import { useCreateTrip } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { buildTripCsvData, parseTripCsv } from "@/lib/trip-csv-import";
+import { buildTripCsvData, parseTripCsv, TRIP_CSV_HEADERS } from "@/lib/trip-csv-import";
 
 interface TripCsvImportModalProps {
   open: boolean;
   onClose: () => void;
   onImported: () => void;
 }
-
-const TEMPLATE_HEADERS = [
-  "Nome", "Destino", "Cidade de Destino", "Estado de Destino", "Data de Saída",
-  "Data de Retorno", "Horário de Saída", "Horário de Retorno", "Preço Adulto",
-  "Preço Criança", "Preço Sênior", "Capacidade", "Tipo", "Categoria",
-  "Cidade de Origem", "Estado de Origem", "Pontos de Embarque", "Inclusões",
-  "Exclusões", "Tipo de Veículo", "Placa", "Motorista", "Guia", "Organizador", "Status",
-];
 
 function downloadTemplate() {
   const example = [
@@ -28,7 +20,7 @@ function downloadTemplate() {
     "Transporte ida e volta; Guia turístico", "Despesas pessoais", "Ônibus",
     "ABC-1234", "João da Silva", "Maria Guia", "Agência", "draft",
   ];
-  const csv = [TEMPLATE_HEADERS, example]
+  const csv = [TRIP_CSV_HEADERS, example]
     .map(row => row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(","))
     .join("\n");
   const link = document.createElement("a");

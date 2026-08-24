@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   Plus, Search, MapPin, Calendar, Users, Bus, Edit, Trash2, Eye,
   ChevronsLeft, ChevronsRight, LayoutGrid, List, ChevronLeft, ChevronRight,
-  X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images, Upload,
+  X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images, Upload, Download,
 } from "lucide-react";
 import { STATUS_MAP, TRIP_TYPES, TRIP_TYPE_LABELS } from "./constants";
 import { formatCurrency, formatDate } from "./utils";
@@ -21,6 +21,7 @@ import { useTrips } from "@/hooks/useTrips";
 import { useGetMe, useGetTenant } from "@workspace/api-client-react";
 import { PageHeader } from "@/components/page-header";
 import { TripCsvImportModal } from "./TripCsvImportModal";
+import { buildTripsCsv } from "@/lib/trip-csv-import";
 
 export function TripList() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -30,7 +31,7 @@ export function TripList() {
   const [importOpen, setImportOpen] = useState(false);
 
   const {
-    trips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
+    trips, allTrips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
     search, setSearch, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, deleteTrip, handleDuplicate, handleDelete,
@@ -43,6 +44,15 @@ export function TripList() {
   });
   const tenantSettings = ((tenantData as (typeof tenantData & { settings?: Record<string, unknown> }))?.settings ?? {}) as Record<string, unknown>;
   const seatMapEnabled = tenantSettings.seatMapEnabled !== false;
+
+  const handleExport = () => {
+    const csv = buildTripsCsv(allTrips);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+    link.download = `viagens-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   const onDelete = async (id: string) => {
     await handleDelete(id);
@@ -61,6 +71,11 @@ export function TripList() {
           {!isVendedor && (
             <Button variant="outline" onClick={() => setImportOpen(true)}>
               <Upload className="w-4 h-4 mr-2" />Importar CSV
+            </Button>
+          )}
+          {!isVendedor && (
+            <Button variant="outline" onClick={handleExport} disabled={allTrips.length === 0}>
+              <Download className="w-4 h-4 mr-2" />Exportar CSV
             </Button>
           )}
           <Link href="/trips/calendar"><Button variant="outline"><Calendar className="w-4 h-4 mr-2" />Calendário</Button></Link>
