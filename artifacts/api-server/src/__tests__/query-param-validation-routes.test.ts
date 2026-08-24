@@ -18,8 +18,9 @@ import request from "supertest";
 // Shared auth mock
 // ---------------------------------------------------------------------------
 
-const { mockRequireAuth } = vi.hoisted(() => ({
+const { mockRequireAuth, mockSelect } = vi.hoisted(() => ({
   mockRequireAuth: vi.fn(),
+  mockSelect: vi.fn(),
 }));
 
 vi.mock("../lib/tenant.js", () => ({
@@ -52,7 +53,7 @@ vi.mock("@workspace/db", () => {
   });
 
   const db = {
-    select: vi.fn(() => chain),
+    select: mockSelect.mockImplementation(() => chain),
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
     transaction: vi.fn(),
@@ -385,6 +386,53 @@ describe("GET /trips — page, limit, status query param validation", () => {
       .query({ limit: "100" });
 
     expect(res.status).not.toBe(400);
+  });
+
+  it("returns tenant-wide indicators even when the requested page is empty", async () => {
+    type QueryChain = Promise<unknown[]> & {
+      from: () => QueryChain;
+      where: () => QueryChain;
+      orderBy: () => QueryChain;
+      limit: () => QueryChain;
+      offset: () => QueryChain;
+    };
+    const result = (rows: unknown[]): QueryChain => {
+      const chain = Promise.resolve(rows) as QueryChain;
+      chain.from = () => chain;
+      chain.where = () => chain;
+      chain.orderBy = () => chain;
+      chain.limit = () => chain;
+      chain.offset = () => chain;
+      return chain;
+    };
+
+    mockSelect
+      .mockImplementationOnce(() => result([]))
+      .mockImplementationOnce(() => result([{ count: 501 }]))
+      .mockImplementationOnce(() => result([{
+        total: 501,
+        active: 400,
+        totalCapacity: 20_000,
+        occupiedSeats: 15_000,
+        totalRevenue: 4_500_000,
+      }]));
+
+    const res = await request(app).get("/trips").query({ page: 42, limit: 12 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      data: [],
+      total: 501,
+      page: 42,
+      limit: 12,
+      stats: {
+        total: 501,
+        active: 400,
+        totalCapacity: 20_000,
+        occupiedSeats: 15_000,
+        totalRevenue: 4_500_000,
+      },
+    });
   });
 });
 

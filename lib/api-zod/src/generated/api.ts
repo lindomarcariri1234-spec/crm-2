@@ -1592,6 +1592,14 @@ export const listTripsResponseDataItemFreeOrganizersMax = 2;
 export const listTripsResponseDataItemFreeGuidesMin = 0;
 export const listTripsResponseDataItemFreeGuidesMax = 2;
 
+export const TripListStats = zod.object({
+  total: zod.number(),
+  active: zod.number(),
+  totalCapacity: zod.number(),
+  occupiedSeats: zod.number(),
+  totalRevenue: zod.number(),
+});
+
 export const ListTripsResponse = zod.object({
   data: zod.array(
     zod.object({
@@ -1664,6 +1672,7 @@ export const ListTripsResponse = zod.object({
   total: zod.number(),
   page: zod.number(),
   limit: zod.number(),
+  stats: TripListStats,
 });
 
 /**

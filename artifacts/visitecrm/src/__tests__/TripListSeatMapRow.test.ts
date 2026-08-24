@@ -20,6 +20,7 @@ vi.mock("wouter", () => ({
 vi.mock("@workspace/api-client-react", () => ({
   useGetMe: mockGetMe,
   useGetTenant: mockGetTenant,
+  useCreateTrip: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
 }));
 
 vi.mock("@/hooks/useTrips", () => ({
@@ -142,6 +143,10 @@ vi.mock("../pages/trips/BoardingPanelModal.js", () => ({
 vi.mock("../pages/trips/TripCard.js", () => ({
   TripCard: () => createElement("div", { "data-testid": "trip-card" }),
   PublishToStoreDialog: () => null,
+}));
+
+vi.mock("../pages/trips/TripCsvImportModal.js", () => ({
+  TripCsvImportModal: () => null,
 }));
 
 import { TripList } from "../pages/trips/TripList.js";

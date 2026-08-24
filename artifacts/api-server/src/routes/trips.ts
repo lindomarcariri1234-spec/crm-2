@@ -282,15 +282,39 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
     if (search) conditions.push(ilike(tripsTable.name, `%${search}%`) as ReturnType<typeof eq>);
     if (status) conditions.push(eq(tripsTable.status, parseTripStatus(status)));
 
-    const trips = await db.select().from(tripsTable)
-      .where(and(...conditions))
-      .orderBy(asc(tripsTable.departureDate))
-      .limit(limitNum).offset(offset);
+    const activeTripCondition = inArray(tripsTable.status, [
+      TRIP_STATUS.ACTIVE,
+      TRIP_STATUS.CONFIRMED,
+    ]);
+    const [trips, [countResult], [statsResult]] = await Promise.all([
+      db.select().from(tripsTable)
+        .where(and(...conditions))
+        .orderBy(asc(tripsTable.departureDate))
+        .limit(limitNum).offset(offset),
+      db.select({ count: sql<number>`count(*)` })
+        .from(tripsTable).where(and(...conditions)),
+      db.select({
+        total: sql<number>`count(*)::int`,
+        active: sql<number>`count(*) filter (where ${activeTripCondition})::int`,
+        totalCapacity: sql<number>`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.totalCapacity} else 0 end), 0)::int`,
+        occupiedSeats: sql<number>`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats} else 0 end), 0)::int`,
+        totalRevenue: sql<number>`coalesce(sum(case when ${activeTripCondition} then (${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats}) * ${tripsTable.priceAdult} else 0 end), 0)::float8`,
+      }).from(tripsTable).where(eq(tripsTable.tenantId, me.tenantId)),
+    ]);
 
-    const [countResult] = await db.select({ count: sql<number>`count(*)` })
-      .from(tripsTable).where(and(...conditions));
-
-    res.json({ data: trips.map(formatTrip), total: Number(countResult?.count ?? 0), page: pageNum, limit: limitNum });
+    res.json({
+      data: trips.map(formatTrip),
+      total: Number(countResult?.count ?? 0),
+      page: pageNum,
+      limit: limitNum,
+      stats: {
+        total: Number(statsResult?.total ?? 0),
+        active: Number(statsResult?.active ?? 0),
+        totalCapacity: Number(statsResult?.totalCapacity ?? 0),
+        occupiedSeats: Number(statsResult?.occupiedSeats ?? 0),
+        totalRevenue: Number(statsResult?.totalRevenue ?? 0),
+      },
+    });
   } catch (err) {
     next(err);
   }

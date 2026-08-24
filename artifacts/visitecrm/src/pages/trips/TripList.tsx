@@ -34,7 +34,7 @@ export function TripList() {
   const { toast } = useToast();
 
   const {
-    trips, allTrips, exportTrips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
+    trips, exportTrips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
     search, setSearch, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, deleteTrip, handleDuplicate, handleDelete,
@@ -104,7 +104,7 @@ export function TripList() {
             </Button>
           )}
           {!isVendedor && (
-            <Button variant="outline" onClick={handleExport} disabled={isExporting || allTrips.length === 0}>
+            <Button variant="outline" onClick={handleExport} disabled={isExporting || stats.total === 0}>
               {isExporting
                 ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 : <Download className="w-4 h-4 mr-2" />}

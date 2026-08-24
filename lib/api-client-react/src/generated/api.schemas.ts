@@ -739,11 +739,20 @@ export interface UpdateLayoutBody {
   cells?: LayoutCell[];
 }
 
+export interface TripListStats {
+  total: number;
+  active: number;
+  totalCapacity: number;
+  occupiedSeats: number;
+  totalRevenue: number;
+}
+
 export interface TripListResponse {
   data: Trip[];
   total: number;
   page: number;
   limit: number;
+  stats: TripListStats;
 }
 
 export interface CreateTripBody {

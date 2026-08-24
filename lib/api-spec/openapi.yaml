@@ -5722,7 +5722,24 @@ components:
           type: integer
         limit:
           type: integer
-      required: [data, total, page, limit]
+        stats:
+          $ref: "#/components/schemas/TripListStats"
+      required: [data, total, page, limit, stats]
+
+    TripListStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        active:
+          type: integer
+        totalCapacity:
+          type: integer
+        occupiedSeats:
+          type: integer
+        totalRevenue:
+          type: number
+      required: [total, active, totalCapacity, occupiedSeats, totalRevenue]
 
     TripCostCategory:
       type: string
@@ -15608,7 +15625,24 @@ components:
           type: integer
         limit:
           type: integer
-      required: [data, total, page, limit]
+        stats:
+          $ref: "#/components/schemas/TripListStats"
+      required: [data, total, page, limit, stats]
+
+    TripListStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        active:
+          type: integer
+        totalCapacity:
+          type: integer
+        occupiedSeats:
+          type: integer
+        totalRevenue:
+          type: number
+      required: [total, active, totalCapacity, occupiedSeats, totalRevenue]
 
     TripCostCategory:
       type: string

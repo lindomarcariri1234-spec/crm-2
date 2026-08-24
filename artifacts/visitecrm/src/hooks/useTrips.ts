@@ -5,7 +5,7 @@ import {
   useListTrips, useCreateTrip, useDeleteTrip, useGetDashboardUpcomingTrips, useGetMe,
 } from "@workspace/api-client-react";
 import type { Trip } from "@workspace/api-client-react";
-import { ROLES, TRIP_STATUS } from "@workspace/permissions";
+import { ROLES } from "@workspace/permissions";
 
 const PAGE_SIZE = 12;
 
@@ -54,7 +54,6 @@ export function useTrips() {
   const createTrip = useCreateTrip();
   const deleteTrip = useDeleteTrip();
   const { data: upcomingTrips = [] } = useGetDashboardUpcomingTrips();
-  const { data: allTrips } = useListTrips({ limit: 500 });
 
   const exportTrips = useCallback(async (): Promise<Trip[]> => {
     const response = await fetch("/api/trips/export", { credentials: "include" });
@@ -80,18 +79,16 @@ export function useTrips() {
   }, [tripsData, typeFilter, dateFilter]);
 
   const stats = useMemo(() => {
-    const all = allTrips?.data ?? [];
-    const active = all.filter(t => t.status === TRIP_STATUS.ACTIVE || t.status === TRIP_STATUS.CONFIRMED);
-    const totalSeats = active.reduce((acc, t) => acc + t.totalCapacity, 0);
-    const occupiedSeats = active.reduce((acc, t) => acc + t.reservedSeats + t.confirmedSeats, 0);
-    const totalRevenue = active.reduce((acc, t) => acc + (t.reservedSeats + t.confirmedSeats) * t.priceAdult, 0);
+    const aggregate = tripsData?.stats;
+    const totalCapacity = aggregate?.totalCapacity ?? 0;
+    const occupiedSeats = aggregate?.occupiedSeats ?? 0;
     return {
-      total: all.length,
-      active: active.length,
-      occupancyRate: totalSeats > 0 ? Math.round(occupiedSeats / totalSeats * 100) : 0,
-      totalRevenue,
+      total: aggregate?.total ?? 0,
+      active: aggregate?.active ?? 0,
+      occupancyRate: totalCapacity > 0 ? Math.round(occupiedSeats / totalCapacity * 100) : 0,
+      totalRevenue: aggregate?.totalRevenue ?? 0,
     };
-  }, [allTrips]);
+  }, [tripsData?.stats]);
 
   const totalPages = Math.ceil((tripsData?.total ?? 0) / PAGE_SIZE);
 
@@ -134,7 +131,7 @@ export function useTrips() {
   };
 
   return {
-    trips, allTrips: allTrips?.data ?? [], exportTrips, isLoading, totalPages, upcomingTrips, stats, me, isVendedor,
+    trips, exportTrips, isLoading, totalPages, upcomingTrips, stats, me, isVendedor,
     search, setSearch,
     statusFilter, setStatusFilter,
     typeFilter, setTypeFilter,
