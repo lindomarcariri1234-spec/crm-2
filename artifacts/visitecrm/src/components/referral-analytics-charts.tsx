@@ -128,7 +128,7 @@ export function ReferralAnalyticsCharts({ data, period, analyticsExportUrl }: Pr
 
         <Card className="shadow-sm">
           <CardContent className="p-5">
-            <p className="text-sm font-medium text-muted-foreground mb-1">Crédito Pendente (Passivo)</p>
+            <p className="text-sm font-medium text-muted-foreground mb-1">Cashback Pendente (Passivo)</p>
             <div className="flex items-baseline gap-2">
               <span className="text-2xl font-bold text-blue-600">{fmtCurrency(summary.rewardsPending)}</span>
             </div>

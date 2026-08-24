@@ -327,7 +327,7 @@ export default function IndicacoesScreen() {
             </View>
             {parseFloat(referral.creditBalance) > 0 ? (
               <View style={{ alignItems: "flex-end" }}>
-                <Text style={[styles.earningsLabel, { color: colors.mutedForeground }]}>Saldo disponível</Text>
+                <Text style={[styles.earningsLabel, { color: colors.mutedForeground }]}>Cashback disponível</Text>
                 <Text style={[styles.earningsValue, { color: colors.primary }]}>
                   R$ {parseFloat(referral.creditBalance).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                 </Text>

@@ -1445,7 +1445,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       if (!authedUser) 
 {
 
-        next(new ValidationError("Autenticação necessária para usar créditos de indicação", "UNAUTHENTICATED_CREDIT"))
+        next(new ValidationError("Autenticação necessária para usar cashback de indicação", "UNAUTHENTICATED_CREDIT"))
 ;
 
         return

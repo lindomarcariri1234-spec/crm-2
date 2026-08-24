@@ -66,7 +66,7 @@ export function StepPaymentSummary({
           )}
           {referralCreditApplied > 0 && (
             <div className="flex justify-between text-purple-600">
-              <span>Crédito de indicação</span>
+              <span>Cashback de indicação</span>
               <span>− R$ {referralCreditApplied.toFixed(2)}</span>
             </div>
           )}
@@ -141,7 +141,7 @@ export function StepPaymentSummary({
                 <Gift className="w-4 h-4 text-purple-600 shrink-0" />
                 <div>
                   <p className="text-xs font-semibold text-purple-800">
-                    Créditos disponíveis: R$ {referralCreditBalance.toFixed(2)}
+                    Cashback disponível: R$ {referralCreditBalance.toFixed(2)}
                   </p>
                   <p className="text-[11px] text-purple-600">Seus bônus de indicação acumulados</p>
                 </div>
@@ -172,7 +172,7 @@ export function StepPaymentSummary({
 
         {referralCreditApplied > 0 && (
           <div className="flex justify-between text-purple-600">
-            <span>Crédito de indicação</span>
+            <span>Cashback de indicação</span>
             <span>− R$ {referralCreditApplied.toFixed(2)}</span>
           </div>
         )}

@@ -122,7 +122,7 @@ function ReferralHistoryRow({ r, primaryColor }: { r: ClientReferral; primaryCol
               {r.bonusCreditUsedAt
                 ? (() => {
                     const usedAmt = r.bonusCreditUsedAmount ? parseFloat(r.bonusCreditUsedAmount) : bonusValue;
-                    return <><CheckCircle className="w-4 h-4" /> Crédito de {formatBRL(usedAmt)} utilizado</>;
+                    return <><CheckCircle className="w-4 h-4" /> Cashback de {formatBRL(usedAmt)} utilizado</>;
                   })()
                 : r.bonusPaid
                 ? <><CheckCircle className="w-4 h-4" /> Bônus de {formatBRL(bonusValue)} liberado</>
@@ -422,7 +422,7 @@ export default function MyReferralPage({ slug, store }: Props) {
               Convide amigos e ganhe recompensas
             </h2>
             <p className="text-muted-foreground text-sm sm:text-base">
-              Seus amigos recebem benefícios na primeira viagem e você ganha crédito promocional e pontos de fidelidade a cada nova conversão confirmada.
+              Seus amigos recebem benefícios na primeira viagem e você ganha cashback e pontos de fidelidade a cada nova conversão confirmada.
             </p>
           </div>
 
@@ -556,7 +556,7 @@ export default function MyReferralPage({ slug, store }: Props) {
                 <Wallet className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-lg font-bold text-foreground leading-tight">Crédito Promocional</h3>
+                <h3 className="text-lg font-bold text-foreground leading-tight">Cashback</h3>
                 <p className="text-sm text-muted-foreground">Desconto em viagens</p>
               </div>
             </div>

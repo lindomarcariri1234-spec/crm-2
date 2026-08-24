@@ -28,6 +28,7 @@ import {
 } from "@workspace/api-client-react";
 import type { Referral, ReferralSettings, ReferralTierConfig, ReferralAnalyticsPeriod, ReferralCampaign } from "@workspace/api-client-react";
 import { REFERRAL_STATUS, ROLES } from "@workspace/permissions";
+import { getReferralCampaignRewardLabel, getReferralRewardLabel } from "@/lib/referral-labels";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -1314,7 +1315,7 @@ export default function Indicacoes() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">{fmtCurrency(settingsBonusVal)}</p>
-            <p className="text-xs text-muted-foreground">{settings?.bonusType === "credit" ? "crédito" : "dinheiro"}</p>
+            <p className="text-xs text-muted-foreground">{getReferralRewardLabel(settings?.bonusType)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -2680,7 +2681,7 @@ export default function Indicacoes() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="credit">Crédito</SelectItem>
+                      <SelectItem value="credit">Cashback</SelectItem>
                       <SelectItem value="cash">Dinheiro</SelectItem>
                     </SelectContent>
                   </Select>
@@ -2706,7 +2707,7 @@ export default function Indicacoes() {
                 <p className="text-xs text-muted-foreground">Quantos dias após a conversão o bônus fica retido antes de ser liberado ao indicador. O bônus é revertido automaticamente se a reserva ou excursão for cancelada nesse período.</p>
               </div>
               <div className="space-y-1">
-                <Label>Validade do crédito/bônus do indicador (dias)</Label>
+                <Label>Validade do cashback/bônus do indicador (dias)</Label>
                 <Input
                   type="number"
                   min="0"
@@ -3296,7 +3297,7 @@ export default function Indicacoes() {
                       <SelectItem value="fixed_bonus">Bônus Fixo (R$)</SelectItem>
                       <SelectItem value="percentage_bonus">Bônus Percentual (%)</SelectItem>
                       <SelectItem value="reduced_bonus">Bônus Reduzido</SelectItem>
-                      <SelectItem value="no_reward">Sem Recompensa</SelectItem>
+                      <SelectItem value="no_reward">Sem Bônus</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -3574,7 +3575,7 @@ export default function Indicacoes() {
                         {c.bonusType === "fixed_bonus" && `Bônus fixo de ${fmtCurrency(Number(c.bonusValue))}`}
                         {c.bonusType === "percentage_bonus" && `Bônus de ${Number(c.bonusValue).toFixed(1)}%`}
                         {c.bonusType === "reduced_bonus" && `Bônus reduzido: ${fmtCurrency(Number(c.bonusValue))}`}
-                        {c.bonusType === "no_reward" && "Sem recompensa"}
+                        {c.bonusType === "no_reward" && getReferralCampaignRewardLabel(c.bonusType)}
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {c.referralsCount ?? 0} conversão{(c.referralsCount ?? 0) !== 1 ? "ões" : ""} · {fmtCurrency(c.bonusPaidAmount ?? 0)} pagos

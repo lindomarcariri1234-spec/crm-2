@@ -2058,7 +2058,7 @@ function ReferralRow({ r, primaryColor }: { r: ClientReferral; primaryColor: str
             {r.bonusCreditUsedAt
               ? (() => {
                   const usedAmt = r.bonusCreditUsedAmount ? parseFloat(r.bonusCreditUsedAmount) : bonusValue;
-                  return `✓ Crédito de ${formatBRL(usedAmt)} usado no checkout`;
+                  return `✓ Cashback de ${formatBRL(usedAmt)} usado no checkout`;
                 })()
               : r.bonusPaid
               ? `✓ Bônus de ${formatBRL(bonusValue)} pago`
@@ -2633,7 +2633,7 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
               {creditUsedBonus > 0 && (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700 border border-purple-200">
                   <Wallet className="w-3.5 h-3.5" />
-                  {formatBRL(creditUsedBonus)} usado como crédito
+                  {formatBRL(creditUsedBonus)} usado como cashback
                 </span>
               )}
             </div>
