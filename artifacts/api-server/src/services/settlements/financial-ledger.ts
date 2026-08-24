@@ -331,7 +331,8 @@ export async function createClientBenefitEntry(
       eq(financialLedgerEntriesTable.clientId, args.clientId),
     ));
     let remaining = args.amount;
-    for (const lot of benefitLots(entries, args.category)) {
+    for (const lot of benefitLots(entries, args.category)
+      .filter((lot) => !lot.expiresAt || lot.expiresAt > occurredAt)) {
       const used = Math.min(Math.max(lot.remaining, 0), remaining);
       if (used > 0) allocations.push({ creditId: lot.id, amount: used });
       remaining -= used;
