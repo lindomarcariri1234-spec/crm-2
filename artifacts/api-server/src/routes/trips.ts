@@ -50,6 +50,11 @@ function parseBrazilDate(dateStr: string): Date {
   return new Date(dateStr + "T12:00:00.000-03:00");
 }
 
+function tripImportFingerprint(data: { name: string; destination: string; destinationCity: string; destinationState: string }, departureDate: Date): string {
+  const normalize = (value: string) => value.normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toLocaleLowerCase("pt-BR").replace(/\s+/g, " ");
+  return [normalize(data.name), normalize(data.destination), normalize(data.destinationCity), normalize(data.destinationState), departureDate.toISOString().slice(0, 10)].join("|");
+}
+
 const ListTripsQuery = z.object({
   search: z.string().optional(),
   status: z.enum(["draft", "published", "active", "confirmed", "cancelled", "completed"]).optional(),
@@ -242,20 +247,25 @@ function formatTrip(t: typeof tripsTable.$inferSelect) {
     name: t.name,
     slug: t.slug,
     description: t.description,
+    shortDescription: t.shortDescription,
     destination: t.destination,
     destinationCity: t.destinationCity,
     destinationState: t.destinationState,
+    destinationCountry: t.destinationCountry ?? null,
     type: t.type,
     category: t.category,
     departureDate: t.departureDate.toISOString(),
     returnDate: t.returnDate?.toISOString() ?? null,
+    registrationDeadline: t.registrationDeadline?.toISOString() ?? null,
     totalCapacity: t.totalCapacity,
     availableSeats: t.availableSeats,
     reservedSeats: t.reservedSeats,
     confirmedSeats: t.confirmedSeats,
     priceAdult: Number(t.priceAdult),
     priceChild: t.priceChild ? Number(t.priceChild) : null,
+    priceInfant: t.priceInfant ? Number(t.priceInfant) : null,
     priceSenior: t.priceSenior ? Number(t.priceSenior) : null,
+    reservationFee: t.reservationFee ? Number(t.reservationFee) : null,
     inclusions: t.inclusions ?? [],
     exclusions: t.exclusions ?? [],
     coverImage: t.coverImage,
@@ -266,9 +276,12 @@ function formatTrip(t: typeof tripsTable.$inferSelect) {
     status: t.status,
     isPublic: t.isPublic,
     isFeatured: t.isFeatured,
+    isAvailableInShop: t.isAvailableInShop,
     vehiclePlate: t.vehiclePlate,
     vehicleType: t.vehicleType,
     driverName: t.driverName,
+    driverCnh: t.driverCnh,
+    driverPhone: t.driverPhone,
     tourGuide: t.tourGuide,
     tripOrganizer: t.tripOrganizer,
     driver1Cpf: t.driver1Cpf ?? null,
@@ -283,6 +296,9 @@ function formatTrip(t: typeof tripsTable.$inferSelect) {
     tourGuideCpf: t.tourGuideCpf ?? null,
     tourGuideRegistration: t.tourGuideRegistration ?? null,
     manifestNumber: t.manifestNumber ?? null,
+    cancellationPolicy: t.cancellationPolicy ?? null,
+    metaTitle: t.metaTitle ?? null,
+    metaDescription: t.metaDescription ?? null,
     seatLayout: t.seatLayout,
     layoutId: t.layoutId ?? null,
     showSeatMap: t.showSeatMap,
@@ -448,12 +464,15 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Apenas administradores podem criar viagens", "FORBIDDEN_ROLE")); return; }
+    const parsed = CreateTripBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+    const isTripCsvImport = req.get("x-visitecrm-import") === "trip-csv";
+    const departureDate = parseBrazilDate(parsed.data.departureDate);
+
     if (me.tenantId) {
       const allowed = await checkPlanLimit(me.tenantId, "trips", req, res);
       if (!allowed) return;
     }
-    const parsed = CreateTripBody.safeParse(req.body);
-    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
 
     const id = generateId();
     const slug = parsed.data.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + id.slice(0, 4);
@@ -500,24 +519,30 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
     const planSupportsSeatMap = hasSeatMapFeature((tenantPlanRow?.supportedFeatures ?? []) as string[]);
     const resolvedShowSeatMap = planSupportsSeatMap ? (parsed.data.showSeatMap ?? true) : true;
 
-    await db.insert(tripsTable).values({
+    const values = {
       id,
       tenantId: me.tenantId,
       name: parsed.data.name,
       slug,
+      importFingerprint: isTripCsvImport ? tripImportFingerprint(parsed.data, departureDate) : null,
       description: sanitizeTripDescription(parsed.data.description),
+      shortDescription: parsed.data.shortDescription ?? null,
       destination: parsed.data.destination,
       destinationCity: parsed.data.destinationCity,
       destinationState: parsed.data.destinationState,
+      destinationCountry: parsed.data.destinationCountry ?? "Brasil",
       type: parsed.data.type,
       category: parsed.data.category,
-      departureDate: parseBrazilDate(parsed.data.departureDate),
+      departureDate,
       returnDate: parsed.data.returnDate ? parseBrazilDate(parsed.data.returnDate) : null,
+      registrationDeadline: parsed.data.registrationDeadline ? parseBrazilDate(parsed.data.registrationDeadline) : null,
       totalCapacity,
       availableSeats: totalCapacity,
       priceAdult: String(parsed.data.priceAdult),
-      priceChild: parsed.data.priceChild ? String(parsed.data.priceChild) : null,
-      priceSenior: parsed.data.priceSenior ? String(parsed.data.priceSenior) : null,
+      priceChild: parsed.data.priceChild != null ? String(parsed.data.priceChild) : null,
+      priceInfant: parsed.data.priceInfant != null ? String(parsed.data.priceInfant) : null,
+      priceSenior: parsed.data.priceSenior != null ? String(parsed.data.priceSenior) : null,
+      reservationFee: parsed.data.reservationFee != null ? String(parsed.data.reservationFee) : null,
       inclusions: parsed.data.inclusions ?? [],
       exclusions: parsed.data.exclusions ?? [],
       coverImage: parsed.data.coverImage ?? null,
@@ -533,15 +558,20 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
       vehiclePlate: parsed.data.vehiclePlate ?? null,
       vehicleType: parsed.data.vehicleType ?? null,
       driverName: parsed.data.driverName ?? null,
+      driverCnh: parsed.data.driverCnh ?? null,
+      driverPhone: parsed.data.driverPhone ?? null,
       tourGuide: parsed.data.tourGuide ?? null,
       tripOrganizer: parsed.data.tripOrganizer ?? null,
-      freeOrganizers: 0,
-      freeGuides: 0,
+      freeOrganizers: parsed.data.freeOrganizers ?? 0,
+      freeGuides: parsed.data.freeGuides ?? 0,
       originCity: parsed.data.originCity ?? null,
       originState: parsed.data.originState ?? null,
       departureTime: parsed.data.departureTime ?? null,
       returnTime: parsed.data.returnTime ?? null,
       createdById: me.id,
+      isPublic: parsed.data.isPublic ?? false,
+      isFeatured: parsed.data.isFeatured ?? false,
+      isAvailableInShop: parsed.data.isAvailableInShop ?? false,
       ...(parsed.data.status ? { status: parsed.data.status } : {}),
       driver1Cpf: parsed.data.driver1Cpf ?? null,
       driver1Cnh: parsed.data.driver1Cnh ?? null,
@@ -554,8 +584,24 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
       driver2CnhExpiry: parsed.data.driver2CnhExpiry ?? null,
       tourGuideCpf: parsed.data.tourGuideCpf ?? null,
       tourGuideRegistration: parsed.data.tourGuideRegistration ?? null,
+      manifestNumber: parsed.data.manifestNumber ?? null,
+      cancellationPolicy: parsed.data.cancellationPolicy ?? null,
+      metaTitle: parsed.data.metaTitle ?? null,
+      metaDescription: parsed.data.metaDescription ?? null,
       showSeatMap: resolvedShowSeatMap,
-    });
+    };
+    const inserted = isTripCsvImport
+      ? await db.insert(tripsTable).values(values).onConflictDoNothing({
+        target: [tripsTable.tenantId, tripsTable.importFingerprint],
+      }).returning({ id: tripsTable.id })
+      : await db.insert(tripsTable).values(values).returning({ id: tripsTable.id });
+    if (!inserted.length) {
+      res.status(409).json({
+        error: "Já existe uma viagem com o mesmo nome, destino e data de saída nesta agência.",
+        code: "TRIP_IMPORT_DUPLICATE",
+      });
+      return;
+    }
 
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, id), eq(tripsTable.tenantId, me.tenantId)))

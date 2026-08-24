@@ -19,6 +19,11 @@ export const TRIP_CSV_HEADERS = [
   "Exclusões", "Tipo de Veículo", "Placa", "Motorista", "Guia", "Organizador", "Status",
 ];
 
+export interface ParsedTripFile {
+  headers: string[];
+  rows: string[][];
+}
+
 function formatCsvDate(value: string | null | undefined): string {
   if (!value) return "";
   const date = value.split("T")[0];
@@ -29,73 +34,54 @@ function formatCsvDate(value: string | null | undefined): string {
 function formatCsvMoney(value: number | null | undefined): string {
   return value == null ? "" : formatBRLPlain(value);
 }
+function parseJsonArray(value: string, field: string, rowNumber: number): { value?: unknown[]; error?: string } {
+  const parsed = parseJsonValue(value, field, rowNumber);
+  if (parsed.error) return { error: parsed.error };
+  if (parsed.value == null) return {};
+  if (!Array.isArray(parsed.value)) return { error: `Linha ${rowNumber}: ${field} deve ser uma lista JSON` };
+  return { value: parsed.value };
+}
 
-function cleanImportedValue(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
-    return trimmed.slice(1, -1).replace(/""/g, "\"").trim();
+function normalizeImportedBoardingPoints(value: string, rowNumber: number): {
+  value?: Array<{ id: string; name: string; time: string; address: string }>;
+  error?: string;
+} {
+  if (!value.trim().startsWith("[")) {
+    const points = splitClientCsvList(value).map((name, index) => ({
+      id: `csv-${rowNumber}-${index + 1}`,
+      name,
+      time: "",
+      address: "",
+    }));
+    return { value: points.length ? points : undefined };
   }
-  return trimmed;
-}
-
-function parseTripDate(value: string): string | undefined {
-  const cleaned = cleanImportedValue(value);
-  const isoDate = cleaned.match(/^(\d{4}-\d{2}-\d{2})(?:T.*)?$/);
-  return isoDate ? isoDate[1] : parseBrazilianCsvDate(cleaned);
-}
-
-function parseJsonArray(value: string): unknown[] | undefined {
-  const cleaned = cleanImportedValue(value);
-  if (!cleaned) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(cleaned);
-    return Array.isArray(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseTripList(value: string): string[] {
-  const parsed = parseJsonArray(value);
-  if (parsed) {
-    return parsed
-      .filter((item): item is string => typeof item === "string")
-      .map(item => item.trim())
-      .filter(Boolean);
-  }
-  return splitClientCsvList(cleanImportedValue(value));
-}
-
-function parseBoardingPoints(
-  value: string,
-  rowNumber: number,
-): Array<{ id: string; name: string; time?: string; address?: string }> {
-  const parsed = parseJsonArray(value);
-  if (parsed) {
-    return parsed.flatMap((item, index) => {
-      if (typeof item === "string" && item.trim()) {
-        return [{ id: `csv-${rowNumber}-${index + 1}`, name: item.trim() }];
-      }
-      if (!item || typeof item !== "object") return [];
-      const point = item as { name?: unknown; time?: unknown; address?: unknown };
-      if (typeof point.name !== "string" || !point.name.trim()) return [];
-      return [{
-        id: `csv-${rowNumber}-${index + 1}`,
-        name: point.name.trim(),
-        ...(typeof point.time === "string" && point.time.trim() ? { time: point.time.trim() } : {}),
-        ...(typeof point.address === "string" && point.address.trim() ? { address: point.address.trim() } : {}),
-      }];
+  const parsed = parseJsonArray(value, "pontos de embarque", rowNumber);
+  if (parsed.error) return { error: parsed.error };
+  if (!parsed.value) return {};
+  const points: Array<{ id: string; name: string; time: string; address: string }> = [];
+  for (const [index, item] of parsed.value.entries()) {
+    if (!item || typeof item !== "object") {
+      return { error: `Linha ${rowNumber}: pontos de embarque contém um item inválido` };
+    }
+    const point = item as Record<string, unknown>;
+    if (typeof point.name !== "string" || !point.name.trim()) {
+      return { error: `Linha ${rowNumber}: ponto de embarque sem nome` };
+    }
+    if (point.time != null && typeof point.time !== "string") {
+      return { error: `Linha ${rowNumber}: horário de embarque inválido` };
+    }
+    if (point.address != null && typeof point.address !== "string") {
+      return { error: `Linha ${rowNumber}: endereço de embarque inválido` };
+    }
+    points.push({
+      id: `csv-${rowNumber}-${index + 1}`,
+      name: point.name.trim(),
+      time: typeof point.time === "string" ? point.time.trim() : "",
+      address: typeof point.address === "string" ? point.address.trim() : "",
     });
   }
-  return splitClientCsvList(cleanImportedValue(value))
-    .map((point, index) => ({ id: `csv-${rowNumber}-${index + 1}`, name: point }));
+  return { value: points.length ? points : undefined };
 }
-
-export interface ParsedTripFile {
-  headers: string[];
-  rows: string[][];
-}
-
 export async function parseTripFile(file: File): Promise<ParsedTripFile> {
   if (/\.xlsx$/i.test(file.name)) {
     const sheetRows = await readXlsxRows(await file.arrayBuffer(), name =>
@@ -120,7 +106,6 @@ export async function parseTripFile(file: File): Promise<ParsedTripFile> {
     rows: csvRows.slice(1).filter(row => row.some(cell => cell.trim())),
   };
 }
-
 function escapeCsvCell(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
@@ -172,7 +157,7 @@ export function buildTripsCsv(trips: Trip[]): string {
 }
 
 function parseBrazilianNumber(value: string): number | undefined {
-  const normalized = cleanImportedValue(value).replace(/[R$\s]/g, "");
+  const normalized = value.trim().replace(/^"(.*)"$/s, "$1").replace(/[R$\s]/g, "");
   if (!normalized) return undefined;
   const hasComma = normalized.includes(",");
   const numeric = hasComma
@@ -182,13 +167,23 @@ function parseBrazilianNumber(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function parsePositiveInteger(value: string, fallback: number): number {
-  const parsed = Number.parseInt(cleanImportedValue(value).replace(/\D/g, ""), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function parsePositiveInteger(value: string, fallback?: number): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function parseNonNegativeInteger(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
 function parseTime(value: string): string | undefined {
-  const trimmed = cleanImportedValue(value);
+  const trimmed = value.trim().replace(/^"(.*)"$/s, "$1");
   if (!trimmed) return undefined;
   const match = trimmed.match(/^(\d{1,2})[:h](\d{2})$/i);
   if (!match) return undefined;
@@ -199,7 +194,7 @@ function parseTime(value: string): string | undefined {
 }
 
 function normalizeStatus(value: string): CreateTripBody["status"] {
-  const status = cleanImportedValue(value).toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+  const status = value.trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
   if (status === "ativa" || status === "active") return "active";
   if (status === "publicada" || status === "published") return "published";
   if (status === "confirmada" || status === "confirmed") return "confirmed";
@@ -215,6 +210,13 @@ function isValidDate(value: string | undefined): value is string {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
+function parseBoolean(value: string, fallback?: boolean): boolean | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["true", "1", "sim", "s", "yes"].includes(normalized)) return true;
+  if (["false", "0", "nao", "não", "n", "no"].includes(normalized)) return false;
+  return undefined;
+}
 export function buildTripCsvData(
   headers: string[],
   row: string[],
@@ -225,8 +227,17 @@ export function buildTripCsvData(
   const destination = get("destino", "destination");
   const destinationCity = get("cidade de destino", "cidadedestino", "destinationcity", "cidade");
   const destinationState = get("estado de destino", "estadodestino", "destinationstate", "uf", "estado");
-  const departureDate = parseTripDate(get("data de saída", "datadesaida", "departuredate", "saida"));
-  const priceAdult = parseBrazilianNumber(get("preço adulto", "precoadulto", "priceadult", "preço", "preco", "valor"));
+  const departureDate = normalizeDate(get("data de saída", "datadesaida", "departuredate", "saida"));
+  const priceAdultRaw = get("preço adulto", "precoadulto", "priceadult", "preço", "preco", "valor");
+  const priceAdult = parseBrazilianNumber(priceAdultRaw);
+  const isFullExport = headers.some((header) => {
+    const normalized = header
+      .normalize("NFD")
+      .replace(/\p{Diacritic}/gu, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "");
+    return normalized === "id" || normalized === "tenantid";
+  });
 
   if (!name) return { error: `Linha ${rowNumber}: nome da viagem é obrigatório` };
   if (!destination) return { error: `Linha ${rowNumber}: destino é obrigatório` };
@@ -235,8 +246,11 @@ export function buildTripCsvData(
   if (!isValidDate(departureDate)) return { error: `Linha ${rowNumber}: data de saída inválida` };
   if (priceAdult == null || priceAdult < 0) return { error: `Linha ${rowNumber}: preço adulto inválido` };
 
-  const returnDate = parseTripDate(get("data de retorno", "dataderetorno", "returndate", "retorno"));
+  const returnDate = normalizeDate(get("data de retorno", "dataderetorno", "returndate", "retorno"));
   if (returnDate && !isValidDate(returnDate)) return { error: `Linha ${rowNumber}: data de retorno inválida` };
+  const registrationDeadlineRaw = get("prazo de inscrição", "prazodeinscricao", "registrationdeadline");
+  const registrationDeadline = normalizeDate(registrationDeadlineRaw);
+  if (registrationDeadlineRaw && !isValidDate(registrationDeadline)) return { error: `Linha ${rowNumber}: prazo de inscrição inválido` };
 
   const departureTimeRaw = get("horário de saída", "horariodesaida", "departuretime", "hora de saída", "horadesaida");
   const returnTimeRaw = get("horário de retorno", "horarioderetorno", "returntime", "hora de retorno", "horaderetorno");
@@ -245,54 +259,211 @@ export function buildTripCsvData(
   if (departureTimeRaw && !departureTime) return { error: `Linha ${rowNumber}: horário de saída inválido` };
   if (returnTimeRaw && !returnTime) return { error: `Linha ${rowNumber}: horário de retorno inválido` };
 
-  const boardingPoints = parseBoardingPoints(get("pontos de embarque", "pontosdeembarque", "boardingpoints", "embarques"), rowNumber);
-  const itinerary = parseJsonArray(get("itinerário", "itinerario", "itinerary"));
-  const gallery = parseTripList(get("galeria", "gallery"));
-  const videos = parseTripList(get("vídeos", "videos"));
+  const priceChildRaw = get("preço criança", "preco crianca", "precochild", "pricechild");
+  const priceInfantRaw = get("preço bebê", "preco bebe", "precoinfant", "priceinfant");
+  const priceSeniorRaw = get("preço sênior", "preco senior", "precosenior", "pricesenior");
+  const reservationFeeRaw = get("taxa de reserva", "taxadereserva", "reservationfee");
+  const priceChild = parseBrazilianNumber(priceChildRaw);
+  const priceInfant = parseBrazilianNumber(priceInfantRaw);
+  const priceSenior = parseBrazilianNumber(priceSeniorRaw);
+  const reservationFee = parseBrazilianNumber(reservationFeeRaw);
+  if (priceChildRaw && (priceChild == null || priceChild < 0)) return { error: `Linha ${rowNumber}: preço criança inválido` };
+  if (priceInfantRaw && (priceInfant == null || priceInfant < 0)) return { error: `Linha ${rowNumber}: preço bebê inválido` };
+  if (priceSeniorRaw && (priceSenior == null || priceSenior < 0)) return { error: `Linha ${rowNumber}: preço sênior inválido` };
+  if (reservationFeeRaw && (reservationFee == null || reservationFee < 0)) return { error: `Linha ${rowNumber}: taxa de reserva inválida` };
+
+  const type = normalizeOptionalString(get("tipo", "type")) ?? "excursao";
+  const category = normalizeOptionalString(get("categoria", "category")) ?? "standard";
+  const capacityRaw = get("capacidade", "capacidade total", "totalcapacity", "lugares");
+  const totalCapacity = parsePositiveInteger(capacityRaw, isFullExport ? undefined : 46);
+  if (totalCapacity == null) return { error: `Linha ${rowNumber}: capacidade inválida` };
+  if (isFullExport && !IMPORTABLE_TRIP_TYPES.has(type)) return { error: `Linha ${rowNumber}: tipo de viagem inválido` };
+  if (!isFullExport && !type) return { error: `Linha ${rowNumber}: tipo de viagem inválido` };
+  if (!category) return { error: `Linha ${rowNumber}: categoria inválida` };
+
+  const departurePointsResult = normalizeImportedBoardingPoints(
+    get("pontos de embarque", "pontosdeembarque", "boardingpoints", "embarques"),
+    rowNumber,
+  );
+  if (departurePointsResult.error) return { error: departurePointsResult.error };
+
+  const inclusionsResult = parseStringList(get("inclusões", "inclusoes", "inclusions"), "inclusões", rowNumber);
+  if (inclusionsResult.error) return { error: inclusionsResult.error };
+  const exclusionsResult = parseStringList(get("exclusões", "exclusoes", "exclusions"), "exclusões", rowNumber);
+  if (exclusionsResult.error) return { error: exclusionsResult.error };
+  const itineraryResult = normalizeImportedItems(get("itinerário", "itinerario", "itinerary"), "itinerary", rowNumber);
+  if (itineraryResult.error) return { error: itineraryResult.error };
+  const fixedCostsResult = normalizeImportedItems(get("custos fixos", "custosfixos", "fixedcosts"), "fixed costs", rowNumber);
+  if (fixedCostsResult.error) return { error: fixedCostsResult.error };
+  const variableCostsResult = normalizeImportedItems(get("custos variáveis", "custosvariaveis", "variablecosts"), "variable costs", rowNumber);
+  if (variableCostsResult.error) return { error: variableCostsResult.error };
+
+  const galleryResult = parseStringList(get("galeria", "gallery"), "galeria", rowNumber);
+  if (galleryResult.error) return { error: galleryResult.error };
+  const videosResult = parseStringList(get("vídeos", "videos"), "vídeos", rowNumber);
+  if (videosResult.error) return { error: videosResult.error };
+
+  const showSeatMapRaw = get("mostrar mapa de assentos", "mostrarmapadeassentos", "showseatmap");
+  const showSeatMap = parseBoolean(showSeatMapRaw);
+  if (showSeatMapRaw && showSeatMap == null) return { error: `Linha ${rowNumber}: mostrar mapa de assentos inválido` };
+  const isPublicRaw = get("público", "publico", "ispublic");
+  const isFeaturedRaw = get("destaque", "isfeatured");
+  const isAvailableInShopRaw = get("disponível na loja", "disponivelnaloja", "isavailableinshop");
+  const isPublic = parseBoolean(isPublicRaw);
+  const isFeatured = parseBoolean(isFeaturedRaw);
+  const isAvailableInShop = parseBoolean(isAvailableInShopRaw);
+  if (isPublicRaw && isPublic == null) return { error: `Linha ${rowNumber}: público inválido` };
+  if (isFeaturedRaw && isFeatured == null) return { error: `Linha ${rowNumber}: destaque inválido` };
+  if (isAvailableInShopRaw && isAvailableInShop == null) return { error: `Linha ${rowNumber}: disponível na loja inválido` };
+
+  const freeOrganizersRaw = get("organizadores gratuitos", "organizadoresgratuitos", "freeorganizers");
+  const freeGuidesRaw = get("guias gratuitos", "guiasgratuitos", "freeguides");
+  const freeOrganizers = parseNonNegativeInteger(freeOrganizersRaw);
+  const freeGuides = parseNonNegativeInteger(freeGuidesRaw);
+  if (freeOrganizersRaw && (freeOrganizers == null || freeOrganizers > 2)) return { error: `Linha ${rowNumber}: organizadores gratuitos inválidos` };
+  if (freeGuidesRaw && (freeGuides == null || freeGuides > 2)) return { error: `Linha ${rowNumber}: guias gratuitos inválidos` };
+  const rawStatus = get("status", "situação", "situacao");
+  const status = normalizeStatus(rawStatus);
+  const normalizedRawStatus = rawStatus.trim().toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+  const knownStatusAliases = new Set([
+    ...IMPORTABLE_TRIP_STATUSES,
+    "ativa", "publicada", "confirmada", "cancelada", "concluida", "canceled",
+  ]);
+  if (isFullExport && normalizedRawStatus && !knownStatusAliases.has(normalizedRawStatus)) {
+    return { error: `Linha ${rowNumber}: status inválido` };
+  }
+  const driver1CnhExpiryRaw = get("validade cnh motorista 1", "validadecnhmotorista1", "driver1cnhexpiry");
+  const driver2CnhExpiryRaw = get("validade cnh motorista 2", "validadecnhmotorista2", "driver2cnhexpiry");
+  const driver1CnhExpiry = normalizeDate(driver1CnhExpiryRaw);
+  const driver2CnhExpiry = normalizeDate(driver2CnhExpiryRaw);
+  if (driver1CnhExpiryRaw && !isValidDate(driver1CnhExpiry)) return { error: `Linha ${rowNumber}: validade da CNH do motorista 1 inválida` };
+  if (driver2CnhExpiryRaw && !isValidDate(driver2CnhExpiry)) return { error: `Linha ${rowNumber}: validade da CNH do motorista 2 inválida` };
 
   return {
     data: {
       name,
       description: get("descrição", "descricao", "description") || undefined,
+      shortDescription: normalizeOptionalString(get("descrição curta", "descricaocurta", "shortdescription")),
       destination,
       destinationCity,
       destinationState: destinationState.toUpperCase(),
+      destinationCountry: normalizeOptionalString(get("país de destino", "paisdedestino", "destinationcountry")),
       originCity: get("cidade de origem", "cidadeorigem", "origincity") || undefined,
       originState: get("estado de origem", "estadoorigem", "originstate")?.toUpperCase() || undefined,
-      type: get("tipo", "type") || "excursao",
-      category: get("categoria", "category") || "standard",
+      type,
+      category,
       departureDate,
       returnDate,
+      registrationDeadline,
       departureTime,
       returnTime,
-      totalCapacity: parsePositiveInteger(get("capacidade", "capacidade total", "totalcapacity", "lugares"), 46),
+      totalCapacity,
       priceAdult,
-      priceChild: parseBrazilianNumber(get("preço criança", "preco crianca", "precochild", "pricechild")),
-      priceSenior: parseBrazilianNumber(get("preço sênior", "preco senior", "precosenior", "pricesenior")),
-      inclusions: parseTripList(get("inclusões", "inclusoes", "inclusions")),
-      exclusions: parseTripList(get("exclusões", "exclusoes", "exclusions")),
-      boardingPoints: boardingPoints.length ? boardingPoints : undefined,
+      priceChild,
+      priceInfant,
+      priceSenior,
+      reservationFee,
+      coverImage: normalizeOptionalString(get("imagem de capa", "imagemdecapa", "coverimage")),
+      inclusions: inclusionsResult.value,
+      exclusions: exclusionsResult.value,
+      boardingPoints: departurePointsResult.value,
+      itinerary: itineraryResult.value,
+      fixedCosts: fixedCostsResult.value,
+      variableCosts: variableCostsResult.value,
+      gallery: galleryResult.value,
+      videos: videosResult.value,
+      isPublic,
+      isFeatured,
+      isAvailableInShop,
       vehicleType: get("tipo de veículo", "tipodeveiculo", "vehicletype") || undefined,
       vehiclePlate: get("placa", "placa do veículo", "placadoveiculo", "vehicleplate") || undefined,
       driverName: get("motorista", "drivername") || undefined,
+      driverCnh: get("cnh do motorista", "cnhdomotorista", "drivercnh") || undefined,
+      driverPhone: get("telefone do motorista", "telefonedomotorista", "driverphone") || undefined,
       tourGuide: get("guia", "guia turístico", "guiaturistico", "tourguide") || undefined,
       tripOrganizer: get("organizador", "organizador da viagem", "triporganizer") || undefined,
-      driver1Cpf: get("cpf do motorista", "driver1cpf") || undefined,
-      driver1Cnh: get("cnh do motorista", "driver1cnh") || undefined,
-      driver1CnhCategory: get("categoria cnh do motorista", "driver1cnhcategory") || undefined,
-      driver1CnhExpiry: get("validade cnh do motorista", "driver1cnhexpiry") || undefined,
-      driver2Name: get("segundo motorista", "driver2name") || undefined,
-      driver2Cpf: get("cpf do segundo motorista", "driver2cpf") || undefined,
-      driver2Cnh: get("cnh do segundo motorista", "driver2cnh") || undefined,
-      driver2CnhCategory: get("categoria cnh do segundo motorista", "driver2cnhcategory") || undefined,
-      driver2CnhExpiry: get("validade cnh do segundo motorista", "driver2cnhexpiry") || undefined,
-      tourGuideCpf: get("cpf do guia", "tourguidecpf") || undefined,
-      tourGuideRegistration: get("registro do guia", "tourguideregistration") || undefined,
-      gallery: gallery.length ? gallery : undefined,
-      videos: videos.length ? videos : undefined,
-      itinerary,
-      status: normalizeStatus(get("status", "situação", "situacao")),
+      driver1Cpf: normalizeOptionalString(get("motorista 1 cpf", "motorista1cpf", "driver1cpf")),
+      driver1Cnh: normalizeOptionalString(get("motorista 1 cnh", "motorista1cnh", "driver1cnh")),
+      driver1CnhCategory: normalizeOptionalString(get("categoria cnh motorista 1", "categoriacnhmotorista1", "driver1cnhcategory")),
+      driver1CnhExpiry,
+      driver2Name: normalizeOptionalString(get("motorista 2", "motorista2", "driver2name")),
+      driver2Cpf: normalizeOptionalString(get("motorista 2 cpf", "motorista2cpf", "driver2cpf")),
+      driver2Cnh: normalizeOptionalString(get("motorista 2 cnh", "motorista2cnh", "driver2cnh")),
+      driver2CnhCategory: normalizeOptionalString(get("categoria cnh motorista 2", "categoriacnhmotorista2", "driver2cnhcategory")),
+      driver2CnhExpiry,
+      tourGuideCpf: normalizeOptionalString(get("cpf do guia", "cpfdoguia", "tourguidecpf")),
+      tourGuideRegistration: normalizeOptionalString(get("registro do guia", "registrodoguia", "tourguideregistration")),
+      manifestNumber: normalizeOptionalString(get("número do manifesto", "numerodomanifesto", "manifestnumber")),
+      cancellationPolicy: normalizeOptionalString(get("política de cancelamento", "politicadecancelamento", "cancellationpolicy")),
+      metaTitle: normalizeOptionalString(get("título meta", "titulometa", "metatitle")),
+      metaDescription: normalizeOptionalString(get("descrição meta", "descricaometa", "metadescription")),
+      freeOrganizers: freeOrganizersRaw ? freeOrganizers : undefined,
+      freeGuides: freeGuidesRaw ? freeGuides : undefined,
+      status,
       seatLayout: get("layout de assentos", "layoutdeassentos", "seatlayout") || "2x2",
+      showSeatMap,
     },
   };
 }
+
+function normalizeImportedItems(
+  value: string,
+  field: "itinerary" | "fixed costs" | "variable costs",
+  rowNumber: number,
+): { value?: unknown[]; error?: string } {
+  const parsed = parseJsonArray(value, field, rowNumber);
+  if (parsed.error || !parsed.value) return parsed;
+  return {
+    value: parsed.value.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const copy = { ...(item as Record<string, unknown>) };
+      delete copy.id;
+      if (field !== "itinerary") copy.id = `csv-${rowNumber}-${index + 1}`;
+      return copy;
+    }),
+  };
+}
+
+function parseStringList(value: string, field: string, rowNumber: number): { value: string[]; error?: string } {
+  const trimmed = value.trim();
+  if (!trimmed) return { value: [] };
+  if (trimmed.startsWith("[")) {
+    const parsed = parseJsonValue(trimmed, field, rowNumber);
+    if (parsed.error) return { value: [], error: parsed.error };
+    if (!Array.isArray(parsed.value) || parsed.value.some((item) => typeof item !== "string")) {
+      return { value: [], error: `Linha ${rowNumber}: ${field} deve ser uma lista de textos` };
+    }
+    return { value: parsed.value.map((item) => item.trim()).filter(Boolean) };
+  }
+  return { value: splitClientCsvList(trimmed) };
+}
+
+function normalizeDate(value: string): string | undefined {
+  const trimmed = value.trim().replace(/^"(.*)"$/s, "$1");
+  if (!trimmed) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) return trimmed.slice(0, 10);
+  return parseBrazilianCsvDate(trimmed);
+}
+
+const IMPORTABLE_TRIP_TYPES = new Set([
+  "excursao", "bate_volta", "trilha", "rota", "transfer", "pacote_fechado", "personalizada",
+]);
+
+function normalizeOptionalString(value: string): string | undefined {
+  const trimmed = value.trim().replace(/^"(.*)"$/s, "$1").trim();
+  return trimmed || undefined;
+}
+
+function parseJsonValue(value: string, field: string, rowNumber: number): { value?: unknown; error?: string } {
+  const trimmed = value.trim().replace(/^"(.*)"$/s, "$1");
+  if (!trimmed) return {};
+  try {
+    return { value: JSON.parse(trimmed) };
+  } catch {
+    return { error: `Linha ${rowNumber}: ${field} contém JSON inválido` };
+  }
+}
+
+const IMPORTABLE_TRIP_STATUSES = new Set([
+  "draft", "published", "active", "confirmed", "cancelled", "completed",
+]);

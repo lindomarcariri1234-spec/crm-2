@@ -428,6 +428,13 @@
       "when": 1806900000000,
       "tag": "0060_chatbot_outbound_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1807000000000,
+      "tag": "0061_trip_import_fingerprint",
+      "breakpoints": true
     }
   ]
 }

@@ -12,12 +12,18 @@ export interface CreateTripBody {
   /** @nullable */
   description?: string | null;
   /** @nullable */
+  shortDescription?: string | null;
+  /** @nullable */
   isPublic?: boolean | null;
   /** @nullable */
   isFeatured?: boolean | null;
+  /** @nullable */
+  isAvailableInShop?: boolean | null;
   destination: string;
   destinationCity: string;
   destinationState: string;
+  /** @nullable */
+  destinationCountry?: string | null;
   /** @nullable */
   originCity?: string | null;
   /** @nullable */
@@ -28,6 +34,8 @@ export interface CreateTripBody {
   /** @nullable */
   returnDate?: string | null;
   /** @nullable */
+  registrationDeadline?: string | null;
+  /** @nullable */
   departureTime?: string | null;
   /** @nullable */
   returnTime?: string | null;
@@ -36,7 +44,11 @@ export interface CreateTripBody {
   /** @nullable */
   priceChild?: number | null;
   /** @nullable */
+  priceInfant?: number | null;
+  /** @nullable */
   priceSenior?: number | null;
+  /** @nullable */
+  reservationFee?: number | null;
   inclusions?: string[];
   exclusions?: string[];
   /** @nullable */
@@ -48,6 +60,10 @@ export interface CreateTripBody {
   vehicleType?: string | null;
   /** @nullable */
   driverName?: string | null;
+  /** @nullable */
+  driverCnh?: string | null;
+  /** @nullable */
+  driverPhone?: string | null;
   /** @nullable */
   tourGuide?: string | null;
   /** @nullable */
@@ -80,6 +96,14 @@ export interface CreateTripBody {
   itinerary?: unknown[];
   fixedCosts?: unknown[];
   variableCosts?: unknown[];
+  /** @nullable */
+  manifestNumber?: string | null;
+  /** @nullable */
+  cancellationPolicy?: string | null;
+  /** @nullable */
+  metaTitle?: string | null;
+  /** @nullable */
+  metaDescription?: string | null;
   /**
    * @minimum 0
    * @maximum 2
