@@ -108,8 +108,22 @@ export interface ClientPortalProfile {
     totalEarnings: string;
     creditBalance: string;
     shareMessage: string | null;
+    currentTierLevel: string;
     currentTierLabel: string;
+    currentTierMultiplier: number;
+    tierProgress: number;
+    nextTierMin: number | null;
+    nextTierLabel: string | null;
+    nextTierRemaining: number | null;
+    nextTierMultiplier: number | null;
     pointsPerReferral: number;
+    wallet: {
+      availableCredit: number;
+      pendingCredit: number;
+      usedCredit: number;
+      expiringCredit: number;
+      expiringOn: string | null;
+    };
   };
   stats: {
     totalSpent: number;
@@ -146,6 +160,19 @@ export interface MemoriesResponse {
 
 export interface MyReferralsResponse {
   data: ClientReferral[];
+}
+
+export interface ClientReferralCampaign {
+  id: string;
+  name: string;
+  startsAt: string;
+  endsAt: string;
+  bonusType: string;
+  bonusValue: string | number;
+  bannerText: string | null;
+  shareMessage: string | null;
+  materialUrl: string | null;
+  eligibleActivitySegments: string[] | null;
 }
 
 export interface LoyaltyTransactionsResponse {

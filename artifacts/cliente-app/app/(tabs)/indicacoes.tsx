@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { SkeletonBox } from "@/components/Skeleton";
 import * as Clipboard from "expo-clipboard";
 import React, { useState } from "react";
+import QRCode from "react-native-qrcode-svg";
 import {
   ActivityIndicator,
   Linking,
@@ -19,7 +20,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
 import { apiFetch } from "@/lib/api";
-import type { ClientPortalProfile, MyReferralsResponse, ClientReferral } from "@/lib/types";
+import type {
+  ClientPortalProfile,
+  MyReferralsResponse,
+  ClientReferral,
+  ClientReferralCampaign,
+} from "@/lib/types";
 
 const REFERRAL_STATUS_LABELS: Record<string, string> = {
   pending: "Aguardando",
@@ -36,6 +42,17 @@ const REFERRAL_STATUS_COLORS: Record<string, string> = {
   expired: "#6b7280",
   reversed: "#6b7280",
 };
+
+function formatCurrency(value: number | string): string {
+  return `R$ ${Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function referralLinkFor(tenantSlug: string | undefined, code: string | null): string | null {
+  const domain = process.env.EXPO_PUBLIC_DOMAIN?.trim();
+  if (!domain || !tenantSlug || !code) return null;
+  const origin = (domain.startsWith("http://") || domain.startsWith("https://") ? domain : `https://${domain}`).replace(/\/$/, "");
+  return `${origin}/loja/${encodeURIComponent(tenantSlug)}/indicacao?code=${encodeURIComponent(code)}`;
+}
 
 /**
  * Returns the number of whole days until `expiresAt`.
@@ -145,18 +162,36 @@ export default function IndicacoesScreen() {
     enabled: !!profileData,
   });
 
+  const { data: activeCampaign } = useQuery<ClientReferralCampaign | null>({
+    queryKey: ["client-referral-campaign"],
+    queryFn: async () => apiFetch<ClientReferralCampaign | null>(await getToken(), "GET", "/client/me/referral-campaign"),
+    enabled: !!profileData,
+  });
+
   const referral = profileData?.referral;
   const code = referral?.code ?? null;
   const referrals = referralsData?.data ?? [];
   const isCodeBlocked = referral ? referral.referralCodeStatus !== "active" : false;
   const bonusValidityDays = referral?.bonusValidityDays ?? 30;
+  const shareLink = referralLinkFor(profileData?.tenant?.slug, code);
 
-  const shareMsg = referral?.shareMessage
+  const shareBase = activeCampaign?.shareMessage
+    ?? referral?.shareMessage
     ?? (code ? `Use meu código ${code} para se cadastrar e ganhar benefícios especiais!` : "");
+  const shareMsg = shareLink && !shareBase.includes(shareLink)
+    ? `${shareBase}\n\n${shareLink}`
+    : shareBase;
 
   async function handleCopy() {
     if (!code) return;
     await Clipboard.setStringAsync(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  }
+
+  async function handleCopyLink() {
+    if (!shareLink) return;
+    await Clipboard.setStringAsync(shareLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
   }
@@ -273,6 +308,18 @@ export default function IndicacoesScreen() {
             <Feather name="share-2" size={16} color="#fff" />
             <Text style={styles.codeBtnText}>Compartilhar</Text>
           </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.codeBtn,
+                { backgroundColor: "rgba(255,255,255,0.18)", opacity: pressed ? 0.75 : 1 },
+              ]}
+              onPress={handleCopyLink}
+              disabled={!shareLink}
+            >
+              <Feather name="link" size={16} color="#fff" />
+              <Text style={styles.codeBtnText}>Link</Text>
+            </Pressable>
         </View>
       </View>
 
@@ -286,6 +333,44 @@ export default function IndicacoesScreen() {
             </Text>
             <Text style={[styles.blockedBannerBody, { color: "#7f1d1d" }]}>
               Seu código de indicação está inativo no momento. Entre em contato com a agência para reativá-lo.
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {shareLink ? (
+        <View style={[styles.shareCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.shareCardCopy}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 2 }]}>Compartilhe por QR Code</Text>
+            <Text style={[styles.shareCardBody, { color: colors.mutedForeground }]}>
+              Aponte a câmera para abrir seu link de indicação. A atribuição será registrada normalmente.
+            </Text>
+          </View>
+          <View style={styles.qrFrame}>
+            <QRCode
+              value={shareLink}
+              size={124}
+              color={colors.foreground}
+              backgroundColor={colors.card}
+              ecl="H"
+            />
+          </View>
+        </View>
+      ) : null}
+
+      {activeCampaign ? (
+        <View style={[styles.campaignCard, { backgroundColor: colors.accent, borderColor: colors.border }]}>
+          <View style={[styles.campaignIcon, { backgroundColor: colors.primary }]}>
+            <Feather name="zap" size={18} color="#fff" />
+          </View>
+          <View style={styles.campaignCopy}>
+            <Text style={[styles.campaignEyebrow, { color: colors.primary }]}>Campanha ativa</Text>
+            <Text style={[styles.campaignTitle, { color: colors.foreground }]}>{activeCampaign.name}</Text>
+            <Text style={[styles.campaignBody, { color: colors.mutedForeground }]}>
+              {activeCampaign.bannerText ?? `Bônus de ${formatCurrency(activeCampaign.bonusValue)} por indicação confirmada.`}
+            </Text>
+            <Text style={[styles.campaignDeadline, { color: colors.mutedForeground }]}>
+              Válida até {new Date(activeCampaign.endsAt).toLocaleDateString("pt-BR")}
             </Text>
           </View>
         </View>
@@ -315,8 +400,67 @@ export default function IndicacoesScreen() {
         </View>
       ) : null}
 
+      {referral ? (
+        <View style={[styles.milestonesCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Metas de indicação</Text>
+          {[
+            { label: "Primeira conversão", target: 1 },
+            { label: "5 conversões confirmadas", target: 5 },
+            { label: "10 conversões confirmadas", target: 10 },
+          ].map((milestone) => {
+            const complete = referral.completedReferrals >= milestone.target;
+            const remaining = Math.max(0, milestone.target - referral.completedReferrals);
+            return (
+              <View key={milestone.target} style={[styles.milestoneRow, { borderTopColor: colors.border }]}>
+                <View style={[styles.milestoneIcon, { backgroundColor: complete ? colors.successLight : colors.accent }]}>
+                  <Feather name={complete ? "check" : "target"} size={15} color={complete ? colors.success : colors.primary} />
+                </View>
+                <View style={styles.milestoneCopy}>
+                  <Text style={[styles.milestoneTitle, { color: colors.foreground }]}>{milestone.label}</Text>
+                  <Text style={[styles.milestoneStatus, { color: complete ? colors.success : colors.mutedForeground }]}>
+                    {complete
+                      ? "Conquista alcançada"
+                      : `Faltam ${remaining} ${remaining === 1 ? "conversão" : "conversões"}`}
+                  </Text>
+                </View>
+                <Text style={[styles.milestoneCount, { color: complete ? colors.success : colors.mutedForeground }]}>
+                  {Math.min(referral.completedReferrals, milestone.target)}/{milestone.target}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {referral ? (
+        <View style={[styles.progressCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.progressHeader}>
+            <View>
+              <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 2 }]}>Seu progresso</Text>
+              <Text style={[styles.progressCaption, { color: colors.mutedForeground }]}>
+                Nível {referral.currentTierLabel} · Multiplicador {referral.currentTierMultiplier}x
+              </Text>
+            </View>
+            <Feather name="award" size={22} color={colors.primary} />
+          </View>
+          {referral.nextTierLabel && referral.nextTierRemaining !== null ? (
+            <>
+              <View style={[styles.progressTrack, { backgroundColor: colors.accent }]}>
+                <View style={[styles.progressFill, { backgroundColor: colors.primary, width: `${Math.min(100, Math.max(0, referral.tierProgress))}%` }]} />
+              </View>
+              <Text style={[styles.progressCaption, { color: colors.mutedForeground }]}>
+                Faltam {referral.nextTierRemaining} {referral.nextTierRemaining === 1 ? "conversão" : "conversões"} para {referral.nextTierLabel}
+                {referral.nextTierMultiplier ? ` (${referral.nextTierMultiplier}x)` : ""}.
+              </Text>
+            </>
+          ) : (
+            <Text style={[styles.progressCaption, { color: colors.success }]}>Você atingiu o nível máximo de indicação.</Text>
+          )}
+        </View>
+      ) : null}
+
       {/* Earnings */}
-      {referral && (parseFloat(referral.totalEarnings) > 0 || parseFloat(referral.creditBalance) > 0) ? (
+      {referral ? (
         <View style={[styles.earningsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={styles.earningsRow}>
             <View>
@@ -325,15 +469,29 @@ export default function IndicacoesScreen() {
                 R$ {parseFloat(referral.totalEarnings).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
               </Text>
             </View>
-            {parseFloat(referral.creditBalance) > 0 ? (
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={[styles.earningsLabel, { color: colors.mutedForeground }]}>Cashback disponível</Text>
-                <Text style={[styles.earningsValue, { color: colors.primary }]}>
-                  R$ {parseFloat(referral.creditBalance).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
-                </Text>
-              </View>
-            ) : null}
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={[styles.earningsLabel, { color: colors.mutedForeground }]}>Cashback disponível</Text>
+              <Text style={[styles.earningsValue, { color: colors.primary }]}>
+                {formatCurrency(referral.wallet.availableCredit)}
+              </Text>
+            </View>
           </View>
+          <View style={[styles.walletDetails, { borderTopColor: colors.border }]}>
+            <Text style={[styles.walletDetail, { color: colors.mutedForeground }]}>
+              Pendente: <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}>{formatCurrency(referral.wallet.pendingCredit)}</Text>
+            </Text>
+            <Text style={[styles.walletDetail, { color: colors.mutedForeground }]}>
+              Utilizado: <Text style={{ color: colors.foreground, fontFamily: "Inter_600SemiBold" }}>{formatCurrency(referral.wallet.usedCredit)}</Text>
+            </Text>
+          </View>
+          {referral.wallet.expiringCredit > 0 && referral.wallet.expiringOn ? (
+            <View style={styles.expiryNotice}>
+              <Feather name="alert-circle" size={14} color="#b45309" />
+              <Text style={styles.expiryNoticeText}>
+                {formatCurrency(referral.wallet.expiringCredit)} expiram em {new Date(referral.wallet.expiringOn).toLocaleDateString("pt-BR")}.
+              </Text>
+            </View>
+          ) : null}
           {/* Bonus validity countdown */}
           {bonusValidityDays > 0 ? (
             <View style={[styles.validityRow, { borderTopColor: colors.border }]}>
@@ -457,6 +615,127 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 16,
   },
+  shareCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 16,
+  },
+  shareCardCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  shareCardBody: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    lineHeight: 17,
+  },
+  qrFrame: {
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: "#ffffff",
+  },
+  campaignCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 16,
+  },
+  campaignIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  campaignCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  campaignEyebrow: {
+    fontSize: 11,
+    fontFamily: "Inter_700Bold",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  campaignTitle: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+  },
+  campaignBody: {
+    fontSize: 12,
+    lineHeight: 17,
+    fontFamily: "Inter_400Regular",
+  },
+  campaignDeadline: {
+    marginTop: 2,
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
+  },
+  progressCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 16,
+    gap: 10,
+  },
+  milestonesCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 16,
+  },
+  milestoneRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+  },
+  milestoneIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  milestoneCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  milestoneTitle: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
+  milestoneStatus: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+  },
+  milestoneCount: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
+  progressHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  progressCaption: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    lineHeight: 18,
+  },
+  progressTrack: {
+    height: 8,
+    overflow: "hidden",
+    borderRadius: 999,
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
   earningsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -470,6 +749,35 @@ const styles = StyleSheet.create({
   earningsValue: {
     fontSize: 20,
     fontFamily: "Inter_700Bold",
+  },
+  walletDetails: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  walletDetail: {
+    flex: 1,
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+  },
+  expiryNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    marginTop: 12,
+    padding: 10,
+    backgroundColor: "#fffbeb",
+    borderRadius: 8,
+  },
+  expiryNoticeText: {
+    flex: 1,
+    color: "#92400e",
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    lineHeight: 17,
   },
   listCard: {
     borderRadius: 14,

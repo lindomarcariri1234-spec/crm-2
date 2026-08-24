@@ -70,3 +70,4 @@
 - [Marketplace capacity lifecycle](marketplace-capacity-lifecycle.md) — dated partner capacity is claimed atomically after payment, never at anonymous checkout
 - [Distribution operation finalization](distribution-operation-finalization.md) — capacity, booking ledger and terminal operation status must commit together; replays repair any ledger gap
 - [WhatsApp attendance delivery](whatsapp-attendance-delivery.md) — persist and conditionally claim replies before provider calls; recovery must honor opt-out.
+- [Expo build port isolation](expo-build-port-isolation.md) — mobile static builds must use a configurable Metro port when the component sandbox also occupies 8081.

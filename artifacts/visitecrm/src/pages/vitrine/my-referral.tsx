@@ -264,7 +264,11 @@ export default function MyReferralPage({ slug, store }: Props) {
   }, [shareLink, profile?.referral?.shareMessage, store.name]);
 
   const handleNativeShare = useCallback(async () => {
-    if (!shareLink || !navigator.share) return;
+    if (!shareLink) return;
+    if (!navigator.share) {
+      await handleCopyLink();
+      return;
+    }
     const title = `Desconto Exclusivo — ${store.name}`;
     const text = `Use meu link para aproveitar benefícios especiais na ${store.name}!`;
 
@@ -273,7 +277,7 @@ export default function MyReferralPage({ slug, store }: Props) {
     } catch {
       // dismissed by user
     }
-  }, [shareLink, store.name]);
+  }, [shareLink, store.name, handleCopyLink]);
 
   const generateQR = useCallback(async (link: string) => {
     setQrLoading(true);
