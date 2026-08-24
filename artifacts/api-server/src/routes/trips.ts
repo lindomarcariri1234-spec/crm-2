@@ -296,6 +296,27 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
   }
 });
 
+// Exportação completa — não usa o limite da listagem paginada.
+// Deve ficar antes de /trips/:id para que "export" não seja tratado como um id.
+router.get("/trips/export", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!MANAGEMENT_ROLES.includes(me.role)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const trips = await db.select().from(tripsTable)
+      .where(eq(tripsTable.tenantId, me.tenantId))
+      .orderBy(asc(tripsTable.departureDate));
+
+    res.json({ data: trips.map(formatTrip), total: trips.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);

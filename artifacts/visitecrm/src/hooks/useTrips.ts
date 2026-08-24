@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { useSearch, useLocation } from "wouter";
 import { parseISO } from "date-fns";
 import {
@@ -55,6 +55,19 @@ export function useTrips() {
   const deleteTrip = useDeleteTrip();
   const { data: upcomingTrips = [] } = useGetDashboardUpcomingTrips();
   const { data: allTrips } = useListTrips({ limit: 500 });
+
+  const exportTrips = useCallback(async (): Promise<Trip[]> => {
+    const response = await fetch("/api/trips/export", { credentials: "include" });
+    const payload = await response.json().catch(() => null) as
+      | { data?: Trip[]; error?: string; message?: string }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(payload?.error ?? payload?.message ?? "Não foi possível preparar a exportação.");
+    }
+
+    return payload?.data ?? [];
+  }, []);
 
   const trips = useMemo(() => {
     let data = tripsData?.data ?? [];
@@ -121,7 +134,7 @@ export function useTrips() {
   };
 
   return {
-    trips, allTrips: allTrips?.data ?? [], isLoading, totalPages, upcomingTrips, stats, me, isVendedor,
+    trips, allTrips: allTrips?.data ?? [], exportTrips, isLoading, totalPages, upcomingTrips, stats, me, isVendedor,
     search, setSearch,
     statusFilter, setStatusFilter,
     typeFilter, setTypeFilter,
