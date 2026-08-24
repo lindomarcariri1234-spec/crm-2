@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11", "postgresql-16"]
+modules = ["nodejs-20", "web", "bash"]
 
   [[artifacts]]
   id = "artifacts/visitecrm"
@@ -172,7 +172,7 @@ path = "scripts/post-merge.sh"
 timeoutMs = 300000
 
   [nix]
-  channel = "stable-25_05"
+channel = "stable-25_05"
 
   [userenv]
 
