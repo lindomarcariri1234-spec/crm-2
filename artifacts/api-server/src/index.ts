@@ -136,7 +136,7 @@ if (!(globalThis.fetch as { _uploadthingPatched?: boolean })._uploadthingPatched
 // UploadThing CDN uploads will fail with "Invalid signature" (SDK v7 bug).
 logger.info(
   { fetchPatchApplied: FETCH_PATCH_APPLIED },
-  "[upload] fetch-patch active — UploadThing CDN double-encode and Range header bug mitigated",
+  "[upload] fetch-patch active — UploadThing CDN Range header bug mitigated",
 );
 
 // UploadThing token validation — warn at startup so missing config is immediately visible.

@@ -1,5 +1,5 @@
-import { Resend } from 'resend';
 import * as React from 'react';
+import { getResend } from './resend-transport';
 import { ReservationConfirmationEmail, type ReservationConfirmationEmailProps } from './templates/reservation-confirmation';
 import { ReservationCancellationEmail, type ReservationCancellationEmailProps } from './templates/reservation-cancellation';
 import { BirthdayEmail, type BirthdayEmailProps } from './templates/birthday';
@@ -42,15 +42,6 @@ export interface SendEmailResult {
   success: boolean;
   messageId?: string;
   error?: string;
-}
-
-function getResend(): Resend | null {
-  const key = process.env.RESEND_API_KEY;
-  if (!key) {
-    console.warn('[email] RESEND_API_KEY not configured — email sending is disabled');
-    return null;
-  }
-  return new Resend(key);
 }
 
 export async function sendReservationCancellationEmail(
