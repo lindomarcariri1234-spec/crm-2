@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { Stack, router, useSegments } from "expo-router";
+import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
@@ -93,23 +94,57 @@ async function registerPushToken(authToken: string): Promise<void> {
 
 const PUBLIC_ROUTES = new Set(["sign-in", "sign-up"]);
 
+function navigateToDeepLink(url: string): void {
+  const parsed = Linking.parse(url);
+  const path = [parsed.hostname, parsed.path].filter(Boolean).join("/");
+  const params = parsed.queryParams ?? {};
+  const reservationId = typeof params.reservationId === "string"
+    ? params.reservationId
+    : path.match(/reservas?\/([^/]+)/i)?.[1];
+  if (reservationId) {
+    router.navigate({ pathname: "/(tabs)/reservas", params: { reservationId } });
+  } else if (/voucher/i.test(path)) {
+    router.navigate("/(tabs)/reservas");
+  } else if (/atendimento|support|suporte/i.test(path)) {
+    router.navigate("/(tabs)/perfil");
+  } else if (/produto|product|vitrine|store/i.test(path)) {
+    router.navigate("/(tabs)");
+  }
+}
+
 function AuthGate() {
   const { isLoaded, isSignedIn, getToken, signOut } = useAuth();
   const segments = useSegments();
   const [roleStatus, setRoleStatus] = useState<"idle" | "loading" | "ok" | "denied">("idle");
   const checkedRef = useRef(false);
+  const pendingDeepLinkRef = useRef<string | null>(null);
 
   useEffect(() => {
+    function handleUrl(url: string | null) {
+      if (!url) return;
+      pendingDeepLinkRef.current = url;
+      if (roleStatus === "ok") {
+        pendingDeepLinkRef.current = null;
+        navigateToDeepLink(url);
+      }
+    }
+    Linking.getInitialURL().then(handleUrl).catch(() => {});
+    const linkSubscription = Linking.addEventListener("url", ({ url }) => handleUrl(url));
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
       const data = response.notification.request.content.data as
-        | { type?: string; reservationId?: string }
+        | { type?: string; reservationId?: string; voucherCode?: string; url?: string }
         | undefined;
-      if (data?.reservationId || data?.type) {
-        router.navigate("/(tabs)/reservas");
+      if (data?.url) {
+        handleUrl(data.url);
+      } else if (data?.reservationId || data?.voucherCode || data?.type) {
+        router.navigate({ pathname: "/(tabs)/reservas", params: { reservationId: data?.reservationId } });
       }
     });
-    return () => subscription.remove();
-  }, []);
+    return () => {
+      subscription.remove();
+      linkSubscription.remove();
+    };
+  }, [roleStatus]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -132,7 +167,10 @@ function AuthGate() {
       .then(async (tok) => {
         await apiFetch<ClientPortalProfile>(tok, "GET", "/client/me");
         setRoleStatus("ok");
-        router.replace("/(tabs)");
+        const pendingLink = pendingDeepLinkRef.current;
+        pendingDeepLinkRef.current = null;
+        if (pendingLink) navigateToDeepLink(pendingLink);
+        else router.replace("/(tabs)");
         if (tok) {
           registerPushToken(tok);
         }

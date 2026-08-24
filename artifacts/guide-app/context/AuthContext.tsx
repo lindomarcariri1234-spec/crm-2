@@ -3,7 +3,14 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
   ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
-  : "";
+  : "http://localhost:8080";
+
+export class GuideApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+    this.name = "GuideApiError";
+  }
+}
 
 const AUTH_KEY = "guide_auth_v1";
 
@@ -74,7 +81,7 @@ export async function apiFetch(
   token: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  return fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${API_BASE}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -82,4 +89,14 @@ export async function apiFetch(
       ...(options.headers ?? {}),
     },
   });
+  if (response.status === 401 || response.status === 403) {
+    throw new GuideApiError("Sessão do guia expirada. Faça login novamente.", response.status);
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as
+      | { error?: string; message?: string }
+      | null;
+    throw new GuideApiError(payload?.message ?? payload?.error ?? `Erro ${response.status}`, response.status);
+  }
+  return response;
 }

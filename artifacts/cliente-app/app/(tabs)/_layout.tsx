@@ -36,6 +36,10 @@ function NativeTabLayout() {
         <Icon sf={{ default: "person.circle", selected: "person.circle.fill" }} />
         <Label>Perfil</Label>
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="notificacoes">
+        <Icon sf={{ default: "bell", selected: "bell.fill" }} />
+        <Label>Avisos</Label>
+      </NativeTabs.Trigger>
     </NativeTabs>
   );
 }
@@ -156,6 +160,14 @@ function ClassicTabLayout() {
             ) : (
               <Feather name="user" size={22} color={color} />
             ),
+        }}
+      />
+      <Tabs.Screen
+        name="notificacoes"
+        options={{
+          title: "Notificações",
+          tabBarLabel: "Avisos",
+          tabBarIcon: ({ color }) => <Feather name="bell" size={22} color={color} />,
         }}
       />
     </Tabs>

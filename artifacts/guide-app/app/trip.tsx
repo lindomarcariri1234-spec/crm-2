@@ -19,7 +19,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import colors from "@/constants/colors";
-import { API_BASE, GuideAuth, apiFetch, useAuth } from "@/context/AuthContext";
+import { API_BASE, GuideApiError, GuideAuth, apiFetch, useAuth } from "@/context/AuthContext";
 
 const s = colors.light;
 
@@ -56,7 +56,15 @@ interface Passenger {
   customerCode?: string | null;
 }
 
-const POLL_MS = 30_000;
+interface PendingCheckin {
+  operation: "upsert" | "delete";
+  passengerId: string;
+  reservationId: string;
+  status: "present" | "absent";
+  queuedAt: string;
+}
+
+const POLL_MS = 5_000;
 const LOCATION_INTERVAL_MS = 30_000;
 const CACHE_KEY_PREFIX = "guide_trip_cache_";
 
@@ -75,6 +83,44 @@ export default function TripScreen() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [isOffline, setIsOffline] = useState(false);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  const pendingKey = auth ? `${CACHE_KEY_PREFIX}${auth.tripId}_pending` : null;
+
+  const flushPending = useCallback(async () => {
+    if (!auth || !pendingKey) return;
+    let pending: PendingCheckin[] = [];
+    try {
+      const raw = await AsyncStorage.getItem(pendingKey);
+      pending = raw ? JSON.parse(raw) as PendingCheckin[] : [];
+    } catch {
+      return;
+    }
+    if (pending.length === 0) return;
+    const remaining: PendingCheckin[] = [];
+    for (const item of pending) {
+      try {
+        if (item.operation === "delete") {
+          await apiFetch(`/api/guide/trip/${auth.tripId}/checkins/${item.passengerId}`, auth.token, {
+            method: "DELETE",
+          });
+        } else {
+          await apiFetch(`/api/guide/trip/${auth.tripId}/checkins`, auth.token, {
+            method: "POST",
+            body: JSON.stringify({
+              passengerId: item.passengerId,
+              reservationId: item.reservationId,
+              status: item.status,
+            }),
+          });
+        }
+      } catch {
+        remaining.push(item);
+      }
+    }
+    setPendingCount(remaining.length);
+    if (remaining.length) await AsyncStorage.setItem(pendingKey, JSON.stringify(remaining));
+    else await AsyncStorage.removeItem(pendingKey);
+  }, [auth, pendingKey]);
 
   useEffect(() => {
     if (!auth) router.replace("/");
@@ -110,6 +156,7 @@ export default function TripScreen() {
         const now = new Date().toISOString();
         setCachedAt(now);
         AsyncStorage.setItem(cacheKey, JSON.stringify({ data, cachedAt: now })).catch(() => {});
+        await flushPending();
       }
     } catch {
       setIsOffline(true);
@@ -132,7 +179,14 @@ export default function TripScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [auth]);
+  }, [auth, flushPending]);
+
+  useEffect(() => {
+    if (!pendingKey) return;
+    AsyncStorage.getItem(pendingKey).then((raw) => {
+      if (raw) setPendingCount((JSON.parse(raw) as PendingCheckin[]).length);
+    }).catch(() => {});
+  }, [pendingKey]);
 
   useEffect(() => {
     fetchData();
@@ -206,8 +260,33 @@ export default function TripScreen() {
       });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       await fetchData(true);
-    } catch {
-      Alert.alert("Erro", "Não foi possível atualizar o status. Tente novamente.");
+    } catch (err) {
+      if (err instanceof GuideApiError) {
+        if (err.status === 401 || err.status === 403) {
+          await logout();
+          router.replace("/");
+        }
+        Alert.alert("Não foi possível atualizar", err.message);
+        return;
+      }
+      if (pendingKey) {
+        const raw = await AsyncStorage.getItem(pendingKey).catch(() => null);
+        const pending = raw ? JSON.parse(raw) as PendingCheckin[] : [];
+        const coalesced = pending.filter((item) => item.passengerId !== passenger.id);
+        coalesced.push({
+          operation: "upsert",
+          passengerId: passenger.id,
+          reservationId: passenger.reservationId,
+          status: newStatus,
+          queuedAt: new Date().toISOString(),
+        });
+        await AsyncStorage.setItem(pendingKey, JSON.stringify(coalesced));
+        setPendingCount(coalesced.length);
+        setIsOffline(true);
+        Alert.alert("Sem conexão", "A alteração foi salva e será sincronizada quando a conexão voltar.");
+      } else {
+        Alert.alert("Erro", "Não foi possível atualizar o status. Tente novamente.");
+      }
     } finally {
       setActionLoading(null);
     }
@@ -222,8 +301,33 @@ export default function TripScreen() {
       });
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       await fetchData(true);
-    } catch {
-      Alert.alert("Erro", "Não foi possível desfazer. Tente novamente.");
+    } catch (err) {
+      if (err instanceof GuideApiError) {
+        if (err.status === 401 || err.status === 403) {
+          await logout();
+          router.replace("/");
+        }
+        Alert.alert("Não foi possível desfazer", err.message);
+        return;
+      }
+      if (pendingKey) {
+        const raw = await AsyncStorage.getItem(pendingKey).catch(() => null);
+        const pending = raw ? JSON.parse(raw) as PendingCheckin[] : [];
+        const coalesced = pending.filter((item) => item.passengerId !== passenger.id);
+        coalesced.push({
+          operation: "delete",
+          passengerId: passenger.id,
+          reservationId: passenger.reservationId,
+          status: "present",
+          queuedAt: new Date().toISOString(),
+        });
+        await AsyncStorage.setItem(pendingKey, JSON.stringify(coalesced));
+        setPendingCount(coalesced.length);
+        setIsOffline(true);
+        Alert.alert("Sem conexão", "O desfazer foi salvo e será sincronizado quando a conexão voltar.");
+      } else {
+        Alert.alert("Erro", "Não foi possível desfazer. Tente novamente.");
+      }
     } finally {
       setActionLoading(null);
     }

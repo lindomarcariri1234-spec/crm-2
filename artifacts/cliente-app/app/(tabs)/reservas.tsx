@@ -4,6 +4,7 @@ import { SkeletonBox } from "@/components/Skeleton";
 import { useQuery } from "@tanstack/react-query";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
+import { useLocalSearchParams } from "expo-router";
 import React from "react";
 import {
   ActivityIndicator,
@@ -369,6 +370,7 @@ export default function ReservasScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
+  const { reservationId } = useLocalSearchParams<{ reservationId?: string }>();
 
   const { data, isLoading, error, refetch, isRefetching } = useQuery<ClientPortalProfile>({
     queryKey: ["client-profile"],
@@ -399,6 +401,12 @@ export default function ReservasScreen() {
       scrollRef.current?.scrollTo({ y: Math.max(offset - 16, 0), animated: true });
     }
   }, []);
+
+  React.useEffect(() => {
+    if (!reservationId || !reservations.some((reservation) => reservation.id === reservationId)) return;
+    const timeout = setTimeout(() => scrollToReservation(reservationId), 350);
+    return () => clearTimeout(timeout);
+  }, [reservationId, reservations, scrollToReservation]);
 
   if (isLoading) {
     return (
