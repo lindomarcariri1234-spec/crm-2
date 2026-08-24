@@ -1,5 +1,5 @@
-import * as XLSX from "xlsx";
 import { getClientCsvValue, parseBrazilianCsvDate, parseClientCsv } from "./client-csv-import";
+import { readXlsxRows } from "./spreadsheet-import";
 
 export interface ManifestPassengerRow {
   line: number;
@@ -38,19 +38,14 @@ function normalizeCategory(value: string): string | undefined {
   return undefined;
 }
 
-function readManifestRows(data: ArrayBuffer | string, fileName: string): string[][] {
+async function readManifestRows(data: ArrayBuffer | string, fileName: string): Promise<string[][]> {
   if (/\.csv$/i.test(fileName)) return parseClientCsv(String(data));
-  const workbook = XLSX.read(data, { type: "array", cellDates: true });
-  const sheetName = workbook.SheetNames.find(name =>
+  if (!/\.xlsx$/i.test(fileName)) {
+    throw new Error("Formato não suportado. Envie um arquivo CSV ou XLSX.");
+  }
+  return readXlsxRows(data as ArrayBuffer, name =>
     name.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().includes("manifesto antt"),
-  ) ?? workbook.SheetNames[0];
-  if (!sheetName) return [];
-  return XLSX.utils.sheet_to_json<string[]>(workbook.Sheets[sheetName], {
-    header: 1,
-    defval: "",
-    raw: false,
-    dateNF: "dd/mm/yyyy",
-  }).map(row => row.map(cell => String(cell ?? "").trim()));
+  );
 }
 
 export function buildManifestImport(headers: string[], rawRows: string[][]): ParsedManifest {
@@ -102,7 +97,7 @@ export function buildManifestImport(headers: string[], rawRows: string[][]): Par
 
 export async function parseManifestFile(file: File): Promise<ParsedManifest> {
   const data = /\.csv$/i.test(file.name) ? await file.text() : await file.arrayBuffer();
-  const matrix = readManifestRows(data, file.name);
+  const matrix = await readManifestRows(data, file.name);
   if (matrix.length < 2) throw new Error("O arquivo precisa conter cabeçalho e ao menos uma linha de passageiro.");
   const [headers, ...rawRows] = matrix;
   return buildManifestImport(headers, rawRows.filter(row => row.some(cell => cell.trim())));

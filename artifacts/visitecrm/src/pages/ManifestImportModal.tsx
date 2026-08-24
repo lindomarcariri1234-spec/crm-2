@@ -73,7 +73,7 @@ export function ManifestImportModal({ open, onClose }: { open: boolean; onClose:
             <Button variant="outline" onClick={() => inputRef.current?.click()} disabled={importing}>
               <Upload className="mr-2 h-4 w-4" /> Selecionar XLSX ou CSV
             </Button>
-            <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={selectFile} />
+            <input ref={inputRef} type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={selectFile} />
             {headers.length > 0 && <span className="text-xs text-muted-foreground">{rows.length} linha(s) pronta(s) para importar</span>}
           </div>
 

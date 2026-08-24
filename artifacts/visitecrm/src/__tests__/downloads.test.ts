@@ -10,7 +10,7 @@
  *   - prepareReferrals — date filter on createdAt; bonusPaid label
  *   - prepareCommissions — date filter on createdAt; sellerName vs userId
  *   - preparePipeline — date filter on createdAt
- *   - downloadXlsx   — SheetJS call shape
+ *   - downloadXlsx   — ExcelJS workbook download
  *   - downloadPdf    — jsPDF + autoTable call shape
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -36,16 +36,31 @@ vi.mock("@/hooks/use-toast", () => ({
 }));
 
 // --------------------------------------------------------------------------
-// XLSX mock — factory uses vi.fn() directly (safe to hoist)
+// ExcelJS mock — factory uses vi.fn() directly (safe to hoist)
 // --------------------------------------------------------------------------
-vi.mock("xlsx", () => ({
-  utils: {
-    aoa_to_sheet: vi.fn().mockReturnValue({ s: {}, e: {} }),
-    book_new: vi.fn().mockReturnValue({}),
-    book_append_sheet: vi.fn(),
-  },
-  writeFile: vi.fn(),
+const exceljsMocks = vi.hoisted(() => {
+  const addRows = vi.fn();
+  const addWorksheet = vi.fn().mockReturnValue({ addRows });
+  const writeBuffer = vi.fn().mockResolvedValue(new ArrayBuffer(0));
+  const Workbook = vi.fn().mockImplementation(() => ({
+    addWorksheet,
+    xlsx: { writeBuffer },
+  }));
+  return { Workbook, addWorksheet, addRows, writeBuffer };
+});
+
+const browserUrlMocks = vi.hoisted(() => ({
+  createObjectURL: vi.fn().mockReturnValue("blob:test"),
+  revokeObjectURL: vi.fn(),
 }));
+
+vi.mock("exceljs", () => ({
+  default: {
+    Workbook: exceljsMocks.Workbook,
+  },
+}));
+vi.stubGlobal("URL", browserUrlMocks);
+vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
 // --------------------------------------------------------------------------
 // jsPDF + autoTable mocks
@@ -83,7 +98,6 @@ import {
   downloadPdf,
 } from "../pages/downloads-utils.js";
 
-import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import Downloads from "../pages/downloads.js";
@@ -666,35 +680,29 @@ describe("downloadXlsx", () => {
     vi.clearAllMocks();
   });
 
-  it("calls aoa_to_sheet with headers prepended to rows", () => {
+  it("adds headers before every data row", async () => {
     const headers = ["Col A", "Col B"];
     const rows = [["v1", "v2"], ["v3", "v4"]];
-    downloadXlsx(headers, rows, "test.xlsx");
+    await downloadXlsx(headers, rows, "test.xlsx");
 
-    const aoaToSheet = vi.mocked(XLSX.utils.aoa_to_sheet);
-    expect(aoaToSheet).toHaveBeenCalledOnce();
-    const arg = aoaToSheet.mock.calls[0][0] as string[][];
+    expect(exceljsMocks.addRows).toHaveBeenCalledOnce();
+    const arg = exceljsMocks.addRows.mock.calls[0][0] as string[][];
     expect(arg[0]).toEqual(headers);
     expect(arg[1]).toEqual(rows[0]);
     expect(arg[2]).toEqual(rows[1]);
   });
 
-  it("creates a new workbook and appends the sheet named 'Dados'", () => {
-    downloadXlsx(["H"], [["v"]], "out.xlsx");
+  it("creates a workbook and a sheet named 'Dados'", async () => {
+    await downloadXlsx(["H"], [["v"]], "out.xlsx");
 
-    expect(vi.mocked(XLSX.utils.book_new)).toHaveBeenCalledOnce();
-    const bookAppendSheet = vi.mocked(XLSX.utils.book_append_sheet);
-    expect(bookAppendSheet).toHaveBeenCalledOnce();
-    const [, , sheetName] = bookAppendSheet.mock.calls[0];
-    expect(sheetName).toBe("Dados");
+    expect(exceljsMocks.Workbook).toHaveBeenCalledOnce();
+    expect(exceljsMocks.addWorksheet).toHaveBeenCalledWith("Dados");
   });
 
-  it("calls XLSX.writeFile with the correct filename", () => {
-    downloadXlsx(["H"], [["v"]], "clientes_20250101.xlsx");
-    const writeFile = vi.mocked(XLSX.writeFile);
-    expect(writeFile).toHaveBeenCalledOnce();
-    const [, filename] = writeFile.mock.calls[0];
-    expect(filename).toBe("clientes_20250101.xlsx");
+  it("writes the workbook and downloads with the requested filename", async () => {
+    await downloadXlsx(["H"], [["v"]], "clientes_20250101.xlsx");
+    expect(exceljsMocks.writeBuffer).toHaveBeenCalledOnce();
+    expect(browserUrlMocks.createObjectURL).toHaveBeenCalledOnce();
   });
 });
 
@@ -845,21 +853,20 @@ describe("large-volume export — 5 000 rows", () => {
     expect(result!.rows[0]).toHaveLength(result!.headers.length);
   });
 
-  it("downloadXlsx passes all 5 000 rows to XLSX.utils.aoa_to_sheet", () => {
+  it("downloadXlsx passes all 5 000 rows to ExcelJS", async () => {
     const headers = ["ID", "Nome", "Valor"];
     const rows = Array.from({ length: N }, (_, i) => [`${i}`, `Item ${i}`, `${i * 10}`]);
 
-    downloadXlsx(headers, rows, "grande_volume.xlsx");
+    await downloadXlsx(headers, rows, "grande_volume.xlsx");
 
-    const aoaToSheet = vi.mocked(XLSX.utils.aoa_to_sheet);
-    expect(aoaToSheet).toHaveBeenCalledOnce();
-    const matrix = aoaToSheet.mock.calls[0][0] as string[][];
+    expect(exceljsMocks.addRows).toHaveBeenCalledOnce();
+    const matrix = exceljsMocks.addRows.mock.calls[0][0] as string[][];
     // First row is headers, next N are data rows
     expect(matrix).toHaveLength(N + 1);
     expect(matrix[0]).toEqual(headers);
     expect(matrix[1]).toEqual(rows[0]);
     expect(matrix[N]).toEqual(rows[N - 1]);
-    expect(vi.mocked(XLSX.writeFile)).toHaveBeenCalledWith(expect.anything(), "grande_volume.xlsx");
+    expect(exceljsMocks.writeBuffer).toHaveBeenCalledOnce();
   });
 
   it("downloadPdf passes all 5 000 rows to autoTable body without throwing", () => {
@@ -946,7 +953,7 @@ describe("Downloads — empty quick-download result", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-20T12:00:00Z"));
     mockToast.mockClear();
-    vi.mocked(XLSX.writeFile).mockClear();
+    exceljsMocks.writeBuffer.mockClear();
     vi.mocked(jsPDF).mockClear();
 
     originalFetch = fetchHost.fetch;
@@ -979,7 +986,7 @@ describe("Downloads — empty quick-download result", () => {
     expect(mockToast).toHaveBeenNthCalledWith(1, {
       title: "Sem dados de Clientes para exportar no período",
     });
-    expect(vi.mocked(XLSX.writeFile)).not.toHaveBeenCalled();
+    expect(exceljsMocks.writeBuffer).not.toHaveBeenCalled();
 
     const pdfButton = getQuickDownloadButton(container, "Clientes", "PDF");
     await flushAct(async () => {

@@ -65,27 +65,48 @@ function serveManifest(platform, res) {
   res.end(manifest);
 }
 
-function serveLandingPage(req, res, landingPageTemplate, appName) {
-  const forwardedProto = req.headers["x-forwarded-proto"];
-  const protocol = forwardedProto || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers["host"];
-  const baseUrl = `${protocol}://${host}`;
-  const expsUrl = `${host}`;
-
+function serveLandingPage(res, landingPageTemplate, appName, host) {
   const html = landingPageTemplate
-    .replace(/BASE_URL_PLACEHOLDER/g, baseUrl)
-    .replace(/EXPS_URL_PLACEHOLDER/g, expsUrl)
+    .replace(/EXPS_URL_PLACEHOLDER/g, host)
     .replace(/APP_NAME_PLACEHOLDER/g, appName);
 
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(html);
 }
 
-function serveStaticFile(urlPath, res) {
-  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, "");
-  const filePath = path.join(STATIC_ROOT, safePath);
+function getSafeRequestHost(req) {
+  const forwardedHost = req.headers["x-forwarded-host"];
+  const rawHost = Array.isArray(forwardedHost)
+    ? forwardedHost[0]
+    : forwardedHost || req.headers.host;
+  const host = rawHost?.split(",")[0].trim();
+  if (!host || /[\s/\\@]/.test(host)) return null;
 
-  if (!filePath.startsWith(STATIC_ROOT)) {
+  try {
+    const parsed = new URL(`https://${host}`);
+    return parsed.hostname ? parsed.host : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveStaticFile(urlPath) {
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(urlPath);
+  } catch {
+    return null;
+  }
+
+  const relativePath = decodedPath.replace(/^[/\\]+/, "");
+  const filePath = path.resolve(STATIC_ROOT, relativePath);
+  const staticRootPrefix = `${STATIC_ROOT}${path.sep}`;
+  return filePath.startsWith(staticRootPrefix) ? filePath : null;
+}
+
+function serveStaticFile(urlPath, res) {
+  const filePath = resolveStaticFile(urlPath);
+  if (!filePath) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
@@ -108,7 +129,7 @@ const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, "utf-8");
 const appName = getAppName();
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  const url = new URL(req.url || "/", "http://localhost");
   let pathname = url.pathname;
 
   if (basePath && pathname.startsWith(basePath)) {
@@ -122,7 +143,12 @@ const server = http.createServer((req, res) => {
     }
 
     if (pathname === "/") {
-      return serveLandingPage(req, res, landingPageTemplate, appName);
+      const host = getSafeRequestHost(req);
+      if (!host) {
+        res.writeHead(400);
+        return res.end("Invalid host");
+      }
+      return serveLandingPage(res, landingPageTemplate, appName, host);
     }
   }
 

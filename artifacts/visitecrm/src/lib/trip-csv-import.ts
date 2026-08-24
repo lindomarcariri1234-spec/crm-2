@@ -1,4 +1,3 @@
-import * as XLSX from "xlsx";
 import type { CreateTripBody } from "@workspace/api-client-react";
 import {
   getClientCsvValue,
@@ -8,6 +7,7 @@ import {
 } from "./client-csv-import";
 import { formatBRLPlain } from "@workspace/shared";
 import type { Trip } from "@workspace/api-client-react";
+import { readXlsxRows } from "./spreadsheet-import";
 
 export { parseClientCsv as parseTripCsv };
 
@@ -97,29 +97,22 @@ export interface ParsedTripFile {
 }
 
 export async function parseTripFile(file: File): Promise<ParsedTripFile> {
-  if (/\.xlsx?$/i.test(file.name)) {
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-    const sheetName = workbook.SheetNames.find(name =>
+  if (/\.xlsx$/i.test(file.name)) {
+    const sheetRows = await readXlsxRows(await file.arrayBuffer(), name =>
       name.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().includes("viag"),
-    ) ?? workbook.SheetNames[0];
-    const sheetRows = sheetName
-      ? XLSX.utils.sheet_to_json<string[]>(workbook.Sheets[sheetName], {
-        header: 1,
-        defval: "",
-        raw: false,
-        dateNF: "dd/mm/yyyy",
-      })
-      : [];
+    );
     if (sheetRows.length < 2) throw new Error("O arquivo precisa conter cabeçalho e ao menos uma viagem.");
     return {
-      headers: sheetRows[0].map(cell => String(cell ?? "").trim()),
+      headers: sheetRows[0],
       rows: sheetRows
         .slice(1)
-        .map(row => row.map(cell => String(cell ?? "").trim()))
         .filter(row => row.some(cell => cell)),
     };
   }
 
+  if (!/\.csv$/i.test(file.name)) {
+    throw new Error("Formato não suportado. Envie um arquivo CSV ou XLSX.");
+  }
   const csvRows = parseClientCsv(await file.text());
   if (csvRows.length < 2) throw new Error("O arquivo precisa conter cabeçalho e ao menos uma viagem.");
   return {

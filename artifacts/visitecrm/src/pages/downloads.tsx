@@ -216,7 +216,7 @@ export default function Downloads() {
         if (!rows.length) { toast({ title: `Sem dados de ${label} para exportar no período` }); return; }
         const filename = `${filenameBase}_${format(new Date(), "yyyyMMdd")}.${fmt}`;
         if (fmt === "csv") downloadCsv([headers, ...rows], filename);
-        else if (fmt === "xlsx") downloadXlsx(headers, rows, filename);
+        else if (fmt === "xlsx") await downloadXlsx(headers, rows, filename);
         else downloadPdf(label, headers, rows, filename);
         toast({ title: `${count} registros exportados!` });
       } catch (err) {

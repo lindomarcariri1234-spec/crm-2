@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildTripCsvData, buildTripsCsv, parseTripCsv, TRIP_CSV_HEADERS } from "@/lib/trip-csv-import";
+import ExcelJS from "exceljs";
+import {
+  buildTripCsvData,
+  buildTripsCsv,
+  parseTripCsv,
+  parseTripFile,
+  TRIP_CSV_HEADERS,
+} from "@/lib/trip-csv-import";
 
 describe("trip CSV import", () => {
   it("parses Brazilian separators, quoted values, dates and currency", () => {
@@ -134,6 +141,26 @@ describe("trip CSV import", () => {
         { name: "Praça Central" },
         { name: "Rodoviária" },
       ],
+    });
+  });
+
+  it("reads an XLSX upload with the trip worksheet", async () => {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Viagens");
+    worksheet.addRows([
+      ["Nome", "Destino", "Cidade de Destino", "Estado de Destino", "Data de Saída", "Preço Adulto", "Capacidade"],
+      ["Férias em Natal", "Praias", "Natal", "RN", "15/12/2026", 1890.5, 46],
+    ]);
+    const workbookData = await workbook.xlsx.writeBuffer();
+    const file = new File(
+      [workbookData],
+      "viagens.xlsx",
+      { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+    );
+
+    await expect(parseTripFile(file)).resolves.toEqual({
+      headers: ["Nome", "Destino", "Cidade de Destino", "Estado de Destino", "Data de Saída", "Preço Adulto", "Capacidade"],
+      rows: [["Férias em Natal", "Praias", "Natal", "RN", "15/12/2026", "1890.5", "46"]],
     });
   });
 });
