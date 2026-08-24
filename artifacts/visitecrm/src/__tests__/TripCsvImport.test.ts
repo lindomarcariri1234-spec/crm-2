@@ -35,6 +35,50 @@ describe("trip CSV import", () => {
       .toContain("horário de saída inválido");
   });
 
+  it("maps a full trip export without reusing source IDs or occupancy", () => {
+    const headers = [
+      "id", "tenant_id", "name", "description", "destination", "destination_city", "destination_state",
+      "origin_city", "origin_state", "type", "category", "departure_date", "return_date",
+      "departure_time", "return_time", "total_capacity", "available_seats", "reserved_seats",
+      "seat_map", "price_adult", "price_child", "price_senior", "inclusions", "exclusions",
+      "itinerary", "boarding_points", "gallery", "videos", "status", "is_public", "is_featured",
+      "vehicle_plate", "vehicle_type", "driver_name", "tour_guide", "trip_organizer", "seat_layout",
+    ];
+    const row = [
+      "source-trip", "source-tenant", "Excursão para Maceió", "<p>Praia e hotel</p>", "Praia do Francês",
+      "Maceió", "AL", "Crato", "CE", "excursao", "standard", '"2026-12-17T15:00:00.000Z"',
+      '"2026-12-21T15:00:00.000Z"', "20:00", "03:00", "55", "36", "19", '{"1":{"status":"reserved"}}',
+      "850.00", "425.00", "700.00", '["Transporte","Café da manhã"]', '["Almoço"]',
+      '[{"day":1,"title":"Chegada"}]',
+      '[{"id":"source-point","name":"Rodoviária","time":"22:00","address":"Centro"}]',
+      '["https://cdn.example/1.jpg"]', '["https://cdn.example/1.mp4"]', "active", "false", "true",
+      "ABC-1234", "Ônibus", "João", "Maria", "Agência", "2x2",
+    ];
+
+    const result = buildTripCsvData(headers, row, 2);
+
+    expect(result.error).toBeUndefined();
+    expect(result.data).toMatchObject({
+      name: "Excursão para Maceió",
+      departureDate: "2026-12-17",
+      returnDate: "2026-12-21",
+      totalCapacity: 55,
+      priceAdult: 850,
+      inclusions: ["Transporte", "Café da manhã"],
+      exclusions: ["Almoço"],
+      boardingPoints: [{ id: "csv-2-1", name: "Rodoviária", time: "22:00", address: "Centro" }],
+      gallery: ["https://cdn.example/1.jpg"],
+      videos: ["https://cdn.example/1.mp4"],
+    });
+    expect(result.data).not.toHaveProperty("id");
+    expect(result.data).not.toHaveProperty("tenantId");
+    expect(result.data).not.toHaveProperty("availableSeats");
+    expect(result.data).not.toHaveProperty("reservedSeats");
+    expect(result.data).not.toHaveProperty("seatMap");
+    expect(result.data).not.toHaveProperty("isPublic");
+    expect(result.data).not.toHaveProperty("isFeatured");
+  });
+
   it("exports the import template columns with Brazilian spreadsheet formats", () => {
     const csv = buildTripsCsv([{
       id: "trip-1",

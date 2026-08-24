@@ -4,7 +4,7 @@ import { useCreateTrip } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { buildTripCsvData, parseTripCsv, TRIP_CSV_HEADERS } from "@/lib/trip-csv-import";
+import { buildTripCsvData, parseTripFile, TRIP_CSV_HEADERS } from "@/lib/trip-csv-import";
 
 interface TripCsvImportModalProps {
   open: boolean;
@@ -51,25 +51,25 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
     setSuccessCount(0);
   }
 
-  function handleFile(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const parsed = parseTripCsv(String(reader.result ?? ""));
-      if (parsed.length < 2) {
-        toast({ title: "CSV inválido", description: "O arquivo precisa conter cabeçalho e pelo menos uma viagem.", variant: "destructive" });
-        return;
-      }
-      const dataRows = parsed.slice(1).filter(row => row.some(cell => cell.trim()));
-      setHeaders(parsed[0]);
-      setRows(dataRows);
-      setPreview(dataRows.slice(0, 5));
+    try {
+      const parsed = await parseTripFile(file);
+      setHeaders(parsed.headers);
+      setRows(parsed.rows);
+      setPreview(parsed.rows.slice(0, 5));
       setErrors([]);
       setSuccessCount(0);
-    };
-    reader.readAsText(file, "UTF-8");
-    event.target.value = "";
+    } catch (error) {
+      toast({
+        title: "Arquivo inválido",
+        description: error instanceof Error ? error.message : "Não foi possível ler o arquivo de viagens.",
+        variant: "destructive",
+      });
+    } finally {
+      event.target.value = "";
+    }
   }
 
   async function handleImport() {
@@ -127,10 +127,10 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
     <Dialog open={open} onOpenChange={value => { if (!value) handleClose(); }}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Importar Viagens via CSV</DialogTitle>
+          <DialogTitle>Importar Viagens</DialogTitle>
           <DialogDescription>
             Nome, destino, cidade/UF de destino, data de saída e preço adulto são obrigatórios.
-            Datas podem usar DD/MM/AAAA e valores podem usar o formato brasileiro.
+            Aceita CSV ou XLSX; dados de ocupação, IDs e tenant da origem não são importados.
           </DialogDescription>
         </DialogHeader>
 
@@ -142,7 +142,13 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
             <Button variant="outline" onClick={() => inputRef.current?.click()}>
               <Upload className="w-4 h-4 mr-2" /> Selecionar arquivo
             </Button>
-            <input ref={inputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleFile} />
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={(event) => { void handleFile(event); }}
+            />
           </div>
 
           {headers.length > 0 && (

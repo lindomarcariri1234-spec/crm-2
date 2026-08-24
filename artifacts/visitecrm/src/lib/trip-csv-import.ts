@@ -66,13 +66,6 @@ function parseTripList(value: string): string[] {
   return splitClientCsvList(cleanImportedValue(value));
 }
 
-function parseBoolean(value: string): boolean | undefined {
-  const normalized = cleanImportedValue(value).toLowerCase();
-  if (["true", "1", "sim", "yes"].includes(normalized)) return true;
-  if (["false", "0", "não", "nao", "no"].includes(normalized)) return false;
-  return undefined;
-}
-
 function parseBoardingPoints(
   value: string,
   rowNumber: number,
@@ -268,8 +261,6 @@ export function buildTripCsvData(
     data: {
       name,
       description: get("descrição", "descricao", "description") || undefined,
-      isPublic: parseBoolean(get("público", "publico", "ispublic")),
-      isFeatured: parseBoolean(get("destaque", "isfeatured")),
       destination,
       destinationCity,
       destinationState: destinationState.toUpperCase(),
@@ -285,7 +276,7 @@ export function buildTripCsvData(
       priceAdult,
       priceChild: parseBrazilianNumber(get("preço criança", "preco crianca", "precochild", "pricechild")),
       priceSenior: parseBrazilianNumber(get("preço sênior", "preco senior", "precosenior", "pricesenior")),
-      inclusions: splitClientCsvList(get("inclusões", "inclusoes", "inclusions")),
+      inclusions: parseTripList(get("inclusões", "inclusoes", "inclusions")),
       exclusions: parseTripList(get("exclusões", "exclusoes", "exclusions")),
       boardingPoints: boardingPoints.length ? boardingPoints : undefined,
       vehicleType: get("tipo de veículo", "tipodeveiculo", "vehicletype") || undefined,
@@ -309,7 +300,6 @@ export function buildTripCsvData(
       itinerary,
       status: normalizeStatus(get("status", "situação", "situacao")),
       seatLayout: get("layout de assentos", "layoutdeassentos", "seatlayout") || "2x2",
-      showSeatMap: parseBoolean(get("mostrar mapa de assentos", "showseatmap")),
     },
   };
 }
