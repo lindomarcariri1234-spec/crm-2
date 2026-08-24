@@ -1,8 +1,11 @@
-import { index, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { reservationsTable } from "./reservations";
 import { tenantsTable } from "./tenants";
 
-export type WhatsAppOutboxType = "reservation_confirmed";
+export type WhatsAppOutboxType =
+  | "reservation_confirmed"
+  | "boarding_reminder"
+  | "payment_pending";
 export type WhatsAppOutboxStatus = "pending" | "enqueued" | "processing" | "sent";
 
 /**
@@ -22,7 +25,13 @@ export const whatsappNotificationOutboxTable = pgTable(
       .notNull()
       .references(() => reservationsTable.id, { onDelete: "cascade" }),
     type: text("type").$type<WhatsAppOutboxType>().notNull(),
+    // Calendar day in America/Sao_Paulo for reminder types. Confirmation uses
+    // the stable "confirmation" value so all notification variants share the
+    // same durable outbox without weakening their idempotency key.
+    referenceDate: text("reference_date").notNull().default("confirmation"),
     status: text("status").$type<WhatsAppOutboxStatus>().notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    provider: text("provider"),
     enqueuedAt: timestamp("enqueued_at", { withTimezone: true }),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     lastError: text("last_error"),
@@ -30,10 +39,11 @@ export const whatsappNotificationOutboxTable = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
   },
   (table) => [
-    uniqueIndex("whatsapp_notification_outbox_reservation_type_unique").on(
+    uniqueIndex("whatsapp_notification_outbox_reservation_type_reference_unique").on(
       table.tenantId,
       table.reservationId,
       table.type,
+      table.referenceDate,
     ),
     index("whatsapp_notification_outbox_pending_idx").on(table.status, table.createdAt),
   ],

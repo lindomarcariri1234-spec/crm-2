@@ -6,6 +6,7 @@ import { logger } from "../lib/logger";
 import { REFERRAL_STATUS } from "@workspace/permissions";
 import { areWorkersEnabled } from "../lib/redis";
 import { formatBRL } from "@workspace/shared";
+import { normalizeBrazilPhone } from "@workspace/shared";
 
 const DEFAULT_CONVERTED_MESSAGE =
   "Boa notícia! {{nome}} usou seu código {{codigo}} e comprou com a {{agencia}}. Seu bônus de R$ {{valor}} está sendo processado.";
@@ -32,11 +33,16 @@ export async function enqueueOrSend(
   message: string,
   tenantId: string,
 ): Promise<WhatsAppDispatchResult> {
+  const normalizedPhone = normalizeBrazilPhone(phone);
+  if (!normalizedPhone) {
+    logger.warn({ phone, tenantId }, "[whatsapp-queue] Invalid Brazilian phone number — skipping");
+    return { mode: "direct", success: false, error: "invalid_phone" };
+  }
   const queue = getWhatsAppQueue();
   if (queue) {
     try {
-      await queue.add("whatsapp-notification", { phone, message, tenantId });
-      logger.info({ phone }, "[whatsapp-queue] Job enqueued");
+      await queue.add("whatsapp-notification", { phone: normalizedPhone, message, tenantId });
+      logger.info({ phone: normalizedPhone }, "[whatsapp-queue] Job enqueued");
       return { mode: "queued", success: true };
     } catch (err) {
       logger.warn(
@@ -52,7 +58,7 @@ export async function enqueueOrSend(
       "[workers-disabled] ENABLE_WORKERS=false — sending WhatsApp message directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
     );
   }
-  const result = await sendTenantWhatsAppMessage(tenantId, phone, message);
+  const result = await sendTenantWhatsAppMessage(tenantId, normalizedPhone, message);
   if (!result.success && result.error !== "credentials_not_configured") {
     logger.warn({ phone, error: result.error }, "[whatsapp-queue] Direct send failed");
   }
@@ -494,10 +500,11 @@ export async function dispatchWhatsAppBoardingReminder(opts: {
   departureDate: string;
   boardingPoints: Array<{ id: string; name: string; time?: string }>;
   tenantName: string;
-}): Promise<void> {
+  delivery?: "queue" | "direct";
+}): Promise<boolean> {
   try {
     const settings = await getWhatsAppNotificationSettings(opts.tenantId);
-    if (!settings.boardingReminder) return;
+    if (!settings.boardingReminder) return true;
 
     const template = settings.boardingReminderMessage?.trim() || DEFAULT_BOARDING_REMINDER_MESSAGE;
     const bpMap = new Map(opts.boardingPoints.map((bp) => [bp.id, bp]));
@@ -559,7 +566,10 @@ export async function dispatchWhatsAppBoardingReminder(opts: {
           horario: boardingTime,
           agencia: opts.tenantName,
         });
-        await enqueueOrSend(p.phone, message, opts.tenantId);
+        const result = opts.delivery === "direct"
+          ? await sendDirect(p.phone, message, opts.tenantId)
+          : await enqueueOrSend(p.phone, message, opts.tenantId);
+        if (!result.success) return false;
         continue;
       }
       // No passenger phone — fall back to booking client's contact, respecting opt-in
@@ -579,7 +589,10 @@ export async function dispatchWhatsAppBoardingReminder(opts: {
           horario: boardingTime,
           agencia: opts.tenantName,
         });
-        await enqueueOrSend(clientPhone, message, opts.tenantId);
+        const result = opts.delivery === "direct"
+          ? await sendDirect(clientPhone, message, opts.tenantId)
+          : await enqueueOrSend(clientPhone, message, opts.tenantId);
+        if (!result.success) return false;
       }
     }
 
@@ -594,10 +607,15 @@ export async function dispatchWhatsAppBoardingReminder(opts: {
         horario: bp?.time ?? "",
         agencia: opts.tenantName,
       });
-      await enqueueOrSend(clientPhone, message, opts.tenantId);
+      const result = opts.delivery === "direct"
+        ? await sendDirect(clientPhone, message, opts.tenantId)
+        : await enqueueOrSend(clientPhone, message, opts.tenantId);
+      if (!result.success) return false;
     }
+    return true;
   } catch (err) {
     logger.warn({ err, tenantId: opts.tenantId }, "[whatsapp] dispatchWhatsAppBoardingReminder failed — non-fatal");
+    return false;
   }
 }
 
@@ -658,16 +676,18 @@ export async function dispatchWhatsAppPagamentoPendente(opts: {
   departureDate: string;
   remainingBalance: number;
   tenantName: string;
-}): Promise<void> {
+  delivery?: "queue" | "direct";
+}): Promise<boolean> {
   try {
     const settings = await getWhatsAppNotificationSettings(opts.tenantId);
-    if (!settings.pagamentoPendente) return;
+    if (!settings.pagamentoPendente) return true;
 
     const template = settings.pagamentoPendenteMessage?.trim() || DEFAULT_PAGAMENTO_PENDENTE_MESSAGE;
 
-    await broadcastToReservationPassengers({
+    const results = await broadcastToReservationPassengers({
       reservationId: opts.reservationId,
       tenantId: opts.tenantId,
+      delivery: opts.delivery,
       buildMessage: (nome) =>
         interpolateWhatsAppMessage(template, {
           nome,
@@ -677,7 +697,9 @@ export async function dispatchWhatsAppPagamentoPendente(opts: {
           agencia: opts.tenantName,
         }),
     });
+    return results.every((result) => result.success);
   } catch (err) {
     logger.warn({ err, tenantId: opts.tenantId }, "[whatsapp] dispatchWhatsAppPagamentoPendente failed — non-fatal");
+    return false;
   }
 }

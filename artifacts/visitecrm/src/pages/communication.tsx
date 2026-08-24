@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   useListMessages,
   useSendMessage,
@@ -78,6 +78,25 @@ interface FailedEmailSummary {
   exhaustedAt: string;
 }
 
+interface AiConversation {
+  id: string;
+  clientId: string | null;
+  channel: string;
+  status: string;
+  assignedUserId: string | null;
+  sessionId: string | null;
+  startedAt: string;
+  createdAt: string;
+}
+
+interface AiMessage {
+  id: string;
+  role: string;
+  content: string;
+  isBot: boolean;
+  sentAt: string;
+}
+
 const CHANNELS = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "email", label: "E-mail" },
@@ -128,6 +147,13 @@ export default function Communication() {
   const [selectedConversationClientId, setSelectedConversationClientId] = useState<string | null>(null);
   const [inboxChannel, setInboxChannel] = useState("whatsapp");
   const [inboxMessage, setInboxMessage] = useState("");
+  const [aiConversations, setAiConversations] = useState<AiConversation[]>([]);
+  const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
+  const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
+  const [aiReply, setAiReply] = useState("");
+  const [loadingAiInbox, setLoadingAiInbox] = useState(false);
+  const [sendingAiReply, setSendingAiReply] = useState(false);
+  const aiReplyKey = useRef<string | null>(null);
 
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   const [loadingEmailLogs, setLoadingEmailLogs] = useState(false);
@@ -218,6 +244,34 @@ export default function Communication() {
       fetchFailedSummary();
     }
   }, [tab, fetchEmailLogs, fetchFailedSummary]);
+
+  const fetchAiInbox = useCallback(async () => {
+    setLoadingAiInbox(true);
+    try {
+      const res = await fetch(`${BASE}/api/chatbot-conversations`, { credentials: "include" });
+      if (!res.ok) throw new Error("failed");
+      setAiConversations(await res.json());
+    } catch {
+      toast({ title: "Não foi possível carregar o atendimento por IA.", variant: "destructive" });
+    } finally {
+      setLoadingAiInbox(false);
+    }
+  }, [toast]);
+
+  const selectAiConversation = useCallback(async (id: string) => {
+    setSelectedAiConversationId(id);
+    try {
+      const res = await fetch(`${BASE}/api/chatbot-conversations/${id}/messages`, { credentials: "include" });
+      if (!res.ok) throw new Error("failed");
+      setAiMessages(await res.json());
+    } catch {
+      toast({ title: "Não foi possível carregar o histórico.", variant: "destructive" });
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (tab === "ai-inbox") fetchAiInbox();
+  }, [tab, fetchAiInbox]);
 
   const handleResend = async (id: string) => {
     setResendingId(id);
@@ -370,6 +424,31 @@ export default function Communication() {
     });
     setInboxMessage("");
     refetchMessages();
+  };
+
+  const handleAiReply = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedAiConversationId || !aiReply.trim()) return;
+    setSendingAiReply(true);
+    try {
+      const res = await fetch(`${BASE}/api/chatbot-conversations/${selectedAiConversationId}/reply`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: aiReply.trim(),
+          idempotencyKey: aiReplyKey.current ?? (aiReplyKey.current = crypto.randomUUID()),
+        }),
+      });
+      if (!res.ok) throw new Error("failed");
+      setAiReply("");
+      aiReplyKey.current = null;
+      await Promise.all([selectAiConversation(selectedAiConversationId), fetchAiInbox()]);
+    } catch {
+      toast({ title: "Não foi possível enviar pelo WhatsApp.", variant: "destructive" });
+    } finally {
+      setSendingAiReply(false);
+    }
   };
 
   return (
@@ -592,6 +671,9 @@ export default function Communication() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="conversations">Conversas</TabsTrigger>
+          <TabsTrigger value="ai-inbox" className="flex items-center gap-1">
+            <MessageSquare className="w-3.5 h-3.5" /> Atendimento IA
+          </TabsTrigger>
           <TabsTrigger value="messages">Mensagens Enviadas</TabsTrigger>
           <TabsTrigger value="templates">Templates</TabsTrigger>
           <TabsTrigger value="email-logs" className="flex items-center gap-1">
@@ -709,6 +791,88 @@ export default function Communication() {
                           onChange={e => setInboxMessage(e.target.value)}
                         />
                         <Button type="submit" size="sm" disabled={sendMessage.isPending || !inboxMessage.trim()}>
+                          <Send className="w-4 h-4" />
+                        </Button>
+                      </form>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="ai-inbox" className="mt-4">
+          {loadingAiInbox ? (
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
+              <div className="col-span-2"><Skeleton className="h-[400px] w-full" /></div>
+            </div>
+          ) : aiConversations.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-30" />
+              <p className="font-medium">Nenhum atendimento WhatsApp ainda.</p>
+              <p className="text-sm mt-1">As conversas recebidas pela integração aparecerão aqui.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 h-[520px]">
+              <div className="border rounded-lg overflow-hidden flex flex-col">
+                <div className="p-3 border-b bg-muted/30">
+                  <p className="text-sm font-semibold">Atendimentos ({aiConversations.length})</p>
+                </div>
+                <div className="flex-1 overflow-y-auto divide-y">
+                  {aiConversations.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      onClick={() => selectAiConversation(conversation.id)}
+                      className={`w-full text-left p-3 hover:bg-muted/40 transition-colors ${selectedAiConversationId === conversation.id ? "bg-primary/5 border-l-2 border-primary" : ""}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-medium text-sm truncate">{conversation.sessionId ?? "Contato sem telefone"}</p>
+                        <Badge variant={conversation.status === "human_handoff" ? "default" : "secondary"}>
+                          {conversation.status === "human_handoff" ? "Humano" : conversation.status === "opted_out" ? "Opt-out" : "IA"}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {new Date(conversation.createdAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="md:col-span-2 border rounded-lg overflow-hidden flex flex-col">
+                {!selectedAiConversationId ? (
+                  <div className="flex-1 flex items-center justify-center text-muted-foreground">
+                    <p className="text-sm">Selecione um atendimento para ver o histórico.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-3 border-b bg-muted/30">
+                      <p className="font-semibold text-sm">Atendimento WhatsApp</p>
+                      <p className="text-xs text-muted-foreground">A IA interrompe respostas ao detectar uma solicitação de atendimento humano.</p>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                      {aiMessages.map((message) => (
+                        <div key={message.id} className={`flex ${message.role === "user" ? "justify-start" : "justify-end"}`}>
+                          <div className={`max-w-xs rounded-lg px-3 py-2 text-sm ${message.role === "user" ? "bg-muted" : message.isBot ? "bg-primary/10 text-foreground" : "bg-primary text-primary-foreground"}`}>
+                            <p>{message.content}</p>
+                            <p className="mt-1 text-[10px] opacity-70">
+                              {message.isBot ? "IA" : message.role === "user" ? "Cliente" : "Equipe"} · {new Date(message.sentAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-3 border-t">
+                      <form onSubmit={handleAiReply} className="flex gap-2">
+                        <input
+                          type="text"
+                          className="flex-1 px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                          placeholder="Responder como equipe..."
+                          value={aiReply}
+                          onChange={(e) => setAiReply(e.target.value)}
+                        />
+                        <Button type="submit" size="sm" disabled={sendingAiReply || !aiReply.trim()}>
                           <Send className="w-4 h-4" />
                         </Button>
                       </form>

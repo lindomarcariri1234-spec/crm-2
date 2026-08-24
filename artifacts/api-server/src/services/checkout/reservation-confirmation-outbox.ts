@@ -1,5 +1,5 @@
-import { db, whatsappNotificationOutboxTable } from "@workspace/db";
-import { and, eq, isNull, lt, not, or } from "drizzle-orm";
+import { db, whatsappNotificationOutboxTable, type WhatsAppOutboxType } from "@workspace/db";
+import { and, eq, inArray, isNull, lt, not, or, sql } from "drizzle-orm";
 import { generateId } from "../../lib/id";
 import { logger } from "../../lib/logger";
 import { getWhatsAppQueue } from "../../queues/index";
@@ -7,6 +7,99 @@ import { dispatchWhatsAppReservationConfirmed } from "../../queues/whatsapp-help
 
 const RESERVATION_CONFIRMED = "reservation_confirmed" as const;
 const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
+
+export type ReservationReminderType = Extract<
+  WhatsAppOutboxType,
+  "boarding_reminder" | "payment_pending"
+>;
+
+/**
+ * Runs a reminder only once for its Brazil calendar day. The durable unique
+ * key and conditional claim protect against overlapping crons, queue retries
+ * and application restarts. Failed delivery is deliberately released to
+ * `pending`, allowing the same day's next cron run to recover it.
+ */
+export async function deliverReservationReminderOnce(opts: {
+  reservationId: string;
+  tenantId: string;
+  type: ReservationReminderType;
+  referenceDate: string;
+  deliver: () => Promise<boolean>;
+}): Promise<"sent" | "duplicate" | "failed"> {
+  const { reservationId, tenantId, type, referenceDate, deliver } = opts;
+  await db
+    .insert(whatsappNotificationOutboxTable)
+    .values({
+      id: generateId(),
+      tenantId,
+      reservationId,
+      type,
+      referenceDate,
+    })
+    .onConflictDoNothing();
+
+  const claimed = await db
+    .update(whatsappNotificationOutboxTable)
+    .set({
+      status: "processing",
+      attempts: sql`${whatsappNotificationOutboxTable.attempts} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(whatsappNotificationOutboxTable.tenantId, tenantId),
+        eq(whatsappNotificationOutboxTable.reservationId, reservationId),
+        eq(whatsappNotificationOutboxTable.type, type),
+        eq(whatsappNotificationOutboxTable.referenceDate, referenceDate),
+        isNull(whatsappNotificationOutboxTable.sentAt),
+        not(eq(whatsappNotificationOutboxTable.status, "processing")),
+      ),
+    )
+    .returning({ id: whatsappNotificationOutboxTable.id });
+
+  if (!claimed.length) return "duplicate";
+
+  try {
+    const delivered = await deliver();
+    await db
+      .update(whatsappNotificationOutboxTable)
+      .set(
+        delivered
+          ? { status: "sent", sentAt: new Date(), lastError: null }
+          : { status: "pending", lastError: "delivery_failed" },
+      )
+      .where(eq(whatsappNotificationOutboxTable.id, claimed[0].id));
+    return delivered ? "sent" : "failed";
+  } catch (err) {
+    await db
+      .update(whatsappNotificationOutboxTable)
+      .set({
+        status: "pending",
+        lastError: err instanceof Error ? err.message.slice(0, 240) : "delivery_failed",
+      })
+      .where(eq(whatsappNotificationOutboxTable.id, claimed[0].id));
+    return "failed";
+  }
+}
+
+/** Releases reminder claims after an interrupted process so the same Brazil
+ * calendar-day reminder remains recoverable without creating a second row. */
+export async function resetStaleReservationReminderClaims(): Promise<number> {
+  const staleBefore = new Date(Date.now() - PROCESSING_TIMEOUT_MS);
+  const reset = await db
+    .update(whatsappNotificationOutboxTable)
+    .set({ status: "pending", lastError: "processing_timeout", updatedAt: new Date() })
+    .where(
+      and(
+        inArray(whatsappNotificationOutboxTable.type, ["boarding_reminder", "payment_pending"]),
+        eq(whatsappNotificationOutboxTable.status, "processing"),
+        lt(whatsappNotificationOutboxTable.updatedAt, staleBefore),
+        isNull(whatsappNotificationOutboxTable.sentAt),
+      ),
+    )
+    .returning({ id: whatsappNotificationOutboxTable.id });
+  return reset.length;
+}
 
 /**
  * Creates (or resumes) the one durable reservation-confirmation notification.
@@ -23,6 +116,7 @@ export async function scheduleReservationConfirmedWhatsApp(
       tenantId,
       reservationId,
       type: RESERVATION_CONFIRMED,
+      referenceDate: "confirmation",
     })
     .onConflictDoNothing()
     .returning({

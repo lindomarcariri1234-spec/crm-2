@@ -69,3 +69,4 @@
 - [Attached files can be auto-committed](attached-file-auto-commit.md) — inspect HEAD and attached_assets before pushing; a clean status can hide an auto-committed upload
 - [Marketplace capacity lifecycle](marketplace-capacity-lifecycle.md) — dated partner capacity is claimed atomically after payment, never at anonymous checkout
 - [Distribution operation finalization](distribution-operation-finalization.md) — capacity, booking ledger and terminal operation status must commit together; replays repair any ledger gap
+- [WhatsApp attendance delivery](whatsapp-attendance-delivery.md) — persist and conditionally claim replies before provider calls; recovery must honor opt-out.

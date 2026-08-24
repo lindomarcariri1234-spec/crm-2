@@ -6,6 +6,7 @@ import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
+import { deliverAttendanceReply } from "../services/whatsapp-attendance";
 
 const router = Router();
 
@@ -21,6 +22,11 @@ const CreateMessageBody = z.object({
   content: z.string().min(1),
   mediaUrl: z.string().optional(),
   isBot: z.boolean().optional(),
+});
+
+const ReplyConversationBody = z.object({
+  content: z.string().trim().min(1).max(4000),
+  idempotencyKey: z.string().uuid(),
 });
 
 router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promise<void> => {
@@ -112,6 +118,64 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
       .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId))).limit(1);
     if (!conv) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
     res.json(conv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Human reply after an AI handoff. The phone is server-owned in sessionId and
+ * never accepted from the browser, which keeps an agent inside their tenant. */
+router.post("/chatbot-conversations/:id/reply", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const parsed = ReplyConversationBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+    const [conversation] = await db.select().from(chatbotConversationsTable)
+      .where(and(
+        eq(chatbotConversationsTable.id, req.params.id),
+        eq(chatbotConversationsTable.tenantId, me.tenantId),
+        eq(chatbotConversationsTable.channel, "whatsapp"),
+      ))
+      .limit(1);
+    if (!conversation?.sessionId || conversation.status === "opted_out") {
+      next(new NotFoundError("WhatsApp conversation not available for delivery", "NOT_FOUND"));
+      return;
+    }
+    const sourceMessageId = `staff:${parsed.data.idempotencyKey}`;
+    const id = generateId();
+    const [created] = await db.insert(chatbotMessagesTable).values({
+      id,
+      tenantId: me.tenantId,
+      conversationId: conversation.id,
+      sourceMessageId,
+      role: "assistant",
+      content: parsed.data.content,
+      isBot: false,
+      deliveryStatus: "pending",
+    }).onConflictDoNothing().returning({ id: chatbotMessagesTable.id });
+    const [existing] = created ? [created] : await db.select({ id: chatbotMessagesTable.id })
+      .from(chatbotMessagesTable)
+      .where(and(
+        eq(chatbotMessagesTable.tenantId, me.tenantId),
+        eq(chatbotMessagesTable.sourceMessageId, sourceMessageId),
+      ))
+      .limit(1);
+    if (!existing || !await deliverAttendanceReply({
+      tenantId: me.tenantId,
+      messageId: existing.id,
+      phone: conversation.sessionId,
+    })) {
+      next(new ValidationError("Não foi possível enviar a mensagem pelo WhatsApp.", "WHATSAPP_DELIVERY_FAILED"));
+      return;
+    }
+    await db.update(chatbotConversationsTable)
+      .set({ status: "human_handoff", assignedUserId: me.id })
+      .where(eq(chatbotConversationsTable.id, conversation.id));
+    const [message] = await db.select().from(chatbotMessagesTable)
+      .where(and(eq(chatbotMessagesTable.id, id), eq(chatbotMessagesTable.tenantId, me.tenantId)))
+      .limit(1);
+    res.status(201).json(message);
   } catch (err) {
     next(err);
   }

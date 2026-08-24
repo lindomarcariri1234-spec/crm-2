@@ -26,6 +26,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { runBirthdayCron } from "./lib/birthday";
 import { processNpsDispatch, processInstallmentDueReminders, processTrialExpiryNotifications } from "./workers/reminder.worker";
+import { retryPendingAttendanceReplies } from "./services/whatsapp-attendance";
 import { runUploadThingOrphanCleanup } from "./lib/uploadthing-orphan-cleanup";
 import { runExpiredReservationsCron } from "./lib/expired-reservations";
 import { runPipelineTripEndedCron } from "./services/pipeline-automation";
@@ -434,6 +435,13 @@ applyMigrations()
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[uploadthing-orphan] node-cron fallback registered (nightly 02:00)");
 
+        cron.schedule("*/5 * * * *", () => {
+          retryPendingAttendanceReplies().catch((err) =>
+            logger.error({ err }, "[chatbot-delivery] node-cron retry failed"),
+          );
+        });
+        logger.info("[chatbot-delivery] node-cron retry registered (every 5 minutes)");
+
         return;
       }
 
@@ -547,6 +555,12 @@ applyMigrations()
             { name: "uploadthing_orphan_cleanup", data: { type: "uploadthing_orphan_cleanup" } },
           ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule uploadthing orphan cleanup"));
 
+          await reminderQueue.upsertJobScheduler(
+            "chatbot-delivery-retry",
+            { pattern: "*/5 * * * *" },
+            { name: "chatbot_delivery_retry", data: { type: "chatbot_delivery_retry" } },
+          ).catch((err) => logger.error({ err }, "[reminders] Failed to schedule chatbot delivery retry"));
+
           logger.info("[reminders] Repeatable reminder jobs registered");
         }
       } else {
@@ -586,6 +600,13 @@ applyMigrations()
           );
         }, { timezone: "America/Sao_Paulo" });
         logger.info("[uploadthing-orphan] node-cron fallback registered (nightly 02:00)");
+
+        cron.schedule("*/5 * * * *", () => {
+          retryPendingAttendanceReplies().catch((err) =>
+            logger.error({ err }, "[chatbot-delivery] node-cron retry failed"),
+          );
+        });
+        logger.info("[chatbot-delivery] node-cron retry registered (every 5 minutes)");
       }
     })();
   });

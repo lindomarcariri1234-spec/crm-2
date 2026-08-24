@@ -18,8 +18,29 @@ import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../s
 import { roundMoney } from "../lib/pricing";
 import { ValidationError, AppError } from "../lib/errors";
 import { adjustOrderSettlement, recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
+import { processEvolutionInbound } from "../services/whatsapp-attendance";
 
 const router = Router();
+
+// Evolution calls this endpoint for every inbound WhatsApp event. It is
+// instance-scoped and verifies the integration API key before resolving a
+// tenant; no tenant identifier is accepted from the external caller.
+router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const outcome = await processEvolutionInbound({
+      instanceName: req.params["instanceName"] ?? "",
+      apiKey: req.header("apikey") ?? req.header("x-api-key") ?? undefined,
+      payload: req.body,
+    });
+    if (outcome === "unauthorized") {
+      res.status(401).json({ received: false });
+      return;
+    }
+    res.status(200).json({ received: true, outcome });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // Express captures the parsed body via req.body and the raw bytes via
 // req.rawBody (see app.ts express.json verify hook). Webhook signature

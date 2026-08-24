@@ -17,6 +17,11 @@ import { RESERVATION_STATUS, PAYMENT_STATUS, ROLES } from "@workspace/permission
 import { buildEmailPropsFromReservation } from "../queues/email-helpers";
 import { generateId } from "../lib/id";
 import { MAX_AUTO_RETRY_ATTEMPTS } from "../lib/email-retry-constants";
+import {
+  deliverReservationReminderOnce,
+  resetStaleReservationReminderClaims,
+} from "../services/checkout/reservation-confirmation-outbox";
+import { retryPendingAttendanceReplies } from "../services/whatsapp-attendance";
 
 const BRAZIL_TZ = "America/Sao_Paulo";
 
@@ -60,6 +65,8 @@ function escapeHtml(str: string | null | undefined): string {
 // ────────────────────────────────────────────────────────────
 
 export async function processBoardingReminders(): Promise<void> {
+  const recovered = await resetStaleReservationReminderClaims();
+  if (recovered) logger.warn({ recovered }, "[reminder:boarding] Released stale WhatsApp claims");
   // Query a wide window (D-1 through D-14) so configurable reminder days are covered.
   // Per-tenant settings determine which days actually trigger.
   const MAX_BOARDING_REMINDER_DAYS = 14;
@@ -140,16 +147,27 @@ export async function processBoardingReminders(): Promise<void> {
       : [1];
     if (reminderDays.includes(daysUntilDeparture)) {
       const waPoints = (row.boardingPoints ?? []) as { id: string; name: string; time?: string }[];
-      await dispatchWhatsAppBoardingReminder({
+      const referenceDate = localToday();
+      const delivery = await deliverReservationReminderOnce({
         reservationId: row.reservationId,
         tenantId: row.tenantId,
-        tripName: row.tripDestination ?? row.tripName,
-        departureDate: depDate,
-        boardingPoints: waPoints,
-        tenantName: row.agencyName,
-      }).catch((err) =>
-        logger.warn({ err, reservationId: row.reservationId }, "[reminder:boarding] WhatsApp dispatch failed — non-fatal"),
-      );
+        type: "boarding_reminder",
+        referenceDate,
+        deliver: async () => {
+          return dispatchWhatsAppBoardingReminder({
+            reservationId: row.reservationId,
+            tenantId: row.tenantId,
+            tripName: row.tripDestination ?? row.tripName,
+            departureDate: depDate,
+            boardingPoints: waPoints,
+            tenantName: row.agencyName,
+            delivery: "direct",
+          });
+        },
+      });
+      if (delivery === "failed") {
+        logger.warn({ reservationId: row.reservationId }, "[reminder:boarding] WhatsApp dispatch failed — will retry");
+      }
     }
 
     // Email + push only for D-1 (traditional behavior) and only for clients with an email
@@ -251,6 +269,8 @@ export async function processBoardingReminders(): Promise<void> {
 // ────────────────────────────────────────────────────────────
 
 export async function processWhatsAppPagamentoPendente(): Promise<void> {
+  const recovered = await resetStaleReservationReminderClaims();
+  if (recovered) logger.warn({ recovered }, "[reminder:pagamento-pendente] Released stale WhatsApp claims");
   // Query confirmed reservations with outstanding balance departing in D-1..D-30
   const MAX_DAYS = 30;
   const { start: windowStart } = brazilDayWindow(1);
@@ -316,17 +336,29 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
 
     const depDateStr = formatDateBRServer(row.departureDate);
 
-    await dispatchWhatsAppPagamentoPendente({
+    const delivery = await deliverReservationReminderOnce({
       reservationId: row.reservationId,
       tenantId: row.tenantId,
-      tripName: row.tripDestination ?? row.tripName,
-      departureDate: depDateStr,
-      remainingBalance: Number(row.balance ?? 0),
-      tenantName: row.agencyName,
-    }).catch((err) =>
-      logger.warn({ err, reservationId: row.reservationId }, "[reminder:pagamento-pendente] WhatsApp dispatch failed — non-fatal"),
-    );
-    dispatched++;
+      type: "payment_pending",
+      referenceDate: localToday(),
+      deliver: async () => {
+        return dispatchWhatsAppPagamentoPendente({
+          reservationId: row.reservationId,
+          tenantId: row.tenantId,
+          tripName: row.tripDestination ?? row.tripName,
+          departureDate: depDateStr,
+          remainingBalance: Number(row.balance ?? 0),
+          tenantName: row.agencyName,
+          delivery: "direct",
+        });
+      },
+    });
+    if (delivery === "sent") dispatched++;
+    else if (delivery === "failed") {
+      logger.warn({ reservationId: row.reservationId }, "[reminder:pagamento-pendente] WhatsApp dispatch failed — will retry");
+    } else {
+      skipped++;
+    }
   }
 
   logger.info({ dispatched, skipped, total: rows.length }, "[reminder:pagamento-pendente] Run complete");
@@ -1908,6 +1940,8 @@ export function startReminderWorker(): Worker<ReminderJobData> | null {
         await processTrialExpiryNotifications();
       } else if (job.data.type === "uploadthing_orphan_cleanup") {
         await runUploadThingOrphanCleanup();
+      } else if (job.data.type === "chatbot_delivery_retry") {
+        await retryPendingAttendanceReplies();
       } else {
         logger.warn({ type: job.data.type }, "[reminder-worker] Unknown reminder type");
       }

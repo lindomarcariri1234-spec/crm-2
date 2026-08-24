@@ -414,6 +414,20 @@
       "when": 1806700000000,
       "tag": "0058_cooing_the_stranger",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1806800000000,
+      "tag": "0059_whatsapp_outbox_and_inbound_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1806900000000,
+      "tag": "0060_chatbot_outbound_delivery",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, json } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, integer, json, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -20,16 +20,30 @@ export const insertChatbotConversationSchema = createInsertSchema(chatbotConvers
 export type InsertChatbotConversation = z.infer<typeof insertChatbotConversationSchema>;
 export type ChatbotConversation = typeof chatbotConversationsTable.$inferSelect;
 
-export const chatbotMessagesTable = pgTable("chatbot_messages", {
-  id: text("id").primaryKey(),
-  conversationId: text("conversation_id").notNull(),
-  tenantId: text("tenant_id").notNull(),
-  role: text("role").notNull().default("user"),
-  content: text("content").notNull(),
-  mediaUrl: text("media_url"),
-  isBot: boolean("is_bot").notNull().default(false),
-  sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const chatbotMessagesTable = pgTable(
+  "chatbot_messages",
+  {
+    id: text("id").primaryKey(),
+    conversationId: text("conversation_id").notNull(),
+    tenantId: text("tenant_id").notNull(),
+    // Provider message IDs are the idempotency key for inbound WhatsApp
+    // deliveries, which Evolution may replay after a timeout.
+    sourceMessageId: text("source_message_id"),
+    deliveryStatus: text("delivery_status").notNull().default("sent"),
+    deliveryAttempts: integer("delivery_attempts").notNull().default(0),
+    deliveryUpdatedAt: timestamp("delivery_updated_at", { withTimezone: true }).notNull().defaultNow(),
+    lastDeliveryError: text("last_delivery_error"),
+    role: text("role").notNull().default("user"),
+    content: text("content").notNull(),
+    mediaUrl: text("media_url"),
+    isBot: boolean("is_bot").notNull().default(false),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("chatbot_messages_tenant_source_message_unique")
+      .on(table.tenantId, table.sourceMessageId),
+  ],
+);
 
 export const insertChatbotMessageSchema = createInsertSchema(chatbotMessagesTable).omit({ sentAt: true });
 export type InsertChatbotMessage = z.infer<typeof insertChatbotMessageSchema>;
