@@ -166,4 +166,36 @@ describe("initStripeSync — boot-time stripe.* table assertion", () => {
       checkedAt: expect.any(String),
     });
   });
+
+  it("still asserts stripe.accounts when no app URL is configured", async () => {
+    const originalFrontendUrl = process.env["FRONTEND_URL"];
+    const originalReplitDevDomain = process.env["REPLIT_DEV_DOMAIN"];
+
+    // The table assertion must not be gated by managed webhook registration.
+    delete process.env["FRONTEND_URL"];
+    delete process.env["REPLIT_DEV_DOMAIN"];
+    h.queryResults.push({ rows: [{ exists: true }] });
+
+    try {
+      await initStripeSync();
+    } finally {
+      if (originalFrontendUrl === undefined) {
+        delete process.env["FRONTEND_URL"];
+      } else {
+        process.env["FRONTEND_URL"] = originalFrontendUrl;
+      }
+      if (originalReplitDevDomain === undefined) {
+        delete process.env["REPLIT_DEV_DOMAIN"];
+      } else {
+        process.env["REPLIT_DEV_DOMAIN"] = originalReplitDevDomain;
+      }
+    }
+
+    expect(infoMessages().some((m) => m.includes("stripe.accounts table verified"))).toBe(true);
+    expect(warnMessages().some((m) => m.includes("No app URL available"))).toBe(true);
+    expect(getStripeSyncTablesStatus()).toEqual({
+      ok: true,
+      checkedAt: expect.any(String),
+    });
+  });
 });
