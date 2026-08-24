@@ -805,6 +805,9 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    // CSV migrations represent historical records; they must retain business data
+    // without sending new-booking messages to every client in the backup.
+    const isCsvImport = req.get("x-visitecrm-import") === "reservation-csv";
     const parsed = CreateReservationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
 
@@ -1234,7 +1237,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
       }).catch((err) => req.log.error({ err }, "Error in trip overlap detection after reservation creation"));
     }
     // Fire-and-forget: enqueue confirmation email + WhatsApp (never blocks reservation creation)
-    ;(async () => {
+    if (!isCsvImport) (async () => {
       try {
         const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, me.tenantId)).limit(1);
         if (!tenant) return;
@@ -1393,6 +1396,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const isCsvImport = req.get("x-visitecrm-import") === "reservation-csv";
     const existing = await requireReservationAccess(me, req.params.id);
 
     const parsed = UpdateReservationBody.safeParse(req.body);
@@ -2055,7 +2059,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     }
     // Send cancellation email only on a true active → cancelled transition
     // (not for "refunded", not for repeated patches on already-cancelled reservations)
-    if (parsed.data.status === RESERVATION_STATUS.CANCELLED && wasActive && existing.clientId) {
+    if (!isCsvImport && parsed.data.status === RESERVATION_STATUS.CANCELLED && wasActive && existing.clientId) {
       enqueueReservationCancellationEmail(req.params.id, me.tenantId)
         .catch((err) => req.log.error({ err }, "Error enqueueing cancellation email"));
       const loyaltyPointsRefunded = (existing.discountLoyaltyPoints ?? 0) > 0
@@ -2072,12 +2076,12 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
       ).catch((err) => req.log.error({ err }, "Error inserting cancellation client notification"));
     }
     // When a fully-paid reservation is confirmed via status change, notify the agency
-    if (isBeingConfirmed) {
+    if (!isCsvImport && isBeingConfirmed) {
       enqueueNewBookingNotificationEmail(req.params.id, me.tenantId)
         .catch((err) => req.log.error({ err }, "Error enqueueing agency new-booking notification on reservation confirmation"));
     }
     // #18: When a reservation is confirmed, push a notification to the client's mobile app
-    if (isBeingConfirmed && existing.clientId) {
+    if (!isCsvImport && isBeingConfirmed && existing.clientId) {
       (async () => {
         try {
           const [client] = await db.select({
@@ -2109,7 +2113,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
       })();
     }
     // #28: When a referral is reversed on cancellation, notify the referrer
-    if (reversedReferralInfo) {
+    if (!isCsvImport && reversedReferralInfo) {
       const { referrerId: _rrReferrerId, referredId: _rrReferredId, bonusAmount: _rrBonusAmount } = reversedReferralInfo;
       dispatchReferralReversedEmail({ referrerId: _rrReferrerId, referredId: _rrReferredId, bonusAmount: _rrBonusAmount, tenantId: me.tenantId, reason: "reservation_cancelled" })
         .catch((err) => req.log.error({ err }, "Error enqueueing referral reversal notification email"));
