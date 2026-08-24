@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   Plus, Search, MapPin, Calendar, Users, Bus, Edit, Trash2, Eye,
   ChevronsLeft, ChevronsRight, LayoutGrid, List, ChevronLeft, ChevronRight,
-  X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images,
+  X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images, Upload,
 } from "lucide-react";
 import { STATUS_MAP, TRIP_TYPES, TRIP_TYPE_LABELS } from "./constants";
 import { formatCurrency, formatDate } from "./utils";
@@ -20,19 +20,21 @@ import { TripCard, PublishToStoreDialog } from "./TripCard";
 import { useTrips } from "@/hooks/useTrips";
 import { useGetMe, useGetTenant } from "@workspace/api-client-react";
 import { PageHeader } from "@/components/page-header";
+import { TripCsvImportModal } from "./TripCsvImportModal";
 
 export function TripList() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [boardingTrip, setBoardingTrip] = useState<{ id: string; name: string } | null>(null);
   const [publishingTrip, setPublishingTrip] = useState<Trip | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const {
     trips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
     search, setSearch, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, deleteTrip, handleDuplicate, handleDelete,
-    hasActiveFilters, clearFilters,
+    hasActiveFilters, clearFilters, refetch,
   } = useTrips();
   const { data: me } = useGetMe();
   const tenantId = me?.tenantId ?? null;
@@ -56,6 +58,11 @@ export function TripList() {
         }
         actions={
           <>
+          {!isVendedor && (
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload className="w-4 h-4 mr-2" />Importar CSV
+            </Button>
+          )}
           <Link href="/trips/calendar"><Button variant="outline"><Calendar className="w-4 h-4 mr-2" />Calendário</Button></Link>
           {!isVendedor && (
             <Link href="/trips/media"><Button variant="outline"><Images className="w-4 h-4 mr-2" />Mídia</Button></Link>
@@ -238,6 +245,12 @@ export function TripList() {
           onClose={() => setPublishingTrip(null)}
         />
       )}
+
+      <TripCsvImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => { void refetch(); }}
+      />
     </div>
   );
 }
