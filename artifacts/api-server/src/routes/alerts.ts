@@ -507,11 +507,10 @@ router.post("/alerts/email-retry-exhausted/:reservationId/resolve", async (req, 
 
     const { reservationId } = req.params;
 
-    // Verify the reservation belongs to this tenant and grab its referral code
+    // Verify the reservation belongs to this tenant before resolving its email alert.
     const [reservation] = await db
       .select({
         id: reservationsTable.id,
-        discountReferralCode: reservationsTable.discountReferralCode,
       })
       .from(reservationsTable)
       .where(and(
@@ -525,14 +524,7 @@ router.post("/alerts/email-retry-exhausted/:reservationId/resolve", async (req, 
       return;
     }
 
-    if (!reservation.discountReferralCode) {
-      next(new ValidationError("Reserva não possui código de indicação", "VALIDATION_ERROR"));
-      return;
-    }
-
-    // Acknowledge the surfaced gap by stamping the COMPLETED referral rows that
-    // match this reservation's code. This mirrors the gap-detection JOIN
-    // (status=COMPLETED AND code=discount_referral_code) so the alert clears.
+    // Acknowledge the surfaced exhausted email rows for this tenant reservation.
     const now = new Date();
     await db
       .update(emailLogsTable)

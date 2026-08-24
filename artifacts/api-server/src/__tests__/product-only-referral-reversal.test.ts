@@ -15,13 +15,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //                         AND reservationId IS NULL LIMIT 1
 //
 // DB call sequence when referralId is provided:
-//   1. SELECT by id (primary)  — if found → 2 UPDATEs (client + referral)
+//   1. SELECT by id (primary)  — if found → 3 UPDATEs (client + referral + commission)
 //   2. SELECT by code (fallback, only when primary returns nothing)
-//      — if found → 2 UPDATEs
+//      — if found → 3 UPDATEs
 //      — if not found → no-op, return false
 //
 // DB call sequence when referralId is null/undefined:
-//   1. SELECT by code (fallback only) — if found → 2 UPDATEs, else no-op
+//   1. SELECT by code (fallback only) — if found → 3 UPDATEs, else no-op
 // ---------------------------------------------------------------------------
 
 vi.mock("@workspace/db", () => ({
@@ -43,11 +43,17 @@ vi.mock("@workspace/db", () => ({
     successfulReferrals: "successful_referrals",
     referralEarnings: "referral_earnings",
   },
+  referralCommissionsTable: {
+    tenantId: "tenant_id",
+    referralId: "referral_id",
+    status: "status",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
   and: vi.fn((...args: unknown[]) => ({ _and: args })),
   eq: vi.fn((col: unknown, val: unknown) => ({ _eq: [col, val] })),
+  inArray: vi.fn((col: unknown, values: unknown[]) => ({ _inArray: [col, values] })),
   isNull: vi.fn((col: unknown) => ({ _isNull: col })),
   sql: vi.fn(() => "SQL_EXPR"),
 }));
@@ -155,7 +161,7 @@ describe("reverseProductOnlyOrderReferral", () => {
       expect(result).toBe(true);
       // One SELECT (primary) + two UPDATEs; no fallback SELECT
       expect(tx.select).toHaveBeenCalledTimes(1);
-      expect(tx.update).toHaveBeenCalledTimes(2);
+      expect(tx.update).toHaveBeenCalledTimes(3);
     });
 
     it("picks the exact row when multiple COMPLETED conversions exist for the same code", async () => {
@@ -198,7 +204,7 @@ describe("reverseProductOnlyOrderReferral", () => {
 
       expect(result).toBe(true);
       expect(tx.select).toHaveBeenCalledTimes(2);
-      expect(tx.update).toHaveBeenCalledTimes(2);
+      expect(tx.update).toHaveBeenCalledTimes(3);
     });
 
     it("returns false when both primary and fallback find nothing", async () => {
@@ -236,7 +242,7 @@ describe("reverseProductOnlyOrderReferral", () => {
 
       expect(result).toBe(true);
       expect(tx.select).toHaveBeenCalledTimes(1);
-      expect(tx.update).toHaveBeenCalledTimes(2);
+      expect(tx.update).toHaveBeenCalledTimes(3);
     });
 
     it("returns false when fallback finds nothing", async () => {
@@ -380,8 +386,8 @@ describe("reverseProductOnlyOrderReferral", () => {
 
       expect(first).toBe(true);
       expect(second).toBe(false);
-      // First call: 1 SELECT + 2 UPDATEs. Second: 2 SELECTs (both empty) + 0 UPDATEs.
-      expect(updateSetCalls).toHaveLength(2);
+      // First call: 1 SELECT + 3 UPDATEs. Second: 2 SELECTs (both empty) + 0 UPDATEs.
+      expect(updateSetCalls).toHaveLength(3);
     });
   });
 });

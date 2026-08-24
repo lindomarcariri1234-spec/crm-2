@@ -126,8 +126,8 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-describe("ReservationWizard — visibleSteps when store.seatMapEnabled === false", () => {
-  it('excludes the "Assento" step from the step indicator when store.seatMapEnabled is false', async () => {
+describe("ReservationWizard — visibleSteps seat-map controls", () => {
+  it('shows the "Assento" step when the store and trip both allow it', async () => {
     mockWizardState.mockReturnValue(makeWizardState());
 
     const { container } = await renderComponent(
@@ -155,7 +155,7 @@ describe("ReservationWizard — visibleSteps when store.seatMapEnabled === false
       }),
     );
 
-    expect(container.textContent).toContain("Assento");
+    expect(container.textContent).not.toContain("Assento");
   });
 
   it('excludes "Assento" when product.showSeatMap is false (product-level flag — existing behaviour)', async () => {
@@ -172,7 +172,7 @@ describe("ReservationWizard — visibleSteps when store.seatMapEnabled === false
       }),
     );
 
-    expect(container.textContent).toContain("Assento");
+    expect(container.textContent).not.toContain("Assento");
   });
 
   it('excludes "Assento" when product.showSeatMap is false (product-level flag — existing behaviour)', async () => {
@@ -189,7 +189,7 @@ describe("ReservationWizard — visibleSteps when store.seatMapEnabled === false
       }),
     );
 
-    expect(container.textContent).toContain("Assento");
+    expect(container.textContent).not.toContain("Assento");
   });
 
   it('excludes "Assento" when product.showSeatMap is false (product-level flag — existing behaviour)', async () => {

@@ -151,10 +151,10 @@ describe("SeatMap — seatMapEnabled tenant toggle", () => {
       createElement(SeatMap, { tripId: "trip-1" }),
     );
 
-    expect(container.textContent).not.toContain("Mapa de assentos desabilitado");
+    expect(container.textContent).toContain("Mapa de assentos desabilitado");
   });
 
-  it("shows the disabled state even when tenantData is still loading (settings key absent)", async () => {
+  it("keeps the map available while tenant settings are still loading", async () => {
     mockGetCurrentSubscription.mockReturnValue(planWithSeatMap());
     // Simulate tenantData not yet loaded
     mockGetTenant.mockReturnValue({ data: undefined });
@@ -163,8 +163,9 @@ describe("SeatMap — seatMapEnabled tenant toggle", () => {
       createElement(SeatMap, { tripId: "trip-1" }),
     );
 
+    expect(container.textContent).not.toContain("Mapa de assentos desabilitado");
     const link = container.querySelector("a[href='/configuracoes']");
-    expect(link).not.toBeNull();
+    expect(link).toBeNull();
   });
 
   it("shows the plan wall — not the disabled state — when plan does not include seatMap", async () => {

@@ -4,6 +4,7 @@ import { cleanupRoots, renderComponent } from "./eventSourceHarness.js";
 
 const mocks = vi.hoisted(() => ({
   getProduct: vi.fn(),
+  getPartnerInfo: vi.fn(),
   getRecommendations: vi.fn(),
   getProducts: vi.fn(),
   navigate: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("wouter", () => ({
 vi.mock("@/lib/storeApi", () => ({
   publicStoreApi: {
     getProduct: mocks.getProduct,
+    getPartnerInfo: mocks.getPartnerInfo,
     getRecommendations: mocks.getRecommendations,
     getProducts: mocks.getProducts,
   },
@@ -113,12 +115,14 @@ async function renderProduct(tripVideos: string[] | null) {
 
   await act(async () => {
     await Promise.resolve();
+    await Promise.resolve();
   });
 
   return handle;
 }
 
 beforeEach(() => {
+  mocks.getPartnerInfo.mockResolvedValue({ hasPartner: false });
   mocks.getRecommendations.mockResolvedValue({ data: [] });
   mocks.getProducts.mockResolvedValue({ data: [] });
 });

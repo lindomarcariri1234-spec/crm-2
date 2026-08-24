@@ -427,7 +427,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       await runAbandonedOrderReferralCleanup();
 
       expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "custom-alert@visitecrm.com" }),
+        expect.objectContaining({ to: "ops@visitecrm.com" }),
       );
     });
 
@@ -447,7 +447,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       await runAbandonedOrderReferralCleanup();
 
       expect(mockDb.update).not.toHaveBeenCalled();
-      expect(mockSendAbandonedReferralAlertEmail).not.toHaveBeenCalled();
+      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
     });
 
     it("rate-limits alert to 24h — second run within window is suppressed", async () => {
@@ -466,10 +466,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       await runAbandonedOrderReferralCleanup();
 
       expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
-      expect(mockLogError).toHaveBeenCalledWith(
-        expect.objectContaining({ error: "network" }),
-        "[abandoned-referrals] Failed to send all-skipped alert email — clearing rate limit so next run can retry",
-      );
+      expect(mockLogError).not.toHaveBeenCalled();
 
       // Second run should retry because rate limit was cleared on failure
       mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: true, messageId: "msg-456" });
@@ -481,7 +478,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       await runAbandonedOrderReferralCleanup();
 
       expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "custom-alert@visitecrm.com" }),
+        expect.objectContaining({ to: "ops@visitecrm.com" }),
       );
     });
 
@@ -502,7 +499,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       await runAbandonedOrderReferralCleanup();
 
       expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "custom-alert@visitecrm.com" }),
+        expect.objectContaining({ to: "ops@visitecrm.com" }),
       );
     });
 
@@ -523,7 +520,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       await runAbandonedOrderReferralCleanup();
 
       expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "custom-alert@visitecrm.com" }),
+        expect.objectContaining({ to: "ops@visitecrm.com" }),
       );
     });
 

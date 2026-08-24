@@ -40,6 +40,7 @@ vi.mock("@workspace/db", () => ({
   commissionsTable: {},
   storeCouponsTable: {},
   storesTable: {},
+  vehicleLayoutsTable: {},
 }));
 
 // Single source of truth for the drizzle-orm mock.  To add a new operator,
@@ -117,6 +118,7 @@ vi.mock("../lib/reservation-number.js", () => ({
 vi.mock("../lib/passenger.js", () => ({
   deriveAgeCategory: vi.fn(() => "adult"),
   getAgeYears: vi.fn(() => 30),
+  syncIsChildUnder7: vi.fn().mockResolvedValue(false),
 }));
 
 import { requireAuth } from "../lib/tenant.js";
@@ -228,6 +230,7 @@ describe("POST /api/reservations — commission sync resilience", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLimit.mockReset();
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
     mockLimit.mockResolvedValue([]);
     mockWhere.mockReturnValue({ limit: mockLimit });
@@ -299,6 +302,7 @@ describe("PATCH /api/reservations/:reservationId/passengers/:id — seat update 
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLimit.mockReset();
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
     mockLimit.mockResolvedValue([]);
     mockWhere.mockReturnValue({ limit: mockLimit });

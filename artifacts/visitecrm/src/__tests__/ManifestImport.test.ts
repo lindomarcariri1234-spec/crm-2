@@ -11,11 +11,10 @@ describe("Manifest XLSX import", () => {
       ["RES-001", "Excursão Natal", "15/12/2026", "Ana Costa", "123.456.789-00", "12"],
     ]);
     const workbookData = await workbook.xlsx.writeBuffer();
-    const file = new File(
-      [workbookData],
-      "manifesto.xlsx",
-      { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
-    );
+    const file = {
+      name: "manifesto.xlsx",
+      arrayBuffer: async () => workbookData,
+    } as File;
 
     await expect(parseManifestFile(file)).resolves.toMatchObject({
       headers: ["Nº Reserva", "Viagem", "Data de Saída", "Passageiro", "CPF", "Poltrona"],

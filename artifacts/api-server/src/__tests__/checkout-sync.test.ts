@@ -114,6 +114,7 @@ vi.mock("@workspace/db", () => {
     clientsTable: {},
     usersTable: {},
     referralsTable: {},
+    settlementItemsTable: {},
     referralTrackingTable: {},
     referralSettingsTable: {},
     pipelineStagesTable: {},
@@ -344,10 +345,8 @@ function setupTripLinkedCheckoutQueue() {
     [FAKE_STORE],                                                 // 1. getActiveStore (db)
     [FAKE_TRIP_PRODUCT],                                          // 2. product fetch (db, prepareCheckoutItems)
     [{ availableSeats: 10 }],                                     // 3. trip seats check (db, prepareCheckoutItems)
-    [{ id: "user-001" }],                                         // 4. admin user (tx, persist-order)
-    [{ id: "client-001", cpf: null, birthDate: null }],           // 5. existing client (tx, upsertCheckoutClient)
-    [FAKE_ORDER],                                                 // 6. post-tx order (db)
-    [],                                                           // 7. post-tx items (db)
+    [FAKE_ORDER],                                                 // 4. post-tx order (db)
+    [],                                                           // 5. post-tx items (db)
   );
 }
 
@@ -612,10 +611,8 @@ describe("POST /api/public/store/:slug/orders — idempotency key dedup", () => 
       [], // 2. idempotency-key upfront lookup — none found
       [FAKE_TRIP_PRODUCT], // 3. product fetch
       [{ availableSeats: 10 }], // 4. trip seats check
-      [{ id: "user-001" }], // 5. admin user (tx)
-      [{ id: "client-001", cpf: null, birthDate: null }], // 6. existing client (tx)
-      [FAKE_ORDER], // 7. post-tx order
-      [], // 8. post-tx items
+      [FAKE_ORDER], // 5. post-tx order
+      [], // 6. post-tx items
     );
     mockCreateReservationsForOrder.mockResolvedValue({
       reservationIds: ["res-001"],
@@ -730,10 +727,8 @@ describe("POST /api/public/store/:slug/orders — referral PENDING row at checko
         minPurchaseAmount: null,
         maxReferralsPerUser: null,
       }],
-      [{ id: "user-001" }],                 // 7. admin user (tx, persistCheckoutOrder)
-      [{ id: "client-001", cpf: null, birthDate: null }], // 8. existing client (tx, upsertCheckoutClient)
-      [FAKE_ORDER],                         // 9. post-tx order re-fetch
-      [],                                   // 10. post-tx items re-fetch
+      [FAKE_ORDER],                         // 7. post-tx order re-fetch
+      [],                                   // 8. post-tx items re-fetch
     );
 
     // Override the transaction mock for this test so we can capture the tx

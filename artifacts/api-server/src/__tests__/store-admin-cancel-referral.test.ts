@@ -21,14 +21,15 @@ import request from "supertest";
 // vi.hoisted: shared mocks that must exist before any vi.mock() factory
 // ---------------------------------------------------------------------------
 
-const { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, selectQueue, mockUpdateReturning } = vi.hoisted(() => {
+const { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning } = vi.hoisted(() => {
   const selectQueue: Array<unknown[]> = [];
   // Default returns true / [] to avoid mock noise
   const mockReverseProductOnly = vi.fn().mockResolvedValue(true);
   const mockReverseTripOrder = vi.fn().mockResolvedValue([]);
   const mockCancelPartnerItems = vi.fn().mockResolvedValue(undefined);
+  const mockReverseOrderSettlement = vi.fn().mockResolvedValue(undefined);
   const mockUpdateReturning = vi.fn();
-  return { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, selectQueue, mockUpdateReturning };
+  return { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning };
 });
 
 // ---------------------------------------------------------------------------
@@ -100,6 +101,11 @@ vi.mock("drizzle-orm", async () => {
   const { makeDrizzleOrmMock } = await import("./helpers/drizzle-mock.js");
   return makeDrizzleOrmMock();
 });
+
+vi.mock("../services/settlements/financial-ledger.js", () => ({
+  reverseOrderSettlement: mockReverseOrderSettlement,
+  recordOrderPaymentSettlement: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("@clerk/express", () => ({
   clerkClient: vi.fn(),

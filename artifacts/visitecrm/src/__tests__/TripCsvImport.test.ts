@@ -152,11 +152,10 @@ describe("trip CSV import", () => {
       ["Férias em Natal", "Praias", "Natal", "RN", "15/12/2026", 1890.5, 46],
     ]);
     const workbookData = await workbook.xlsx.writeBuffer();
-    const file = new File(
-      [workbookData],
-      "viagens.xlsx",
-      { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
-    );
+    const file = {
+      name: "viagens.xlsx",
+      arrayBuffer: async () => workbookData,
+    } as File;
 
     await expect(parseTripFile(file)).resolves.toEqual({
       headers: ["Nome", "Destino", "Cidade de Destino", "Estado de Destino", "Data de Saída", "Preço Adulto", "Capacidade"],

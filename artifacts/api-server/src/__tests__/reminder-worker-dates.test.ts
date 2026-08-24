@@ -52,6 +52,14 @@ vi.mock("../queues/whatsapp-helpers.js", () => ({
   getWhatsAppNotificationSettings: mockNotificationSettings,
 }));
 
+vi.mock("../services/checkout/reservation-confirmation-outbox.js", () => ({
+  resetStaleReservationReminderClaims: vi.fn().mockResolvedValue(0),
+  deliverReservationReminderOnce: vi.fn(async ({ deliver }: { deliver: () => Promise<unknown> }) => {
+    await deliver();
+    return "sent";
+  }),
+}));
+
 import {
   processBoardingReminders,
   processWhatsAppPagamentoPendente,

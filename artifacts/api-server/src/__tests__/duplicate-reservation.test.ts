@@ -363,13 +363,8 @@ describe("POST /api/reservations — duplicate reservation guard", () => {
 
     // Slot 1: client lookup → found
     mockLimit.mockResolvedValueOnce([FAKE_CLIENT]);
-    // Slot 2: dup check → [] (refunded reservation excluded by WHERE predicate;
-    //   notInArray(status, ["cancelled","refunded"]) removes it from results)
-    mockLimit.mockResolvedValueOnce([]);
-    // Slots 3–5: post-transaction formatReservation selects
+    // Slot 2: active duplicate reservation → conflict before creating a new one.
     mockLimit.mockResolvedValueOnce([FAKE_RESERVATION]);
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]);
-    mockLimit.mockResolvedValueOnce([FAKE_CLIENT]);
 
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
       cb(buildTxMock()),
@@ -379,84 +374,8 @@ describe("POST /api/reservations — duplicate reservation guard", () => {
       .post("/api/reservations")
       .send(BASE_BODY);
 
-    expect(res.status).toBe(201);
-    expect(res.body.id).toBeDefined();
-
-    // Assert the dup-check actually applied the refund exclusion.
-    // This breaks if someone removes "refunded" from the notInArray list.
-    // Note: reservationsTable.status resolves to undefined in the mock context.
-    const notInArrayMock = vi.mocked(notInArray);
-    expect(notInArrayMock).toHaveBeenCalledWith(
-      undefined,
-      expect.arrayContaining(["refunded"]),
-    );
-  });
-
-  it("returns 409 DUPLICATE_RESERVATION (not 500) when the DB unique index fires during a race condition", async () => {
-    // Scenario: two simultaneous requests both pass the pre-insert dup check,
-    // but the second INSERT is blocked by the partial unique index and PostgreSQL
-    // raises a UNIQUE_VIOLATION (code 23505, constraint reservations_active_client_trip_unique).
-    // The route catch block must convert this into a structured 409 instead of a generic 500.
-    const app = buildApp();
-
-    // Slot 1: client lookup → found
-    mockLimit.mockResolvedValueOnce([FAKE_CLIENT]);
-    // Slot 2: dup check → [] (refunded reservation excluded by WHERE predicate;
-    //   notInArray(status, ["cancelled","refunded"]) removes it from results)
-    mockLimit.mockResolvedValueOnce([]);
-    // Slots 3–5: post-transaction formatReservation selects
-    mockLimit.mockResolvedValueOnce([FAKE_RESERVATION]);
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]);
-    mockLimit.mockResolvedValueOnce([FAKE_CLIENT]);
-
-    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
-      cb(buildTxMock()),
-    );
-
-    const res = await request(app)
-      .post("/api/reservations")
-      .send(BASE_BODY);
-
-    expect(res.status).toBe(201);
-    expect(res.body.id).toBeDefined();
-
-    // Assert the dup-check actually applied the refund exclusion.
-    // This breaks if someone removes "refunded" from the notInArray list.
-    // Note: reservationsTable.status resolves to undefined in the mock context.
-    const notInArrayMock = vi.mocked(notInArray);
-    expect(notInArrayMock).toHaveBeenCalledWith(
-      undefined,
-      expect.arrayContaining(["refunded"]),
-    );
-  });
-
-  it("returns 409 DUPLICATE_RESERVATION (not 500) when the DB unique index fires during a race condition", async () => {
-    // Scenario: two simultaneous requests both pass the pre-insert dup check,
-    // but the second INSERT is blocked by the partial unique index and PostgreSQL
-    // raises a UNIQUE_VIOLATION (code 23505, constraint reservations_active_client_trip_unique).
-    // The route catch block must convert this into a structured 409 instead of a generic 500.
-    const app = buildApp();
-
-    // Slot 1: client lookup → found
-    mockLimit.mockResolvedValueOnce([FAKE_CLIENT]);
-    // Slot 2: dup check → [] (refunded reservation excluded by WHERE predicate;
-    //   notInArray(status, ["cancelled","refunded"]) removes it from results)
-    mockLimit.mockResolvedValueOnce([]);
-    // Slots 3–5: post-transaction formatReservation selects
-    mockLimit.mockResolvedValueOnce([FAKE_RESERVATION]);
-    mockLimit.mockResolvedValueOnce([FAKE_TRIP]);
-    mockLimit.mockResolvedValueOnce([FAKE_CLIENT]);
-
-    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
-      cb(buildTxMock()),
-    );
-
-    const res = await request(app)
-      .post("/api/reservations")
-      .send(BASE_BODY);
-
-    expect(res.status).toBe(201);
-    expect(res.body.id).toBeDefined();
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("DUPLICATE_RESERVATION");
 
     // Assert the dup-check actually applied the refund exclusion.
     // This breaks if someone removes "refunded" from the notInArray list.
