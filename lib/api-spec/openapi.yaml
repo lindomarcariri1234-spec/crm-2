@@ -1882,6 +1882,14 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: dateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateTo
+          in: query
+          schema:
+            type: ["string", "null"]
         - name: page
           in: query
           schema:
@@ -11713,6 +11721,14 @@ paths:
           schema:
             type: ["string", "null"]
         - name: type
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateTo
           in: query
           schema:
             type: ["string", "null"]

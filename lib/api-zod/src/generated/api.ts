@@ -2680,6 +2680,8 @@ export const ListPaymentsQueryParams = zod.object({
   clientId: zod.coerce.string().nullish(),
   status: zod.coerce.string().nullish(),
   type: zod.coerce.string().nullish(),
+  dateFrom: zod.coerce.string().nullish(),
+  dateTo: zod.coerce.string().nullish(),
   page: zod.coerce.number().default(listPaymentsQueryPageDefault),
   limit: zod.coerce.number().default(listPaymentsQueryLimitDefault),
 });
