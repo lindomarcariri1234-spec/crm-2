@@ -633,3 +633,85 @@ describe("PassengersList — busca textual: integração no componente", () => {
     expect(container.textContent).toContain("Bebê Silva");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Component integration tests — renders PassengersList and interacts with the
+// boarding-status filter Select via selectRegistry.
+//
+// Select rendering order with boardingPoints=[]:
+//   index 0 → export-status filter
+//   index 1 → category filter
+//   index 2 → boarding-status filter  ← target
+// ---------------------------------------------------------------------------
+
+describe("PassengersList — filtro de status de embarque: integração no componente", () => {
+  beforeEach(() => {
+    selectRegistry.clear();
+    inputRegistry.clear();
+    mockGetTrip.mockReturnValue({ data: undefined });
+    mockGetTripBoardingPanel.mockReturnValue(panelData([
+      makeBaby({ name: "Bebê Silva" }),
+      makeAdult({ name: "João Adulto", checkedInAt: "2026-08-24T10:00:00.000Z" }),
+    ]));
+    mockToast.mockReturnValue(undefined);
+    mockRefetch.mockResolvedValue({});
+  });
+
+  afterEach(async () => {
+    await cleanupRoots();
+    vi.clearAllMocks();
+    selectRegistry.clear();
+    inputRegistry.clear();
+  });
+
+  it("com 'embarcado', mostra apenas passageiros com check-in e esconde o bebê de colo", async () => {
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+
+    const triggerBoardingStatus = selectRegistry.get(2);
+    expect(triggerBoardingStatus).toBeDefined();
+
+    await flushAct(() => { triggerBoardingStatus!("embarcado"); });
+
+    const rows = container.querySelectorAll("tbody tr");
+    expect(rows).toHaveLength(1);
+    expect(container.textContent).toContain("João Adulto");
+    expect(container.textContent).not.toContain("Bebê Silva");
+  });
+
+  it("com 'pendente', mostra apenas passageiros sem check-in", async () => {
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+
+    const triggerBoardingStatus = selectRegistry.get(2);
+    expect(triggerBoardingStatus).toBeDefined();
+
+    await flushAct(() => { triggerBoardingStatus!("pendente"); });
+
+    const rows = container.querySelectorAll("tbody tr");
+    expect(rows).toHaveLength(1);
+    expect(container.textContent).toContain("Bebê Silva");
+    expect(container.textContent).not.toContain("João Adulto");
+  });
+
+  it("ao voltar para 'all', faz todos os passageiros reaparecerem", async () => {
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+
+    const triggerBoardingStatus = selectRegistry.get(2);
+    expect(triggerBoardingStatus).toBeDefined();
+
+    await flushAct(() => { triggerBoardingStatus!("embarcado"); });
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
+
+    await flushAct(() => { triggerBoardingStatus!("all"); });
+
+    const rows = container.querySelectorAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(container.textContent).toContain("João Adulto");
+    expect(container.textContent).toContain("Bebê Silva");
+  });
+});
