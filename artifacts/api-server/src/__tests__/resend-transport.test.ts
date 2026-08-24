@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockProxy = vi.fn();
 
-import { createConnectorResend } from "../../../../lib/email/src/resend-transport.js";
+import { createApiKeyResend, createConnectorResend } from "../../../../lib/email/src/resend-transport.js";
 
 const message = {
   from: "CRM <sender@unverified.example>",
@@ -16,6 +16,7 @@ beforeEach(() => {
   vi.stubEnv("RESEND_FROM_EMAIL", "");
   vi.stubEnv("NODE_ENV", "development");
 });
+
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -85,5 +86,52 @@ describe("Replit Resend connector transport", () => {
 
     const request = mockProxy.mock.calls[0]?.[2] as { body: Record<string, unknown> };
     expect(request.body.from).toBe("VisiteCRM <noreply@verified.example>");
+  });
+
+  it("refuses production delivery when no sender is configured", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+
+    const result = await createConnectorResend({ proxy: mockProxy }).emails.send({
+      ...message,
+      text: "Hello",
+    });
+
+    expect(result.data).toBeNull();
+    expect(result.error?.message).toBe("RESEND_FROM_EMAIL must be configured in production");
+    expect(mockProxy).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured sender with a direct Resend API key", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RESEND_FROM_EMAIL", "VisiteCRM <reservas@resend.visitecrm.com>");
+    const mockSend = vi.fn().mockResolvedValue({ data: { id: "email_direct_123" }, error: null });
+    const directClient = { emails: { send: mockSend } } as Parameters<typeof createApiKeyResend>[1];
+
+    const result = await createApiKeyResend("re_test", directClient).emails.send({
+      ...message,
+      text: "Hello",
+    });
+
+    expect(result).toEqual({ data: { id: "email_direct_123" }, error: null });
+    expect(mockSend).toHaveBeenCalledWith({
+      ...message,
+      text: "Hello",
+      from: "VisiteCRM <reservas@resend.visitecrm.com>",
+    });
+  });
+
+  it("refuses direct API key delivery in production without a configured sender", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const mockSend = vi.fn();
+    const directClient = { emails: { send: mockSend } } as Parameters<typeof createApiKeyResend>[1];
+
+    const result = await createApiKeyResend("re_test", directClient).emails.send({
+      ...message,
+      text: "Hello",
+    });
+
+    expect(result.data).toBeNull();
+    expect(result.error?.message).toBe("RESEND_FROM_EMAIL must be configured in production");
+    expect(mockSend).not.toHaveBeenCalled();
   });
 });

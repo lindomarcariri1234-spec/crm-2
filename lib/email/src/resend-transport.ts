@@ -39,8 +39,9 @@ function serializeAttachment(attachment: ConnectorAttachment): ConnectorAttachme
   return { ...attachment, content: attachment.content.toString("base64") };
 }
 
-function resolveFromAddress(from: unknown): unknown {
-  if (process.env["RESEND_FROM_EMAIL"]) return process.env["RESEND_FROM_EMAIL"];
+function resolveFromAddress(): string {
+  const configuredFrom = process.env["RESEND_FROM_EMAIL"]?.trim();
+  if (configuredFrom) return configuredFrom;
 
   // Resend's test sender permits the non-production delivery check without a
   // customer-owned domain. Production continues to use the configured sender
@@ -49,7 +50,7 @@ function resolveFromAddress(from: unknown): unknown {
     return "VisiteCRM <onboarding@resend.dev>";
   }
 
-  return from;
+  throw new Error("RESEND_FROM_EMAIL must be configured in production");
 }
 
 function toConnectorPayload(payload: EmailPayload): Record<string, unknown> {
@@ -71,7 +72,7 @@ function toConnectorPayload(payload: EmailPayload): Record<string, unknown> {
 
   return {
     ...rest,
-    from: resolveFromAddress(rest.from),
+    from: resolveFromAddress(),
     ...(html ? { html } : {}),
     ...(attachments ? { attachments: attachments.map(serializeAttachment) } : {}),
   };
@@ -116,6 +117,29 @@ export function createConnectorResend(
   } as unknown as Resend;
 }
 
+export function createApiKeyResend(
+  apiKey: string,
+  client: Resend = new Resend(apiKey),
+): Resend {
+  return {
+    emails: {
+      send: async (payload: EmailPayload): Promise<EmailSendResponse> => {
+        try {
+          return await client.emails.send({
+            ...payload,
+            from: resolveFromAddress(),
+          });
+        } catch (error) {
+          return {
+            data: null,
+            error: { message: error instanceof Error ? error.message : String(error) },
+          } as EmailSendResponse;
+        }
+      },
+    },
+  } as unknown as Resend;
+}
+
 /**
  * Prefer a direct key outside Replit, then use the attached Replit Resend
  * connector. This keeps local deployments working while avoiding a copied API
@@ -123,5 +147,5 @@ export function createConnectorResend(
  */
 export function getResend(): Resend {
   const key = process.env["RESEND_API_KEY"];
-  return key ? new Resend(key) : createConnectorResend();
+  return key ? createApiKeyResend(key) : createConnectorResend();
 }
