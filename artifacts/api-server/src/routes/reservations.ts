@@ -317,6 +317,53 @@ function formatPassenger(p: typeof passengersTable.$inferSelect) {
   };
 }
 
+const ManifestImportRowSchema = z.object({
+  line: z.number().int().positive(),
+  reservationNumber: z.string().trim().min(1).max(120),
+  tripName: z.string().trim().min(1).max(500),
+  departureDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  name: z.string().trim().min(1).max(500),
+  cpf: z.string().trim().max(32).optional(),
+  birthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  ageCategory: z.enum(["adult", "child", "baby", "senior"]).optional(),
+  seatNumber: z.string().trim().max(80).optional(),
+  boardingPoint: z.string().trim().max(300).optional(),
+  phone: z.string().trim().max(80).optional(),
+  status: z.string().trim().max(120).optional(),
+});
+
+const ManifestImportBodySchema = z.object({
+  rows: z.array(ManifestImportRowSchema).min(1).max(2_000),
+});
+
+function normalizeManifestText(value: string): string {
+  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function brazilDateKey(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(value);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function utcDateKey(value: Date): string {
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`;
+}
+
+function tripMatchesManifestDate(value: Date, expected: string): boolean {
+  // Older records may have used UTC midnight for a date-only departure.
+  // Match that legacy representation as well as Brazil's civil calendar date.
+  return brazilDateKey(value) === expected || utcDateKey(value) === expected;
+}
+
+function manifestDate(value: string): Date {
+  // Noon UTC safely represents a date-only field without accidentally moving it
+  // to the preceding Brazil calendar date.
+  return new Date(`${value}T12:00:00.000Z`);
+}
+
 const ValidateCouponBodySchema = z.object({
   code: z.string().min(1),
   subtotal: z.number().positive(),
@@ -2368,6 +2415,120 @@ router.get("/reservations/:reservationId/passengers", async (req, res, next: Nex
     const passengers = await db.select().from(passengersTable)
       .where(eq(passengersTable.reservationId, req.params.reservationId));
     res.json(passengers.map(formatPassenger));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/reservations/import-manifest", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+    }
+    const parsed = ManifestImportBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError("Linhas do manifesto inválidas.", "VALIDATION_ERROR")); return;
+    }
+
+    const reservationNumbers = [...new Set(parsed.data.rows.map(row => row.reservationNumber))];
+    const reservationRows = await db.select({ reservation: reservationsTable, trip: tripsTable })
+      .from(reservationsTable)
+      .innerJoin(tripsTable, and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, reservationsTable.tenantId)))
+      .where(and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.reservationNumber, reservationNumbers)));
+    const reservationIds = reservationRows.map(row => row.reservation.id);
+    const passengerRows = reservationIds.length
+      ? await db.select().from(passengersTable).where(inArray(passengersTable.reservationId, reservationIds))
+      : [];
+    const passengersByReservation = new Map<string, typeof passengerRows>();
+    for (const passenger of passengerRows) {
+      const list = passengersByReservation.get(passenger.reservationId) ?? [];
+      list.push(passenger);
+      passengersByReservation.set(passenger.reservationId, list);
+    }
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const seen = new Set<string>();
+
+    for (const row of parsed.data.rows) {
+      const candidates = reservationRows.filter(candidate =>
+        candidate.reservation.reservationNumber === row.reservationNumber
+        && normalizeManifestText(candidate.trip.name) === normalizeManifestText(row.tripName)
+        && tripMatchesManifestDate(candidate.trip.departureDate, row.departureDate),
+      );
+      if (candidates.length === 0) {
+        skipped++; errors.push(`Linha ${row.line}: reserva ${row.reservationNumber} para "${row.tripName}" em ${row.departureDate} não foi encontrada nesta agência.`);
+        continue;
+      }
+      if (candidates.length > 1) {
+        skipped++; errors.push(`Linha ${row.line}: a referência da reserva ${row.reservationNumber} é ambígua.`);
+        continue;
+      }
+
+      const candidate = candidates[0];
+      const duplicateKey = `${candidate.reservation.id}|${row.cpf ?? `${normalizeManifestText(row.name)}|${row.birthDate ?? ""}`}`;
+      if (seen.has(duplicateKey)) {
+        skipped++; errors.push(`Linha ${row.line}: passageiro duplicado no arquivo para a mesma reserva.`);
+        continue;
+      }
+      seen.add(duplicateKey);
+
+      const current = passengersByReservation.get(candidate.reservation.id) ?? [];
+      const byCpf = row.cpf ? current.filter(passenger => passenger.cpf?.replace(/\D/g, "") === row.cpf!.replace(/\D/g, "")) : [];
+      const byName = !row.cpf ? current.filter(passenger =>
+        normalizeManifestText(passenger.name) === normalizeManifestText(row.name)
+        && (!row.birthDate || (passenger.birthDate != null && brazilDateKey(passenger.birthDate) === row.birthDate)),
+      ) : [];
+      const matches = byCpf.length ? byCpf : byName;
+      if (matches.length > 1) {
+        skipped++; errors.push(`Linha ${row.line}: há mais de um passageiro correspondente na reserva ${row.reservationNumber}.`);
+        continue;
+      }
+
+      let boardingLocationId: string | undefined;
+      if (row.boardingPoint) {
+        const boardingPoints = candidate.trip.boardingPoints ?? [];
+        const boarding = boardingPoints.find(point => normalizeManifestText(point.name) === normalizeManifestText(row.boardingPoint!));
+        if (boarding) boardingLocationId = boarding.id;
+        else warnings.push(`Linha ${row.line}: ponto de embarque "${row.boardingPoint}" não existe nesta viagem; ele não foi alterado.`);
+      }
+      if (row.status) {
+        warnings.push(`Linha ${row.line}: status "${row.status}" foi informado apenas como referência; check-in não é alterado pela importação.`);
+      }
+      const ageCategory = row.ageCategory ?? undefined;
+      const values = {
+        name: row.name,
+        ...(row.cpf ? { cpf: row.cpf } : {}),
+        ...(row.birthDate ? { birthDate: manifestDate(row.birthDate) } : {}),
+        ...(ageCategory ? { ageCategory, isChildUnder7: syncIsChildUnder7(ageCategory) } : {}),
+        ...(row.seatNumber ? { seatNumber: row.seatNumber } : {}),
+        ...(row.phone ? { phone: row.phone } : {}),
+        ...(boardingLocationId ? { boardingLocationId } : {}),
+      };
+
+      if (matches.length === 1) {
+        await db.update(passengersTable).set(values).where(eq(passengersTable.id, matches[0].id));
+        updated++;
+      } else {
+        const id = generateId();
+        const category = ageCategory ?? "adult";
+        const inserted = {
+          id, reservationId: candidate.reservation.id, ...values,
+          ageCategory: category, isChildUnder7: syncIsChildUnder7(category),
+        };
+        await db.insert(passengersTable).values(inserted);
+        current.push({ ...inserted, cpf: inserted.cpf ?? null, birthDate: inserted.birthDate ?? null, seatNumber: inserted.seatNumber ?? null, phone: inserted.phone ?? null, boardingLocationId: inserted.boardingLocationId ?? null, rg: null, isPrimary: false, checkedInAt: null, disembarkLocationId: null, observations: null, specialNeeds: null, documentType: null });
+        passengersByReservation.set(candidate.reservation.id, current);
+        created++;
+      }
+      broadcastSeatUpdate(candidate.reservation.tripId, me.tenantId).catch(() => {});
+    }
+    res.json({ created, updated, skipped, errors, warnings });
   } catch (err) {
     next(err);
   }
