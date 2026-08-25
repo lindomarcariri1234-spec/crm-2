@@ -29,6 +29,11 @@ vi.mock("@workspace/db", () => ({
     successfulReferrals: "successful_referrals",
     referralEarnings: "referral_earnings",
   },
+  referralCommissionsTable: {
+    tenantId: "tenant_id",
+    referralId: "referral_id",
+    status: "status",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -147,7 +152,7 @@ describe("reverseTripOrderReferrals", () => {
 
     expect(result).toEqual(["ref-001"]);
     expect(tx.select).toHaveBeenCalledTimes(1);
-    expect(tx.update).toHaveBeenCalledTimes(2); // client + referral
+    expect(tx.update).toHaveBeenCalledTimes(3); // client + referral + commission
 
     // Client decrement uses GREATEST-guarded SQL
     expect(updateSetCalls[0]).toMatchObject({
@@ -178,7 +183,7 @@ describe("reverseTripOrderReferrals", () => {
     expect(result).toEqual(["ref-001", "ref-002"]);
     expect(tx.select).toHaveBeenCalledTimes(1);
     // Two referrals → 2 client updates + 2 referral updates
-    expect(tx.update).toHaveBeenCalledTimes(4);
+    expect(tx.update).toHaveBeenCalledTimes(6);
 
     // Both referrers got decremented
     const clientUpdates = updateSetCalls.filter((d) => d.successfulReferrals !== undefined);
@@ -262,7 +267,7 @@ describe("reverseTripOrderReferrals", () => {
     // assert the exact interpolated value here, but the real code passes
     // bonusToReverse.toFixed(2) into the template. We verify the update
     // count and structure instead.
-    expect(tx.update).toHaveBeenCalledTimes(2);
+    expect(tx.update).toHaveBeenCalledTimes(3);
     expect(updateSetCalls[0]).toMatchObject({
       successfulReferrals: "SQL_EXPR",
       referralEarnings: "SQL_EXPR",
@@ -281,7 +286,7 @@ describe("reverseTripOrderReferrals", () => {
     });
 
     expect(result).toEqual(["ref-001"]);
-    expect(tx.update).toHaveBeenCalledTimes(2);
+    expect(tx.update).toHaveBeenCalledTimes(3);
     expect(updateSetCalls[1]).toMatchObject({
       status: "reversed",
       reversalReason: "order_cancelled",
