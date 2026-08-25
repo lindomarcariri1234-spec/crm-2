@@ -1,4 +1,984 @@
-                     <label className="flex items-center gap-2 cursor-pointer text-sm">
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useLocation, useSearch } from "wouter";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useListClients, useCreateClient, useUpdateClient,
+  useListPipelineStages, useListTrips, useListUsers,
+  useCreateDeal, useListPayments, useCreateReservation,
+  useCalculateCommission, useGetMe, useDeleteClient,
+} from "@workspace/api-client-react";
+import type { Client } from "@workspace/api-client-react";
+import { Client360Modal } from "@/components/client360-modal";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
+import {
+  Plus, Search, Users, TrendingUp, UserCheck, MoreHorizontal,
+  MapPin, Download, Upload, ChevronLeft, ChevronRight,
+  X, ArrowUpDown, ArrowUp, ArrowDown, AlertCircle, Trash2, Copy,
+  GitMerge, ChevronDown, ChevronUp, Loader2, ShieldAlert,
+} from "lucide-react";
+import { PageHeader } from "@/components/page-header";
+import { format, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import { formatDateBR, localToday, isValidBrazilWhatsAppPhone } from "@workspace/shared";
+import { useToast } from "@/hooks/use-toast";
+import { SeatMapPicker } from "@/components/SeatMapPicker";
+import { PlanLimitWall, usePlanLimitError } from "@/components/plan-limit-wall";
+
+import { formatCurrency } from "@/lib/utils";
+import {
+  generatedImportedClientEmail,
+  getClientCsvValue,
+  parseBrazilianCsvDate,
+  parseClientCsv,
+  splitClientCsvList,
+} from "@/lib/client-csv-import";
+import { ROLES, PAYMENT_STATUS, ADMIN_ROLES } from "@workspace/permissions";
+
+function cleanCPF(cpf: string): string {
+  return cpf.replace(/\D/g, "");
+}
+
+function maskCPF(value: string): string {
+  const digits = cleanCPF(value).slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
+function isValidCPF(cpf: string): boolean {
+  const c = cleanCPF(cpf);
+  if (c.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(c)) return false;
+  let sum = 0;
+  for (let i = 1; i <= 9; i++) sum += parseInt(c[i - 1]) * (11 - i);
+  let rem = (sum * 10) % 11;
+  if (rem === 10 || rem === 11) rem = 0;
+  if (rem !== parseInt(c[9])) return false;
+  sum = 0;
+  for (let i = 1; i <= 10; i++) sum += parseInt(c[i - 1]) * (12 - i);
+  rem = (sum * 10) % 11;
+  if (rem === 10 || rem === 11) rem = 0;
+  return rem === parseInt(c[10]);
+}
+
+function downloadCsv(rows: string[][], filename: string) {
+  const content = rows.map(r => r.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob(["\uFEFF" + content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportClientsCsv(clients: Client[]) {
+  const headers = ["Código", "Nome", "E-mail", "WhatsApp", "Telefone", "CPF", "Nascimento", "Gênero", "Cidade", "Estado", "Instagram", "Classificação", "Status", "Pipeline", "Total Gasto", "Saldo Devedor", "Tags", "Destinos Sonhados", "Observações", "Cadastrado em"];
+  const rows = clients.map(c => [
+    c.customerCode ?? "", c.name, c.email, c.whatsapp, c.phone ?? "", c.cpf ?? "",
+    c.birthDate ? formatDateBR(c.birthDate) : "",
+    c.gender ?? "", c.addressCity ?? "", c.addressState ?? "", c.instagram ?? "",
+    c.classification ?? "", c.status ?? "", c.pipelineStage ?? "",
+    String(c.totalSpent), String(c.outstandingBalance),
+    (c.tags ?? []).join("; "), (c.dreamDestinations ?? []).join("; "),
+    c.observations ?? "",
+    formatDateBR(c.createdAt),
+  ]);
+  downloadCsv([headers, ...rows], `clientes_${localToday().replace(/-/g, "")}.csv`);
+}
+
+
+interface CsvImportModalProps { open: boolean; onClose: () => void; onImported: () => void; }
+
+function CsvImportModal({ open, onClose, onImported }: CsvImportModalProps) {
+  const { toast } = useToast();
+  const createClient = useCreateClient();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<string[][]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [errors, setErrors] = useState<string[]>([]);
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rows = parseClientCsv(reader.result as string);
+      if (rows.length < 2) { toast({ title: "CSV inválido", variant: "destructive" }); return; }
+      setHeaders(rows[0]);
+      setPreview(rows.slice(1, 6));
+      setErrors([]);
+    };
+    reader.readAsText(file, "UTF-8");
+  }
+
+  async function handleImport() {
+    if (!inputRef.current?.files?.[0]) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const rows = parseClientCsv(reader.result as string).slice(1).filter(r => r.some(c => c.trim()));
+      setImporting(true); setProgress(0); setErrors([]);
+      const errs: string[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const get = (...aliases: string[]) => getClientCsvValue(headers, r, aliases);
+        const name = get("nome", "name");
+        const rawEmail = get("email", "emailaddress");
+        const whatsapp = get("whatsapp", "celular", "telefonecelular") || get("telefone", "phone");
+        const rawCpf = get("cpf");
+        const cpfDigits = cleanCPF(rawCpf);
+        if (!name || !whatsapp) { errs.push(`Linha ${i + 2}: nome e WhatsApp são obrigatórios`); setProgress(Math.round(((i + 1) / rows.length) * 100)); continue; }
+        if (!cpfDigits || !isValidCPF(cpfDigits)) { errs.push(`Linha ${i + 2}: ${name} — CPF inválido ou ausente`); setProgress(Math.round(((i + 1) / rows.length) * 100)); continue; }
+        try {
+          await createClient.mutateAsync({
+            data: {
+              name,
+              email: rawEmail || generatedImportedClientEmail(cpfDigits),
+              whatsapp,
+              phone: get("telefone", "phone") || undefined,
+              cpf: cpfDigits,
+              birthDate: parseBrazilianCsvDate(get("nascimento", "datanascimento", "birthdate")),
+              gender: get("genero", "gender") || undefined,
+              instagram: get("instagram") || undefined,
+              addressCity: get("cidade", "city") || undefined,
+              addressState: get("estado", "state") || undefined,
+              observations: get("observacoes", "observacao", "notes") || undefined,
+              tags: splitClientCsvList(get("tags")),
+              dreamDestinations: splitClientCsvList(get("destinossonhados", "destinos", "dreamdestinations")),
+            },
+          });
+        } catch (err: unknown) {
+          const rd = (err as { data?: Record<string, unknown> })?.data
+            ?? (err as { response?: { data?: Record<string, unknown> } })?.response?.data;
+          if (rd?.["conflict"] === "name_whatsapp") {
+            const ec = rd["existingClient"] as { name?: string; code?: string } | undefined;
+            errs.push(`Linha ${i + 2}: ${name} — duplicado (já existe: ${ec?.name ?? name}${ec?.code ? ` · ${ec.code}` : ""})`);
+          } else {
+            errs.push(`Linha ${i + 2}: ${name} — erro ao criar`);
+          }
+        }
+        setProgress(Math.round(((i + 1) / rows.length) * 100));
+      }
+      setImporting(false); setErrors(errs);
+      if (errs.length === 0) { toast({ title: `${rows.length} clientes importados com sucesso!` }); onImported(); onClose(); }
+      else { toast({ title: `Importação concluída com ${errs.length} erro(s)`, variant: "destructive" }); onImported(); }
+    };
+    reader.readAsText(inputRef.current.files[0], "UTF-8");
+  }
+
+  function handleClose() { if (!importing) { setPreview([]); setHeaders([]); setErrors([]); setProgress(0); onClose(); } }
+
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) handleClose(); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Importar Clientes via CSV</DialogTitle>
+          <DialogDescription>O arquivo deve ter cabeçalhos Nome, WhatsApp e CPF (obrigatórios). E-mail é opcional; quando estiver vazio, será criado apenas um identificador interno sem entrega de mensagens.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-muted/20 transition-colors" onClick={() => inputRef.current?.click()}>
+            <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Clique para selecionar um arquivo CSV</p>
+            <input ref={inputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleFile} />
+          </div>
+          {headers.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Pré-visualização (primeiros 5 registros)</p>
+              <div className="overflow-x-auto border rounded-lg">
+                <table className="text-xs w-full">
+                  <thead className="bg-muted"><tr>{headers.slice(0, 6).map(h => <th key={h} className="px-2 py-1 text-left font-medium">{h}</th>)}</tr></thead>
+                  <tbody>{preview.map((row, i) => <tr key={i} className="border-t">{row.slice(0, 6).map((cell, j) => <td key={j} className="px-2 py-1 truncate max-w-[120px]">{cell}</td>)}</tr>)}</tbody>
+                </table>
+              </div>
+              <p className="text-xs text-muted-foreground">Colunas detectadas: {headers.join(", ")}</p>
+            </div>
+          )}
+          {importing && (
+            <div className="space-y-1">
+              <div className="w-full bg-muted rounded-full h-2"><div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${progress}%` }} /></div>
+              <p className="text-xs text-muted-foreground text-center">Importando... {progress}%</p>
+            </div>
+          )}
+          {errors.length > 0 && (
+            <div className="space-y-1 max-h-32 overflow-y-auto border rounded-lg p-2 bg-destructive/10">
+              {errors.map((e, i) => <p key={i} className="text-xs text-destructive flex items-center gap-1"><AlertCircle className="w-3 h-3 shrink-0" />{e}</p>)}
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={handleClose} disabled={importing}>Cancelar</Button>
+          <Button onClick={handleImport} disabled={importing || preview.length === 0}>
+            {importing ? `Importando ${progress}%...` : "Importar Clientes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  active: { label: "Ativo", color: "bg-green-100 text-green-700 border-green-200" },
+  inactive: { label: "Inativo", color: "bg-gray-100 text-gray-600 border-gray-200" },
+  lead: { label: "Lead", color: "bg-blue-100 text-blue-700 border-blue-200" },
+  prospect: { label: "Prospecto", color: "bg-yellow-100 text-yellow-700 border-yellow-200" },
+  vip: { label: "VIP", color: "bg-purple-100 text-purple-700 border-purple-200" },
+};
+
+const CLASSIFICATION_LABELS: Record<string, string> = {
+  lead: "Lead",
+  prospect: "Prospecto",
+  client: "Cliente",
+  vip: "VIP",
+  inactive: "Inativo",
+};
+
+const GENDER_OPTIONS = [
+  { value: "M", label: "Masculino" },
+  { value: "F", label: "Feminino" },
+  { value: "other", label: "Outro" },
+];
+
+const ORIGIN_OPTIONS = ["Indicação", "Instagram", "WhatsApp", "Google", "Cliente Antigo", "Evento", "Outros"];
+const MARITAL_OPTIONS = ["Solteiro(a)", "Casado(a)", "Divorciado(a)", "Viúvo(a)"];
+const TRAVEL_TYPE_OPTIONS = ["Casal", "Bate-volta", "Excursão", "Trilha", "Corporativo"];
+const ROOM_TYPE_OPTIONS = ["Quarto Casal", "Quarto Triplo", "Quarto Quádruplo", "Quarto Compartilhado", "Não se aplica"];
+const TRAVEL_REASON_OPTIONS = ["Lazer", "Aniversário", "Família", "Romance", "Negócios"];
+const TRAVEL_INTERESTS_OPTIONS = ["Gastronomia", "Natureza", "Cultura e história", "Compras", "Aventura", "Religiosidade", "Descanso", "Ecoturismo", "Arte e música", "Fotografia"];
+const PAYMENT_METHOD_OPTIONS = ["Dinheiro", "PIX", "Cartão Débito", "Cartão Crédito", "Boleto", "Transferência"];
+const INTERNAL_RATING_LABELS: Record<number, string> = { 1: "Difícil", 2: "Neutro", 3: "Fácil", 4: "Ótimo", 5: "Excelente" };
+
+function CommissionPreview({
+  sellerId,
+  saleAmount,
+  tripId,
+  onApply,
+}: {
+  sellerId: string;
+  saleAmount: number;
+  tripId?: string;
+  onApply: (amount: number) => void;
+}) {
+  const enabled = !!sellerId && sellerId !== "none" && saleAmount > 0;
+  const { data } = useCalculateCommission(
+    { sellerId, saleAmount, tripId: tripId && tripId !== "none" ? tripId : undefined },
+    { query: { enabled, queryKey: ["commission-preview", sellerId, saleAmount, tripId] } }
+  );
+  if (!enabled || !data) return null;
+  const estimated = parseFloat(String(data.commissionAmount ?? 0));
+  if (estimated <= 0) return null;
+  return (
+    <div className="flex items-center gap-2 mt-1 p-2 bg-green-50 dark:bg-green-950/30 rounded-md border border-green-200 dark:border-green-800">
+      <span className="text-xs text-green-700 dark:text-green-300 flex-1">
+        Comissão estimada:{" "}
+        <strong>{formatCurrency(estimated)}</strong>
+        {data.commissionType === "percentage" && ` (${data.commissionRate}%)`}
+        {data.commissionType === "fixed" && " (valor fixo)"}
+      </span>
+      <button
+        type="button"
+        className="text-xs font-medium text-green-700 dark:text-green-300 hover:underline"
+        onClick={() => onApply(estimated)}
+      >
+        Usar
+      </button>
+    </div>
+  );
+}
+
+interface ClientFormData {
+  name: string; email: string; whatsapp: string; phone: string; cpf: string; rg: string;
+  birthDate: string; gender: string; addressCity: string; addressState: string;
+  instagram: string; pipelineStage: string; classification: string; status: string;
+  origin: string; maritalStatus: string;
+  tripId: string; boardingPoint: string; seatNumber: string;
+  travelType: string; roomType: string; hasInsurance: boolean; isGratuidade: boolean;
+  hasMinorChild: boolean; isOnLap: boolean; travelReason: string;
+  ticketPrice: string; quantity: string; discount: string; paymentMethod: string;
+  amountPaid: string; commission: string; consultantId: string;
+  installments: string;
+  internalRating: number; observations: string;
+  professionalArea: string; favoriteDrink: string;
+  musicalPreferences: string; foodPreferences: string;
+  dreamDestinations: string; tags: string;
+  npsScore: string; companyFeedback: string;
+  travelInterests: string[]; ambassadorOptIn: boolean;
+}
+
+const EMPTY_CLIENT: ClientFormData = {
+  name: "", email: "", whatsapp: "", phone: "", cpf: "", rg: "", birthDate: "", gender: "none",
+  addressCity: "", addressState: "", instagram: "", pipelineStage: "none",
+  classification: "lead", status: "active", origin: "none", maritalStatus: "none",
+  tripId: "none", boardingPoint: "none", seatNumber: "", travelType: "none",
+  roomType: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
+  ticketPrice: "", quantity: "1", discount: "", paymentMethod: "none", amountPaid: "", commission: "", consultantId: "none",
+  installments: "1",
+  internalRating: 0, observations: "",
+  professionalArea: "", favoriteDrink: "", musicalPreferences: "", foodPreferences: "",
+  dreamDestinations: "", tags: "",
+  npsScore: "", companyFeedback: "",
+  travelInterests: [], ambassadorOptIn: false,
+};
+
+function sanitizeBirthDateInput(isoStr: string): string {
+  const datePart = isoStr.split("T")[0];
+  const d = new Date(datePart);
+  if (isNaN(d.getTime())) return "";
+  const year = d.getFullYear();
+  if (year < 1900 || year > 2100) return "";
+  return datePart;
+}
+
+function clientToForm(c: Client): ClientFormData {
+  return {
+    name: c.name, email: c.email, whatsapp: c.whatsapp, phone: c.phone ?? "",
+    cpf: c.cpf ?? "", rg: c.rg ?? "", birthDate: c.birthDate ? sanitizeBirthDateInput(c.birthDate) : "",
+    gender: c.gender ?? "none", addressCity: c.addressCity ?? "", addressState: c.addressState ?? "",
+    instagram: c.instagram ?? "", pipelineStage: c.pipelineStage ?? "none",
+    classification: c.classification ?? "lead", status: c.status ?? "active",
+    origin: c.origin ?? "none", maritalStatus: c.maritalStatus ?? "none",
+    tripId: "none", boardingPoint: "none", seatNumber: "", travelType: "none",
+    roomType: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
+    ticketPrice: "", quantity: "1", discount: "", paymentMethod: "none", amountPaid: "", commission: "", consultantId: "none",
+  installments: "1",
+    internalRating: c.internalRating ?? 0, observations: c.observations ?? "",
+    professionalArea: c.professionalArea ?? "", favoriteDrink: c.favoriteDrink ?? "",
+    musicalPreferences: c.musicalPreferences ?? "", foodPreferences: c.foodPreferences ?? "",
+    dreamDestinations: (c.dreamDestinations ?? []).join(", "), tags: (c.tags ?? []).join(", "),
+    npsScore: c.companyNps != null ? String(c.companyNps) : (c.npsScore != null ? String(c.npsScore) : ""),
+    companyFeedback: c.companyFeedback ?? "",
+    travelInterests: c.travelInterests ?? [],
+    ambassadorOptIn: c.ambassadorOptIn ?? false,
+  };
+}
+
+
+function ClientPaymentsSection({ clientId }: { clientId: string }) {
+  const { data: payments, isLoading } = useListPayments({ clientId, limit: 10 });
+  if (isLoading) return <div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>;
+  const items = payments?.data ?? [];
+  return (
+    <div className="space-y-2 pt-2 border-t">
+      <p className="text-sm font-medium text-muted-foreground">Pagamentos / Comissões</p>
+      {items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nenhum pagamento registrado.</p>
+      ) : (
+        <div className="space-y-1 max-h-[220px] overflow-y-auto">
+          {items.map(p => (
+            <div key={p.id} className="flex items-center justify-between rounded-lg border bg-muted/20 px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{p.description ?? p.category}</p>
+                <p className="text-xs text-muted-foreground">
+                  Vence {p.dueDate ? formatDateBR(p.dueDate) : "—"}
+                  {p.installmentNumber ? ` · Parcela ${p.installmentNumber}` : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                  p.status === PAYMENT_STATUS.PAID ? "bg-green-100 text-green-700" :
+                  p.status === PAYMENT_STATUS.OVERDUE ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"
+                }`}>{p.status === PAYMENT_STATUS.PAID ? "Pago" : p.status === PAYMENT_STATUS.OVERDUE ? "Vencido" : "Pendente"}</span>
+                <span className="text-sm font-semibold">{formatCurrency(p.amount)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ClientModalProps {
+  open: boolean;
+  onClose: () => void;
+  editClient?: Client | null;
+  onSave: (createReservation?: boolean, savedClientId?: string) => void;
+  defaultStageId?: string;
+  pipelineId?: string | null;
+}
+
+export function ClientModal({ open, onClose, editClient, onSave, defaultStageId, pipelineId }: ClientModalProps) {
+  const [tab, setTab] = useState("personal");
+  const [form, setForm] = useState<ClientFormData>(EMPTY_CLIENT);
+  const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
+  const [hasSeatMap, setHasSeatMap] = useState<boolean | null>(null);
+  const [limitError, setLimitError] = useState<{ resource: string; current?: number; limit?: number } | null>(null);
+  const [duplicateConflict, setDuplicateConflict] = useState<{ id: string; name: string; code: string | null; whatsapp: string } | null>(null);
+  const { toast } = useToast();
+  const { data: allStages } = useListPipelineStages();
+  // When creating a deal, scope stages to the pipeline the user is currently viewing
+  const stages = pipelineId
+    ? allStages?.filter(s => s.pipelineId === pipelineId)
+    : allStages;
+  const { data: tripsData } = useListTrips({ limit: 100 });
+  const { data: usersData } = useListUsers();
+  const { data: me } = useGetMe();
+  const createClient = useCreateClient();
+  const updateClient = useUpdateClient();
+  const createDeal = useCreateDeal();
+  const createReservation = useCreateReservation();
+
+  useEffect(() => {
+    if (open) {
+      setTab("personal");
+      const formData = editClient ? clientToForm(editClient) : EMPTY_CLIENT;
+      setForm(formData);
+      setSelectedSeats(formData.seatNumber ? [formData.seatNumber] : []);
+      setHasSeatMap(null);
+      setDuplicateConflict(null);
+    }
+  }, [open, editClient]);
+
+  const isEditing = !!editClient;
+  const isPending = createClient.isPending || updateClient.isPending || createDeal.isPending || createReservation.isPending;
+  const set = (key: keyof ClientFormData) => (val: string) => setForm(prev => ({ ...prev, [key]: val }));
+  const whatsappHasInvalidFormat =
+    form.whatsapp.length > 0 && !isValidBrazilWhatsAppPhone(form.whatsapp);
+
+  const trips = tripsData?.data ?? [];
+  const users = usersData ?? [];
+  const selectedTrip = trips.find(t => t.id === form.tripId);
+  const boardingPoints = (selectedTrip?.boardingPoints ?? []) as Array<{ id: string; name: string }>;
+
+  useEffect(() => {
+    if (form.tripId && form.tripId !== "none" && selectedTrip) {
+      setForm(prev => ({ ...prev, ticketPrice: prev.isGratuidade ? "0" : String(selectedTrip.priceAdult) }));
+    } else if (!form.tripId || form.tripId === "none") {
+      setForm(prev => ({ ...prev, ticketPrice: "" }));
+    }
+  }, [form.tripId, selectedTrip]);
+
+  useEffect(() => {
+    if (form.isGratuidade) {
+      setForm(prev => ({ ...prev, ticketPrice: "0" }));
+    } else if (form.tripId && form.tripId !== "none" && selectedTrip) {
+      setForm(prev => ({ ...prev, ticketPrice: String(selectedTrip.priceAdult) }));
+    }
+  }, [form.isGratuidade]);
+
+  const ticketPrice = parseFloat(form.ticketPrice) || 0;
+  const quantity = parseInt(form.quantity) || 1;
+  const discount = parseFloat(form.discount) || 0;
+  const amountPaid = parseFloat(form.amountPaid) || 0;
+  const valorTotal = ticketPrice * quantity;
+  const valorComDesconto = Math.max(0, valorTotal - discount);
+  const faltaPagar = valorComDesconto - amountPaid;
+
+  const handleSubmit = async (forceCreate = false) => {
+    if (!form.name || !form.whatsapp) {
+      toast({ title: "Nome e WhatsApp são obrigatórios", variant: "destructive" });
+      return;
+    }
+    if (!isEditing) {
+      if (!form.cpf) {
+        toast({ title: "CPF é obrigatório", variant: "destructive" });
+        return;
+      }
+    }
+    if (form.cpf && !isValidCPF(form.cpf)) {
+      toast({ title: "CPF inválido", description: "Verifique o número e tente novamente.", variant: "destructive" });
+      return;
+    }
+    if (discount < 0 || discount > valorTotal) {
+      toast({ title: "Desconto inválido", description: "O desconto não pode ser negativo nem maior que o Valor Total.", variant: "destructive" });
+      return;
+    }
+    if (amountPaid < 0 || amountPaid > valorComDesconto) {
+      toast({ title: "Valor pago inválido", description: "O valor já pago não pode ser maior que o Valor com Desconto.", variant: "destructive" });
+      return;
+    }
+    const base = {
+      name: form.name, email: form.email, whatsapp: form.whatsapp,
+      phone: form.phone || undefined, cpf: form.cpf ? cleanCPF(form.cpf) : undefined,
+      rg: form.rg || undefined,
+      birthDate: form.birthDate ? new Date(form.birthDate).toISOString() : undefined,
+      gender: form.gender !== "none" ? form.gender : undefined,
+      addressCity: form.addressCity || undefined,
+      addressState: form.addressState || undefined,
+      instagram: form.instagram || undefined,
+      origin: form.origin !== "none" ? form.origin : undefined,
+      maritalStatus: form.maritalStatus !== "none" ? form.maritalStatus : undefined,
+      observations: form.observations || undefined,
+      tags: form.tags ? form.tags.split(",").map(t => t.trim()).filter(Boolean) : [],
+      dreamDestinations: form.dreamDestinations ? form.dreamDestinations.split(",").map(t => t.trim()).filter(Boolean) : [],
+      professionalArea: form.professionalArea || undefined,
+      favoriteDrink: form.favoriteDrink || undefined,
+      musicalPreferences: form.musicalPreferences || undefined,
+      foodPreferences: form.foodPreferences || undefined,
+      internalRating: form.internalRating > 0 ? form.internalRating : undefined,
+      companyFeedback: form.companyFeedback || undefined,
+      companyNps: form.npsScore ? parseInt(form.npsScore) : undefined,
+      pipelineStage: form.pipelineStage !== "none" ? form.pipelineStage : undefined,
+      classification: form.classification || undefined,
+      status: form.status || undefined,
+      travelInterests: form.travelInterests.length > 0 ? form.travelInterests : [],
+      ambassadorOptIn: form.ambassadorOptIn,
+    };
+
+    try {
+      let savedId: string | undefined;
+      if (isEditing && editClient) {
+        await updateClient.mutateAsync({
+          id: editClient.id,
+          data: { ...base },
+        });
+        savedId = editClient.id;
+        const hasTrip = form.tripId !== "none";
+        const commission = parseFloat(form.commission) || 0;
+        const consultantId = form.consultantId !== "none" ? form.consultantId : null;
+        if (hasTrip && (ticketPrice > 0 || form.isGratuidade || form.isOnLap)) {
+          try {
+            await createReservation.mutateAsync({
+              data: {
+                tripId: form.tripId,
+                clientId: savedId,
+                seats: selectedSeats,
+                totalValue: valorComDesconto,
+                paidValue: amountPaid || undefined,
+                discountTotal: discount > 0 ? discount : undefined,
+                paymentMethod: form.paymentMethod !== "none" ? form.paymentMethod.toLowerCase().replace(/ /g, "_") : undefined,
+                installments: parseInt(form.installments) || 1,
+                commissionAmount: commission > 0 ? commission : null,
+                sellerId: consultantId,
+                notes: form.observations || undefined,
+                isGratuidade: form.isGratuidade || undefined,
+                isOnLap: form.isOnLap || undefined,
+                isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
+              },
+            });
+          } catch {
+            // Reservation creation failure should not block client update
+          }
+        }
+      } else {
+        const result = await createClient.mutateAsync({ data: { ...base, cpf: cleanCPF(form.cpf), forceCreate: forceCreate || undefined } });
+        savedId = result.id;
+        if (result.isNew === false) {
+          toast({ title: "Cliente já cadastrado", description: "Os dados do cadastro existente foram atualizados com sucesso." });
+        }
+        if (savedId) {
+          const hasTrip = form.tripId !== "none";
+          const commission = parseFloat(form.commission) || 0;
+          const consultantId = form.consultantId !== "none" ? form.consultantId : null;
+
+          // Create reservation when trip selected and ticket price > 0 (or gratuidade)
+          let createdReservationId: string | undefined;
+          if (hasTrip && (ticketPrice > 0 || form.isGratuidade || form.isOnLap)) {
+            try {
+              const resResult = await createReservation.mutateAsync({
+                data: {
+                  tripId: form.tripId,
+                  clientId: savedId,
+                  seats: selectedSeats,
+                  totalValue: valorComDesconto,
+                  paidValue: amountPaid || undefined,
+                  discountTotal: discount > 0 ? discount : undefined,
+                  paymentMethod: form.paymentMethod !== "none" ? form.paymentMethod.toLowerCase().replace(/ /g, "_") : undefined,
+                  installments: parseInt(form.installments) || 1,
+                  commissionAmount: commission > 0 ? commission : null,
+                  sellerId: consultantId,
+                  notes: form.observations || undefined,
+                  isGratuidade: form.isGratuidade || undefined,
+                  isOnLap: form.isOnLap || undefined,
+                  isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
+                },
+              });
+              createdReservationId = resResult.id;
+            } catch {
+              // Reservation creation failure should not block client creation
+            }
+          }
+
+          // When reservation was created successfully, the backend's syncClientDeal
+          // already created/moved the deal to "Reserva Criada". Skip frontend deal
+          // creation to avoid duplicates in the Pipeline.
+          if (!createdReservationId) {
+            const leadStage = stages?.find(s => s.name === "Lead");
+            const dealStageId = hasTrip
+              ? (leadStage?.id ?? defaultStageId)
+              : defaultStageId;
+            if (dealStageId) {
+              const tripName = selectedTrip?.name ?? "Viagem";
+              await createDeal.mutateAsync({
+                data: {
+                  stageId: dealStageId,
+                  ...(hasTrip ? { tripId: form.tripId } : {}),
+                  title: hasTrip ? `${form.name} — ${tripName}` : `${form.name} — Lead`,
+                  value: hasTrip ? (valorComDesconto ?? 0) : 0,
+                  clientId: savedId,
+                  leadName: form.name,
+                  leadWhatsapp: form.whatsapp,
+                  ...(form.travelReason !== "none" ? { travelReason: form.travelReason } : {}),
+                },
+              });
+            }
+          }
+        }
+      }
+      toast({ title: isEditing ? "Alterações salvas!" : "Cliente criado!" });
+      onSave(false, savedId);
+      onClose();
+    } catch (err: unknown) {
+      const responseData = (err as { data?: Record<string, unknown> })?.data
+        ?? (err as { response?: { data?: Record<string, unknown> } })?.response?.data
+        ?? {};
+      const limitInfo = usePlanLimitError(responseData);
+      if (limitInfo.isLimitError) {
+        setLimitError({ resource: limitInfo.resource ?? "clients", current: limitInfo.current, limit: limitInfo.limit });
+        return;
+      }
+      // Duplicate name+WhatsApp conflict — show inline confirmation (only on first attempt, not forceCreate)
+      if (!forceCreate && responseData["conflict"] === "name_whatsapp") {
+        const ec = responseData["existingClient"] as { id: string; name: string; code: string | null; whatsapp: string } | undefined;
+        if (ec) { setDuplicateConflict(ec); return; }
+      }
+      const msg = (responseData["error"] as string)
+        || (err as { message?: string })?.message
+        || "Erro ao salvar cliente";
+      toast({ title: msg, variant: "destructive" });
+    }
+  };
+
+  const handleForceCreate = () => {
+    setDuplicateConflict(null);
+    handleSubmit(true);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <div className="flex items-center gap-3 flex-wrap">
+            <DialogTitle>{isEditing ? `Editar: ${editClient?.name}` : "Novo Cliente"}</DialogTitle>
+            {isEditing && editClient?.customerCode && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-muted-foreground font-normal">Código de Registro:</span>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 font-mono text-xs px-2 py-0.5 rounded bg-muted border hover:bg-muted/70 transition-colors text-muted-foreground"
+                  title="Copiar código do cliente"
+                  onClick={() => {
+                    navigator.clipboard.writeText(editClient.customerCode!);
+                    toast({ title: "Código copiado!" });
+                  }}
+                >
+                  {editClient.customerCode}
+                  <Copy className="w-3 h-3 ml-0.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        </DialogHeader>
+
+        {limitError && (
+          <PlanLimitWall
+            resource={limitError.resource as "clients" | "users" | "trips"}
+            current={limitError.current}
+            limit={limitError.limit}
+          />
+        )}
+
+        {duplicateConflict && (
+          <div className="rounded-lg border border-yellow-300 bg-yellow-50 dark:bg-yellow-950/30 dark:border-yellow-700 p-4 space-y-3">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">Contato duplicado detectado</p>
+                <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-0.5">
+                  Já existe um contato com este mesmo nome e WhatsApp:{" "}
+                  <span className="font-semibold">{duplicateConflict.name}</span>
+                  {duplicateConflict.code && (
+                    <span className="font-mono text-xs ml-1">({duplicateConflict.code})</span>
+                  )}
+                  .
+                </p>
+                <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">Deseja criar mesmo assim ou cancelar?</p>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" size="sm" onClick={() => setDuplicateConflict(null)}>
+                Cancelar
+              </Button>
+              <Button size="sm" onClick={handleForceCreate} disabled={isPending}>
+                {isPending ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : null}
+                Criar mesmo assim
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList className="flex w-full justify-start overflow-x-auto text-xs">
+            <TabsTrigger value="personal">Pessoal</TabsTrigger>
+            <TabsTrigger value="trip">Viagem</TabsTrigger>
+            <TabsTrigger value="financial">Financeiro</TabsTrigger>
+            <TabsTrigger value="observations">Obs.</TabsTrigger>
+            <TabsTrigger value="followup">Follow-up</TabsTrigger>
+            <TabsTrigger value="agency">Agência</TabsTrigger>
+          </TabsList>
+
+          {/* Aba 1 — Pessoal */}
+          <TabsContent value="personal" className="space-y-4 mt-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2 space-y-2">
+                <Label>Nome Completo *</Label>
+                <Input placeholder="Maria Silva" value={form.name} onChange={e => set("name")(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>WhatsApp *</Label>
+                <Input placeholder="+55 31 99999-9999" value={form.whatsapp} onChange={e => set("whatsapp")(e.target.value)} />
+                {whatsappHasInvalidFormat && (
+                  <p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400" role="status">
+                    <AlertCircle className="w-3 h-3 shrink-0" />
+                    Número fora do padrão do WhatsApp brasileiro (12–13 dígitos com o código 55). A mensagem não será enviada até corrigi-lo.
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label>CPF {!isEditing && <span className="text-destructive">*</span>}</Label>
+                <Input
+                  placeholder="000.000.000-00"
+                  value={form.cpf}
+                  onChange={e => set("cpf")(maskCPF(e.target.value))}
+                  className={form.cpf && !isValidCPF(form.cpf) ? "border-destructive" : ""}
+                />
+                {form.cpf && !isValidCPF(form.cpf) && (
+                  <p className="text-xs text-destructive mt-1">CPF inválido</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label>E-mail</Label>
+                <Input type="email" placeholder="maria@email.com" value={form.email} onChange={e => set("email")(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Instagram</Label>
+                <Input placeholder="@mariaSilva" value={form.instagram} onChange={e => set("instagram")(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Data de Aniversário</Label>
+                <Input type="date" value={form.birthDate} onChange={e => set("birthDate")(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Origem do Cliente</Label>
+                <Select value={form.origin} onValueChange={set("origin")}>
+                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Não informado</SelectItem>
+                    {ORIGIN_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Cidade</Label>
+                <Input placeholder="Belo Horizonte" value={form.addressCity} onChange={e => set("addressCity")(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Estado Civil</Label>
+                <Select value={form.maritalStatus} onValueChange={set("maritalStatus")}>
+                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Não informado</SelectItem>
+                    {MARITAL_OPTIONS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Gênero</Label>
+                <Select value={form.gender} onValueChange={set("gender")}>
+                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Não informado</SelectItem>
+                    {GENDER_OPTIONS.map(g => <SelectItem key={g.value} value={g.value}>{g.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Status no Pipeline</Label>
+                <Select value={form.pipelineStage} onValueChange={set("pipelineStage")}>
+                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Nenhum</SelectItem>
+                    {stages?.map(s => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Aba 2 — Viagem */}
+          <TabsContent value="trip" className="space-y-4 mt-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2 space-y-2">
+                <Label>Viagem</Label>
+                <Select
+                  value={form.tripId}
+                  onValueChange={v => {
+                    setForm(prev => ({ ...prev, tripId: v, boardingPoint: "none", seatNumber: "" }));
+                    setSelectedSeats([]);
+                    setHasSeatMap(null);
+                  }}
+                >
+                  <SelectTrigger><SelectValue placeholder="Selecionar viagem..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Nenhuma</SelectItem>
+                    {trips.map(t => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name} — {formatDateBR(t.departureDate)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {selectedTrip && (
+                <div className="col-span-2 rounded-lg border bg-blue-50/60 dark:bg-blue-950/20 p-3 text-sm space-y-2">
+                  <p className="font-semibold text-foreground">{selectedTrip.name}</p>
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-muted-foreground">Destino</p>
+                      <p className="font-medium text-foreground">{selectedTrip.destination}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Data de Partida</p>
+                      <p className="font-medium text-foreground">{formatDateBR(selectedTrip.departureDate)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Preço / Pessoa</p>
+                      <p className="font-medium text-foreground">{formatCurrency(selectedTrip.priceAdult)}</p>
+                    </div>
+                  </div>
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Vagas disponíveis: </span>
+                    <span className={`font-semibold ${selectedTrip.availableSeats <= 5 ? "text-destructive" : "text-green-600"}`}>
+                      {selectedTrip.availableSeats}
+                    </span>
+                    <span className="text-muted-foreground"> de {selectedTrip.totalCapacity}</span>
+                  </div>
+                </div>
+              )}
+              {boardingPoints.length > 0 && (
+                <div className="col-span-2 space-y-2">
+                  <Label>Local de Embarque</Label>
+                  <Select value={form.boardingPoint} onValueChange={set("boardingPoint")}>
+                    <SelectTrigger><SelectValue placeholder="Selecionar ponto de embarque..." /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Não especificado</SelectItem>
+                      {boardingPoints.map(bp => <SelectItem key={bp.id} value={bp.name}>{bp.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {!form.isOnLap && (selectedTrip && form.tripId !== "none" ? (
+                <div className="col-span-2 space-y-3">
+                  <Label>Selecionar Poltrona</Label>
+                  <SeatMapPicker
+                    tripId={form.tripId}
+                    selectedSeats={selectedSeats}
+                    onSeatsChange={seats => {
+                      setSelectedSeats(seats);
+                      setForm(prev => ({ ...prev, seatNumber: seats[0] ?? "" }));
+                    }}
+                    maxSeats={1}
+                    onHasMap={setHasSeatMap}
+                  />
+                  {hasSeatMap === false && (
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Poltrona (manual)</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        placeholder="Informe o número da poltrona..."
+                        value={form.seatNumber}
+                        onChange={e => {
+                          const val = e.target.value;
+                          set("seatNumber")(val);
+                          setSelectedSeats(val ? [val] : []);
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Label>Poltrona</Label>
+                  <Input type="number" min="1" placeholder="Ex: 12" value={form.seatNumber} onChange={e => {
+                    const val = e.target.value;
+                    set("seatNumber")(val);
+                    setSelectedSeats(val ? [val] : []);
+                  }} />
+                </div>
+              ))}
+              <div className="space-y-2">
+                <Label>Tipo de Viagem</Label>
+                <Select value={form.travelType} onValueChange={set("travelType")}>
+                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Não especificado</SelectItem>
+                    {TRAVEL_TYPE_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Pacote / Quarto</Label>
+                <Select value={form.roomType} onValueChange={set("roomType")}>
+                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Não especificado</SelectItem>
+                    {ROOM_TYPE_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2 flex flex-col gap-3 pt-1">
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    id="isGratuidade"
+                    checked={form.isGratuidade}
+                    onCheckedChange={v => setForm(prev => ({ ...prev, isGratuidade: !!v }))}
+                  />
+                  <Label htmlFor="isGratuidade" className="cursor-pointer font-medium text-amber-700 dark:text-amber-400">Gratuidade (passageiro cortesia)</Label>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    id="hasInsurance"
+                    checked={form.hasInsurance}
+                    onCheckedChange={v => setForm(prev => ({ ...prev, hasInsurance: !!v }))}
+                  />
+                  <Label htmlFor="hasInsurance" className="cursor-pointer">Possui Seguro de Viagem</Label>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-3">
+                    <Checkbox
+                      id="hasMinorChild"
+                      checked={form.hasMinorChild}
+                      onCheckedChange={v => {
+                        if (!v) {
+                          setForm(prev => ({ ...prev, hasMinorChild: false, isOnLap: false }));
+                        } else {
+                          setForm(prev => ({ ...prev, hasMinorChild: true }));
+                        }
+                      }}
+                    />
+                    <Label htmlFor="hasMinorChild" className="cursor-pointer">Criança menor de 7 anos</Label>
+                  </div>
+                  {form.hasMinorChild && (
+                    <div className="pl-7 flex flex-col gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm">
                         <input
                           type="radio"
                           name="childSeatOption"
