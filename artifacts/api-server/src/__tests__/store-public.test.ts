@@ -59,6 +59,7 @@ vi.mock("@workspace/db", () => ({
   partnersTable: {},
   partnerProductsTable: {},
   partnerCommissionsTable: {},
+  settlementItemsTable: {},
   dealsTable: {},
   pipelineStagesTable: {},
   tenantsTable: {},
@@ -130,6 +131,14 @@ vi.mock("../queues/whatsapp-helpers.js", () => ({
 // imports) from loading.
 vi.mock("../services/checkout/post-booking.js", () => ({
   runPostPaymentSideEffects: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../services/checkout/create-reservations.js", () => ({
+  createReservationsForOrder: vi.fn().mockResolvedValue({
+    reservationIds: [],
+    reservationClientId: null,
+    tripIds: [],
+  }),
 }));
 
 vi.mock("../lib/id.js", () => ({
