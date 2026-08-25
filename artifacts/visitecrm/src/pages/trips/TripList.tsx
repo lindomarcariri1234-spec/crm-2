@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   Plus, Search, MapPin, Calendar, Users, Bus, Edit, Trash2, Eye,
   ChevronsLeft, ChevronsRight, LayoutGrid, List, ChevronLeft, ChevronRight,
-  X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images,
+  X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images, Upload, Download, Loader2,
 } from "lucide-react";
 import { STATUS_MAP, TRIP_TYPES, TRIP_TYPE_LABELS } from "./constants";
 import { formatCurrency, formatDate } from "./utils";
@@ -20,19 +20,25 @@ import { TripCard, PublishToStoreDialog } from "./TripCard";
 import { useTrips } from "@/hooks/useTrips";
 import { useGetMe, useGetTenant } from "@workspace/api-client-react";
 import { PageHeader } from "@/components/page-header";
+import { TripCsvImportModal } from "./TripCsvImportModal";
+import { buildTripCsvHeader, buildTripCsvRows } from "@/lib/trip-csv-import";
+import { useToast } from "@/hooks/use-toast";
 
 export function TripList() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [boardingTrip, setBoardingTrip] = useState<{ id: string; name: string } | null>(null);
   const [publishingTrip, setPublishingTrip] = useState<Trip | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const { toast } = useToast();
 
   const {
-    trips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
+    trips, exportTrips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
     search, setSearch, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, deleteTrip, handleDuplicate, handleDelete,
-    hasActiveFilters, clearFilters,
+    hasActiveFilters, clearFilters, refetch,
   } = useTrips();
   const { data: me } = useGetMe();
   const tenantId = me?.tenantId ?? null;
@@ -41,6 +47,45 @@ export function TripList() {
   });
   const tenantSettings = ((tenantData as (typeof tenantData & { settings?: Record<string, unknown> }))?.settings ?? {}) as Record<string, unknown>;
   const seatMapEnabled = tenantSettings.seatMapEnabled !== false;
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    toast({
+      title: "Preparando exportação...",
+      description: "Agências com muitas viagens podem levar alguns segundos.",
+    });
+
+    try {
+      const csvParts: BlobPart[] = [`\uFEFF${buildTripCsvHeader()}\n`];
+      const exportedCount = await exportTrips((batch) => {
+        csvParts.push(`${buildTripCsvRows(batch)}\n`);
+      });
+
+      if (exportedCount === 0) {
+        toast({ title: "Nenhuma viagem para exportar." });
+        return;
+      }
+
+      const url = URL.createObjectURL(new Blob(csvParts, { type: "text/csv;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `viagens-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "Exportação concluída",
+        description: `${exportedCount} viagem(ns) incluída(s) no CSV.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Erro na exportação",
+        description: error instanceof Error ? error.message : "Não foi possível exportar as viagens.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const onDelete = async (id: string) => {
     await handleDelete(id);
@@ -56,6 +101,19 @@ export function TripList() {
         }
         actions={
           <>
+          {!isVendedor && (
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload className="w-4 h-4 mr-2" />Importar CSV
+            </Button>
+          )}
+          {!isVendedor && (
+            <Button variant="outline" onClick={handleExport} disabled={isExporting || stats.total === 0}>
+              {isExporting
+                ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                : <Download className="w-4 h-4 mr-2" />}
+              {isExporting ? "Preparando..." : "Exportar CSV"}
+            </Button>
+          )}
           <Link href="/trips/calendar"><Button variant="outline"><Calendar className="w-4 h-4 mr-2" />Calendário</Button></Link>
           {!isVendedor && (
             <Link href="/trips/media"><Button variant="outline"><Images className="w-4 h-4 mr-2" />Mídia</Button></Link>
@@ -238,6 +296,12 @@ export function TripList() {
           onClose={() => setPublishingTrip(null)}
         />
       )}
+
+      <TripCsvImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => { void refetch(); }}
+      />
     </div>
   );
 }
