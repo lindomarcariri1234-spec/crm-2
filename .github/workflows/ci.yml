@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      # Drizzle's static checks must not attempt to provision or connect to a DB.
+      DRIZZLE_SCHEMA_ONLY: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate database schema statically
+        run: |
+          pnpm --filter @workspace/db run check
+          pnpm --filter @workspace/db run validate-coverage
+          pnpm --filter @workspace/db run validate-columns
+          pnpm --filter @workspace/db run validate-tables
+
+      - name: Type-check database, API contracts, and API
+        run: |
+          NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/db exec tsc --build
+          NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/api-zod exec tsc --build
+          node lib/api-zod/scripts/compact-dts.mjs
+          (
+            cd artifacts/api-server
+            NODE_OPTIONS=--max-old-space-size=1500 pnpm exec tsc -p tsconfig.check.json
+          )
+
+      - name: Type-check API client and frontend
+        run: |
+          NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/api-client-react exec tsc --build
+          NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @workspace/visitecrm run typecheck
+
+      - name: Test API suite
+        run: pnpm --filter @workspace/api-server run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
+
+      - name: Test frontend suite
+        run: pnpm --filter @workspace/visitecrm run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
+
+      - name: Build API for production
+        run: pnpm --filter @workspace/api-server run build
+
+      - name: Build VisiteCRM frontend for production
+        run: pnpm --filter @workspace/visitecrm run build
