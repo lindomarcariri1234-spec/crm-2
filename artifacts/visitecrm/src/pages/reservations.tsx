@@ -13,6 +13,7 @@ import { NewReservationWizard } from "./reservations/NewReservationWizard";
 import { EditReservationModal } from "./reservations/EditReservationModal";
 import { ReservationsTable } from "./reservations/ReservationsTable";
 import { VoucherModal } from "./reservations/VoucherModal";
+import { ReservationCsvImportModal } from "./reservations/ReservationCsvImportModal";
 import { PageHeader } from "@/components/page-header";
 export { VoucherModal };
 
@@ -25,6 +26,7 @@ export default function Reservations() {
   const [editId, setEditId] = useState<string | null>(null);
   const [voucherRes, setVoucherRes] = useState<Reservation | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [initialTripId, setInitialTripId] = useState<string | undefined>(undefined);
   const [initialClientId, setInitialClientId] = useState<string | undefined>(undefined);
   const [initialAmount, setInitialAmount] = useState<number | undefined>(undefined);
@@ -97,7 +99,7 @@ export default function Reservations() {
         onViewDetail={id => setDetailId(id)} onEdit={id => setEditId(id)}
         onVoucher={r => setVoucherRes(r)}
         onCheckin={r => setConfirmCheckinRes(r)} onCancel={(id, storeOrderId) => setConfirmCancel({ id, storeOrderId })}
-        setClient360Id={setClient360Id}
+        setClient360Id={setClient360Id} onImport={() => setIsImportOpen(true)}
       />
 
       <ReservationDetailModal reservationId={activeDetailId ?? ""} open={!!activeDetailId} onClose={() => { if (idFromRoute) navigate("/reservations"); setDetailId(null); }} />
@@ -109,6 +111,11 @@ export default function Reservations() {
       />
       {editId && <EditReservationModal reservationId={editId} open={!!editId} onClose={() => setEditId(null)} onSuccess={() => { refetch(); refetchStats(); setEditId(null); }} />}
       <VoucherModal reservation={voucherRes} open={!!voucherRes} onClose={() => setVoucherRes(null)} />
+      <ReservationCsvImportModal
+        open={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
+        onImported={() => { refetch(); refetchStats(); }}
+      />
 
       <AlertDialog open={!!confirmCancel} onOpenChange={o => { if (!o) setConfirmCancel(null); }}>
         <AlertDialogContent>
