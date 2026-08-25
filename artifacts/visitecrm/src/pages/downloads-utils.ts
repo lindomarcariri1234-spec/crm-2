@@ -5,7 +5,7 @@
  * Kept separate so they can be unit-tested without mounting the full React component.
  */
 import { format, parseISO } from "date-fns";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { Client, Trip, Referral, Commission, Deal } from "@workspace/api-client-react";
@@ -232,15 +232,26 @@ export function preparePipeline(
 // Download helpers
 // --------------------------------------------------------------------------
 
-export function downloadXlsx(
+export async function downloadXlsx(
   headers: string[],
   rows: string[][],
   filename: string,
-): void {
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Dados");
-  XLSX.writeFile(wb, filename);
+): Promise<void> {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Dados");
+  worksheet.addRows([headers, ...rows]);
+
+  const workbookData = await workbook.xlsx.writeBuffer();
+  const blob = new Blob(
+    [workbookData],
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 export function downloadPdf(
