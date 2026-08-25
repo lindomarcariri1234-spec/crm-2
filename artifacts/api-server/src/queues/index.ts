@@ -72,12 +72,7 @@ export interface PdfManifestJobData {
   type: "manifest";
   tenantId: string;
   tripId: string;
-  tripName: string;
-  manifestNumber: string | null;
-  agencyName: string;
   recipientEmail: string;
-  htmlContent: string;
-  pdfBase64: string;
   userId: string;
   ipAddress: string | null;
   userAgent: string | null;
