@@ -4,13 +4,16 @@ const {
   mockSelect,
   mockUpdate,
   mockSendReservationConfirmationEmail,
+  mockSendReminderHtmlEmail,
   mockWorker,
   mockAnd,
   mockEq,
   processors,
+  failedHandlers,
   updateWheres,
 } = vi.hoisted(() => {
   const processors: Array<(job: unknown) => Promise<unknown>> = [];
+  const failedHandlers: Array<(job: unknown, err: Error) => Promise<unknown>> = [];
   const updateWheres: unknown[] = [];
   const set = vi.fn(() => ({
     where: vi.fn((condition: unknown) => {
@@ -23,13 +26,20 @@ const {
     mockSelect: vi.fn(),
     mockUpdate: vi.fn(() => ({ set })),
     mockSendReservationConfirmationEmail: vi.fn(),
+    mockSendReminderHtmlEmail: vi.fn(),
     mockWorker: vi.fn().mockImplementation((_queue, processor) => {
       processors.push(processor);
-      return { on: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+      return {
+        on: vi.fn((event, handler) => {
+          if (event === "failed") failedHandlers.push(handler);
+        }),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
     }),
     mockAnd: vi.fn((...conditions: unknown[]) => ({ conditions })),
     mockEq: vi.fn((column, value) => ({ column, value })),
     processors,
+    failedHandlers,
     updateWheres,
   };
 });
@@ -45,7 +55,12 @@ vi.mock("@workspace/db", () => ({
     id: "email_logs.id",
     tenantId: "email_logs.tenant_id",
   },
-  campaignSendsTable: {},
+  campaignSendsTable: {
+    id: "campaign_sends.id",
+    campaignId: "campaign_sends.campaign_id",
+    clientId: "campaign_sends.client_id",
+    tenantId: "campaign_sends.tenant_id",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -64,7 +79,7 @@ vi.mock("@workspace/email", () => ({
   sendReferralExpiringSoonEmail: vi.fn(),
   sendReferralBonusReleasedEmail: vi.fn(),
   sendReferralWelcomeEmail: vi.fn(),
-  sendReminderHtmlEmail: vi.fn(),
+  sendReminderHtmlEmail: mockSendReminderHtmlEmail,
   sendReferralLoyaltyPointsEmail: vi.fn(),
 }));
 
@@ -99,6 +114,7 @@ describe("email worker tenant-scoped email logs", () => {
     await stopEmailWorker();
     vi.clearAllMocks();
     processors.length = 0;
+    failedHandlers.length = 0;
     updateWheres.length = 0;
   });
 
@@ -151,6 +167,117 @@ describe("email worker tenant-scoped email logs", () => {
         conditions: [
           { column: "email_logs.id", value: "log-1" },
           { column: "email_logs.tenant_id", value: "tenant-a" },
+        ],
+      },
+    ]);
+  });
+});
+
+
+describe("email worker tenant-scoped campaign sends", () => {
+  beforeEach(async () => {
+    await stopEmailWorker();
+    vi.clearAllMocks();
+    processors.length = 0;
+    failedHandlers.length = 0;
+    updateWheres.length = 0;
+  });
+
+  it("skips a campaign email whose campaign send is not owned by the payload tenant", async () => {
+    mockScopedLogLookup([]);
+    startEmailWorker();
+
+    await processors[0]({
+      id: "campaign-job-1",
+      name: "campaign-email",
+      data: {
+        to: "client@example.com",
+        toName: "Client",
+        subject: "A campaign",
+        htmlContent: "<p>Hello</p>",
+        fromName: "Agency",
+        campaignId: "campaign-1",
+        clientId: "client-1",
+        tenantId: "tenant-a",
+      },
+    });
+
+    expect(mockAnd).toHaveBeenCalledWith(
+      { column: "campaign_sends.id", value: "campaign-job-1" },
+      { column: "campaign_sends.campaign_id", value: "campaign-1" },
+      { column: "campaign_sends.client_id", value: "client-1" },
+      { column: "campaign_sends.tenant_id", value: "tenant-a" },
+    );
+    expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("sends and updates a campaign send owned by the payload tenant", async () => {
+    mockScopedLogLookup([{ id: "campaign-send-1" }]);
+    mockSendReminderHtmlEmail.mockResolvedValue({
+      success: true,
+      messageId: "provider-message-1",
+    });
+    startEmailWorker();
+
+    await processors[0]({
+      id: "campaign-job-2",
+      name: "campaign-email",
+      data: {
+        to: "client@example.com",
+        toName: "Client",
+        subject: "A campaign",
+        htmlContent: "<p>Hello</p>",
+        fromName: "Agency",
+        campaignId: "campaign-1",
+        clientId: "client-1",
+        tenantId: "tenant-a",
+      },
+    });
+
+    expect(mockSendReminderHtmlEmail).toHaveBeenCalledWith({
+      to: "client@example.com",
+      subject: "A campaign",
+      html: "<p>Hello</p>",
+      fromName: "Agency",
+    });
+    expect(updateWheres).toEqual([
+      {
+        conditions: [
+          { column: "campaign_sends.id", value: "campaign-job-2" },
+          { column: "campaign_sends.campaign_id", value: "campaign-1" },
+          { column: "campaign_sends.client_id", value: "client-1" },
+          { column: "campaign_sends.tenant_id", value: "tenant-a" },
+        ],
+      },
+    ]);
+  });
+
+  it("tenant-scopes the campaign send update after exhausted retries", async () => {
+    startEmailWorker();
+
+    await failedHandlers[0](
+      {
+        id: "campaign-job-3",
+        name: "campaign-email",
+        attemptsMade: 3,
+        opts: { attempts: 3 },
+        data: {
+          campaignId: "campaign-1",
+          clientId: "client-1",
+          tenantId: "tenant-a",
+        },
+      },
+      new Error("Provider unavailable"),
+    );
+
+    expect(updateWheres).toEqual([
+      {
+        conditions: [
+          { column: "campaign_sends.id", value: "campaign-job-3" },
+          { column: "campaign_sends.campaign_id", value: "campaign-1" },
+          { column: "campaign_sends.client_id", value: "client-1" },
+          { column: "campaign_sends.tenant_id", value: "tenant-a" },
         ],
       },
     ]);

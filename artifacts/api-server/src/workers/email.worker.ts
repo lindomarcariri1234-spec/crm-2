@@ -47,6 +47,28 @@ async function updateEmailLogForTenant(
     );
 }
 
+async function campaignSendBelongsToTenant(
+  sendId: string,
+  campaignId: string,
+  clientId: string,
+  tenantId: string,
+): Promise<boolean> {
+  const [campaignSend] = await db
+    .select({ id: campaignSendsTable.id })
+    .from(campaignSendsTable)
+    .where(
+      and(
+        eq(campaignSendsTable.id, sendId),
+        eq(campaignSendsTable.campaignId, campaignId),
+        eq(campaignSendsTable.clientId, clientId),
+        eq(campaignSendsTable.tenantId, tenantId),
+      ),
+    )
+    .limit(1);
+
+  return Boolean(campaignSend);
+}
+
 export function startEmailWorker(): Worker<EmailJobData> | null {
   const conn = getRedisConnection();
   if (!conn) {
@@ -183,7 +205,14 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
           });
         }
       } else if (job.name === "campaign-email") {
-        const { to, subject, htmlContent, fromName, campaignId, clientId } = job.data as CampaignEmailJobData;
+        const { to, subject, htmlContent, fromName, campaignId, clientId, tenantId } = job.data as CampaignEmailJobData;
+        if (!job.id || !(await campaignSendBelongsToTenant(job.id, campaignId, clientId, tenantId))) {
+          logger.warn(
+            { jobId: job.id, campaignId, clientId, tenantId },
+            "[email-worker] Skipping campaign email job: campaign send does not belong to tenant",
+          );
+          return;
+        }
         result = await sendReminderHtmlEmail({ to, subject, html: htmlContent, fromName });
         if (result.success) {
           await db
@@ -191,8 +220,10 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
             .set({ status: "sent", error: null })
             .where(
               and(
+                eq(campaignSendsTable.id, job.id),
                 eq(campaignSendsTable.campaignId, campaignId),
-                eq(campaignSendsTable.clientId, clientId)
+                eq(campaignSendsTable.clientId, clientId),
+                eq(campaignSendsTable.tenantId, tenantId),
               )
             );
         }
@@ -232,19 +263,29 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
       );
 
       if (job.name === "campaign-email") {
-        const { campaignId, clientId } = job.data as CampaignEmailJobData;
+        const { campaignId, clientId, tenantId } = job.data as CampaignEmailJobData;
+        const sendId = job.id;
+        if (!sendId) {
+          logger.error(
+            { campaignId, clientId, tenantId },
+            "[email-worker] Failed campaign job has no durable send ID",
+          );
+          return;
+        }
         try {
           await db
             .update(campaignSendsTable)
             .set({ status: "error", error: err?.message ?? "All retries exhausted" })
             .where(
               and(
+                eq(campaignSendsTable.id, sendId),
                 eq(campaignSendsTable.campaignId, campaignId),
-                eq(campaignSendsTable.clientId, clientId)
+                eq(campaignSendsTable.clientId, clientId),
+                eq(campaignSendsTable.tenantId, tenantId),
               )
             );
         } catch (dbErr) {
-          logger.error({ jobId: job.id, campaignId, clientId, dbErr }, "[email-worker] Failed to update campaign_sends after exhausted retries");
+          logger.error({ jobId: job.id, campaignId, clientId, tenantId, dbErr }, "[email-worker] Failed to update campaign_sends after exhausted retries");
         }
       } else {
         const data = job.data as Partial<ReservationEmailJobData & CancellationEmailJobData>;
