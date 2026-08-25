@@ -42,6 +42,7 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
   const [progress, setProgress] = useState(0);
   const [successCount, setSuccessCount] = useState(0);
   const [ignoredCount, setIgnoredCount] = useState(0);
+  const [importIdempotencyKey, setImportIdempotencyKey] = useState("");
 
   function reset() {
     setHeaders([]);
@@ -52,6 +53,7 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
     setProgress(0);
     setSuccessCount(0);
     setIgnoredCount(0);
+    setImportIdempotencyKey("");
   }
 
   function handleFile(event: React.ChangeEvent<HTMLInputElement>) {
@@ -79,6 +81,7 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
       setSuccessCount(0);
       setIgnoredCount(0);
       setProgress(0);
+      setImportIdempotencyKey(crypto.randomUUID());
     };
     reader.readAsText(file, "UTF-8");
     event.target.value = "";
@@ -90,47 +93,60 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
     setProgress(0);
     setSuccessCount(0);
     setIgnoredCount(0);
-    const validationErrors = rows
-      .map((row, index) => buildTripCsvData(headers, row, index + 2).error)
-      .filter((error): error is string => Boolean(error));
-    const importErrors: string[] = [...validationErrors];
+    const requestIdempotencyKey = importIdempotencyKey || crypto.randomUUID();
+    if (!importIdempotencyKey) setImportIdempotencyKey(requestIdempotencyKey);
+    const importErrors: string[] = [];
     let imported = 0;
     let ignored = 0;
     const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+    const importRows = rows.map((row, index) => ({
+      line: index + 2,
+      data: buildTripCsvData(headers, row, index + 2).data ?? {},
+    }));
+    setProgress(10);
 
-    for (let index = 0; index < validRows.length; index += 1) {
-      const item = validRows[index];
-      try {
-        const response = await fetch(`${basePath}/api/trips`, {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "x-visitecrm-import": "trip-csv",
-          },
-          body: JSON.stringify(item.data),
-        });
-        const body = await response.json().catch(() => ({})) as { error?: string; code?: string };
-        if (response.ok) {
-          imported += 1;
-          setSuccessCount(imported);
-        } else if (response.status === 409 && body.code === "TRIP_IMPORT_DUPLICATE") {
-          ignored += 1;
-          setIgnoredCount(ignored);
-        } else {
-          importErrors.push(`Linha ${item.line}: ${item.data.name} — ${body.error ?? "erro ao criar viagem"}`);
-        }
-      } catch {
-        importErrors.push(`Linha ${item.line}: ${item.data.name} — erro de rede ao criar viagem`);
+    try {
+      const response = await fetch(`${basePath}/api/trips/import`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idempotencyKey: requestIdempotencyKey,
+          rows: importRows,
+        }),
+      });
+      const body = await response.json().catch(() => ({})) as {
+        error?: string;
+        code?: string;
+        results?: Array<{ line: number; name: string; status: "created" | "duplicate" | "error"; error?: string }>;
+      };
+      if (!response.ok) {
+        importErrors.push(body.error ?? "A importação não foi concluída. Tente retomar.");
+      } else {
+        const results = body.results ?? [];
+        imported = results.filter(result => result.status === "created").length;
+        ignored = results.filter(result => result.status === "duplicate").length;
+        setSuccessCount(imported);
+        setIgnoredCount(ignored);
+        importErrors.push(
+          ...results
+            .filter(result => result.status === "error")
+            .map(result => `Linha ${result.line}: ${result.name} — ${result.error ?? "erro ao criar viagem"}`),
+        );
+        if (imported > 0) onImported();
       }
-      setProgress(Math.round(((index + 1) / validRows.length) * 100));
+      setProgress(100);
+    } catch {
+      importErrors.push("Importação interrompida por erro de rede. Clique em retomar para continuar sem duplicar viagens.");
     }
 
     setImporting(false);
     setErrors(importErrors);
-    if (imported > 0) onImported();
+    if (importErrors.length === 0) setImportIdempotencyKey("");
     toast({
-      title: `Importação concluída: ${imported} criada(s), ${ignored} ignorada(s), ${importErrors.length} erro(s)`,
+      title: importErrors.length
+        ? "Importação interrompida ou concluída com erros"
+        : `Importação concluída: ${imported} criada(s), ${ignored} ignorada(s)`,
       variant: importErrors.length ? "destructive" : "default",
     });
   }
@@ -207,7 +223,7 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
                 <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${progress}%` }} />
               </div>
               <p className="text-xs text-muted-foreground text-center flex items-center justify-center gap-1">
-                <Loader2 className="w-3 h-3 animate-spin" /> Importando... {progress}%
+                 <Loader2 className="w-3 h-3 animate-spin" /> Enviando lote... {progress}%
               </p>
             </div>
           )}
@@ -231,7 +247,11 @@ export function TripCsvImportModal({ open, onClose, onImported }: TripCsvImportM
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={importing}>Cancelar</Button>
           <Button onClick={handleImport} disabled={importing || validRows.length === 0}>
-            {importing ? `Importando ${progress}%...` : `Confirmar e importar ${validRows.length} viagem(ns)`}
+            {importing
+              ? `Enviando lote ${progress}%...`
+              : importIdempotencyKey && errors.length > 0
+                ? `Retomar importação (${rows.length} linha(s))`
+                : `Confirmar e importar ${rows.length} viagem(ns)`}
           </Button>
         </DialogFooter>
       </DialogContent>

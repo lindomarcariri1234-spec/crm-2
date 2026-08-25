@@ -1,11 +1,12 @@
 import { Router, type NextFunction, type Response } from "express";
+import { createHash } from "node:crypto";
 import sanitizeHtml from "sanitize-html";
 import { db } from "@workspace/db";
 import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { tryAddBoardingClient, removeBoardingClient, emitBoardingUpdate } from "../lib/boarding-sse";
 import { getClientIp } from "../lib/get-client-ip";
-import { tripsTable, reservationsTable, passengersTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable } from "@workspace/db";
+import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, type TripImportResult } from "@workspace/db";
 import { checkPlanLimit } from "../lib/planLimits";
 import type { LayoutCell, FixedCostItem, VariableCostItem, FreePassenger } from "@workspace/db";
 import { eq, and, ilike, sql, desc, asc, inArray, or, gt, isNotNull } from "drizzle-orm";
@@ -61,6 +62,138 @@ const ListTripsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(500).default(20),
 });
+
+const TripImportRequest = z.object({
+  idempotencyKey: z.string().trim().min(1).max(200),
+  rows: z.array(z.object({
+    line: z.number().int().min(1),
+    data: z.unknown(),
+  })).min(1).max(500),
+}).strict();
+
+type TripQueryExecutor = Pick<typeof db, "select">;
+
+async function buildTripInsertValues(
+  parsedData: z.infer<typeof CreateTripBody>,
+  me: { tenantId: string; id: string },
+  queryDb: TripQueryExecutor,
+  id: string,
+  isCsvImport: boolean,
+) {
+  const departureDate = parseBrazilDate(parsedData.departureDate);
+  const slug = parsedData.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + id.slice(0, 4);
+  let seatMap: Record<string, unknown> = {};
+  const layout = parsedData.seatLayout ?? "2x2";
+  let totalCapacity = parsedData.totalCapacity;
+  let layoutId: string | null = parsedData.layoutId ?? null;
+
+  if (layoutId) {
+    const [layoutRow] = await queryDb.select().from(vehicleLayoutsTable)
+      .where(and(eq(vehicleLayoutsTable.id, layoutId), eq(vehicleLayoutsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!layoutRow) throw new ValidationError("Layout não encontrado", "VALIDATION_ERROR");
+    const cells = (layoutRow.cells ?? []) as LayoutCell[];
+    seatMap = generateSeatMapFromLayout(cells, layoutRow.numberingType);
+    totalCapacity = cells.filter(c => ["seat", "vip", "accessible"].includes(c.type)).length;
+  } else {
+    const cols = layout === "2x1" ? 3 : 4;
+    const rows = Math.ceil(totalCapacity / cols);
+    let seatNum = 1;
+    for (let r = 1; r <= rows; r++) {
+      for (let c = 1; c <= cols; c++) {
+        if (seatNum <= totalCapacity) {
+          seatMap[`${seatNum}`] = { row: r, col: c, status: "available" };
+          seatNum++;
+        }
+      }
+    }
+  }
+
+  const [tenantRow] = await queryDb
+    .select({ planId: tenantsTable.planId })
+    .from(tenantsTable)
+    .where(eq(tenantsTable.id, me.tenantId))
+    .limit(1);
+  const tenantPlanId = tenantRow?.planId ?? "starter";
+  const [tenantPlanRow] = await queryDb
+    .select({ supportedFeatures: plansTable.supportedFeatures })
+    .from(plansTable)
+    .where(or(eq(plansTable.id, tenantPlanId), eq(plansTable.slug, tenantPlanId)))
+    .limit(1);
+  const planSupportsSeatMap = hasSeatMapFeature((tenantPlanRow?.supportedFeatures ?? []) as string[]);
+
+  return {
+    id,
+    tenantId: me.tenantId,
+    name: parsedData.name,
+    slug,
+    importFingerprint: isCsvImport ? tripImportFingerprint(parsedData, departureDate) : null,
+    description: sanitizeTripDescription(parsedData.description),
+    shortDescription: parsedData.shortDescription ?? null,
+    destination: parsedData.destination,
+    destinationCity: parsedData.destinationCity,
+    destinationState: parsedData.destinationState,
+    destinationCountry: parsedData.destinationCountry ?? "Brasil",
+    type: parsedData.type,
+    category: parsedData.category,
+    departureDate,
+    returnDate: parsedData.returnDate ? parseBrazilDate(parsedData.returnDate) : null,
+    registrationDeadline: parsedData.registrationDeadline ? parseBrazilDate(parsedData.registrationDeadline) : null,
+    totalCapacity,
+    availableSeats: totalCapacity,
+    priceAdult: String(parsedData.priceAdult),
+    priceChild: parsedData.priceChild != null ? String(parsedData.priceChild) : null,
+    priceInfant: parsedData.priceInfant != null ? String(parsedData.priceInfant) : null,
+    priceSenior: parsedData.priceSenior != null ? String(parsedData.priceSenior) : null,
+    reservationFee: parsedData.reservationFee != null ? String(parsedData.reservationFee) : null,
+    inclusions: parsedData.inclusions ?? [],
+    exclusions: parsedData.exclusions ?? [],
+    coverImage: parsedData.coverImage ?? null,
+    seatLayout: layout,
+    layoutId,
+    itinerary: parsedData.itinerary ?? null,
+    boardingPoints: (parsedData.boardingPoints ?? []) as { id: string; name: string; time: string; address: string }[],
+    fixedCosts: Array.isArray(parsedData.fixedCosts) ? parsedData.fixedCosts as FixedCostItem[] : [],
+    variableCosts: Array.isArray(parsedData.variableCosts) ? parsedData.variableCosts as VariableCostItem[] : [],
+    gallery: parsedData.gallery ?? [],
+    videos: parsedData.videos ?? [],
+    seatMap,
+    vehiclePlate: parsedData.vehiclePlate ?? null,
+    vehicleType: parsedData.vehicleType ?? null,
+    driverName: parsedData.driverName ?? null,
+    driverCnh: parsedData.driverCnh ?? null,
+    driverPhone: parsedData.driverPhone ?? null,
+    tourGuide: parsedData.tourGuide ?? null,
+    tripOrganizer: parsedData.tripOrganizer ?? null,
+    freeOrganizers: parsedData.freeOrganizers ?? 0,
+    freeGuides: parsedData.freeGuides ?? 0,
+    originCity: parsedData.originCity ?? null,
+    originState: parsedData.originState ?? null,
+    departureTime: parsedData.departureTime ?? null,
+    returnTime: parsedData.returnTime ?? null,
+    createdById: me.id,
+    isPublic: parsedData.isPublic ?? false,
+    isFeatured: parsedData.isFeatured ?? false,
+    isAvailableInShop: parsedData.isAvailableInShop ?? false,
+    ...(parsedData.status ? { status: parsedData.status } : {}),
+    driver1Cpf: parsedData.driver1Cpf ?? null,
+    driver1Cnh: parsedData.driver1Cnh ?? null,
+    driver1CnhCategory: parsedData.driver1CnhCategory ?? null,
+    driver1CnhExpiry: parsedData.driver1CnhExpiry ?? null,
+    driver2Name: parsedData.driver2Name ?? null,
+    driver2Cpf: parsedData.driver2Cpf ?? null,
+    driver2Cnh: parsedData.driver2Cnh ?? null,
+    driver2CnhCategory: parsedData.driver2CnhCategory ?? null,
+    driver2CnhExpiry: parsedData.driver2CnhExpiry ?? null,
+    tourGuideCpf: parsedData.tourGuideCpf ?? null,
+    tourGuideRegistration: parsedData.tourGuideRegistration ?? null,
+    manifestNumber: parsedData.manifestNumber ?? null,
+    cancellationPolicy: parsedData.cancellationPolicy ?? null,
+    metaTitle: parsedData.metaTitle ?? null,
+    metaDescription: parsedData.metaDescription ?? null,
+    showSeatMap: planSupportsSeatMap ? (parsedData.showSeatMap ?? true) : true,
+  };
+}
 
 const ExportTripsQuery = z.object({
   format: z.enum(["json", "ndjson"]).default("json"),
@@ -453,6 +586,207 @@ router.get("/trips/export", async (req, res, next: NextFunction): Promise<void> 
       res.end(`],"total":${exportedCount}}`);
     } else {
       res.end();
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/trips/import", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) {
+      next(new ForbiddenError("Apenas administradores podem importar viagens", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const parsedRequest = TripImportRequest.safeParse(req.body);
+    if (!parsedRequest.success) {
+      next(new ValidationError(String(parsedRequest.error.message), "VALIDATION_ERROR"));
+      return;
+    }
+
+    const { idempotencyKey, rows } = parsedRequest.data;
+    const requestHash = createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+    const validatedRows = rows.map((row) => {
+      const rowData = row.data && typeof row.data === "object"
+        ? row.data as { name?: unknown }
+        : {};
+      const name = typeof rowData.name === "string" ? rowData.name : "Viagem";
+      const rowParsed = CreateTripBody.safeParse(row.data);
+      if (!rowParsed.success) {
+        return {
+          line: row.line,
+          name,
+          data: undefined,
+          error: `Linha ${row.line}: ${rowParsed.error.errors[0]?.message ?? "dados inválidos"}`,
+        };
+      }
+      return { line: row.line, name: rowParsed.data.name, data: rowParsed.data, error: undefined };
+    });
+
+    type ImportTransactionResult =
+      | { kind: "replay"; results: TripImportResult[] }
+      | { kind: "conflict" }
+      | { kind: "response"; status: number; body: Record<string, unknown> };
+
+    let transactionResult: ImportTransactionResult;
+    try {
+      transactionResult = await db.transaction(async (tx): Promise<ImportTransactionResult> => {
+        // Serializing on the tenant row makes the count-and-insert operation safe
+        // when two browser tabs import at the same time.
+        const tenantLockResult = await tx.execute(sql`
+          SELECT id, status, trial_ends_at, plan_id, max_trips_override
+          FROM tenants
+          WHERE id = ${me.tenantId}
+          FOR UPDATE
+        `);
+        const tenant = (tenantLockResult as unknown as {
+          rows: Array<{
+            id: string;
+            status: string;
+            trial_ends_at: Date | null;
+            plan_id: string | null;
+            max_trips_override: number | null;
+          }>;
+        }).rows[0];
+        if (!tenant) {
+          return { kind: "response", status: 404, body: { error: "Tenant não encontrado" } };
+        }
+        if (tenant.status === "suspended" || tenant.status === "cancelled" || tenant.status === "pending_payment") {
+          const messages: Record<string, string> = {
+            suspended: "Esta conta está suspensa.",
+            cancelled: "A assinatura desta conta foi cancelada.",
+            pending_payment: "É necessário concluir o pagamento para continuar.",
+          };
+          return {
+            kind: "response",
+            status: 403,
+            body: { error: tenant.status === "suspended" ? "TENANT_SUSPENDED" : tenant.status === "cancelled" ? "SUBSCRIPTION_CANCELLED" : "SUBSCRIPTION_PAYMENT_REQUIRED", message: messages[tenant.status] },
+          };
+        }
+        if (tenant.status === "trial" && tenant.trial_ends_at && tenant.trial_ends_at < new Date()) {
+          return { kind: "response", status: 403, body: { error: "TRIAL_EXPIRED", message: "O período de teste expirou. Assine um plano para continuar." } };
+        }
+
+        const [existingBatch] = await tx.select().from(tripImportBatchesTable)
+          .where(and(
+            eq(tripImportBatchesTable.tenantId, me.tenantId),
+            eq(tripImportBatchesTable.idempotencyKey, idempotencyKey),
+          ))
+          .limit(1);
+        if (existingBatch) {
+          if (existingBatch.requestHash !== requestHash) return { kind: "conflict" };
+          return { kind: "replay", results: (existingBatch.results ?? []) as TripImportResult[] };
+        }
+
+        const [plan] = await tx.select({ maxTrips: plansTable.maxTrips })
+          .from(plansTable)
+          .where(or(
+            eq(plansTable.id, tenant.plan_id ?? "starter"),
+            eq(plansTable.slug, tenant.plan_id ?? "starter"),
+          ))
+          .limit(1);
+        const maxAllowed = tenant.max_trips_override ?? plan?.maxTrips ?? 20;
+        const [countRow] = await tx.select({ count: sql<number>`count(*)` })
+          .from(tripsTable)
+          .where(eq(tripsTable.tenantId, me.tenantId));
+        const currentCount = Number(countRow?.count ?? 0);
+
+        const existingFingerprints = await tx.select({
+          id: tripsTable.id,
+          importFingerprint: tripsTable.importFingerprint,
+        }).from(tripsTable).where(and(
+          eq(tripsTable.tenantId, me.tenantId),
+          isNotNull(tripsTable.importFingerprint),
+        ));
+        const fingerprintToTripId = new Map(
+          existingFingerprints
+            .filter((trip): trip is { id: string; importFingerprint: string } => Boolean(trip.importFingerprint))
+            .map((trip) => [trip.importFingerprint, trip.id]),
+        );
+
+        const validNewFingerprints = new Set<string>();
+        for (const row of validatedRows) {
+          if (!row.data) continue;
+          const fingerprint = tripImportFingerprint(row.data, parseBrazilDate(row.data.departureDate));
+          if (!fingerprintToTripId.has(fingerprint)) validNewFingerprints.add(fingerprint);
+        }
+        const limitError = currentCount + validNewFingerprints.size > maxAllowed
+          ? `Limite do plano atingido: máximo de ${maxAllowed} viagens. Faça upgrade para continuar.`
+          : undefined;
+        const results: TripImportResult[] = [];
+        const createdTripIds: string[] = [];
+
+        for (const row of validatedRows) {
+          if (!row.data) {
+            results.push({ line: row.line, name: row.name, status: "error", error: row.error });
+            continue;
+          }
+          const fingerprint = tripImportFingerprint(row.data, parseBrazilDate(row.data.departureDate));
+          const duplicateTripId = fingerprintToTripId.get(fingerprint);
+          if (duplicateTripId) {
+            results.push({ line: row.line, name: row.name, status: "duplicate", tripId: duplicateTripId });
+            continue;
+          }
+          if (limitError) {
+            results.push({ line: row.line, name: row.name, status: "error", error: limitError });
+            continue;
+          }
+
+          const id = generateId();
+          const values = await buildTripInsertValues(row.data, me, tx, id, true);
+          const inserted = await tx.insert(tripsTable).values(values).onConflictDoNothing({
+            target: [tripsTable.tenantId, tripsTable.importFingerprint],
+          }).returning({ id: tripsTable.id });
+          if (!inserted.length) {
+            results.push({ line: row.line, name: row.name, status: "duplicate" });
+            continue;
+          }
+          fingerprintToTripId.set(fingerprint, id);
+          createdTripIds.push(id);
+          results.push({ line: row.line, name: row.name, status: "created", tripId: id });
+        }
+
+        const batchId = generateId();
+        await tx.insert(tripImportBatchesTable).values({
+          id: batchId,
+          tenantId: me.tenantId,
+          idempotencyKey,
+          requestHash,
+          status: "completed",
+          results,
+          createdById: me.id,
+        });
+        return { kind: "response", status: 200, body: { importId: batchId, results, createdTripIds } };
+      });
+    } catch (error) {
+      logger.error({ err: error, tenantId: me.tenantId, idempotencyKey }, "[trips] import transaction rolled back");
+      next(new AppError(
+        "Importação não concluída; nenhuma viagem foi criada. Tente novamente com a mesma chave.",
+        500,
+        "TRIP_IMPORT_FAILED",
+      ));
+      return;
+    }
+
+    if (transactionResult.kind === "conflict") {
+      res.status(409).json({
+        error: "A chave de importação já foi usada com outro lote.",
+        code: "TRIP_IMPORT_IDEMPOTENCY_CONFLICT",
+      });
+      return;
+    }
+    if (transactionResult.kind === "replay") {
+      res.status(200).json({ replayed: true, results: transactionResult.results });
+      return;
+    }
+    res.status(transactionResult.status).json(transactionResult.body);
+    if (transactionResult.body.createdTripIds && Array.isArray(transactionResult.body.createdTripIds)) {
+      for (const tripId of transactionResult.body.createdTripIds as string[]) {
+        scheduleCalendarSyncTrip(tripId).catch((err) => logger.warn({ err }, "[trips] calendar sync (import) failed"));
+      }
     }
   } catch (err) {
     next(err);
