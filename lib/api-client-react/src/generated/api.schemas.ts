@@ -5,103 +5,113 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatusDatabase {
-  connected: boolean;
-}
+export type ReservationStatus =
+  (typeof ReservationStatus)[keyof typeof ReservationStatus];
 
-export interface HealthStatusRedis {
+export const ReservationStatus = {
+  pending: "pending",
+  confirmed: "confirmed",
+  cancelled: "cancelled",
+  refunded: "refunded",
+  completed: "completed",
+  failed: "failed",
+} as const;
+
+export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
+
+export const PaymentStatus = {
+  pending: "pending",
+  paid: "paid",
+  overdue: "overdue",
+  cancelled: "cancelled",
+  approved: "approved",
+  failed: "failed",
+  refunded: "refunded",
+  charged_back: "charged_back",
+} as const;
+
+export type PaymentType = (typeof PaymentType)[keyof typeof PaymentType];
+
+export const PaymentType = {
+  receivable: "receivable",
+  payable: "payable",
+} as const;
+
+export type CommissionStatus =
+  (typeof CommissionStatus)[keyof typeof CommissionStatus];
+
+export const CommissionStatus = {
+  pending: "pending",
+  approved: "approved",
+  paid: "paid",
+  cancelled: "cancelled",
+} as const;
+
+export type DealStatus = (typeof DealStatus)[keyof typeof DealStatus];
+
+export const DealStatus = {
+  open: "open",
+  won: "won",
+  lost: "lost",
+} as const;
+
+export type TripStatus = (typeof TripStatus)[keyof typeof TripStatus];
+
+export const TripStatus = {
+  draft: "draft",
+  published: "published",
+  active: "active",
+  confirmed: "confirmed",
+  cancelled: "cancelled",
+  completed: "completed",
+} as const;
+
+export type Role = (typeof Role)[keyof typeof Role];
+
+export const Role = {
+  superadmin: "superadmin",
+  agencia: "agencia",
+  gerente: "gerente",
+  vendedor: "vendedor",
+  suporte: "suporte",
+  cliente: "cliente",
+} as const;
+
+export type ExpenseStatus = (typeof ExpenseStatus)[keyof typeof ExpenseStatus];
+
+export const ExpenseStatus = {
+  pending: "pending",
+  paid: "paid",
+  overdue: "overdue",
+  cancelled: "cancelled",
+} as const;
+
+export type HealthStatusDatabase = {
+  connected: boolean;
+};
+
+export type HealthStatusRedis = {
   connected: boolean;
   configured: boolean;
-}
+};
 
-export interface HealthStatusWorkers {
+export type HealthStatusBullmqWorkers = {
   email: boolean;
   reminder: boolean;
   pdf: boolean;
   commissionSync: boolean;
-}
+};
 
-export interface HealthStatusBullmq {
+export type HealthStatusBullmq = {
   active: boolean;
-  workers: HealthStatusWorkers;
-}
+  workers: HealthStatusBullmqWorkers;
+};
 
 export interface HealthStatus {
   status: string;
   database: HealthStatusDatabase;
   redis: HealthStatusRedis;
   bullmq: HealthStatusBullmq;
-}
-
-export interface SystemHealthRedisDailyUsage {
-  commandCount: number;
-  maxCommands: number;
-  usagePct: number;
-  warningThresholdPct: number;
-}
-
-export interface SystemHealthRedis {
-  status: "ok" | "degraded" | "unavailable";
-  dailyUsage?: SystemHealthRedisDailyUsage;
-}
-
-export interface SystemHealthWorkers {
-  enabled: boolean;
-}
-
-export interface SystemHealthStripeWebhookAuditEndpoint {
-  id: string;
-  url: string;
-}
-
-export type SystemHealthStripeWebhookAuditStatus = "ok" | "duplicate" | "unknown";
-
-export interface SystemHealthStripeWebhookAudit {
-  status: SystemHealthStripeWebhookAuditStatus;
-  duplicateCount: number;
-  endpoints: SystemHealthStripeWebhookAuditEndpoint[];
-  checkedAt: string | null;
-}
-
-export interface SystemHealthStripeSyncTables {
-  ok: boolean | null;
-  checkedAt: string | null;
-}
-
-export interface SystemHealthSeatDrift {
-  tripsChecked: number;
-  tripsWithDrift: number;
-  status: "ok" | "drift_detected";
-}
-
-export interface SystemHealthPipelineOrphans {
-  openDealsOnCancelledReservations: number;
-  status: "ok" | "orphans_detected";
-}
-
-export interface SystemHealthClientFinancialDrift {
-  clientsWithNegativeBalance: number;
-  status: "ok" | "drift_detected";
-}
-
-export interface SystemHealth {
-  redis: SystemHealthRedis;
-  workers: SystemHealthWorkers;
-  stripeWebhookAudit: SystemHealthStripeWebhookAudit;
-  stripeSyncTables: SystemHealthStripeSyncTables;
-  seatDrift?: SystemHealthSeatDrift;
-  pipelineOrphans?: SystemHealthPipelineOrphans;
-  clientFinancialDrift?: SystemHealthClientFinancialDrift;
-}
-
-export interface RepairSystemHealth {
-  orphansFixed: number;
-  tripsCorrected: number;
-}
-
-export interface RepairSeatDrift {
-  fixed: number;
-  skipped: number;
 }
 
 export interface SuccessResponse {
@@ -135,45 +145,6 @@ export interface DashboardSummary {
   totalPayable: number;
   avgReservationsPerTrip: number;
   totalFaturamento: number;
-  salesThisMonth?: number;
-  pendingReservations?: number;
-  overduePaymentsCount?: number;
-  overduePayments?: number;
-  loyaltyPointsIssued?: number;
-  retentionRate?: number;
-  tripsThisMonth?: number;
-  conversionRate?: number;
-  profit?: number;
-  profitMargin?: number;
-  avgNps?: number | null;
-  pipelineLeads?: number;
-}
-
-export interface DashboardComparativeItem {
-  month: string;
-  key: string;
-  revenue: number;
-  expenses: number;
-  profit: number;
-  reservations: number;
-  /** @nullable */
-  revenueGrowth?: number | null;
-  /** @nullable */
-  expensesGrowth?: number | null;
-  /** @nullable */
-  profitGrowth?: number | null;
-  /** @nullable */
-  reservationsGrowth?: number | null;
-}
-
-export interface DashboardTopCustomer {
-  id: string;
-  name: string;
-  email: string;
-  /** @nullable */
-  photoUrl?: string | null;
-  totalSpent: number;
-  reservationCount: number;
 }
 
 export type DashboardChartsTopDestinationsItem = {
@@ -279,8 +250,6 @@ export interface TripSummary {
   status: string;
   /** @nullable */
   coverImage?: string | null;
-  /** @nullable */
-  numberingType?: string | null;
 }
 
 export interface ActivityItem {
@@ -356,32 +325,6 @@ export interface Client {
   isNew?: boolean | null;
   /** @nullable */
   message?: string | null;
-  /** @nullable */
-  purchaseScore?: number | null;
-  /** @nullable */
-  recompraScore?: number | null;
-  /** @nullable */
-  churnScore?: number | null;
-  /** @nullable */
-  nboTripId?: string | null;
-  /** @nullable */
-  nboTripName?: string | null;
-  /** @nullable */
-  nboTripDestination?: string | null;
-  /** @nullable */
-  nboReasoning?: string | null;
-  /** @nullable */
-  scoresCalculatedAt?: string | null;
-  /** @nullable */
-  customerCode?: string | null;
-  travelInterests?: string[];
-  /** @nullable */
-  travelPreference?: string | null;
-  preferredDestinationTypes?: string[];
-  /** @nullable */
-  likesPhotosVideos?: boolean | null;
-  /** @nullable */
-  ambassadorOptIn?: boolean | null;
 }
 
 export interface ClientListResponse {
@@ -416,6 +359,9 @@ export interface CreateClientBody {
   observations?: string | null;
   tags?: string[];
   dreamDestinations?: string[];
+  travelInterests?: string[];
+  /** @nullable */
+  ambassadorOptIn?: boolean | null;
   /** @nullable */
   origin?: string | null;
   /** @nullable */
@@ -434,6 +380,7 @@ export interface CreateClientBody {
   internalRating?: number | null;
   /** @nullable */
   companyNps?: number | null;
+  /** If true, skip the duplicate name+WhatsApp check and create the client anyway. */
   forceCreate?: boolean;
 }
 
@@ -468,6 +415,10 @@ export interface UpdateClientBody {
   observations?: string | null;
   /** @nullable */
   dreamDestinations?: string[] | null;
+  /** @nullable */
+  travelInterests?: string[] | null;
+  /** @nullable */
+  ambassadorOptIn?: boolean | null;
   /** @nullable */
   addressCity?: string | null;
   /** @nullable */
@@ -564,13 +515,23 @@ export type TripBoardingPointsItem = {
 
 export type TripItineraryItem = { [key: string]: unknown };
 
+export type FreePassengerRole =
+  (typeof FreePassengerRole)[keyof typeof FreePassengerRole];
+
+export const FreePassengerRole = {
+  organizer: "organizer",
+  guide: "guide",
+} as const;
+
 export interface FreePassenger {
   id: string;
   name: string;
   cpf: string;
   whatsapp: string;
-  role: "organizer" | "guide";
+  role: FreePassengerRole;
+  /** @nullable */
   seatNumber: string | null;
+  /** @nullable */
   checkedInAt?: string | null;
 }
 
@@ -580,13 +541,9 @@ export interface Trip {
   slug: string;
   /** @nullable */
   description?: string | null;
-  /** @nullable */
-  shortDescription?: string | null;
   destination: string;
   destinationCity: string;
   destinationState: string;
-  /** @nullable */
-  destinationCountry?: string | null;
   /** @nullable */
   originCity?: string | null;
   /** @nullable */
@@ -596,8 +553,6 @@ export interface Trip {
   departureDate: string;
   /** @nullable */
   returnDate?: string | null;
-  /** @nullable */
-  registrationDeadline?: string | null;
   /** @nullable */
   departureTime?: string | null;
   /** @nullable */
@@ -610,31 +565,21 @@ export interface Trip {
   /** @nullable */
   priceChild?: number | null;
   /** @nullable */
-  priceInfant?: number | null;
-  /** @nullable */
   priceSenior?: number | null;
-  /** @nullable */
-  reservationFee?: number | null;
   inclusions: string[];
   exclusions: string[];
   /** @nullable */
   coverImage?: string | null;
   gallery: string[];
-  videos: string[];
   status: string;
   isPublic: boolean;
   isFeatured: boolean;
-  isAvailableInShop: boolean;
   /** @nullable */
   vehiclePlate?: string | null;
   /** @nullable */
   vehicleType?: string | null;
   /** @nullable */
   driverName?: string | null;
-  /** @nullable */
-  driverCnh?: string | null;
-  /** @nullable */
-  driverPhone?: string | null;
   /** @nullable */
   tourGuide?: string | null;
   /** @nullable */
@@ -664,20 +609,22 @@ export interface Trip {
   /** @nullable */
   manifestNumber?: string | null;
   /** @nullable */
-  cancellationPolicy?: string | null;
-  /** @nullable */
-  metaTitle?: string | null;
-  /** @nullable */
-  metaDescription?: string | null;
-  /** @nullable */
   seatLayout?: string | null;
   boardingPoints?: TripBoardingPointsItem[];
   itinerary?: TripItineraryItem[];
   fixedCosts?: unknown[];
   variableCosts?: unknown[];
-  /** @nullable */
+  /**
+   * @minimum 0
+   * @maximum 2
+   * @nullable
+   */
   freeOrganizers?: number | null;
-  /** @nullable */
+  /**
+   * @minimum 0
+   * @maximum 2
+   * @nullable
+   */
   freeGuides?: number | null;
   freePassengers?: FreePassenger[] | null;
   /** @nullable */
@@ -776,6 +723,114 @@ export interface TripListResponse {
   stats: TripListStats;
 }
 
+export type TripCostCategory =
+  (typeof TripCostCategory)[keyof typeof TripCostCategory];
+
+export const TripCostCategory = {
+  Transporte: "Transporte",
+  Hospedagem: "Hospedagem",
+  Alimentação: "Alimentação",
+  Guia: "Guia",
+  Marketing: "Marketing",
+  Seguro: "Seguro",
+  Taxas: "Taxas",
+  Outros: "Outros",
+} as const;
+
+export type TripCostStatus =
+  (typeof TripCostStatus)[keyof typeof TripCostStatus];
+
+export const TripCostStatus = {
+  pending: "pending",
+  paid: "paid",
+  overdue: "overdue",
+} as const;
+
+export interface TripCost {
+  id: string;
+  tripId: string;
+  category: TripCostCategory;
+  description: string;
+  /** @nullable */
+  supplierId: string | null;
+  /** @nullable */
+  supplierName: string | null;
+  amount: number;
+  status: TripCostStatus;
+  /** @nullable */
+  dueDate: string | null;
+  /** @nullable */
+  paidAt: string | null;
+  /** @nullable */
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface TripCostSummary {
+  expectedRevenue: number;
+  totalRealCosts: number;
+  totalPaidCosts: number;
+  totalPendingCosts: number;
+  profit: number;
+  margin: number;
+  plannedBudget: number;
+  budgetVariance: number;
+  confirmedSeats: number;
+}
+
+export interface ListTripCostsResponse {
+  costs: TripCost[];
+  summary: TripCostSummary;
+}
+
+export type CreateTripCostBodyStatus =
+  (typeof CreateTripCostBodyStatus)[keyof typeof CreateTripCostBodyStatus];
+
+export const CreateTripCostBodyStatus = {
+  pending: "pending",
+  paid: "paid",
+  overdue: "overdue",
+} as const;
+
+export interface CreateTripCostBody {
+  category: TripCostCategory;
+  description: string;
+  /** @nullable */
+  supplierName?: string | null;
+  amount: number;
+  status?: CreateTripCostBodyStatus;
+  /** @nullable */
+  dueDate?: string | null;
+  /** @nullable */
+  paidAt?: string | null;
+  /** @nullable */
+  notes?: string | null;
+}
+
+export type UpdateTripCostBodyStatus =
+  (typeof UpdateTripCostBodyStatus)[keyof typeof UpdateTripCostBodyStatus];
+
+export const UpdateTripCostBodyStatus = {
+  pending: "pending",
+  paid: "paid",
+  overdue: "overdue",
+} as const;
+
+export interface UpdateTripCostBody {
+  category?: TripCostCategory;
+  description?: string;
+  /** @nullable */
+  supplierName?: string | null;
+  amount?: number;
+  status?: UpdateTripCostBodyStatus;
+  /** @nullable */
+  dueDate?: string | null;
+  /** @nullable */
+  paidAt?: string | null;
+  /** @nullable */
+  notes?: string | null;
+}
+
 export interface CreateTripBody {
   name: string;
   /** @nullable */
@@ -859,13 +914,25 @@ export interface CreateTripBody {
   tourGuideCpf?: string | null;
   /** @nullable */
   tourGuideRegistration?: string | null;
-  status?: string;
+  status?: TripStatus;
   gallery?: string[];
   videos?: string[];
   boardingPoints?: unknown[];
   itinerary?: unknown[];
   fixedCosts?: unknown[];
   variableCosts?: unknown[];
+  /**
+   * @minimum 0
+   * @maximum 2
+   * @nullable
+   */
+  freeOrganizers?: number | null;
+  /**
+   * @minimum 0
+   * @maximum 2
+   * @nullable
+   */
+  freeGuides?: number | null;
   /** @nullable */
   manifestNumber?: string | null;
   /** @nullable */
@@ -874,10 +941,6 @@ export interface CreateTripBody {
   metaTitle?: string | null;
   /** @nullable */
   metaDescription?: string | null;
-  /** @nullable */
-  freeOrganizers?: number | null;
-  /** @nullable */
-  freeGuides?: number | null;
   /** @nullable */
   layoutId?: string | null;
   /** @nullable */
@@ -889,8 +952,7 @@ export interface UpdateTripBody {
   name?: string | null;
   /** @nullable */
   description?: string | null;
-  /** @nullable */
-  status?: string | null;
+  status?: TripStatus | null;
   /** @nullable */
   isPublic?: boolean | null;
   /** @nullable */
@@ -975,15 +1037,9 @@ export interface UpdateTripBody {
   variableCosts?: unknown[];
   /** @nullable */
   layoutId?: string | null;
-  freePassengers?: Array<{
-    id: string;
-    name: string;
-    cpf: string;
-    whatsapp: string;
-    role: "organizer" | "guide";
-    seatNumber: string | null;
-    checkedInAt?: string | null;
-  }>;
+  /** @nullable */
+  showSeatMap?: boolean | null;
+  freePassengers?: FreePassenger[];
 }
 
 export interface Seat {
@@ -994,7 +1050,7 @@ export interface Seat {
   /** Cell type (seat, vip, accessible, wc, stairs, fridge, blocked) */
   type?: string;
   /** @nullable */
-  occupantName?: string | null;
+  passengerName?: string | null;
   /** @nullable */
   reservationId?: string | null;
 }
@@ -1006,8 +1062,6 @@ export interface SeatMap {
   /** Number of columns in the seat layout grid */
   cols?: number;
   seats: Seat[];
-  /** @nullable */
-  numberingType?: string | null;
 }
 
 export type ReservationClient = {
@@ -1035,7 +1089,10 @@ export interface Reservation {
   totalValue: number;
   paidValue: number;
   balance: number;
-  /** @nullable */
+  /**
+   * Amount paid as the initial deposit for an online reservation
+   * @nullable
+   */
   depositAmount?: number | null;
   /** @nullable */
   paymentMethod?: string | null;
@@ -1048,7 +1105,7 @@ export interface Reservation {
   commissionSyncStatus?: string | null;
   /** @nullable */
   sellerId?: string | null;
-  status: string;
+  status: ReservationStatus;
   voucherCode: string;
   /** @nullable */
   reservationNumber?: string | null;
@@ -1059,8 +1116,6 @@ export interface Reservation {
   notes?: string | null;
   /** @nullable */
   boardingLocationId?: string | null;
-  /** @nullable */
-  boardingLocation?: { name: string; time?: string | null } | null;
   /** @nullable */
   storeOrderId?: string | null;
   /** @nullable */
@@ -1093,79 +1148,62 @@ export interface ReservationListResponse {
 
 export interface CreateReservationBody {
   tripId: string;
-
   clientId: string;
-
   seats: string[];
   /** @nullable */
-
   tripType?: string | null;
   /** @nullable */
-
   packageType?: string | null;
-
   hasInsurance?: boolean;
-
-  isGratuidade?: boolean;
-
   totalValue: number;
   /** @nullable */
-
   paymentMethod?: string | null;
-
   installments?: number;
+  /**
+   * ISO date (YYYY-MM-DD) for the first installment due date
+   * @nullable
+   */
+  firstDueDate?: string | null;
   /** @nullable */
-
   commissionPercentage?: number | null;
   /**
    * Direct commission amount in BRL (overrides rule-based calculation)
    * @nullable
    */
-
   commissionAmount?: number | null;
   /**
    * ID of the seller/consultant responsible for this reservation
    * @nullable
    */
-
   sellerId?: string | null;
   /** Amount already paid at the time of booking */
-
   paidValue?: number;
   /** @nullable */
-
   notes?: string | null;
   /** @nullable */
-
   discountCouponCode?: string | null;
   /** @nullable */
-
   discountCouponAmount?: number | null;
   /** @nullable */
-
   discountLoyaltyPoints?: number | null;
   /** @nullable */
-
   discountLoyaltyAmount?: number | null;
   /** @nullable */
-
   discountReferralCode?: string | null;
   /** @nullable */
-
   discountReferralAmount?: number | null;
   /** @nullable */
-
   discountTotal?: number | null;
-  /** @nullable */
-
-  firstDueDate?: string | null;
-  /** @nullable */
-
+  /**
+   * Boarding location ID for the client
+   * @nullable
+   */
   boardingLocationId?: string | null;
-
+  /** Mark reservation as complimentary (free of charge) for guides, partners, etc. */
+  isGratuidade?: boolean;
+  /** Criança de colo — não ocupa poltrona */
   isOnLap?: boolean;
   /** Criança menor de 7 anos que ocupa poltrona — força ageCategory=child */
-
   isChildUnder7?: boolean;
 }
 
@@ -1201,8 +1239,7 @@ export interface ReferralValidationResult {
 }
 
 export interface UpdateReservationBody {
-  /** @nullable */
-  status?: string | null;
+  status?: ReservationStatus | null;
   /** @nullable */
   paymentMethod?: string | null;
   /** @nullable */
@@ -1213,10 +1250,13 @@ export interface UpdateReservationBody {
   totalValue?: number | null;
   /** @nullable */
   installments?: number | null;
+  /**
+   * ISO date (YYYY-MM-DD) for the first installment due date — triggers regeneration of installments
+   * @nullable
+   */
+  firstDueDate?: string | null;
   /** @nullable */
   boardingLocationId?: string | null;
-  /** @nullable */
-  isGratuidade?: boolean | null;
   /**
    * Direct commission amount in BRL
    * @nullable
@@ -1227,8 +1267,21 @@ export interface UpdateReservationBody {
    * @nullable
    */
   sellerId?: string | null;
-  /** @nullable */
-  firstDueDate?: string | null;
+  /**
+   * ID of the client to link to this reservation
+   * @nullable
+   */
+  clientId?: string | null;
+  /**
+   * ID of the trip to link to this reservation
+   * @nullable
+   */
+  tripId?: string | null;
+  /**
+   * Mark reservation as complimentary (free of charge)
+   * @nullable
+   */
+  isGratuidade?: boolean | null;
   /**
    * Total discount amount in BRL
    * @nullable
@@ -1243,37 +1296,6 @@ export interface ReservationStats {
   cancelled: number;
   totalOutstanding: number;
 }
-
-export type GetReservationStatsParams = {
-  /**
-   * @nullable
-   */
-  search?: string | null;
-  /**
-   * @nullable
-   */
-  tripId?: string | null;
-  /**
-   * @nullable
-   */
-  status?: string | null;
-  /**
-   * @nullable
-   */
-  sellerId?: string | null;
-  /**
-   * @nullable
-   */
-  dateFrom?: string | null;
-  /**
-   * @nullable
-   */
-  dateTo?: string | null;
-  /**
-   * @nullable
-   */
-  hasAutoRetry?: boolean | null;
-};
 
 export interface Passenger {
   id: string;
@@ -1356,12 +1378,6 @@ export interface BoardingPanel {
   boardingPoints: BoardingPoint[];
   /** @nullable */
   manifestNumber?: string | null;
-  /** @nullable */
-  cancellationPolicy?: string | null;
-  /** @nullable */
-  metaTitle?: string | null;
-  /** @nullable */
-  metaDescription?: string | null;
   /** @nullable */
   vehiclePlate?: string | null;
   /** @nullable */
@@ -1463,7 +1479,7 @@ export interface Payment {
   reservationId?: string | null;
   /** @nullable */
   clientId?: string | null;
-  type: string;
+  type: PaymentType;
   category: string;
   amount: number;
   paymentMethod: string;
@@ -1472,7 +1488,7 @@ export interface Payment {
   dueDate: string;
   /** @nullable */
   paidAt?: string | null;
-  status: string;
+  status: PaymentStatus;
   /** @nullable */
   description?: string | null;
   /** @nullable */
@@ -1493,7 +1509,7 @@ export interface CreatePaymentBody {
   reservationId?: string | null;
   /** @nullable */
   clientId?: string | null;
-  type: string;
+  type: PaymentType;
   category: string;
   amount: number;
   paymentMethod: string;
@@ -1503,15 +1519,13 @@ export interface CreatePaymentBody {
   description?: string | null;
   /** @nullable */
   notes?: string | null;
-  /** @nullable */
-  status?: string | null;
+  status?: PaymentStatus | null;
   /** @nullable */
   paidAt?: string | null;
 }
 
 export interface UpdatePaymentBody {
-  /** @nullable */
-  status?: string | null;
+  status?: PaymentStatus | null;
   /** @nullable */
   paidAt?: string | null;
   /** @nullable */
@@ -1541,7 +1555,7 @@ export interface Expense {
   /** @nullable */
   paymentDate?: string | null;
   dueDate: string;
-  status: string;
+  status: ExpenseStatus;
   /** @nullable */
   notes?: string | null;
   createdAt: string;
@@ -1570,8 +1584,7 @@ export interface CreateExpenseBody {
 }
 
 export interface UpdateExpenseBody {
-  /** @nullable */
-  status?: string | null;
+  status?: ExpenseStatus | null;
   /** @nullable */
   paymentDate?: string | null;
   /** @nullable */
@@ -1602,7 +1615,7 @@ export interface Deal {
   ownerId: string;
   /** @nullable */
   expectedCloseDate?: string | null;
-  status: string;
+  status: DealStatus;
   /** @nullable */
   lostReason?: string | null;
   source: string;
@@ -1620,28 +1633,6 @@ export interface Deal {
   clientName?: string | null;
   /** @nullable */
   ownerName?: string | null;
-  /** @nullable */
-  travelReason?: string | null;
-  /** @nullable */
-  followUpNote?: string | null;
-  /** @nullable */
-  clientEmail?: string | null;
-  /** @nullable */
-  clientWhatsapp?: string | null;
-  /** @nullable */
-  clientPhone?: string | null;
-  /** @nullable */
-  clientCpf?: string | null;
-  /** @nullable */
-  clientCity?: string | null;
-  /** @nullable */
-  clientState?: string | null;
-  /** @nullable */
-  clientClassification?: string | null;
-  /** @nullable */
-  clientOutstandingBalance?: number | null;
-  /** @nullable */
-  customerCode?: string | null;
 }
 
 export interface CreateDealBody {
@@ -1673,14 +1664,9 @@ export interface UpdateDealBody {
   title?: string | null;
   /** @nullable */
   value?: number | null;
-  /** @nullable */
-  status?: string | null;
+  status?: DealStatus | null;
   /** @nullable */
   lostReason?: string | null;
-  /** @nullable */
-  travelReason?: string | null;
-  /** @nullable */
-  followUpNote?: string | null;
   /** @nullable */
   description?: string | null;
   /** @nullable */
@@ -1714,8 +1700,6 @@ export interface UpdatePipelineBody {
 
 export interface PipelineStage {
   id: string;
-  /** @nullable */
-  pipelineId?: string | null;
   name: string;
   color: string;
   order: number;
@@ -2157,8 +2141,19 @@ export interface OrderItem {
 export interface Order {
   id: string;
   userId: string;
+  /** Full order total (subtotal - discounts). Not overwritten by depositAmount. */
   totalAmount: number;
   finalAmount: number;
+  /**
+   * Amount the customer chose to pay now (partial payment). Null when full payment is required.
+   * @nullable
+   */
+  depositAmount?: number | null;
+  /**
+   * Balance remaining after deposit (totalAmount - depositAmount). Null when fully paid upfront.
+   * @nullable
+   */
+  amountRemaining?: number | null;
   status: string;
   paymentStatus: string;
   createdAt: string;
@@ -2170,6 +2165,93 @@ export interface UpdateOrderBody {
   status?: string | null;
   /** @nullable */
   paymentStatus?: string | null;
+}
+
+export type PublicCheckoutBodyItemsItem = {
+  productId?: string;
+  quantity?: number;
+};
+
+/**
+ * Body for POST /public/store/{slug}/orders (vitrine checkout)
+ */
+export interface PublicCheckoutBody {
+  items: PublicCheckoutBodyItemsItem[];
+  customerName: string;
+  customerEmail: string;
+  /** @nullable */
+  customerPhone?: string | null;
+  /** @nullable */
+  customerCpf?: string | null;
+  /** @nullable */
+  paymentMethod?: string | null;
+  /** @nullable */
+  couponCode?: string | null;
+  /** @nullable */
+  referralCode?: string | null;
+  /** @nullable */
+  notes?: string | null;
+  seats?: string[];
+  /** @nullable */
+  boardingLocationId?: string | null;
+  /**
+   * Partial payment amount chosen by the customer. Must be >= store.minDepositAmount and <= order total. Rejected when store.minDepositAmount is not configured. The order totalAmount is always the full price — depositAmount does NOT overwrite it.
+
+   * @nullable
+   */
+  depositAmount?: number | null;
+  /**
+   * Client-generated key for idempotent checkout retry (max 128 chars)
+   * @nullable
+   */
+  idempotencyKey?: string | null;
+}
+
+/**
+ * Response from POST /public/store/{slug}/orders (vitrine checkout)
+ */
+export interface PublicStoreOrderResponse {
+  id: string;
+  orderNumber: string;
+  status: string;
+  /** Full order total (subtotal - discounts). Never overwritten by depositAmount. */
+  totalAmount: number;
+  /**
+   * Amount charged now for partial-payment orders. Null when full payment is due upfront.
+   * @nullable
+   */
+  depositAmount?: number | null;
+  /**
+   * Balance owed after deposit (totalAmount - depositAmount). Null when fully paid.
+   * @nullable
+   */
+  amountRemaining?: number | null;
+  /** @nullable */
+  paymentMethod?: string | null;
+  createdAt: string;
+}
+
+/**
+ * Public store configuration returned for vitrine pages
+ */
+export interface PublicStoreInfo {
+  id: string;
+  name: string;
+  slug: string;
+  /**
+   * Minimum deposit amount (BRL) the store accepts for partial payments. Null means full payment is required; when set, customers may pay this amount now and the remainder later.
+
+   * @nullable
+   */
+  minDepositAmount?: string | null;
+  /** @nullable */
+  minOrderValue?: string | null;
+  paymentMethods: string[];
+  stripeEnabled: boolean;
+  maintenanceMode: boolean;
+  couponsEnabled: boolean;
+  referralsEnabled: boolean;
+  seatMapEnabled: boolean;
 }
 
 export interface Campaign {
@@ -2188,12 +2270,6 @@ export interface Campaign {
   sentCount: number;
   openedCount: number;
   clickedCount: number;
-  deliveredCount?: number;
-  triggerType: string;
-  autoEnabled: boolean;
-  /** @nullable */
-  triggerConfig?: Record<string, unknown> | null;
-  targetSegment?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -2208,10 +2284,6 @@ export interface CreateCampaignBody {
   targetSegment: CreateCampaignBodyTargetSegment;
   /** @nullable */
   scheduledAt?: string | null;
-  triggerType?: string;
-  /** @nullable */
-  triggerConfig?: Record<string, unknown> | null;
-  autoEnabled?: boolean;
 }
 
 export interface UpdateCampaignBody {
@@ -2223,19 +2295,11 @@ export interface UpdateCampaignBody {
   scheduledAt?: string | null;
   /** @nullable */
   content?: string | null;
-  /** @nullable */
-  subject?: string | null;
-  autoEnabled?: boolean;
-  triggerType?: string;
-  /** @nullable */
-  triggerConfig?: Record<string, unknown> | null;
-  targetSegment?: Record<string, unknown>;
 }
 
 export interface NpsResponse {
   id: string;
-  /** @nullable */
-  userId?: string | null;
+  userId: string;
   score: number;
   classification: string;
   /** @nullable */
@@ -2243,17 +2307,6 @@ export interface NpsResponse {
   /** @nullable */
   clientName?: string | null;
   createdAt: string;
-  source?: "store" | "travel";
-  /** @nullable */
-  tripId?: string | null;
-  /** @nullable */
-  scoreTransport?: number | null;
-  /** @nullable */
-  scoreService?: number | null;
-  /** @nullable */
-  scoreOrganization?: number | null;
-  /** @nullable */
-  scoreGuide?: number | null;
 }
 
 export interface NpsSendLink {
@@ -2269,14 +2322,6 @@ export interface NpsSummary {
   passives: number;
   detractors: number;
   total: number;
-  /** @nullable */
-  avgTransport?: number | null;
-  /** @nullable */
-  avgService?: number | null;
-  /** @nullable */
-  avgOrganization?: number | null;
-  /** @nullable */
-  avgGuide?: number | null;
 }
 
 export type UserProfileTenant = {
@@ -2293,8 +2338,6 @@ export type UserProfileTenant = {
   planId: string;
   /** @nullable */
   website?: string | null;
-  /** @nullable */
-  settings?: Record<string, unknown> | null;
 } | null;
 
 export interface UserProfile {
@@ -2302,7 +2345,7 @@ export interface UserProfile {
   clerkId: string;
   name: string;
   email: string;
-  role: string;
+  role: Role;
   /** @nullable */
   avatarUrl?: string | null;
   isActive: boolean;
@@ -2316,8 +2359,6 @@ export interface UserProfile {
   /** @nullable */
   monthlyGoal?: number | null;
   createdAt: string;
-  /** Days remaining in trial (only present when status=trial and within 7 days of expiry) @nullable */
-  trialDaysLeft?: number | null;
   tenant?: UserProfileTenant;
 }
 
@@ -2334,14 +2375,13 @@ export interface SyncUserBody {
 export interface CreateUserBody {
   name: string;
   email: string;
-  role: string;
+  role: Role;
 }
 
 export interface UpdateUserBody {
   /** @nullable */
   name?: string | null;
-  /** @nullable */
-  role?: string | null;
+  role?: Role | null;
   /** @nullable */
   isActive?: boolean | null;
   /** @nullable */
@@ -2430,6 +2470,63 @@ export interface CommissionRank {
   month: string;
 }
 
+export type SystemHealthRedisStatus =
+  (typeof SystemHealthRedisStatus)[keyof typeof SystemHealthRedisStatus];
+
+export const SystemHealthRedisStatus = {
+  ok: "ok",
+  degraded: "degraded",
+  unavailable: "unavailable",
+} as const;
+
+export interface SystemHealthRedis {
+  status: SystemHealthRedisStatus;
+}
+
+export interface SystemHealthStripeWebhookAuditEndpoint {
+  id: string;
+  url: string;
+}
+
+export type SystemHealthStripeWebhookAuditStatus =
+  (typeof SystemHealthStripeWebhookAuditStatus)[keyof typeof SystemHealthStripeWebhookAuditStatus];
+
+export const SystemHealthStripeWebhookAuditStatus = {
+  ok: "ok",
+  duplicate: "duplicate",
+  unknown: "unknown",
+} as const;
+
+export interface SystemHealthStripeWebhookAudit {
+  status: SystemHealthStripeWebhookAuditStatus;
+  duplicateCount: number;
+  endpoints: SystemHealthStripeWebhookAuditEndpoint[];
+  checkedAt: string | null;
+}
+
+export interface SystemHealthStripeSyncTables {
+  /** @nullable */
+  ok: boolean | null;
+  /** @nullable */
+  checkedAt: string | null;
+}
+
+export interface SystemHealth {
+  redis: SystemHealthRedis;
+  stripeWebhookAudit: SystemHealthStripeWebhookAudit;
+  stripeSyncTables: SystemHealthStripeSyncTables;
+}
+
+export interface RepairSystemHealth {
+  orphansFixed: number;
+  tripsCorrected: number;
+}
+
+export interface RepairSeatDrift {
+  fixed: number;
+  skipped: number;
+}
+
 export type AdminStatsByStatus = { [key: string]: number };
 
 export type AdminStatsByPlan = { [key: string]: number };
@@ -2462,10 +2559,6 @@ export interface Tenant {
   website?: string | null;
   /** @nullable */
   reservationPrefix?: string | null;
-  /** @nullable */
-  prefixLocked?: boolean | null;
-  /** @nullable */
-  settings?: Record<string, unknown> | null;
   createdAt: string;
 }
 
@@ -2502,23 +2595,11 @@ export interface UpdateTenantBody {
   /** @nullable */
   maxTripsOverride?: number | null;
   /** @nullable */
-  trialEndsAt?: string | null;
-  /** @nullable */
   website?: string | null;
   /** @nullable */
   reservationPrefix?: string | null;
   /** @nullable */
   birthdayMessagesEnabled?: boolean | null;
-  /** @nullable */
-  couponsEnabled?: boolean | null;
-  /** @nullable */
-  referralsEnabled?: boolean | null;
-  npsCategories?: {
-    transport?: boolean;
-    service?: boolean;
-    organization?: boolean;
-    guide?: boolean;
-  } | null;
 }
 
 export interface BoardingLocation {
@@ -2592,8 +2673,6 @@ export interface Commission {
   /** @nullable */
   paidAt?: string | null;
   createdAt: string;
-  /** @nullable */
-  sellerName?: string | null;
 }
 
 export interface UpdateCommissionBody {
@@ -2619,8 +2698,6 @@ export interface Referral {
   referrerEmail?: string | null;
   /** @nullable */
   referrerPhone?: string | null;
-  /** @nullable */
-  referrerWhatsapp?: string | null;
   code: string;
   status: string;
   bonusAmount: string;
@@ -2654,25 +2731,8 @@ export interface Referral {
   reservationId?: string | null;
   /** @nullable */
   notes?: string | null;
-  fraudFlag: boolean;
-  /** @nullable */
-  fraudReason?: string | null;
   /** @nullable */
   convertedAt?: string | null;
-  /** @nullable */
-  reversalReason?: string | null;
-  /** @nullable */
-  reversalAt?: string | null;
-  /** @nullable */
-  bonusReleasesAt?: string | null;
-  bonusBlocked?: boolean;
-  referrerSuccessfulReferrals?: number;
-  /** @nullable */
-  expiryWarning7SentAt?: string | null;
-  /** @nullable */
-  expiryWarning1SentAt?: string | null;
-  /** @nullable */
-  bonusReleaseNotifiedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2691,10 +2751,6 @@ export interface UpdateReferralBody {
   convertedAt?: string;
   isActive?: boolean;
   notes?: string;
-}
-
-export interface ReverseReferralBonusBody {
-  reason: string;
 }
 
 export interface ReferralStats {
@@ -2740,7 +2796,6 @@ export interface ReferralSettings {
   expiryWarning7DaysEnabled: boolean;
   expiryWarning1DayEnabled: boolean;
   bonusReleaseEmailEnabled: boolean;
-  loyaltyPointsEmailEnabled: boolean;
   pointsPerReferral: number;
   gracePeriodDays: number;
   bonusValidityDays: number;
@@ -2771,7 +2826,6 @@ export interface UpdateReferralSettingsBody {
   expiryWarning7DaysEnabled?: boolean;
   expiryWarning1DayEnabled?: boolean;
   bonusReleaseEmailEnabled?: boolean;
-  loyaltyPointsEmailEnabled?: boolean;
   pointsPerReferral?: number;
   gracePeriodDays?: number;
   bonusValidityDays?: number;
@@ -2780,26 +2834,13 @@ export interface UpdateReferralSettingsBody {
   maxReferralsPerUser?: number;
 }
 
-export interface ReferralAttemptLog {
-  id: string;
-  storeSlug: string;
-  /** @nullable */
-  ipAddress?: string | null;
-  createdAt: string;
-}
-
 export interface ClientReferralInfo {
   /** @nullable */
   referralCode: string | null;
-  referralCodeStatus: "active" | "blocked" | "cancelled";
   totalReferrals: number;
   successfulReferrals: number;
   referralEarnings: number;
-  /** @nullable */
-  referralSuspendedAttemptAt?: string | null;
-  referralSuspendedAttemptCount: number;
   referrals: Referral[];
-  attemptLogs?: ReferralAttemptLog[];
 }
 
 export interface Coupon {
@@ -2878,19 +2919,15 @@ export interface LoyaltyProgram {
   realPerPoint: string;
   minRedeemPoints: number;
   isActive: boolean;
-  /** @nullable */
-  tierBenefits?: Record<string, string[]> | null;
   createdAt: string;
 }
 
 export interface CreateLoyaltyProgramBody {
-  name?: string;
+  name: string;
   description?: string;
   pointsPerReal?: string;
   realPerPoint?: string;
   minRedeemPoints?: number;
-  /** @nullable */
-  tierBenefits?: Record<string, string[]> | null;
 }
 
 export interface LoyaltyMember {
@@ -3204,7 +3241,6 @@ export interface Plan {
   maxClients: number;
   maxTrips: number;
   features: string[];
-  supportedFeatures: string[];
   isActive: boolean;
   isFeatured: boolean;
   createdAt: string;
@@ -3221,7 +3257,6 @@ export interface CreatePlanBody {
   maxClients?: number;
   maxTrips?: number;
   features?: string[];
-  supportedFeatures?: string[];
   isActive?: boolean;
   isFeatured?: boolean;
 }
@@ -3236,7 +3271,6 @@ export interface UpdatePlanBody {
   maxClients?: number;
   maxTrips?: number;
   features?: string[];
-  supportedFeatures?: string[];
   isActive?: boolean;
   isFeatured?: boolean;
 }
@@ -3266,13 +3300,9 @@ export interface InvoiceWithTenant {
   tenantId: string;
   /** @nullable */
   planId?: string | null;
-  /** @nullable */
-  invoiceNumber?: string | null;
   amount: string;
   currency: string;
   status: string;
-  /** @nullable */
-  paymentMethod?: string | null;
   /** @nullable */
   dueDate?: string | null;
   /** @nullable */
@@ -3281,18 +3311,10 @@ export interface InvoiceWithTenant {
   description?: string | null;
   /** @nullable */
   notes?: string | null;
-  /** @nullable */
-  pixCode?: string | null;
-  /** @nullable */
-  pixQrCodeUrl?: string | null;
-  /** @nullable */
-  pixExpiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
   /** @nullable */
   tenantName?: string | null;
-  /** @nullable */
-  tenantEmail?: string | null;
 }
 
 export interface CreateInvoiceBody {
@@ -3390,8 +3412,6 @@ export interface TenantDetails {
   maxClientsOverride?: number | null;
   /** @nullable */
   maxTripsOverride?: number | null;
-  /** @nullable */
-  trialEndsAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -3560,8 +3580,6 @@ export interface CalendarConnectResponse {
 
 export interface CalendarStatus {
   connected: boolean;
-  /** Status of the Google Calendar connection: 'connected' | 'invalid' | 'disconnected' */
-  status?: string | null;
   tokenValid?: boolean;
   eventsCount: number;
   /** @nullable */
@@ -3588,6 +3606,74 @@ export interface CalendarSyncResponse {
   success: boolean;
   message: string;
   synced: number;
+}
+
+export interface SalesCycleChannelBreakdown {
+  /** Acquisition channel name (COALESCE'd to "Outros" when null) */
+  origin: string;
+  clients: number;
+  /** @nullable */
+  avgDaysToPayment?: number | null;
+  /** @nullable */
+  avgDaysToTrip?: number | null;
+  /** Percentage of clients in this channel who made a payment */
+  conversionRate: number;
+}
+
+/**
+ * Sales cycle metrics for a single salesperson (seller_id on reservations). Only sellers with ≥ 3 clients in the period are included, sorted by shortest avgDaysToPayment (NULLS LAST).
+ */
+export interface SalesCycleSellerBreakdown {
+  sellerId: string;
+  sellerName: string;
+  /** Number of clients assigned to this seller in the period */
+  clients: number;
+  /**
+   * Mean days from client registration to first payment; null when no client has paid
+   * @nullable
+   */
+  avgDaysToPayment?: number | null;
+  /** Percentage of assigned clients who made at least one payment */
+  conversionRate: number;
+}
+
+export interface SalesCycleTrendPoint {
+  /** ISO month label: YYYY-MM */
+  month: string;
+  /** @nullable */
+  avgDaysToPayment?: number | null;
+  /** @nullable */
+  avgDaysToTrip?: number | null;
+}
+
+export interface SalesCycleData {
+  /**
+   * Mean days from client registration to first payment
+   * @nullable
+   */
+  avgDaysToPayment?: number | null;
+  /** @nullable */
+  medianDaysToPayment?: number | null;
+  /** @nullable */
+  p25DaysToPayment?: number | null;
+  /** @nullable */
+  p75DaysToPayment?: number | null;
+  /**
+   * Mean days from client registration to first confirmed trip departure
+   * @nullable
+   */
+  avgDaysToTrip?: number | null;
+  /** @nullable */
+  medianDaysToTrip?: number | null;
+  /** Number of clients registered in the selected period */
+  totalClients: number;
+  /** Subset of totalClients who made at least one payment */
+  clientsWithPayment: number;
+  byChannel: SalesCycleChannelBreakdown[];
+  /** Breakdown by assigned salesperson; only sellers with ≥ 3 clients, sorted by shortest cycle */
+  bySeller: SalesCycleSellerBreakdown[];
+  /** Last 12 months, gap-filled with null for months with no data */
+  trend: SalesCycleTrendPoint[];
 }
 
 export type ListAdminInvoicesParams = {
@@ -3641,16 +3727,41 @@ export const GetDashboardChartsPeriod = {
   "12m": "12m",
 } as const;
 
+export type GetSalesCycleParams = {
+  /**
+   * Lookback window for clients included in the analysis
+   */
+  period?: GetSalesCyclePeriod;
+  /**
+ * Optional acquisition channel (client origin) to scope the trend
+series. When omitted the trend covers all channels. The overall
+aggregates and byChannel breakdown are always unfiltered.
+
+ */
+  channel?: string;
+  /**
+ * Optional seller identifier to scope the trend series. When omitted
+the trend covers all sellers. The overall aggregates and breakdowns
+are always unfiltered.
+
+ */
+  seller?: string;
+};
+
+export type GetSalesCyclePeriod =
+  (typeof GetSalesCyclePeriod)[keyof typeof GetSalesCyclePeriod];
+
+export const GetSalesCyclePeriod = {
+  "30d": "30d",
+  "90d": "90d",
+  "12m": "12m",
+} as const;
+
 export type ListClientsParams = {
   /**
    * @nullable
    */
   search?: string | null;
-  /**
-   * Exact CPF lookup (11 digits, strips non-numeric).
-   * @nullable
-   */
-  cpf?: string | null;
   /**
    * @nullable
    */
@@ -3690,6 +3801,10 @@ export type ListClientsParams = {
   /**
    * @nullable
    */
+  hasAutoRetry?: boolean | null;
+  /**
+   * @nullable
+   */
   sortBy?: string | null;
   /**
    * @nullable
@@ -3697,22 +3812,6 @@ export type ListClientsParams = {
   sortOrder?: string | null;
   page?: number;
   limit?: number;
-  /**
-   * @nullable
-   */
-  minPurchaseScore?: number | null;
-  /**
-   * @nullable
-   */
-  maxPurchaseScore?: number | null;
-  /**
-   * @nullable
-   */
-  minChurnScore?: number | null;
-  /**
-   * @nullable
-   */
-  maxChurnScore?: number | null;
 };
 
 export type UpdateClientPipelineStageBody = {
@@ -3741,6 +3840,37 @@ export type SyncTripPassengers200 = {
   created: number;
 };
 
+export type GetReservationStatsParams = {
+  /**
+   * @nullable
+   */
+  search?: string | null;
+  /**
+   * @nullable
+   */
+  tripId?: string | null;
+  /**
+   * @nullable
+   */
+  status?: string | null;
+  /**
+   * @nullable
+   */
+  sellerId?: string | null;
+  /**
+   * @nullable
+   */
+  dateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  dateTo?: string | null;
+  /**
+   * @nullable
+   */
+  hasAutoRetry?: boolean | null;
+};
+
 export type ListReservationsParams = {
   /**
    * @nullable
@@ -3763,7 +3893,6 @@ export type ListReservationsParams = {
    */
   createdById?: string | null;
   /**
-   * ID of the seller/consultant responsible for this reservation.
    * @nullable
    */
   sellerId?: string | null;
@@ -3795,6 +3924,10 @@ export type ListReservationsParams = {
   limit?: number;
 };
 
+export type RetryCommissionSync200 = {
+  success: boolean;
+};
+
 export type ListPaymentsParams = {
   /**
    * @nullable
@@ -3822,6 +3955,10 @@ export type ListPaymentsParams = {
   dateTo?: string | null;
   page?: number;
   limit?: number;
+};
+
+export type DeletePayment200 = {
+  success: boolean;
 };
 
 export type ListExpensesParams = {
@@ -3894,35 +4031,8 @@ export type ListNpsResponsesParams = {
    * @nullable
    */
   classification?: string | null;
-  /**
-   * @nullable
-   */
-  tripId?: string | null;
-  /**
-   * @nullable
-   */
-  dateFrom?: string | null;
-  /**
-   * @nullable
-   */
-  dateTo?: string | null;
   page?: number;
   limit?: number;
-};
-
-export type GetNpsSummaryParams = {
-  /**
-   * @nullable
-   */
-  tripId?: string | null;
-  /**
-   * @nullable
-   */
-  dateFrom?: string | null;
-  /**
-   * @nullable
-   */
-  dateTo?: string | null;
 };
 
 export type SendNpsSurveyBody = {
@@ -4039,309 +4149,3 @@ export type GetCalendarCallbackParams = {
    */
   error?: string;
 };
-
-export interface TripCost {
-  id: string;
-  tripId: string;
-  category: string;
-  description: string;
-  supplierId: string | null;
-  supplierName: string | null;
-  amount: number;
-  status: string;
-  dueDate: string | null;
-  paidAt: string | null;
-  notes: string | null;
-  createdAt: string;
-}
-
-export interface TripCostSummary {
-  expectedRevenue: number;
-  totalRealCosts: number;
-  totalPaidCosts: number;
-  totalPendingCosts: number;
-  profit: number;
-  margin: number;
-  plannedBudget: number;
-  budgetVariance: number;
-  confirmedSeats: number;
-}
-
-export interface TripCostsResponse {
-  costs: TripCost[];
-  summary: TripCostSummary;
-}
-
-export interface CreateTripCostBody {
-  category: string;
-  description: string;
-  supplierName?: string | null;
-  amount: number;
-  status?: string;
-  dueDate?: string | null;
-  paidAt?: string | null;
-  notes?: string | null;
-}
-
-export type UpdateTripCostBody = Partial<CreateTripCostBody>;
-
-export interface InsightsSummaryExecutive {
-  totalRevenue: number;
-  totalRevenuePrev: number;
-  netProfit: number;
-  netProfitPrev: number;
-  totalClients: number;
-  newClients: number;
-  newClientsPrev: number;
-  confirmedReservations: number;
-  confirmedReservationsPrev: number;
-  occupancyRate: number;
-  conversionRate: number;
-  conversionRatePrev: number;
-  averageNps: number | null;
-  averageNpsPrev: number | null;
-  activeTrips: number;
-  profitMargin: number;
-  profitMarginPrev: number;
-  momGrowth: number | null;
-  yoyGrowth: number | null;
-}
-
-export interface InsightsSummaryCommercial {
-  openDeals: number;
-  openDealsPrev: number;
-  wonDeals: number;
-  wonDealsPrev: number;
-  pipelineValue: number;
-  pipelineValuePrev: number;
-  avgTicket: number;
-  avgTicketPrev: number;
-  newReservations: number;
-  newReservationsPrev: number;
-  cancellations: number;
-  cancellationsPrev: number;
-  conversionRate: number;
-  conversionRatePrev: number;
-  totalLeads: number;
-  totalLeadsPrev: number;
-  repeatClients: number;
-  repeatClientsPrev: number;
-  activeClients: number;
-  activeClientsPrev: number;
-  ltv: number;
-  ltvPrev: number;
-  cac: number;
-  cacPrev: number;
-}
-
-export interface InsightsSummaryCampaignByType {
-  type: string;
-  count: number;
-}
-
-export interface InsightsSummaryMarketing {
-  newClients: number;
-  newClientsPrev: number;
-  referrals: number;
-  referralsPrev: number;
-  convertedReferrals: number;
-  convertedReferralsPrev: number;
-  totalLeads: number;
-  totalLeadsPrev: number;
-  conversionRate: number;
-  conversionRatePrev: number;
-  activeCampaigns: number;
-  newCampaigns: number;
-  newCampaignsPrev: number;
-  sentCampaigns: number;
-  totalSentMessages: number;
-  totalOpenedMessages: number;
-  totalClickedMessages: number;
-  totalRecipients: number;
-  openRate: number;
-  clickRate: number;
-  campaignRoi: number;
-  campaignsByType: InsightsSummaryCampaignByType[];
-}
-
-export interface InsightsSummaryExpenseCategoryBreakdown {
-  category: string;
-  total: number;
-}
-
-export interface InsightsSummaryFinancial {
-  totalRevenue: number;
-  totalRevenuePrev: number;
-  totalExpenses: number;
-  totalExpensesPrev: number;
-  netProfit: number;
-  netProfitPrev: number;
-  profitMargin: number;
-  profitMarginPrev: number;
-  commissions: number;
-  commissionsPrev: number;
-  receivable: number;
-  payable: number;
-  overdue: number;
-  avgTicket: number;
-  avgTicketPrev: number;
-  expenseCategories: InsightsSummaryExpenseCategoryBreakdown[];
-}
-
-export interface InsightsSummaryOperational {
-  activeTrips: number;
-  newTrips: number;
-  newTripsPrev: number;
-  occupancyRate: number;
-  totalAvailableSeats: number;
-  avgReservationsPerTrip: number;
-  avgReservationsPerTripPrev: number;
-  confirmedReservations: number;
-  confirmedReservationsPrev: number;
-  cancellations: number;
-  cancellationsPrev: number;
-  revenuePerTrip: number;
-  revenuePerTripPrev: number;
-  totalSuppliers: number;
-  newSuppliers: number;
-  newSuppliersPrev: number;
-  checkedInPassengers: number;
-  checkedInPassengersPrev: number;
-  averageNps: number | null;
-  averageNpsPrev: number | null;
-}
-
-export interface InsightsSummaryRetention {
-  loyaltyMembers: number;
-  loyaltyActiveMembers: number;
-  loyaltyNewMembers: number;
-  loyaltyNewMembersPrev: number;
-  averageNps: number | null;
-  averageNpsPrev: number | null;
-  promoterClients: number;
-  promoterClientsPrev: number;
-  retentionRate: number;
-  retentionRatePrev: number;
-  referralRate: number;
-  referralRatePrev: number;
-  newClients: number;
-  newClientsPrev: number;
-  repeatClients: number;
-  repeatClientsPrev: number;
-  totalClients: number;
-  convertedReferrals: number;
-  convertedReferralsPrev: number;
-}
-
-export interface InsightsSummaryTopDestination {
-  name: string;
-  count: number;
-}
-
-export interface InsightsSummaryExpansion {
-  newTrips: number;
-  newTripsPrev: number;
-  newDestinations90d: number;
-  newDestinationsPrev90d: number;
-  totalDestinations: number;
-  newSuppliers: number;
-  newSuppliersPrev: number;
-  totalSuppliers: number;
-  revenuePerTrip: number;
-  revenuePerTripPrev: number;
-  topDestinations: InsightsSummaryTopDestination[];
-  avgTicket: number;
-  avgTicketPrev: number;
-  totalRevenue: number;
-  totalRevenuePrev: number;
-  momGrowth: number | null;
-  yoyGrowth: number | null;
-}
-
-export interface InsightsSummary {
-  period: string;
-  executive: InsightsSummaryExecutive;
-  commercial: InsightsSummaryCommercial;
-  marketing: InsightsSummaryMarketing;
-  financial: InsightsSummaryFinancial;
-  operational: InsightsSummaryOperational;
-  retention: InsightsSummaryRetention;
-  expansion: InsightsSummaryExpansion;
-}
-
-export type GetInsightsSummaryPeriod = 'month' | 'quarter' | 'year';
-
-export interface GetInsightsSummaryParams {
-  period?: GetInsightsSummaryPeriod;
-}
-
-// ─── Sales Cycle ─────────────────────────────────────────────────────────────
-
-export interface SalesCycleChannelBreakdown {
-  origin: string;
-  clients: number;
-  /** @nullable */
-  avgDaysToPayment: number | null;
-  /** @nullable */
-  avgDaysToTrip: number | null;
-  conversionRate: number;
-}
-
-export interface SalesCycleSellerBreakdown {
-  sellerId: string;
-  sellerName: string;
-  clients: number;
-  /** @nullable */
-  avgDaysToPayment: number | null;
-  conversionRate: number;
-}
-
-export interface SalesCycleTrendPoint {
-  month: string;
-  /** @nullable */
-  avgDaysToPayment: number | null;
-  /** @nullable */
-  avgDaysToTrip: number | null;
-}
-
-export interface SalesCycleData {
-  period: string;
-  /** @nullable */
-  avgDaysToPayment: number | null;
-  /** @nullable */
-  medianDaysToPayment: number | null;
-  /** @nullable */
-  p25DaysToPayment: number | null;
-  /** @nullable */
-  p75DaysToPayment: number | null;
-  /** @nullable */
-  avgDaysToTrip: number | null;
-  /** @nullable */
-  medianDaysToTrip: number | null;
-  totalClients: number;
-  clientsWithPayment: number;
-  clientsWithTrip: number;
-  byChannel: SalesCycleChannelBreakdown[];
-  bySeller: SalesCycleSellerBreakdown[];
-  trend: SalesCycleTrendPoint[];
-}
-
-export type GetSalesCyclePeriod = '30d' | '90d' | '12m';
-
-export interface GetSalesCycleParams {
-  period?: GetSalesCyclePeriod;
-  /** Filter the trend series to a specific acquisition channel (origin). Omit for all channels. */
-  channel?: string;
-  /** Filter the trend series to a specific seller. Omit for all sellers. */
-  seller?: string;
-}
-
-export interface BroadcastTripWhatsAppBody {
-  messageTemplate: string;
-  filter: 'all' | 'confirmed' | 'pending';
-}
-
-export interface BroadcastTripWhatsAppResponse {
-  queued: number;
-  skipped: number;
-}

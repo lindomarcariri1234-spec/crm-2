@@ -18,8 +18,6 @@ export interface UpdateDealBody {
   /** @nullable */
   lostReason?: string | null;
   /** @nullable */
-  travelReason?: string | null;
-  /** @nullable */
   description?: string | null;
   /** @nullable */
   expectedCloseDate?: string | null;

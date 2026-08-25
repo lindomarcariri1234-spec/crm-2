@@ -6,11 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ListNpsResponsesParams = {
-  /**
-   * @nullable
-   */
-  classification?: string | null;
-  page?: number;
-  limit?: number;
+export type PublicCheckoutBodyItemsItem = {
+  productId?: string;
+  quantity?: number;
 };

@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Trip } from "./trip";
+import type { TripListStats } from "./tripListStats";
 
 export interface TripListResponse {
   data: Trip[];
@@ -13,12 +14,4 @@ export interface TripListResponse {
   page: number;
   limit: number;
   stats: TripListStats;
-}
-
-export interface TripListStats {
-  total: number;
-  active: number;
-  totalCapacity: number;
-  occupiedSeats: number;
-  totalRevenue: number;
 }

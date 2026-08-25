@@ -12,11 +12,6 @@ export type ListClientsParams = {
    */
   search?: string | null;
   /**
-   * Exact CPF lookup (11 digits, strips non-numeric).
-   * @nullable
-   */
-  cpf?: string | null;
-  /**
    * @nullable
    */
   status?: string | null;
@@ -52,6 +47,10 @@ export type ListClientsParams = {
    * @nullable
    */
   dateTo?: string | null;
+  /**
+   * @nullable
+   */
+  hasAutoRetry?: boolean | null;
   /**
    * @nullable
    */

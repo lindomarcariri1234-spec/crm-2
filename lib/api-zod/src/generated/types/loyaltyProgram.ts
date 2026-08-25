@@ -16,7 +16,5 @@ export interface LoyaltyProgram {
   realPerPoint: string;
   minRedeemPoints: number;
   isActive: boolean;
-  /** @nullable */
-  tierBenefits?: Record<string, string[]> | null;
   createdAt: string;
 }

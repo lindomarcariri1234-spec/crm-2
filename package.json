@@ -9,6 +9,8 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "schema:check": "pnpm --filter @workspace/db check",
     "superadmin:set": "pnpm --filter @workspace/scripts superadmin:set",
+    "api:codegen": "pnpm --filter @workspace/api-spec run codegen",
+    "api:codegen:check": "pnpm run api:codegen && git diff --exit-code -- lib/api-zod/src/generated lib/api-zod/src/index.ts lib/api-client-react/src/generated",
     "test": "pnpm -r --if-present run test"
   },
   "private": true,
@@ -35,6 +37,7 @@
       "dompurify": "3.4.13",
       "form-data": "4.0.6",
       "js-yaml": "5.3.0",
+      "orval>js-yaml": "4.1.0",
       "@babel/core": "7.29.7",
       "yaml": "2.8.3",
       "brace-expansion@1": "1.1.18",

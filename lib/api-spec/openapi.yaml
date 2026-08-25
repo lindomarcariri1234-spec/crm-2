@@ -5324,6 +5324,12 @@ components:
           type: array
           items:
             type: string
+        travelInterests:
+          type: array
+          items:
+            type: string
+        ambassadorOptIn:
+          type: ["boolean", "null"]
         origin:
           type: ["string", "null"]
         maritalStatus:
@@ -5384,6 +5390,12 @@ components:
           type: ["array", "null"]
           items:
             type: string
+        travelInterests:
+          type: ["array", "null"]
+          items:
+            type: string
+        ambassadorOptIn:
+          type: ["boolean", "null"]
         addressCity:
           type: ["string", "null"]
         addressState:
@@ -5896,9 +5908,13 @@ components:
           type: string
         description:
           type: ["string", "null"]
+        shortDescription:
+          type: ["string", "null"]
         isPublic:
           type: ["boolean", "null"]
         isFeatured:
+          type: ["boolean", "null"]
+        isAvailableInShop:
           type: ["boolean", "null"]
         destination:
           type: string
@@ -5906,6 +5922,8 @@ components:
           type: string
         destinationState:
           type: string
+        destinationCountry:
+          type: ["string", "null"]
         originCity:
           type: ["string", "null"]
         originState:
@@ -5918,6 +5936,8 @@ components:
           type: string
         returnDate:
           type: ["string", "null"]
+        registrationDeadline:
+          type: ["string", "null"]
         departureTime:
           type: ["string", "null"]
         returnTime:
@@ -5928,7 +5948,11 @@ components:
           type: number
         priceChild:
           type: ["number", "null"]
+        priceInfant:
+          type: ["number", "null"]
         priceSenior:
+          type: ["number", "null"]
+        reservationFee:
           type: ["number", "null"]
         inclusions:
           type: array
@@ -5947,6 +5971,10 @@ components:
         vehicleType:
           type: ["string", "null"]
         driverName:
+          type: ["string", "null"]
+        driverCnh:
+          type: ["string", "null"]
+        driverPhone:
           type: ["string", "null"]
         tourGuide:
           type: ["string", "null"]
@@ -5980,6 +6008,10 @@ components:
           type: array
           items:
             type: string
+        videos:
+          type: array
+          items:
+            type: string
         boardingPoints:
           type: array
           items: {}
@@ -5992,6 +6024,22 @@ components:
         variableCosts:
           type: array
           items: {}
+        freeOrganizers:
+          type: ["integer", "null"]
+          minimum: 0
+          maximum: 2
+        freeGuides:
+          type: ["integer", "null"]
+          minimum: 0
+          maximum: 2
+        manifestNumber:
+          type: ["string", "null"]
+        cancellationPolicy:
+          type: ["string", "null"]
+        metaTitle:
+          type: ["string", "null"]
+        metaDescription:
+          type: ["string", "null"]
         layoutId:
           type: ["string", "null"]
         showSeatMap:
@@ -6021,6 +6069,8 @@ components:
         isPublic:
           type: ["boolean", "null"]
         isFeatured:
+          type: ["boolean", "null"]
+        isAvailableInShop:
           type: ["boolean", "null"]
         departureDate:
           type: ["string", "null"]
@@ -6100,6 +6150,10 @@ components:
           type: array
           items:
             type: string
+        videos:
+          type: array
+          items:
+            type: string
         boardingPoints:
           type: array
           items: {}
@@ -6116,6 +6170,10 @@ components:
           type: ["string", "null"]
         showSeatMap:
           type: ["boolean", "null"]
+        freePassengers:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreePassenger"
 
     SeatMap:
       type: object
@@ -6303,14 +6361,15 @@ components:
           type: ["string", "null"]
         hasInsurance:
           type: boolean
-        isGratuidade:
-          type: boolean
         totalValue:
           type: number
         paymentMethod:
           type: ["string", "null"]
         installments:
           type: integer
+        firstDueDate:
+          type: ["string", "null"]
+          description: ISO date (YYYY-MM-DD) for the first installment due date
         commissionPercentage:
           type: ["number", "null"]
         commissionAmount:
@@ -6425,6 +6484,9 @@ components:
           type: ["number", "null"]
         installments:
           type: ["integer", "null"]
+        firstDueDate:
+          type: ["string", "null"]
+          description: ISO date (YYYY-MM-DD) for the first installment due date — triggers regeneration of installments
         boardingLocationId:
           type: ["string", "null"]
         commissionAmount:
@@ -8003,6 +8065,9 @@ components:
           type: string
         avatarUrl:
           type: ["string", "null"]
+        storeSlug:
+          type: string
+          description: When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users.
       required: [clerkId, name, email]
 
     CreateUserBody:
@@ -8210,15 +8275,6 @@ components:
         tripsCorrected:
           type: integer
       required: [orphansFixed, tripsCorrected]
-
-    RepairSeatDrift:
-      type: object
-      properties:
-        fixed:
-          type: integer
-        skipped:
-          type: integer
-      required: [fixed, skipped]
 
     RepairSeatDrift:
       type: object

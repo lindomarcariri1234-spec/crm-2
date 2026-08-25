@@ -19,10 +19,14 @@ export interface Reservation {
   /** @nullable */
   packageType?: string | null;
   hasInsurance: boolean;
+  isGratuidade: boolean;
   totalValue: number;
   paidValue: number;
   balance: number;
-  /** @nullable */
+  /**
+   * Amount paid as the initial deposit for an online reservation
+   * @nullable
+   */
   depositAmount?: number | null;
   /** @nullable */
   paymentMethod?: string | null;
@@ -46,8 +50,6 @@ export interface Reservation {
   notes?: string | null;
   /** @nullable */
   boardingLocationId?: string | null;
-  /** @nullable */
-  boardingLocation?: { name: string; time?: string | null } | null;
   /** @nullable */
   storeOrderId?: string | null;
   /** @nullable */

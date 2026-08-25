@@ -38,6 +38,10 @@ export interface UpdateClientBody {
   /** @nullable */
   dreamDestinations?: string[] | null;
   /** @nullable */
+  travelInterests?: string[] | null;
+  /** @nullable */
+  ambassadorOptIn?: boolean | null;
+  /** @nullable */
   addressCity?: string | null;
   /** @nullable */
   addressState?: string | null;
@@ -65,8 +69,4 @@ export interface UpdateClientBody {
   internalRating?: number | null;
   /** @nullable */
   companyNps?: number | null;
-  /** @nullable */
-  travelInterests?: string[] | null;
-  /** @nullable */
-  ambassadorOptIn?: boolean | null;
 }

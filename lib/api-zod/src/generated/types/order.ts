@@ -10,8 +10,19 @@ import type { OrderItem } from "./orderItem";
 export interface Order {
   id: string;
   userId: string;
+  /** Full order total (subtotal - discounts). Not overwritten by depositAmount. */
   totalAmount: number;
   finalAmount: number;
+  /**
+   * Amount the customer chose to pay now (partial payment). Null when full payment is required.
+   * @nullable
+   */
+  depositAmount?: number | null;
+  /**
+   * Balance remaining after deposit (totalAmount - depositAmount). Null when fully paid upfront.
+   * @nullable
+   */
+  amountRemaining?: number | null;
   status: string;
   paymentStatus: string;
   createdAt: string;

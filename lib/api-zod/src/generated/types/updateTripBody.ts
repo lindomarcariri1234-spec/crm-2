@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { FreePassenger } from "./freePassenger";
 import type { TripStatus } from "./tripStatus";
 
 export interface UpdateTripBody {
@@ -17,6 +18,8 @@ export interface UpdateTripBody {
   isPublic?: boolean | null;
   /** @nullable */
   isFeatured?: boolean | null;
+  /** @nullable */
+  isAvailableInShop?: boolean | null;
   /** @nullable */
   departureDate?: string | null;
   /** @nullable */
@@ -88,33 +91,14 @@ export interface UpdateTripBody {
   /** @nullable */
   category?: string | null;
   gallery?: string[];
+  videos?: string[];
   boardingPoints?: unknown[];
   itinerary?: unknown[];
   fixedCosts?: unknown[];
   variableCosts?: unknown[];
-  /**
-   * @minimum 0
-   * @maximum 2
-   * @nullable
-   */
-  freeOrganizers?: number | null;
-  /**
-   * @minimum 0
-   * @maximum 2
-   * @nullable
-   */
-  freeGuides?: number | null;
   /** @nullable */
   layoutId?: string | null;
   /** @nullable */
   showSeatMap?: boolean | null;
-  freePassengers?: Array<{
-    id: string;
-    name: string;
-    cpf: string;
-    whatsapp: string;
-    role: "organizer" | "guide";
-    seatNumber: string | null;
-    checkedInAt?: string | null;
-  }>;
+  freePassengers?: FreePassenger[];
 }

@@ -12,4 +12,6 @@ export interface SyncUserBody {
   email: string;
   /** @nullable */
   avatarUrl?: string | null;
+  /** When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users. */
+  storeSlug?: string;
 }

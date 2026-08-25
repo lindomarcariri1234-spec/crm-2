@@ -19,6 +19,11 @@ export interface CreateReservationBody {
   /** @nullable */
   paymentMethod?: string | null;
   installments?: number;
+  /**
+   * ISO date (YYYY-MM-DD) for the first installment due date
+   * @nullable
+   */
+  firstDueDate?: string | null;
   /** @nullable */
   commissionPercentage?: number | null;
   /**
@@ -49,15 +54,15 @@ export interface CreateReservationBody {
   discountReferralAmount?: number | null;
   /** @nullable */
   discountTotal?: number | null;
-  /** @nullable */
-  boardingLocationId?: string | null;
-  /** ISO date (YYYY-MM-DD) for the first installment due date
+  /**
+   * Boarding location ID for the client
    * @nullable
    */
-  firstDueDate?: string | null;
+  boardingLocationId?: string | null;
+  /** Mark reservation as complimentary (free of charge) for guides, partners, etc. */
+  isGratuidade?: boolean;
   /** Criança de colo — não ocupa poltrona */
   isOnLap?: boolean;
-  isGratuidade?: boolean;
   /** Criança menor de 7 anos que ocupa poltrona — força ageCategory=child */
   isChildUnder7?: boolean;
 }

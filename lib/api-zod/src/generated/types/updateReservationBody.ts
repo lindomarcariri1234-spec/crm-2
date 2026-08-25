@@ -19,6 +19,11 @@ export interface UpdateReservationBody {
   totalValue?: number | null;
   /** @nullable */
   installments?: number | null;
+  /**
+   * ISO date (YYYY-MM-DD) for the first installment due date — triggers regeneration of installments
+   * @nullable
+   */
+  firstDueDate?: string | null;
   /** @nullable */
   boardingLocationId?: string | null;
   /**
@@ -31,14 +36,21 @@ export interface UpdateReservationBody {
    * @nullable
    */
   sellerId?: string | null;
-  /** @nullable */
+  /**
+   * ID of the client to link to this reservation
+   * @nullable
+   */
   clientId?: string | null;
-  /** @nullable */
+  /**
+   * ID of the trip to link to this reservation
+   * @nullable
+   */
   tripId?: string | null;
-  /** @nullable */
+  /**
+   * Mark reservation as complimentary (free of charge)
+   * @nullable
+   */
   isGratuidade?: boolean | null;
-  /** @nullable */
-  firstDueDate?: string | null;
   /**
    * Total discount amount in BRL
    * @nullable

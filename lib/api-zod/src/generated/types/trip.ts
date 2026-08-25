@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { FreePassenger } from "./freePassenger";
 import type { TripBoardingPointsItem } from "./tripBoardingPointsItem";
 import type { TripItineraryItem } from "./tripItineraryItem";
 
@@ -99,9 +100,11 @@ export interface Trip {
    * @nullable
    */
   freeGuides?: number | null;
+  freePassengers?: FreePassenger[] | null;
   /** @nullable */
   layoutId?: string | null;
-  showSeatMap?: boolean;
+  /** @nullable */
+  showSeatMap?: boolean | null;
   createdAt: string;
   updatedAt: string;
 }

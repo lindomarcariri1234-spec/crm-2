@@ -62,7 +62,7 @@
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
-- [Orval js-yaml generation incompatibility](orval-js-yaml-codegen.md) — current Orval generation fails with the workspace js-yaml override; fix toolchain compatibility before relying on codegen.
+- [Orval codegen workflow](orval-js-yaml-codegen.md) — generated API artifacts come from the canonical first OpenAPI document; use the drift command, never hand-edit output.
 - [Trial expiry notification idempotency](trial-expiry-notification-idempotency.md) — use the platform-settings ledger for atomic per-tenant, per-trial-window email claims without changing the immutable tenant schema
 - [Vite canonical URL handling](vite-canonical-url.md) — a relative canonical href="/" is processed as a filesystem asset and breaks this Vite production build; use an absolute fallback URL
 - [Shared UploadThing file references](shared-uploadthing-file-references.md) — after a cascade, protect files still referenced by another record in the same tenant, not only by another tenant

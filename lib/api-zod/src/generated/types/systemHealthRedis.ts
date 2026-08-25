@@ -5,10 +5,8 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
-import type { SystemHealthRedisDailyUsage } from "./systemHealthRedisDailyUsage";
 import type { SystemHealthRedisStatus } from "./systemHealthRedisStatus";
 
 export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
-  dailyUsage?: SystemHealthRedisDailyUsage;
 }

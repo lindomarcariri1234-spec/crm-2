@@ -7,11 +7,32 @@
  */
 
 export type GetReservationStatsParams = {
+  /**
+   * @nullable
+   */
   search?: string | null;
+  /**
+   * @nullable
+   */
   tripId?: string | null;
+  /**
+   * @nullable
+   */
   status?: string | null;
+  /**
+   * @nullable
+   */
   sellerId?: string | null;
+  /**
+   * @nullable
+   */
   dateFrom?: string | null;
+  /**
+   * @nullable
+   */
   dateTo?: string | null;
+  /**
+   * @nullable
+   */
   hasAutoRetry?: boolean | null;
 };

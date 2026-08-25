@@ -32,10 +32,4 @@ export interface UpdateTenantBody {
   reservationPrefix?: string | null;
   /** @nullable */
   birthdayMessagesEnabled?: boolean | null;
-  npsCategories?: {
-    transport?: boolean;
-    service?: boolean;
-    organization?: boolean;
-    guide?: boolean;
-  } | null;
 }

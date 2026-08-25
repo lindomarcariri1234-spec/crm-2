@@ -6,30 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { SystemHealthRedis } from "./systemHealthRedis";
-import type { SystemHealthStripeWebhookAudit } from "./systemHealthStripeWebhookAudit";
 import type { SystemHealthStripeSyncTables } from "./systemHealthStripeSyncTables";
-
-export interface SystemHealthSeatDrift {
-  tripsChecked: number;
-  tripsWithDrift: number;
-  status: "ok" | "drift_detected";
-}
-
-export interface SystemHealthPipelineOrphans {
-  openDealsOnCancelledReservations: number;
-  status: "ok" | "orphans_detected";
-}
-
-export interface SystemHealthClientFinancialDrift {
-  clientsWithNegativeBalance: number;
-  status: "ok" | "drift_detected";
-}
+import type { SystemHealthStripeWebhookAudit } from "./systemHealthStripeWebhookAudit";
 
 export interface SystemHealth {
   redis: SystemHealthRedis;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
   stripeSyncTables: SystemHealthStripeSyncTables;
-  seatDrift?: SystemHealthSeatDrift;
-  pipelineOrphans?: SystemHealthPipelineOrphans;
-  clientFinancialDrift?: SystemHealthClientFinancialDrift;
 }

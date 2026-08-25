@@ -13,12 +13,4 @@ export interface NpsSummary {
   passives: number;
   detractors: number;
   total: number;
-  /** @nullable */
-  avgTransport?: number | null;
-  /** @nullable */
-  avgService?: number | null;
-  /** @nullable */
-  avgOrganization?: number | null;
-  /** @nullable */
-  avgGuide?: number | null;
 }

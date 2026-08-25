@@ -6,11 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ListNpsResponsesParams = {
-  /**
-   * @nullable
-   */
-  classification?: string | null;
-  page?: number;
-  limit?: number;
-};
+export interface TripListStats {
+  total: number;
+  active: number;
+  totalCapacity: number;
+  occupiedSeats: number;
+  totalRevenue: number;
+}

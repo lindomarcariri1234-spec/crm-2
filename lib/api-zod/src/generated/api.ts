@@ -59,14 +59,6 @@ export const HealthCheckLegacyResponse = zod.object({
 export const GetSystemHealthResponse = zod.object({
   redis: zod.object({
     status: zod.enum(["ok", "degraded", "unavailable"]),
-    dailyUsage: zod
-      .object({
-        commandCount: zod.number(),
-        maxCommands: zod.number(),
-        usagePct: zod.number(),
-        warningThresholdPct: zod.number(),
-      })
-      .optional(),
   }),
   stripeWebhookAudit: zod.object({
     status: zod.enum(["ok", "duplicate", "unknown"]),
@@ -83,23 +75,18 @@ export const GetSystemHealthResponse = zod.object({
     ok: zod.boolean().nullable(),
     checkedAt: zod.string().nullable(),
   }),
-  seatDrift: zod.object({
-    tripsChecked: zod.number(),
-    tripsWithDrift: zod.number(),
-    status: zod.enum(["ok", "drift_detected"]),
-  }).optional(),
-  pipelineOrphans: zod.object({
-    openDealsOnCancelledReservations: zod.number(),
-    status: zod.enum(["ok", "orphans_detected"]),
-  }).optional(),
-  clientFinancialDrift: zod.object({
-    clientsWithNegativeBalance: zod.number(),
-    status: zod.enum(["ok", "drift_detected"]),
-  }).optional(),
 });
 
 /**
- * @summary Repair seat drift (superadmin only)
+ * @summary Repair pipeline orphan deals and seat counter drift (superadmin only)
+ */
+export const RepairSystemHealthResponse = zod.object({
+  orphansFixed: zod.number(),
+  tripsCorrected: zod.number(),
+});
+
+/**
+ * @summary Repair seat counter drift (superadmin only)
  */
 export const RepairSeatDriftResponse = zod.object({
   fixed: zod.number(),
@@ -134,7 +121,6 @@ export const ListAdminInvoicesResponseItem = zod.object({
   dueDate: zod.string().nullish(),
   paidAt: zod.string().nullish(),
   description: zod.string().nullish(),
-  shortDescription: zod.string().nullish(),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
@@ -784,6 +770,112 @@ export const GetDashboardFunnelResponse = zod.object({
 });
 
 /**
+ * Returns aggregate, channel-breakdown, and 12-month trend data showing
+how many days elapse from client registration to their first payment
+and first confirmed trip departure.
+Requires authentication. SALES and CLIENT roles are blocked (403).
+
+ * @summary Get sales cycle metrics (days from registration to payment and trip)
+ */
+export const getSalesCycleQueryPeriodDefault = `12m`;
+
+export const GetSalesCycleQueryParams = zod.object({
+  period: zod
+    .enum(["30d", "90d", "12m"])
+    .default(getSalesCycleQueryPeriodDefault)
+    .describe("Lookback window for clients included in the analysis"),
+  channel: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Optional acquisition channel (client origin) to scope the trend\nseries. When omitted the trend covers all channels. The overall\naggregates and byChannel breakdown are always unfiltered.\n",
+    ),
+  seller: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Optional seller identifier to scope the trend series. When omitted\nthe trend covers all sellers. The overall aggregates and breakdowns\nare always unfiltered.\n",
+    ),
+});
+
+export const GetSalesCycleResponse = zod.object({
+  avgDaysToPayment: zod
+    .number()
+    .nullish()
+    .describe("Mean days from client registration to first payment"),
+  medianDaysToPayment: zod.number().nullish(),
+  p25DaysToPayment: zod.number().nullish(),
+  p75DaysToPayment: zod.number().nullish(),
+  avgDaysToTrip: zod
+    .number()
+    .nullish()
+    .describe(
+      "Mean days from client registration to first confirmed trip departure",
+    ),
+  medianDaysToTrip: zod.number().nullish(),
+  totalClients: zod
+    .number()
+    .describe("Number of clients registered in the selected period"),
+  clientsWithPayment: zod
+    .number()
+    .describe("Subset of totalClients who made at least one payment"),
+  byChannel: zod.array(
+    zod.object({
+      origin: zod
+        .string()
+        .describe(
+          'Acquisition channel name (COALESCE\'d to \"Outros\" when null)',
+        ),
+      clients: zod.number(),
+      avgDaysToPayment: zod.number().nullish(),
+      avgDaysToTrip: zod.number().nullish(),
+      conversionRate: zod
+        .number()
+        .describe("Percentage of clients in this channel who made a payment"),
+    }),
+  ),
+  bySeller: zod
+    .array(
+      zod
+        .object({
+          sellerId: zod.string(),
+          sellerName: zod.string(),
+          clients: zod
+            .number()
+            .describe(
+              "Number of clients assigned to this seller in the period",
+            ),
+          avgDaysToPayment: zod
+            .number()
+            .nullish()
+            .describe(
+              "Mean days from client registration to first payment; null when no client has paid",
+            ),
+          conversionRate: zod
+            .number()
+            .describe(
+              "Percentage of assigned clients who made at least one payment",
+            ),
+        })
+        .describe(
+          "Sales cycle metrics for a single salesperson (seller_id on reservations). Only sellers with ≥ 3 clients in the period are included, sorted by shortest avgDaysToPayment (NULLS LAST).",
+        ),
+    )
+    .describe(
+      "Breakdown by assigned salesperson; only sellers with ≥ 3 clients, sorted by shortest cycle",
+    ),
+  trend: zod
+    .array(
+      zod.object({
+        month: zod.string().describe("ISO month label: YYYY-MM"),
+        avgDaysToPayment: zod.number().nullish(),
+        avgDaysToTrip: zod.number().nullish(),
+      }),
+    )
+    .describe("Last 12 months, gap-filled with null for months with no data"),
+});
+
+/**
  * @summary List clients
  */
 export const listClientsQueryPageDefault = 1;
@@ -800,6 +892,7 @@ export const ListClientsQueryParams = zod.object({
   origin: zod.coerce.string().nullish(),
   dateFrom: zod.coerce.string().nullish(),
   dateTo: zod.coerce.string().nullish(),
+  hasAutoRetry: zod.coerce.boolean().nullish(),
   sortBy: zod.coerce.string().nullish(),
   sortOrder: zod.coerce.string().nullish(),
   page: zod.coerce.number().default(listClientsQueryPageDefault),
@@ -844,12 +937,6 @@ export const ListClientsResponse = zod.object({
       foodPreferences: zod.string().nullish(),
       internalRating: zod.number().nullish(),
       companyNps: zod.number().nullish(),
-      travelInterests: zod.array(zod.string()),
-      travelPreference: zod.string().nullish(),
-      preferredDestinationTypes: zod.array(zod.string()),
-      likesPhotosVideos: zod.boolean().nullish(),
-      ambassadorOptIn: zod.boolean().nullish(),
-      customerCode: zod.string().nullish(),
       isNew: zod.boolean().nullish(),
       message: zod.string().nullish(),
     }),
@@ -862,25 +949,12 @@ export const ListClientsResponse = zod.object({
 /**
  * @summary Create a client
  */
-/**
- * @summary Broadcast a WhatsApp message to all passengers of a trip
- */
-export const BroadcastTripWhatsAppBody = zod.object({
-  messageTemplate: zod.string().min(1).max(2000),
-  filter: zod.enum(["all", "confirmed", "pending"]),
-});
-
-export const BroadcastTripWhatsAppResponse = zod.object({
-  queued: zod.number(),
-  skipped: zod.number(),
-});
-
 export const CreateClientBody = zod.object({
   name: zod.string(),
   email: zod.string(),
   whatsapp: zod.string(),
   phone: zod.string().nullish(),
-  cpf: zod.string().nullish(),
+  cpf: zod.string(),
   rg: zod.string().nullish(),
   birthDate: zod.string().nullish(),
   gender: zod.string().nullish(),
@@ -891,6 +965,8 @@ export const CreateClientBody = zod.object({
   observations: zod.string().nullish(),
   tags: zod.array(zod.string()).optional(),
   dreamDestinations: zod.array(zod.string()).optional(),
+  travelInterests: zod.array(zod.string()).optional(),
+  ambassadorOptIn: zod.boolean().nullish(),
   origin: zod.string().nullish(),
   maritalStatus: zod.string().nullish(),
   professionalArea: zod.string().nullish(),
@@ -900,9 +976,12 @@ export const CreateClientBody = zod.object({
   foodPreferences: zod.string().nullish(),
   internalRating: zod.number().nullish(),
   companyNps: zod.number().nullish(),
-  travelInterests: zod.array(zod.string()).optional(),
-  ambassadorOptIn: zod.boolean().nullish(),
-  forceCreate: zod.boolean().optional(),
+  forceCreate: zod
+    .boolean()
+    .optional()
+    .describe(
+      "If true, skip the duplicate name+WhatsApp check and create the client anyway.",
+    ),
 });
 
 /**
@@ -948,12 +1027,6 @@ export const GetClientResponse = zod.object({
   foodPreferences: zod.string().nullish(),
   internalRating: zod.number().nullish(),
   companyNps: zod.number().nullish(),
-  travelInterests: zod.array(zod.string()),
-  travelPreference: zod.string().nullish(),
-  preferredDestinationTypes: zod.array(zod.string()),
-  likesPhotosVideos: zod.boolean().nullish(),
-  ambassadorOptIn: zod.boolean().nullish(),
-  customerCode: zod.string().nullish(),
   isNew: zod.boolean().nullish(),
   message: zod.string().nullish(),
 });
@@ -981,6 +1054,8 @@ export const UpdateClientBody = zod.object({
   tags: zod.array(zod.string()).nullish(),
   observations: zod.string().nullish(),
   dreamDestinations: zod.array(zod.string()).nullish(),
+  travelInterests: zod.array(zod.string()).nullish(),
+  ambassadorOptIn: zod.boolean().nullish(),
   addressCity: zod.string().nullish(),
   addressState: zod.string().nullish(),
   npsScore: zod.number().nullish(),
@@ -995,8 +1070,6 @@ export const UpdateClientBody = zod.object({
   foodPreferences: zod.string().nullish(),
   internalRating: zod.number().nullish(),
   companyNps: zod.number().nullish(),
-  travelInterests: zod.array(zod.string()).nullish(),
-  ambassadorOptIn: zod.boolean().nullish(),
 });
 
 export const UpdateClientResponse = zod.object({
@@ -1035,12 +1108,6 @@ export const UpdateClientResponse = zod.object({
   foodPreferences: zod.string().nullish(),
   internalRating: zod.number().nullish(),
   companyNps: zod.number().nullish(),
-  travelInterests: zod.array(zod.string()),
-  travelPreference: zod.string().nullish(),
-  preferredDestinationTypes: zod.array(zod.string()),
-  likesPhotosVideos: zod.boolean().nullish(),
-  ambassadorOptIn: zod.boolean().nullish(),
-  customerCode: zod.string().nullish(),
   isNew: zod.boolean().nullish(),
   message: zod.string().nullish(),
 });
@@ -1120,12 +1187,6 @@ export const UpdateClientPipelineStageResponse = zod.object({
   foodPreferences: zod.string().nullish(),
   internalRating: zod.number().nullish(),
   companyNps: zod.number().nullish(),
-  travelInterests: zod.array(zod.string()),
-  travelPreference: zod.string().nullish(),
-  preferredDestinationTypes: zod.array(zod.string()),
-  likesPhotosVideos: zod.boolean().nullish(),
-  ambassadorOptIn: zod.boolean().nullish(),
-  customerCode: zod.string().nullish(),
   isNew: zod.boolean().nullish(),
   message: zod.string().nullish(),
 });
@@ -1230,12 +1291,9 @@ export const GetClientReferralParams = zod.object({
 
 export const GetClientReferralResponse = zod.object({
   referralCode: zod.string().nullable(),
-  referralCodeStatus: zod.enum(["active", "blocked", "cancelled"]),
   totalReferrals: zod.number(),
   successfulReferrals: zod.number(),
   referralEarnings: zod.number(),
-  referralSuspendedAttemptAt: zod.string().nullish(),
-  referralSuspendedAttemptCount: zod.number(),
   referrals: zod.array(
     zod.object({
       id: zod.string(),
@@ -1302,7 +1360,14 @@ export const GetReferralSettingsResponse = zod.object({
   allowSelfReferral: zod.boolean(),
   requireFirstPurchase: zod.boolean(),
   shareMessage: zod.string().nullish(),
-  tiersConfig: zod.array(zod.object({ level: zod.string(), label: zod.string(), minReferrals: zod.number(), bonusMultiplier: zod.number() })),
+  tiersConfig: zod.array(
+    zod.object({
+      level: zod.string(),
+      label: zod.string(),
+      minReferrals: zod.number(),
+      bonusMultiplier: zod.number(),
+    }),
+  ),
   whatsappEnabled: zod.boolean(),
   whatsappPhoneNumber: zod.string().nullish(),
   whatsappConvertedMessage: zod.string().nullish(),
@@ -1311,12 +1376,11 @@ export const GetReferralSettingsResponse = zod.object({
   expiryWarning7DaysEnabled: zod.boolean(),
   expiryWarning1DayEnabled: zod.boolean(),
   bonusReleaseEmailEnabled: zod.boolean(),
-  loyaltyPointsEmailEnabled: zod.boolean(),
   pointsPerReferral: zod.number(),
   gracePeriodDays: zod.number(),
   bonusValidityDays: zod.number(),
   discountExpirationDays: zod.number(),
-  minPurchaseAmount: zod.string().nullable().optional(),
+  minPurchaseAmount: zod.string().nullish(),
   maxReferralsPerUser: zod.number(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
@@ -1335,7 +1399,16 @@ export const UpdateReferralSettingsBody = zod.object({
   allowSelfReferral: zod.boolean().optional(),
   requireFirstPurchase: zod.boolean().optional(),
   shareMessage: zod.string().optional(),
-  tiersConfig: zod.array(zod.object({ level: zod.string(), label: zod.string(), minReferrals: zod.number(), bonusMultiplier: zod.number() })).optional(),
+  tiersConfig: zod
+    .array(
+      zod.object({
+        level: zod.string(),
+        label: zod.string(),
+        minReferrals: zod.number(),
+        bonusMultiplier: zod.number(),
+      }),
+    )
+    .optional(),
   whatsappEnabled: zod.boolean().optional(),
   whatsappPhoneNumber: zod.string().optional(),
   whatsappConvertedMessage: zod.string().optional(),
@@ -1344,7 +1417,6 @@ export const UpdateReferralSettingsBody = zod.object({
   expiryWarning7DaysEnabled: zod.boolean().optional(),
   expiryWarning1DayEnabled: zod.boolean().optional(),
   bonusReleaseEmailEnabled: zod.boolean().optional(),
-  loyaltyPointsEmailEnabled: zod.boolean().optional(),
   pointsPerReferral: zod.number().optional(),
   gracePeriodDays: zod.number().optional(),
   bonusValidityDays: zod.number().optional(),
@@ -1365,7 +1437,14 @@ export const UpdateReferralSettingsResponse = zod.object({
   allowSelfReferral: zod.boolean(),
   requireFirstPurchase: zod.boolean(),
   shareMessage: zod.string().nullish(),
-  tiersConfig: zod.array(zod.object({ level: zod.string(), label: zod.string(), minReferrals: zod.number(), bonusMultiplier: zod.number() })),
+  tiersConfig: zod.array(
+    zod.object({
+      level: zod.string(),
+      label: zod.string(),
+      minReferrals: zod.number(),
+      bonusMultiplier: zod.number(),
+    }),
+  ),
   whatsappEnabled: zod.boolean(),
   whatsappPhoneNumber: zod.string().nullish(),
   whatsappConvertedMessage: zod.string().nullish(),
@@ -1374,12 +1453,11 @@ export const UpdateReferralSettingsResponse = zod.object({
   expiryWarning7DaysEnabled: zod.boolean(),
   expiryWarning1DayEnabled: zod.boolean(),
   bonusReleaseEmailEnabled: zod.boolean(),
-  loyaltyPointsEmailEnabled: zod.boolean(),
   pointsPerReferral: zod.number(),
   gracePeriodDays: zod.number(),
   bonusValidityDays: zod.number(),
   discountExpirationDays: zod.number(),
-  minPurchaseAmount: zod.string().nullable().optional(),
+  minPurchaseAmount: zod.string().nullish(),
   maxReferralsPerUser: zod.number(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
@@ -1593,14 +1671,6 @@ export const listTripsResponseDataItemFreeOrganizersMax = 2;
 export const listTripsResponseDataItemFreeGuidesMin = 0;
 export const listTripsResponseDataItemFreeGuidesMax = 2;
 
-export const TripListStats = zod.object({
-  total: zod.number(),
-  active: zod.number(),
-  totalCapacity: zod.number(),
-  occupiedSeats: zod.number(),
-  totalRevenue: zod.number(),
-});
-
 export const ListTripsResponse = zod.object({
   data: zod.array(
     zod.object({
@@ -1630,7 +1700,6 @@ export const ListTripsResponse = zod.object({
       exclusions: zod.array(zod.string()),
       coverImage: zod.string().nullish(),
       gallery: zod.array(zod.string()),
-      videos: zod.array(zod.string()),
       status: zod.string(),
       isPublic: zod.boolean(),
       isFeatured: zod.boolean(),
@@ -1665,7 +1734,31 @@ export const ListTripsResponse = zod.object({
       itinerary: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
       fixedCosts: zod.array(zod.unknown()).optional(),
       variableCosts: zod.array(zod.unknown()).optional(),
+      freeOrganizers: zod
+        .number()
+        .min(listTripsResponseDataItemFreeOrganizersMin)
+        .max(listTripsResponseDataItemFreeOrganizersMax)
+        .nullish(),
+      freeGuides: zod
+        .number()
+        .min(listTripsResponseDataItemFreeGuidesMin)
+        .max(listTripsResponseDataItemFreeGuidesMax)
+        .nullish(),
+      freePassengers: zod
+        .array(
+          zod.object({
+            id: zod.string(),
+            name: zod.string(),
+            cpf: zod.string(),
+            whatsapp: zod.string(),
+            role: zod.enum(["organizer", "guide"]),
+            seatNumber: zod.string().nullable(),
+            checkedInAt: zod.string().nullish(),
+          }),
+        )
+        .nullish(),
       layoutId: zod.string().nullish(),
+      showSeatMap: zod.boolean().nullish(),
       createdAt: zod.string(),
       updatedAt: zod.string(),
     }),
@@ -1673,12 +1766,24 @@ export const ListTripsResponse = zod.object({
   total: zod.number(),
   page: zod.number(),
   limit: zod.number(),
-  stats: TripListStats,
+  stats: zod.object({
+    total: zod.number(),
+    active: zod.number(),
+    totalCapacity: zod.number(),
+    occupiedSeats: zod.number(),
+    totalRevenue: zod.number(),
+  }),
 });
 
 /**
  * @summary Create a trip
  */
+export const createTripBodyFreeOrganizersMin = 0;
+export const createTripBodyFreeOrganizersMax = 2;
+
+export const createTripBodyFreeGuidesMin = 0;
+export const createTripBodyFreeGuidesMax = 2;
+
 export const CreateTripBody = zod.object({
   name: zod.string(),
   description: zod.string().nullish(),
@@ -1743,8 +1848,16 @@ export const CreateTripBody = zod.object({
   itinerary: zod.array(zod.unknown()).optional(),
   fixedCosts: zod.array(zod.unknown()).optional(),
   variableCosts: zod.array(zod.unknown()).optional(),
-  freeOrganizers: zod.number().min(0).max(2).nullish(),
-  freeGuides: zod.number().min(0).max(2).nullish(),
+  freeOrganizers: zod
+    .number()
+    .min(createTripBodyFreeOrganizersMin)
+    .max(createTripBodyFreeOrganizersMax)
+    .nullish(),
+  freeGuides: zod
+    .number()
+    .min(createTripBodyFreeGuidesMin)
+    .max(createTripBodyFreeGuidesMax)
+    .nullish(),
   manifestNumber: zod.string().nullish(),
   cancellationPolicy: zod.string().nullish(),
   metaTitle: zod.string().nullish(),
@@ -1793,7 +1906,6 @@ export const GetTripResponse = zod.object({
   exclusions: zod.array(zod.string()),
   coverImage: zod.string().nullish(),
   gallery: zod.array(zod.string()),
-  videos: zod.array(zod.string()),
   status: zod.string(),
   isPublic: zod.boolean(),
   isFeatured: zod.boolean(),
@@ -1828,18 +1940,31 @@ export const GetTripResponse = zod.object({
   itinerary: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   fixedCosts: zod.array(zod.unknown()).optional(),
   variableCosts: zod.array(zod.unknown()).optional(),
-  freeOrganizers: zod.number().nullish(),
-  freeGuides: zod.number().nullish(),
-  freePassengers: zod.array(zod.object({
-    id: zod.string(),
-    name: zod.string(),
-    cpf: zod.string(),
-    whatsapp: zod.string(),
-    role: zod.enum(["organizer", "guide"]),
-    seatNumber: zod.string().nullable(),
-    checkedInAt: zod.string().nullish(),
-  })).nullish(),
+  freeOrganizers: zod
+    .number()
+    .min(getTripResponseFreeOrganizersMin)
+    .max(getTripResponseFreeOrganizersMax)
+    .nullish(),
+  freeGuides: zod
+    .number()
+    .min(getTripResponseFreeGuidesMin)
+    .max(getTripResponseFreeGuidesMax)
+    .nullish(),
+  freePassengers: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        cpf: zod.string(),
+        whatsapp: zod.string(),
+        role: zod.enum(["organizer", "guide"]),
+        seatNumber: zod.string().nullable(),
+        checkedInAt: zod.string().nullish(),
+      }),
+    )
+    .nullish(),
   layoutId: zod.string().nullish(),
+  showSeatMap: zod.boolean().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });
@@ -1913,15 +2038,19 @@ export const UpdateTripBody = zod.object({
   variableCosts: zod.array(zod.unknown()).optional(),
   layoutId: zod.string().nullish(),
   showSeatMap: zod.boolean().nullish(),
-  freePassengers: zod.array(zod.object({
-    id: zod.string(),
-    name: zod.string(),
-    cpf: zod.string(),
-    whatsapp: zod.string(),
-    role: zod.enum(["organizer", "guide"]),
-    seatNumber: zod.string().nullable(),
-    checkedInAt: zod.string().nullish(),
-  })).optional(),
+  freePassengers: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        cpf: zod.string(),
+        whatsapp: zod.string(),
+        role: zod.enum(["organizer", "guide"]),
+        seatNumber: zod.string().nullable(),
+        checkedInAt: zod.string().nullish(),
+      }),
+    )
+    .optional(),
 });
 
 export const updateTripResponseFreeOrganizersMin = 0;
@@ -1957,7 +2086,6 @@ export const UpdateTripResponse = zod.object({
   exclusions: zod.array(zod.string()),
   coverImage: zod.string().nullish(),
   gallery: zod.array(zod.string()),
-  videos: zod.array(zod.string()),
   status: zod.string(),
   isPublic: zod.boolean(),
   isFeatured: zod.boolean(),
@@ -1978,9 +2106,6 @@ export const UpdateTripResponse = zod.object({
   tourGuideCpf: zod.string().nullish(),
   tourGuideRegistration: zod.string().nullish(),
   manifestNumber: zod.string().nullish(),
-  cancellationPolicy: zod.string().nullish(),
-  metaTitle: zod.string().nullish(),
-  metaDescription: zod.string().nullish(),
   seatLayout: zod.string().nullish(),
   boardingPoints: zod
     .array(
@@ -1995,7 +2120,31 @@ export const UpdateTripResponse = zod.object({
   itinerary: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
   fixedCosts: zod.array(zod.unknown()).optional(),
   variableCosts: zod.array(zod.unknown()).optional(),
+  freeOrganizers: zod
+    .number()
+    .min(updateTripResponseFreeOrganizersMin)
+    .max(updateTripResponseFreeOrganizersMax)
+    .nullish(),
+  freeGuides: zod
+    .number()
+    .min(updateTripResponseFreeGuidesMin)
+    .max(updateTripResponseFreeGuidesMax)
+    .nullish(),
+  freePassengers: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        cpf: zod.string(),
+        whatsapp: zod.string(),
+        role: zod.enum(["organizer", "guide"]),
+        seatNumber: zod.string().nullable(),
+        checkedInAt: zod.string().nullish(),
+      }),
+    )
+    .nullish(),
   layoutId: zod.string().nullish(),
+  showSeatMap: zod.boolean().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });
@@ -2111,6 +2260,17 @@ export const GetTripBoardingPanelResponse = zod.object({
   tourGuide: zod.string().nullish(),
   tourGuideCpf: zod.string().nullish(),
   tourGuideRegistration: zod.string().nullish(),
+  freePassengers: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      cpf: zod.string(),
+      whatsapp: zod.string(),
+      role: zod.enum(["organizer", "guide"]),
+      seatNumber: zod.string().nullable(),
+      checkedInAt: zod.string().nullish(),
+    }),
+  ),
 });
 
 /**
@@ -2122,6 +2282,145 @@ export const SyncTripPassengersParams = zod.object({
 
 export const SyncTripPassengersResponse = zod.object({
   created: zod.number().describe("Number of passenger records created"),
+});
+
+/**
+ * @summary List costs for a trip
+ */
+export const ListTripCostsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ListTripCostsResponse = zod.object({
+  costs: zod.array(
+    zod.object({
+      id: zod.string(),
+      tripId: zod.string(),
+      category: zod.enum([
+        "Transporte",
+        "Hospedagem",
+        "Alimentação",
+        "Guia",
+        "Marketing",
+        "Seguro",
+        "Taxas",
+        "Outros",
+      ]),
+      description: zod.string(),
+      supplierId: zod.string().nullable(),
+      supplierName: zod.string().nullable(),
+      amount: zod.number(),
+      status: zod.enum(["pending", "paid", "overdue"]),
+      dueDate: zod.string().nullable(),
+      paidAt: zod.string().nullable(),
+      notes: zod.string().nullable(),
+      createdAt: zod.string(),
+    }),
+  ),
+  summary: zod.object({
+    expectedRevenue: zod.number(),
+    totalRealCosts: zod.number(),
+    totalPaidCosts: zod.number(),
+    totalPendingCosts: zod.number(),
+    profit: zod.number(),
+    margin: zod.number(),
+    plannedBudget: zod.number(),
+    budgetVariance: zod.number(),
+    confirmedSeats: zod.number(),
+  }),
+});
+
+/**
+ * @summary Create a trip cost
+ */
+export const CreateTripCostParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const CreateTripCostBody = zod.object({
+  category: zod.enum([
+    "Transporte",
+    "Hospedagem",
+    "Alimentação",
+    "Guia",
+    "Marketing",
+    "Seguro",
+    "Taxas",
+    "Outros",
+  ]),
+  description: zod.string(),
+  supplierName: zod.string().nullish(),
+  amount: zod.number(),
+  status: zod.enum(["pending", "paid", "overdue"]).optional(),
+  dueDate: zod.string().nullish(),
+  paidAt: zod.string().nullish(),
+  notes: zod.string().nullish(),
+});
+
+/**
+ * @summary Update a trip cost
+ */
+export const UpdateTripCostParams = zod.object({
+  id: zod.coerce.string(),
+  costId: zod.coerce.string(),
+});
+
+export const UpdateTripCostBody = zod.object({
+  category: zod
+    .enum([
+      "Transporte",
+      "Hospedagem",
+      "Alimentação",
+      "Guia",
+      "Marketing",
+      "Seguro",
+      "Taxas",
+      "Outros",
+    ])
+    .optional(),
+  description: zod.string().optional(),
+  supplierName: zod.string().nullish(),
+  amount: zod.number().optional(),
+  status: zod.enum(["pending", "paid", "overdue"]).optional(),
+  dueDate: zod.string().nullish(),
+  paidAt: zod.string().nullish(),
+  notes: zod.string().nullish(),
+});
+
+export const UpdateTripCostResponse = zod.object({
+  id: zod.string(),
+  tripId: zod.string(),
+  category: zod.enum([
+    "Transporte",
+    "Hospedagem",
+    "Alimentação",
+    "Guia",
+    "Marketing",
+    "Seguro",
+    "Taxas",
+    "Outros",
+  ]),
+  description: zod.string(),
+  supplierId: zod.string().nullable(),
+  supplierName: zod.string().nullable(),
+  amount: zod.number(),
+  status: zod.enum(["pending", "paid", "overdue"]),
+  dueDate: zod.string().nullable(),
+  paidAt: zod.string().nullable(),
+  notes: zod.string().nullable(),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Delete a trip cost
+ */
+export const DeleteTripCostParams = zod.object({
+  id: zod.coerce.string(),
+  costId: zod.coerce.string(),
+});
+
+export const DeleteTripCostResponse = zod.object({
+  success: zod.boolean(),
 });
 
 /**
@@ -2190,6 +2489,7 @@ export const ListReservationsQueryParams = zod.object({
   departureDateFrom: zod.coerce.string().nullish(),
   departureDateTo: zod.coerce.string().nullish(),
   commissionSyncStatus: zod.coerce.string().nullish(),
+  hasAutoRetry: zod.coerce.boolean().nullish(),
   page: zod.coerce.number().default(listReservationsQueryPageDefault),
   limit: zod.coerce.number().default(listReservationsQueryLimitDefault),
 });
@@ -2208,7 +2508,12 @@ export const ListReservationsResponse = zod.object({
       totalValue: zod.number(),
       paidValue: zod.number(),
       balance: zod.number(),
-      depositAmount: zod.number().nullish(),
+      depositAmount: zod
+        .number()
+        .nullish()
+        .describe(
+          "Amount paid as the initial deposit for an online reservation",
+        ),
       paymentMethod: zod.string().nullish(),
       installments: zod.number(),
       commissionPercentage: zod.number().nullish(),
@@ -2229,7 +2534,6 @@ export const ListReservationsResponse = zod.object({
       checkedInAt: zod.string().nullish(),
       notes: zod.string().nullish(),
       boardingLocationId: zod.string().nullish(),
-      boardingLocation: zod.object({ name: zod.string(), time: zod.string().nullish() }).nullish(),
       storeOrderId: zod.string().nullish(),
       discountCouponCode: zod.string().nullish(),
       discountCouponAmount: zod.number().nullish(),
@@ -2240,6 +2544,7 @@ export const ListReservationsResponse = zod.object({
       discountTotal: zod.number().nullish(),
       createdAt: zod.string(),
       updatedAt: zod.string(),
+      hasAutoRetry: zod.boolean().optional(),
       trip: zod.object({
         id: zod.string(),
         name: zod.string(),
@@ -2249,7 +2554,6 @@ export const ListReservationsResponse = zod.object({
         totalCapacity: zod.number(),
         status: zod.string(),
         coverImage: zod.string().nullish(),
-        numberingType: zod.string().nullish(),
       }),
       client: zod.object({
         id: zod.string(),
@@ -2276,11 +2580,13 @@ export const CreateReservationBody = zod.object({
   tripType: zod.string().nullish(),
   packageType: zod.string().nullish(),
   hasInsurance: zod.boolean().optional(),
-  isGratuidade: zod.boolean().optional(),
   totalValue: zod.number(),
   paymentMethod: zod.string().nullish(),
   installments: zod.number().optional(),
-  firstDueDate: zod.string().nullish().describe("ISO date (YYYY-MM-DD) for the first installment due date"),
+  firstDueDate: zod
+    .string()
+    .nullish()
+    .describe("ISO date (YYYY-MM-DD) for the first installment due date"),
   commissionPercentage: zod.number().nullish(),
   commissionAmount: zod
     .number()
@@ -2304,9 +2610,26 @@ export const CreateReservationBody = zod.object({
   discountReferralCode: zod.string().nullish(),
   discountReferralAmount: zod.number().nullish(),
   discountTotal: zod.number().nullish(),
-  boardingLocationId: zod.string().nullish(),
-  isOnLap: zod.boolean().optional().describe("Criança de colo — não ocupa poltrona"),
-  isChildUnder7: zod.boolean().optional().describe("Criança menor de 7 anos que ocupa poltrona — força ageCategory=child"),
+  boardingLocationId: zod
+    .string()
+    .nullish()
+    .describe("Boarding location ID for the client"),
+  isGratuidade: zod
+    .boolean()
+    .optional()
+    .describe(
+      "Mark reservation as complimentary (free of charge) for guides, partners, etc.",
+    ),
+  isOnLap: zod
+    .boolean()
+    .optional()
+    .describe("Criança de colo — não ocupa poltrona"),
+  isChildUnder7: zod
+    .boolean()
+    .optional()
+    .describe(
+      "Criança menor de 7 anos que ocupa poltrona — força ageCategory=child",
+    ),
 });
 
 /**
@@ -2343,7 +2666,10 @@ export const GetReservationResponse = zod.object({
   totalValue: zod.number(),
   paidValue: zod.number(),
   balance: zod.number(),
-  depositAmount: zod.number().nullish(),
+  depositAmount: zod
+    .number()
+    .nullish()
+    .describe("Amount paid as the initial deposit for an online reservation"),
   paymentMethod: zod.string().nullish(),
   installments: zod.number(),
   commissionPercentage: zod.number().nullish(),
@@ -2364,7 +2690,6 @@ export const GetReservationResponse = zod.object({
   checkedInAt: zod.string().nullish(),
   notes: zod.string().nullish(),
   boardingLocationId: zod.string().nullish(),
-  boardingLocation: zod.object({ name: zod.string(), time: zod.string().nullish() }).nullish(),
   storeOrderId: zod.string().nullish(),
   discountCouponCode: zod.string().nullish(),
   discountCouponAmount: zod.number().nullish(),
@@ -2375,6 +2700,7 @@ export const GetReservationResponse = zod.object({
   discountTotal: zod.number().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
+  hasAutoRetry: zod.boolean().optional(),
   trip: zod.object({
     id: zod.string(),
     name: zod.string(),
@@ -2384,7 +2710,6 @@ export const GetReservationResponse = zod.object({
     totalCapacity: zod.number(),
     status: zod.string(),
     coverImage: zod.string().nullish(),
-    numberingType: zod.string().nullish(),
   }),
   client: zod.object({
     id: zod.string(),
@@ -2422,7 +2747,12 @@ export const UpdateReservationBody = zod.object({
   seats: zod.array(zod.string()).nullish(),
   totalValue: zod.number().nullish(),
   installments: zod.number().nullish(),
-  firstDueDate: zod.string().nullish().describe("ISO date (YYYY-MM-DD) for the first installment due date — triggers regeneration of installments"),
+  firstDueDate: zod
+    .string()
+    .nullish()
+    .describe(
+      "ISO date (YYYY-MM-DD) for the first installment due date — triggers regeneration of installments",
+    ),
   boardingLocationId: zod.string().nullish(),
   commissionAmount: zod
     .number()
@@ -2432,9 +2762,18 @@ export const UpdateReservationBody = zod.object({
     .string()
     .nullish()
     .describe("ID of the seller\/consultant responsible for this reservation"),
-  clientId: zod.string().nullish().describe("ID of the client to link to this reservation"),
-  tripId: zod.string().nullish().describe("ID of the trip to link to this reservation"),
-  isGratuidade: zod.boolean().nullish().describe("Mark reservation as complimentary (free of charge)"),
+  clientId: zod
+    .string()
+    .nullish()
+    .describe("ID of the client to link to this reservation"),
+  tripId: zod
+    .string()
+    .nullish()
+    .describe("ID of the trip to link to this reservation"),
+  isGratuidade: zod
+    .boolean()
+    .nullish()
+    .describe("Mark reservation as complimentary (free of charge)"),
   discountTotal: zod
     .number()
     .nullish()
@@ -2453,7 +2792,10 @@ export const UpdateReservationResponse = zod.object({
   totalValue: zod.number(),
   paidValue: zod.number(),
   balance: zod.number(),
-  depositAmount: zod.number().nullish(),
+  depositAmount: zod
+    .number()
+    .nullish()
+    .describe("Amount paid as the initial deposit for an online reservation"),
   paymentMethod: zod.string().nullish(),
   installments: zod.number(),
   commissionPercentage: zod.number().nullish(),
@@ -2474,7 +2816,6 @@ export const UpdateReservationResponse = zod.object({
   checkedInAt: zod.string().nullish(),
   notes: zod.string().nullish(),
   boardingLocationId: zod.string().nullish(),
-  boardingLocation: zod.object({ name: zod.string(), time: zod.string().nullish() }).nullish(),
   storeOrderId: zod.string().nullish(),
   discountCouponCode: zod.string().nullish(),
   discountCouponAmount: zod.number().nullish(),
@@ -2485,6 +2826,7 @@ export const UpdateReservationResponse = zod.object({
   discountTotal: zod.number().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
+  hasAutoRetry: zod.boolean().optional(),
   trip: zod.object({
     id: zod.string(),
     name: zod.string(),
@@ -2494,7 +2836,6 @@ export const UpdateReservationResponse = zod.object({
     totalCapacity: zod.number(),
     status: zod.string(),
     coverImage: zod.string().nullish(),
-    numberingType: zod.string().nullish(),
   }),
   client: zod.object({
     id: zod.string(),
@@ -2536,7 +2877,10 @@ export const CheckInReservationResponse = zod.object({
   totalValue: zod.number(),
   paidValue: zod.number(),
   balance: zod.number(),
-  depositAmount: zod.number().nullish(),
+  depositAmount: zod
+    .number()
+    .nullish()
+    .describe("Amount paid as the initial deposit for an online reservation"),
   paymentMethod: zod.string().nullish(),
   installments: zod.number(),
   commissionPercentage: zod.number().nullish(),
@@ -2557,7 +2901,6 @@ export const CheckInReservationResponse = zod.object({
   checkedInAt: zod.string().nullish(),
   notes: zod.string().nullish(),
   boardingLocationId: zod.string().nullish(),
-  boardingLocation: zod.object({ name: zod.string(), time: zod.string().nullish() }).nullish(),
   storeOrderId: zod.string().nullish(),
   discountCouponCode: zod.string().nullish(),
   discountCouponAmount: zod.number().nullish(),
@@ -2568,6 +2911,7 @@ export const CheckInReservationResponse = zod.object({
   discountTotal: zod.number().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
+  hasAutoRetry: zod.boolean().optional(),
   trip: zod.object({
     id: zod.string(),
     name: zod.string(),
@@ -2577,7 +2921,6 @@ export const CheckInReservationResponse = zod.object({
     totalCapacity: zod.number(),
     status: zod.string(),
     coverImage: zod.string().nullish(),
-    numberingType: zod.string().nullish(),
   }),
   client: zod.object({
     id: zod.string(),
@@ -2642,7 +2985,10 @@ export const UpdatePassengerBody = zod.object({
   birthDate: zod.string().nullish(),
   seatNumber: zod.string().nullish(),
   ageCategory: zod.string().nullish(),
-  isChildUnder7: zod.boolean().optional().describe("Criança menor de 7 anos — sincroniza ageCategory ao salvar"),
+  isChildUnder7: zod
+    .boolean()
+    .optional()
+    .describe("Criança menor de 7 anos — sincroniza ageCategory ao salvar"),
 });
 
 export const UpdatePassengerResponse = zod.object({
@@ -2887,6 +3233,17 @@ export const UpdatePaymentResponse = zod.object({
 });
 
 /**
+ * @summary Delete a payment
+ */
+export const DeletePaymentParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeletePaymentResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
  * @summary Get financial summary
  */
 export const GetPaymentsSummaryResponse = zod.object({
@@ -3014,8 +3371,6 @@ export const ListDealsResponseItem = zod.object({
   expectedCloseDate: zod.string().nullish(),
   status: zod.enum(["open", "won", "lost"]),
   lostReason: zod.string().nullish(),
-  travelReason: zod.string().nullish(),
-  followUpNote: zod.string().nullish(),
   source: zod.string(),
   autoCreated: zod.boolean(),
   seats: zod.array(zod.string()),
@@ -3026,15 +3381,6 @@ export const ListDealsResponseItem = zod.object({
   stageColor: zod.string().nullish(),
   clientName: zod.string().nullish(),
   ownerName: zod.string().nullish(),
-  clientEmail: zod.string().nullish(),
-  clientWhatsapp: zod.string().nullish(),
-  clientPhone: zod.string().nullish(),
-  clientCpf: zod.string().nullish(),
-  clientCity: zod.string().nullish(),
-  clientState: zod.string().nullish(),
-  clientClassification: zod.string().nullish(),
-  clientOutstandingBalance: zod.number().nullish(),
-  customerCode: zod.string().nullish(),
 });
 export const ListDealsResponse = zod.array(ListDealsResponseItem);
 
@@ -3053,7 +3399,6 @@ export const CreateDealBody = zod.object({
   tripId: zod.string().nullish(),
   reservationId: zod.string().nullish(),
   expectedCloseDate: zod.string().nullish(),
-  travelReason: zod.string().nullish(),
 });
 
 /**
@@ -3079,19 +3424,8 @@ export const GetDealResponse = zod.object({
   expectedCloseDate: zod.string().nullish(),
   status: zod.enum(["open", "won", "lost"]),
   lostReason: zod.string().nullish(),
-  travelReason: zod.string().nullish(),
-  followUpNote: zod.string().nullish(),
   source: zod.string(),
   autoCreated: zod.boolean(),
-  clientEmail: zod.string().nullish(),
-  clientWhatsapp: zod.string().nullish(),
-  clientPhone: zod.string().nullish(),
-  clientCpf: zod.string().nullish(),
-  clientCity: zod.string().nullish(),
-  clientState: zod.string().nullish(),
-  clientClassification: zod.string().nullish(),
-  clientOutstandingBalance: zod.number().nullish(),
-  customerCode: zod.string().nullish(),
   seats: zod.array(zod.string()),
   reservationNumber: zod.string().nullish(),
   createdAt: zod.string(),
@@ -3115,8 +3449,6 @@ export const UpdateDealBody = zod.object({
   value: zod.number().nullish(),
   status: zod.union([zod.enum(["open", "won", "lost"]), zod.null()]).optional(),
   lostReason: zod.string().nullish(),
-  travelReason: zod.string().nullish(),
-  followUpNote: zod.string().nullish(),
   description: zod.string().nullish(),
   expectedCloseDate: zod.string().nullish(),
   reservationId: zod.string().nullish(),
@@ -3139,8 +3471,6 @@ export const UpdateDealResponse = zod.object({
   expectedCloseDate: zod.string().nullish(),
   status: zod.enum(["open", "won", "lost"]),
   lostReason: zod.string().nullish(),
-  travelReason: zod.string().nullish(),
-  followUpNote: zod.string().nullish(),
   source: zod.string(),
   autoCreated: zod.boolean(),
   seats: zod.array(zod.string()),
@@ -3191,8 +3521,6 @@ export const MoveDealResponse = zod.object({
   expectedCloseDate: zod.string().nullish(),
   status: zod.enum(["open", "won", "lost"]),
   lostReason: zod.string().nullish(),
-  travelReason: zod.string().nullish(),
-  followUpNote: zod.string().nullish(),
   source: zod.string(),
   autoCreated: zod.boolean(),
   seats: zod.array(zod.string()),
@@ -3254,7 +3582,6 @@ export const UpdatePipelineResponse = zod.object({
  */
 export const ListPipelineStagesResponseItem = zod.object({
   id: zod.string(),
-  pipelineId: zod.string(),
   name: zod.string(),
   color: zod.string(),
   order: zod.number(),
@@ -3891,8 +4218,24 @@ export const ListOrdersQueryParams = zod.object({
 export const ListOrdersResponseItem = zod.object({
   id: zod.string(),
   userId: zod.string(),
-  totalAmount: zod.number(),
+  totalAmount: zod
+    .number()
+    .describe(
+      "Full order total (subtotal - discounts). Not overwritten by depositAmount.",
+    ),
   finalAmount: zod.number(),
+  depositAmount: zod
+    .number()
+    .nullish()
+    .describe(
+      "Amount the customer chose to pay now (partial payment). Null when full payment is required.",
+    ),
+  amountRemaining: zod
+    .number()
+    .nullish()
+    .describe(
+      "Balance remaining after deposit (totalAmount - depositAmount). Null when fully paid upfront.",
+    ),
   status: zod.string(),
   paymentStatus: zod.string(),
   createdAt: zod.string(),
@@ -3918,8 +4261,24 @@ export const GetOrderParams = zod.object({
 export const GetOrderResponse = zod.object({
   id: zod.string(),
   userId: zod.string(),
-  totalAmount: zod.number(),
+  totalAmount: zod
+    .number()
+    .describe(
+      "Full order total (subtotal - discounts). Not overwritten by depositAmount.",
+    ),
   finalAmount: zod.number(),
+  depositAmount: zod
+    .number()
+    .nullish()
+    .describe(
+      "Amount the customer chose to pay now (partial payment). Null when full payment is required.",
+    ),
+  amountRemaining: zod
+    .number()
+    .nullish()
+    .describe(
+      "Balance remaining after deposit (totalAmount - depositAmount). Null when fully paid upfront.",
+    ),
   status: zod.string(),
   paymentStatus: zod.string(),
   createdAt: zod.string(),
@@ -3949,8 +4308,24 @@ export const UpdateOrderBody = zod.object({
 export const UpdateOrderResponse = zod.object({
   id: zod.string(),
   userId: zod.string(),
-  totalAmount: zod.number(),
+  totalAmount: zod
+    .number()
+    .describe(
+      "Full order total (subtotal - discounts). Not overwritten by depositAmount.",
+    ),
   finalAmount: zod.number(),
+  depositAmount: zod
+    .number()
+    .nullish()
+    .describe(
+      "Amount the customer chose to pay now (partial payment). Null when full payment is required.",
+    ),
+  amountRemaining: zod
+    .number()
+    .nullish()
+    .describe(
+      "Balance remaining after deposit (totalAmount - depositAmount). Null when fully paid upfront.",
+    ),
   status: zod.string(),
   paymentStatus: zod.string(),
   createdAt: zod.string(),
@@ -3995,9 +4370,6 @@ export const CreateCampaignBody = zod.object({
   content: zod.string(),
   targetSegment: zod.record(zod.string(), zod.unknown()),
   scheduledAt: zod.string().nullish(),
-  triggerType: zod.string().optional(),
-  triggerConfig: zod.record(zod.string(), zod.unknown()).nullish(),
-  autoEnabled: zod.boolean().optional(),
 });
 
 /**
@@ -4049,9 +4421,6 @@ export const listNpsResponsesQueryLimitDefault = 20;
 
 export const ListNpsResponsesQueryParams = zod.object({
   classification: zod.coerce.string().nullish(),
-  tripId: zod.coerce.string().nullish(),
-  dateFrom: zod.coerce.string().nullish(),
-  dateTo: zod.coerce.string().nullish(),
   page: zod.coerce.number().default(listNpsResponsesQueryPageDefault),
   limit: zod.coerce.number().default(listNpsResponsesQueryLimitDefault),
 });
@@ -4088,12 +4457,6 @@ export const SendNpsSurveyResponse = zod.object({
 /**
  * @summary Get NPS summary and score
  */
-export const GetNpsSummaryQueryParams = zod.object({
-  tripId: zod.coerce.string().nullish(),
-  dateFrom: zod.coerce.string().nullish(),
-  dateTo: zod.coerce.string().nullish(),
-});
-
 export const GetNpsSummaryResponse = zod.object({
   averageScore: zod.number(),
   npsScore: zod.number(),
@@ -4101,10 +4464,6 @@ export const GetNpsSummaryResponse = zod.object({
   passives: zod.number(),
   detractors: zod.number(),
   total: zod.number(),
-  avgTransport: zod.number().nullable().optional(),
-  avgService: zod.number().nullable().optional(),
-  avgOrganization: zod.number().nullable().optional(),
-  avgGuide: zod.number().nullable().optional(),
 });
 
 /**
@@ -4133,8 +4492,6 @@ export const GetMeResponse = zod.object({
   commissionFixed: zod.number().optional(),
   monthlyGoal: zod.number().nullish(),
   createdAt: zod.string(),
-  /** Days remaining in trial (only present when status=trial and within 7 days of expiry) */
-  trialDaysLeft: zod.number().nullish(),
   tenant: zod
     .object({
       id: zod.string(),
@@ -4158,8 +4515,12 @@ export const SyncMeBody = zod.object({
   name: zod.string(),
   email: zod.string(),
   avatarUrl: zod.string().nullish(),
-  /** When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users. */
-  storeSlug: zod.string().optional(),
+  storeSlug: zod
+    .string()
+    .optional()
+    .describe(
+      "When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users.",
+    ),
 });
 
 export const SyncMeResponse = zod.object({
@@ -4384,7 +4745,6 @@ export const GetTenantResponse = zod.object({
   secondaryColor: zod.string().nullish(),
   website: zod.string().nullish(),
   reservationPrefix: zod.string().nullish(),
-  prefixLocked: zod.boolean().nullish(),
   createdAt: zod.string(),
 });
 
@@ -4412,7 +4772,6 @@ export const UpdateTenantBody = zod.object({
   maxUsersOverride: zod.number().nullish(),
   maxClientsOverride: zod.number().nullish(),
   maxTripsOverride: zod.number().nullish(),
-  trialEndsAt: zod.string().nullish(),
   website: zod.string().nullish(),
   reservationPrefix: zod.string().nullish(),
   birthdayMessagesEnabled: zod.boolean().nullish(),
@@ -4432,7 +4791,6 @@ export const UpdateTenantResponse = zod.object({
   secondaryColor: zod.string().nullish(),
   website: zod.string().nullish(),
   reservationPrefix: zod.string().nullish(),
-  prefixLocked: zod.boolean().nullish(),
   createdAt: zod.string(),
 });
 
@@ -4582,7 +4940,6 @@ export const ListCommissionsResponseItem = zod.object({
   status: zod.string(),
   paidAt: zod.string().nullish(),
   createdAt: zod.string(),
-  sellerName: zod.string().nullish(),
 });
 export const ListCommissionsResponse = zod.array(ListCommissionsResponseItem);
 
@@ -4847,12 +5204,6 @@ export const ListReferralsResponse = zod.object({
       reservationId: zod.string().nullish(),
       notes: zod.string().nullish(),
       convertedAt: zod.string().nullish(),
-      reversalReason: zod.string().nullish(),
-      reversalAt: zod.string().nullish(),
-      bonusReleasesAt: zod.string().nullish(),
-      bonusBlocked: zod.boolean().optional(),
-      referrerWhatsapp: zod.string().nullish(),
-      referrerSuccessfulReferrals: zod.number().optional(),
       createdAt: zod.string(),
       updatedAt: zod.string(),
     }),
@@ -4916,10 +5267,6 @@ export const UpdateReferralBody = zod.object({
   convertedAt: zod.string().optional(),
   isActive: zod.boolean().optional(),
   notes: zod.string().optional(),
-});
-
-export const ReverseReferralBonusBody = zod.object({
-  reason: zod.string().min(1),
 });
 
 export const UpdateReferralResponse = zod.object({
@@ -5358,12 +5705,11 @@ export const UpdateLoyaltyProgramParams = zod.object({
 });
 
 export const UpdateLoyaltyProgramBody = zod.object({
-  name: zod.string().optional(),
+  name: zod.string(),
   description: zod.string().optional(),
   pointsPerReal: zod.string().optional(),
   realPerPoint: zod.string().optional(),
   minRedeemPoints: zod.number().optional(),
-  tierBenefits: zod.record(zod.string(), zod.array(zod.string())).nullable().optional(),
 });
 
 export const UpdateLoyaltyProgramResponse = zod.object({
@@ -5375,7 +5721,6 @@ export const UpdateLoyaltyProgramResponse = zod.object({
   realPerPoint: zod.string(),
   minRedeemPoints: zod.number(),
   isActive: zod.boolean(),
-  tierBenefits: zod.record(zod.string(), zod.array(zod.string())).nullish(),
   createdAt: zod.string(),
 });
 
@@ -5826,7 +6171,6 @@ export const DisconnectCalendarResponse = zod.object({
  */
 export const GetCalendarStatusResponse = zod.object({
   connected: zod.boolean(),
-  status: zod.string().nullish(),
   tokenValid: zod.boolean().optional(),
   eventsCount: zod.number(),
   lastSync: zod.string().nullish(),
@@ -5851,11 +6195,6 @@ export const SyncCalendarResponse = zod.object({
 
  * @summary Google OAuth2 callback (server-side redirect handler)
  */
-export const RepairSystemHealthResponse = zod.object({
-  orphansFixed: zod.number(),
-});
-export type RepairSystemHealthResponse = zod.infer<typeof RepairSystemHealthResponse>;
-
 export const GetCalendarCallbackQueryParams = zod.object({
   code: zod.coerce
     .string()
@@ -5871,207 +6210,4 @@ export const GetCalendarCallbackQueryParams = zod.object({
     .string()
     .optional()
     .describe("Present when the user denied access"),
-});
-
-/**
- * @summary Get insights summary for all 7 strategic pillars
- */
-export const GetInsightsSummaryQueryParams = zod.object({
-  period: zod.enum(["month", "quarter", "year"]).optional(),
-});
-
-export const GetInsightsSummaryResponse = zod.object({
-  period: zod.string(),
-  executive: zod.object({
-    totalRevenue: zod.number(),
-    totalRevenuePrev: zod.number(),
-    netProfit: zod.number(),
-    netProfitPrev: zod.number(),
-    totalClients: zod.number(),
-    newClients: zod.number(),
-    newClientsPrev: zod.number(),
-    confirmedReservations: zod.number(),
-    confirmedReservationsPrev: zod.number(),
-    occupancyRate: zod.number(),
-    conversionRate: zod.number(),
-    conversionRatePrev: zod.number(),
-    averageNps: zod.number().nullable(),
-    averageNpsPrev: zod.number().nullable(),
-    activeTrips: zod.number(),
-    profitMargin: zod.number(),
-    profitMarginPrev: zod.number(),
-    momGrowth: zod.number().nullable(),
-    yoyGrowth: zod.number().nullable(),
-  }),
-  commercial: zod.object({
-    openDeals: zod.number(),
-    openDealsPrev: zod.number(),
-    wonDeals: zod.number(),
-    wonDealsPrev: zod.number(),
-    pipelineValue: zod.number(),
-    pipelineValuePrev: zod.number(),
-    avgTicket: zod.number(),
-    avgTicketPrev: zod.number(),
-    newReservations: zod.number(),
-    newReservationsPrev: zod.number(),
-    cancellations: zod.number(),
-    cancellationsPrev: zod.number(),
-    conversionRate: zod.number(),
-    conversionRatePrev: zod.number(),
-    totalLeads: zod.number(),
-    totalLeadsPrev: zod.number(),
-    repeatClients: zod.number(),
-    repeatClientsPrev: zod.number(),
-    activeClients: zod.number(),
-    activeClientsPrev: zod.number(),
-    ltv: zod.number(),
-    ltvPrev: zod.number(),
-    cac: zod.number(),
-    cacPrev: zod.number(),
-  }),
-  marketing: zod.object({
-    newClients: zod.number(),
-    newClientsPrev: zod.number(),
-    referrals: zod.number(),
-    referralsPrev: zod.number(),
-    convertedReferrals: zod.number(),
-    convertedReferralsPrev: zod.number(),
-    totalLeads: zod.number(),
-    totalLeadsPrev: zod.number(),
-    conversionRate: zod.number(),
-    conversionRatePrev: zod.number(),
-    activeCampaigns: zod.number(),
-    newCampaigns: zod.number(),
-    newCampaignsPrev: zod.number(),
-    sentCampaigns: zod.number(),
-    totalSentMessages: zod.number(),
-    totalOpenedMessages: zod.number(),
-    totalClickedMessages: zod.number(),
-    totalRecipients: zod.number(),
-    openRate: zod.number(),
-    clickRate: zod.number(),
-    campaignRoi: zod.number(),
-    campaignsByType: zod.array(zod.object({ type: zod.string(), count: zod.number() })),
-  }),
-  financial: zod.object({
-    totalRevenue: zod.number(),
-    totalRevenuePrev: zod.number(),
-    totalExpenses: zod.number(),
-    totalExpensesPrev: zod.number(),
-    netProfit: zod.number(),
-    netProfitPrev: zod.number(),
-    profitMargin: zod.number(),
-    profitMarginPrev: zod.number(),
-    commissions: zod.number(),
-    commissionsPrev: zod.number(),
-    receivable: zod.number(),
-    payable: zod.number(),
-    overdue: zod.number(),
-    avgTicket: zod.number(),
-    avgTicketPrev: zod.number(),
-    expenseCategories: zod.array(zod.object({ category: zod.string(), total: zod.number() })),
-  }),
-  operational: zod.object({
-    activeTrips: zod.number(),
-    newTrips: zod.number(),
-    newTripsPrev: zod.number(),
-    occupancyRate: zod.number(),
-    totalAvailableSeats: zod.number(),
-    avgReservationsPerTrip: zod.number(),
-    avgReservationsPerTripPrev: zod.number(),
-    confirmedReservations: zod.number(),
-    confirmedReservationsPrev: zod.number(),
-    cancellations: zod.number(),
-    cancellationsPrev: zod.number(),
-    revenuePerTrip: zod.number(),
-    revenuePerTripPrev: zod.number(),
-    totalSuppliers: zod.number(),
-    newSuppliers: zod.number(),
-    newSuppliersPrev: zod.number(),
-    checkedInPassengers: zod.number(),
-    checkedInPassengersPrev: zod.number(),
-    averageNps: zod.number().nullable(),
-    averageNpsPrev: zod.number().nullable(),
-  }),
-  retention: zod.object({
-    loyaltyMembers: zod.number(),
-    loyaltyActiveMembers: zod.number(),
-    loyaltyNewMembers: zod.number(),
-    loyaltyNewMembersPrev: zod.number(),
-    averageNps: zod.number().nullable(),
-    averageNpsPrev: zod.number().nullable(),
-    promoterClients: zod.number(),
-    promoterClientsPrev: zod.number(),
-    retentionRate: zod.number(),
-    retentionRatePrev: zod.number(),
-    referralRate: zod.number(),
-    referralRatePrev: zod.number(),
-    newClients: zod.number(),
-    newClientsPrev: zod.number(),
-    repeatClients: zod.number(),
-    repeatClientsPrev: zod.number(),
-    totalClients: zod.number(),
-    convertedReferrals: zod.number(),
-    convertedReferralsPrev: zod.number(),
-  }),
-  expansion: zod.object({
-    newTrips: zod.number(),
-    newTripsPrev: zod.number(),
-    newDestinations90d: zod.number(),
-    newDestinationsPrev90d: zod.number(),
-    totalDestinations: zod.number(),
-    newSuppliers: zod.number(),
-    newSuppliersPrev: zod.number(),
-    totalSuppliers: zod.number(),
-    revenuePerTrip: zod.number(),
-    revenuePerTripPrev: zod.number(),
-    topDestinations: zod.array(zod.object({ name: zod.string(), count: zod.number() })),
-    avgTicket: zod.number(),
-    avgTicketPrev: zod.number(),
-    totalRevenue: zod.number(),
-    totalRevenuePrev: zod.number(),
-    momGrowth: zod.number().nullable(),
-    yoyGrowth: zod.number().nullable(),
-  }),
-});
-
-/**
- * @summary Get sales cycle metrics (avg days from registration to payment/trip)
- */
-export const GetSalesCycleQueryParams = zod.object({
-  period: zod.enum(["30d", "90d", "12m"]).optional(),
-  channel: zod.string().optional(),
-  seller: zod.string().optional(),
-});
-
-export const GetSalesCycleResponse = zod.object({
-  period: zod.string(),
-  avgDaysToPayment: zod.number().nullable(),
-  medianDaysToPayment: zod.number().nullable(),
-  p25DaysToPayment: zod.number().nullable(),
-  p75DaysToPayment: zod.number().nullable(),
-  avgDaysToTrip: zod.number().nullable(),
-  medianDaysToTrip: zod.number().nullable(),
-  totalClients: zod.number(),
-  clientsWithPayment: zod.number(),
-  clientsWithTrip: zod.number(),
-  byChannel: zod.array(zod.object({
-    origin: zod.string(),
-    clients: zod.number(),
-    avgDaysToPayment: zod.number().nullable(),
-    avgDaysToTrip: zod.number().nullable(),
-    conversionRate: zod.number(),
-  })),
-  bySeller: zod.array(zod.object({
-    sellerId: zod.string(),
-    sellerName: zod.string(),
-    clients: zod.number(),
-    avgDaysToPayment: zod.number().nullable(),
-    conversionRate: zod.number(),
-  })),
-  trend: zod.array(zod.object({
-    month: zod.string(),
-    avgDaysToPayment: zod.number().nullable(),
-    avgDaysToTrip: zod.number().nullable(),
-  })),
 });

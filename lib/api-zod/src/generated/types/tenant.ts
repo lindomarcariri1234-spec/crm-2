@@ -27,7 +27,5 @@ export interface Tenant {
   website?: string | null;
   /** @nullable */
   reservationPrefix?: string | null;
-  /** @nullable */
-  settings?: Record<string, unknown> | null;
   createdAt: string;
 }

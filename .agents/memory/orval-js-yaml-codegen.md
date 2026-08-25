@@ -1,18 +1,10 @@
 ---
-name: Orval js-yaml generation incompatibility
-description: Why API client/schema code generation currently fails and how to approach a repair safely.
+name: Orval codegen workflow
+description: The compatibility boundary and repeatable process for generating OpenAPI validators and React clients.
 ---
 
-`pnpm --filter @workspace/api-spec run codegen` currently fails before generation because Orval imports a default `js-yaml` export that the workspace's `js-yaml` v5 override does not provide.
+Use `pnpm run api:codegen` to regenerate the Zod validators, React client types, and hooks, and `pnpm run api:codegen:check` to detect drift. Do not hand-edit generated API artifacts.
 
-**Why:** API-contract changes cannot be safely regenerated until the direct generator or the overridden transitive dependency is made compatible. Changing the override without review could affect other tooling and security posture.
+**Why:** The workspace retains `js-yaml` v5 for other tooling, while Orval requires the v4 default-export behavior. A scoped Orval-only dependency override preserves both needs. The checked-in OpenAPI input also retains a historical appended document, so generation deliberately uses the canonical first OpenAPI definition rather than treating the combined source as a valid single document.
 
-**How to apply:** When updating OpenAPI-driven code, first repair this compatibility by upgrading Orval or selecting a compatible `js-yaml` version after reviewing the workspace impact; then rerun generation and review all generated diffs.
-
-## Current additional blocker
-
-The checked-in OpenAPI source contains duplicated keys and concatenated top-level sections. A narrow Orval-only downgrade to `js-yaml` 4 makes Orval start, but strict YAML parsing then fails and `clean: true` deletes generated output before reporting the malformed source.
-
-**Why:** The workspace-wide `js-yaml` 5 override masks the duplicate-key parse error by blocking Orval earlier at module load. Treating the module import alone as the fix can therefore erase generated files without producing replacements.
-
-**How to apply:** Do not run clean code generation against the current source until a dedicated OpenAPI consolidation task produces one valid document. If generation is attempted and fails after cleaning, restore generated files from `HEAD` before continuing.
+**How to apply:** Change the canonical OpenAPI definition, run the root generation command, review the generated diffs, then run the drift check. The generated Zod package entry point is finalized as part of the command because exporting both Orval output surfaces creates duplicate TypeScript exports. If the OpenAPI documents are eventually consolidated, remove the first-document preparation boundary and validate the new single source before changing the workflow.

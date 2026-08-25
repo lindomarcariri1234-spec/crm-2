@@ -16,6 +16,4 @@ export interface TripSummary {
   status: string;
   /** @nullable */
   coverImage?: string | null;
-  /** @nullable */
-  numberingType?: string | null;
 }

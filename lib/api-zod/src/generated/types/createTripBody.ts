@@ -92,18 +92,11 @@ export interface CreateTripBody {
   tourGuideRegistration?: string | null;
   status?: TripStatus;
   gallery?: string[];
+  videos?: string[];
   boardingPoints?: unknown[];
   itinerary?: unknown[];
   fixedCosts?: unknown[];
   variableCosts?: unknown[];
-  /** @nullable */
-  manifestNumber?: string | null;
-  /** @nullable */
-  cancellationPolicy?: string | null;
-  /** @nullable */
-  metaTitle?: string | null;
-  /** @nullable */
-  metaDescription?: string | null;
   /**
    * @minimum 0
    * @maximum 2
@@ -116,6 +109,14 @@ export interface CreateTripBody {
    * @nullable
    */
   freeGuides?: number | null;
+  /** @nullable */
+  manifestNumber?: string | null;
+  /** @nullable */
+  cancellationPolicy?: string | null;
+  /** @nullable */
+  metaTitle?: string | null;
+  /** @nullable */
+  metaDescription?: string | null;
   /** @nullable */
   layoutId?: string | null;
   /** @nullable */

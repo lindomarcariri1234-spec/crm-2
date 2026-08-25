@@ -31,6 +31,9 @@ export interface CreateClientBody {
   observations?: string | null;
   tags?: string[];
   dreamDestinations?: string[];
+  travelInterests?: string[];
+  /** @nullable */
+  ambassadorOptIn?: boolean | null;
   /** @nullable */
   origin?: string | null;
   /** @nullable */
@@ -49,7 +52,6 @@ export interface CreateClientBody {
   internalRating?: number | null;
   /** @nullable */
   companyNps?: number | null;
-  travelInterests?: string[];
-  /** @nullable */
-  ambassadorOptIn?: boolean | null;
+  /** If true, skip the duplicate name+WhatsApp check and create the client anyway. */
+  forceCreate?: boolean;
 }

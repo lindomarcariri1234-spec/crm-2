@@ -32,8 +32,6 @@ export interface Deal {
   status: DealStatus;
   /** @nullable */
   lostReason?: string | null;
-  /** @nullable */
-  travelReason?: string | null;
   source: string;
   autoCreated: boolean;
   seats: string[];
@@ -49,16 +47,4 @@ export interface Deal {
   clientName?: string | null;
   /** @nullable */
   ownerName?: string | null;
-  /** @nullable */
-  clientWhatsapp?: string | null;
-  /** @nullable */
-  clientCity?: string | null;
-  /** @nullable */
-  clientState?: string | null;
-  /** @nullable */
-  clientClassification?: string | null;
-  /** @nullable */
-  clientOutstandingBalance?: number | null;
-  /** @nullable */
-  customerCode?: string | null;
 }

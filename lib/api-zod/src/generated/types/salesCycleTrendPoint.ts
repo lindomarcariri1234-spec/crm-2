@@ -6,9 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface SystemHealthStripeSyncTables {
+export interface SalesCycleTrendPoint {
+  /** ISO month label: YYYY-MM */
+  month: string;
   /** @nullable */
-  ok: boolean | null;
+  avgDaysToPayment?: number | null;
   /** @nullable */
-  checkedAt: string | null;
+  avgDaysToTrip?: number | null;
 }
