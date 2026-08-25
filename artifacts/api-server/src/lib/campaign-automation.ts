@@ -4,7 +4,7 @@ import { RESERVATION_STATUS, type ReservationStatus } from "@workspace/permissio
 import { logger } from "./logger";
 import { generateId } from "./id";
 import { sendReminderHtmlEmail, type SendEmailResult } from "@workspace/email";
-import { getCampaignEmailQueue } from "../queues/index";
+import { getCampaignEmailQueue, type CampaignEmailJobData } from "../queues/index";
 
 const TRIGGER_TYPES = [
   "birthday",
@@ -20,6 +20,138 @@ interface ClientRow {
   id: string;
   name: string;
   email: string | null;
+}
+
+interface QueuedCampaignSendRow {
+  sendId: string;
+  campaignId: string;
+  clientId: string;
+  tenantId: string;
+  subject: string;
+  content: string;
+  clientName: string;
+  clientEmail: string;
+  tenantName: string | null;
+}
+
+async function prepareCampaignJobSlot(
+  queue: NonNullable<ReturnType<typeof getCampaignEmailQueue>>,
+  jobId: string,
+  expectedData: Pick<CampaignEmailJobData, "campaignId" | "clientId" | "tenantId">,
+): Promise<boolean> {
+  // Queue doubles used by direct enqueue callers may not expose getJob. A
+  // production BullMQ Queue always does.
+  if (typeof queue.getJob !== "function") return true;
+
+  const existingJob = await queue.getJob(jobId);
+  if (!existingJob) return true;
+
+  // Never remove a job unless both its immutable logical identity and terminal
+  // failed state are unambiguous. In particular, a completed job can mean the
+  // email was delivered before a DB status update was lost.
+  if (
+    existingJob.name !== "campaign-email"
+    || existingJob.data.campaignId !== expectedData.campaignId
+    || existingJob.data.clientId !== expectedData.clientId
+    || existingJob.data.tenantId !== expectedData.tenantId
+    || typeof existingJob.getState !== "function"
+    || typeof existingJob.remove !== "function"
+  ) {
+    return false;
+  }
+
+  if (await existingJob.getState() !== "failed") return false;
+
+  await existingJob.remove();
+
+  // Another cron may have replaced the failed job while this one was removing
+  // it. BullMQ job IDs still provide the final uniqueness guard, but avoiding
+  // add here also avoids treating that concurrent replacement as our enqueue.
+  return !(await queue.getJob(jobId));
+}
+
+/**
+ * Repairs the narrow DB-before-Redis crash window. Campaign job IDs are
+ * durable and deterministic (the campaign_sends id), so BullMQ's job-id
+ * uniqueness makes a concurrent sweep/add return the existing job rather
+ * than create a second delivery.
+ *
+ * A send is deliberately left queued when recovery cannot enqueue it; the
+ * next hourly sweep can retry it. Rows are selected through tenant-matched
+ * campaign and client joins, and the worker independently verifies ownership.
+ */
+export async function reconcileStaleQueuedCampaignSends(): Promise<void> {
+  const queue = getCampaignEmailQueue();
+  // Queue doubles in callers/tests may only support production enqueueing.
+  // A real BullMQ Queue always has getJob; without it we cannot safely decide
+  // whether a queued send already has an active job.
+  if (!queue || typeof queue.getJob !== "function") return;
+
+  const staleSends = await db
+    .select({
+      sendId: campaignSendsTable.id,
+      campaignId: campaignSendsTable.campaignId,
+      clientId: campaignSendsTable.clientId,
+      tenantId: campaignSendsTable.tenantId,
+      subject: campaignsTable.subject,
+      content: campaignsTable.content,
+      clientName: clientsTable.name,
+      clientEmail: clientsTable.email,
+      tenantName: tenantsTable.name,
+    })
+    .from(campaignSendsTable)
+    .innerJoin(
+      campaignsTable,
+      and(
+        eq(campaignsTable.id, campaignSendsTable.campaignId),
+        eq(campaignsTable.tenantId, campaignSendsTable.tenantId),
+      ),
+    )
+    .innerJoin(
+      clientsTable,
+      and(
+        eq(clientsTable.id, campaignSendsTable.clientId),
+        eq(clientsTable.tenantId, campaignSendsTable.tenantId),
+      ),
+    )
+    .leftJoin(tenantsTable, eq(tenantsTable.id, campaignSendsTable.tenantId))
+    .where(
+      and(
+        eq(campaignSendsTable.status, "queued"),
+        sql`${campaignSendsTable.sentAt} < NOW() - INTERVAL '5 minutes'`,
+        eq(campaignsTable.type, "email"),
+        isNotNull(campaignsTable.subject),
+        isNotNull(clientsTable.email),
+      ),
+    ) as QueuedCampaignSendRow[];
+
+  for (const send of staleSends) {
+    // sendId is persisted before enqueue and is therefore available even for
+    // rows created by the crash window.
+    const jobId = send.sendId;
+    try {
+      const jobData: CampaignEmailJobData = {
+        to: send.clientEmail,
+        toName: send.clientName,
+        subject: send.subject,
+        htmlContent: send.content
+          .replace(/\{nome\}/gi, send.clientName)
+          .replace(/\{name\}/gi, send.clientName),
+        fromName: send.tenantName ?? "VisiteCRM",
+        campaignId: send.campaignId,
+        clientId: send.clientId,
+        tenantId: send.tenantId,
+      };
+      if (!(await prepareCampaignJobSlot(queue, jobId, jobData))) continue;
+
+      await queue.add("campaign-email", jobData, { jobId });
+    } catch (err) {
+      logger.error(
+        { err, campaignId: send.campaignId, clientId: send.clientId, tenantId: send.tenantId },
+        "[campaign-automation] Failed to recover stale queued campaign send",
+      );
+    }
+  }
 }
 
 async function resolveClientsByTrigger(
@@ -197,18 +329,9 @@ async function processTenantCampaign(
       .replace(/\{name\}/gi, client.name);
 
     if (queue) {
+      let durableSendId: string;
       try {
-        await queue.add("campaign-email", {
-          to: client.email,
-          toName: client.name,
-          subject: campaign.subject,
-          htmlContent: personalised,
-          fromName: tenantName,
-          campaignId: campaign.id,
-          clientId: client.id,
-          tenantId: campaign.tenantId,
-        });
-        await db
+        const [persistedSend] = await db
           .insert(campaignSendsTable)
           .values({
             id: sendId,
@@ -219,12 +342,49 @@ async function processTenantCampaign(
           })
           .onConflictDoUpdate({
             target: [campaignSendsTable.campaignId, campaignSendsTable.clientId],
-            set: { id: sendId, status: "queued", sentAt: new Date(), error: null },
+            // The campaign_sends ID is also BullMQ's durable job ID. Never
+            // replace it when retrying an errored logical send.
+            set: { status: "queued", sentAt: new Date(), error: null },
             setWhere: eq(campaignSendsTable.status, "error"),
-          });
+          })
+          .returning({ id: campaignSendsTable.id });
+
+        // A concurrent run may have won the unique campaign/client conflict
+        // with a non-error row, in which case setWhere makes RETURNING empty.
+        if (!persistedSend) continue;
+        durableSendId = persistedSend.id;
+      } catch (err) {
+        errorCount++;
+        logger.error(
+          { err, campaignId: campaign.id, clientId: client.id },
+          "[campaign-automation] Failed to persist campaign send before enqueue",
+        );
+        continue;
+      }
+
+      try {
+        const jobData: CampaignEmailJobData = {
+          to: client.email,
+          toName: client.name,
+          subject: campaign.subject,
+          htmlContent: personalised,
+          fromName: tenantName,
+          campaignId: campaign.id,
+          clientId: client.id,
+          tenantId: campaign.tenantId,
+        };
+        // This check is essential on retries: queue.add may have durably
+        // created the job and then thrown while returning its response. A
+        // retained terminal failed job is the sole safe replacement case.
+        if (!(await prepareCampaignJobSlot(queue, durableSendId, jobData))) continue;
+
+        await queue.add("campaign-email", jobData, { jobId: durableSendId });
         successCount++;
       } catch (err) {
         errorCount++;
+        // queue.add can commit in Redis and still throw while returning its
+        // response. Keep the row queued and its ID immutable; stale recovery
+        // will inspect this exact job ID and add only when it is absent.
         logger.error({ err, campaignId: campaign.id, clientId: client.id }, "[campaign-automation] Failed to enqueue");
       }
     } else {
@@ -252,7 +412,7 @@ async function processTenantCampaign(
             })
             .onConflictDoUpdate({
               target: [campaignSendsTable.campaignId, campaignSendsTable.clientId],
-              set: { id: sendId, status: "sent", sentAt: new Date(), error: null },
+              set: { status: "sent", sentAt: new Date(), error: null },
               setWhere: eq(campaignSendsTable.status, "error"),
             });
         } catch (dbErr) {
@@ -309,6 +469,12 @@ export async function runCampaignAutomationCron() {
   const currentHour = Number(nowSP);
 
   logger.info({ currentHour }, "[campaign-automation] Hourly automation check");
+
+  try {
+    await reconcileStaleQueuedCampaignSends();
+  } catch (err) {
+    logger.error({ err }, "[campaign-automation] Failed stale queued campaign send reconciliation");
+  }
 
   const autoCampaigns = await db
     .select()
