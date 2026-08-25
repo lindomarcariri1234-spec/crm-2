@@ -2424,7 +2424,7 @@ router.post("/trips/:id/manifest/send", async (req, res, next: NextFunction): Pr
           tripId: trip.id,
           recipientEmail: to,
           userId: me.id,
-          ipAddress: req.ip ?? null,
+          ipAddress: getClientIp(req),
           userAgent: req.headers["user-agent"] ?? null,
         });
         res.status(202).json({ success: true, channel: "email", queued: true });
