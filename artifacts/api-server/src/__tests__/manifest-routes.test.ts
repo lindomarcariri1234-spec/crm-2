@@ -23,6 +23,7 @@ const {
   mockInsert,
   mockSendManifestEmail,
   mockGetPdfQueue,
+  mockPdfQueueAdd,
 } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
@@ -32,6 +33,7 @@ const {
   const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
   const mockSendManifestEmail = vi.fn().mockResolvedValue({ success: true });
   const mockGetPdfQueue = vi.fn().mockReturnValue(null);
+  const mockPdfQueueAdd = vi.fn().mockResolvedValue(undefined);
   return {
     mockLimit,
     mockWhere,
@@ -40,6 +42,7 @@ const {
     mockInsert,
     mockSendManifestEmail,
     mockGetPdfQueue,
+    mockPdfQueueAdd,
   };
 });
 
@@ -421,6 +424,31 @@ describe("POST /api/trips/:id/manifest/send — manifest send route wiring", () 
       to: "passageiros@teste.com.br",
       tripName: FAKE_TRIP.name,
     });
+  });
+
+  it("queues only manifest identifiers and recipient metadata", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ADMIN as never);
+    setupManifestDbMocks();
+    mockGetPdfQueue.mockReturnValue({ add: mockPdfQueueAdd });
+
+    const res = await request(buildApp())
+      .post("/api/trips/trip-001/manifest/send")
+      .send({ channel: "email", to: "passageiros@teste.com.br" });
+
+    expect(res.status).toBe(202);
+    expect(mockSendManifestEmail).not.toHaveBeenCalled();
+    expect(mockPdfQueueAdd).toHaveBeenCalledWith("manifest", {
+      type: "manifest",
+      tenantId: TENANT_ID,
+      tripId: FAKE_TRIP.id,
+      recipientEmail: "passageiros@teste.com.br",
+      userId: FAKE_ADMIN.id,
+      ipAddress: "127.0.0.1",
+      userAgent: null,
+    });
+    const payload = mockPdfQueueAdd.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("htmlContent");
+    expect(payload).not.toHaveProperty("pdfBase64");
   });
 
   it("passes a non-empty PDF buffer (starts with %PDF-) to sendManifestEmail", async () => {
