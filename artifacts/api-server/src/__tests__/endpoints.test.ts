@@ -189,6 +189,7 @@ vi.mock("../lib/reservation-number.js", () => ({
 vi.mock("../lib/passenger.js", () => ({
   deriveAgeCategory: vi.fn(() => "adult"),
   getAgeYears: vi.fn(() => 30),
+  syncIsChildUnder7: vi.fn((ageCategory: string) => ageCategory === "child" || ageCategory === "baby"),
 }));
 
 // ---------------------------------------------------------------------------
@@ -542,6 +543,290 @@ describe("POST /api/reservations — endpoint pricing computation", () => {
   // to reliably test a fire-and-forget that calls a service which in turn
   // calls pipeline-automation — three layers of async mocks, each with their
   // own select chains. Keep the unit tests as the source of truth.
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/reservations/import-manifest
+//
+// The import endpoint must never guess when a manifest reference is unsafe.
+// These endpoint tests exercise the real matching loop and inspect the update
+// payload so fields omitted from the manifest (especially check-in state) are
+// not silently overwritten.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/reservations/import-manifest — safe passenger matching", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+
+  const manifestTrip = {
+    id: "trip-manifest",
+    name: "Excursão ao Nordeste",
+    departureDate: new Date("2025-07-10T12:00:00.000Z"),
+    boardingPoints: [],
+  };
+
+  const manifestReservation = {
+    id: "reservation-manifest",
+    tripId: manifestTrip.id,
+    reservationNumber: "AG-EX-202507-0001",
+  };
+
+  function makePassenger(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "passenger-manifest",
+      reservationId: manifestReservation.id,
+      name: "Maria de Fátima",
+      cpf: "123.456.789-00",
+      rg: "RG-ORIGINAL",
+      birthDate: new Date("1990-04-12T12:00:00.000Z"),
+      ageCategory: "adult",
+      seatNumber: "1A",
+      checkedInAt: new Date("2025-07-10T10:00:00.000Z"),
+      phone: "85999990000",
+      boardingLocationId: "boarding-original",
+      ...overrides,
+    };
+  }
+
+  function queueManifestDb(
+    reservations: Array<{ reservation: typeof manifestReservation; trip: typeof manifestTrip }>,
+    passengers: Array<Record<string, unknown>>,
+  ) {
+    const manifestWhere = mockWhere as unknown as {
+      mockResolvedValueOnce(value: unknown): void;
+    };
+    const manifestFrom = mockFrom as unknown as {
+      mockReset(): {
+        mockReturnValueOnce(value: unknown): {
+          mockReturnValue(value: unknown): void;
+        };
+      };
+      mockReturnValueOnce(value: unknown): {
+        mockReturnValue(value: unknown): void;
+      };
+    };
+
+    mockLimit.mockReset();
+    mockLimit.mockResolvedValue([]);
+    mockWhere.mockReset();
+    mockWhere.mockReturnValue({ limit: mockLimit, orderBy: mockOrderBy });
+    manifestWhere.mockResolvedValueOnce(reservations);
+    manifestFrom
+      .mockReset()
+      .mockReturnValueOnce({
+        innerJoin: vi.fn(() => ({ where: mockWhere })),
+      })
+      .mockReturnValue({ where: mockWhere, limit: mockLimit });
+    if (reservations.length > 0) {
+      manifestWhere.mockResolvedValueOnce(passengers);
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedInserts.length = 0;
+    requireAuthMock.mockResolvedValue(FAKE_USER as never);
+    mockLimit.mockReset();
+    mockLimit.mockResolvedValue([]);
+    mockOrderBy.mockReturnValue({ limit: mockLimit });
+    mockWhere.mockReset();
+    mockWhere.mockReturnValue({ limit: mockLimit, orderBy: mockOrderBy });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockSelect.mockReturnValue({ from: mockFrom });
+  });
+
+  it("skips duplicate rows in one file after processing the first row once", async () => {
+    const passenger = makePassenger();
+    queueManifestDb(
+      [{ reservation: manifestReservation, trip: manifestTrip }],
+      [passenger],
+    );
+
+    const row = {
+      line: 2,
+      reservationNumber: manifestReservation.reservationNumber,
+      tripName: manifestTrip.name,
+      departureDate: "2025-07-10",
+      name: "Maria de Fátima Atualizada",
+      cpf: "123.456.789-00",
+      seatNumber: "2B",
+    };
+    const res = await request(buildReservationsApp())
+      .post("/api/reservations/import-manifest")
+      .send({ rows: [row, { ...row, line: 3 }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: 0, updated: 1, skipped: 1 });
+    expect(res.body.errors).toEqual([
+      "Linha 3: passageiro duplicado no arquivo para a mesma reserva.",
+    ]);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledWith({
+      name: "Maria de Fátima Atualizada",
+      cpf: "123.456.789-00",
+      seatNumber: "2B",
+    });
+  });
+
+  it("skips missing reservation references without attempting a passenger update", async () => {
+    queueManifestDb([], []);
+
+    const res = await request(buildReservationsApp())
+      .post("/api/reservations/import-manifest")
+      .send({
+        rows: [{
+          line: 2,
+          reservationNumber: "AG-MISSING",
+          tripName: "Excursão ao Nordeste",
+          departureDate: "2025-07-10",
+          name: "Pessoa Ausente",
+        }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(res.body.errors[0]).toContain("não foi encontrada nesta agência");
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("skips ambiguous reservation references instead of choosing one record", async () => {
+    const secondReservation = {
+      ...manifestReservation,
+      id: "reservation-manifest-duplicate",
+    };
+    queueManifestDb(
+      [
+        { reservation: manifestReservation, trip: manifestTrip },
+        { reservation: secondReservation, trip: manifestTrip },
+      ],
+      [makePassenger(), makePassenger({ id: "passenger-manifest-duplicate", reservationId: secondReservation.id })],
+    );
+
+    const res = await request(buildReservationsApp())
+      .post("/api/reservations/import-manifest")
+      .send({
+        rows: [{
+          line: 2,
+          reservationNumber: manifestReservation.reservationNumber,
+          tripName: manifestTrip.name,
+          departureDate: "2025-07-10",
+          name: "Maria de Fátima Atualizada",
+          cpf: "123.456.789-00",
+        }],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(res.body.errors[0]).toContain("a referência da reserva AG-EX-202507-0001 é ambígua");
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("matches CPF and name independently, preserves check-in, and leaves absent fields unchanged", async () => {
+    const cpfPassenger = makePassenger({
+      id: "passenger-cpf",
+      name: "Pessoa CPF Original",
+      cpf: "111.222.333-44",
+      seatNumber: "1A",
+    });
+    const namePassenger = makePassenger({
+      id: "passenger-name",
+      name: "José da Silva",
+      cpf: null,
+      birthDate: new Date("1985-02-03T12:00:00.000Z"),
+      seatNumber: "2B",
+      checkedInAt: new Date("2025-07-10T11:00:00.000Z"),
+    });
+    queueManifestDb(
+      [{ reservation: manifestReservation, trip: manifestTrip }],
+      [cpfPassenger, namePassenger],
+    );
+
+    const res = await request(buildReservationsApp())
+      .post("/api/reservations/import-manifest")
+      .send({
+        rows: [
+          {
+            line: 2,
+            reservationNumber: manifestReservation.reservationNumber,
+            tripName: manifestTrip.name,
+            departureDate: "2025-07-10",
+            name: "Pessoa CPF Atualizada",
+            cpf: "11122233344",
+          },
+          {
+            line: 3,
+            reservationNumber: manifestReservation.reservationNumber,
+            tripName: "EXCURSAO AO NORDESTE",
+            departureDate: "2025-07-10",
+            name: "JOSE DA SILVA",
+            birthDate: "1985-02-03",
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: 0, updated: 2, skipped: 0 });
+    expect(mockUpdate).toHaveBeenCalledTimes(2);
+
+    expect(mockUpdateSet).toHaveBeenNthCalledWith(1, {
+      name: "Pessoa CPF Atualizada",
+      cpf: "11122233344",
+    });
+    expect(mockUpdateSet).toHaveBeenNthCalledWith(2, {
+      name: "JOSE DA SILVA",
+      birthDate: new Date("1985-02-03T12:00:00.000Z"),
+    });
+
+    const updateCalls = mockUpdateSet.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    for (const [values] of updateCalls) {
+      expect(values).not.toHaveProperty("checkedInAt");
+      expect(values).not.toHaveProperty("rg");
+      expect(values).not.toHaveProperty("phone");
+      expect(values).not.toHaveProperty("boardingLocationId");
+      expect(values).not.toHaveProperty("seatNumber");
+    }
+  });
+
+  it("continues with valid rows after a bad row in the same request", async () => {
+    const passenger = makePassenger();
+    queueManifestDb(
+      [{ reservation: manifestReservation, trip: manifestTrip }],
+      [passenger],
+    );
+
+    const res = await request(buildReservationsApp())
+      .post("/api/reservations/import-manifest")
+      .send({
+        rows: [
+          {
+            line: 2,
+            reservationNumber: "AG-NOT-FOUND",
+            tripName: manifestTrip.name,
+            departureDate: "2025-07-10",
+            name: "Linha Inválida",
+          },
+          {
+            line: 3,
+            reservationNumber: manifestReservation.reservationNumber,
+            tripName: manifestTrip.name,
+            departureDate: "2025-07-10",
+            name: "Maria de Fátima Atualizada",
+            cpf: "12345678900",
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: 0, updated: 1, skipped: 1 });
+    expect(res.body.errors[0]).toContain("Linha 2");
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledWith({
+      name: "Maria de Fátima Atualizada",
+      cpf: "12345678900",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
