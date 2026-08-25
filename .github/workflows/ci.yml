@@ -61,6 +61,7 @@ jobs:
 
       - name: Type-check API client and frontend
         run: |
+          NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/shared exec tsc --build
           NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/api-client-react exec tsc --build
           NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @workspace/visitecrm run typecheck
 
