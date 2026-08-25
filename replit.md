@@ -27,6 +27,45 @@ VisiteCRM is built as a pnpm workspace monorepo utilizing TypeScript.
 - **`artifacts/visitecrm`**: React frontend, port 19951, accessible at `/`
 - **`artifacts/api-server`**: Express API server, port 8080, routes at `/api`
 
+### Replit Development Setup
+
+- **Runtime**: Node.js 24 and pnpm workspaces. Install the locked dependency tree with `pnpm install --frozen-lockfile`.
+- **Web preview**: run the `artifacts/visitecrm: web` workflow (Vite on port 19951). It proxies `/api` requests to the local API.
+- **API**: run the `artifacts/api-server: API Server` workflow (Express on port 8080). It requires `CLERK_SECRET_KEY`, `CREDENTIAL_ENCRYPTION_KEY`, and Replit-provided `DATABASE_URL`; the development Clerk publishable key is configured as an environment variable.
+- **Optional integrations**: uploads require `UPLOADTHING_TOKEN`; email delivery requires `RESEND_API_KEY`; Redis-backed queues require `REDIS_URL`. The API starts without these optional services, using its documented development fallbacks.
+
+### Post-Merge and Full Validation
+
+`scripts/post-merge.sh` installs the lockfile-pinned dependency tree with
+`pnpm install --frozen-lockfile`, applies pending migrations, runs the
+idempotent plan seed, and verifies the live development database. It then runs
+the static migration checks below:
+
+```bash
+pnpm --filter @workspace/db run check
+pnpm --filter @workspace/db run validate-coverage
+pnpm --filter @workspace/db run validate-columns
+pnpm --filter @workspace/db run validate-tables
+```
+
+It intentionally does **not** run production builds or the full test suite,
+which take longer than is appropriate for automatic post-merge execution.
+
+For full validation before merging, run:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @workspace/db run check
+pnpm --filter @workspace/db run validate-coverage
+pnpm --filter @workspace/db run validate-columns
+pnpm --filter @workspace/db run validate-tables
+pnpm run build
+pnpm test
+```
+
+After database changes, confirm that the post-merge reconciliation completes
+successfully in the development database.
+
 ### Core Features and Design Patterns
 - **Multi-tenancy**: Each agency operates as a distinct tenant with isolated data.
 - **Role-Based Access Control (RBAC)**: Supports roles like `superadmin`, `agencia`, `vendedor`, and `cliente` with fine-grained permissions enforced at the API level.
@@ -72,7 +111,7 @@ Drizzle ORM manages all schema migrations in `lib/db/drizzle/`; they run automat
 **Baseline rules (do not violate)**:
 - The legacy per-step migration chain was squashed into one idempotent baseline (`0000_squash_baseline`), generated from the current Drizzle schema. **Never mutate it or its `when` timestamp.**
 - Add schema changes only as new numbered migrations via `pnpm --filter @workspace/db generate` (idx `1`+). Each new migration's `when` must stay strictly greater than every earlier entry **and** above the real DB watermark (~`1.8e12`, higher than `Date.now()` in 2026) — otherwise Drizzle silently skips it. The guard test `artifacts/api-server/src/__tests__/migration-journal-order.test.ts` enforces ordering.
-- After any `ADD COLUMN` migration, run `pnpm --filter @workspace/db validate-coverage` (schema-drift workflow) to confirm fresh databases stay schema-complete.
+- After any `ADD COLUMN` migration, run `pnpm --filter @workspace/db validate-coverage` to audit the post-baseline migration and `validate-columns` to confirm the current schema has migration coverage. A fresh database is completed by applying the immutable baseline **and** all ordered incremental migrations.
 
 **Seeding**:
 - Plans (Starter/Pro/Enterprise) are auto-seeded on startup by `seedPlansIfMissing()` (insert-only, never overwrites admin-edited rows). To force a re-sync: `pnpm --filter @workspace/scripts run seed:plans`.
