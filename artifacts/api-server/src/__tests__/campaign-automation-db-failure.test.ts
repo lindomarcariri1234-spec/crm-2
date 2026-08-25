@@ -12,6 +12,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+type MockCampaignQueue = {
+  add: ReturnType<typeof vi.fn>;
+  getJob?: ReturnType<typeof vi.fn>;
+};
+
 const {
   mockSelect,
   mockInsert,
@@ -20,6 +25,8 @@ const {
   mockLogError,
   mockLogInfo,
   mockSendEmail,
+  mockCampaignQueueAdd,
+  mockGetCampaignEmailQueue,
 } = vi.hoisted(() => ({
   mockSelect: vi.fn(),
   mockInsert: vi.fn(),
@@ -28,10 +35,12 @@ const {
   mockLogError: vi.fn(),
   mockLogInfo: vi.fn(),
   mockSendEmail: vi.fn(),
+  mockCampaignQueueAdd: vi.fn(),
+  mockGetCampaignEmailQueue: vi.fn<() => MockCampaignQueue | null>(() => null),
 }));
 
 vi.mock("../queues/index.js", () => ({
-  getCampaignEmailQueue: vi.fn(() => null),
+  getCampaignEmailQueue: mockGetCampaignEmailQueue,
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -41,9 +50,9 @@ vi.mock("@workspace/db", () => ({
     update: mockUpdate,
   },
   campaignsTable: { autoEnabled: "autoEnabled", id: "id", tenantId: "tenantId", sentCount: "sentCount", recipientsCount: "recipientsCount" },
-  campaignSendsTable: { campaignId: "campaignId", clientId: "clientId", status: "status", sentAt: "sentAt" },
+  campaignSendsTable: { id: "id", campaignId: "campaignId", clientId: "clientId", tenantId: "tenantId", status: "status", sentAt: "sentAt" },
   clientsTable: { id: "id", tenantId: "tenantId", name: "name", email: "email", birthDate: "birthDate" },
-  tenantsTable: { id: "id" },
+  tenantsTable: { id: "id", name: "name" },
   reservationsTable: { clientId: "clientId", tenantId: "tenantId", status: "status", createdAt: "createdAt" },
   tripsTable: {},
 }));
@@ -73,7 +82,7 @@ vi.mock("../lib/id.js", () => ({
   generateId: vi.fn(() => "test-send-id"),
 }));
 
-import { runCampaignAutomationCron } from "../lib/campaign-automation.js";
+import { runCampaignAutomationCron, reconcileStaleQueuedCampaignSends } from "../lib/campaign-automation.js";
 
 // Brazil (America/Sao_Paulo) is UTC-3 (no DST since 2019).
 // Setting system time to 11:00 UTC yields 08:00 Brazil → currentHour = 8.
@@ -187,6 +196,269 @@ describe("campaign-automation: DB write failure regression", () => {
       );
 
       expect(mockUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("queued campaign email path", () => {
+    it("persists the queued campaign send before making its job available to a worker", async () => {
+      setupSelectCalls();
+      const events: string[] = [];
+      mockGetCampaignEmailQueue.mockReturnValue({
+        add: vi.fn().mockImplementation(async () => {
+          events.push("enqueue");
+        }),
+      });
+      mockInsert.mockImplementation(() => ({
+        values: vi.fn(() => ({
+          onConflictDoUpdate: vi.fn(() => ({
+            returning: vi.fn().mockImplementation(async () => {
+              events.push("persist");
+              return [{ id: "test-send-id" }];
+            }),
+          })),
+        })),
+      }));
+      mockUpdate.mockImplementation(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+      }));
+
+      await runCampaignAutomationCron();
+
+      expect(events).toEqual(["persist", "enqueue"]);
+    });
+
+    it("re-enqueues a stale queued row left by a crash before queue.add, with its durable job id", async () => {
+      const getJob = vi.fn().mockResolvedValue(undefined);
+      const add = vi.fn().mockResolvedValue(undefined);
+      mockGetCampaignEmailQueue.mockReturnValue({ getJob, add });
+      mockSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            innerJoin: vi.fn().mockReturnValue({
+              leftJoin: vi.fn().mockReturnValue({
+                where: vi.fn().mockResolvedValue([{
+                  sendId: "send-crashed-before-add",
+                  campaignId: CAMPAIGN.id,
+                  clientId: CLIENT.id,
+                  tenantId: CAMPAIGN.tenantId,
+                  subject: CAMPAIGN.subject,
+                  content: CAMPAIGN.content,
+                  clientName: CLIENT.name,
+                  clientEmail: CLIENT.email,
+                  tenantName: TENANT.name,
+                }]),
+              }),
+            }),
+          }),
+        }),
+      });
+
+      await reconcileStaleQueuedCampaignSends();
+
+      expect(getJob).toHaveBeenCalledWith("send-crashed-before-add");
+      expect(add).toHaveBeenCalledWith(
+        "campaign-email",
+        expect.objectContaining({
+          campaignId: CAMPAIGN.id,
+          clientId: CLIENT.id,
+          tenantId: CAMPAIGN.tenantId,
+          to: CLIENT.email,
+        }),
+        { jobId: "send-crashed-before-add" },
+      );
+    });
+
+    it("reopens an errored send and replaces its exhausted retained job with a processable job using the same durable id", async () => {
+      // The reconciliation query runs before campaign processing and finds no
+      // stale queued rows. The campaign query then finds the eligible client.
+      mockSelect.mockImplementationOnce(() => ({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            innerJoin: vi.fn().mockReturnValue({
+              leftJoin: vi.fn().mockReturnValue({
+                where: vi.fn().mockResolvedValue([]),
+              }),
+            }),
+          }),
+        }),
+      }));
+      setupSelectCalls();
+
+      const events: string[] = [];
+      const retainedFailedJob = {
+        id: "original-send-id",
+        name: "campaign-email",
+        data: {
+          campaignId: CAMPAIGN.id,
+          clientId: CLIENT.id,
+          tenantId: CAMPAIGN.tenantId,
+        },
+        getState: vi.fn().mockResolvedValue("failed"),
+        remove: vi.fn().mockImplementation(async () => {
+          events.push("remove-failed");
+          currentJob = undefined;
+        }),
+      };
+      let currentJob: typeof retainedFailedJob | { id: string; state: "waiting" } | undefined =
+        retainedFailedJob;
+      const getJob = vi.fn(async () => currentJob);
+      const add = vi.fn().mockImplementation(async (
+        _name: string,
+        _data: unknown,
+        options: { jobId: string },
+      ) => {
+        events.push("enqueue-replacement");
+        currentJob = { id: options.jobId, state: "waiting" };
+      });
+      mockGetCampaignEmailQueue.mockReturnValue({ getJob, add });
+
+      const onConflictDoUpdate = vi.fn(() => ({
+        // An exhausted worker failure has already changed this logical send to
+        // DB status=error. The upsert reopens it but preserves its original ID.
+        returning: vi.fn().mockResolvedValue([{ id: "original-send-id" }]),
+      }));
+      mockInsert.mockImplementation(() => ({
+        values: vi.fn(() => ({ onConflictDoUpdate })),
+      }));
+      mockUpdate.mockImplementation(() => ({
+        set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+      }));
+
+      await runCampaignAutomationCron();
+
+      expect(onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        set: expect.objectContaining({ status: "queued", error: null }),
+      }));
+      expect(retainedFailedJob.getState).toHaveBeenCalledOnce();
+      expect(retainedFailedJob.remove).toHaveBeenCalledOnce();
+      expect(events).toEqual(["remove-failed", "enqueue-replacement"]);
+      expect(add).toHaveBeenCalledWith(
+        "campaign-email",
+        expect.objectContaining({
+          campaignId: CAMPAIGN.id,
+          clientId: CLIENT.id,
+          tenantId: CAMPAIGN.tenantId,
+          to: CLIENT.email,
+        }),
+        { jobId: "original-send-id" },
+      );
+      expect(currentJob).toEqual({ id: "original-send-id", state: "waiting" });
+    });
+
+    it.each(["active", "waiting", "completed"] as const)(
+      "does not remove or replace a retained %s job",
+      async (state) => {
+        const remove = vi.fn();
+        const existingJob = {
+          id: "send-with-existing-job",
+          name: "campaign-email",
+          data: {
+            campaignId: CAMPAIGN.id,
+            clientId: CLIENT.id,
+            tenantId: CAMPAIGN.tenantId,
+          },
+          getState: vi.fn().mockResolvedValue(state),
+          remove,
+        };
+        const getJob = vi.fn().mockResolvedValue(existingJob);
+        const add = vi.fn();
+        mockGetCampaignEmailQueue.mockReturnValue({ getJob, add });
+        mockSelect.mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            innerJoin: vi.fn().mockReturnValue({
+              innerJoin: vi.fn().mockReturnValue({
+                leftJoin: vi.fn().mockReturnValue({
+                  where: vi.fn().mockResolvedValue([{
+                    sendId: "send-with-existing-job",
+                    campaignId: CAMPAIGN.id,
+                    clientId: CLIENT.id,
+                    tenantId: CAMPAIGN.tenantId,
+                    subject: CAMPAIGN.subject,
+                    content: CAMPAIGN.content,
+                    clientName: CLIENT.name,
+                    clientEmail: CLIENT.email,
+                    tenantName: TENANT.name,
+                  }]),
+                }),
+              }),
+            }),
+          }),
+        });
+
+        await reconcileStaleQueuedCampaignSends();
+
+        expect(existingJob.getState).toHaveBeenCalledOnce();
+        expect(remove).not.toHaveBeenCalled();
+        expect(add).not.toHaveBeenCalled();
+      },
+    );
+
+    it("keeps the original queued send and does not duplicate a durable job when queue.add commits then throws", async () => {
+      setupSelectCalls();
+      const durableJobs = new Set<string>();
+      const scheduledJobIds: string[] = [];
+      const add = mockCampaignQueueAdd.mockImplementation(
+        async (_name: string, _data: unknown, options: { jobId: string }) => {
+          durableJobs.add(options.jobId);
+          scheduledJobIds.push(options.jobId);
+          throw new Error("Redis response lost");
+        },
+      );
+      mockGetCampaignEmailQueue.mockReturnValue({
+        // Omit getJob on the initial queue double so cron's stale sweep does
+        // not consume the select mocks prepared for campaign processing.
+        add,
+      });
+      mockInsert.mockImplementation(() => ({
+        values: vi.fn(() => ({
+          onConflictDoUpdate: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue([{ id: "test-send-id" }]),
+          })),
+        })),
+      }));
+
+      await runCampaignAutomationCron();
+
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(scheduledJobIds).toEqual(["test-send-id"]);
+
+      const getJob = vi.fn(async (jobId: string) => (
+        durableJobs.has(jobId) ? { id: jobId } : undefined
+      ));
+      mockGetCampaignEmailQueue.mockReturnValue({ getJob, add });
+      mockSelect.mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          innerJoin: vi.fn().mockReturnValue({
+            innerJoin: vi.fn().mockReturnValue({
+              leftJoin: vi.fn().mockReturnValue({
+                where: vi.fn().mockResolvedValue([{
+                  sendId: "test-send-id",
+                  campaignId: CAMPAIGN.id,
+                  clientId: CLIENT.id,
+                  tenantId: CAMPAIGN.tenantId,
+                  subject: CAMPAIGN.subject,
+                  content: CAMPAIGN.content,
+                  clientName: CLIENT.name,
+                  clientEmail: CLIENT.email,
+                  tenantName: TENANT.name,
+                }]),
+              }),
+            }),
+          }),
+        }),
+      });
+
+      await reconcileStaleQueuedCampaignSends();
+
+      expect(getJob).toHaveBeenCalledWith("test-send-id");
+      expect(add).toHaveBeenCalledTimes(1);
+      expect(scheduledJobIds).toEqual(["test-send-id"]);
+      expect(mockLogError).toHaveBeenCalledWith(
+        expect.objectContaining({ campaignId: CAMPAIGN.id, clientId: CLIENT.id }),
+        expect.stringContaining("Failed to enqueue"),
+      );
     });
   });
 });
