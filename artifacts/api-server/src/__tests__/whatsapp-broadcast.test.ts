@@ -19,6 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { normalizeBrazilPhone } from "@workspace/shared";
 
 // ─── Hoisted state (must exist before any vi.mock factory runs) ───────────────
 
@@ -188,6 +189,9 @@ const PASSENGER_NO_PHONE = { id: "p4", name: "Diana", phone: null };
 function sentPhones(): string[] {
   return mockSendWhatsApp.mock.calls.map((c) => c[1] as string);
 }
+function canonicalPhone(phone: string) {
+  return normalizeBrazilPhone(phone)!;
+}
 function sentMessages(): string[] {
   return mockSendWhatsApp.mock.calls.map((c) => c[2] as string);
 }
@@ -211,7 +215,7 @@ describe("enqueueOrSend", () => {
     });
 
     expect(add).toHaveBeenCalledWith("whatsapp-notification", {
-      phone: "+5511999990001",
+      phone: canonicalPhone("+5511999990001"),
       message: "Olá!",
       tenantId: "tenant-1",
     });
@@ -230,7 +234,7 @@ describe("enqueueOrSend", () => {
       error: "credentials_not_configured",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", "+5511999990001", "Olá!");
+    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", canonicalPhone("+5511999990001"), "Olá!");
   });
 
   it("falls back to direct send when adding a Redis job fails", async () => {
@@ -248,7 +252,7 @@ describe("enqueueOrSend", () => {
     });
 
     expect(add).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", "+5511999990001", "Olá!");
+    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", canonicalPhone("+5511999990001"), "Olá!");
   });
 });
 
@@ -277,7 +281,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(sentPhones()).toEqual([PASSENGER_A.phone, PASSENGER_B.phone]);
+    expect(sentPhones()).toEqual([canonicalPhone(PASSENGER_A.phone), canonicalPhone(PASSENGER_B.phone)]);
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(2);
   });
 
@@ -337,7 +341,7 @@ describe("broadcastToReservationPassengers", () => {
 
     // Both passengers resolve to the same digits → only one send.
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sentPhones()[0]).toBe(PASSENGER_A.phone);
+    expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
   });
 
   it("uses the passenger's own phone regardless of client whatsappOptIn", async () => {
@@ -355,7 +359,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(sentPhones()).toEqual([PASSENGER_A.phone]);
+    expect(sentPhones()).toEqual([canonicalPhone(PASSENGER_A.phone)]);
   });
 
   it("uses client phone as fallback for a passenger with no own phone when client opted in", async () => {
@@ -373,7 +377,7 @@ describe("broadcastToReservationPassengers", () => {
     });
 
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sentPhones()[0]).toBe(CLIENT_OPTED_IN.whatsapp);
+    expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
   });
 
   it("sends nothing for a passenger with no phone when client has opted out", async () => {
@@ -408,7 +412,7 @@ describe("broadcastToReservationPassengers", () => {
     });
 
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sentPhones()[0]).toBe(CLIENT_OPTED_IN.whatsapp);
+    expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
   });
 
   it("sends nothing when there are zero passengers and client opted out", async () => {
@@ -479,7 +483,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
     expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(sentPhones()[0]).toBe(PASSENGER_A.phone);
+    expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
     expect(mockInterpolate).toHaveBeenCalledWith(
       expect.stringContaining("{valor}"),
       expect.objectContaining({
@@ -503,7 +507,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(2);
-    expect(sentPhones()).toEqual([PASSENGER_A.phone, PASSENGER_B.phone]);
+    expect(sentPhones()).toEqual([canonicalPhone(PASSENGER_A.phone), canonicalPhone(PASSENGER_B.phone)]);
     expect(mockInterpolate).toHaveBeenCalledTimes(2);
   });
 
@@ -524,7 +528,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
     expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(sentPhones()[0]).toBe(PASSENGER_A.phone);
+    expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
   });
 
   it("uses the configured custom payment template", async () => {
@@ -569,7 +573,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
     expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(sentPhones()[0]).toBe(CLIENT_OPTED_IN.whatsapp);
+    expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
     expect(mockInterpolate).toHaveBeenCalledWith(
       expect.stringContaining("{valor}"),
       expect.objectContaining({ nome: PASSENGER_NO_PHONE.name }),
@@ -629,7 +633,7 @@ describe("dispatchWhatsAppCadastroRealizado", () => {
     });
 
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sentPhones()[0]).toBe(PASSENGER_A.phone);
+    expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
     // Message vars should include the reservation reference.
     const vars = JSON.parse(mockSendWhatsApp.mock.calls[0][2] as string);
     expect(vars).toMatchObject({ referencia: "R-002", viagem: "Rio de Janeiro" });
@@ -675,7 +679,7 @@ describe("dispatchWhatsAppPagamentoPendente", () => {
     await dispatchWhatsAppPagamentoPendente(OPTS);
 
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sentPhones()[0]).toBe(PASSENGER_B.phone);
+    expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_B.phone));
     const vars = JSON.parse(mockSendWhatsApp.mock.calls[0][2] as string);
     expect(vars).toMatchObject({
       viagem: OPTS.tripName,
@@ -741,13 +745,13 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     const calls = mockSendWhatsApp.mock.calls;
     // First passenger (Alice) → BP_A; phone is arg[1], message is arg[2]
-    expect(calls[0][1]).toBe(passengerAtBpA.phone);
+    expect(calls[0][1]).toBe(canonicalPhone(passengerAtBpA.phone));
     const aliceVars = JSON.parse(calls[0][2] as string);
     expect(aliceVars.local_saida).toBe(BP_A.name);
     expect(aliceVars.horario).toBe(BP_A.time);
 
     // Second passenger (Bob) → BP_B
-    expect(calls[1][1]).toBe(passengerAtBpB.phone);
+    expect(calls[1][1]).toBe(canonicalPhone(passengerAtBpB.phone));
     const bobVars = JSON.parse(calls[1][2] as string);
     expect(bobVars.local_saida).toBe(BP_B.name);
     expect(bobVars.horario).toBe(BP_B.time);
@@ -806,7 +810,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
     expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(sentPhones()[0]).toBe(firstPassenger.phone);
+    expect(sentPhones()[0]).toBe(canonicalPhone(firstPassenger.phone));
   });
 
   it("falls back to the first boarding point when passenger has no boardingLocationId", async () => {
@@ -838,7 +842,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
     expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sentPhones()[0]).toBe(CLIENT_OPTED_IN.whatsapp);
+    expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
     const vars = JSON.parse(mockSendWhatsApp.mock.calls[0][2] as string);
     // Client fallback uses first boarding point and clientName.
     expect(vars.local_saida).toBe(BP_A.name);
@@ -927,7 +931,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
     });
 
     expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp.mock.calls[0][1]).toBe("+5511999990001");
+    expect(mockSendWhatsApp.mock.calls[0][1]).toBe(canonicalPhone("+5511999990001"));
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
@@ -983,7 +987,7 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
     });
 
     expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp.mock.calls[0][1]).toBe("+5511999990001");
+    expect(mockSendWhatsApp.mock.calls[0][1]).toBe(canonicalPhone("+5511999990001"));
   });
 
   it("skips referrer who has whatsappOptIn = false even when referrerPhone is supplied", async () => {
@@ -1028,7 +1032,7 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
     });
 
     expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp.mock.calls[0][1]).toBe("+5511999990001");
+    expect(mockSendWhatsApp.mock.calls[0][1]).toBe(canonicalPhone("+5511999990001"));
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
