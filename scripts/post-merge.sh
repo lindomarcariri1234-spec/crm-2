@@ -1,6 +1,12 @@
 #!/bin/bash
-set -e
-pnpm install --no-frozen-lockfile
+set -euo pipefail
+
+# Post-merge must reproduce the dependency tree committed in pnpm-lock.yaml.
+pnpm install --frozen-lockfile
+
+# Reconcile the development database before checking its schema. Both commands
+# are idempotent: migrations only advance the journal and plan seeding never
+# overwrites administrator-managed values.
 pnpm --filter @workspace/db run migrate
 pnpm --filter @workspace/scripts seed:plans
 
@@ -10,7 +16,7 @@ pnpm --filter @workspace/scripts seed:plans
 # is missing from the live DB after a merge).
 #
 #   check            — migration-file hashes are consistent with _journal.json
-#   validate-coverage — every ADD COLUMN migration is reflected in the squash baseline
+#   validate-coverage — reports ADD COLUMN migrations made after the immutable baseline
 #   validate-columns  — every snapshot column has a corresponding ADD COLUMN migration
 #   validate-tables   — every table/column in baseline is explained by a migration
 pnpm --filter @workspace/db run check
@@ -18,13 +24,6 @@ pnpm --filter @workspace/db run validate-coverage
 pnpm --filter @workspace/db run validate-columns
 pnpm --filter @workspace/db run validate-tables
 
-# ── Live DB column verification ──────────────────────────────────────────────
-# Connects to the actual database and confirms that every table + column
-# defined in the latest Drizzle snapshot exists in information_schema.columns.
-#
-# This catches the case the static checks CANNOT detect: when the Drizzle
-# migrations tracking table (__drizzle_migrations) gets out of sync with the
-# real DB state, e.g. a migration marked "applied" without actually executing
-# the ALTER TABLE. Without this check, the missing column causes 500 crashes
-# on every request that touches it (root cause of the prefix_locked outage).
+# Verify that migrations were applied to the actual database, not only recorded
+# in Drizzle's journal. This prevents schema drift from surfacing as API 500s.
 pnpm --filter @workspace/db run verify-db
