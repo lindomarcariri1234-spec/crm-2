@@ -12,4 +12,13 @@ export interface TripListResponse {
   total: number;
   page: number;
   limit: number;
+  stats: TripListStats;
+}
+
+export interface TripListStats {
+  total: number;
+  active: number;
+  totalCapacity: number;
+  occupiedSeats: number;
+  totalRevenue: number;
 }
