@@ -12,6 +12,63 @@ type EmailJobData = ReservationEmailJobData | CancellationEmailJobData | Birthda
 
 let _worker: Worker<EmailJobData> | null = null;
 
+function hasEmailLog(data: EmailJobData): data is Exclude<EmailJobData, BirthdayEmailJobData | CampaignEmailJobData> {
+  return "emailLogId" in data;
+}
+
+async function emailLogBelongsToTenant(emailLogId: string, tenantId: string): Promise<boolean> {
+  const [emailLog] = await db
+    .select({ id: emailLogsTable.id })
+    .from(emailLogsTable)
+    .where(
+      and(
+        eq(emailLogsTable.id, emailLogId),
+        eq(emailLogsTable.tenantId, tenantId),
+      ),
+    )
+    .limit(1);
+
+  return Boolean(emailLog);
+}
+
+async function updateEmailLogForTenant(
+  emailLogId: string,
+  tenantId: string,
+  values: Parameters<ReturnType<typeof db.update>["set"]>[0],
+): Promise<void> {
+  await db
+    .update(emailLogsTable)
+    .set(values)
+    .where(
+      and(
+        eq(emailLogsTable.id, emailLogId),
+        eq(emailLogsTable.tenantId, tenantId),
+      ),
+    );
+}
+
+async function campaignSendBelongsToTenant(
+  sendId: string,
+  campaignId: string,
+  clientId: string,
+  tenantId: string,
+): Promise<boolean> {
+  const [campaignSend] = await db
+    .select({ id: campaignSendsTable.id })
+    .from(campaignSendsTable)
+    .where(
+      and(
+        eq(campaignSendsTable.id, sendId),
+        eq(campaignSendsTable.campaignId, campaignId),
+        eq(campaignSendsTable.clientId, clientId),
+        eq(campaignSendsTable.tenantId, tenantId),
+      ),
+    )
+    .limit(1);
+
+  return Boolean(campaignSend);
+}
+
 export function startEmailWorker(): Worker<EmailJobData> | null {
   const conn = getRedisConnection();
   if (!conn) {
@@ -29,6 +86,17 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
     async (job) => {
       logger.info({ jobId: job.id, jobName: job.name }, "[email-worker] Processing job");
 
+      if (hasEmailLog(job.data)) {
+        const { emailLogId, tenantId } = job.data;
+        if (!(await emailLogBelongsToTenant(emailLogId, tenantId))) {
+          logger.warn(
+            { jobId: job.id, jobName: job.name, emailLogId, tenantId },
+            "[email-worker] Skipping email job: email log does not belong to tenant",
+          );
+          return;
+        }
+      }
+
       let result: SendEmailResult;
 
       if (job.name === "reservation-cancellation") {
@@ -37,10 +105,10 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
         result = await sendReservationCancellationEmail(cancellationProps);
         const { emailLogId } = job.data as CancellationEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as CancellationEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "new-booking-notification") {
         const {
@@ -54,10 +122,10 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
         result = await sendNewBookingNotificationEmail(notificationProps, { to: recipients, cc });
         const { emailLogId } = job.data as NewBookingNotificationEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as NewBookingNotificationEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "birthday-email") {
         const { tenantId: _t, emailSubject, senderName, emailMessage, ...birthdayProps } =
@@ -72,75 +140,79 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
         result = await sendReferralBonusPaidEmail(bonusPaidProps);
         const { emailLogId } = job.data as ReferralBonusPaidEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as ReferralBonusPaidEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "referral-converted") {
         const { emailLogId: _e, tenantId: _t, ...convertedProps } = job.data as ReferralConvertedEmailJobData;
         result = await sendReferralConvertedEmail(convertedProps);
         const { emailLogId } = job.data as ReferralConvertedEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as ReferralConvertedEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "referral-expired") {
         const { emailLogId: _e, tenantId: _t, ...expiredProps } = job.data as ReferralExpiredEmailJobData;
         result = await sendReferralExpiredEmail(expiredProps);
         const { emailLogId } = job.data as ReferralExpiredEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as ReferralExpiredEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "referral-expiring-soon") {
         const { emailLogId: _e, tenantId: _t, ...expiringSoonProps } = job.data as ReferralExpiringSoonEmailJobData;
         result = await sendReferralExpiringSoonEmail(expiringSoonProps);
         const { emailLogId } = job.data as ReferralExpiringSoonEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as ReferralExpiringSoonEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "referral-bonus-released") {
         const { emailLogId: _e, tenantId: _t, ...bonusReleasedProps } = job.data as ReferralBonusReleasedEmailJobData;
         result = await sendReferralBonusReleasedEmail(bonusReleasedProps);
         const { emailLogId } = job.data as ReferralBonusReleasedEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as ReferralBonusReleasedEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "referral-welcome") {
         const { emailLogId: _e, tenantId: _t, ...welcomeProps } = job.data as ReferralWelcomeEmailJobData;
         result = await sendReferralWelcomeEmail(welcomeProps);
         const { emailLogId } = job.data as ReferralWelcomeEmailJobData;
-        await db
-          .update(emailLogsTable)
-          .set({
-            status: result.success ? "sent" : "failed",
-            messageId: result.messageId ?? null,
-            errorMessage: result.error ?? null,
-          })
-          .where(eq(emailLogsTable.id, emailLogId));
+        await updateEmailLogForTenant(emailLogId, (job.data as ReferralWelcomeEmailJobData).tenantId, {
+          status: result.success ? "sent" : "failed",
+          messageId: result.messageId ?? null,
+          errorMessage: result.error ?? null,
+        });
       } else if (job.name === "referral-loyalty-points") {
         const { emailLogId: _e, tenantId: _t, ...loyaltyPointsProps } = job.data as ReferralLoyaltyPointsEmailJobData;
         result = await sendReferralLoyaltyPointsEmail(loyaltyPointsProps);
         const { emailLogId } = job.data as ReferralLoyaltyPointsEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as ReferralLoyaltyPointsEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       } else if (job.name === "campaign-email") {
-        const { to, subject, htmlContent, fromName, campaignId, clientId } = job.data as CampaignEmailJobData;
+        const { to, subject, htmlContent, fromName, campaignId, clientId, tenantId } = job.data as CampaignEmailJobData;
+        if (!job.id || !(await campaignSendBelongsToTenant(job.id, campaignId, clientId, tenantId))) {
+          logger.warn(
+            { jobId: job.id, campaignId, clientId, tenantId },
+            "[email-worker] Skipping campaign email job: campaign send does not belong to tenant",
+          );
+          return;
+        }
         result = await sendReminderHtmlEmail({ to, subject, html: htmlContent, fromName });
         if (result.success) {
           await db
@@ -148,8 +220,10 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
             .set({ status: "sent", error: null })
             .where(
               and(
+                eq(campaignSendsTable.id, job.id),
                 eq(campaignSendsTable.campaignId, campaignId),
-                eq(campaignSendsTable.clientId, clientId)
+                eq(campaignSendsTable.clientId, clientId),
+                eq(campaignSendsTable.tenantId, tenantId),
               )
             );
         }
@@ -159,10 +233,10 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
         result = await sendReservationConfirmationEmail(emailProps);
         const { emailLogId } = job.data as ReservationEmailJobData;
         if (result.success) {
-          await db
-            .update(emailLogsTable)
-            .set({ status: "sent", messageId: result.messageId ?? null })
-            .where(eq(emailLogsTable.id, emailLogId));
+          await updateEmailLogForTenant(emailLogId, (job.data as ReservationEmailJobData).tenantId, {
+            status: "sent",
+            messageId: result.messageId ?? null,
+          });
         }
       }
 
@@ -189,31 +263,38 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
       );
 
       if (job.name === "campaign-email") {
-        const { campaignId, clientId } = job.data as CampaignEmailJobData;
+        const { campaignId, clientId, tenantId } = job.data as CampaignEmailJobData;
+        const sendId = job.id;
+        if (!sendId) {
+          logger.error(
+            { campaignId, clientId, tenantId },
+            "[email-worker] Failed campaign job has no durable send ID",
+          );
+          return;
+        }
         try {
           await db
             .update(campaignSendsTable)
             .set({ status: "error", error: err?.message ?? "All retries exhausted" })
             .where(
               and(
+                eq(campaignSendsTable.id, sendId),
                 eq(campaignSendsTable.campaignId, campaignId),
-                eq(campaignSendsTable.clientId, clientId)
+                eq(campaignSendsTable.clientId, clientId),
+                eq(campaignSendsTable.tenantId, tenantId),
               )
             );
         } catch (dbErr) {
-          logger.error({ jobId: job.id, campaignId, clientId, dbErr }, "[email-worker] Failed to update campaign_sends after exhausted retries");
+          logger.error({ jobId: job.id, campaignId, clientId, tenantId, dbErr }, "[email-worker] Failed to update campaign_sends after exhausted retries");
         }
       } else {
         const data = job.data as Partial<ReservationEmailJobData & CancellationEmailJobData>;
-        if (data.emailLogId) {
+        if (data.emailLogId && data.tenantId) {
           try {
-            await db
-              .update(emailLogsTable)
-              .set({
-                status: "failed",
-                errorMessage: err?.message ?? "Unknown error after all retries",
-              })
-              .where(eq(emailLogsTable.id, data.emailLogId));
+            await updateEmailLogForTenant(data.emailLogId, data.tenantId, {
+              status: "failed",
+              errorMessage: err?.message ?? "Unknown error after all retries",
+            });
           } catch (dbErr) {
             logger.error({ jobId: job.id, dbErr }, "[email-worker] Failed to update email log after exhausted retries");
           }
