@@ -7,6 +7,13 @@ import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js
 // ---------------------------------------------------------------------------
 const mockGetMe = vi.hoisted(() => vi.fn());
 const mockGetTenant = vi.hoisted(() => vi.fn());
+const mockExportTrips = vi.hoisted(() => vi.fn());
+const mockToast = vi.hoisted(() => vi.fn());
+const mockBuildTripCsvHeader = vi.hoisted(() => vi.fn());
+const mockBuildTripCsvRows = vi.hoisted(() => vi.fn());
+const mockCreateObjectURL = vi.hoisted(() => vi.fn(() => "blob:test"));
+const mockRevokeObjectURL = vi.hoisted(() => vi.fn());
+const mockAnchorClick = vi.hoisted(() => vi.fn());
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -20,6 +27,7 @@ vi.mock("wouter", () => ({
 vi.mock("@workspace/api-client-react", () => ({
   useGetMe: mockGetMe,
   useGetTenant: mockGetTenant,
+  useCreateTrip: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
 }));
 
 vi.mock("@/hooks/useTrips", () => ({
@@ -50,6 +58,7 @@ vi.mock("@/hooks/useTrips", () => ({
         updatedAt: "2026-01-01T00:00:00.000Z",
       },
     ],
+    exportTrips: mockExportTrips,
     isLoading: false,
     totalPages: 1,
     upcomingTrips: [],
@@ -70,6 +79,8 @@ vi.mock("@/hooks/useTrips", () => ({
     deleteTrip: { mutateAsync: vi.fn() },
     handleDuplicate: vi.fn(),
     handleDelete: vi.fn(),
+    hasActiveFilters: false,
+    clearFilters: vi.fn(),
   }),
 }));
 
@@ -144,6 +155,19 @@ vi.mock("../pages/trips/TripCard.js", () => ({
   PublishToStoreDialog: () => null,
 }));
 
+vi.mock("../pages/trips/TripCsvImportModal.js", () => ({
+  TripCsvImportModal: () => null,
+}));
+
+vi.mock("@/lib/trip-csv-import", () => ({
+  buildTripCsvHeader: mockBuildTripCsvHeader,
+  buildTripCsvRows: mockBuildTripCsvRows,
+}));
+
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: mockToast }),
+}));
+
 import { TripList } from "../pages/trips/TripList.js";
 import { makeTenantData, makeMe } from "./tenantFixtures.js";
 
@@ -166,6 +190,26 @@ async function renderInListMode(seatMapEnabled: boolean | undefined) {
 beforeEach(() => {
   mockGetMe.mockReturnValue(makeMe());
   mockGetTenant.mockReturnValue(makeTenantData(false));
+  mockExportTrips.mockReset();
+  mockToast.mockReset();
+  mockBuildTripCsvHeader.mockReset();
+  mockBuildTripCsvHeader.mockReturnValue("Nome");
+  mockBuildTripCsvRows.mockReset();
+  mockBuildTripCsvRows.mockReturnValue("Viagem Teste");
+  mockCreateObjectURL.mockClear();
+  mockRevokeObjectURL.mockClear();
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: mockCreateObjectURL,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: mockRevokeObjectURL,
+  });
+  Object.defineProperty(HTMLAnchorElement.prototype, "click", {
+    configurable: true,
+    value: mockAnchorClick,
+  });
 });
 
 afterEach(async () => {
@@ -190,5 +234,62 @@ describe("TripList list-row — seatMapEnabled tenant toggle", () => {
     const { container } = await renderInListMode(undefined);
     const link = container.querySelector("a[href='/trips/trip-1/seat-map']");
     expect(link).not.toBeNull();
+  });
+});
+
+function getExportButton(container: HTMLElement): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+    .find((candidate) => candidate.textContent?.includes("Exportar CSV") || candidate.textContent?.includes("Preparando..."));
+  if (!button) throw new Error("Export button not found");
+  return button;
+}
+
+describe("TripList — complete CSV export", () => {
+  it("shows the preparation state while the complete export is being fetched", async () => {
+    let resolveExport!: (count: number) => void;
+    const pendingExport = new Promise<number>((resolve) => {
+      resolveExport = resolve;
+    });
+    mockExportTrips.mockReturnValue(pendingExport);
+
+    const { container } = await renderComponent(createElement(TripList));
+    const exportButton = getExportButton(container);
+
+    await flushAct(() => {
+      exportButton.click();
+    });
+
+    expect(exportButton.disabled).toBe(true);
+    expect(exportButton.textContent).toContain("Preparando...");
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Preparando exportação...",
+    }));
+
+    await flushAct(() => {
+      resolveExport([]);
+    });
+  });
+
+  it("generates the download with the shared import CSV builder", async () => {
+    const exportedTrips = [{ id: "trip-exported", name: "Viagem completa" }];
+    mockExportTrips.mockImplementation(async (onBatch: (trips: unknown[]) => void) => {
+      onBatch(exportedTrips);
+      return exportedTrips.length;
+    });
+
+    const { container } = await renderComponent(createElement(TripList));
+    await flushAct(() => {
+      getExportButton(container).click();
+    });
+
+    expect(mockBuildTripCsvHeader).toHaveBeenCalledTimes(1);
+    expect(mockBuildTripCsvRows).toHaveBeenCalledTimes(1);
+    expect(mockBuildTripCsvRows).toHaveBeenCalledWith(exportedTrips);
+    expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
+    expect(mockRevokeObjectURL).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Exportação concluída",
+      description: "1 viagem(ns) incluída(s) no CSV.",
+    }));
   });
 });
