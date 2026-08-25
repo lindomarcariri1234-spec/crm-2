@@ -18,8 +18,23 @@ jobs:
     name: Validate
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: visitecrm_ci
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d visitecrm_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       CI: "true"
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/visitecrm_ci
       # Drizzle's static checks must not attempt to provision or connect to a DB.
       DRIZZLE_SCHEMA_ONLY: "1"
 
@@ -49,6 +64,9 @@ jobs:
           pnpm --filter @workspace/db run validate-columns
           pnpm --filter @workspace/db run validate-tables
 
+      - name: Apply database migrations for integration tests
+        run: pnpm --filter @workspace/db run migrate
+
       - name: Type-check database, API contracts, and API
         run: |
           NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/db exec tsc --build
@@ -61,6 +79,7 @@ jobs:
 
       - name: Type-check API client and frontend
         run: |
+          NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/shared exec tsc --build
           NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/api-client-react exec tsc --build
           NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter @workspace/visitecrm run typecheck
 
