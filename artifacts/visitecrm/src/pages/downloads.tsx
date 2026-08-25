@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Download, FileText, FileSpreadsheet, Users, Map, CalendarCheck, DollarSign, Bus, Loader2, BarChart2,
+  Download, FileText, FileSpreadsheet, Users, Map, CalendarCheck, DollarSign, Bus, Loader2, BarChart2, Upload,
 } from "lucide-react";
 import { format, startOfMonth } from "date-fns";
 import {
@@ -23,6 +23,7 @@ import {
   downloadXlsx,
   downloadPdf,
 } from "./downloads-utils.js";
+import { ManifestImportModal } from "./ManifestImportModal";
 
 function downloadCsv(rows: string[][], filename: string) {
   const content = rows.map(r => r.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -101,6 +102,7 @@ export default function Downloads() {
 
   // Track which quick-download card is currently loading
   const [quickLoading, setQuickLoading] = useState<string | null>(null);
+  const [manifestImportOpen, setManifestImportOpen] = useState(false);
 
   async function serverExport(fmt: ExportFormat) {
     setExporting(fmt);
@@ -214,7 +216,7 @@ export default function Downloads() {
         if (!rows.length) { toast({ title: `Sem dados de ${label} para exportar no período` }); return; }
         const filename = `${filenameBase}_${format(new Date(), "yyyyMMdd")}.${fmt}`;
         if (fmt === "csv") downloadCsv([headers, ...rows], filename);
-        else if (fmt === "xlsx") downloadXlsx(headers, rows, filename);
+        else if (fmt === "xlsx") await downloadXlsx(headers, rows, filename);
         else downloadPdf(label, headers, rows, filename);
         toast({ title: `${count} registros exportados!` });
       } catch (err) {
@@ -262,6 +264,7 @@ export default function Downloads() {
       description: "Manifesto de passageiros (filtro por data de saída da viagem)",
       icon: Bus,
       formats: makeFormats("Manifesto", _prepareManifest, "manifesto_passageiros"),
+      importAction: true,
     },
     {
       label: "Relatório de Indicações",
@@ -443,12 +446,18 @@ export default function Downloads() {
                       </Button>
                     );
                   })}
+                    {exp.importAction && (
+                      <Button variant="outline" size="sm" onClick={() => setManifestImportOpen(true)} disabled={quickLoading !== null}>
+                        <Upload className="mr-1.5 h-3.5 w-3.5" /> Importar Manifesto
+                      </Button>
+                    )}
                 </div>
               </CardContent>
             </Card>
           );
         })}
       </div>
+      <ManifestImportModal open={manifestImportOpen} onClose={() => setManifestImportOpen(false)} />
     </div>
   );
 }
