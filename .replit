@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11", "postgresql-16"]
+modules = ["web", "bash", "nodejs-24", "postgresql-16"]
 
   [[artifacts]]
   id = "artifacts/visitecrm"
@@ -61,13 +61,12 @@ author = "agent"
 mode = "sequential"
 
 [workflows.workflow.metadata]
-outputType = "webview"
+outputType = "console"
 artifactId = "3B4_FFSkEVBkAeYMFRJ2e"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "pnpm --filter @workspace/api-server run dev"
-cwd = "./artifacts/api-server"
 waitForPort = 8080
 
 [workflows.workflow.tasks.env]
@@ -117,6 +116,10 @@ args = "visitecrm-typecheck"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "schema-drift"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "artifacts/api-server: API Server"
 
 [[workflows.workflow]]
 name = "artifacts/cliente-app: expo"
@@ -172,7 +175,7 @@ path = "scripts/post-merge.sh"
 timeoutMs = 300000
 
   [nix]
-  channel = "stable-25_05"
+channel = "stable-25_05"
 
   [userenv]
 
@@ -181,6 +184,7 @@ NODE_ENV = "production"
 ENABLE_WORKERS = "true"
 UPLOADTHING_CALLBACK_URL = "https://visitecrm.com/api/uploadthing"
 CLERK_PUBLISHABLE_KEY = "pk_live_Y2xlcmsudmlzaXRlY3JtLmNvbSQ"
+RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
 
   [userenv.shared]
   VITE_UPLOADTHING_URL = "/api/uploadthing"
