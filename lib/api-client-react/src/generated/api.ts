@@ -111,6 +111,7 @@ import type {
   GetCalendarCallbackParams,
   GetDashboardChartsParams,
   GetDashboardRevenueChartParams,
+  GetReservationStatsParams,
   GetPublicReferralInfo200,
   GetPublicReferralInfoParams,
   HealthStatus,
@@ -5801,27 +5802,39 @@ export const useUpdatePassengerBoarding = <
 /**
  * @summary Get reservation aggregate statistics
  */
-export const getGetReservationStatsUrl = () => {
-  return `/api/reservations/stats`;
+export const getGetReservationStatsUrl = (params?: GetReservationStatsParams) => {
+  const normalizedParams = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) normalizedParams.append(key, value === null ? "null" : value.toString());
+  });
+  const stringifiedParams = normalizedParams.toString();
+  return stringifiedParams.length > 0
+    ? `/api/reservations/stats?${stringifiedParams}`
+    : `/api/reservations/stats`;
 };
 
 export const getReservationStats = async (
+  params?: GetReservationStatsParams,
   options?: RequestInit,
 ): Promise<ReservationStats> => {
-  return customFetch<ReservationStats>(getGetReservationStatsUrl(), {
+  return customFetch<ReservationStats>(getGetReservationStatsUrl(params), {
     ...options,
     method: "GET",
   });
 };
 
-export const getGetReservationStatsQueryKey = () => {
-  return [`/api/reservations/stats`] as const;
+export const getGetReservationStatsQueryKey = (
+  params?: GetReservationStatsParams,
+) => {
+  return [`/api/reservations/stats`, ...(params ? [params] : [])] as const;
 };
 
 export const getGetReservationStatsQueryOptions = <
   TData = Awaited<ReturnType<typeof getReservationStats>>,
   TError = ErrorType<unknown>,
->(options?: {
+>(
+  params?: GetReservationStatsParams,
+  options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getReservationStats>>,
     TError,
@@ -5831,11 +5844,11 @@ export const getGetReservationStatsQueryOptions = <
 }) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getGetReservationStatsQueryKey();
+  const queryKey = queryOptions?.queryKey ?? getGetReservationStatsQueryKey(params);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getReservationStats>>
-  > = ({ signal }) => getReservationStats({ signal, ...requestOptions });
+  > = ({ signal }) => getReservationStats(params, { signal, ...requestOptions });
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof getReservationStats>>,
@@ -5856,7 +5869,9 @@ export type GetReservationStatsQueryError = ErrorType<unknown>;
 export function useGetReservationStats<
   TData = Awaited<ReturnType<typeof getReservationStats>>,
   TError = ErrorType<unknown>,
->(options?: {
+>(
+  params?: GetReservationStatsParams,
+  options?: {
   query?: UseQueryOptions<
     Awaited<ReturnType<typeof getReservationStats>>,
     TError,
@@ -5864,7 +5879,7 @@ export function useGetReservationStats<
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getGetReservationStatsQueryOptions(options);
+  const queryOptions = getGetReservationStatsQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

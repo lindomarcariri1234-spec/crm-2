@@ -2154,6 +2154,16 @@ export const UpdatePassengerBoardingResponse = zod.object({
 /**
  * @summary Get reservation aggregate statistics
  */
+export const GetReservationStatsQueryParams = zod.object({
+  search: zod.coerce.string().nullish(),
+  tripId: zod.coerce.string().nullish(),
+  status: zod.coerce.string().nullish(),
+  sellerId: zod.coerce.string().nullish(),
+  dateFrom: zod.coerce.string().nullish(),
+  dateTo: zod.coerce.string().nullish(),
+  hasAutoRetry: zod.coerce.boolean().nullish(),
+});
+
 export const GetReservationStatsResponse = zod.object({
   total: zod.number(),
   confirmed: zod.number(),
@@ -2174,6 +2184,7 @@ export const ListReservationsQueryParams = zod.object({
   clientId: zod.coerce.string().nullish(),
   status: zod.coerce.string().nullish(),
   createdById: zod.coerce.string().nullish(),
+  sellerId: zod.coerce.string().nullish(),
   dateFrom: zod.coerce.string().nullish(),
   dateTo: zod.coerce.string().nullish(),
   departureDateFrom: zod.coerce.string().nullish(),

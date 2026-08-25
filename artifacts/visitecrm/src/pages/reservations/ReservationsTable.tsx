@@ -126,7 +126,7 @@ export function ReservationsTable({
               if (statusFilter) params.set("status", statusFilter);
               if (search) params.set("search", search);
               if (tripFilter) params.set("tripId", tripFilter);
-              if (sellerFilter) params.set("createdById", sellerFilter);
+              if (sellerFilter) params.set("sellerId", sellerFilter);
               if (dateFrom) params.set("dateFrom", dateFrom);
               if (dateTo) params.set("dateTo", dateTo);
               if (hasAutoRetryFilter) params.set("hasAutoRetry", "true");

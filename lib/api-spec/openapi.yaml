@@ -779,6 +779,10 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: hasAutoRetry
+          in: query
+          schema:
+            type: ["boolean", "null"]
         - name: sortBy
           in: query
           schema:
@@ -1514,6 +1518,35 @@ paths:
       operationId: getReservationStats
       tags: [reservations]
       summary: Get reservation aggregate statistics
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: tripId
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: status
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: sellerId
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateTo
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: hasAutoRetry
+          in: query
+          schema:
+            type: ["boolean", "null"]
       responses:
         "200":
           description: Reservation stats
@@ -1545,6 +1578,10 @@ paths:
           schema:
             type: ["string", "null"]
         - name: createdById
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: sellerId
           in: query
           schema:
             type: ["string", "null"]
@@ -11384,6 +11421,31 @@ paths:
       operationId: getReservationStats
       tags: [reservations]
       summary: Get reservation aggregate statistics
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: tripId
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: status
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: sellerId
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateTo
+          in: query
+          schema:
+            type: ["string", "null"]
       responses:
         "200":
           description: Reservation stats
@@ -11415,6 +11477,10 @@ paths:
           schema:
             type: ["string", "null"]
         - name: createdById
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: sellerId
           in: query
           schema:
             type: ["string", "null"]

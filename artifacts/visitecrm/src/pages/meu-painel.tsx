@@ -96,13 +96,10 @@ export default function MeuPainel() {
     [allDeals, me]
   );
 
-  const myReservations = useMemo(
-    () =>
-      reservations.filter((r) =>
-        myCommissions.some((c) => c.reservationId === r.id)
-      ),
-    [reservations, myCommissions]
-  );
+  // The reservations endpoint already applies the logged-in seller's server-side
+  // scope. Do not use commission records as a proxy for ownership: a valid
+  // reservation may not have a commission yet.
+  const myReservations = reservations;
 
   const wonDeals = myDeals.filter((d) => d.status === DEAL_STATUS.WON).length;
   const closedDeals = myDeals.filter((d) => d.status === DEAL_STATUS.WON || d.status === DEAL_STATUS.LOST).length;

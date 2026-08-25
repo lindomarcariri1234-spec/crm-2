@@ -26,6 +26,7 @@ import { calculateScoresForClient } from "../lib/client-scores";
 import { getRedisConnection } from "../lib/redis";
 import { getAIClientForTenant } from "../lib/ai-client";
 import { z } from "zod";
+import { clientSellerScopeCondition } from "../lib/seller-scope";
 
 const ListClientsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -162,7 +163,7 @@ router.get("/clients", async (req, res, next: NextFunction): Promise<void> => {
     const conditions: ReturnType<typeof eq>[] = [eq(clientsTable.tenantId, me.tenantId)];
 
     if (me.role === ROLES.SALES) {
-      conditions.push(eq(clientsTable.createdById, me.id));
+      conditions.push(clientSellerScopeCondition(me) as ReturnType<typeof eq>);
     }
 
     if (search) {
@@ -191,7 +192,9 @@ router.get("/clients", async (req, res, next: NextFunction): Promise<void> => {
     if (dateTo && !ISO_DATE.test(dateTo)) { next(new ValidationError("dateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
     if (dateFrom) conditions.push(sql`${clientsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
     if (dateTo) conditions.push(sql`${clientsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
-    if (me.role !== ROLES.SALES && sellerId) conditions.push(eq(clientsTable.createdById, sellerId));
+    if (me.role !== ROLES.SALES && sellerId) {
+      conditions.push(clientSellerScopeCondition({ id: sellerId, tenantId: me.tenantId }) as ReturnType<typeof eq>);
+    }
     const scoreSubquery = (col: "purchase_score" | "churn_score") =>
       sql`(SELECT ${sql.raw(col)} FROM client_scores WHERE client_id = ${clientsTable.id} AND tenant_id = ${clientsTable.tenantId})`;
     if (minPurchaseScore != null) conditions.push(sql`${scoreSubquery("purchase_score")} >= ${minPurchaseScore}` as ReturnType<typeof eq>);
@@ -430,7 +433,7 @@ async function requireClientAccess(
 ): Promise<typeof clientsTable.$inferSelect> {
   const conditions: ReturnType<typeof eq>[] = [eq(clientsTable.id, clientId), eq(clientsTable.tenantId, me.tenantId)];
   if (me.role === ROLES.CLIENT) conditions.push(eq(clientsTable.userId, me.id));
-  else if (me.role === ROLES.SALES) conditions.push(eq(clientsTable.createdById, me.id));
+  else if (me.role === ROLES.SALES) conditions.push(clientSellerScopeCondition(me) as ReturnType<typeof eq>);
   const [client] = await db.select().from(clientsTable).where(and(...conditions)).limit(1);
   if (!client) throw new NotFoundError("Client not found", "CLIENT_NOT_FOUND");
   return client;

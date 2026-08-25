@@ -4,7 +4,7 @@ import {
   useListTrips, useListClients, useListBoardingLocations, useListUsers,
   useCreateReservation, useUpdateDeal,
   useValidateReservationCoupon, useGetTrip, useGetClientLoyalty,
-  useCreateClient,
+  useCreateClient, useGetMe,
   validateReferralCode,
   useListReservations,
 } from "@workspace/api-client-react";
@@ -16,7 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { XCircle, AlertTriangle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RESERVATION_STATUS } from "@workspace/permissions";
+import { RESERVATION_STATUS, ROLES } from "@workspace/permissions";
 import { PAYMENT_METHOD_LABELS as PAYMENT_LABELS } from "@/lib/labels";
 import { WizardStep1 } from "./WizardStep1";
 import { WizardStep2 } from "./WizardStep2";
@@ -60,6 +60,7 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
   const { data: clientsData } = useListClients({ limit: 300 });
   const { data: boardingRaw } = useListBoardingLocations();
   const { data: usersForWizard } = useListUsers();
+  const { data: me } = useGetMe();
   const createReservation = useCreateReservation();
   const updateDeal = useUpdateDeal();
   const createClient = useCreateClient();
@@ -98,6 +99,10 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
   const [createError, setCreateError] = useState<string | null>(null);
   const [dupAcknowledged, setDupAcknowledged] = useState(false);
   const [overlapAcknowledged, setOverlapAcknowledged] = useState(false);
+
+  useEffect(() => {
+    if (me?.role === ROLES.SALES && sellerId === "none") setSellerId(me.id);
+  }, [me?.id, me?.role, sellerId]);
 
   const [clientSearch, setClientSearch] = useState("");
   const [pendingClient, setPendingClient] = useState<{ id: string; name: string; whatsapp?: string | null } | null>(null);
@@ -342,15 +347,20 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
   };
 
   const balance = Math.max(0, finalTotal - paidValue);
+  const wizardSellers = useMemo(() => {
+    if (me?.role === ROLES.SALES && me.id) return [{ id: me.id, name: me.name }];
+    return (usersForWizard ?? []).filter(user => user.role === ROLES.SALES || user.role === ROLES.AGENCY_ADMIN);
+  }, [me?.id, me?.name, me?.role, usersForWizard]);
 
   const step2Props = {
     totalValue, setTotalValue, paidValue, setPaidValue, paymentMethod, setPaymentMethod,
     installments, setInstallments, firstDueDate, setFirstDueDate, notes, setNotes, commissionAmount, setCommissionAmount,
     sellerId, setSellerId, hasInsurance, setHasInsurance,
+    isSales: me?.role === ROLES.SALES,
     couponCode, setCouponCode, couponApplied, setCouponApplied, couponError, setCouponError, couponLoading,
     redeemLoyalty, setRedeemLoyalty, loyaltyPointsToRedeem, setLoyaltyPointsToRedeem, setLoyaltyAmountApplied,
     referralCode, setReferralCode, referralApplied, setReferralApplied, referralError, setReferralError, referralLoading,
-    discountsOpen, setDiscountsOpen, loyaltyInfo, usersForWizard, selectedTripFull, selectedClientId, effectiveSeats,
+    discountsOpen, setDiscountsOpen, loyaltyInfo, usersForWizard: wizardSellers, selectedTripFull, selectedClientId, effectiveSeats,
     uiCouponApplied, uiLoyaltyApplied, uiReferralApplied, totalDiscount,
     handleCouponApply, handleReferralApply,
     onBack: () => setStep(1), onNext: () => setStep(3),

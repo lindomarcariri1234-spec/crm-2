@@ -1244,6 +1244,37 @@ export interface ReservationStats {
   totalOutstanding: number;
 }
 
+export type GetReservationStatsParams = {
+  /**
+   * @nullable
+   */
+  search?: string | null;
+  /**
+   * @nullable
+   */
+  tripId?: string | null;
+  /**
+   * @nullable
+   */
+  status?: string | null;
+  /**
+   * @nullable
+   */
+  sellerId?: string | null;
+  /**
+   * @nullable
+   */
+  dateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  dateTo?: string | null;
+  /**
+   * @nullable
+   */
+  hasAutoRetry?: boolean | null;
+};
+
 export interface Passenger {
   id: string;
   reservationId: string;
@@ -3731,6 +3762,11 @@ export type ListReservationsParams = {
    * @nullable
    */
   createdById?: string | null;
+  /**
+   * ID of the seller/consultant responsible for this reservation.
+   * @nullable
+   */
+  sellerId?: string | null;
   /**
    * @nullable
    */

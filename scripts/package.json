@@ -11,6 +11,7 @@
     "backfill:referral-reservation-id": "tsx ./src/backfill-referral-reservation-id.ts",
     "backfill:referral-source": "tsx ./src/backfill-referral-source.ts",
     "backfill:referral-pending-orders": "tsx ./src/backfill-referral-pending-orders.ts",
+    "reconcile:seller-reservation-ownership": "tsx ./src/reconcile-seller-reservation-ownership.ts",
     "cleanup:pipeline-duplicate-leads": "tsx ./src/cleanup-pipeline-duplicate-leads.ts",
     "cleanup:pipeline-orphan-deals": "tsx ./src/cleanup-pipeline-orphan-deals.ts",
     "list:duplicate-reservations": "tsx ./src/list-duplicate-reservations.ts",

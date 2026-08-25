@@ -144,6 +144,7 @@ export * from "./getDashboardRevenueChartParams";
 export * from "./getDashboardRevenueChartPeriod";
 export * from "./getPublicReferralInfo200";
 export * from "./getPublicReferralInfoParams";
+export * from "./getReservationStatsParams";
 export * from "./healthStatus";
 export * from "./healthStatusBullmq";
 export * from "./healthStatusBullmqWorkers";

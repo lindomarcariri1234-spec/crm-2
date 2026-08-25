@@ -30,6 +30,10 @@ export type ListReservationsParams = {
   /**
    * @nullable
    */
+  sellerId?: string | null;
+  /**
+   * @nullable
+   */
   dateFrom?: string | null;
   /**
    * @nullable

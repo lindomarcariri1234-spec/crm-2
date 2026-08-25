@@ -53,6 +53,7 @@ export interface WizardStep2Props {
   setDiscountsOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
   loyaltyInfo: LoyaltyInfo | null | undefined;
   usersForWizard: { id: string; name: string }[] | undefined;
+  isSales?: boolean;
   selectedTripFull: Trip | undefined;
   selectedClientId: string;
   effectiveSeats: string[];
@@ -126,12 +127,13 @@ export function WizardStep2(p: WizardStep2Props) {
         <div className="space-y-2">
           <label className="text-sm font-medium">Consultor / Vendedor</label>
           <Select value={p.sellerId} onValueChange={p.setSellerId}>
-            <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+            <SelectTrigger><SelectValue placeholder={p.isSales ? "Você será o responsável" : "Selecionar..."} /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="none">Não especificado</SelectItem>
+              {!p.isSales && <SelectItem value="none">Não especificado</SelectItem>}
               {(p.usersForWizard ?? []).map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
             </SelectContent>
           </Select>
+          {p.isSales && <p className="text-xs text-muted-foreground">Esta reserva será atribuída automaticamente a você.</p>}
         </div>
       </div>
 

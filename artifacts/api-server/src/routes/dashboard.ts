@@ -14,6 +14,7 @@ import { roundMoney } from "../lib/pricing";
 import { ForbiddenError, ValidationError } from "../lib/errors";
 import { ROLES, RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, DEAL_STATUS, TRIP_STATUS } from "@workspace/permissions";
 import { z } from "zod";
+import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
 
 const RevenueChartQuery = z.object({
   period: z.enum(["7d", "30d", "90d", "12m"]).default("30d"),
@@ -73,12 +74,12 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
 
     if (me.role === ROLES.SALES) {
       const [clientCount] = await db.select({ count: sql<number>`count(*)` })
-        .from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), eq(clientsTable.createdById, me.id)));
+        .from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me)));
       const [newClientCount] = await db.select({ count: sql<number>`count(*)` })
-        .from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), eq(clientsTable.createdById, me.id), gte(clientsTable.createdAt, startOfMonth)));
+        .from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me), gte(clientsTable.createdAt, startOfMonth)));
 
       const myClients = await db.select({ id: clientsTable.id }).from(clientsTable)
-        .where(and(eq(clientsTable.tenantId, tenantId), eq(clientsTable.createdById, me.id)));
+        .where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me)));
       const myClientIds = myClients.map(c => c.id);
 
       let totalRevenue = 0, revenueThisMonth = 0, pendingAmount = 0, receivedToday = 0;
@@ -99,9 +100,9 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
       let avgTicket = 0, activeClientsCount = 0;
       if (myClientIds.length > 0) {
         const [rc] = await db.select({ count: sql<number>`count(*)` })
-          .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), inArray(reservationsTable.clientId, myClientIds)));
+          .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), reservationSellerScopeCondition(me)));
         const [cc] = await db.select({ count: sql<number>`count(*)` })
-          .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), inArray(reservationsTable.clientId, myClientIds), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
+          .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), reservationSellerScopeCondition(me), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
         totalReservations = Number(rc?.count ?? 0);
         confirmedReservations = Number(cc?.count ?? 0);
       }
@@ -325,16 +326,18 @@ router.get("/dashboard/revenue-chart", async (req, res, next: NextFunction): Pro
     let reservationConditions = and(eq(reservationsTable.tenantId, me.tenantId), gte(reservationsTable.createdAt, since))!;
 
     if (me.role === ROLES.SALES) {
-      const sellerClients = await db.select({ id: clientsTable.id })
+      const scopedClients = await db.select({ id: clientsTable.id })
         .from(clientsTable)
-        .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.createdById, me.id)));
-      if (!sellerClients.length) {
-        res.json([]);
-        return;
-      }
-      const sellerClientIds = sellerClients.map(c => c.id);
-      paymentConditions = and(eq(paymentsTable.tenantId, me.tenantId), gte(paymentsTable.createdAt, since), inArray(paymentsTable.clientId, sellerClientIds))!;
-      reservationConditions = and(eq(reservationsTable.tenantId, me.tenantId), gte(reservationsTable.createdAt, since), inArray(reservationsTable.clientId, sellerClientIds))!;
+        .where(and(eq(clientsTable.tenantId, me.tenantId), clientSellerScopeCondition(me)));
+      const scopedClientIds = scopedClients.map(client => client.id);
+      paymentConditions = scopedClientIds.length > 0
+        ? and(eq(paymentsTable.tenantId, me.tenantId), gte(paymentsTable.createdAt, since), inArray(paymentsTable.clientId, scopedClientIds))!
+        : and(eq(paymentsTable.tenantId, me.tenantId), sql`false`)!;
+      reservationConditions = and(
+        eq(reservationsTable.tenantId, me.tenantId),
+        gte(reservationsTable.createdAt, since),
+        reservationSellerScopeCondition(me),
+      )!;
     }
 
     const payments = await db.select().from(paymentsTable).where(paymentConditions);
@@ -729,16 +732,8 @@ router.get("/dashboard/recent-activity", async (req, res, next: NextFunction): P
     let reservationCondition = eq(reservationsTable.tenantId, me.tenantId);
 
     if (me.role === ROLES.SALES) {
-      const sellerClients = await db.select({ id: clientsTable.id }).from(clientsTable)
-        .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.createdById, me.id)));
-      const sellerClientIds = sellerClients.map(c => c.id);
-      if (sellerClientIds.length > 0) {
-        clientCondition = and(eq(clientsTable.tenantId, me.tenantId), inArray(clientsTable.id, sellerClientIds))!;
-        reservationCondition = and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.clientId, sellerClientIds))!;
-      } else {
-        res.json([]);
-        return;
-      }
+      clientCondition = and(eq(clientsTable.tenantId, me.tenantId), clientSellerScopeCondition(me))!;
+      reservationCondition = and(eq(reservationsTable.tenantId, me.tenantId), reservationSellerScopeCondition(me))!;
     }
 
     const recentClients = await db.select().from(clientsTable)

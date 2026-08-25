@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { reservationsTable, passengersTable, tripsTable, clientsTable, storeCouponsTable, storesTable, storeOrdersTable, loyaltyMembersTable, loyaltyTransactionsTable, loyaltyProgramsTable, referralsTable, referralSettingsTable, referralCampaignsTable, dealsTable, tenantsTable, emailLogsTable, paymentsTable, commissionsTable, vehicleLayoutsTable, reservationInstallmentsTable, boardingLocationsTable } from "@workspace/db";
+import { reservationsTable, passengersTable, tripsTable, clientsTable, storeCouponsTable, storesTable, storeOrdersTable, loyaltyMembersTable, loyaltyTransactionsTable, loyaltyProgramsTable, referralsTable, referralSettingsTable, referralCampaignsTable, dealsTable, tenantsTable, emailLogsTable, paymentsTable, commissionsTable, vehicleLayoutsTable, reservationInstallmentsTable, boardingLocationsTable, usersTable } from "@workspace/db";
 import { eq, and, sql, desc, asc, inArray, notInArray, or, ilike } from "drizzle-orm";
 import { formatBRL } from "@workspace/shared";
 import { generateId, generateVoucherCode } from "../lib/id";
@@ -28,9 +28,44 @@ import { moveDealToStage, cancelDealOnReservationCancellation } from "../service
 import { syncClientDeal } from "../services/pipeline-deal-sync";
 import { recalculateClientFinancials } from "./payments.js";
 import { detectAndNotifyTripOverlap } from "../lib/trip-overlap-notify";
+import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
 
 
 const router = Router();
+
+const ASSIGNABLE_SELLER_ROLES = [ROLES.SALES, ROLES.AGENCY_ADMIN] as const;
+
+async function resolveEffectiveSellerId(
+  me: { id: string; tenantId: string; role: string },
+  requestedSellerId: string | null | undefined,
+): Promise<string | null> {
+  const sellerId = requestedSellerId?.trim() || null;
+
+  if (me.role === ROLES.SALES && sellerId && sellerId !== me.id) {
+    throw new ForbiddenError("Vendedores só podem atribuir reservas a si mesmos", "FORBIDDEN_SELLER_ASSIGNMENT");
+  }
+
+  // A seller's blank selection has an explicit, safe owner: themselves.
+  if (!sellerId) return me.role === ROLES.SALES ? me.id : null;
+
+  const [seller] = await db.select({
+    id: usersTable.id,
+    role: usersTable.role,
+  })
+    .from(usersTable)
+    .where(and(
+      eq(usersTable.id, sellerId),
+      eq(usersTable.tenantId, me.tenantId),
+      eq(usersTable.isActive, true),
+    ))
+    .limit(1);
+
+  if (!seller || !ASSIGNABLE_SELLER_ROLES.includes(seller.role as typeof ASSIGNABLE_SELLER_ROLES[number])) {
+    throw new ValidationError("Vendedor inválido, inativo ou de outra agência", "INVALID_SELLER");
+  }
+
+  return seller.id;
+}
 
 async function generateInstallments(
   reservationId: string,
@@ -439,7 +474,42 @@ router.get("/reservations/stats", async (req, res, next: NextFunction): Promise<
     const me = await requireAuth(req, res);
     if (!me) return;
 
-    const tenantCond = eq(reservationsTable.tenantId, me.tenantId);
+    const { tripId, status, sellerId, dateFrom, dateTo, search, hasAutoRetry } = req.query as Record<string, string>;
+    const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
+    if (tripId) conditions.push(eq(reservationsTable.tripId, tripId));
+    if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
+    if (sellerId) conditions.push(eq(reservationsTable.sellerId, sellerId));
+    if (hasAutoRetry === "true") {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM ${emailLogsTable} WHERE ${emailLogsTable.reservationId} = ${reservationsTable.id} AND ${emailLogsTable.isAutoRetry} = true)` as ReturnType<typeof eq>,
+      );
+    }
+    const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+    if (dateFrom && !ISO_DATE.test(dateFrom)) { next(new ValidationError("dateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (dateTo && !ISO_DATE.test(dateTo)) { next(new ValidationError("dateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (dateFrom) conditions.push(sql`${reservationsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
+    if (dateTo) conditions.push(sql`${reservationsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
+    if (search) {
+      const term = `%${search}%`;
+      const matchingClients = await db.select({ id: clientsTable.id }).from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, me.tenantId),
+          or(
+            ilike(clientsTable.name, term),
+            ilike(clientsTable.email, term),
+            ilike(clientsTable.whatsapp, term),
+            ilike(clientsTable.cpf, term),
+          ),
+        ));
+      const voucherCondition = or(
+        ilike(reservationsTable.voucherCode, term),
+        ilike(reservationsTable.reservationNumber, term),
+      ) as ReturnType<typeof eq>;
+      conditions.push(matchingClients.length > 0
+        ? or(voucherCondition, inArray(reservationsTable.clientId, matchingClients.map(client => client.id))) as ReturnType<typeof eq>
+        : voucherCondition);
+    }
+    if (me.role === ROLES.SALES) conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
 
     const [statsRow] = await db
       .select({
@@ -450,7 +520,7 @@ router.get("/reservations/stats", async (req, res, next: NextFunction): Promise<
         totalOutstanding: sql<number>`coalesce(sum(balance) filter (where status not in (${RESERVATION_STATUS.CANCELLED}, ${RESERVATION_STATUS.COMPLETED})), 0)`,
       })
       .from(reservationsTable)
-      .where(tenantCond);
+      .where(and(...conditions));
 
     res.json({
       total: Number(statsRow?.total ?? 0),
@@ -471,7 +541,7 @@ router.get("/reservations/export", async (req, res, next: NextFunction): Promise
     // Clients are not permitted to export reservation data
     if (me.role === ROLES.CLIENT) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
-    const { tripId, clientId, status, search, createdById, dateFrom, dateTo, commissionSyncStatus, hasAutoRetry } = req.query as Record<string, string>;
+    const { tripId, clientId, status, search, createdById, sellerId, dateFrom, dateTo, commissionSyncStatus, hasAutoRetry } = req.query as Record<string, string>;
 
     const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
     if (dateFrom && !ISO_DATE.test(dateFrom)) { next(new ValidationError("dateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
@@ -482,6 +552,7 @@ router.get("/reservations/export", async (req, res, next: NextFunction): Promise
     if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
     if (commissionSyncStatus) conditions.push(eq(reservationsTable.commissionSyncStatus, commissionSyncStatus));
     if (createdById) conditions.push(eq(reservationsTable.createdById, createdById));
+    if (sellerId) conditions.push(eq(reservationsTable.sellerId, sellerId));
     if (hasAutoRetry === "true") {
       conditions.push(
         sql`EXISTS (SELECT 1 FROM ${emailLogsTable} WHERE ${emailLogsTable.reservationId} = ${reservationsTable.id} AND ${emailLogsTable.isAutoRetry} = true)` as ReturnType<typeof eq>,
@@ -515,47 +586,11 @@ router.get("/reservations/export", async (req, res, next: NextFunction): Promise
       }
     }
 
-    // Mirror the same row-level scoping as GET /reservations
+    // Mirror the same row-level scoping as GET /reservations.
     if (me.role === ROLES.SALES) {
-      const sellerClients = await db.select({ id: clientsTable.id })
-        .from(clientsTable)
-        .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.createdById, me.id)));
-      if (!sellerClients.length && !clientId) {
-        // Sales rep has no clients — return empty CSV
-        const BOM = "\uFEFF";
-        const exportDate = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 10);
-        const exportHeaders = [
-          "Nº Reserva", "Cliente", "E-mail", "WhatsApp", "CPF",
-          "Viagem", "Data de Saída", "Assentos",
-          "Valor Total (R$)", "Pago (R$)", "Saldo (R$)", "Método de Pagamento",
-          "Status", "Origem", "E-mail Auto-reenviado", "Criado em",
-        ];
-        res.setHeader("Content-Type", "text/csv; charset=utf-8");
-        res.setHeader("Content-Disposition", `attachment; filename="reservas-${exportDate}.csv"`);
-        res.send(BOM + exportHeaders.join(","));
-        return;
-      }
-      const sellerClientIds = sellerClients.map(c => c.id);
-      if (clientId) {
-        if (!sellerClientIds.includes(clientId)) {
-          const BOM = "\uFEFF";
-          const exportDate = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 10);
-          const exportHeaders = [
-            "Nº Reserva", "Cliente", "E-mail", "WhatsApp", "CPF",
-            "Viagem", "Data de Saída", "Assentos",
-            "Valor Total (R$)", "Pago (R$)", "Saldo (R$)", "Método de Pagamento",
-            "Status", "Origem", "E-mail Auto-reenviado", "Criado em",
-          ];
-          res.setHeader("Content-Type", "text/csv; charset=utf-8");
-          res.setHeader("Content-Disposition", `attachment; filename="reservas-${exportDate}.csv"`);
-          res.send(BOM + exportHeaders.join(","));
-          return;
-        }
-        conditions.push(eq(reservationsTable.clientId, clientId));
-      } else {
-        conditions.push(inArray(reservationsTable.clientId, sellerClientIds));
-      }
-    } else if (clientId) {
+      conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+    }
+    if (clientId) {
       conditions.push(eq(reservationsTable.clientId, clientId));
     }
 
@@ -674,6 +709,19 @@ router.get("/reservations/trip-overlap", async (req, res, next: NextFunction): P
 
     const { clientId, tripId } = req.query as Record<string, string>;
     if (!clientId || !tripId) { next(new ValidationError("clientId e tripId são obrigatórios", "VALIDATION_ERROR")); return; }
+    if (me.role === ROLES.SALES) {
+      const [client] = await db.select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.id, clientId),
+          eq(clientsTable.tenantId, me.tenantId),
+          // A seller must prove access to the target client before this
+          // availability helper reveals any reservation metadata.
+          clientSellerScopeCondition(me) as ReturnType<typeof eq>,
+        ))
+        .limit(1);
+      if (!client) { throw new NotFoundError("Client not found", "CLIENT_NOT_FOUND"); }
+    }
 
     // Load the target trip dates
     const [targetTrip] = await db.select({ departureDate: tripsTable.departureDate, returnDate: tripsTable.returnDate })
@@ -698,6 +746,7 @@ router.get("/reservations/trip-overlap", async (req, res, next: NextFunction): P
     .where(and(
       eq(reservationsTable.tenantId, me.tenantId),
       eq(reservationsTable.clientId, clientId),
+      ...(me.role === ROLES.SALES ? [reservationSellerScopeCondition(me)] : []),
       notInArray(reservationsTable.tripId, [tripId]),
       notInArray(reservationsTable.status, [RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED]),
       // Overlap: targetStart ≤ otherEnd  AND  targetEnd ≥ otherStart
@@ -724,7 +773,7 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
     if (!me) return;
 
     const {
-      tripId, clientId, status, search, createdById, dateFrom, dateTo,
+      tripId, clientId, status, search, createdById, sellerId, dateFrom, dateTo,
       departureDateFrom, departureDateTo, commissionSyncStatus, hasAutoRetry,
       page = "1", limit = "20",
     } = req.query as Record<string, string>;
@@ -743,6 +792,7 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
     if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
     if (commissionSyncStatus) conditions.push(eq(reservationsTable.commissionSyncStatus, commissionSyncStatus));
     if (createdById) conditions.push(eq(reservationsTable.createdById, createdById));
+    if (sellerId) conditions.push(eq(reservationsTable.sellerId, sellerId));
     if (hasAutoRetry === "true") {
       conditions.push(
         sql`EXISTS (SELECT 1 FROM ${emailLogsTable} WHERE ${emailLogsTable.reservationId} = ${reservationsTable.id} AND ${emailLogsTable.isAutoRetry} = true)` as ReturnType<typeof eq>,
@@ -789,23 +839,8 @@ router.get("/reservations", async (req, res, next: NextFunction): Promise<void> 
       }
       conditions.push(eq(reservationsTable.clientId, clientRecord.id));
     } else if (me.role === ROLES.SALES) {
-      const sellerClients = await db.select({ id: clientsTable.id })
-        .from(clientsTable)
-        .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.createdById, me.id)));
-      if (!sellerClients.length && !clientId) {
-        res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
-        return;
-      }
-      const sellerClientIds = sellerClients.map(c => c.id);
-      if (clientId) {
-        if (!sellerClientIds.includes(clientId)) {
-          res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
-          return;
-        }
-        conditions.push(eq(reservationsTable.clientId, clientId));
-      } else {
-        conditions.push(inArray(reservationsTable.clientId, sellerClientIds));
-      }
+      conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+      if (clientId) conditions.push(eq(reservationsTable.clientId, clientId));
     } else if (clientId) {
       conditions.push(eq(reservationsTable.clientId, clientId));
     }
@@ -887,6 +922,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
 
     const baseValue = parsed.data.totalValue;
     const now = new Date();
+    const effectiveSellerId = await resolveEffectiveSellerId(me, parsed.data.sellerId);
 
     let serverCouponId: string | null = null;
     let serverCouponCode: string | null = null;
@@ -1084,7 +1120,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         installments: parsed.data.installments ?? 1,
         commissionPercentage: parsed.data.commissionPercentage ? String(parsed.data.commissionPercentage) : null,
         commissionAmount: parsed.data.commissionAmount ? String(parsed.data.commissionAmount) : null,
-        sellerId: parsed.data.sellerId ?? null,
+        sellerId: effectiveSellerId,
         boardingLocationId: parsed.data.boardingLocationId ?? null,
         status: paidValueNum >= serverFinalTotal ? RESERVATION_STATUS.CONFIRMED : RESERVATION_STATUS.PENDING,
         voucherCode,
@@ -1270,7 +1306,14 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
     enqueueCommissionSync(id, me.tenantId)
       .catch((err) => req.log.error({ err }, "Error enqueuing commission sync after reservation creation"));
     if (reservation.clientId) {
-      syncClientDeal(reservation.clientId, me.tenantId, reservation.tripId, Number(reservation.totalValue), me.id, id)
+      syncClientDeal(
+        reservation.clientId,
+        me.tenantId,
+        reservation.tripId,
+        Number(reservation.totalValue),
+        effectiveSellerId ?? me.id,
+        id,
+      )
         .catch((err) => req.log.error({ err }, "Error syncing deal after reservation creation"));
       const totalFormatted = formatBRL(Number(reservation.totalValue));
       writeClientActivity(reservation.clientId, "reservation_created", `Reserva ${voucherCode} criada — ${totalFormatted}`, me.id, { voucherCode, totalValue: Number(reservation.totalValue) })
@@ -1414,9 +1457,15 @@ async function requireReservationAccess(
       throw new NotFoundError("Reservation not found", "RESERVATION_NOT_FOUND");
     }
   } else if (me.role === ROLES.SALES) {
-    const [clientRecord] = await db.select({ createdById: clientsTable.createdById }).from(clientsTable)
-      .where(and(eq(clientsTable.id, reservation.clientId!), eq(clientsTable.tenantId, me.tenantId))).limit(1);
-    if (!clientRecord || clientRecord.createdById !== me.id) {
+    const [scopedReservation] = await db.select({ id: reservationsTable.id })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.id, reservation.id),
+        eq(reservationsTable.tenantId, me.tenantId),
+        reservationSellerScopeCondition(me),
+      ))
+      .limit(1);
+    if (!scopedReservation) {
       throw new NotFoundError("Reservation not found", "RESERVATION_NOT_FOUND");
     }
   }
@@ -1463,7 +1512,9 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
       updates.balance = String(computeBalance(parsed.data.totalValue, paidValue));
     }
     if (parsed.data.commissionAmount !== undefined) updates.commissionAmount = parsed.data.commissionAmount != null ? String(parsed.data.commissionAmount) : null;
-    if (parsed.data.sellerId !== undefined) updates.sellerId = parsed.data.sellerId ?? null;
+    if (parsed.data.sellerId !== undefined) {
+      updates.sellerId = await resolveEffectiveSellerId(me, parsed.data.sellerId);
+    }
     if (parsed.data.discountTotal !== undefined) updates.discountTotal = parsed.data.discountTotal != null ? String(parsed.data.discountTotal) : null;
     if (parsed.data.isGratuidade !== undefined && parsed.data.isGratuidade !== null) updates.isGratuidade = parsed.data.isGratuidade;
 
@@ -2074,7 +2125,14 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
 
     if (!reservation) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
     if (parsed.data.totalValue != null && existing.clientId) {
-      syncClientDeal(existing.clientId, me.tenantId, existing.tripId, parsed.data.totalValue, me.id, req.params.id)
+      syncClientDeal(
+        existing.clientId,
+        me.tenantId,
+        existing.tripId,
+        parsed.data.totalValue,
+        reservation.sellerId ?? me.id,
+        req.params.id,
+      )
         .catch((err) => req.log.error({ err }, "Error syncing deal after reservation update"));
     }
     if (isBeingConfirmed && existing.clientId) {

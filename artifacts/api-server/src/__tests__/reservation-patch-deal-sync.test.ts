@@ -34,6 +34,7 @@ import {
   tripsTable,
   clientsTable,
   reservationsTable,
+  passengersTable,
 } from "@workspace/db";
 import { ROLES, RESERVATION_STATUS } from "@workspace/permissions";
 
@@ -168,6 +169,9 @@ const USER_ID      = `pdsu-${RUN}`;
 const TRIP_ID      = `pdst-${RUN}`;
 const CLIENT_ID    = `pdsc-${RUN}`;
 const RES_ID       = `pdsr-${RUN}`;
+const SELLER_ID    = `pdss-${RUN}`;
+const OTHER_CLIENT_ID = `pdsc-other-${RUN}`;
+const OTHER_RES_ID = `pdsr-other-${RUN}`;
 
 // ---------------------------------------------------------------------------
 // Express app factory
@@ -223,6 +227,16 @@ beforeAll(async () => {
     referralCode: `PDS${RUN.toUpperCase()}`,
   });
 
+  await db.insert(usersTable).values({
+    id:           SELLER_ID,
+    clerkId:      `pds_seller_clerk_${RUN}`,
+    tenantId:     TENANT_ID,
+    name:         "Test Seller",
+    email:        `seller-${RUN}@agency.com`,
+    role:         ROLES.SALES,
+    referralCode: `PDSS${RUN.toUpperCase()}`,
+  });
+
   await db.insert(tripsTable).values({
     id:               TRIP_ID,
     tenantId:         TENANT_ID,
@@ -265,6 +279,38 @@ beforeAll(async () => {
     voucherCode:  `VCH${RUN.toUpperCase()}`,
     qrCode:       `QR${RUN.toUpperCase()}`,
   });
+
+  await db.insert(clientsTable).values({
+    id:        OTHER_CLIENT_ID,
+    tenantId:  TENANT_ID,
+    name:      "Other Seller Client",
+    email:     `other-client-${RUN}@test.com`,
+    whatsapp:  "71999990001",
+    createdById: USER_ID,
+  });
+
+  await db.insert(reservationsTable).values({
+    id:           OTHER_RES_ID,
+    tenantId:     TENANT_ID,
+    tripId:       TRIP_ID,
+    clientId:     OTHER_CLIENT_ID,
+    createdById:  USER_ID,
+    status:       RESERVATION_STATUS.PENDING,
+    totalValue:   "1200",
+    paidValue:    "0",
+    balance:      "1200",
+    seats:        [],
+    tripType:     "excursao",
+    voucherCode:  `OTHER${RUN.toUpperCase()}`,
+    qrCode:       `QR-OTHER${RUN.toUpperCase()}`,
+  });
+
+  await db.insert(passengersTable).values({
+    id: `pdsp-${RUN}`,
+    reservationId: RES_ID,
+    name: "Visible Passenger",
+    ageCategory: "adult",
+  });
 });
 
 afterAll(async () => {
@@ -280,6 +326,10 @@ afterAll(async () => {
 
 afterEach(() => {
   mockSyncClientDeal.mockClear();
+  vi.mocked(requireAuth).mockResolvedValue({
+    id: USER_ID, tenantId: TENANT_ID, role: ROLES.AGENCY_ADMIN,
+    clerkId: `pds_clerk_${RUN}`, name: "Test Admin", email: `admin-${RUN}@test.com`,
+  } as never);
 });
 
 // ---------------------------------------------------------------------------
@@ -326,6 +376,59 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
 
     // Guard condition: `parsed.data.totalValue != null` must be false → no call
     expect(mockSyncClientDeal).not.toHaveBeenCalled();
+  });
+
+  it("3 — keeps the responsible seller when a reservation total is synchronized to the pipeline", async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .patch(`/api/reservations/${RES_ID}`)
+      .send({ sellerId: SELLER_ID, totalValue: 1600 });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockSyncClientDeal).toHaveBeenCalledWith(
+      CLIENT_ID, TENANT_ID, TRIP_ID, 1600, SELLER_ID, RES_ID,
+    );
+  });
+
+  it("4 — scopes list, stats, details and passengers to reservations assigned to the seller", async () => {
+    await db.update(reservationsTable).set({ sellerId: SELLER_ID })
+      .where(eq(reservationsTable.id, RES_ID));
+    vi.mocked(requireAuth).mockResolvedValue({
+      id: SELLER_ID, tenantId: TENANT_ID, role: ROLES.SALES,
+      clerkId: `pds_seller_clerk_${RUN}`, name: "Test Seller", email: `seller-${RUN}@agency.com`,
+    } as never);
+    const app = buildApp();
+
+    const [list, stats, detail, passengers, outside] = await Promise.all([
+      request(app).get("/api/reservations"),
+      request(app).get("/api/reservations/stats"),
+      request(app).get(`/api/reservations/${RES_ID}`),
+      request(app).get(`/api/reservations/${RES_ID}/passengers`),
+      request(app).get(`/api/reservations/${OTHER_RES_ID}`),
+    ]);
+
+    expect(list.status).toBe(200);
+    expect(list.body.data.map((reservation: { id: string }) => reservation.id)).toEqual([RES_ID]);
+    expect(stats.status).toBe(200);
+    expect(stats.body.total).toBe(1);
+    expect(detail.status).toBe(200);
+    expect(passengers.status).toBe(200);
+    expect(passengers.body).toHaveLength(1);
+    expect(outside.status).toBe(404);
+  });
+
+  it("5 — does not reveal overlap metadata for another seller's client", async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      id: SELLER_ID, tenantId: TENANT_ID, role: ROLES.SALES,
+      clerkId: `pds_seller_clerk_${RUN}`, name: "Test Seller", email: `seller-${RUN}@agency.com`,
+    } as never);
+
+    const response = await request(buildApp())
+      .get(`/api/reservations/trip-overlap?clientId=${OTHER_CLIENT_ID}&tripId=${TRIP_ID}`);
+
+    expect(response.status).toBe(404);
   });
 
 });

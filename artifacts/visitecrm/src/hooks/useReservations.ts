@@ -61,7 +61,7 @@ export function useReservations(options?: UseReservationsOptions) {
     status: statusFilter || undefined,
     tripId: tripFilter || undefined,
     search: search || undefined,
-    createdById: sellerFilter || undefined,
+    sellerId: sellerFilter || undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
     hasAutoRetry: hasAutoRetryFilter || undefined,
@@ -69,7 +69,15 @@ export function useReservations(options?: UseReservationsOptions) {
     limit: PAGE_SIZE,
   });
 
-  const { data: stats, refetch: refetchStats } = useGetReservationStats();
+  const { data: stats, refetch: refetchStats } = useGetReservationStats({
+    status: statusFilter || undefined,
+    tripId: tripFilter || undefined,
+    search: search || undefined,
+    sellerId: sellerFilter || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    hasAutoRetry: hasAutoRetryFilter || undefined,
+  });
   const { data: tripsData } = useListTrips({ limit: 100 });
   const { data: usersRaw } = useListUsers();
   const { data: boardingRaw } = useListBoardingLocations();
