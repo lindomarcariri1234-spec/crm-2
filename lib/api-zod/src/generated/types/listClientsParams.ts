@@ -14,6 +14,10 @@ export type ListClientsParams = {
   /**
    * @nullable
    */
+  cpf?: string | null;
+  /**
+   * @nullable
+   */
   status?: string | null;
   /**
    * @nullable

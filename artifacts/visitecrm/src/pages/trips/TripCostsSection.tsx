@@ -111,10 +111,10 @@ function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
         notes: values.notes || null,
       };
       if (cost) {
-        await updateCost.mutateAsync({ tripId, costId: cost.id, data: payload });
+        await updateCost.mutateAsync({ id: tripId, costId: cost.id, data: payload });
         toast({ title: "Custo atualizado" });
       } else {
-        await createCost.mutateAsync({ tripId, data: payload });
+        await createCost.mutateAsync({ id: tripId, data: payload });
         toast({ title: "Custo adicionado" });
       }
       onSaved();
@@ -250,7 +250,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     if (!confirm("Remover este custo?")) return;
     setDeletingId(id);
     try {
-      await deleteCost.mutateAsync({ tripId, costId: id });
+      await deleteCost.mutateAsync({ id: tripId, costId: id });
       toast({ title: "Custo removido" });
       refetch();
     } catch {

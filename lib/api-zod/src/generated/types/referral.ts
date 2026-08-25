@@ -61,4 +61,14 @@ export interface Referral {
   convertedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** @nullable */
+  fraudFlag?: boolean | null;
+  /** @nullable */
+  fraudReason?: string | null;
+  /** @nullable */
+  expiryWarning7SentAt?: string | null;
+  /** @nullable */
+  expiryWarning1SentAt?: string | null;
+  /** @nullable */
+  bonusReleaseNotifiedAt?: string | null;
 }

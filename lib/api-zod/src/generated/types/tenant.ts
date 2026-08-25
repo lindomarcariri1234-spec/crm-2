@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { TenantSettings } from "./tenantSettings";
 
 export interface Tenant {
   id: string;
@@ -27,5 +28,8 @@ export interface Tenant {
   website?: string | null;
   /** @nullable */
   reservationPrefix?: string | null;
+  prefixLocked?: boolean;
+  /** @nullable */
+  settings?: TenantSettings;
   createdAt: string;
 }

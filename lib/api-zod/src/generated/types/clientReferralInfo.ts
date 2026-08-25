@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { ClientReferralInfoAttemptLogsItem } from "./clientReferralInfoAttemptLogsItem";
 import type { Referral } from "./referral";
 
 export interface ClientReferralInfo {
@@ -14,4 +15,10 @@ export interface ClientReferralInfo {
   successfulReferrals: number;
   referralEarnings: number;
   referrals: Referral[];
+  /** @nullable */
+  referralCodeStatus?: string | null;
+  /** @nullable */
+  referralSuspendedAttemptAt?: string | null;
+  referralSuspendedAttemptCount?: number;
+  attemptLogs?: ClientReferralInfoAttemptLogsItem[];
 }

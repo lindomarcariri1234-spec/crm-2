@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { ReservationBoardingLocation } from "./reservationBoardingLocation";
 import type { ReservationClient } from "./reservationClient";
 import type { ReservationStatus } from "./reservationStatus";
 import type { TripSummary } from "./tripSummary";
@@ -50,6 +51,8 @@ export interface Reservation {
   notes?: string | null;
   /** @nullable */
   boardingLocationId?: string | null;
+  /** @nullable */
+  boardingLocation?: ReservationBoardingLocation;
   /** @nullable */
   storeOrderId?: string | null;
   /** @nullable */

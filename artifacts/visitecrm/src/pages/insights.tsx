@@ -1610,8 +1610,8 @@ export default function Insights() {
                     <div key={item.label} className="flex items-center gap-3">
                       <span className="text-sm text-muted-foreground w-32 shrink-0">{item.label}</span>
                       <div className="flex-1 bg-muted rounded-full h-5 overflow-hidden">
-                        <div className="h-5 rounded-full flex items-center justify-end pr-2" style={{ width: `${Math.max((item.value / max) * 100, 2)}%`, backgroundColor: item.color }}>
-                          <span className="text-xs font-medium text-white">{item.value}</span>
+                        <div className="h-5 rounded-full flex items-center justify-end pr-2" style={{ width: `${Math.max(((item.value ?? 0) / max) * 100, 2)}%`, backgroundColor: item.color }}>
+                          <span className="text-xs font-medium text-white">{item.value ?? 0}</span>
                         </div>
                       </div>
                     </div>
@@ -1686,7 +1686,7 @@ export default function Insights() {
                     <span className="text-sm text-muted-foreground">Indicações geradas</span>
                     <div className="flex items-center gap-2">
                       <span className="font-semibold">{mk.referrals}</span>
-                      <GrowthBadge value={pctChange(mk.referrals, mk.referralsPrev)} />
+                      <GrowthBadge value={pctChange(mk.referrals ?? 0, mk.referralsPrev ?? 0)} />
                     </div>
                   </div>
                   <div className="flex justify-between items-center py-2 border-b">

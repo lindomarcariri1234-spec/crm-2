@@ -33,6 +33,7 @@ export interface ReferralSettings {
   expiryWarning7DaysEnabled: boolean;
   expiryWarning1DayEnabled: boolean;
   bonusReleaseEmailEnabled: boolean;
+  loyaltyPointsEmailEnabled?: boolean;
   pointsPerReferral: number;
   gracePeriodDays: number;
   bonusValidityDays: number;

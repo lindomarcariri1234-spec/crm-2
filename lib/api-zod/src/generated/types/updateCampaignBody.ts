@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { UpdateCampaignBodyTriggerConfig } from "./updateCampaignBodyTriggerConfig";
 
 export interface UpdateCampaignBody {
   /** @nullable */
@@ -15,4 +16,10 @@ export interface UpdateCampaignBody {
   scheduledAt?: string | null;
   /** @nullable */
   content?: string | null;
+  /** @nullable */
+  subject?: string | null;
+  /** @nullable */
+  autoEnabled?: boolean | null;
+  /** @nullable */
+  triggerConfig?: UpdateCampaignBodyTriggerConfig;
 }

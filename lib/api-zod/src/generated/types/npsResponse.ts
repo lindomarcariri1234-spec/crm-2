@@ -15,5 +15,13 @@ export interface NpsResponse {
   feedback?: string | null;
   /** @nullable */
   clientName?: string | null;
+  /** @nullable */
+  scoreTransport?: number | null;
+  /** @nullable */
+  scoreService?: number | null;
+  /** @nullable */
+  scoreOrganization?: number | null;
+  /** @nullable */
+  scoreGuide?: number | null;
   createdAt: string;
 }

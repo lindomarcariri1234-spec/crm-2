@@ -18,6 +18,7 @@ export interface Plan {
   maxClients: number;
   maxTrips: number;
   features: string[];
+  supportedFeatures?: string[];
   isActive: boolean;
   isFeatured: boolean;
   createdAt: string;

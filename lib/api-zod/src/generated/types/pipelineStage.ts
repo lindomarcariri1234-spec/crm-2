@@ -15,4 +15,5 @@ export interface PipelineStage {
   isDefaultWeb: boolean;
   dealsCount: number;
   dealsValue: number;
+  pipelineId?: string;
 }

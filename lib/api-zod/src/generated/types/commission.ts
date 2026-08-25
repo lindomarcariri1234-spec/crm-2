@@ -24,4 +24,6 @@ export interface Commission {
   /** @nullable */
   paidAt?: string | null;
   createdAt: string;
+  /** @nullable */
+  sellerName?: string | null;
 }

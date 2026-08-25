@@ -10,6 +10,9 @@ import type { Seat } from "./seat";
 export interface SeatMap {
   tripId: string;
   layout: string;
+  /** @nullable */
+  numberingType?: string | null;
+  floors?: number;
   totalSeats: number;
   /** Number of columns in the seat layout grid */
   cols?: number;

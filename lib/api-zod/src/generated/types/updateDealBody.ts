@@ -25,4 +25,8 @@ export interface UpdateDealBody {
   reservationId?: string | null;
   /** @nullable */
   tripId?: string | null;
+  /** @nullable */
+  travelReason?: string | null;
+  /** @nullable */
+  followUpNote?: string | null;
 }

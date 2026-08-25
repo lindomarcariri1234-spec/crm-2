@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { CampaignTriggerConfig } from "./campaignTriggerConfig";
 
 export interface Campaign {
   id: string;
@@ -22,5 +23,11 @@ export interface Campaign {
   sentCount: number;
   openedCount: number;
   clickedCount: number;
+  deliveredCount?: number;
+  /** @nullable */
+  triggerType?: string | null;
+  /** @nullable */
+  triggerConfig?: CampaignTriggerConfig;
+  autoEnabled?: boolean;
   createdAt: string;
 }

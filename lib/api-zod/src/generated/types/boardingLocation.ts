@@ -18,4 +18,6 @@ export interface BoardingLocation {
   /** @nullable */
   departureTime?: string | null;
   createdAt: string;
+  /** @nullable */
+  sellerName?: string | null;
 }

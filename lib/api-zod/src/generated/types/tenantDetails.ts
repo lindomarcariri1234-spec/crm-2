@@ -24,6 +24,8 @@ export interface TenantDetails {
   planId: string;
   status: string;
   /** @nullable */
+  trialEndsAt?: string | null;
+  /** @nullable */
   cnpj?: string | null;
   /** @nullable */
   address?: string | null;

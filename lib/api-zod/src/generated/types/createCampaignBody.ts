@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CreateCampaignBodyTargetSegment } from "./createCampaignBodyTargetSegment";
+import type { CreateCampaignBodyTriggerConfig } from "./createCampaignBodyTriggerConfig";
 
 export interface CreateCampaignBody {
   name: string;
@@ -16,4 +17,10 @@ export interface CreateCampaignBody {
   targetSegment: CreateCampaignBodyTargetSegment;
   /** @nullable */
   scheduledAt?: string | null;
+  /** @nullable */
+  triggerType?: string | null;
+  /** @nullable */
+  triggerConfig?: CreateCampaignBodyTriggerConfig;
+  /** @nullable */
+  autoEnabled?: boolean | null;
 }

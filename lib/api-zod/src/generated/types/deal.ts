@@ -46,5 +46,25 @@ export interface Deal {
   /** @nullable */
   clientName?: string | null;
   /** @nullable */
+  clientWhatsapp?: string | null;
+  /** @nullable */
+  clientEmail?: string | null;
+  /** @nullable */
+  clientPhone?: string | null;
+  /** @nullable */
+  clientCpf?: string | null;
+  /** @nullable */
+  clientClassification?: string | null;
+  /** @nullable */
+  clientCity?: string | null;
+  /** @nullable */
+  clientState?: string | null;
+  /** @nullable */
+  clientOutstandingBalance?: number | null;
+  /** @nullable */
+  travelReason?: string | null;
+  /** @nullable */
+  followUpNote?: string | null;
+  /** @nullable */
   ownerName?: string | null;
 }

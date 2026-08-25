@@ -95,8 +95,10 @@ import type {
   CreateUserBody,
   CreateVehicleBody,
   DashboardCharts,
+  DashboardComparativePoint,
   DashboardFunnel,
   DashboardSummary,
+  DashboardTopCustomer,
   Deal,
   DeletePayment200,
   Destination,
@@ -105,17 +107,21 @@ import type {
   ExpenseListResponse,
   FeatureFlag,
   FinancialSummary,
+  FreePassengerCheckIn,
   GenerateClientReferralCode200,
   GetBirthdayHistoryParams,
   GetBirthdayUpcomingParams,
   GetCalendarCallbackParams,
   GetDashboardChartsParams,
   GetDashboardRevenueChartParams,
+  GetInsightsSummaryParams,
+  GetNpsSummaryParams,
   GetPublicReferralInfo200,
   GetPublicReferralInfoParams,
   GetReservationStatsParams,
   GetSalesCycleParams,
   HealthStatus,
+  InsightsSummary,
   Invoice,
   InvoiceWithTenant,
   ListAdminAuditLogsParams,
@@ -157,6 +163,7 @@ import type {
   Pipeline,
   PipelineStage,
   Plan,
+  PlansStripeHealth,
   PlatformSetting,
   Product,
   ProductCategory,
@@ -167,10 +174,12 @@ import type {
   ReferralValidationResult,
   RepairSeatDrift,
   RepairSystemHealth,
+  ResendExpiryWarningParams,
   Reservation,
   ReservationListResponse,
   ReservationStats,
   RetryCommissionSync200,
+  ReverseReferralBonusBody,
   SalesCycleData,
   SalesGoal,
   SeatMap,
@@ -186,6 +195,8 @@ import type {
   Tenant,
   TenantDetails,
   TenantWithCount,
+  TestWhatsAppMessageBody,
+  TestWhatsAppMessageResult,
   TrackPublicReferralVisit200,
   TrackPublicReferralVisitBody,
   Trip,
@@ -231,6 +242,8 @@ import type {
   ValidatePublicReferralCodeBody,
   Vehicle,
   VehicleLayout,
+  WhatsAppBroadcastBody,
+  WhatsAppBroadcastResult,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -12429,41 +12442,57 @@ export const useSendNpsSurvey = <
 /**
  * @summary Get NPS summary and score
  */
-export const getGetNpsSummaryUrl = () => {
-  return `/api/nps/summary`;
+export const getGetNpsSummaryUrl = (params?: GetNpsSummaryParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/nps/summary?${stringifiedParams}`
+    : `/api/nps/summary`;
 };
 
 export const getNpsSummary = async (
+  params?: GetNpsSummaryParams,
   options?: RequestInit,
 ): Promise<NpsSummary> => {
-  return customFetch<NpsSummary>(getGetNpsSummaryUrl(), {
+  return customFetch<NpsSummary>(getGetNpsSummaryUrl(params), {
     ...options,
     method: "GET",
   });
 };
 
-export const getGetNpsSummaryQueryKey = () => {
-  return [`/api/nps/summary`] as const;
+export const getGetNpsSummaryQueryKey = (params?: GetNpsSummaryParams) => {
+  return [`/api/nps/summary`, ...(params ? [params] : [])] as const;
 };
 
 export const getGetNpsSummaryQueryOptions = <
   TData = Awaited<ReturnType<typeof getNpsSummary>>,
   TError = ErrorType<unknown>,
->(options?: {
-  query?: UseQueryOptions<
-    Awaited<ReturnType<typeof getNpsSummary>>,
-    TError,
-    TData
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}) => {
+>(
+  params?: GetNpsSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getNpsSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getGetNpsSummaryQueryKey();
+  const queryKey = queryOptions?.queryKey ?? getGetNpsSummaryQueryKey(params);
 
   const queryFn: QueryFunction<Awaited<ReturnType<typeof getNpsSummary>>> = ({
     signal,
-  }) => getNpsSummary({ signal, ...requestOptions });
+  }) => getNpsSummary(params, { signal, ...requestOptions });
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof getNpsSummary>>,
@@ -12484,15 +12513,18 @@ export type GetNpsSummaryQueryError = ErrorType<unknown>;
 export function useGetNpsSummary<
   TData = Awaited<ReturnType<typeof getNpsSummary>>,
   TError = ErrorType<unknown>,
->(options?: {
-  query?: UseQueryOptions<
-    Awaited<ReturnType<typeof getNpsSummary>>,
-    TError,
-    TData
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getGetNpsSummaryQueryOptions(options);
+>(
+  params?: GetNpsSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getNpsSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetNpsSummaryQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
@@ -19610,3 +19642,1119 @@ export function useGetCalendarCallback<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Check active Stripe prices for platform plans
+ */
+export const getGetPlansStripeHealthUrl = () => {
+  return `/api/admin/plans/stripe-health`;
+};
+
+export const getPlansStripeHealth = async (
+  options?: RequestInit,
+): Promise<PlansStripeHealth> => {
+  return customFetch<PlansStripeHealth>(getGetPlansStripeHealthUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPlansStripeHealthQueryKey = () => {
+  return [`/api/admin/plans/stripe-health`] as const;
+};
+
+export const getGetPlansStripeHealthQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPlansStripeHealth>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPlansStripeHealth>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPlansStripeHealthQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPlansStripeHealth>>
+  > = ({ signal }) => getPlansStripeHealth({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPlansStripeHealth>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPlansStripeHealthQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPlansStripeHealth>>
+>;
+export type GetPlansStripeHealthQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Check active Stripe prices for platform plans
+ */
+
+export function useGetPlansStripeHealth<
+  TData = Awaited<ReturnType<typeof getPlansStripeHealth>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPlansStripeHealth>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPlansStripeHealthQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get twelve-month revenue, expense, profit, and reservation comparison
+ */
+export const getGetDashboardComparativeUrl = () => {
+  return `/api/dashboard/comparative`;
+};
+
+export const getDashboardComparative = async (
+  options?: RequestInit,
+): Promise<DashboardComparativePoint[]> => {
+  return customFetch<DashboardComparativePoint[]>(
+    getGetDashboardComparativeUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetDashboardComparativeQueryKey = () => {
+  return [`/api/dashboard/comparative`] as const;
+};
+
+export const getGetDashboardComparativeQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDashboardComparative>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDashboardComparative>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetDashboardComparativeQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDashboardComparative>>
+  > = ({ signal }) => getDashboardComparative({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDashboardComparative>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetDashboardComparativeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDashboardComparative>>
+>;
+export type GetDashboardComparativeQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get twelve-month revenue, expense, profit, and reservation comparison
+ */
+
+export function useGetDashboardComparative<
+  TData = Awaited<ReturnType<typeof getDashboardComparative>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDashboardComparative>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetDashboardComparativeQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get the five highest-spending customers
+ */
+export const getGetDashboardTopCustomersUrl = () => {
+  return `/api/dashboard/top-customers`;
+};
+
+export const getDashboardTopCustomers = async (
+  options?: RequestInit,
+): Promise<DashboardTopCustomer[]> => {
+  return customFetch<DashboardTopCustomer[]>(getGetDashboardTopCustomersUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetDashboardTopCustomersQueryKey = () => {
+  return [`/api/dashboard/top-customers`] as const;
+};
+
+export const getGetDashboardTopCustomersQueryOptions = <
+  TData = Awaited<ReturnType<typeof getDashboardTopCustomers>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDashboardTopCustomers>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetDashboardTopCustomersQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getDashboardTopCustomers>>
+  > = ({ signal }) => getDashboardTopCustomers({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getDashboardTopCustomers>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetDashboardTopCustomersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getDashboardTopCustomers>>
+>;
+export type GetDashboardTopCustomersQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the five highest-spending customers
+ */
+
+export function useGetDashboardTopCustomers<
+  TData = Awaited<ReturnType<typeof getDashboardTopCustomers>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getDashboardTopCustomers>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetDashboardTopCustomersQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get the strategic insights summary
+ */
+export const getGetInsightsSummaryUrl = (params?: GetInsightsSummaryParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/insights/summary?${stringifiedParams}`
+    : `/api/insights/summary`;
+};
+
+export const getInsightsSummary = async (
+  params?: GetInsightsSummaryParams,
+  options?: RequestInit,
+): Promise<InsightsSummary> => {
+  return customFetch<InsightsSummary>(getGetInsightsSummaryUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetInsightsSummaryQueryKey = (
+  params?: GetInsightsSummaryParams,
+) => {
+  return [`/api/insights/summary`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetInsightsSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getInsightsSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetInsightsSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getInsightsSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetInsightsSummaryQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getInsightsSummary>>
+  > = ({ signal }) => getInsightsSummary(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getInsightsSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetInsightsSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getInsightsSummary>>
+>;
+export type GetInsightsSummaryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the strategic insights summary
+ */
+
+export function useGetInsightsSummary<
+  TData = Awaited<ReturnType<typeof getInsightsSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetInsightsSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getInsightsSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetInsightsSummaryQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Regenerate a trip seat map from its vehicle layout
+ */
+export const getRegenerateTripSeatMapUrl = (id: string) => {
+  return `/api/trips/${id}/regenerate-seat-map`;
+};
+
+export const regenerateTripSeatMap = async (
+  id: string,
+  options?: RequestInit,
+): Promise<Trip> => {
+  return customFetch<Trip>(getRegenerateTripSeatMapUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRegenerateTripSeatMapMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateTripSeatMap>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof regenerateTripSeatMap>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["regenerateTripSeatMap"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof regenerateTripSeatMap>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return regenerateTripSeatMap(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RegenerateTripSeatMapMutationResult = NonNullable<
+  Awaited<ReturnType<typeof regenerateTripSeatMap>>
+>;
+
+export type RegenerateTripSeatMapMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Regenerate a trip seat map from its vehicle layout
+ */
+export const useRegenerateTripSeatMap = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof regenerateTripSeatMap>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof regenerateTripSeatMap>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getRegenerateTripSeatMapMutationOptions(options));
+};
+
+/**
+ * @summary Check in a complimentary trip passenger
+ */
+export const getCheckInFreePassengerUrl = (id: string, fpId: string) => {
+  return `/api/trips/${id}/free-passengers/${fpId}/check-in`;
+};
+
+export const checkInFreePassenger = async (
+  id: string,
+  fpId: string,
+  options?: RequestInit,
+): Promise<FreePassengerCheckIn> => {
+  return customFetch<FreePassengerCheckIn>(
+    getCheckInFreePassengerUrl(id, fpId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getCheckInFreePassengerMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof checkInFreePassenger>>,
+    TError,
+    { id: string; fpId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof checkInFreePassenger>>,
+  TError,
+  { id: string; fpId: string },
+  TContext
+> => {
+  const mutationKey = ["checkInFreePassenger"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof checkInFreePassenger>>,
+    { id: string; fpId: string }
+  > = (props) => {
+    const { id, fpId } = props ?? {};
+
+    return checkInFreePassenger(id, fpId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CheckInFreePassengerMutationResult = NonNullable<
+  Awaited<ReturnType<typeof checkInFreePassenger>>
+>;
+
+export type CheckInFreePassengerMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Check in a complimentary trip passenger
+ */
+export const useCheckInFreePassenger = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof checkInFreePassenger>>,
+    TError,
+    { id: string; fpId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof checkInFreePassenger>>,
+  TError,
+  { id: string; fpId: string },
+  TContext
+> => {
+  return useMutation(getCheckInFreePassengerMutationOptions(options));
+};
+
+/**
+ * @summary Undo a complimentary passenger check-in
+ */
+export const getUndoCheckInFreePassengerUrl = (id: string, fpId: string) => {
+  return `/api/trips/${id}/free-passengers/${fpId}/check-in`;
+};
+
+export const undoCheckInFreePassenger = async (
+  id: string,
+  fpId: string,
+  options?: RequestInit,
+): Promise<FreePassengerCheckIn> => {
+  return customFetch<FreePassengerCheckIn>(
+    getUndoCheckInFreePassengerUrl(id, fpId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getUndoCheckInFreePassengerMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof undoCheckInFreePassenger>>,
+    TError,
+    { id: string; fpId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof undoCheckInFreePassenger>>,
+  TError,
+  { id: string; fpId: string },
+  TContext
+> => {
+  const mutationKey = ["undoCheckInFreePassenger"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof undoCheckInFreePassenger>>,
+    { id: string; fpId: string }
+  > = (props) => {
+    const { id, fpId } = props ?? {};
+
+    return undoCheckInFreePassenger(id, fpId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UndoCheckInFreePassengerMutationResult = NonNullable<
+  Awaited<ReturnType<typeof undoCheckInFreePassenger>>
+>;
+
+export type UndoCheckInFreePassengerMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Undo a complimentary passenger check-in
+ */
+export const useUndoCheckInFreePassenger = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof undoCheckInFreePassenger>>,
+    TError,
+    { id: string; fpId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof undoCheckInFreePassenger>>,
+  TError,
+  { id: string; fpId: string },
+  TContext
+> => {
+  return useMutation(getUndoCheckInFreePassengerMutationOptions(options));
+};
+
+/**
+ * @summary Queue a WhatsApp broadcast for trip passengers
+ */
+export const getBroadcastTripWhatsAppUrl = (id: string) => {
+  return `/api/trips/${id}/whatsapp-broadcast`;
+};
+
+export const broadcastTripWhatsApp = async (
+  id: string,
+  whatsAppBroadcastBody: WhatsAppBroadcastBody,
+  options?: RequestInit,
+): Promise<WhatsAppBroadcastResult> => {
+  return customFetch<WhatsAppBroadcastResult>(getBroadcastTripWhatsAppUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(whatsAppBroadcastBody),
+  });
+};
+
+export const getBroadcastTripWhatsAppMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof broadcastTripWhatsApp>>,
+    TError,
+    { id: string; data: BodyType<WhatsAppBroadcastBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof broadcastTripWhatsApp>>,
+  TError,
+  { id: string; data: BodyType<WhatsAppBroadcastBody> },
+  TContext
+> => {
+  const mutationKey = ["broadcastTripWhatsApp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof broadcastTripWhatsApp>>,
+    { id: string; data: BodyType<WhatsAppBroadcastBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return broadcastTripWhatsApp(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type BroadcastTripWhatsAppMutationResult = NonNullable<
+  Awaited<ReturnType<typeof broadcastTripWhatsApp>>
+>;
+export type BroadcastTripWhatsAppMutationBody = BodyType<WhatsAppBroadcastBody>;
+export type BroadcastTripWhatsAppMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Queue a WhatsApp broadcast for trip passengers
+ */
+export const useBroadcastTripWhatsApp = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof broadcastTripWhatsApp>>,
+    TError,
+    { id: string; data: BodyType<WhatsAppBroadcastBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof broadcastTripWhatsApp>>,
+  TError,
+  { id: string; data: BodyType<WhatsAppBroadcastBody> },
+  TContext
+> => {
+  return useMutation(getBroadcastTripWhatsAppMutationOptions(options));
+};
+
+/**
+ * @summary Mark a converted referral bonus as paid
+ */
+export const getPayReferralBonusUrl = (id: string) => {
+  return `/api/referrals/${id}/pay-bonus`;
+};
+
+export const payReferralBonus = async (
+  id: string,
+  options?: RequestInit,
+): Promise<Referral> => {
+  return customFetch<Referral>(getPayReferralBonusUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getPayReferralBonusMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof payReferralBonus>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof payReferralBonus>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["payReferralBonus"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof payReferralBonus>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return payReferralBonus(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type PayReferralBonusMutationResult = NonNullable<
+  Awaited<ReturnType<typeof payReferralBonus>>
+>;
+
+export type PayReferralBonusMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Mark a converted referral bonus as paid
+ */
+export const usePayReferralBonus = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof payReferralBonus>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof payReferralBonus>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getPayReferralBonusMutationOptions(options));
+};
+
+/**
+ * @summary Resend a referral expiry warning
+ */
+export const getResendExpiryWarningUrl = (
+  id: string,
+  params: ResendExpiryWarningParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/referrals/${id}/resend-expiry-warning?${stringifiedParams}`
+    : `/api/referrals/${id}/resend-expiry-warning`;
+};
+
+export const resendExpiryWarning = async (
+  id: string,
+  params: ResendExpiryWarningParams,
+  options?: RequestInit,
+): Promise<Referral> => {
+  return customFetch<Referral>(getResendExpiryWarningUrl(id, params), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResendExpiryWarningMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendExpiryWarning>>,
+    TError,
+    { id: string; params: ResendExpiryWarningParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resendExpiryWarning>>,
+  TError,
+  { id: string; params: ResendExpiryWarningParams },
+  TContext
+> => {
+  const mutationKey = ["resendExpiryWarning"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resendExpiryWarning>>,
+    { id: string; params: ResendExpiryWarningParams }
+  > = (props) => {
+    const { id, params } = props ?? {};
+
+    return resendExpiryWarning(id, params, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResendExpiryWarningMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resendExpiryWarning>>
+>;
+
+export type ResendExpiryWarningMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Resend a referral expiry warning
+ */
+export const useResendExpiryWarning = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendExpiryWarning>>,
+    TError,
+    { id: string; params: ResendExpiryWarningParams },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resendExpiryWarning>>,
+  TError,
+  { id: string; params: ResendExpiryWarningParams },
+  TContext
+> => {
+  return useMutation(getResendExpiryWarningMutationOptions(options));
+};
+
+/**
+ * @summary Resend a referral bonus release notification
+ */
+export const getResendBonusReleaseUrl = (id: string) => {
+  return `/api/referrals/${id}/resend-bonus-release`;
+};
+
+export const resendBonusRelease = async (
+  id: string,
+  options?: RequestInit,
+): Promise<Referral> => {
+  return customFetch<Referral>(getResendBonusReleaseUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getResendBonusReleaseMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendBonusRelease>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resendBonusRelease>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["resendBonusRelease"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resendBonusRelease>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return resendBonusRelease(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResendBonusReleaseMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resendBonusRelease>>
+>;
+
+export type ResendBonusReleaseMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Resend a referral bonus release notification
+ */
+export const useResendBonusRelease = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resendBonusRelease>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resendBonusRelease>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getResendBonusReleaseMutationOptions(options));
+};
+
+/**
+ * @summary Reverse a converted referral bonus
+ */
+export const getReverseReferralBonusUrl = (id: string) => {
+  return `/api/referrals/${id}/reverse`;
+};
+
+export const reverseReferralBonus = async (
+  id: string,
+  reverseReferralBonusBody: ReverseReferralBonusBody,
+  options?: RequestInit,
+): Promise<Referral> => {
+  return customFetch<Referral>(getReverseReferralBonusUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(reverseReferralBonusBody),
+  });
+};
+
+export const getReverseReferralBonusMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reverseReferralBonus>>,
+    TError,
+    { id: string; data: BodyType<ReverseReferralBonusBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof reverseReferralBonus>>,
+  TError,
+  { id: string; data: BodyType<ReverseReferralBonusBody> },
+  TContext
+> => {
+  const mutationKey = ["reverseReferralBonus"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof reverseReferralBonus>>,
+    { id: string; data: BodyType<ReverseReferralBonusBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return reverseReferralBonus(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReverseReferralBonusMutationResult = NonNullable<
+  Awaited<ReturnType<typeof reverseReferralBonus>>
+>;
+export type ReverseReferralBonusMutationBody =
+  BodyType<ReverseReferralBonusBody>;
+export type ReverseReferralBonusMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Reverse a converted referral bonus
+ */
+export const useReverseReferralBonus = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reverseReferralBonus>>,
+    TError,
+    { id: string; data: BodyType<ReverseReferralBonusBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof reverseReferralBonus>>,
+  TError,
+  { id: string; data: BodyType<ReverseReferralBonusBody> },
+  TContext
+> => {
+  return useMutation(getReverseReferralBonusMutationOptions(options));
+};
+
+/**
+ * @summary Send a referral WhatsApp test message to the configured agency number
+ */
+export const getTestWhatsAppMessageUrl = () => {
+  return `/api/referral-settings/test-whatsapp`;
+};
+
+export const testWhatsAppMessage = async (
+  testWhatsAppMessageBody: TestWhatsAppMessageBody,
+  options?: RequestInit,
+): Promise<TestWhatsAppMessageResult> => {
+  return customFetch<TestWhatsAppMessageResult>(getTestWhatsAppMessageUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(testWhatsAppMessageBody),
+  });
+};
+
+export const getTestWhatsAppMessageMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof testWhatsAppMessage>>,
+    TError,
+    { data: BodyType<TestWhatsAppMessageBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof testWhatsAppMessage>>,
+  TError,
+  { data: BodyType<TestWhatsAppMessageBody> },
+  TContext
+> => {
+  const mutationKey = ["testWhatsAppMessage"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof testWhatsAppMessage>>,
+    { data: BodyType<TestWhatsAppMessageBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return testWhatsAppMessage(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TestWhatsAppMessageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof testWhatsAppMessage>>
+>;
+export type TestWhatsAppMessageMutationBody = BodyType<TestWhatsAppMessageBody>;
+export type TestWhatsAppMessageMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Send a referral WhatsApp test message to the configured agency number
+ */
+export const useTestWhatsAppMessage = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof testWhatsAppMessage>>,
+    TError,
+    { data: BodyType<TestWhatsAppMessageBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof testWhatsAppMessage>>,
+  TError,
+  { data: BodyType<TestWhatsAppMessageBody> },
+  TContext
+> => {
+  return useMutation(getTestWhatsAppMessageMutationOptions(options));
+};

@@ -26,6 +26,8 @@ export interface UserProfile {
   commissionFixed?: number;
   /** @nullable */
   monthlyGoal?: number | null;
+  /** @nullable */
+  trialDaysLeft?: number | null;
   createdAt: string;
   tenant?: UserProfileTenant;
 }

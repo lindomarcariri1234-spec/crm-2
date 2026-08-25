@@ -5,11 +5,14 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { CreateLoyaltyProgramBodyTierBenefits } from "./createLoyaltyProgramBodyTierBenefits";
 
 export interface CreateLoyaltyProgramBody {
-  name: string;
+  /** @nullable */
+  name?: string | null;
   description?: string;
   pointsPerReal?: string;
   realPerPoint?: string;
   minRedeemPoints?: number;
+  tierBenefits?: CreateLoyaltyProgramBodyTierBenefits;
 }

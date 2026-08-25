@@ -68,4 +68,28 @@ export interface Client {
   isNew?: boolean | null;
   /** @nullable */
   message?: string | null;
+  /** @nullable */
+  customerCode?: string | null;
+  preferredDestinationTypes?: string[];
+  travelInterests?: string[];
+  /** @nullable */
+  travelPreference?: string | null;
+  /** @nullable */
+  likesPhotosVideos?: boolean | null;
+  /** @nullable */
+  ambassadorOptIn?: boolean | null;
+  /** @nullable */
+  purchaseScore?: number | null;
+  /** @nullable */
+  recompraScore?: number | null;
+  /** @nullable */
+  churnScore?: number | null;
+  /** @nullable */
+  nboReasoning?: string | null;
+  /** @nullable */
+  nboTripName?: string | null;
+  /** @nullable */
+  nboTripDestination?: string | null;
+  /** @nullable */
+  scoresCalculatedAt?: string | null;
 }

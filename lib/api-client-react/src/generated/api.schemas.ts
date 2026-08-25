@@ -5,6 +5,410 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+export interface PlanStripeHealthItem {
+  planId: string;
+  slug: string;
+  name: string;
+  isActive: boolean;
+  monthlyOk: boolean;
+  annualOk: boolean;
+  isFree: boolean;
+  error?: string;
+}
+
+export interface PlansStripeHealth {
+  stripeConfigured: boolean;
+  plans: PlanStripeHealthItem[];
+}
+
+export interface DashboardComparativePoint {
+  month: string;
+  key: string;
+  revenue: number;
+  expenses: number;
+  profit: number;
+  reservations: number;
+  /** @nullable */
+  revenueGrowth: number | null;
+  /** @nullable */
+  expensesGrowth: number | null;
+  /** @nullable */
+  profitGrowth: number | null;
+  /** @nullable */
+  reservationsGrowth: number | null;
+}
+
+export interface DashboardTopCustomer {
+  id: string;
+  name: string;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  photoUrl?: string | null;
+  totalSpent: number;
+  reservationCount: number;
+}
+
+export type InsightsMetricPillarCampaignsByTypeItem = {
+  type: string;
+  count: number;
+};
+
+export type InsightsMetricPillarExpenseCategoriesItem = {
+  category: string;
+  total: number;
+};
+
+export type InsightsMetricPillarTopDestinationsItem = {
+  name: string;
+  count: number;
+};
+
+/**
+ * Numeric metrics shared by the strategic insights pillars.
+ */
+export interface InsightsMetricPillar {
+  totalRevenue: number;
+  totalRevenuePrev: number;
+  totalExpenses: number;
+  totalExpensesPrev: number;
+  netProfit: number;
+  netProfitPrev: number;
+  profitMargin: number;
+  profitMarginPrev: number;
+  newClients: number;
+  newClientsPrev: number;
+  confirmedReservations: number;
+  confirmedReservationsPrev: number;
+  activeTrips: number;
+  conversionRate: number;
+  conversionRatePrev: number;
+  occupancyRate?: number;
+  /** @nullable */
+  momGrowth?: number | null;
+  /** @nullable */
+  yoyGrowth?: number | null;
+  /** @nullable */
+  averageNps?: number | null;
+  /** @nullable */
+  averageNpsPrev?: number | null;
+  openDeals?: number;
+  openDealsPrev?: number;
+  wonDeals?: number;
+  wonDealsPrev?: number;
+  pipelineValue?: number;
+  pipelineValuePrev?: number;
+  avgTicket?: number;
+  avgTicketPrev?: number;
+  newReservations?: number;
+  newReservationsPrev?: number;
+  repeatClients?: number;
+  repeatClientsPrev?: number;
+  cancellations?: number;
+  cancellationsPrev?: number;
+  activeClients?: number;
+  activeClientsPrev?: number;
+  ltv?: number;
+  ltvPrev?: number;
+  cac?: number;
+  cacPrev?: number;
+  totalLeads?: number;
+  totalLeadsPrev?: number;
+  referrals?: number;
+  referralsPrev?: number;
+  convertedReferrals?: number;
+  convertedReferralsPrev?: number;
+  activeCampaigns?: number;
+  newCampaigns?: number;
+  sentCampaigns?: number;
+  totalSentMessages?: number;
+  totalRecipients: number;
+  totalOpenedMessages: number;
+  totalClickedMessages: number;
+  openRate: number;
+  clickRate: number;
+  campaignRoi: number;
+  commissions: number;
+  commissionsPrev: number;
+  receivable: number;
+  payable: number;
+  overdue: number;
+  totalAvailableSeats?: number;
+  checkedInPassengers: number;
+  checkedInPassengersPrev: number;
+  newTrips?: number;
+  newTripsPrev?: number;
+  totalSuppliers?: number;
+  newSuppliers?: number;
+  newSuppliersPrev?: number;
+  avgReservationsPerTrip: number;
+  revenuePerTrip: number;
+  revenuePerTripPrev: number;
+  loyaltyMembers: number;
+  loyaltyActiveMembers: number;
+  promoterClients: number;
+  promoterClientsPrev: number;
+  retentionRate: number;
+  retentionRatePrev: number;
+  referralRate: number;
+  referralRatePrev: number;
+  totalClients?: number;
+  totalDestinations?: number;
+  newDestinations90d?: number;
+  newDestinationsPrev90d?: number;
+  campaignsByType: InsightsMetricPillarCampaignsByTypeItem[];
+  expenseCategories: InsightsMetricPillarExpenseCategoriesItem[];
+  avgReservationsPerTripPrev: number;
+  loyaltyNewMembers: number;
+  topDestinations: InsightsMetricPillarTopDestinationsItem[];
+}
+
+export interface InsightsExecutive {
+  totalRevenue: number;
+  totalRevenuePrev: number;
+  netProfit: number;
+  netProfitPrev: number;
+  totalClients: number;
+  newClients: number;
+  newClientsPrev: number;
+  confirmedReservations: number;
+  confirmedReservationsPrev: number;
+  occupancyRate: number;
+  conversionRate: number;
+  conversionRatePrev: number;
+  /** @nullable */
+  averageNps: number | null;
+  /** @nullable */
+  averageNpsPrev: number | null;
+  activeTrips: number;
+  profitMargin: number;
+  profitMarginPrev: number;
+  /** @nullable */
+  momGrowth: number | null;
+  /** @nullable */
+  yoyGrowth: number | null;
+}
+
+export interface InsightsCommercial {
+  openDeals: number;
+  openDealsPrev: number;
+  wonDeals: number;
+  wonDealsPrev: number;
+  pipelineValue: number;
+  pipelineValuePrev: number;
+  avgTicket: number;
+  avgTicketPrev: number;
+  newReservations: number;
+  newReservationsPrev: number;
+  cancellations: number;
+  cancellationsPrev: number;
+  conversionRate: number;
+  conversionRatePrev: number;
+  totalLeads: number;
+  totalLeadsPrev: number;
+  repeatClients: number;
+  repeatClientsPrev: number;
+  activeClients: number;
+  activeClientsPrev: number;
+  ltv: number;
+  ltvPrev: number;
+  cac: number;
+  cacPrev: number;
+}
+
+export type InsightsMarketingCampaignsByTypeItem = {
+  type: string;
+  count: number;
+};
+
+export interface InsightsMarketing {
+  newClients: number;
+  newClientsPrev: number;
+  referrals: number;
+  referralsPrev: number;
+  convertedReferrals: number;
+  convertedReferralsPrev: number;
+  totalLeads: number;
+  totalLeadsPrev: number;
+  conversionRate: number;
+  conversionRatePrev: number;
+  activeCampaigns: number;
+  newCampaigns: number;
+  newCampaignsPrev: number;
+  sentCampaigns: number;
+  totalSentMessages: number;
+  totalOpenedMessages: number;
+  totalClickedMessages: number;
+  totalRecipients: number;
+  openRate: number;
+  clickRate: number;
+  campaignRoi: number;
+  campaignsByType: InsightsMarketingCampaignsByTypeItem[];
+}
+
+export type InsightsFinancialExpenseCategoriesItem = {
+  category: string;
+  total: number;
+};
+
+export interface InsightsFinancial {
+  totalRevenue: number;
+  totalRevenuePrev: number;
+  totalExpenses: number;
+  totalExpensesPrev: number;
+  commissions: number;
+  commissionsPrev: number;
+  netProfit: number;
+  netProfitPrev: number;
+  profitMargin: number;
+  profitMarginPrev: number;
+  receivable: number;
+  payable: number;
+  overdue: number;
+  avgTicket: number;
+  avgTicketPrev: number;
+  expenseCategories: InsightsFinancialExpenseCategoriesItem[];
+}
+
+export interface InsightsOperational {
+  activeTrips: number;
+  newTrips: number;
+  newTripsPrev: number;
+  occupancyRate: number;
+  totalAvailableSeats: number;
+  avgReservationsPerTrip: number;
+  avgReservationsPerTripPrev: number;
+  confirmedReservations: number;
+  confirmedReservationsPrev: number;
+  cancellations: number;
+  cancellationsPrev: number;
+  revenuePerTrip: number;
+  revenuePerTripPrev: number;
+  totalSuppliers: number;
+  newSuppliers: number;
+  newSuppliersPrev: number;
+  checkedInPassengers: number;
+  checkedInPassengersPrev: number;
+  /** @nullable */
+  averageNps: number | null;
+  /** @nullable */
+  averageNpsPrev: number | null;
+}
+
+export interface InsightsRetention {
+  loyaltyMembers: number;
+  loyaltyActiveMembers: number;
+  loyaltyNewMembers: number;
+  loyaltyNewMembersPrev: number;
+  /** @nullable */
+  averageNps: number | null;
+  /** @nullable */
+  averageNpsPrev: number | null;
+  promoterClients: number;
+  promoterClientsPrev: number;
+  retentionRate: number;
+  retentionRatePrev: number;
+  referralRate: number;
+  referralRatePrev: number;
+  newClients: number;
+  newClientsPrev: number;
+  repeatClients: number;
+  repeatClientsPrev: number;
+  totalClients: number;
+  convertedReferrals: number;
+  convertedReferralsPrev: number;
+}
+
+export type InsightsExpansionTopDestinationsItem = {
+  name: string;
+  count: number;
+};
+
+export interface InsightsExpansion {
+  newTrips: number;
+  newTripsPrev: number;
+  newDestinations90d: number;
+  newDestinationsPrev90d: number;
+  totalDestinations: number;
+  newSuppliers: number;
+  newSuppliersPrev: number;
+  totalSuppliers: number;
+  revenuePerTrip: number;
+  revenuePerTripPrev: number;
+  topDestinations: InsightsExpansionTopDestinationsItem[];
+  avgTicket: number;
+  avgTicketPrev: number;
+  totalRevenue: number;
+  totalRevenuePrev: number;
+  /** @nullable */
+  momGrowth: number | null;
+  /** @nullable */
+  yoyGrowth: number | null;
+}
+
+export interface InsightsSummary {
+  executive: InsightsExecutive;
+  commercial: InsightsCommercial;
+  marketing: InsightsMarketing;
+  financial: InsightsFinancial;
+  operational: InsightsOperational;
+  retention: InsightsRetention;
+  expansion: InsightsExpansion;
+}
+
+export interface FreePassengerCheckIn {
+  id: string;
+  /** @nullable */
+  checkedInAt: string | null;
+}
+
+export type WhatsAppBroadcastBodyFilter =
+  (typeof WhatsAppBroadcastBodyFilter)[keyof typeof WhatsAppBroadcastBodyFilter];
+
+export const WhatsAppBroadcastBodyFilter = {
+  all: "all",
+  confirmed: "confirmed",
+  pending: "pending",
+} as const;
+
+export interface WhatsAppBroadcastBody {
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  messageTemplate: string;
+  filter: WhatsAppBroadcastBodyFilter;
+}
+
+export interface WhatsAppBroadcastResult {
+  queued: number;
+  skipped: number;
+}
+
+export interface ReverseReferralBonusBody {
+  /** @minLength 1 */
+  reason: string;
+}
+
+export type TestWhatsAppMessageBodyType =
+  (typeof TestWhatsAppMessageBodyType)[keyof typeof TestWhatsAppMessageBodyType];
+
+export const TestWhatsAppMessageBodyType = {
+  converted: "converted",
+  bonusPaid: "bonusPaid",
+  reversed: "reversed",
+  share: "share",
+} as const;
+
+export interface TestWhatsAppMessageBody {
+  type: TestWhatsAppMessageBodyType;
+  message?: string;
+}
+
+export interface TestWhatsAppMessageResult {
+  success: boolean;
+}
+
 export type ReservationStatus =
   (typeof ReservationStatus)[keyof typeof ReservationStatus];
 
@@ -145,6 +549,19 @@ export interface DashboardSummary {
   totalPayable: number;
   avgReservationsPerTrip: number;
   totalFaturamento: number;
+  overduePayments?: number;
+  overduePaymentsCount?: number;
+  conversionRate?: number;
+  pipelineLeads?: number;
+  salesThisMonth?: number;
+  retentionRate?: number;
+  loyaltyPointsIssued?: number;
+  /** @nullable */
+  avgNps?: number | null;
+  tripsThisMonth?: number;
+  pendingReservations?: number;
+  profit?: number;
+  profitMargin?: number;
 }
 
 export type DashboardChartsTopDestinationsItem = {
@@ -250,6 +667,8 @@ export interface TripSummary {
   status: string;
   /** @nullable */
   coverImage?: string | null;
+  /** @nullable */
+  numberingType?: string | null;
 }
 
 export interface ActivityItem {
@@ -325,6 +744,30 @@ export interface Client {
   isNew?: boolean | null;
   /** @nullable */
   message?: string | null;
+  /** @nullable */
+  customerCode?: string | null;
+  preferredDestinationTypes?: string[];
+  travelInterests?: string[];
+  /** @nullable */
+  travelPreference?: string | null;
+  /** @nullable */
+  likesPhotosVideos?: boolean | null;
+  /** @nullable */
+  ambassadorOptIn?: boolean | null;
+  /** @nullable */
+  purchaseScore?: number | null;
+  /** @nullable */
+  recompraScore?: number | null;
+  /** @nullable */
+  churnScore?: number | null;
+  /** @nullable */
+  nboReasoning?: string | null;
+  /** @nullable */
+  nboTripName?: string | null;
+  /** @nullable */
+  nboTripDestination?: string | null;
+  /** @nullable */
+  scoresCalculatedAt?: string | null;
 }
 
 export interface ClientListResponse {
@@ -1052,17 +1495,33 @@ export interface Seat {
   /** @nullable */
   passengerName?: string | null;
   /** @nullable */
+  occupantName?: string | null;
+  floor?: number;
+  /** @nullable */
   reservationId?: string | null;
 }
 
 export interface SeatMap {
   tripId: string;
   layout: string;
+  /** @nullable */
+  numberingType?: string | null;
+  floors?: number;
   totalSeats: number;
   /** Number of columns in the seat layout grid */
   cols?: number;
   seats: Seat[];
 }
+
+/**
+ * @nullable
+ */
+export type ReservationBoardingLocation = {
+  id?: string;
+  name?: string;
+  /** @nullable */
+  time?: string | null;
+} | null;
 
 export type ReservationClient = {
   id: string;
@@ -1116,6 +1575,8 @@ export interface Reservation {
   notes?: string | null;
   /** @nullable */
   boardingLocationId?: string | null;
+  /** @nullable */
+  boardingLocation?: ReservationBoardingLocation;
   /** @nullable */
   storeOrderId?: string | null;
   /** @nullable */
@@ -1632,6 +2093,26 @@ export interface Deal {
   /** @nullable */
   clientName?: string | null;
   /** @nullable */
+  clientWhatsapp?: string | null;
+  /** @nullable */
+  clientEmail?: string | null;
+  /** @nullable */
+  clientPhone?: string | null;
+  /** @nullable */
+  clientCpf?: string | null;
+  /** @nullable */
+  clientClassification?: string | null;
+  /** @nullable */
+  clientCity?: string | null;
+  /** @nullable */
+  clientState?: string | null;
+  /** @nullable */
+  clientOutstandingBalance?: number | null;
+  /** @nullable */
+  travelReason?: string | null;
+  /** @nullable */
+  followUpNote?: string | null;
+  /** @nullable */
   ownerName?: string | null;
 }
 
@@ -1651,6 +2132,10 @@ export interface CreateDealBody {
   leadWhatsapp?: string | null;
   /** @nullable */
   tripId?: string | null;
+  /** @nullable */
+  travelReason?: string | null;
+  /** @nullable */
+  followUpNote?: string | null;
   /** @nullable */
   reservationId?: string | null;
   /** @nullable */
@@ -1675,6 +2160,10 @@ export interface UpdateDealBody {
   reservationId?: string | null;
   /** @nullable */
   tripId?: string | null;
+  /** @nullable */
+  travelReason?: string | null;
+  /** @nullable */
+  followUpNote?: string | null;
 }
 
 export interface Pipeline {
@@ -1707,6 +2196,7 @@ export interface PipelineStage {
   isDefaultWeb: boolean;
   dealsCount: number;
   dealsValue: number;
+  pipelineId?: string;
 }
 
 export interface Message {
@@ -2254,6 +2744,11 @@ export interface PublicStoreInfo {
   seatMapEnabled: boolean;
 }
 
+/**
+ * @nullable
+ */
+export type CampaignTriggerConfig = { [key: string]: unknown } | null;
+
 export interface Campaign {
   id: string;
   name: string;
@@ -2270,10 +2765,21 @@ export interface Campaign {
   sentCount: number;
   openedCount: number;
   clickedCount: number;
+  deliveredCount?: number;
+  /** @nullable */
+  triggerType?: string | null;
+  /** @nullable */
+  triggerConfig?: CampaignTriggerConfig;
+  autoEnabled?: boolean;
   createdAt: string;
 }
 
 export type CreateCampaignBodyTargetSegment = { [key: string]: unknown };
+
+/**
+ * @nullable
+ */
+export type CreateCampaignBodyTriggerConfig = { [key: string]: unknown } | null;
 
 export interface CreateCampaignBody {
   name: string;
@@ -2284,7 +2790,18 @@ export interface CreateCampaignBody {
   targetSegment: CreateCampaignBodyTargetSegment;
   /** @nullable */
   scheduledAt?: string | null;
+  /** @nullable */
+  triggerType?: string | null;
+  /** @nullable */
+  triggerConfig?: CreateCampaignBodyTriggerConfig;
+  /** @nullable */
+  autoEnabled?: boolean | null;
 }
+
+/**
+ * @nullable
+ */
+export type UpdateCampaignBodyTriggerConfig = { [key: string]: unknown } | null;
 
 export interface UpdateCampaignBody {
   /** @nullable */
@@ -2295,6 +2812,12 @@ export interface UpdateCampaignBody {
   scheduledAt?: string | null;
   /** @nullable */
   content?: string | null;
+  /** @nullable */
+  subject?: string | null;
+  /** @nullable */
+  autoEnabled?: boolean | null;
+  /** @nullable */
+  triggerConfig?: UpdateCampaignBodyTriggerConfig;
 }
 
 export interface NpsResponse {
@@ -2306,6 +2829,14 @@ export interface NpsResponse {
   feedback?: string | null;
   /** @nullable */
   clientName?: string | null;
+  /** @nullable */
+  scoreTransport?: number | null;
+  /** @nullable */
+  scoreService?: number | null;
+  /** @nullable */
+  scoreOrganization?: number | null;
+  /** @nullable */
+  scoreGuide?: number | null;
   createdAt: string;
 }
 
@@ -2322,7 +2853,20 @@ export interface NpsSummary {
   passives: number;
   detractors: number;
   total: number;
+  /** @nullable */
+  avgTransport?: number | null;
+  /** @nullable */
+  avgService?: number | null;
+  /** @nullable */
+  avgOrganization?: number | null;
+  /** @nullable */
+  avgGuide?: number | null;
 }
+
+/**
+ * @nullable
+ */
+export type UserProfileTenantSettings = { [key: string]: unknown } | null;
 
 export type UserProfileTenant = {
   id: string;
@@ -2338,6 +2882,8 @@ export type UserProfileTenant = {
   planId: string;
   /** @nullable */
   website?: string | null;
+  /** @nullable */
+  settings?: UserProfileTenantSettings;
 } | null;
 
 export interface UserProfile {
@@ -2358,6 +2904,8 @@ export interface UserProfile {
   commissionFixed?: number;
   /** @nullable */
   monthlyGoal?: number | null;
+  /** @nullable */
+  trialDaysLeft?: number | null;
   createdAt: string;
   tenant?: UserProfileTenant;
 }
@@ -2479,8 +3027,20 @@ export const SystemHealthRedisStatus = {
   unavailable: "unavailable",
 } as const;
 
+/**
+ * @nullable
+ */
+export type SystemHealthRedisDailyUsage = {
+  commandCount: number;
+  maxCommands: number;
+  usagePct: number;
+  warningThresholdPct: number;
+} | null;
+
 export interface SystemHealthRedis {
   status: SystemHealthRedisStatus;
+  /** @nullable */
+  dailyUsage?: SystemHealthRedisDailyUsage;
 }
 
 export interface SystemHealthStripeWebhookAuditEndpoint {
@@ -2511,10 +3071,22 @@ export interface SystemHealthStripeSyncTables {
   checkedAt: string | null;
 }
 
+export type SystemHealthWorkers = { [key: string]: unknown };
+
+export type SystemHealthSeatDrift = { [key: string]: unknown };
+
+export type SystemHealthPipelineOrphans = { [key: string]: unknown };
+
+export type SystemHealthClientFinancialDrift = { [key: string]: unknown };
+
 export interface SystemHealth {
   redis: SystemHealthRedis;
   stripeWebhookAudit: SystemHealthStripeWebhookAudit;
   stripeSyncTables: SystemHealthStripeSyncTables;
+  workers?: SystemHealthWorkers;
+  seatDrift?: SystemHealthSeatDrift;
+  pipelineOrphans?: SystemHealthPipelineOrphans;
+  clientFinancialDrift?: SystemHealthClientFinancialDrift;
 }
 
 export interface RepairSystemHealth {
@@ -2538,6 +3110,11 @@ export interface AdminStats {
   mrr: number;
 }
 
+/**
+ * @nullable
+ */
+export type TenantSettings = { [key: string]: unknown } | null;
+
 export interface Tenant {
   id: string;
   name: string;
@@ -2559,6 +3136,9 @@ export interface Tenant {
   website?: string | null;
   /** @nullable */
   reservationPrefix?: string | null;
+  prefixLocked?: boolean;
+  /** @nullable */
+  settings?: TenantSettings;
   createdAt: string;
 }
 
@@ -2573,6 +3153,13 @@ export interface CreateTenantBody {
   planId?: string;
   status?: string;
 }
+
+export type UpdateTenantBodyNpsCategories = {
+  transport?: boolean;
+  service?: boolean;
+  organization?: boolean;
+  guide?: boolean;
+};
 
 export interface UpdateTenantBody {
   name?: string;
@@ -2598,6 +3185,9 @@ export interface UpdateTenantBody {
   website?: string | null;
   /** @nullable */
   reservationPrefix?: string | null;
+  npsCategories?: UpdateTenantBodyNpsCategories;
+  /** @nullable */
+  trialEndsAt?: string | null;
   /** @nullable */
   birthdayMessagesEnabled?: boolean | null;
 }
@@ -2614,6 +3204,8 @@ export interface BoardingLocation {
   /** @nullable */
   departureTime?: string | null;
   createdAt: string;
+  /** @nullable */
+  sellerName?: string | null;
 }
 
 export interface CreateBoardingLocationBody {
@@ -2673,6 +3265,8 @@ export interface Commission {
   /** @nullable */
   paidAt?: string | null;
   createdAt: string;
+  /** @nullable */
+  sellerName?: string | null;
 }
 
 export interface UpdateCommissionBody {
@@ -2735,6 +3329,16 @@ export interface Referral {
   convertedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  /** @nullable */
+  fraudFlag?: boolean | null;
+  /** @nullable */
+  fraudReason?: string | null;
+  /** @nullable */
+  expiryWarning7SentAt?: string | null;
+  /** @nullable */
+  expiryWarning1SentAt?: string | null;
+  /** @nullable */
+  bonusReleaseNotifiedAt?: string | null;
 }
 
 export interface CreateReferralBody {
@@ -2796,6 +3400,7 @@ export interface ReferralSettings {
   expiryWarning7DaysEnabled: boolean;
   expiryWarning1DayEnabled: boolean;
   bonusReleaseEmailEnabled: boolean;
+  loyaltyPointsEmailEnabled?: boolean;
   pointsPerReferral: number;
   gracePeriodDays: number;
   bonusValidityDays: number;
@@ -2826,6 +3431,7 @@ export interface UpdateReferralSettingsBody {
   expiryWarning7DaysEnabled?: boolean;
   expiryWarning1DayEnabled?: boolean;
   bonusReleaseEmailEnabled?: boolean;
+  loyaltyPointsEmailEnabled?: boolean;
   pointsPerReferral?: number;
   gracePeriodDays?: number;
   bonusValidityDays?: number;
@@ -2834,6 +3440,14 @@ export interface UpdateReferralSettingsBody {
   maxReferralsPerUser?: number;
 }
 
+export type ClientReferralInfoAttemptLogsItem = {
+  id: string;
+  storeSlug: string;
+  /** @nullable */
+  ipAddress?: string | null;
+  createdAt: string;
+};
+
 export interface ClientReferralInfo {
   /** @nullable */
   referralCode: string | null;
@@ -2841,6 +3455,12 @@ export interface ClientReferralInfo {
   successfulReferrals: number;
   referralEarnings: number;
   referrals: Referral[];
+  /** @nullable */
+  referralCodeStatus?: string | null;
+  /** @nullable */
+  referralSuspendedAttemptAt?: string | null;
+  referralSuspendedAttemptCount?: number;
+  attemptLogs?: ClientReferralInfoAttemptLogsItem[];
 }
 
 export interface Coupon {
@@ -2909,6 +3529,8 @@ export interface CreateDocumentBody {
   entityId?: string;
 }
 
+export type LoyaltyProgramTierBenefits = { [key: string]: string[] };
+
 export interface LoyaltyProgram {
   id: string;
   tenantId: string;
@@ -2919,15 +3541,20 @@ export interface LoyaltyProgram {
   realPerPoint: string;
   minRedeemPoints: number;
   isActive: boolean;
+  tierBenefits?: LoyaltyProgramTierBenefits;
   createdAt: string;
 }
 
+export type CreateLoyaltyProgramBodyTierBenefits = { [key: string]: string[] };
+
 export interface CreateLoyaltyProgramBody {
-  name: string;
+  /** @nullable */
+  name?: string | null;
   description?: string;
   pointsPerReal?: string;
   realPerPoint?: string;
   minRedeemPoints?: number;
+  tierBenefits?: CreateLoyaltyProgramBodyTierBenefits;
 }
 
 export interface LoyaltyMember {
@@ -3241,6 +3868,7 @@ export interface Plan {
   maxClients: number;
   maxTrips: number;
   features: string[];
+  supportedFeatures?: string[];
   isActive: boolean;
   isFeatured: boolean;
   createdAt: string;
@@ -3315,6 +3943,12 @@ export interface InvoiceWithTenant {
   updatedAt: string;
   /** @nullable */
   tenantName?: string | null;
+  /** @nullable */
+  pixCode?: string | null;
+  /** @nullable */
+  pixQrCodeUrl?: string | null;
+  /** @nullable */
+  pixExpiresAt?: string | null;
 }
 
 export interface CreateInvoiceBody {
@@ -3386,6 +4020,8 @@ export interface TenantDetails {
   secondaryColor?: string | null;
   planId: string;
   status: string;
+  /** @nullable */
+  trialEndsAt?: string | null;
   /** @nullable */
   cnpj?: string | null;
   /** @nullable */
@@ -3580,6 +4216,7 @@ export interface CalendarConnectResponse {
 
 export interface CalendarStatus {
   connected: boolean;
+  status?: string;
   tokenValid?: boolean;
   eventsCount: number;
   /** @nullable */
@@ -3762,6 +4399,10 @@ export type ListClientsParams = {
    * @nullable
    */
   search?: string | null;
+  /**
+   * @nullable
+   */
+  cpf?: string | null;
   /**
    * @nullable
    */
@@ -4031,6 +4672,10 @@ export type ListNpsResponsesParams = {
    * @nullable
    */
   classification?: string | null;
+  /**
+   * @nullable
+   */
+  tripId?: string | null;
   page?: number;
   limit?: number;
 };
@@ -4042,6 +4687,21 @@ export type SendNpsSurveyBody = {
 
 export type SendNpsSurvey200 = {
   links: NpsSendLink[];
+};
+
+export type GetNpsSummaryParams = {
+  /**
+   * @nullable
+   */
+  tripId?: string | null;
+  /**
+   * @nullable
+   */
+  dateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  dateTo?: string | null;
 };
 
 export type CalculateCommissionParams = {
@@ -4149,3 +4809,28 @@ export type GetCalendarCallbackParams = {
    */
   error?: string;
 };
+
+export type GetInsightsSummaryParams = {
+  period?: GetInsightsSummaryPeriod;
+};
+
+export type GetInsightsSummaryPeriod =
+  (typeof GetInsightsSummaryPeriod)[keyof typeof GetInsightsSummaryPeriod];
+
+export const GetInsightsSummaryPeriod = {
+  month: "month",
+  quarter: "quarter",
+  year: "year",
+} as const;
+
+export type ResendExpiryWarningParams = {
+  window: ResendExpiryWarningWindow;
+};
+
+export type ResendExpiryWarningWindow =
+  (typeof ResendExpiryWarningWindow)[keyof typeof ResendExpiryWarningWindow];
+
+export const ResendExpiryWarningWindow = {
+  NUMBER_1: 1,
+  NUMBER_7: 7,
+} as const;

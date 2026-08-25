@@ -8,6 +8,7 @@
 
 export interface CalendarStatus {
   connected: boolean;
+  status?: string;
   tokenValid?: boolean;
   eventsCount: number;
   /** @nullable */

@@ -16,5 +16,8 @@ export interface Seat {
   /** @nullable */
   passengerName?: string | null;
   /** @nullable */
+  occupantName?: string | null;
+  floor?: number;
+  /** @nullable */
   reservationId?: string | null;
 }

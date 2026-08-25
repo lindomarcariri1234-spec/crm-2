@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { UpdateTenantBodyNpsCategories } from "./updateTenantBodyNpsCategories";
 
 export interface UpdateTenantBody {
   name?: string;
@@ -30,6 +31,9 @@ export interface UpdateTenantBody {
   website?: string | null;
   /** @nullable */
   reservationPrefix?: string | null;
+  npsCategories?: UpdateTenantBodyNpsCategories;
+  /** @nullable */
+  trialEndsAt?: string | null;
   /** @nullable */
   birthdayMessagesEnabled?: boolean | null;
 }

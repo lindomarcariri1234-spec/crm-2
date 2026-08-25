@@ -26,4 +26,10 @@ export interface InvoiceWithTenant {
   updatedAt: string;
   /** @nullable */
   tenantName?: string | null;
+  /** @nullable */
+  pixCode?: string | null;
+  /** @nullable */
+  pixQrCodeUrl?: string | null;
+  /** @nullable */
+  pixExpiresAt?: string | null;
 }

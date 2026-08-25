@@ -33,4 +33,17 @@ export interface DashboardSummary {
   totalPayable: number;
   avgReservationsPerTrip: number;
   totalFaturamento: number;
+  overduePayments?: number;
+  overduePaymentsCount?: number;
+  conversionRate?: number;
+  pipelineLeads?: number;
+  salesThisMonth?: number;
+  retentionRate?: number;
+  loyaltyPointsIssued?: number;
+  /** @nullable */
+  avgNps?: number | null;
+  tripsThisMonth?: number;
+  pendingReservations?: number;
+  profit?: number;
+  profitMargin?: number;
 }

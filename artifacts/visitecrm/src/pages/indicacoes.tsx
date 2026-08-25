@@ -440,7 +440,7 @@ export default function Indicacoes() {
       return;
     }
     try {
-      await testWhatsApp.mutateAsync({ body: { type, message } });
+      await testWhatsApp.mutateAsync({ data: { type, message } });
       toast({ title: "Mensagem de teste enviada!", description: "Verifique o WhatsApp configurado na agência." });
     } catch (err: unknown) {
       const apiError = (err as { data?: { error?: string } })?.data?.error;
@@ -487,7 +487,7 @@ export default function Indicacoes() {
       return;
     }
     try {
-      const updated = await reverseBonus.mutateAsync({ id: reverseBonusTarget.id, body: { reason: reverseBonusReason.trim() } });
+      const updated = await reverseBonus.mutateAsync({ id: reverseBonusTarget.id, data: { reason: reverseBonusReason.trim() } });
       toast({ title: "Bônus revertido com sucesso", description: "O indicador será notificado por e-mail." });
       refetch();
       setReverseBonusDialogOpen(false);
@@ -2510,7 +2510,7 @@ export default function Indicacoes() {
                       disabled={resendWarning.isPending}
                       onClick={() => {
                         resendWarning.mutate(
-                          { id: selectedReferral.id, window: 7 },
+                          { id: selectedReferral.id, params: { window: 7 } },
                           {
                             onSuccess: (updated) => {
                               setSelectedReferral((prev) => prev ? { ...prev, ...updated } : prev);
@@ -2534,7 +2534,7 @@ export default function Indicacoes() {
                       disabled={resendWarning.isPending}
                       onClick={() => {
                         resendWarning.mutate(
-                          { id: selectedReferral.id, window: 1 },
+                          { id: selectedReferral.id, params: { window: 1 } },
                           {
                             onSuccess: (updated) => {
                               setSelectedReferral((prev) => prev ? { ...prev, ...updated } : prev);

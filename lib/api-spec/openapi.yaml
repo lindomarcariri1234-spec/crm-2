@@ -743,6 +743,10 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: cpf
+          in: query
+          schema:
+            type: ["string", "null"]
         - name: status
           in: query
           schema:
@@ -3101,6 +3105,10 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: tripId
+          in: query
+          schema:
+            type: ["string", "null"]
         - name: page
           in: query
           schema:
@@ -3159,6 +3167,19 @@ paths:
       operationId: getNpsSummary
       tags: [nps]
       summary: Get NPS summary and score
+      parameters:
+        - name: tripId
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateTo
+          in: query
+          schema:
+            type: ["string", "null"]
       responses:
         "200":
           description: NPS summary
@@ -4808,8 +4829,729 @@ paths:
         "302":
           description: Redirect to frontend with ?gcal=connected|denied|error
 
+  # ─── CONTRACTS USED BY THE WEB ADMINISTRATION SCREENS ─────────────
+  /admin/plans/stripe-health:
+    get:
+      operationId: getPlansStripeHealth
+      tags: [admin, plans]
+      summary: Check active Stripe prices for platform plans
+      responses:
+        "200":
+          description: Stripe configuration and per-plan price health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlansStripeHealth"
+
+  /dashboard/comparative:
+    get:
+      operationId: getDashboardComparative
+      tags: [dashboard]
+      summary: Get twelve-month revenue, expense, profit, and reservation comparison
+      responses:
+        "200":
+          description: Comparative monthly dashboard data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DashboardComparativePoint"
+
+  /dashboard/top-customers:
+    get:
+      operationId: getDashboardTopCustomers
+      tags: [dashboard]
+      summary: Get the five highest-spending customers
+      responses:
+        "200":
+          description: Top customers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DashboardTopCustomer"
+
+  /insights/summary:
+    get:
+      operationId: getInsightsSummary
+      tags: [insights]
+      summary: Get the strategic insights summary
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [month, quarter, year]
+            default: month
+      responses:
+        "200":
+          description: Seven-pillar business insights summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InsightsSummary"
+
+  /trips/{id}/regenerate-seat-map:
+    post:
+      operationId: regenerateTripSeatMap
+      tags: [trips]
+      summary: Regenerate a trip seat map from its vehicle layout
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trip with its regenerated seat map
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
+
+  /trips/{id}/free-passengers/{fpId}/check-in:
+    post:
+      operationId: checkInFreePassenger
+      tags: [trips]
+      summary: Check in a complimentary trip passenger
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fpId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Check-in recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreePassengerCheckIn"
+    delete:
+      operationId: undoCheckInFreePassenger
+      tags: [trips]
+      summary: Undo a complimentary passenger check-in
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: fpId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Check-in removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreePassengerCheckIn"
+
+  /trips/{id}/whatsapp-broadcast:
+    post:
+      operationId: broadcastTripWhatsApp
+      tags: [trips]
+      summary: Queue a WhatsApp broadcast for trip passengers
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WhatsAppBroadcastBody"
+      responses:
+        "200":
+          description: Broadcast queue result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WhatsAppBroadcastResult"
+
+  /referrals/{id}/pay-bonus:
+    post:
+      operationId: payReferralBonus
+      tags: [Referrals]
+      summary: Mark a converted referral bonus as paid
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Referral with paid bonus details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Referral"
+
+  /referrals/{id}/resend-expiry-warning:
+    post:
+      operationId: resendExpiryWarning
+      tags: [Referrals]
+      summary: Resend a referral expiry warning
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: window
+          in: query
+          required: true
+          schema:
+            type: integer
+            enum: [1, 7]
+      responses:
+        "200":
+          description: Referral with the warning delivery timestamp
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Referral"
+
+  /referrals/{id}/resend-bonus-release:
+    post:
+      operationId: resendBonusRelease
+      tags: [Referrals]
+      summary: Resend a referral bonus release notification
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Referral with the release delivery timestamp
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Referral"
+
+  /referrals/{id}/reverse:
+    patch:
+      operationId: reverseReferralBonus
+      tags: [Referrals]
+      summary: Reverse a converted referral bonus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReverseReferralBonusBody"
+      responses:
+        "200":
+          description: Reversed referral
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Referral"
+
+  /referral-settings/test-whatsapp:
+    post:
+      operationId: testWhatsAppMessage
+      tags: [Referrals]
+      summary: Send a referral WhatsApp test message to the configured agency number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestWhatsAppMessageBody"
+      responses:
+        "200":
+          description: Test message queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestWhatsAppMessageResult"
+
 components:
   schemas:
+    PlanStripeHealthItem:
+      type: object
+      properties:
+        planId:
+          type: string
+        slug:
+          type: string
+        name:
+          type: string
+        isActive:
+          type: boolean
+        monthlyOk:
+          type: boolean
+        annualOk:
+          type: boolean
+        isFree:
+          type: boolean
+        error:
+          type: string
+      required: [planId, slug, name, isActive, monthlyOk, annualOk, isFree]
+    PlansStripeHealth:
+      type: object
+      properties:
+        stripeConfigured:
+          type: boolean
+        plans:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlanStripeHealthItem"
+      required: [stripeConfigured, plans]
+    DashboardComparativePoint:
+      type: object
+      properties:
+        month:
+          type: string
+        key:
+          type: string
+        revenue:
+          type: number
+        expenses:
+          type: number
+        profit:
+          type: number
+        reservations:
+          type: number
+        revenueGrowth:
+          type: [number, "null"]
+        expensesGrowth:
+          type: [number, "null"]
+        profitGrowth:
+          type: [number, "null"]
+        reservationsGrowth:
+          type: [number, "null"]
+      required: [month, key, revenue, expenses, profit, reservations, revenueGrowth, expensesGrowth, profitGrowth, reservationsGrowth]
+    DashboardTopCustomer:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: [string, "null"]
+        photoUrl:
+          type: [string, "null"]
+        totalSpent:
+          type: number
+        reservationCount:
+          type: integer
+      required: [id, name, totalSpent, reservationCount]
+    InsightsMetricPillar:
+      type: object
+      description: Numeric metrics shared by the strategic insights pillars.
+      properties:
+        totalRevenue: { type: number }
+        totalRevenuePrev: { type: number }
+        totalExpenses: { type: number }
+        totalExpensesPrev: { type: number }
+        netProfit: { type: number }
+        netProfitPrev: { type: number }
+        profitMargin: { type: number }
+        profitMarginPrev: { type: number }
+        newClients: { type: number }
+        newClientsPrev: { type: number }
+        confirmedReservations: { type: number }
+        confirmedReservationsPrev: { type: number }
+        activeTrips: { type: number }
+        conversionRate: { type: number }
+        conversionRatePrev: { type: number }
+        occupancyRate: { type: number }
+        momGrowth: { type: [number, "null"] }
+        yoyGrowth: { type: [number, "null"] }
+        averageNps: { type: [number, "null"] }
+        averageNpsPrev: { type: [number, "null"] }
+        openDeals: { type: number }
+        openDealsPrev: { type: number }
+        wonDeals: { type: number }
+        wonDealsPrev: { type: number }
+        pipelineValue: { type: number }
+        pipelineValuePrev: { type: number }
+        avgTicket: { type: number }
+        avgTicketPrev: { type: number }
+        newReservations: { type: number }
+        newReservationsPrev: { type: number }
+        repeatClients: { type: number }
+        repeatClientsPrev: { type: number }
+        cancellations: { type: number }
+        cancellationsPrev: { type: number }
+        activeClients: { type: number }
+        activeClientsPrev: { type: number }
+        ltv: { type: number }
+        ltvPrev: { type: number }
+        cac: { type: number }
+        cacPrev: { type: number }
+        totalLeads: { type: number }
+        totalLeadsPrev: { type: number }
+        referrals: { type: number }
+        referralsPrev: { type: number }
+        convertedReferrals: { type: number }
+        convertedReferralsPrev: { type: number }
+        activeCampaigns: { type: number }
+        newCampaigns: { type: number }
+        sentCampaigns: { type: number }
+        totalSentMessages: { type: number }
+        totalRecipients: { type: number }
+        totalOpenedMessages: { type: number }
+        totalClickedMessages: { type: number }
+        openRate: { type: number }
+        clickRate: { type: number }
+        campaignRoi: { type: number }
+        commissions: { type: number }
+        commissionsPrev: { type: number }
+        receivable: { type: number }
+        payable: { type: number }
+        overdue: { type: number }
+        totalAvailableSeats: { type: number }
+        checkedInPassengers: { type: number }
+        checkedInPassengersPrev: { type: number }
+        newTrips: { type: number }
+        newTripsPrev: { type: number }
+        totalSuppliers: { type: number }
+        newSuppliers: { type: number }
+        newSuppliersPrev: { type: number }
+        avgReservationsPerTrip: { type: number }
+        revenuePerTrip: { type: number }
+        revenuePerTripPrev: { type: number }
+        loyaltyMembers: { type: number }
+        loyaltyActiveMembers: { type: number }
+        promoterClients: { type: number }
+        promoterClientsPrev: { type: number }
+        retentionRate: { type: number }
+        retentionRatePrev: { type: number }
+        referralRate: { type: number }
+        referralRatePrev: { type: number }
+        totalClients: { type: number }
+        totalDestinations: { type: number }
+        newDestinations90d: { type: number }
+        newDestinationsPrev90d: { type: number }
+        campaignsByType:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              count: { type: number }
+            required: [type, count]
+        expenseCategories:
+          type: array
+          items:
+            type: object
+            properties:
+              category: { type: string }
+              total: { type: number }
+            required: [category, total]
+        avgReservationsPerTripPrev: { type: number }
+        loyaltyNewMembers: { type: number }
+        topDestinations:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              count: { type: number }
+            required: [name, count]
+      required:
+        - totalRevenue
+        - totalRevenuePrev
+        - totalExpenses
+        - totalExpensesPrev
+        - netProfit
+        - netProfitPrev
+        - profitMargin
+        - profitMarginPrev
+        - totalRecipients
+        - totalOpenedMessages
+        - totalClickedMessages
+        - openRate
+        - clickRate
+        - campaignRoi
+        - commissions
+        - commissionsPrev
+        - receivable
+        - payable
+        - overdue
+        - avgReservationsPerTrip
+        - avgReservationsPerTripPrev
+        - revenuePerTrip
+        - revenuePerTripPrev
+        - loyaltyMembers
+        - loyaltyActiveMembers
+        - loyaltyNewMembers
+        - retentionRate
+        - retentionRatePrev
+        - referralRate
+        - referralRatePrev
+        - campaignsByType
+        - expenseCategories
+        - topDestinations
+        - newClients
+        - newClientsPrev
+        - confirmedReservations
+        - confirmedReservationsPrev
+        - activeTrips
+        - conversionRate
+        - conversionRatePrev
+        - checkedInPassengers
+        - checkedInPassengersPrev
+        - promoterClients
+        - promoterClientsPrev
+    InsightsExecutive:
+      type: object
+      properties:
+        totalRevenue: { type: number }
+        totalRevenuePrev: { type: number }
+        netProfit: { type: number }
+        netProfitPrev: { type: number }
+        totalClients: { type: number }
+        newClients: { type: number }
+        newClientsPrev: { type: number }
+        confirmedReservations: { type: number }
+        confirmedReservationsPrev: { type: number }
+        occupancyRate: { type: number }
+        conversionRate: { type: number }
+        conversionRatePrev: { type: number }
+        averageNps: { type: [number, "null"] }
+        averageNpsPrev: { type: [number, "null"] }
+        activeTrips: { type: number }
+        profitMargin: { type: number }
+        profitMarginPrev: { type: number }
+        momGrowth: { type: [number, "null"] }
+        yoyGrowth: { type: [number, "null"] }
+      required: [totalRevenue, totalRevenuePrev, netProfit, netProfitPrev, totalClients, newClients, newClientsPrev, confirmedReservations, confirmedReservationsPrev, occupancyRate, conversionRate, conversionRatePrev, averageNps, averageNpsPrev, activeTrips, profitMargin, profitMarginPrev, momGrowth, yoyGrowth]
+    InsightsCommercial:
+      type: object
+      properties:
+        openDeals: { type: number }
+        openDealsPrev: { type: number }
+        wonDeals: { type: number }
+        wonDealsPrev: { type: number }
+        pipelineValue: { type: number }
+        pipelineValuePrev: { type: number }
+        avgTicket: { type: number }
+        avgTicketPrev: { type: number }
+        newReservations: { type: number }
+        newReservationsPrev: { type: number }
+        cancellations: { type: number }
+        cancellationsPrev: { type: number }
+        conversionRate: { type: number }
+        conversionRatePrev: { type: number }
+        totalLeads: { type: number }
+        totalLeadsPrev: { type: number }
+        repeatClients: { type: number }
+        repeatClientsPrev: { type: number }
+        activeClients: { type: number }
+        activeClientsPrev: { type: number }
+        ltv: { type: number }
+        ltvPrev: { type: number }
+        cac: { type: number }
+        cacPrev: { type: number }
+      required: [openDeals, openDealsPrev, wonDeals, wonDealsPrev, pipelineValue, pipelineValuePrev, avgTicket, avgTicketPrev, newReservations, newReservationsPrev, cancellations, cancellationsPrev, conversionRate, conversionRatePrev, totalLeads, totalLeadsPrev, repeatClients, repeatClientsPrev, activeClients, activeClientsPrev, ltv, ltvPrev, cac, cacPrev]
+    InsightsMarketing:
+      type: object
+      properties:
+        newClients: { type: number }
+        newClientsPrev: { type: number }
+        referrals: { type: number }
+        referralsPrev: { type: number }
+        convertedReferrals: { type: number }
+        convertedReferralsPrev: { type: number }
+        totalLeads: { type: number }
+        totalLeadsPrev: { type: number }
+        conversionRate: { type: number }
+        conversionRatePrev: { type: number }
+        activeCampaigns: { type: number }
+        newCampaigns: { type: number }
+        newCampaignsPrev: { type: number }
+        sentCampaigns: { type: number }
+        totalSentMessages: { type: number }
+        totalOpenedMessages: { type: number }
+        totalClickedMessages: { type: number }
+        totalRecipients: { type: number }
+        openRate: { type: number }
+        clickRate: { type: number }
+        campaignRoi: { type: number }
+        campaignsByType:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              count: { type: number }
+            required: [type, count]
+      required: [newClients, newClientsPrev, referrals, referralsPrev, convertedReferrals, convertedReferralsPrev, totalLeads, totalLeadsPrev, conversionRate, conversionRatePrev, activeCampaigns, newCampaigns, newCampaignsPrev, sentCampaigns, totalSentMessages, totalOpenedMessages, totalClickedMessages, totalRecipients, openRate, clickRate, campaignRoi, campaignsByType]
+    InsightsFinancial:
+      type: object
+      properties:
+        totalRevenue: { type: number }
+        totalRevenuePrev: { type: number }
+        totalExpenses: { type: number }
+        totalExpensesPrev: { type: number }
+        commissions: { type: number }
+        commissionsPrev: { type: number }
+        netProfit: { type: number }
+        netProfitPrev: { type: number }
+        profitMargin: { type: number }
+        profitMarginPrev: { type: number }
+        receivable: { type: number }
+        payable: { type: number }
+        overdue: { type: number }
+        avgTicket: { type: number }
+        avgTicketPrev: { type: number }
+        expenseCategories:
+          type: array
+          items:
+            type: object
+            properties:
+              category: { type: string }
+              total: { type: number }
+            required: [category, total]
+      required: [totalRevenue, totalRevenuePrev, totalExpenses, totalExpensesPrev, commissions, commissionsPrev, netProfit, netProfitPrev, profitMargin, profitMarginPrev, receivable, payable, overdue, avgTicket, avgTicketPrev, expenseCategories]
+    InsightsOperational:
+      type: object
+      properties:
+        activeTrips: { type: number }
+        newTrips: { type: number }
+        newTripsPrev: { type: number }
+        occupancyRate: { type: number }
+        totalAvailableSeats: { type: number }
+        avgReservationsPerTrip: { type: number }
+        avgReservationsPerTripPrev: { type: number }
+        confirmedReservations: { type: number }
+        confirmedReservationsPrev: { type: number }
+        cancellations: { type: number }
+        cancellationsPrev: { type: number }
+        revenuePerTrip: { type: number }
+        revenuePerTripPrev: { type: number }
+        totalSuppliers: { type: number }
+        newSuppliers: { type: number }
+        newSuppliersPrev: { type: number }
+        checkedInPassengers: { type: number }
+        checkedInPassengersPrev: { type: number }
+        averageNps: { type: [number, "null"] }
+        averageNpsPrev: { type: [number, "null"] }
+      required: [activeTrips, newTrips, newTripsPrev, occupancyRate, totalAvailableSeats, avgReservationsPerTrip, avgReservationsPerTripPrev, confirmedReservations, confirmedReservationsPrev, cancellations, cancellationsPrev, revenuePerTrip, revenuePerTripPrev, totalSuppliers, newSuppliers, newSuppliersPrev, checkedInPassengers, checkedInPassengersPrev, averageNps, averageNpsPrev]
+    InsightsRetention:
+      type: object
+      properties:
+        loyaltyMembers: { type: number }
+        loyaltyActiveMembers: { type: number }
+        loyaltyNewMembers: { type: number }
+        loyaltyNewMembersPrev: { type: number }
+        averageNps: { type: [number, "null"] }
+        averageNpsPrev: { type: [number, "null"] }
+        promoterClients: { type: number }
+        promoterClientsPrev: { type: number }
+        retentionRate: { type: number }
+        retentionRatePrev: { type: number }
+        referralRate: { type: number }
+        referralRatePrev: { type: number }
+        newClients: { type: number }
+        newClientsPrev: { type: number }
+        repeatClients: { type: number }
+        repeatClientsPrev: { type: number }
+        totalClients: { type: number }
+        convertedReferrals: { type: number }
+        convertedReferralsPrev: { type: number }
+      required: [loyaltyMembers, loyaltyActiveMembers, loyaltyNewMembers, loyaltyNewMembersPrev, averageNps, averageNpsPrev, promoterClients, promoterClientsPrev, retentionRate, retentionRatePrev, referralRate, referralRatePrev, newClients, newClientsPrev, repeatClients, repeatClientsPrev, totalClients, convertedReferrals, convertedReferralsPrev]
+    InsightsExpansion:
+      type: object
+      properties:
+        newTrips: { type: number }
+        newTripsPrev: { type: number }
+        newDestinations90d: { type: number }
+        newDestinationsPrev90d: { type: number }
+        totalDestinations: { type: number }
+        newSuppliers: { type: number }
+        newSuppliersPrev: { type: number }
+        totalSuppliers: { type: number }
+        revenuePerTrip: { type: number }
+        revenuePerTripPrev: { type: number }
+        topDestinations:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              count: { type: number }
+            required: [name, count]
+        avgTicket: { type: number }
+        avgTicketPrev: { type: number }
+        totalRevenue: { type: number }
+        totalRevenuePrev: { type: number }
+        momGrowth: { type: [number, "null"] }
+        yoyGrowth: { type: [number, "null"] }
+      required: [newTrips, newTripsPrev, newDestinations90d, newDestinationsPrev90d, totalDestinations, newSuppliers, newSuppliersPrev, totalSuppliers, revenuePerTrip, revenuePerTripPrev, topDestinations, avgTicket, avgTicketPrev, totalRevenue, totalRevenuePrev, momGrowth, yoyGrowth]
+    InsightsSummary:
+      type: object
+      properties:
+        executive: { $ref: "#/components/schemas/InsightsExecutive" }
+        commercial: { $ref: "#/components/schemas/InsightsCommercial" }
+        marketing: { $ref: "#/components/schemas/InsightsMarketing" }
+        financial: { $ref: "#/components/schemas/InsightsFinancial" }
+        operational: { $ref: "#/components/schemas/InsightsOperational" }
+        retention: { $ref: "#/components/schemas/InsightsRetention" }
+        expansion: { $ref: "#/components/schemas/InsightsExpansion" }
+      required: [executive, commercial, marketing, financial, operational, retention, expansion]
+    FreePassengerCheckIn:
+      type: object
+      properties:
+        id: { type: string }
+        checkedInAt: { type: [string, "null"], format: date-time }
+      required: [id, checkedInAt]
+    WhatsAppBroadcastBody:
+      type: object
+      properties:
+        messageTemplate: { type: string, minLength: 1, maxLength: 2000 }
+        filter: { type: string, enum: [all, confirmed, pending] }
+      required: [messageTemplate, filter]
+    WhatsAppBroadcastResult:
+      type: object
+      properties:
+        queued: { type: integer }
+        skipped: { type: integer }
+      required: [queued, skipped]
+    ReverseReferralBonusBody:
+      type: object
+      properties:
+        reason: { type: string, minLength: 1 }
+      required: [reason]
+    TestWhatsAppMessageBody:
+      type: object
+      properties:
+        type: { type: string, enum: [converted, bonusPaid, reversed, share] }
+        message: { type: string }
+      required: [type]
+    TestWhatsAppMessageResult:
+      type: object
+      properties:
+        success: { type: boolean }
+      required: [success]
     ReservationStatus:
       type: string
       enum: [pending, confirmed, cancelled, refunded, completed, failed]
@@ -4933,6 +5675,30 @@ components:
         avgReservationsPerTrip:
           type: number
         totalFaturamento:
+          type: number
+        overduePayments:
+          type: number
+        overduePaymentsCount:
+          type: integer
+        conversionRate:
+          type: number
+        pipelineLeads:
+          type: integer
+        salesThisMonth:
+          type: number
+        retentionRate:
+          type: number
+        loyaltyPointsIssued:
+          type: integer
+        avgNps:
+          type: ["number", "null"]
+        tripsThisMonth:
+          type: integer
+        pendingReservations:
+          type: integer
+        profit:
+          type: number
+        profitMargin:
           type: number
       required:
         - totalClients
@@ -5156,6 +5922,8 @@ components:
           type: string
         coverImage:
           type: ["string", "null"]
+        numberingType:
+          type: ["string", "null"]
       required: [id, name, destination, departureDate, availableSeats, totalCapacity, status]
 
     ActivityItem:
@@ -5256,6 +6024,36 @@ components:
         isNew:
           type: ["boolean", "null"]
         message:
+          type: ["string", "null"]
+        customerCode:
+          type: ["string", "null"]
+        preferredDestinationTypes:
+          type: array
+          items:
+            type: string
+        travelInterests:
+          type: array
+          items:
+            type: string
+        travelPreference:
+          type: ["string", "null"]
+        likesPhotosVideos:
+          type: ["boolean", "null"]
+        ambassadorOptIn:
+          type: ["boolean", "null"]
+        purchaseScore:
+          type: ["number", "null"]
+        recompraScore:
+          type: ["number", "null"]
+        churnScore:
+          type: ["number", "null"]
+        nboReasoning:
+          type: ["string", "null"]
+        nboTripName:
+          type: ["string", "null"]
+        nboTripDestination:
+          type: ["string", "null"]
+        scoresCalculatedAt:
           type: ["string", "null"]
       required:
         - id
@@ -6182,6 +6980,10 @@ components:
           type: string
         layout:
           type: string
+        numberingType:
+          type: ["string", "null"]
+        floors:
+          type: integer
         totalSeats:
           type: integer
         cols:
@@ -6209,6 +7011,10 @@ components:
           description: Cell type (seat, vip, accessible, wc, stairs, fridge, blocked)
         passengerName:
           type: ["string", "null"]
+        occupantName:
+          type: ["string", "null"]
+        floor:
+          type: integer
         reservationId:
           type: ["string", "null"]
       required: [number, row, col, status]
@@ -6270,6 +7076,15 @@ components:
           type: ["string", "null"]
         boardingLocationId:
           type: ["string", "null"]
+        boardingLocation:
+          type: ["object", "null"]
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            time:
+              type: ["string", "null"]
         storeOrderId:
           type: ["string", "null"]
         discountCouponCode:
@@ -7035,6 +7850,26 @@ components:
           type: ["string", "null"]
         clientName:
           type: ["string", "null"]
+        clientWhatsapp:
+          type: ["string", "null"]
+        clientEmail:
+          type: ["string", "null"]
+        clientPhone:
+          type: ["string", "null"]
+        clientCpf:
+          type: ["string", "null"]
+        clientClassification:
+          type: ["string", "null"]
+        clientCity:
+          type: ["string", "null"]
+        clientState:
+          type: ["string", "null"]
+        clientOutstandingBalance:
+          type: ["number", "null"]
+        travelReason:
+          type: ["string", "null"]
+        followUpNote:
+          type: ["string", "null"]
         ownerName:
           type: ["string", "null"]
       required:
@@ -7071,6 +7906,10 @@ components:
           type: ["string", "null"]
         tripId:
           type: ["string", "null"]
+        travelReason:
+          type: ["string", "null"]
+        followUpNote:
+          type: ["string", "null"]
         reservationId:
           type: ["string", "null"]
         expectedCloseDate:
@@ -7099,6 +7938,10 @@ components:
         reservationId:
           type: ["string", "null"]
         tripId:
+          type: ["string", "null"]
+        travelReason:
+          type: ["string", "null"]
+        followUpNote:
           type: ["string", "null"]
 
     Pipeline:
@@ -7156,6 +7999,8 @@ components:
           type: integer
         dealsValue:
           type: number
+        pipelineId:
+          type: string
       required: [id, name, color, order, isFinal, isDefaultWeb, dealsCount, dealsValue]
 
     # ─── MESSAGE ───────────────────────────────────────────────────
@@ -7913,6 +8758,15 @@ components:
           type: integer
         clickedCount:
           type: integer
+        deliveredCount:
+          type: integer
+        triggerType:
+          type: ["string", "null"]
+        triggerConfig:
+          type: ["object", "null"]
+          additionalProperties: true
+        autoEnabled:
+          type: boolean
         createdAt:
           type: string
       required: [id, name, type, status, content, recipientsCount, sentCount, openedCount, clickedCount, createdAt]
@@ -7933,6 +8787,13 @@ components:
           additionalProperties: true
         scheduledAt:
           type: ["string", "null"]
+        triggerType:
+          type: ["string", "null"]
+        triggerConfig:
+          type: ["object", "null"]
+          additionalProperties: true
+        autoEnabled:
+          type: ["boolean", "null"]
       required: [name, type, content, targetSegment]
 
     UpdateCampaignBody:
@@ -7946,6 +8807,13 @@ components:
           type: ["string", "null"]
         content:
           type: ["string", "null"]
+        subject:
+          type: ["string", "null"]
+        autoEnabled:
+          type: ["boolean", "null"]
+        triggerConfig:
+          type: ["object", "null"]
+          additionalProperties: true
 
     # ─── NPS ───────────────────────────────────────────────────────
     NpsResponse:
@@ -7963,6 +8831,14 @@ components:
           type: ["string", "null"]
         clientName:
           type: ["string", "null"]
+        scoreTransport:
+          type: ["integer", "null"]
+        scoreService:
+          type: ["integer", "null"]
+        scoreOrganization:
+          type: ["integer", "null"]
+        scoreGuide:
+          type: ["integer", "null"]
         createdAt:
           type: string
       required: [id, userId, score, classification, createdAt]
@@ -7993,6 +8869,14 @@ components:
           type: integer
         total:
           type: integer
+        avgTransport:
+          type: ["number", "null"]
+        avgService:
+          type: ["number", "null"]
+        avgOrganization:
+          type: ["number", "null"]
+        avgGuide:
+          type: ["number", "null"]
       required: [averageScore, npsScore, promoters, passives, detractors, total]
 
     # ─── USER ──────────────────────────────────────────────────────
@@ -8027,6 +8911,8 @@ components:
           type: number
         monthlyGoal:
           type: ["number", "null"]
+        trialDaysLeft:
+          type: ["integer", "null"]
         createdAt:
           type: string
         tenant:
@@ -8051,6 +8937,9 @@ components:
               type: string
             website:
               type: ["string", "null"]
+            settings:
+              type: ["object", "null"]
+              additionalProperties: true
           required: [id, name, slug, status, planId]
       required: [id, clerkId, name, email, role, isActive, referralCode, referralBalance, createdAt]
 
@@ -8219,6 +9108,18 @@ components:
         status:
           type: string
           enum: [ok, degraded, unavailable]
+        dailyUsage:
+          type: ["object", "null"]
+          properties:
+            commandCount:
+              type: number
+            maxCommands:
+              type: number
+            usagePct:
+              type: number
+            warningThresholdPct:
+              type: number
+          required: [commandCount, maxCommands, usagePct, warningThresholdPct]
       required: [status]
 
     SystemHealthStripeWebhookAuditEndpoint:
@@ -8265,6 +9166,18 @@ components:
           $ref: "#/components/schemas/SystemHealthStripeWebhookAudit"
         stripeSyncTables:
           $ref: "#/components/schemas/SystemHealthStripeSyncTables"
+        workers:
+          type: object
+          additionalProperties: true
+        seatDrift:
+          type: object
+          additionalProperties: true
+        pipelineOrphans:
+          type: object
+          additionalProperties: true
+        clientFinancialDrift:
+          type: object
+          additionalProperties: true
       required: [redis, stripeWebhookAudit, stripeSyncTables]
 
     RepairSystemHealth:
@@ -8341,6 +9254,11 @@ components:
           type: ["string", "null"]
         reservationPrefix:
           type: ["string", "null"]
+        prefixLocked:
+          type: boolean
+        settings:
+          type: ["object", "null"]
+          additionalProperties: true
         createdAt:
           type: string
       required: [id, name, slug, email, planId, status, createdAt]
@@ -8399,6 +9317,19 @@ components:
           type: ["string", "null"]
         reservationPrefix:
           type: ["string", "null"]
+        npsCategories:
+          type: object
+          properties:
+            transport:
+              type: boolean
+            service:
+              type: boolean
+            organization:
+              type: boolean
+            guide:
+              type: boolean
+        trialEndsAt:
+          type: ["string", "null"]
         birthdayMessagesEnabled:
           type: ["boolean", "null"]
 
@@ -8424,6 +9355,8 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        sellerName:
+          type: ["string", "null"]
       required: [id, tenantId, name, address, city, state, createdAt]
 
     CreateBoardingLocationBody:
@@ -8513,6 +9446,8 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        sellerName:
+          type: ["string", "null"]
       required: [id, tenantId, userId, baseAmount, commissionAmount, status, createdAt]
 
     UpdateCommissionBody:
@@ -8595,6 +9530,16 @@ components:
           type: string
         updatedAt:
           type: string
+        fraudFlag:
+          type: ["boolean", "null"]
+        fraudReason:
+          type: ["string", "null"]
+        expiryWarning7SentAt:
+          type: ["string", "null"]
+        expiryWarning1SentAt:
+          type: ["string", "null"]
+        bonusReleaseNotifiedAt:
+          type: ["string", "null"]
       required: [id, tenantId, referrerId, code, status, bonusAmount, bonusPaid, discountType, discountValue, discountApplied, isActive, visitsCount, createdAt, updatedAt]
 
     CreateReferralBody:
@@ -8704,6 +9649,8 @@ components:
           type: boolean
         bonusReleaseEmailEnabled:
           type: boolean
+        loyaltyPointsEmailEnabled:
+          type: boolean
         pointsPerReferral:
           type: integer
         gracePeriodDays:
@@ -8763,6 +9710,8 @@ components:
           type: boolean
         bonusReleaseEmailEnabled:
           type: boolean
+        loyaltyPointsEmailEnabled:
+          type: boolean
         pointsPerReferral:
           type: integer
         gracePeriodDays:
@@ -8791,6 +9740,26 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Referral"
+        referralCodeStatus:
+          type: ["string", "null"]
+        referralSuspendedAttemptAt:
+          type: ["string", "null"]
+        referralSuspendedAttemptCount:
+          type: integer
+        attemptLogs:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              storeSlug:
+                type: string
+              ipAddress:
+                type: ["string", "null"]
+              createdAt:
+                type: string
+            required: [id, storeSlug, createdAt]
       required: [referralCode, totalReferrals, successfulReferrals, referralEarnings, referrals]
 
     # ─── COUPON ────────────────────────────────────────────────────
@@ -8913,6 +9882,12 @@ components:
           type: integer
         isActive:
           type: boolean
+        tierBenefits:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
         createdAt:
           type: string
       required: [id, tenantId, name, pointsPerReal, realPerPoint, minRedeemPoints, isActive, createdAt]
@@ -8921,7 +9896,7 @@ components:
       type: object
       properties:
         name:
-          type: string
+          type: ["string", "null"]
         description:
           type: string
         pointsPerReal:
@@ -8930,7 +9905,12 @@ components:
           type: string
         minRedeemPoints:
           type: integer
-      required: [name]
+        tierBenefits:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
 
     # ─── LOYALTY MEMBER ────────────────────────────────────────────
     LoyaltyMember:
@@ -9428,6 +10408,10 @@ components:
           type: array
           items:
             type: string
+        supportedFeatures:
+          type: array
+          items:
+            type: string
         isActive:
           type: boolean
         isFeatured:
@@ -9554,6 +10538,12 @@ components:
           type: string
         tenantName:
           type: ["string", "null"]
+        pixCode:
+          type: ["string", "null"]
+        pixQrCodeUrl:
+          type: ["string", "null"]
+        pixExpiresAt:
+          type: ["string", "null"]
       required: [id, tenantId, amount, currency, status, createdAt, updatedAt]
 
     CreateInvoiceBody:
@@ -9678,6 +10668,8 @@ components:
           type: string
         status:
           type: string
+        trialEndsAt:
+          type: ["string", "null"]
         cnpj:
           type: ["string", "null"]
         address:
@@ -9977,6 +10969,8 @@ components:
       properties:
         connected:
           type: boolean
+        status:
+          type: string
         tokenValid:
           type: boolean
         eventsCount:
@@ -18306,6 +19300,8 @@ components:
           type: ["string", "null"]
         departureTime:
           type: ["string", "null"]
+        time:
+          type: ["string", "null"]
         createdAt:
           type: string
       required: [id, tenantId, name, address, city, state, createdAt]
@@ -18805,7 +19801,7 @@ components:
       type: object
       properties:
         name:
-          type: string
+          type: ["string", "null"]
         description:
           type: string
         pointsPerReal:
