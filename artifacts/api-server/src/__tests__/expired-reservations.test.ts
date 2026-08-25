@@ -24,6 +24,7 @@ const TENANT_ID = `tst-${RUN}`;
 const USER_ID   = `tstu-${RUN}`;
 const TRIP_ID   = `tstt-${RUN}`;
 const CLIENT_ID = `tstc-${RUN}`;
+const SECOND_CLIENT_ID = `tstc-second-${RUN}`;
 const INITIAL_SEATS = 10;
 
 function resId(suffix: string) { return `tstr-${RUN}-${suffix}`; }
@@ -53,7 +54,7 @@ function makeClient(overrides: Partial<InsertClient> = {}): InsertClient {
   } as InsertClient;
 }
 
-function makeReservation(fields: Pick<InsertReservation, "id" | "seats" | "totalValue" | "balance" | "voucherCode" | "qrCode" | "status">): InsertReservation {
+function makeReservation(fields: Pick<InsertReservation, "id" | "seats" | "totalValue" | "balance" | "voucherCode" | "qrCode" | "status"> & { clientId?: string }): InsertReservation {
   return {
     tenantId: TENANT_ID, tripId: TRIP_ID, clientId: CLIENT_ID, createdById: USER_ID,
     ...fields,
@@ -65,6 +66,7 @@ beforeAll(async () => {
   await db.insert(usersTable).values({ id: USER_ID, clerkId: `clerk_${RUN}`, tenantId: TENANT_ID, name: "Cron Agent", email: `agent-${RUN}@test.com`, role: ROLES.AGENCY_ADMIN, referralCode: `REF${RUN.toUpperCase()}` });
   await db.insert(tripsTable).values({ id: TRIP_ID, tenantId: TENANT_ID, name: "Cron Test Trip", slug: `cron-trip-${RUN}`, destination: "Fortaleza", destinationCity: "Fortaleza", destinationState: "CE", type: "excursao", category: "standard", departureDate: new Date("2027-01-10"), totalCapacity: INITIAL_SEATS, availableSeats: INITIAL_SEATS, reservedSeats: 0, priceAdult: "200", createdById: USER_ID });
   await db.insert(clientsTable).values(makeClient());
+  await db.insert(clientsTable).values(makeClient({ id: SECOND_CLIENT_ID, email: `client-second-${RUN}@test.com` }));
 });
 
 afterAll(async () => {
@@ -111,7 +113,7 @@ describe("runExpiredReservationsCron()", () => {
   it("cancels only expired reservations when both past and future exist together", async () => {
     await db.insert(reservationsTable).values(makeReservation({ id: resId("mixed-exp"), seats: ["C1", "C2"], totalValue: "400", balance: "400", voucherCode: `VCH-${RUN}-MXE`, qrCode: "qr-mxe", status: "pending" }));
     await setExpiresAt(resId("mixed-exp"), new Date(Date.now() - 60_000));
-    await db.insert(reservationsTable).values(makeReservation({ id: resId("mixed-fut"), seats: ["C3"], totalValue: "200", balance: "200", voucherCode: `VCH-${RUN}-MXF`, qrCode: "qr-mxf", status: "pending" }));
+    await db.insert(reservationsTable).values(makeReservation({ id: resId("mixed-fut"), clientId: SECOND_CLIENT_ID, seats: ["C3"], totalValue: "200", balance: "200", voucherCode: `VCH-${RUN}-MXF`, qrCode: "qr-mxf", status: "pending" }));
     await setExpiresAt(resId("mixed-fut"), new Date(Date.now() + 15 * 60_000));
     await db.update(tripsTable).set({ availableSeats: INITIAL_SEATS - 3, reservedSeats: 3 }).where(eq(tripsTable.id, TRIP_ID));
 
