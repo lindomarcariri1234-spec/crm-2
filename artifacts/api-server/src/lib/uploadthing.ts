@@ -6,8 +6,8 @@ import { sql } from "drizzle-orm";
  * UploadThing API wrapper.
  *
  * uploadthing@7.7.4 is pinned (exact, no ^). The SDK's Effect-Platform
- * FetchHttpClient adds a spurious `Range: bytes=0-` header and double-encodes
- * URL params on CDN PUT requests, causing "Invalid signature" 400 errors.
+ * FetchHttpClient adds a spurious `Range: bytes=0-` header on CDN PUT
+ * requests, causing "Invalid signature" 400 errors.
  *
  * Fix lives in two places:
  *  1. lib/fetch-patch.ts — patches globalThis.fetch before ANY uploadthing module
@@ -16,8 +16,8 @@ import { sql } from "drizzle-orm";
  *     Node's require() at runtime (after the patch), not bundled inside esbuild.
  *
  * BEFORE UPGRADING uploadthing:
- *   Verify that Effect-Platform's FetchHttpClient no longer adds Range header or
- *   double-encodes params. If fixed: remove fetch-patch.ts, remove the external
+ *   Verify that Effect-Platform's FetchHttpClient no longer adds the Range header.
+ *   If fixed: remove fetch-patch.ts, remove the external
  *   entry in build.mjs, and remove the exact-version pin in package.json.
  */
 
