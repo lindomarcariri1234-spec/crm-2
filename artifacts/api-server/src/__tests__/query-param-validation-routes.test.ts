@@ -18,8 +18,9 @@ import request from "supertest";
 // Shared auth mock
 // ---------------------------------------------------------------------------
 
-const { mockRequireAuth } = vi.hoisted(() => ({
+const { mockRequireAuth, mockSelect } = vi.hoisted(() => ({
   mockRequireAuth: vi.fn(),
+  mockSelect: vi.fn(),
 }));
 
 vi.mock("../lib/tenant.js", () => ({
@@ -52,7 +53,7 @@ vi.mock("@workspace/db", () => {
   });
 
   const db = {
-    select: vi.fn(() => chain),
+    select: mockSelect.mockImplementation(() => chain),
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
     transaction: vi.fn(),
@@ -332,10 +333,10 @@ describe("GET /trips — page, limit, status query param validation", () => {
     expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
-  it("rejects limit=101 (above max) with 400", async () => {
+  it("rejects limit=501 (above max) with 400", async () => {
     const res = await request(app)
       .get("/trips")
-      .query({ limit: "101" });
+      .query({ limit: "501" });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
@@ -386,6 +387,243 @@ describe("GET /trips — page, limit, status query param validation", () => {
 
     expect(res.status).not.toBe(400);
   });
+
+  it("returns tenant-wide indicators even when the requested page is empty", async () => {
+    type QueryChain = Promise<unknown[]> & {
+      from: () => QueryChain;
+      where: () => QueryChain;
+      orderBy: () => QueryChain;
+      limit: () => QueryChain;
+      offset: () => QueryChain;
+    };
+    const result = (rows: unknown[]): QueryChain => {
+      const chain = Promise.resolve(rows) as QueryChain;
+      chain.from = () => chain;
+      chain.where = () => chain;
+      chain.orderBy = () => chain;
+      chain.limit = () => chain;
+      chain.offset = () => chain;
+      return chain;
+    };
+
+    mockSelect
+      .mockImplementationOnce(() => result([]))
+      .mockImplementationOnce(() => result([{ count: 501 }]))
+      .mockImplementationOnce(() => result([{
+        total: 501,
+        active: 400,
+        totalCapacity: 20_000,
+        occupiedSeats: 15_000,
+        totalRevenue: 4_500_000,
+      }]));
+
+    const res = await request(app).get("/trips").query({ page: 42, limit: 12 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      data: [],
+      total: 501,
+      page: 42,
+      limit: 12,
+      stats: {
+        total: 501,
+        active: 400,
+        totalCapacity: 20_000,
+        occupiedSeats: 15_000,
+        totalRevenue: 4_500_000,
+      },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /trips/export — complete tenant backup
+// ---------------------------------------------------------------------------
+
+type ExportQueryChain = {
+  from: () => ExportQueryChain;
+  where: () => ExportQueryChain;
+  orderBy: (...expressions: unknown[]) => ExportQueryChain;
+  limit: (value: number) => ExportQueryChain;
+  then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) => unknown;
+};
+
+type ExportCursor = { departureDate: Date; id: string } | null;
+
+function makeExportQuery(
+  rows: Record<string, unknown>[],
+  state: { cursor: ExportCursor },
+  orderByArgumentCounts: number[],
+): ExportQueryChain {
+  let filteredRows = rows;
+  let limitValue = rows.length;
+  const chain = {} as ExportQueryChain;
+  Object.assign(chain, {
+    from: () => chain,
+    where: () => {
+      // Simulate the database applying the tenant predicate that the route
+      // must provide, while keeping .limit() observable to this regression test.
+      filteredRows = rows.filter((row) => row.tenantId === agencyAdmin.tenantId);
+      return chain;
+    },
+    orderBy: (...expressions: unknown[]) => {
+      orderByArgumentCounts.push(expressions.length);
+      return chain;
+    },
+    limit: (value: number) => {
+      limitValue = value;
+      return chain;
+    },
+    then: (resolve: (value: unknown[]) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve(
+        [...filteredRows]
+          .sort((left, right) => {
+            const leftDate = (left.departureDate as Date).getTime();
+            const rightDate = (right.departureDate as Date).getTime();
+            if (leftDate !== rightDate) return leftDate - rightDate;
+            return String(left.id).localeCompare(String(right.id));
+          })
+          .filter((row) => {
+            if (!state.cursor) return true;
+            const departureDate = row.departureDate as Date;
+            return departureDate > state.cursor.departureDate
+              || (departureDate.getTime() === state.cursor.departureDate.getTime()
+                && String(row.id) > state.cursor.id);
+          })
+          .slice(0, limitValue),
+      ).then((batch) => {
+        if (batch.length > 0) {
+          const lastTrip = batch[batch.length - 1];
+          state.cursor = {
+            departureDate: lastTrip.departureDate as Date,
+            id: String(lastTrip.id),
+          };
+        }
+        return resolve(batch);
+      }, reject),
+  });
+  return chain;
+}
+
+function makeExportTrip(id: string, tenantId: string): Record<string, unknown> {
+  return {
+    id,
+    tenantId,
+    name: `Viagem ${id}`,
+    slug: `viagem-${id}`,
+    description: null,
+    destination: "Fortaleza",
+    destinationCity: "Fortaleza",
+    destinationState: "CE",
+    type: "excursao",
+    category: "standard",
+    departureDate: new Date("2026-09-01T12:00:00.000Z"),
+    returnDate: null,
+    totalCapacity: 46,
+    availableSeats: 46,
+    reservedSeats: 0,
+    confirmedSeats: 0,
+    priceAdult: "100",
+    priceChild: null,
+    priceSenior: null,
+    inclusions: [],
+    exclusions: [],
+    coverImage: null,
+    gallery: [],
+    videos: [],
+    itinerary: [],
+    boardingPoints: [],
+    status: "draft",
+    isPublic: false,
+    isFeatured: false,
+    vehiclePlate: null,
+    vehicleType: null,
+    driverName: null,
+    tourGuide: null,
+    tripOrganizer: null,
+    driver1Cpf: null,
+    driver1Cnh: null,
+    driver1CnhCategory: null,
+    driver1CnhExpiry: null,
+    driver2Name: null,
+    driver2Cpf: null,
+    driver2Cnh: null,
+    driver2CnhCategory: null,
+    driver2CnhExpiry: null,
+    tourGuideCpf: null,
+    tourGuideRegistration: null,
+    manifestNumber: null,
+    seatLayout: "2x2",
+    layoutId: null,
+    showSeatMap: true,
+    fixedCosts: [],
+    variableCosts: [],
+    freeOrganizers: null,
+    freeGuides: null,
+    originCity: null,
+    originState: null,
+    departureTime: null,
+    returnTime: null,
+    createdAt: new Date("2026-01-01T12:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T12:00:00.000Z"),
+  };
+}
+
+describe("GET /trips/export — complete tenant backup", () => {
+  beforeEach(() => {
+    mockRequireAuth.mockResolvedValue(agencyAdmin);
+    mockSelect.mockClear();
+  });
+
+  it("streams every tenant trip in batches without leaking another tenant", async () => {
+    const ownTrips = Array.from({ length: 1_251 }, (_, index) =>
+      makeExportTrip(`tenant-trip-${index + 1}`, agencyAdmin.tenantId),
+    );
+    const otherTenantTrips = [
+      makeExportTrip("other-tenant-trip-1", "tenant-other"),
+      makeExportTrip("other-tenant-trip-2", "tenant-other"),
+    ];
+    const allTrips = [...ownTrips, ...otherTenantTrips];
+    const state = { cursor: null as ExportCursor };
+    const orderByArgumentCounts: number[] = [];
+    mockSelect
+      .mockImplementationOnce(() => makeExportQuery(allTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(allTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(allTrips, state, orderByArgumentCounts));
+
+    const res = await request(app).get("/trips/export").query({ format: "ndjson" });
+    const lines = res.text.trim().split("\n");
+    const exportedIds = lines.map((line) => JSON.parse(line).id as string);
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/x-ndjson");
+    expect(mockSelect).toHaveBeenCalledTimes(3);
+    expect(lines).toHaveLength(1_251);
+    expect(new Set(exportedIds)).toEqual(new Set(ownTrips.map((trip) => trip.id)));
+    expect(orderByArgumentCounts).toEqual([2, 2, 2]);
+    expect(lines.some((line) => line.includes("other-tenant-trip"))).toBe(false);
+  });
+
+  it("does not duplicate or skip trips when departure dates repeat at a batch boundary", async () => {
+    const ownTrips = Array.from({ length: 1_001 }, (_, index) =>
+      makeExportTrip(`same-date-trip-${String(index + 1).padStart(4, "0")}`, agencyAdmin.tenantId),
+    ).reverse();
+    const state = { cursor: null as ExportCursor };
+    const orderByArgumentCounts: number[] = [];
+    mockSelect
+      .mockImplementationOnce(() => makeExportQuery(ownTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(ownTrips, state, orderByArgumentCounts))
+      .mockImplementationOnce(() => makeExportQuery(ownTrips, state, orderByArgumentCounts));
+
+    const res = await request(app).get("/trips/export").query({ format: "ndjson" });
+    const exportedIds = res.text.trim().split("\n").map((line) => JSON.parse(line).id as string);
+    const expectedIds = ownTrips.map((trip) => trip.id).sort();
+
+    expect(res.status).toBe(200);
+    expect(exportedIds).toEqual(expectedIds);
+    expect(new Set(exportedIds)).toHaveLength(ownTrips.length);
+    expect(orderByArgumentCounts).toEqual([2, 2, 2]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -406,10 +644,10 @@ describe("GET /clients — page, limit, sortBy, sortOrder validation", () => {
     expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
-  it("rejects limit=200 (above max 100) with 400", async () => {
+  it("rejects limit=501 (above max 500) with 400", async () => {
     const res = await request(app)
       .get("/clients")
-      .query({ limit: "200" });
+      .query({ limit: "501" });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
