@@ -301,10 +301,21 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       // Existing users only need their tenant's access status checked. Applying
       // a users-plan limit here would block someone from logging in merely
       // because their agency has already reached its account capacity. Skip
-      // this check when a winning invite is about to move the user off of this
-      // tenant entirely — its (possibly expired/suspended) status is no longer
-      // relevant once they are being reconciled elsewhere.
-      if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN && !winningInvite) {
+      // this check on the *current* tenant when a winning invite is about to
+      // move the user off of it entirely — its (possibly expired/suspended)
+      // status is no longer relevant once they are being reconciled elsewhere.
+      //
+      // Instead, when there IS a winning invite, its *target* tenant's access
+      // status must be checked before reconciliation is finalized. Otherwise a
+      // user could be silently reconciled onto a tenant that is itself
+      // suspended or has an expired trial, only to be blocked on their very
+      // next login once checkTenantAccess runs against the new tenantId. Leave
+      // the invite pending and the user on their current tenant so this can be
+      // retried once the target tenant's access is restored.
+      if (winningInvite) {
+        const targetTenantAllowed = await checkTenantAccess(winningInvite.tenantId, req, res);
+        if (!targetTenantAllowed) return;
+      } else if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN) {
         const allowed = await checkTenantAccess(existing.tenantId, req, res);
         if (!allowed) return;
       }

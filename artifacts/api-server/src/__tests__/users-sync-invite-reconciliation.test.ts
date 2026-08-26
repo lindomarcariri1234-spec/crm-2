@@ -398,13 +398,16 @@ describe("POST /api/users/me/sync — reconciling despite the placeholder tenant
     const invite = makeInvite({ tenantId: "tenant-real-agency", role: ROLES.SALES });
     const updatedUser = makeExistingUser({ tenantId: invite.tenantId, role: invite.role });
 
-    // Simulate the placeholder tenant's trial having expired: if the route
-    // ever called checkTenantAccess for the CURRENT tenant while a winning
-    // invite is pending, this would short-circuit with a 403 and the test
-    // would fail — proving reconciliation is attempted first.
-    mockCheckTenantAccess.mockImplementation(async (_tenantId: string, _req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
-      res.status(403).json({ code: "TRIAL_EXPIRED", message: "O período de teste expirou." });
-      return false;
+    // Simulate the placeholder tenant's trial having expired, while the
+    // invite's target tenant is healthy. Reconciliation must go through:
+    // the route now checks the *target* tenant's access (which passes),
+    // never the now-irrelevant current placeholder tenant's.
+    mockCheckTenantAccess.mockImplementation(async (tenantId: string, _req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+      if (tenantId === "tenant-placeholder-expired") {
+        res.status(403).json({ code: "TRIAL_EXPIRED", message: "O período de teste expirou." });
+        return false;
+      }
+      return true;
     });
 
     mockLimit
@@ -420,8 +423,14 @@ describe("POST /api/users/me/sync — reconciling despite the placeholder tenant
     expect(res.body.tenantId).toBe("tenant-real-agency");
     expect(res.body.role).toBe(ROLES.SALES);
     // The (now-irrelevant) placeholder tenant's access status must never have
-    // been checked once a winning invite was found.
-    expect(mockCheckTenantAccess).not.toHaveBeenCalled();
+    // been checked once a winning invite was found — only the invite's
+    // target tenant is.
+    expect(mockCheckTenantAccess).toHaveBeenCalledTimes(1);
+    expect(mockCheckTenantAccess).toHaveBeenCalledWith(
+      "tenant-real-agency",
+      expect.any(Object),
+      expect.any(Object),
+    );
     expect(mockUpdate).toHaveBeenCalledWith({ __name: "invites" });
   });
 
@@ -452,6 +461,78 @@ describe("POST /api/users/me/sync — reconciling despite the placeholder tenant
       expect.any(Object),
     );
     // No profile update or invite mutation should have happened.
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. The invite's TARGET tenant must also be checked before reconciliation is
+//    finalized — reconciling onto a suspended/expired agency must not
+//    silently succeed only to have the user blocked on their very next login.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/users/me/sync — refusing to reconcile onto a blocked target tenant", () => {
+  it("does not reconcile a tenant-less account onto an invite whose target tenant is suspended", async () => {
+    stubClerkUser("vendedor.novo@example.com");
+    const existingUser = makeExistingUser({ tenantId: null });
+    const invite = makeInvite({ tenantId: "tenant-suspended-agency", role: ROLES.SALES });
+
+    mockCheckTenantAccess.mockImplementation(async (tenantId: string, _req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+      if (tenantId === "tenant-suspended-agency") {
+        res.status(403).json({ code: "TENANT_SUSPENDED", message: "Esta conta está suspensa." });
+        return false;
+      }
+      return true;
+    });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser]) // 1. usersTable lookup
+      .mockResolvedValueOnce([invite]);      // 2. invitesTable byEmail
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("TENANT_SUSPENDED");
+    expect(mockCheckTenantAccess).toHaveBeenCalledWith(
+      "tenant-suspended-agency",
+      expect.any(Object),
+      expect.any(Object),
+    );
+    // Neither the user's tenantId nor the invite should have been touched —
+    // the invite must stay pending so this can be retried later.
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not migrate off a self-provisioned placeholder onto an invite whose target tenant's trial expired", async () => {
+    stubClerkUser("vendedor.novo@example.com");
+    const existingUser = makeExistingUser({ tenantId: "tenant-placeholder", role: ROLES.AGENCY_ADMIN });
+    const invite = makeInvite({ tenantId: "tenant-real-agency-expired", role: ROLES.SALES });
+
+    mockCheckTenantAccess.mockImplementation(async (tenantId: string, _req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+      if (tenantId === "tenant-real-agency-expired") {
+        res.status(403).json({ code: "TRIAL_EXPIRED", message: "O período de teste expirou." });
+        return false;
+      }
+      return true;
+    });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser])   // 1. usersTable lookup
+      .mockResolvedValueOnce([invite])         // 2. invitesTable byEmail
+      .mockResolvedValueOnce([{ count: 1 }])   // 3. teammate count in current tenant (self only)
+      .mockResolvedValueOnce([{ count: 0 }]);  // 4. trip count in current tenant (none)
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("TRIAL_EXPIRED");
+    expect(mockCheckTenantAccess).toHaveBeenCalledWith(
+      "tenant-real-agency-expired",
+      expect.any(Object),
+      expect.any(Object),
+    );
+    // The user must remain on their current (placeholder) tenant and the
+    // invite must remain pending, not silently consumed onto a blocked tenant.
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
