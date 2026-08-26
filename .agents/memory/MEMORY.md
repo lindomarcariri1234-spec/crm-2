@@ -75,3 +75,4 @@
 - [GitHub Actions IPv4-mapped loopback](github-actions-ipv4-mapped-loopback.md) — GitHub runners may expose localhost as ::ffff:127.0.0.1; queue/audit payloads should use the canonical client-IP helper.
 - [Pipeline lifecycle scope](pipeline-lifecycle-scope.md) — reservation cards stay tenant+trip-scoped in the default pipeline; only trip-less leads may be adopted.
 - [Invite reconciliation robustness](invite-reconciliation-robustness.md) — email match must be case/whitespace-tolerant; a user with an existing (placeholder) tenantId can still need invite reconciliation, gated by strict safety checks.
+- [Concurrent task file corruption](concurrent-task-file-corruption.md) — an unexplained typecheck regression in code you didn't touch, right before completion, may be a concurrent task's edit landing mid-write; diff against last-good commit, don't assume it's your bug.

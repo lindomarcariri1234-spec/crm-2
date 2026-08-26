@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, tenantsTable, invitesTable, clientsTable, storesTable, tripsTable } from "@workspace/db";
+import { usersTable, tenantsTable, invitesTable, clientsTable, storesTable, tripsTable, reservationsTable, storeProductsTable, storeOrdersTable } from "@workspace/db";
 import { eq, and, gt, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, checkTenantAccess, ADMIN_ROLES } from "../lib/tenant";
@@ -153,14 +153,42 @@ async function resolveStaleTenantInvite(
   const candidate = await resolveInviteForUser(clerkId, canonicalEmail, undefined, log);
   if (!candidate || candidate.tenantId === currentTenantId) return undefined;
 
-  const [[teammates], [trips]] = await Promise.all([
+  // A store row is auto-created for every self-provisioned tenant during
+  // onboarding (see onboarding.ts), so its mere existence says nothing about
+  // whether the vendor actually put real data into it. Check the store's
+  // *contents* instead — products they listed or orders it received — via a
+  // join on storesTable rather than treating the shell row itself as data.
+  const [[teammates], [trips], [clients], [reservations], [storeProducts], [storeOrders]] = await Promise.all([
     db.select({ count: sql<number>`count(*)::int` }).from(usersTable).where(eq(usersTable.tenantId, currentTenantId)).limit(1),
     db.select({ count: sql<number>`count(*)::int` }).from(tripsTable).where(eq(tripsTable.tenantId, currentTenantId)).limit(1),
+    db.select({ count: sql<number>`count(*)::int` }).from(clientsTable).where(eq(clientsTable.tenantId, currentTenantId)).limit(1),
+    db.select({ count: sql<number>`count(*)::int` }).from(reservationsTable).where(eq(reservationsTable.tenantId, currentTenantId)).limit(1),
+    db.select({ count: sql<number>`count(*)::int` }).from(storeProductsTable)
+      .innerJoin(storesTable, eq(storesTable.id, storeProductsTable.storeId))
+      .where(eq(storesTable.tenantId, currentTenantId)).limit(1),
+    db.select({ count: sql<number>`count(*)::int` }).from(storeOrdersTable).where(eq(storeOrdersTable.tenantId, currentTenantId)).limit(1),
   ]);
 
-  if (Number(teammates?.count ?? 0) > 1 || Number(trips?.count ?? 0) > 0) {
+  const teammateCount = Number(teammates?.count ?? 0);
+  const tripCount = Number(trips?.count ?? 0);
+  const clientCount = Number(clients?.count ?? 0);
+  const reservationCount = Number(reservations?.count ?? 0);
+  const storeProductCount = Number(storeProducts?.count ?? 0);
+  const storeOrderCount = Number(storeOrders?.count ?? 0);
+
+  if (
+    teammateCount > 1 ||
+    tripCount > 0 ||
+    clientCount > 0 ||
+    reservationCount > 0 ||
+    storeProductCount > 0 ||
+    storeOrderCount > 0
+  ) {
     log.warn(
-      { clerkId, currentTenantId, inviteTenantId: candidate.tenantId },
+      {
+        clerkId, currentTenantId, inviteTenantId: candidate.tenantId,
+        teammateCount, tripCount, clientCount, reservationCount, storeProductCount, storeOrderCount,
+      },
       "Pending invite found for a user whose current tenant already has real data or other members — leaving both untouched",
     );
     return undefined;

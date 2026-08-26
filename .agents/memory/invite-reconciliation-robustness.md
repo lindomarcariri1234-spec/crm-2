@@ -40,10 +40,18 @@ row you cannot edit directly, e.g. via a read-only prod DB) purely through
 corrected app logic on its next login, without any risk of moving data for an
 unrelated agency or vendor.
 
-**How to apply:** the safety check should probably also cover other
-tenant-scoped tables (clients, reservations, store), not just the one or two
-checked at the time — a placeholder tenant with clients-but-no-trips is still
-"used" and must not be silently abandoned.
+**How to apply:** the safety check now also covers clients, reservations, and
+store activity — not just teammates/trips — so a placeholder tenant with
+clients-but-no-trips is treated as "used" and never silently abandoned.
+
+**Store row is not a usable "is used" signal:** onboarding auto-creates a
+`stores` row (default name/slug/contact info) for every self-provisioned
+tenant, so "does a store row exist for this tenant" is always true and can't
+distinguish an untouched placeholder from a real one. Check the store's
+*contents* instead — `storeProductsTable` (joined via `storesTable.id`, since
+it has no `tenantId` column) and `storeOrdersTable` (has `tenantId` directly).
+Coupons/reviews and store branding customization (logo, description, payment
+methods) are not yet covered — see follow-up tasks if picking this up again.
 
 ## Email matching
 Compare invite emails case/whitespace-insensitively (`lower(trim(email))`),
