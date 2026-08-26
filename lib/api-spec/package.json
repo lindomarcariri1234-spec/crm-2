@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "codegen": "trap 'rm -f .openapi.codegen.yaml' EXIT; node ./scripts/prepare-openapi.mjs && orval --config ./orval.config.ts && node ./scripts/finalize-package-exports.mjs"
+    "codegen": "orval --config ./orval.config.ts && node ./scripts/finalize-package-exports.mjs"
   },
   "devDependencies": {
     "orval": "^8.5.2"
