@@ -103,6 +103,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Save,
+  DatabaseBackup,
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
 import { interpolateWhatsAppPreview, renderWhatsAppPreview } from "@/lib/whatsappPreview";
@@ -256,6 +257,82 @@ function ChangePasswordSection() {
           </Button>
         </form>
       )}
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** "Backup de dados" — full-agency JSON export. Visible only to agency admins/superadmin. */
+function BackupDataSection() {
+  const { toast } = useToast();
+  const { data: me } = useGetMe();
+  const canManage = me?.role === ROLES.AGENCY_ADMIN || me?.role === ROLES.SUPER_ADMIN;
+  const [isExporting, setIsExporting] = useState(false);
+  const [lastExportSize, setLastExportSize] = useState<number | null>(null);
+
+  if (!canManage) return null;
+
+  async function handleExport() {
+    setIsExporting(true);
+    setLastExportSize(null);
+    try {
+      const res = await fetch("/api/tenants/backup/export", { credentials: "include" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string; message?: string }).message ?? (err as { error?: string }).error ?? "Erro ao gerar backup");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? "backup.json";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+      setLastExportSize(blob.size);
+      toast({ title: "Backup gerado com sucesso!" });
+    } catch (err) {
+      toast({ title: "Erro ao gerar backup", description: String(err instanceof Error ? err.message : err), variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  return (
+    <div className="border rounded-lg p-4 space-y-3 mt-4">
+      <div className="flex items-center gap-2">
+        <DatabaseBackup className="w-4 h-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold">Backup de Dados</h3>
+      </div>
+      <p className="text-xs text-muted-foreground max-w-md">
+        Baixe um arquivo JSON com todos os dados da sua agência: configurações, usuários, clientes
+        (com notas, conquistas, destinos dos sonhos, favoritos e pontuação), fornecedores,
+        hospedagens, destinos, veículos, viagens (com layouts de veículo, locais de embarque,
+        custos, mídias e check-ins), reservas com passageiros e parcelas, documentos, modelos de
+        mensagem, automações e campanhas, calendário, comissões, funil de vendas, fidelidade, clube
+        de vantagens, indicações, pesquisas de satisfação (NPS), convites de equipe pendentes, loja
+        (categorias, produtos, cupons, páginas, avaliações, pedidos e alertas de preço), catálogo de
+        marketing (categorias, produtos e pedidos), parceiros de marketplace (com produtos e
+        comissões), acertos financeiros, cupons da agência, metas de vendas e financeiro (pagamentos
+        e despesas). Credenciais de autenticação e segredos de pagamento nunca são incluídos.
+      </p>
+      <div className="flex items-center gap-3">
+        <Button onClick={handleExport} disabled={isExporting} size="sm" variant="outline">
+          {isExporting ? (
+            <><Loader2 className="w-3 h-3 mr-2 animate-spin" />Gerando backup...</>
+          ) : (
+            <><DatabaseBackup className="w-3 h-3 mr-2" />Baixar backup (.json)</>
+          )}
+        </Button>
+        {lastExportSize != null && (
+          <span className="text-xs text-muted-foreground">Arquivo gerado: {formatBytes(lastExportSize)}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -481,6 +558,7 @@ function AgencyProfileTab() {
 
       <SalesGoalSection />
       <ChangePasswordSection />
+      <BackupDataSection />
     </div>
   );
 }

@@ -458,6 +458,7 @@ app.get("/api/trips/:id/manifest/pdf", exportLimiter);
 app.get("/api/trips/:id/passengers/export", exportLimiter);
 app.get("/api/referrals/export", exportLimiter);
 app.get("/api/referrals/analytics/export", exportLimiter);
+app.get("/api/tenants/backup/export", exportLimiter);
 
 // Apply email-send limiter
 app.post("/api/trips/:id/manifest/send", emailSendLimiter);
