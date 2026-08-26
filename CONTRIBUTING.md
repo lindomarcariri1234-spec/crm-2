@@ -31,16 +31,32 @@ Não execute alterações destrutivas em produção sem confirmação explícita
 
 O hook automático `scripts/post-merge.sh` instala exatamente as dependências
 registradas no lockfile (`pnpm install --frozen-lockfile`), aplica migrations,
-executa o seed idempotente de planos e confirma a estrutura do banco. Em seguida,
-executa as validações estáticas abaixo para impedir drift de schema.
+executa o seed idempotente de planos e roda a verificação local unificada
+`schema-drift`. Ela confirma a estrutura do banco diretamente por
+`information_schema`, sem depender do endpoint interno de database diff do
+Replit.
 
 ```bash
-pnpm --filter @workspace/db run check
-pnpm --filter @workspace/db run validate-coverage
-pnpm --filter @workspace/db run validate-columns
-pnpm --filter @workspace/db run validate-tables
-pnpm --filter @workspace/db run verify-db
+pnpm --filter @workspace/db run schema-drift
 ```
+
+Para validar somente os arquivos de migration, sem um banco provisionado:
+
+```bash
+pnpm --filter @workspace/db run schema-drift -- --static-only
+```
+
+O modo padrão exige `DATABASE_URL` e executa os checks estáticos antes da
+comparação live. `--live-only` executa somente a comparação com o banco ativo.
+Os códigos de saída são: `1` para falha estática, `2` para
+`DATABASE_URL` ausente, `3` para banco inacessível ou consulta interrompida e
+`4` para divergência encontrada entre o snapshot e o banco. Assim, uma falha
+de configuração ou conexão não é confundida com drift real.
+
+O workflow local `schema-drift` e o pós-merge usam somente essa entrada
+reproduzível. A mensagem `Failed to check for database diff: The endpoint has
+been disabled` pertence à integração de plataforma do Replit; habilitar esse
+endpoint é uma configuração do control plane, não uma correção de código.
 
 Antes de abrir uma alteração, execute a validação completa:
 
@@ -58,7 +74,7 @@ Para alterações de banco, aplique a migration localmente conforme a seção ac
 quando houver um banco de desenvolvimento disponível, execute também:
 
 ```bash
-pnpm --filter @workspace/db run verify-db
+pnpm --filter @workspace/db run schema-drift
 ```
 
 Execute os testes do pacote alterado em lotes quando a suite for grande.

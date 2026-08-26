@@ -16,7 +16,9 @@
     "validate-coverage": "node scripts/validate-coverage.mjs",
     "validate-columns": "node scripts/validate-columns.mjs",
     "validate-tables": "node scripts/validate-tables.mjs",
-    "verify-db": "node scripts/verify-db-columns.mjs"
+    "verify-db": "node scripts/verify-db-columns.mjs",
+    "schema-drift": "node scripts/schema-drift.mjs",
+    "test": "node --test scripts/schema-drift.test.mjs"
   },
   "dependencies": {
     "@workspace/permissions": "workspace:*",

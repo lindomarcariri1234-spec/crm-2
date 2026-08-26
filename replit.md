@@ -38,15 +38,28 @@ VisiteCRM is built as a pnpm workspace monorepo utilizing TypeScript.
 
 `scripts/post-merge.sh` installs the lockfile-pinned dependency tree with
 `pnpm install --frozen-lockfile`, applies pending migrations, runs the
-idempotent plan seed, and verifies the live development database. It then runs
-the static migration checks below:
+idempotent plan seed, and runs the local `schema-drift` entry point. That
+entry point verifies the live development database directly through
+`information_schema` and then runs the static migration checks; it does not
+call Replit's database-diff endpoint.
 
 ```bash
-pnpm --filter @workspace/db run check
-pnpm --filter @workspace/db run validate-coverage
-pnpm --filter @workspace/db run validate-columns
-pnpm --filter @workspace/db run validate-tables
+pnpm --filter @workspace/db run schema-drift
 ```
+
+For environments without a database, run the reproducible static-only mode:
+
+```bash
+pnpm --filter @workspace/db run schema-drift -- --static-only
+```
+
+The default mode requires `DATABASE_URL`; `--live-only` runs only the direct
+live comparison. Exit code `1` means static migration failure, `2` means
+missing database configuration, `3` means the database could not be reached or
+queried, and `4` means the live schema differs from the Drizzle snapshot.
+The Replit message `Failed to check for database diff: The endpoint has been
+disabled` is a platform control-plane setting, not an application schema
+failure; enabling that endpoint is outside this repository.
 
 It intentionally does **not** run production builds or the full test suite,
 which take longer than is appropriate for automatic post-merge execution.
@@ -63,8 +76,10 @@ pnpm run build
 pnpm test
 ```
 
-After database changes, confirm that the post-merge reconciliation completes
-successfully in the development database.
+After database changes, confirm that `pnpm --filter @workspace/db run
+schema-drift` completes successfully in the development database. Never edit
+`0000_squash_baseline.sql` or use a destructive push to resolve a live
+divergence; review and apply an incremental migration instead.
 
 ### Core Features and Design Patterns
 - **Multi-tenancy**: Each agency operates as a distinct tenant with isolated data.
