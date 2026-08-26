@@ -163,7 +163,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "pnpm --filter @workspace/db check && pnpm --filter @workspace/db validate-coverage && pnpm --filter @workspace/db validate-columns && pnpm --filter @workspace/db validate-tables"
+args = "pnpm --filter @workspace/db run schema-drift"
 
   [agent]
 stack = "BEST_EFFORT_FALLBACK"
