@@ -9,6 +9,8 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "schema:check": "pnpm --filter @workspace/db check",
     "superadmin:set": "pnpm --filter @workspace/scripts superadmin:set",
+    "task:finish": "bash scripts/task-finish.sh",
+    "task:finish:test": "bash scripts/task-finish.test.sh",
     "api:codegen": "pnpm --filter @workspace/api-spec run codegen",
     "api:codegen:check": "pnpm run api:codegen && git diff --exit-code -- lib/api-zod/src/generated lib/api-zod/src/index.ts lib/api-client-react/src/generated",
     "test": "pnpm -r --if-present run test"

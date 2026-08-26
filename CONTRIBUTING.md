@@ -62,3 +62,46 @@ pnpm --filter @workspace/db run verify-db
 ```
 
 Execute os testes do pacote alterado em lotes quando a suite for grande.
+
+## Finalizar uma Task com commit e push
+
+O comando abaixo cria um commit com **somente os arquivos já adicionados ao
+stage** e o envia ao branch atual no remoto `origin`:
+
+```bash
+git status
+git add caminho/do/arquivo
+pnpm task:finish -- "feat: descrição curta da Task"
+```
+
+O comando exige uma mensagem não vazia, um branch com upstream exatamente em
+`origin/<branch>`, alterações staged e uma cópia local que já contenha o
+histórico remoto mais recente. Ele mostra os arquivos staged antes do commit,
+nunca usa `--force` e não cria commits vazios.
+
+Se houver alterações não staged ou arquivos ainda não rastreados, revise-os e
+deixe no stage apenas o que deve ser enviado:
+
+```bash
+git diff
+git add caminho/do/arquivo
+```
+
+Se o remoto tiver avançado ou os históricos divergirem, atualize e reconcilie
+manualmente o branch (por exemplo, com `git pull --rebase` quando apropriado),
+revise o resultado e rode o comando novamente. O comando não faz merge,
+rebase, resolução de conflitos ou force push automaticamente.
+
+Se o push falhar por acesso, rede ou uma atualização concorrente, o commit
+local permanece preservado. Corrija a causa e repita:
+
+```bash
+git push origin "$(git branch --show-current)"
+```
+
+Para validar o comando sem criar commits neste repositório nem usar o remoto
+real, execute:
+
+```bash
+pnpm task:finish:test
+```
