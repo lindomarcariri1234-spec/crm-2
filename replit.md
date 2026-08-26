@@ -39,9 +39,9 @@ VisiteCRM is built as a pnpm workspace monorepo utilizing TypeScript.
 `scripts/post-merge.sh` installs the lockfile-pinned dependency tree with
 `pnpm install --frozen-lockfile`, applies pending migrations, runs the
 idempotent plan seed, and runs the local `schema-drift` entry point. That
-entry point verifies the live development database directly through
-`information_schema` and then runs the static migration checks; it does not
-call Replit's database-diff endpoint.
+entry point runs static migration checks and verifies the live development
+database directly through `information_schema`; it does not call Replit's
+database-diff endpoint.
 
 ```bash
 pnpm --filter @workspace/db run schema-drift
