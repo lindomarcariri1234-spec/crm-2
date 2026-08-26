@@ -10,7 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useSyncMe, useGetMe } from "@workspace/api-client-react";
 import { useApiTimeout } from "@/hooks/useApiTimeout";
 import { ApiTimeoutFallback } from "@/components/api-timeout-fallback";
-import { AccessBlockedWall, extractBlockedCode } from "@/components/access-blocked-wall";
+import { AccessBlockedWall, extractBlockedCode, extractBlockedScope, type BlockedAccessScope } from "@/components/access-blocked-wall";
 
 import Layout from "@/components/layout";
 import AdminLayout from "@/components/admin-layout";
@@ -161,7 +161,7 @@ function RoleRedirect() {
   const [, setLocation] = useLocation();
   const [synced, setSynced] = useState(false);
   const [authError, setAuthError] = useState<{ status?: number; fromSync?: boolean } | null>(null);
-  const [blockedCode, setBlockedCode] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState<{ code: string; scope: BlockedAccessScope } | null>(null);
   const syncStartedRef = useRef(false);
 
   const { timedOut, retryKey, reset } = useApiTimeout();
@@ -185,8 +185,8 @@ function RoleRedirect() {
         },
         onError: (err: unknown) => {
           // If syncMe itself was blocked (trial expired, suspended, etc.) show the wall
-          const blocked = extractBlockedCode(err);
-          if (blocked) { setBlockedCode(blocked); setSynced(true); return; }
+          const code = extractBlockedCode(err);
+          if (code) { setBlocked({ code, scope: extractBlockedScope(err) }); setSynced(true); return; }
           const status = (err as { response?: { status?: number } })?.response?.status
             ?? (err as { status?: number })?.status;
           setAuthError({ status, fromSync: true });
@@ -202,8 +202,8 @@ function RoleRedirect() {
     if (!me) {
       // Check if the failure is a tenant access block (trial expired, suspended, etc.)
       // before falling back to the generic "account not found" error.
-      const blocked = extractBlockedCode(meError);
-      if (blocked) { setBlockedCode(blocked); return; }
+      const code = extractBlockedCode(meError);
+      if (code) { setBlocked({ code, scope: extractBlockedScope(meError) }); return; }
       // Redirecting to /sign-in here causes an infinite loop: Clerk detects the
       // active session and bounces the user straight back to /, which re-mounts
       // RoleRedirect, which calls syncMe again, and so on.
@@ -241,10 +241,11 @@ function RoleRedirect() {
     return <ApiTimeoutFallback onRetry={handleRetry} />;
   }
 
-  if (blockedCode) {
+  if (blocked) {
     return (
       <AccessBlockedWall
-        code={blockedCode}
+        code={blocked.code}
+        scope={blocked.scope}
         onSignOut={() => void signOut({ redirectUrl: `${basePath}/sign-in` })}
       />
     );

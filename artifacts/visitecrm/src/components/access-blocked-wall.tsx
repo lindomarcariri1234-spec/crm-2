@@ -8,6 +8,16 @@ type BlockedCode =
   | "SUBSCRIPTION_CANCELLED"
   | "SUBSCRIPTION_PAYMENT_REQUIRED";
 
+/**
+ * Whose tenant triggered the block, mirroring the API's TenantAccessScope.
+ *   - "own"           — the signed-in user's own account/agency is blocked.
+ *   - "invite_target" — a pending invite would have moved the user onto a
+ *     *different* agency's tenant, but that agency's own account is blocked.
+ *     The user's own account is unaffected; they just can't complete that
+ *     particular reconciliation yet.
+ */
+type BlockedScope = "own" | "invite_target";
+
 const CODE_CONFIG: Record<BlockedCode, { icon: typeof Clock; title: string; description: string }> = {
   TRIAL_EXPIRED: {
     icon: Clock,
@@ -42,16 +52,63 @@ const FALLBACK_CONFIG = {
     "Sua conta não tem acesso no momento. Entre em contato com o suporte.",
 };
 
+// Same codes, reworded for when it's the *inviting agency's* tenant that is
+// blocked rather than the signed-in user's own account — the user must not
+// be told "your account is suspended" for a tenant they don't even belong to
+// yet.
+const INVITE_TARGET_CODE_CONFIG: Record<BlockedCode, { icon: typeof Clock; title: string; description: string }> = {
+  TRIAL_EXPIRED: {
+    icon: Clock,
+    title: "Convite indisponível no momento",
+    description:
+      "O período de teste da agência que te convidou expirou. Seu convite continua pendente e poderá ser concluído assim que a agência regularizar a situação. Entre em contato com quem te convidou.",
+  },
+  TENANT_SUSPENDED: {
+    icon: ShieldOff,
+    title: "Convite indisponível no momento",
+    description:
+      "A agência que te convidou está com a conta suspensa. Seu convite continua pendente e poderá ser concluído assim que a situação for regularizada. Entre em contato com quem te convidou.",
+  },
+  SUBSCRIPTION_CANCELLED: {
+    icon: Ban,
+    title: "Convite indisponível no momento",
+    description:
+      "A assinatura da agência que te convidou foi cancelada. Seu convite continua pendente. Entre em contato com quem te convidou.",
+  },
+  SUBSCRIPTION_PAYMENT_REQUIRED: {
+    icon: CreditCard,
+    title: "Convite indisponível no momento",
+    description:
+      "A agência que te convidou precisa regularizar um pagamento pendente antes que você possa entrar. Seu convite continua pendente. Entre em contato com quem te convidou.",
+  },
+};
+
+const INVITE_TARGET_FALLBACK_CONFIG = {
+  icon: ShieldOff,
+  title: "Convite indisponível no momento",
+  description:
+    "A agência que te convidou não está disponível no momento. Seu convite continua pendente. Entre em contato com quem te convidou.",
+};
+
 interface Props {
   /** Error code returned by the API */
   code: string;
+  /**
+   * Whose tenant is blocked — the signed-in user's own ("own", default) or
+   * the target agency of a pending invite ("invite_target"). See
+   * `extractBlockedScope`.
+   */
+  scope?: BlockedScope;
   /** Override sign-out handler (defaults to Clerk signOut) */
   onSignOut?: () => void;
 }
 
-export function AccessBlockedWall({ code, onSignOut }: Props) {
+export function AccessBlockedWall({ code, scope = "own", onSignOut }: Props) {
   const { signOut } = useClerk();
-  const cfg = CODE_CONFIG[code as BlockedCode] ?? FALLBACK_CONFIG;
+  const cfg =
+    scope === "invite_target"
+      ? INVITE_TARGET_CODE_CONFIG[code as BlockedCode] ?? INVITE_TARGET_FALLBACK_CONFIG
+      : CODE_CONFIG[code as BlockedCode] ?? FALLBACK_CONFIG;
   const Icon = cfg.icon;
 
   const handleSignOut = onSignOut ?? (() => void signOut());
@@ -100,18 +157,34 @@ export const BLOCKED_ACCESS_CODES = [
 ] as const;
 
 export type BlockedAccessCode = (typeof BLOCKED_ACCESS_CODES)[number];
+export type BlockedAccessScope = BlockedScope;
+
+function errorResponseBody(err: unknown): Record<string, unknown> | undefined {
+  const e = err as Record<string, unknown>;
+  return (
+    ((e?.response as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined) ??
+    (e?.data as Record<string, unknown> | undefined) ??
+    e
+  );
+}
 
 /** Extract a blocked-access error code from any API error shape */
 export function extractBlockedCode(err: unknown): BlockedAccessCode | null {
   if (!err) return null;
-  // Axios-style: err.response.data.code
-  const e = err as Record<string, unknown>;
-  const code =
-    ((e.response as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined)?.code ??
-    (e.data as Record<string, unknown> | undefined)?.code ??
-    e.code;
+  const code = errorResponseBody(err)?.code;
   if (typeof code === "string" && (BLOCKED_ACCESS_CODES as readonly string[]).includes(code)) {
     return code as BlockedAccessCode;
   }
   return null;
+}
+
+/**
+ * Extract the tenant-access scope ("own" vs "invite_target") from any API
+ * error shape. Defaults to "own" when the field is absent — e.g. responses
+ * from before this distinction existed, or checks that only ever target the
+ * user's own tenant.
+ */
+export function extractBlockedScope(err: unknown): BlockedAccessScope {
+  const scope = errorResponseBody(err)?.scope;
+  return scope === "invite_target" ? "invite_target" : "own";
 }

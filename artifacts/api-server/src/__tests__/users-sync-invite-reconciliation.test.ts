@@ -430,6 +430,7 @@ describe("POST /api/users/me/sync — reconciling despite the placeholder tenant
       "tenant-real-agency",
       expect.any(Object),
       expect.any(Object),
+      { scope: "invite_target" },
     );
     expect(mockUpdate).toHaveBeenCalledWith({ __name: "invites" });
   });
@@ -471,6 +472,50 @@ describe("POST /api/users/me/sync — reconciling despite the placeholder tenant
 //    silently succeed only to have the user blocked on their very next login.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 8. The very first sync for a brand-new user (no local account yet) must
+//    apply the same invite_target scope when the pending invite that assigns
+//    their tenant points at a blocked agency — this is the initial-invite
+//    counterpart to the reconciliation checks above.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/users/me/sync — provisioning a brand-new user against a blocked invite target", () => {
+  it("reports scope invite_target (not own) when a newly provisioned user's invite points at a suspended agency", async () => {
+    stubClerkUser("novo.vendedor@example.com");
+    const invite = makeInvite({ tenantId: "tenant-suspended-agency", role: ROLES.SALES });
+
+    mockCheckTenantAccess.mockImplementation(async (tenantId: string, _req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+      if (tenantId === "tenant-suspended-agency") {
+        res.status(403).json({ code: "TENANT_SUSPENDED", scope: "invite_target", message: "Esta conta está suspensa." });
+        return false;
+      }
+      return true;
+    });
+
+    mockLimit
+      .mockResolvedValueOnce([])       // 1. usersTable lookup — no existing local account
+      .mockResolvedValueOnce([invite]); // 2. invitesTable byEmail
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("TENANT_SUSPENDED");
+    // The critical assertion: this must never come back as scope "own" — the
+    // brand-new user's own (nonexistent) account isn't blocked, the inviting
+    // agency is.
+    expect(res.body.scope).toBe("invite_target");
+    expect(mockCheckTenantAccess).toHaveBeenCalledWith(
+      "tenant-suspended-agency",
+      expect.any(Object),
+      expect.any(Object),
+      { scope: "invite_target" },
+    );
+    // No user or invite row should have been created/mutated.
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /api/users/me/sync — refusing to reconcile onto a blocked target tenant", () => {
   it("does not reconcile a tenant-less account onto an invite whose target tenant is suspended", async () => {
     stubClerkUser("vendedor.novo@example.com");
@@ -497,6 +542,7 @@ describe("POST /api/users/me/sync — refusing to reconcile onto a blocked targe
       "tenant-suspended-agency",
       expect.any(Object),
       expect.any(Object),
+      { scope: "invite_target" },
     );
     // Neither the user's tenantId nor the invite should have been touched —
     // the invite must stay pending so this can be retried later.
@@ -530,6 +576,7 @@ describe("POST /api/users/me/sync — refusing to reconcile onto a blocked targe
       "tenant-real-agency-expired",
       expect.any(Object),
       expect.any(Object),
+      { scope: "invite_target" },
     );
     // The user must remain on their current (placeholder) tenant and the
     // invite must remain pending, not silently consumed onto a blocked tenant.

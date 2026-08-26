@@ -217,6 +217,12 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       }
 
       let linkedTenantId = pendingInvite?.tenantId ?? null;
+      // Tracks whether linkedTenantId came from a pending invite (someone
+      // else's agency) vs. a direct storefront client registration (the
+      // tenant the user is themselves joining). Only the invite case must
+      // report scope "invite_target" — the account being created doesn't
+      // exist yet, so "own" still correctly describes the storefront case.
+      let linkedTenantIsInviteTarget = Boolean(pendingInvite);
       const superadminClerkId = process.env.SUPERADMIN_CLERK_ID;
       let assignedRole = (superadminClerkId && clerkId === superadminClerkId) ? ROLES.SUPER_ADMIN : (pendingInvite?.role ?? ROLES.AGENCY_ADMIN);
 
@@ -235,13 +241,19 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
           .limit(1);
         if (storeRow) {
           linkedTenantId = storeRow.tenantId;
+          linkedTenantIsInviteTarget = false;
           assignedRole = ROLES.CLIENT;
           req.log.info({ clerkId, storeSlug: parsed.data.storeSlug, tenantId: storeRow.tenantId }, "New user registered via storefront — assigned role CLIENT");
         }
       }
 
       if (linkedTenantId) {
-        const hasTenantAccess = await checkTenantAccess(linkedTenantId, req, res);
+        const hasTenantAccess = await checkTenantAccess(
+          linkedTenantId,
+          req,
+          res,
+          linkedTenantIsInviteTarget ? { scope: "invite_target" } : undefined,
+        );
         if (!hasTenantAccess) return;
         const allowed = await checkPlanLimit(linkedTenantId, "users", req, res);
         if (!allowed) return;
@@ -313,7 +325,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       // the invite pending and the user on their current tenant so this can be
       // retried once the target tenant's access is restored.
       if (winningInvite) {
-        const targetTenantAllowed = await checkTenantAccess(winningInvite.tenantId, req, res);
+        const targetTenantAllowed = await checkTenantAccess(winningInvite.tenantId, req, res, { scope: "invite_target" });
         if (!targetTenantAllowed) return;
       } else if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN) {
         const allowed = await checkTenantAccess(existing.tenantId, req, res);

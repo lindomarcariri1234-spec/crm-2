@@ -21,6 +21,21 @@ export type AuthedUser = {
 };
 
 /**
+ * Which tenant is being checked, from the perspective of the requesting user.
+ *   - "own"           (default) — the user's own linked tenant.
+ *   - "invite_target" — a *different* tenant that a pending invite would
+ *     reconcile the user onto. That tenant belongs to the inviting agency,
+ *     not the user, so the 403 response must not read as if the user's own
+ *     account is blocked — the frontend uses this to show agency-appropriate
+ *     copy instead of "your account is suspended".
+ */
+export type TenantAccessScope = "own" | "invite_target";
+
+export type TenantAccessContext = {
+  scope?: TenantAccessScope;
+};
+
+/**
  * Checks whether a tenant's subscription state allows access to protected routes.
  * Returns true if access is allowed, false (and sends a 403) if blocked.
  *
@@ -38,8 +53,13 @@ export type AuthedUser = {
  * management and invoice-payment routes) should pass `skipTenantStatusCheck: true`
  * to `requireAuth()` so that users in a `pending_payment` state can still reach the
  * payment completion flow.
+ *
+ * Pass `context.scope: "invite_target"` when checking a tenant other than the
+ * caller's own (e.g. an invite's destination tenant during reconciliation) so
+ * the response carries that distinction for the frontend.
  */
-export async function checkTenantAccess(tenantId: string, req: Request, res: Response): Promise<boolean> {
+export async function checkTenantAccess(tenantId: string, req: Request, res: Response, context?: TenantAccessContext): Promise<boolean> {
+  const scope: TenantAccessScope = context?.scope ?? "own";
   const [tenant] = await db
     .select({ status: tenantsTable.status, trialEndsAt: tenantsTable.trialEndsAt })
     .from(tenantsTable)
@@ -52,6 +72,7 @@ export async function checkTenantAccess(tenantId: string, req: Request, res: Res
       code: "TENANT_NOT_FOUND",
       message: "Agência não encontrada.",
       requestId: req.id ?? "unknown",
+      scope,
     });
     return false;
   }
@@ -64,6 +85,7 @@ export async function checkTenantAccess(tenantId: string, req: Request, res: Res
       code: "TENANT_SUSPENDED",
       message: "Esta conta está suspensa. Entre em contato com o suporte.",
       requestId: req.id ?? "unknown",
+      scope,
     });
     return false;
   }
@@ -74,6 +96,7 @@ export async function checkTenantAccess(tenantId: string, req: Request, res: Res
       code: "SUBSCRIPTION_CANCELLED",
       message: "A assinatura desta conta foi cancelada. Entre em contato com o suporte para reativação.",
       requestId: req.id ?? "unknown",
+      scope,
     });
     return false;
   }
@@ -84,6 +107,7 @@ export async function checkTenantAccess(tenantId: string, req: Request, res: Res
       code: "SUBSCRIPTION_PAYMENT_REQUIRED",
       message: "É necessário concluir o pagamento para continuar usando o VisiteCRM. Acesse a área de assinatura para regularizar.",
       requestId: req.id ?? "unknown",
+      scope,
     });
     return false;
   }
@@ -96,6 +120,7 @@ export async function checkTenantAccess(tenantId: string, req: Request, res: Res
         code: "TRIAL_EXPIRED",
         message: "O período de teste expirou. Assine um plano para continuar usando o VisiteCRM.",
         requestId: req.id ?? "unknown",
+        scope,
       });
       return false;
     }
