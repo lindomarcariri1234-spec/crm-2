@@ -19,6 +19,7 @@ import { roundMoney } from "../lib/pricing";
 import { ValidationError, AppError } from "../lib/errors";
 import { adjustOrderSettlement, recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 import { processEvolutionInbound } from "../services/whatsapp-attendance";
+import { moveDealToStage } from "../services/pipeline-automation";
 
 const router = Router();
 
@@ -657,7 +658,11 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
 
   // Find the reservations linked to this order via storeOrderId == orderNumber
   const reservations = await tx
-    .select({ id: reservationsTable.id, totalValue: reservationsTable.totalValue })
+    .select({
+      id: reservationsTable.id,
+      clientId: reservationsTable.clientId,
+      totalValue: reservationsTable.totalValue,
+    })
     .from(reservationsTable)
     .where(
       and(
@@ -717,6 +722,14 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     });
 
     await syncReservationPaymentStatus(r.id, order.tenantId, tx);
+    await moveDealToStage({
+      tenantId: order.tenantId,
+      clientId: r.clientId,
+      reservationId: r.id,
+      targetStageName: "Pagamento Confirmado",
+      forwardOnly: true,
+      executor: tx,
+    });
   }
 
   logger.info(

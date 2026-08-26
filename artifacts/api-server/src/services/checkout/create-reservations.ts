@@ -7,7 +7,6 @@ import {
   reservationsTable,
   passengersTable,
   tripsTable,
-  dealsTable,
   paymentsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -26,6 +25,8 @@ import { upsertCheckoutClient } from "./checkout-user";
 import { roundMoney } from "../../lib/pricing";
 import { syncReservationPaymentStatus, paymentExistsForGatewayTx, type DbExecutor } from "../../lib/reservation-payments";
 import type { Tx } from "./tx";
+import { syncClientDeal, type PipelineExecutor } from "../pipeline-deal-sync";
+import { moveDealToStage } from "../pipeline-automation";
 
 export interface CreateReservationsResult {
   reservationIds: string[];
@@ -408,56 +409,20 @@ export async function createReservationsForOrder(
       );
     }
 
-    const stageId = isDepositConfirmed
-      ? (ctx.reservaCriadaStageId ?? ctx.vitrineStageId)
-      : ctx.vitrineStageId;
-    if (stageId) {
-      const tripName = ctx.tripNameMap.get(tripId) ?? product.name;
-      const title = `${order.customerName} — ${tripName}`;
-
-      // Deduplication guard: if a deal already exists for this client+trip,
-      // update it instead of inserting a duplicate. This covers the case where
-      // a frontend "Lead" deal was created before the vitrine checkout.
-      const [existingDeal] = order.clientId
-        ? await exec
-            .select({ id: dealsTable.id })
-            .from(dealsTable)
-            .where(and(
-              eq(dealsTable.clientId, order.clientId),
-              eq(dealsTable.tenantId, order.tenantId),
-              eq(dealsTable.tripId, tripId),
-              eq(dealsTable.status, "open"),
-            ))
-            .limit(1)
-        : [];
-
-      if (existingDeal) {
-        await exec
-          .update(dealsTable)
-          .set({
-            value: totalValue.toFixed(2),
-            stageId,
-            title,
-            reservationId,
-            ...(isDepositConfirmed ? { status: "won" as const } : {}),
-          })
-          .where(and(eq(dealsTable.id, existingDeal.id), eq(dealsTable.tenantId, order.tenantId)));
-      } else {
-        await exec.insert(dealsTable).values({
-          id: generateId(),
-          tenantId: order.tenantId,
-          stageId,
-          title,
-          value: totalValue.toFixed(2),
-          clientId: order.clientId ?? null,
-          tripId,
-          ownerId: ctx.reservationCreatedById,
-          status: isDepositConfirmed ? "won" : "open",
-          source: "website",
-          autoCreated: true,
+    if (order.clientId) {
+      await syncClientDeal(
+        order.clientId,
+        order.tenantId,
+        tripId,
+        totalValue,
+        ctx.reservationCreatedById,
+        {
           reservationId,
-        });
-      }
+          source: "website",
+          targetStageName: isDepositConfirmed ? "Reserva Criada" : "Vitrine",
+          executor: exec as unknown as PipelineExecutor,
+        },
+      );
     }
   }
 
@@ -513,7 +478,11 @@ export async function confirmReservationsForOrder(
   if (!order || amount <= 0) return { reservationIds: [] };
 
   const reservations = await tx
-    .select({ id: reservationsTable.id, totalValue: reservationsTable.totalValue })
+    .select({
+      id: reservationsTable.id,
+      clientId: reservationsTable.clientId,
+      totalValue: reservationsTable.totalValue,
+    })
     .from(reservationsTable)
     .where(and(
       eq(reservationsTable.tenantId, order.tenantId),
@@ -559,6 +528,14 @@ export async function confirmReservationsForOrder(
     });
 
     await syncReservationPaymentStatus(r.id, order.tenantId, tx);
+    await moveDealToStage({
+      tenantId: order.tenantId,
+      clientId: r.clientId,
+      reservationId: r.id,
+      targetStageName: "Pagamento Confirmado",
+      forwardOnly: true,
+      executor: tx,
+    });
   }
 
   return { reservationIds: reservations.map((r) => r.id) };

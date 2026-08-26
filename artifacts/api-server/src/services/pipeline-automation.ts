@@ -5,13 +5,15 @@ import { DEAL_STATUS } from "@workspace/permissions";
 import { logger } from "../lib/logger";
 import { generateId } from "../lib/id";
 
+type PipelineExecutor = Pick<typeof db, "select" | "update">;
+
 export async function moveDealToStage({
   tenantId,
   dealId,
-  clientId,
   reservationId,
   targetStageName,
   forwardOnly,
+  executor,
 }: {
   tenantId: string;
   dealId?: string;
@@ -19,36 +21,39 @@ export async function moveDealToStage({
   reservationId?: string | null;
   targetStageName: string;
   forwardOnly: boolean;
+  /** Use the caller's transaction when the stage move is part of a larger write. */
+  executor?: PipelineExecutor;
 }): Promise<void> {
   try {
+    const exec = executor ?? db;
     // Step 1: Find the deal first so we know which pipeline it belongs to.
     let deal: { id: string; stageId: string } | undefined;
 
     if (dealId) {
-      const [found] = await db
+      const [found] = await exec
         .select({ id: dealsTable.id, stageId: dealsTable.stageId })
         .from(dealsTable)
         .where(and(eq(dealsTable.id, dealId), eq(dealsTable.tenantId, tenantId)))
         .limit(1);
       deal = found;
-    } else {
-      const [found] = await db
+    } else if (reservationId) {
+      const [found] = await exec
         .select({ id: dealsTable.id, stageId: dealsTable.stageId })
         .from(dealsTable)
         .where(
           and(
             eq(dealsTable.tenantId, tenantId),
             eq(dealsTable.status, DEAL_STATUS.OPEN),
-            reservationId
-              ? eq(dealsTable.reservationId, reservationId)
-              : clientId
-                ? eq(dealsTable.clientId, clientId)
-                : undefined,
+            eq(dealsTable.reservationId, reservationId),
           ),
         )
         .orderBy(desc(dealsTable.createdAt))
         .limit(1);
       deal = found;
+    } else {
+      // A generic client can have multiple trips. Reservation lifecycle stages
+      // must never choose the newest arbitrary card from that client.
+      return;
     }
 
     if (!deal) return;
@@ -56,7 +61,7 @@ export async function moveDealToStage({
     // Step 2: Look up the deal's current stage to obtain its pipelineId and order.
     // Both are needed: pipelineId scopes the target-stage search to the same
     // pipeline; order is used for the forwardOnly guard.
-    const [currentStageRow] = await db
+    const [currentStageRow] = await exec
       .select({ order: pipelineStagesTable.order, pipelineId: pipelineStagesTable.pipelineId })
       .from(pipelineStagesTable)
       .where(eq(pipelineStagesTable.id, deal.stageId))
@@ -67,7 +72,7 @@ export async function moveDealToStage({
     // Step 3: Find the target stage by name, scoped to the deal's own pipeline.
     // If the name doesn't exist in this pipeline we log a warning and do nothing —
     // we never move a deal to a stage that belongs to a different pipeline.
-    const [targetStage] = await db
+    const [targetStage] = await exec
       .select({ id: pipelineStagesTable.id, order: pipelineStagesTable.order })
       .from(pipelineStagesTable)
       .where(
@@ -91,7 +96,7 @@ export async function moveDealToStage({
     if (forwardOnly && currentStageRow.order >= targetStage.order) return;
 
     // Step 5: Advance the deal.
-    await db
+    await exec
       .update(dealsTable)
       .set({ stageId: targetStage.id })
       .where(and(eq(dealsTable.id, deal.id), eq(dealsTable.tenantId, tenantId)));
@@ -203,31 +208,9 @@ export async function cancelDealOnReservationCancellation({
       return false;
     }
 
-    // Step 3b: Check if the client has an active reservation in any OTHER trip.
-    // If so, the client is still an active booker — leave the deal open without
-    // re-linking (the deal context remains tied to the cancelled trip).
-    const [activeOtherTripReservation] = await db
-      .select({ id: reservationsTable.id })
-      .from(reservationsTable)
-      .where(
-        and(
-          eq(reservationsTable.tenantId, tenantId),
-          eq(reservationsTable.clientId, clientId),
-          ne(reservationsTable.tripId, tripId),
-          inArray(reservationsTable.status, ["pending", "confirmed"]),
-        ),
-      )
-      .limit(1);
-
-    if (activeOtherTripReservation) {
-      logger.info(
-        { tenantId, dealId: deal.id, cancelledReservationId: reservationId, otherTripReservationId: activeOtherTripReservation.id },
-        "[pipeline-automation] Client has active reservation in another trip — deal not moved to Cancelado",
-      );
-      return false;
-    }
-
-    // Step 4: No active reservation anywhere — get the deal's pipeline from its current stage.
+    // Step 4: No surviving reservation for THIS trip — get the deal's pipeline
+    // from its current stage. A booking in another trip must not keep this
+    // cancelled trip's card open.
     const [currentStage] = await db
       .select({ pipelineId: pipelineStagesTable.pipelineId })
       .from(pipelineStagesTable)
@@ -276,9 +259,23 @@ export async function cancelDealOnReservationCancellation({
         name: "Cancelado",
         color: "#6b7280",
         order: newOrder,
-      });
+      }).onConflictDoNothing();
 
-      cancelledStageId = newId;
+      // A cancellation replay can race another worker creating this default
+      // stage. The stage-name unique index resolves the write; re-read the
+      // canonical row so both workers move the deal to the same stage.
+      const [resolvedStage] = await db
+        .select({ id: pipelineStagesTable.id })
+        .from(pipelineStagesTable)
+        .where(and(
+          eq(pipelineStagesTable.pipelineId, pipelineId),
+          eq(pipelineStagesTable.tenantId, tenantId),
+          eq(pipelineStagesTable.name, "Cancelado"),
+        ))
+        .limit(1);
+      if (!resolvedStage) return false;
+
+      cancelledStageId = resolvedStage.id;
       logger.info(
         { tenantId, pipelineId, stageId: newId, order: newOrder },
         "[pipeline-automation] Created default 'Cancelado' stage",

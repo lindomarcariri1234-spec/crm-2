@@ -73,3 +73,4 @@
 - [Expo build port isolation](expo-build-port-isolation.md) — mobile static builds must use a configurable Metro port when the component sandbox also occupies 8081.
 - [Resend production verification](resend-production-verification.md) — the connected production credential may be send-only; verify the exact sender domain externally before testing delivery.
 - [GitHub Actions IPv4-mapped loopback](github-actions-ipv4-mapped-loopback.md) — GitHub runners may expose localhost as ::ffff:127.0.0.1; queue/audit payloads should use the canonical client-IP helper.
+- [Pipeline lifecycle scope](pipeline-lifecycle-scope.md) — reservation cards stay tenant+trip-scoped in the default pipeline; only trip-less leads may be adopted.

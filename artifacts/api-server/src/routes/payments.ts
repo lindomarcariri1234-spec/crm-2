@@ -552,9 +552,14 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       writeClientActivity(effectiveClientId, "payment", `Pagamento de ${amountFormatted} recebido`, me.id, { amount: parsed.data.amount, reservationId: parsed.data.reservationId })
         .catch(() => {});
     }
-    if (effectiveClientId && explicitStatus === PAYMENT_STATUS.PAID && parsed.data.type === PAYMENT_TYPE.RECEIVABLE) {
-      moveDealToStage({ tenantId: me.tenantId, clientId: effectiveClientId, reservationId: parsed.data.reservationId ?? null, targetStageName: "Pagamento Confirmado", forwardOnly: true })
-        .catch((err) => req.log.error({ err }, "Error moving deal to Pagamento Confirmado on payment create"));
+    if (effectiveClientId && parsed.data.reservationId && explicitStatus === PAYMENT_STATUS.PAID && parsed.data.type === PAYMENT_TYPE.RECEIVABLE) {
+      await moveDealToStage({
+        tenantId: me.tenantId,
+        clientId: effectiveClientId,
+        reservationId: parsed.data.reservationId ?? null,
+        targetStageName: "Pagamento Confirmado",
+        forwardOnly: true,
+      });
     }
     if (parsed.data.reservationId && explicitStatus === PAYMENT_STATUS.PAID && parsed.data.type === PAYMENT_TYPE.RECEIVABLE) {
       enqueueNewBookingNotificationEmail(parsed.data.reservationId, me.tenantId)
@@ -655,7 +660,7 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
       await syncReservationPaymentStatus(payment.reservationId, me.tenantId);
       await syncReservationCommission(payment.reservationId, me.tenantId);
     }
-    if (payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
+    if (payment.reservationId && payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
       if (payment.reservationId) {
         const [reservationRow] = await db.select({ clientId: reservationsTable.clientId, totalValue: reservationsTable.totalValue })
           .from(reservationsTable)
@@ -678,9 +683,14 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         });
       }
     }
-    if (payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
-      moveDealToStage({ tenantId: me.tenantId, clientId: payment.clientId ?? null, reservationId: payment.reservationId ?? null, targetStageName: "Pagamento Confirmado", forwardOnly: true })
-        .catch((err) => req.log.error({ err }, "Error moving deal to Pagamento Confirmado on payment update"));
+    if (payment.reservationId && payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
+      await moveDealToStage({
+        tenantId: me.tenantId,
+        clientId: payment.clientId ?? null,
+        reservationId: payment.reservationId ?? null,
+        targetStageName: "Pagamento Confirmado",
+        forwardOnly: true,
+      });
     }
     res.json(formatPayment(payment));
     CalendarSyncService.syncPayment(req.params.id)

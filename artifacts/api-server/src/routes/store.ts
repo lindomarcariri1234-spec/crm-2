@@ -33,6 +33,7 @@ import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../s
 import { encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
 import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
+import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
 // links point at the Vitrine; the unsubscribe link points at the public API,
@@ -901,61 +902,45 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
             // WhatsApp notifications for a payment that was already confirmed.
             await runPostPaymentSideEffects(currentOrder.id);
           }
+
+          // Product-only orders have no reservation to drive the travel
+          // lifecycle, but remain visible in CRM as a paid Vitrine order.
+          if (createResult.reservationIds.length === 0 && currentOrder.clientId) {
+            await syncPaidProductOrderDeal({
+              tenantId: currentOrder.tenantId,
+              clientId: currentOrder.clientId,
+              ownerId: me.id,
+              orderNumber: currentOrder.orderNumber,
+              totalValue: currentOrder.totalAmount,
+            });
+          }
         })
         .catch((err) => {
           req.log.warn({ err, orderId: currentOrder.id }, "[store/orders] Failed reservation/post-payment side effects on manual payment confirmation");
         });
     }
 
-    // Auto-create CRM deal as "won" when order transitions to paid or completed (fire-and-forget).
-    // Looks up linked reservation by storeOrderId to get tripId + reservationId for full linkage.
-    if ((isTransitioningToPaid || isTransitioningToCompleted) && order.clientId) {
-      (async () => {
-        try {
-          const [existingDeal] = await db.select({ id: dealsTable.id })
-            .from(dealsTable)
-            .where(and(
-              eq(dealsTable.tenantId, me.tenantId),
-              eq(dealsTable.title, `Pedido Loja ${order.orderNumber}`),
-            ))
-            .limit(1);
-          if (!existingDeal) {
-            // storeOrderId is stored as orderNumber (human-readable) in reservations.
-            // Tenant-scoped to prevent cross-tenant data leakage.
-            const [linkedReservation] = await db.select({
-              id: reservationsTable.id,
-              tripId: reservationsTable.tripId,
-            })
-              .from(reservationsTable)
-              .where(and(
-                eq(reservationsTable.tenantId, me.tenantId),
-                eq(reservationsTable.storeOrderId, order.orderNumber),
-              ))
-              .limit(1);
-            const [firstStage] = await db.select({ id: pipelineStagesTable.id })
-              .from(pipelineStagesTable)
-              .where(eq(pipelineStagesTable.tenantId, me.tenantId))
-              .orderBy(asc(pipelineStagesTable.order))
-              .limit(1);
-            if (firstStage) {
-              await db.insert(dealsTable).values({
-                id: generateId(),
-                tenantId: me.tenantId,
-                title: `Pedido Loja ${order.orderNumber}`,
-                clientId: order.clientId,
-                ownerId: me.id,
-                stageId: firstStage.id,
-                value: order.totalAmount,
-                status: "won",
-                ...(linkedReservation?.tripId && { tripId: linkedReservation.tripId }),
-                ...(linkedReservation?.id && { reservationId: linkedReservation.id }),
-              });
-            }
-          }
-        } catch (dealErr) {
-          req.log.warn({ dealErr }, "Could not auto-create CRM deal on order status update");
-        }
-      })();
+    // Keep the historical CRM visibility for a product-only order completed
+    // outside the payment action. Trip orders already have reservation cards;
+    // an unlinked order gets the centralized store-order card instead.
+    if (isTransitioningToCompleted && !isTransitioningToPaid && currentOrder.clientId) {
+      const [linkedReservation] = await db
+        .select({ id: reservationsTable.id })
+        .from(reservationsTable)
+        .where(and(
+          eq(reservationsTable.tenantId, currentOrder.tenantId),
+          eq(reservationsTable.storeOrderId, currentOrder.orderNumber),
+        ))
+        .limit(1);
+      if (!linkedReservation) {
+        await syncPaidProductOrderDeal({
+          tenantId: currentOrder.tenantId,
+          clientId: currentOrder.clientId,
+          ownerId: me.id,
+          orderNumber: currentOrder.orderNumber,
+          totalValue: currentOrder.totalAmount,
+        });
+      }
     }
 
     // When an admin manually cancels a paid order (referralEffectsAppliedAt set),

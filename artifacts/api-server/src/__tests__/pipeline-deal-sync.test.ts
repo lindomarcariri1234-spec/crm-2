@@ -31,6 +31,7 @@ const {
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
+  mockOnConflictDoNothing,
   mockInsertValues,
   mockInsert,
   mockMoveDealToStage,
@@ -43,13 +44,14 @@ const {
   const mockUpdateWhere = vi.fn().mockResolvedValue([]);
   const mockUpdateSet   = vi.fn(() => ({ where: mockUpdateWhere }));
   const mockUpdate      = vi.fn(() => ({ set: mockUpdateSet }));
-  const mockInsertValues = vi.fn().mockResolvedValue([]);
+  const mockOnConflictDoNothing = vi.fn().mockResolvedValue([]);
+  const mockInsertValues = vi.fn(() => ({ onConflictDoNothing: mockOnConflictDoNothing }));
   const mockInsert       = vi.fn(() => ({ values: mockInsertValues }));
   const mockMoveDealToStage = vi.fn().mockResolvedValue(undefined);
   return {
     mockLimit, mockOrderBy, mockWhere, mockFrom, mockSelect,
     mockUpdateWhere, mockUpdateSet, mockUpdate,
-    mockInsertValues, mockInsert,
+    mockOnConflictDoNothing, mockInsertValues, mockInsert,
     mockMoveDealToStage,
   };
 });
@@ -67,6 +69,7 @@ vi.mock("@workspace/db", () => ({
   clientsTable:        { _table: "clients" },
   tripsTable:          { _table: "trips" },
   dealsTable:          { _table: "deals" },
+  pipelinesTable:      { _table: "pipelines" },
   pipelineStagesTable: { _table: "pipelineStages" },
 }));
 
@@ -75,6 +78,7 @@ vi.mock("drizzle-orm", () => ({
   and:  vi.fn((...a: unknown[]) => a),
   desc: vi.fn(() => "desc"),
   asc:  vi.fn(() => "asc"),
+  isNull: vi.fn(() => "isNull"),
 }));
 
 vi.mock("../lib/id.js", () => ({
@@ -82,7 +86,7 @@ vi.mock("../lib/id.js", () => ({
 }));
 
 vi.mock("@workspace/permissions", () => ({
-  DEAL_STATUS: { OPEN: "open" },
+  DEAL_STATUS: { OPEN: "open", WON: "won" },
 }));
 
 vi.mock("../services/pipeline-automation.js", () => ({
@@ -93,7 +97,7 @@ vi.mock("../services/pipeline-automation.js", () => ({
 // Import module under test AFTER all mocks
 // ---------------------------------------------------------------------------
 
-import { syncClientDeal } from "../services/pipeline-deal-sync.js";
+import { syncClientDeal, syncPaidProductOrderDeal } from "../services/pipeline-deal-sync.js";
 
 // ---------------------------------------------------------------------------
 // Mock-chain helpers
@@ -132,6 +136,7 @@ const FAKE_CLIENT = { name: "João Silva" };
 const FAKE_TRIP   = { name: "Excursão ao Nordeste" };
 const RESERVA_CRIADA_STAGE = { id: "stage-reserva-criada" };
 const FIRST_STAGE          = { id: "stage-lead" };
+const DEFAULT_PIPELINE     = { id: "pipeline-default" };
 const EXISTING_DEAL        = { id: "deal-existing", clientId: CLIENT_ID, tenantId: TENANT_ID };
 
 // ---------------------------------------------------------------------------
@@ -139,14 +144,18 @@ const EXISTING_DEAL        = { id: "deal-existing", clientId: CLIENT_ID, tenantI
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  // Some insert scenarios intentionally skip the first-stage fallback query.
+  // Reset, rather than clear, so an unconsumed mockResolvedValueOnce cannot
+  // leak into the next lifecycle scenario.
+  vi.resetAllMocks();
 
   mockFrom.mockReturnValue({ where: mockWhere });
   mockSelect.mockReturnValue({ from: mockFrom });
   mockUpdateWhere.mockResolvedValue([]);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   mockUpdate.mockReturnValue({ set: mockUpdateSet });
-  mockInsertValues.mockResolvedValue([]);
+  mockOnConflictDoNothing.mockResolvedValue([]);
+  mockInsertValues.mockReturnValue({ onConflictDoNothing: mockOnConflictDoNothing });
   mockInsert.mockReturnValue({ values: mockInsertValues });
   mockMoveDealToStage.mockResolvedValue(undefined);
 });
@@ -181,6 +190,11 @@ function queueSharedSelects(existingDeal: unknown) {
     mockWhere.mockImplementationOnce(() => wv());
     mockOrderBy.mockImplementationOnce(() => ov());
     mockLimit.mockResolvedValueOnce([]);
+
+    // Canonical/default pipeline is resolved before locating its lifecycle stage.
+    mockWhere.mockImplementationOnce(() => wv());
+    mockOrderBy.mockImplementationOnce(() => ov());
+    mockLimit.mockResolvedValueOnce([DEFAULT_PIPELINE]);
   }
 }
 
@@ -226,6 +240,7 @@ describe("syncClientDeal — exactly one deal, no duplicates", () => {
 
     // moveDealToStage must NOT be called (there is no existing deal to advance)
     expect(mockMoveDealToStage).not.toHaveBeenCalled();
+    expect(mockOnConflictDoNothing).toHaveBeenCalledTimes(1);
   });
 
   // ── Scenario B ──────────────────────────────────────────────────────────
@@ -337,6 +352,11 @@ describe("syncClientDeal — exactly one deal, no duplicates", () => {
     mockWhere.mockImplementationOnce(() => wv());
     mockOrderBy.mockImplementationOnce(() => ov());
     mockLimit.mockResolvedValueOnce([]);
+
+    // canonical/default pipeline
+    mockWhere.mockImplementationOnce(() => wv());
+    mockOrderBy.mockImplementationOnce(() => ov());
+    mockLimit.mockResolvedValueOnce([DEFAULT_PIPELINE]);
 
     // "Reserva Criada" stage
     mockWhere.mockImplementationOnce(() => wv());
@@ -473,6 +493,59 @@ describe("syncClientDeal — exactly one deal, no duplicates", () => {
 
     // Should NOT insert a new deal
     expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("J — Vitrine creates an open website card in its own lifecycle stage", async () => {
+    queueSharedSelects(null);
+    const vitrineStage = { id: "stage-vitrine" };
+    mockWhere.mockImplementationOnce(() => wv());
+    mockLimit.mockResolvedValueOnce([vitrineStage]);
+
+    await syncClientDeal(CLIENT_ID, TENANT_ID, TRIP_ID, 700, OWNER_ID, {
+      reservationId: "res-vitrine",
+      source: "website",
+      targetStageName: "Vitrine",
+    });
+
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      stageId: vitrineStage.id,
+      source: "website",
+      reservationId: "res-vitrine",
+      status: "open",
+      autoCreated: true,
+    }));
+  });
+
+  it("K — product-only paid orders create one stable won card in the default pipeline", async () => {
+    // Existing card lookup by the stable order title → absent
+    mockWhere.mockImplementationOnce(() => wv());
+    mockLimit.mockResolvedValueOnce([]);
+    // Canonical/default pipeline
+    mockWhere.mockImplementationOnce(() => wv());
+    mockOrderBy.mockImplementationOnce(() => ov());
+    mockLimit.mockResolvedValueOnce([DEFAULT_PIPELINE]);
+    // Pagamento Confirmado within that same pipeline
+    mockWhere.mockImplementationOnce(() => wv());
+    mockLimit.mockResolvedValueOnce([{ id: "stage-paid" }]);
+
+    await syncPaidProductOrderDeal({
+      tenantId: TENANT_ID,
+      clientId: CLIENT_ID,
+      ownerId: OWNER_ID,
+      orderNumber: "#2026-0001",
+      totalValue: 320,
+    });
+
+    expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Pedido Loja #2026-0001",
+      stageId: "stage-paid",
+      clientId: CLIENT_ID,
+      ownerId: OWNER_ID,
+      value: "320",
+      status: "won",
+      source: "website",
+      autoCreated: true,
+    }));
   });
 
 });

@@ -1231,6 +1231,18 @@ export default function Pipeline() {
   const deleteDeal = useDeleteDeal();
   const updateDeal = useUpdateDeal();
 
+  // Checkout, payment webhooks and the trip-ended cron can change the board
+  // outside this browser session. Revalidate the compact board data so cards,
+  // counters and the Vitrine origin stay current without requiring a reload.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void Promise.all([refetchOpenDeals(), refetchWonDeals()]);
+      void refetchLostDeals();
+      void refetchStages();
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [refetchOpenDeals, refetchWonDeals, refetchLostDeals, refetchStages]);
+
   // Initialize selectedPipelineId to default pipeline
   useEffect(() => {
     if (!selectedPipelineId && pipelines?.length) {

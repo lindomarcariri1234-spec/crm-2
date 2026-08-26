@@ -1306,15 +1306,14 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
     enqueueCommissionSync(id, me.tenantId)
       .catch((err) => req.log.error({ err }, "Error enqueuing commission sync after reservation creation"));
     if (reservation.clientId) {
-      syncClientDeal(
+      await syncClientDeal(
         reservation.clientId,
         me.tenantId,
         reservation.tripId,
         Number(reservation.totalValue),
         effectiveSellerId ?? me.id,
         id,
-      )
-        .catch((err) => req.log.error({ err }, "Error syncing deal after reservation creation"));
+      );
       const totalFormatted = formatBRL(Number(reservation.totalValue));
       writeClientActivity(reservation.clientId, "reservation_created", `Reserva ${voucherCode} criada — ${totalFormatted}`, me.id, { voucherCode, totalValue: Number(reservation.totalValue) })
         .catch((err) => req.log.error({ err }, "Error writing reservation creation activity"));
@@ -2125,15 +2124,14 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
 
     if (!reservation) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
     if (parsed.data.totalValue != null && existing.clientId) {
-      syncClientDeal(
+      await syncClientDeal(
         existing.clientId,
         me.tenantId,
         existing.tripId,
         parsed.data.totalValue,
         reservation.sellerId ?? me.id,
         req.params.id,
-      )
-        .catch((err) => req.log.error({ err }, "Error syncing deal after reservation update"));
+      );
     }
     if (isBeingConfirmed && existing.clientId) {
       loyaltyAwardPointsForReservation({
@@ -2147,8 +2145,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
       const code = existing.voucherCode ?? req.params.id.slice(-8).toUpperCase();
       writeClientActivity(existing.clientId, "reservation_cancelled", `Reserva ${code} cancelada`, me.id, { voucherCode: code })
         .catch((err) => req.log.error({ err }, "Error writing cancellation activity"));
-      cancelDealOnReservationCancellation({ tenantId: me.tenantId, reservationId: existing.id })
-        .catch((err) => req.log.error({ err }, "Error cancelling deal on reservation cancellation"));
+      await cancelDealOnReservationCancellation({ tenantId: me.tenantId, reservationId: existing.id });
     }
     if (!isBeingCancelled) {
       enqueueCommissionSync(req.params.id, me.tenantId)
@@ -2448,6 +2445,15 @@ router.post("/reservations/:id/check-in", async (req, res, next: NextFunction): 
       .where(and(eq(reservationsTable.id, req.params.id), eq(reservationsTable.tenantId, me.tenantId)))
       .limit(1);
     if (!reservation) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
+    if (existing.clientId) {
+      await moveDealToStage({
+        tenantId: me.tenantId,
+        clientId: existing.clientId,
+        reservationId: req.params.id,
+        targetStageName: "Em Viagem",
+        forwardOnly: true,
+      });
+    }
     const formatted = await formatReservation(reservation);
     res.json(formatted);
     broadcastSeatUpdate(existing.tripId, me.tenantId).catch(() => {});
@@ -2457,8 +2463,6 @@ router.post("/reservations/:id/check-in", async (req, res, next: NextFunction): 
       const tripName = trip?.name ?? "viagem";
       writeClientActivity(existing.clientId, "checkin", `Check-in realizado na viagem ${tripName}`, me.id, { tripName })
         .catch((err) => req.log.error({ err }, "Error writing check-in activity"));
-      moveDealToStage({ tenantId: me.tenantId, clientId: existing.clientId, reservationId: req.params.id, targetStageName: "Em Viagem", forwardOnly: true })
-        .catch((err) => req.log.error({ err }, "Error moving deal to Em Viagem on check-in"));
     }
   } catch (err) {
     next(err);
