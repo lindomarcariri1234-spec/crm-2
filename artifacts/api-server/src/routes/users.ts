@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, tenantsTable, invitesTable, clientsTable, storesTable } from "@workspace/db";
+import { usersTable, tenantsTable, invitesTable, clientsTable, storesTable, tripsTable } from "@workspace/db";
 import { eq, and, gt, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, checkTenantAccess, ADMIN_ROLES } from "../lib/tenant";
@@ -89,18 +89,30 @@ router.get("/users/me", async (req, res, next): Promise<void> => {
   }
 });
 
+/**
+ * Normalizes an email for comparison purposes: trims surrounding whitespace and
+ * lowercases it. Invite matching must be tolerant of case/whitespace differences
+ * between what an inviter typed and the canonical email Clerk reports for the
+ * account, or an accepted invite can get stuck as "pending" forever.
+ */
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 async function resolveInviteForUser(
   clerkId: string,
   canonicalEmail: string,
   inviteIdFromMeta: string | undefined,
   log: import("pino").Logger,
 ): Promise<typeof invitesTable.$inferSelect | undefined> {
+  const normalizedEmail = normalizeEmail(canonicalEmail);
+
   if (inviteIdFromMeta) {
     const [byId] = await db.select().from(invitesTable)
       .where(and(
         eq(invitesTable.id, inviteIdFromMeta),
         eq(invitesTable.accepted, false),
-        eq(invitesTable.email, canonicalEmail),
+        sql`lower(trim(${invitesTable.email})) = ${normalizedEmail}`,
         gt(invitesTable.expiresAt, new Date()),
       ))
       .limit(1);
@@ -110,12 +122,51 @@ async function resolveInviteForUser(
 
   const [byEmail] = await db.select().from(invitesTable)
     .where(and(
-      eq(invitesTable.email, canonicalEmail),
+      sql`lower(trim(${invitesTable.email})) = ${normalizedEmail}`,
       eq(invitesTable.accepted, false),
       gt(invitesTable.expiresAt, new Date()),
     ))
     .limit(1);
   return byEmail;
+}
+
+/**
+ * Looks for a pending invite that should win over a user's *current* tenant
+ * link, for the narrow case where that current tenant is a self-provisioned
+ * placeholder the user never actually used (e.g. they clicked through onboarding
+ * before a teammate invite from a different agency arrived). This must never
+ * touch a tenant with real data or other members — it only unblocks a user who
+ * is otherwise invisible to the agency that invited them.
+ */
+async function resolveStaleTenantInvite(
+  clerkId: string,
+  currentTenantId: string,
+  currentRole: string,
+  canonicalEmail: string,
+  log: import("pino").Logger,
+): Promise<typeof invitesTable.$inferSelect | undefined> {
+  // Only ever reconsider a self-provisioned agency owner. A vendedor/gerente
+  // that was properly provisioned into a real tenant is never a candidate —
+  // this keeps the check from ever disturbing an established staff member.
+  if (currentRole !== ROLES.AGENCY_ADMIN) return undefined;
+
+  const candidate = await resolveInviteForUser(clerkId, canonicalEmail, undefined, log);
+  if (!candidate || candidate.tenantId === currentTenantId) return undefined;
+
+  const [[teammates], [trips]] = await Promise.all([
+    db.select({ count: sql<number>`count(*)::int` }).from(usersTable).where(eq(usersTable.tenantId, currentTenantId)).limit(1),
+    db.select({ count: sql<number>`count(*)::int` }).from(tripsTable).where(eq(tripsTable.tenantId, currentTenantId)).limit(1),
+  ]);
+
+  if (Number(teammates?.count ?? 0) > 1 || Number(trips?.count ?? 0) > 0) {
+    log.warn(
+      { clerkId, currentTenantId, inviteTenantId: candidate.tenantId },
+      "Pending invite found for a user whose current tenant already has real data or other members — leaving both untouched",
+    );
+    return undefined;
+  }
+
+  return candidate;
 }
 
 router.post("/users/me/sync", async (req, res, next): Promise<void> => {
@@ -240,17 +291,41 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
         req.log.info({ clerkId, userId: existing.id }, "Auto-promoted user to superadmin via SUPERADMIN_CLERK_ID");
       }
 
-      if (!existing.tenantId && !clerkFetchFailed) {
-        const reconcileInvite = await resolveInviteForUser(clerkId, canonicalEmail, inviteIdFromMeta, req.log);
-        if (reconcileInvite) {
-          updateSet.tenantId = reconcileInvite.tenantId;
+      if (!clerkFetchFailed) {
+        // Case A: the account has no tenant at all (most common — e.g. it was
+        // created before a matching invite existed, or a previous sync attempt
+        // hit a transient Clerk failure). Every subsequent successful login
+        // retries this until it succeeds or no invite matches.
+        const reconcileInvite = existing.tenantId
+          ? undefined
+          : await resolveInviteForUser(clerkId, canonicalEmail, inviteIdFromMeta, req.log);
+
+        // Case B: the account already has a tenant, but it is a self-provisioned
+        // placeholder (e.g. the user clicked through onboarding before a
+        // teammate invite from a *different* agency arrived) and a pending
+        // invite for a real agency is now waiting. Resolved conservatively —
+        // see resolveStaleTenantInvite for the safety conditions.
+        const staleTenantInvite = (existing.tenantId && !reconcileInvite)
+          ? await resolveStaleTenantInvite(clerkId, existing.tenantId, existing.role, canonicalEmail, req.log)
+          : undefined;
+
+        const winningInvite = reconcileInvite ?? staleTenantInvite;
+        if (winningInvite) {
+          const fromTenantId = existing.tenantId;
+          updateSet.tenantId = winningInvite.tenantId;
           // Never downgrade a superadmin via invite reconciliation
           if (updateSet.role !== ROLES.SUPER_ADMIN) {
-            updateSet.role = reconcileInvite.role;
+            updateSet.role = winningInvite.role;
           }
           await db.update(invitesTable)
             .set({ accepted: true, acceptedAt: new Date() })
-            .where(eq(invitesTable.id, reconcileInvite.id));
+            .where(eq(invitesTable.id, winningInvite.id));
+          if (staleTenantInvite) {
+            req.log.info(
+              { clerkId, userId: existing.id, fromTenantId, toTenantId: winningInvite.tenantId, inviteId: winningInvite.id },
+              "Reconciled user off an unused self-provisioned tenant onto a pending staff invite",
+            );
+          }
         }
       }
 

@@ -1,0 +1,57 @@
+---
+name: Invite reconciliation robustness
+description: Lessons from fixing a staff invite that stayed "pending" after the vendor logged in — root cause and the safety model used for the fix.
+---
+
+## Root cause pattern
+Invite reconciliation in a `POST /users/me/sync`-style flow that only runs
+`if (!existing.tenantId)` silently stops working the moment a user acquires
+*any* tenantId before the real invite arrives — e.g. self-provisioning via an
+onboarding "skip" flow that auto-creates a placeholder tenant. The user is
+then permanently stuck as admin of an empty tenant, invisible to the agency
+that actually invited them, with their invite stuck "pending" forever. This
+class of bug does not throw errors or show up in logs — it just silently
+returns empty tenant-scoped data forever.
+
+**Why:** tenantId-null is not the only "not really onboarded yet" state; a
+freshly self-provisioned placeholder tenant (sole member, zero real data) is
+functionally the same state and needs the same reconciliation opportunity.
+
+**How to apply:** when building invite/account-linking reconciliation, treat
+"has a tenant but it's an unused placeholder" as a distinct case from "has no
+tenant" and "has a real established tenant" — the first two should both allow
+reconciliation, the third must never be touched.
+
+## Safety model for reconciling an existing tenantId
+Before overriding a user's current tenantId with a different pending invite's
+tenant, require ALL of:
+- current role is the self-provisioning default (e.g. agency-owner/admin) —
+  never reconsider an already-provisioned staff member (vendedor/gerente) even
+  if a stray invite happens to match their email.
+- a matching pending, unexpired invite exists for a *different* tenant.
+- the current tenant is verifiably unused: exactly one member and zero real
+  business records (trips, in this app's case) in it.
+
+Only when all hold, update tenantId+role and mark the invite accepted; log an
+info line. Otherwise leave both tenants/invites untouched with a warn log.
+
+**Why:** this is the only way to self-heal a real production account (whose
+row you cannot edit directly, e.g. via a read-only prod DB) purely through
+corrected app logic on its next login, without any risk of moving data for an
+unrelated agency or vendor.
+
+**How to apply:** the safety check should probably also cover other
+tenant-scoped tables (clients, reservations, store), not just the one or two
+checked at the time — a placeholder tenant with clients-but-no-trips is still
+"used" and must not be silently abandoned.
+
+## Email matching
+Compare invite emails case/whitespace-insensitively (`lower(trim(email))`),
+never with a bare `eq()`. A typo'd capital letter in an invite should not
+permanently strand the invited user.
+
+## Test-mock ripple effect
+Adding extra `db.select` calls to an existing-user branch of a heavily-mocked
+route (positional `mockLimit.mockResolvedValueOnce(...)` chains) breaks every
+other test that reaches that branch, even if unrelated to the new feature —
+audit and update each one's queued select sequence, not just the new tests.

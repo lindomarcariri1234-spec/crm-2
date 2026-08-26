@@ -257,11 +257,13 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
 
     // Select call sequence for the existing-user update path:
     // 1. usersTable → [existingUser] (user found)
-    //    (no invite reconciliation because existing.tenantId != null)
-    // 2. usersTable re-fetch after update → [existingUser (unchanged role)]
+    // 2. invitesTable byEmail lookup for the stale-tenant safety check → []
+    //    (no pending invite at all, so no migration is even considered)
+    // 3. usersTable re-fetch after update → [existingUser (unchanged role)]
     mockLimit
       .mockResolvedValueOnce([existingUser])  // 1. usersTable lookup
-      .mockResolvedValueOnce([existingUser]); // 2. usersTable re-fetch
+      .mockResolvedValueOnce([])              // 2. invitesTable byEmail (none pending)
+      .mockResolvedValueOnce([existingUser]); // 3. usersTable re-fetch
 
     const res = await request(buildApp())
       .post("/api/users/me/sync")
