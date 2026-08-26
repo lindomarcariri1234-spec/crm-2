@@ -476,19 +476,24 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
       success: true,
       data: { ...BASE_BODY, clerkId: "clerk_new_user" },
     });
-    mockLimit.mockResolvedValueOnce([{
-      id: "existing-user-id",
-      clerkId: "clerk_new_user",
-      tenantId: "blocked-tenant",
-      name: "Ana Viajante",
-      email: "traveller@example.com",
-      role: ROLES.AGENCY_ADMIN,
-      avatarUrl: null,
-      isActive: true,
-      referralCode: "BLOCKED",
-      referralBalance: "0",
-      createdAt: new Date(),
-    }]);
+    mockLimit
+      .mockResolvedValueOnce([{
+        id: "existing-user-id",
+        clerkId: "clerk_new_user",
+        tenantId: "blocked-tenant",
+        name: "Ana Viajante",
+        email: "traveller@example.com",
+        role: ROLES.AGENCY_ADMIN,
+        avatarUrl: null,
+        isActive: true,
+        referralCode: "BLOCKED",
+        referralBalance: "0",
+        createdAt: new Date(),
+      }])
+      // A winning-invite check now runs before the tenant access gate (so an
+      // expired/suspended placeholder never blocks a real pending invite) —
+      // here there is none, so the access check below still applies.
+      .mockResolvedValueOnce([]);
     mockCheckTenantAccess.mockImplementation(async (_tenantId, _req, res) => {
       res.status(403).json({
         code: "TENANT_SUSPENDED",

@@ -55,3 +55,13 @@ Adding extra `db.select` calls to an existing-user branch of a heavily-mocked
 route (positional `mockLimit.mockResolvedValueOnce(...)` chains) breaks every
 other test that reaches that branch, even if unrelated to the new feature —
 audit and update each one's queued select sequence, not just the new tests.
+
+## Access-check ordering vs. reconciliation
+`checkTenantAccess` on the user's *current* tenant must never run before
+invite reconciliation is attempted, or an expired/suspended self-provisioned
+placeholder permanently locks out a user who has a valid pending invite to a
+different, active tenant — reconciliation never gets a chance to run. Resolve
+`winningInvite` first; only gate on the current tenant's access status when no
+winning invite was found. This does not verify the *target* tenant's access
+status before reconciling onto it — that gap self-corrects on the user's next
+login (checkTenantAccess then runs against the new tenantId).

@@ -384,3 +384,74 @@ describe("POST /api/users/me/sync — migrating off an unused self-provisioned t
     expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 6. Reconciliation must happen BEFORE the current tenant's access status is
+//    enforced, so an expired/suspended self-provisioned placeholder never
+//    blocks a valid invite from a different, active agency.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/users/me/sync — reconciling despite the placeholder tenant's own access being blocked", () => {
+  it("reconciles onto a pending invite even though the current placeholder tenant would fail its own access check", async () => {
+    stubClerkUser("vendedor.novo@example.com");
+    const existingUser = makeExistingUser({ tenantId: "tenant-placeholder-expired", role: ROLES.AGENCY_ADMIN });
+    const invite = makeInvite({ tenantId: "tenant-real-agency", role: ROLES.SALES });
+    const updatedUser = makeExistingUser({ tenantId: invite.tenantId, role: invite.role });
+
+    // Simulate the placeholder tenant's trial having expired: if the route
+    // ever called checkTenantAccess for the CURRENT tenant while a winning
+    // invite is pending, this would short-circuit with a 403 and the test
+    // would fail — proving reconciliation is attempted first.
+    mockCheckTenantAccess.mockImplementation(async (_tenantId: string, _req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+      res.status(403).json({ code: "TRIAL_EXPIRED", message: "O período de teste expirou." });
+      return false;
+    });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser])   // 1. usersTable lookup
+      .mockResolvedValueOnce([invite])         // 2. invitesTable byEmail
+      .mockResolvedValueOnce([{ count: 1 }])   // 3. teammate count in current tenant (self only)
+      .mockResolvedValueOnce([{ count: 0 }])   // 4. trip count in current tenant (none)
+      .mockResolvedValueOnce([updatedUser]);   // 5. usersTable re-fetch
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBe("tenant-real-agency");
+    expect(res.body.role).toBe(ROLES.SALES);
+    // The (now-irrelevant) placeholder tenant's access status must never have
+    // been checked once a winning invite was found.
+    expect(mockCheckTenantAccess).not.toHaveBeenCalled();
+    expect(mockUpdate).toHaveBeenCalledWith({ __name: "invites" });
+  });
+
+  it("still blocks an existing user on an expired/suspended tenant when there is no matching invite", async () => {
+    stubClerkUser("dono.sem.convite@example.com");
+    const existingUser = makeExistingUser({
+      tenantId: "tenant-expired-no-invite",
+      role: ROLES.AGENCY_ADMIN,
+      email: "dono.sem.convite@example.com",
+    });
+
+    mockCheckTenantAccess.mockImplementation(async (_tenantId: string, _req: unknown, res: { status: (n: number) => { json: (b: unknown) => void } }) => {
+      res.status(403).json({ code: "TRIAL_EXPIRED", message: "O período de teste expirou." });
+      return false;
+    });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser]) // 1. usersTable lookup
+      .mockResolvedValueOnce([]);            // 2. invitesTable byEmail — no match
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("TRIAL_EXPIRED");
+    expect(mockCheckTenantAccess).toHaveBeenCalledWith(
+      "tenant-expired-no-invite",
+      expect.any(Object),
+      expect.any(Object),
+    );
+    // No profile update or invite mutation should have happened.
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});

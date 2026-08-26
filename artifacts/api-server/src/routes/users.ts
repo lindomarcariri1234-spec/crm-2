@@ -270,10 +270,41 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
         referralBalance: Number(newUser.referralBalance), createdAt: newUser.createdAt.toISOString(),
       }));
     } else {
+      // Resolve any winning invite BEFORE gating on the current tenant's access
+      // status. A self-provisioned placeholder tenant can expire or be
+      // suspended before the user's real invite arrives; checking access on
+      // that placeholder first would permanently lock the user out even though
+      // a valid invite to a different, active tenant is waiting for them. See
+      // resolveStaleTenantInvite for the safety conditions on Case B.
+      let reconcileInvite: typeof invitesTable.$inferSelect | undefined;
+      let staleTenantInvite: typeof invitesTable.$inferSelect | undefined;
+      if (!clerkFetchFailed) {
+        // Case A: the account has no tenant at all (most common — e.g. it was
+        // created before a matching invite existed, or a previous sync attempt
+        // hit a transient Clerk failure). Every subsequent successful login
+        // retries this until it succeeds or no invite matches.
+        reconcileInvite = existing.tenantId
+          ? undefined
+          : await resolveInviteForUser(clerkId, canonicalEmail, inviteIdFromMeta, req.log);
+
+        // Case B: the account already has a tenant, but it is a self-provisioned
+        // placeholder (e.g. the user clicked through onboarding before a
+        // teammate invite from a *different* agency arrived) and a pending
+        // invite for a real agency is now waiting. Resolved conservatively —
+        // see resolveStaleTenantInvite for the safety conditions.
+        staleTenantInvite = (existing.tenantId && !reconcileInvite)
+          ? await resolveStaleTenantInvite(clerkId, existing.tenantId, existing.role, canonicalEmail, req.log)
+          : undefined;
+      }
+      const winningInvite = reconcileInvite ?? staleTenantInvite;
+
       // Existing users only need their tenant's access status checked. Applying
       // a users-plan limit here would block someone from logging in merely
-      // because their agency has already reached its account capacity.
-      if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN) {
+      // because their agency has already reached its account capacity. Skip
+      // this check when a winning invite is about to move the user off of this
+      // tenant entirely — its (possibly expired/suspended) status is no longer
+      // relevant once they are being reconciled elsewhere.
+      if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN && !winningInvite) {
         const allowed = await checkTenantAccess(existing.tenantId, req, res);
         if (!allowed) return;
       }
@@ -291,41 +322,21 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
         req.log.info({ clerkId, userId: existing.id }, "Auto-promoted user to superadmin via SUPERADMIN_CLERK_ID");
       }
 
-      if (!clerkFetchFailed) {
-        // Case A: the account has no tenant at all (most common — e.g. it was
-        // created before a matching invite existed, or a previous sync attempt
-        // hit a transient Clerk failure). Every subsequent successful login
-        // retries this until it succeeds or no invite matches.
-        const reconcileInvite = existing.tenantId
-          ? undefined
-          : await resolveInviteForUser(clerkId, canonicalEmail, inviteIdFromMeta, req.log);
-
-        // Case B: the account already has a tenant, but it is a self-provisioned
-        // placeholder (e.g. the user clicked through onboarding before a
-        // teammate invite from a *different* agency arrived) and a pending
-        // invite for a real agency is now waiting. Resolved conservatively —
-        // see resolveStaleTenantInvite for the safety conditions.
-        const staleTenantInvite = (existing.tenantId && !reconcileInvite)
-          ? await resolveStaleTenantInvite(clerkId, existing.tenantId, existing.role, canonicalEmail, req.log)
-          : undefined;
-
-        const winningInvite = reconcileInvite ?? staleTenantInvite;
-        if (winningInvite) {
-          const fromTenantId = existing.tenantId;
-          updateSet.tenantId = winningInvite.tenantId;
-          // Never downgrade a superadmin via invite reconciliation
-          if (updateSet.role !== ROLES.SUPER_ADMIN) {
-            updateSet.role = winningInvite.role;
-          }
-          await db.update(invitesTable)
-            .set({ accepted: true, acceptedAt: new Date() })
-            .where(eq(invitesTable.id, winningInvite.id));
-          if (staleTenantInvite) {
-            req.log.info(
-              { clerkId, userId: existing.id, fromTenantId, toTenantId: winningInvite.tenantId, inviteId: winningInvite.id },
-              "Reconciled user off an unused self-provisioned tenant onto a pending staff invite",
-            );
-          }
+      if (winningInvite) {
+        const fromTenantId = existing.tenantId;
+        updateSet.tenantId = winningInvite.tenantId;
+        // Never downgrade a superadmin via invite reconciliation
+        if (updateSet.role !== ROLES.SUPER_ADMIN) {
+          updateSet.role = winningInvite.role;
+        }
+        await db.update(invitesTable)
+          .set({ accepted: true, acceptedAt: new Date() })
+          .where(eq(invitesTable.id, winningInvite.id));
+        if (staleTenantInvite) {
+          req.log.info(
+            { clerkId, userId: existing.id, fromTenantId, toTenantId: winningInvite.tenantId, inviteId: winningInvite.id },
+            "Reconciled user off an unused self-provisioned tenant onto a pending staff invite",
+          );
         }
       }
 
