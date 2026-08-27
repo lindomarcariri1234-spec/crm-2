@@ -47,7 +47,7 @@ export function useTrips() {
   const { data: me } = useGetMe();
   const isVendedor = me?.role === ROLES.SALES;
 
-  const { data: tripsData, isLoading, refetch } = useListTrips({
+  const { data: tripsData, isLoading, isError, error, refetch } = useListTrips({
     search: search || undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
     page,
@@ -165,7 +165,7 @@ export function useTrips() {
   };
 
   return {
-    trips, exportTrips, isLoading, totalPages, upcomingTrips, stats, me, isVendedor,
+    trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, me, isVendedor,
     search, setSearch,
     statusFilter, setStatusFilter,
     typeFilter, setTypeFilter,

@@ -34,7 +34,7 @@ export function TripList() {
   const { toast } = useToast();
 
   const {
-    trips, exportTrips, isLoading, totalPages, upcomingTrips, stats, isVendedor,
+    trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, isVendedor,
     search, setSearch, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, deleteTrip, handleDuplicate, handleDelete,
@@ -207,6 +207,15 @@ export function TripList() {
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-64 rounded-xl" />)}
+        </div>
+      ) : isError ? (
+        <div className="text-center py-20 text-destructive">
+          <AlertCircle className="w-10 h-10 mx-auto mb-3 opacity-50" />
+          <p className="font-medium">Não foi possível carregar as viagens</p>
+          <p className="text-sm mt-1 text-muted-foreground">
+            {error instanceof Error ? error.message : "Ocorreu um erro ao buscar as viagens. Tente novamente."}
+          </p>
+          <Button variant="outline" className="mt-4" onClick={() => refetch()}>Tentar novamente</Button>
         </div>
       ) : trips.length === 0 ? (
         <div className="text-center py-20 text-muted-foreground">

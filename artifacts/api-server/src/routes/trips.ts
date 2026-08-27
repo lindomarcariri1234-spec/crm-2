@@ -469,6 +469,15 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
       TRIP_STATUS.ACTIVE,
       TRIP_STATUS.CONFIRMED,
     ]);
+
+    // The aggregate stats query is a "nice to have" for the summary cards and
+    // must never take down the main trip list if it fails (e.g. a data edge
+    // case in the aggregation). Isolate it with its own catch so a stats
+    // failure degrades to zeroed stats instead of a 500 that hides trips the
+    // tenant actually has (see e.g. the "Próximas Partidas" widget, which
+    // uses a simpler query and would otherwise show data while the main list
+    // silently errors out).
+    type TripStatsRow = { total: number; active: number; totalCapacity: number; occupiedSeats: number; totalRevenue: number };
     const [trips, [countResult], [statsResult]] = await Promise.all([
       db.select().from(tripsTable)
         .where(and(...conditions))
@@ -482,7 +491,14 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
         totalCapacity: sql<number>`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.totalCapacity} else 0 end), 0)::int`,
         occupiedSeats: sql<number>`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats} else 0 end), 0)::int`,
         totalRevenue: sql<number>`coalesce(sum(case when ${activeTripCondition} then (${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats}) * ${tripsTable.priceAdult} else 0 end), 0)::float8`,
-      }).from(tripsTable).where(eq(tripsTable.tenantId, me.tenantId)),
+      }).from(tripsTable).where(eq(tripsTable.tenantId, me.tenantId))
+        .catch((statsErr: unknown) => {
+          logger.error(
+            { err: statsErr, tenantId: me.tenantId },
+            "[trips] failed to compute trip stats aggregate; returning trip list without stats",
+          );
+          return [] as TripStatsRow[];
+        }),
     ]);
 
     res.json({
