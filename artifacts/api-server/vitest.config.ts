@@ -4,8 +4,11 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
-    // This suite imports the real database connection. Run it through
+    // These suites import the real database connection. Run them through
     // `pnpm test:integration` when DATABASE_URL is available.
-    exclude: ["src/__tests__/admin-cancel-referral-integration.test.ts"],
+    exclude: [
+      "src/__tests__/admin-cancel-referral-integration.test.ts",
+      "src/__tests__/backup-export-integration.test.ts",
+    ],
   },
 });

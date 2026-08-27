@@ -199,7 +199,7 @@ const ExportTripsQuery = z.object({
   format: z.enum(["json", "ndjson"]).default("json"),
 });
 
-const EXPORT_TRIPS_BATCH_SIZE = 500;
+export const EXPORT_TRIPS_BATCH_SIZE = 500;
 
 type SeatMapEntry = { row: number; col: number; floor?: number; status: string; type?: string };
 
@@ -346,7 +346,7 @@ function generateSeatMapFromLayout(
 
 const router = Router();
 
-async function writeExportChunk(res: Response, chunk: string): Promise<void> {
+export async function writeExportChunk(res: Response, chunk: string): Promise<void> {
   if (res.write(chunk)) return;
 
   await new Promise<void>((resolve, reject) => {
@@ -374,7 +374,7 @@ async function writeExportChunk(res: Response, chunk: string): Promise<void> {
   });
 }
 
-function formatTrip(t: typeof tripsTable.$inferSelect) {
+export function formatTrip(t: typeof tripsTable.$inferSelect) {
   return {
     id: t.id,
     name: t.name,
@@ -434,6 +434,7 @@ function formatTrip(t: typeof tripsTable.$inferSelect) {
     metaDescription: t.metaDescription ?? null,
     seatLayout: t.seatLayout,
     layoutId: t.layoutId ?? null,
+    vehicleId: t.vehicleId ?? null,
     showSeatMap: t.showSeatMap,
     fixedCosts: Array.isArray(t.fixedCosts) ? t.fixedCosts as FixedCostItem[] : [],
     variableCosts: Array.isArray(t.variableCosts) ? t.variableCosts as VariableCostItem[] : [],

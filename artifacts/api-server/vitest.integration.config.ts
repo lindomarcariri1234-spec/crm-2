@@ -3,6 +3,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["src/__tests__/admin-cancel-referral-integration.test.ts"],
+    include: [
+      "src/__tests__/admin-cancel-referral-integration.test.ts",
+      "src/__tests__/backup-export-integration.test.ts",
+    ],
   },
 });

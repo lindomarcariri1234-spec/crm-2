@@ -34,6 +34,7 @@ import request from "supertest";
 const {
   mockLimit,
   mockWhere,
+  mockInnerJoin,
   mockFrom,
   mockSelect,
   mockInsertValues,
@@ -48,7 +49,8 @@ const {
 } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
-  const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
+  const mockInnerJoin = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
+  const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit, innerJoin: mockInnerJoin }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
   const mockInsertValues = vi.fn().mockResolvedValue([]);
@@ -64,7 +66,7 @@ const {
   const mockCheckTenantAccess = vi.fn().mockResolvedValue(true);
 
   return {
-    mockLimit, mockWhere, mockFrom, mockSelect,
+    mockLimit, mockWhere, mockInnerJoin, mockFrom, mockSelect,
     mockInsertValues, mockInsert, mockUpdateWhere, mockUpdateSet, mockUpdate,
     mockSyncMeBodySafeParse, mockGetUser, mockCheckPlanLimit, mockCheckTenantAccess,
   };
@@ -87,6 +89,9 @@ vi.mock("@workspace/db", () => ({
   clientsTable: { __name: "clients" },
   storesTable: { __name: "stores" },
   tripsTable: { __name: "trips" },
+  reservationsTable: { __name: "reservations" },
+  storeProductsTable: { __name: "store_products" },
+  storeOrdersTable: { __name: "store_orders" },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -309,7 +314,11 @@ describe("POST /api/users/me/sync — migrating off an unused self-provisioned t
       .mockResolvedValueOnce([invite])             // 2. invitesTable byEmail
       .mockResolvedValueOnce([{ count: 1 }])       // 3. teammate count in current tenant (self only)
       .mockResolvedValueOnce([{ count: 0 }])       // 4. trip count in current tenant (none)
-      .mockResolvedValueOnce([updatedUser]);       // 5. usersTable re-fetch
+      .mockResolvedValueOnce([{ count: 0 }])       // 5. client count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])       // 6. reservation count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])       // 7. store product count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])       // 8. store order count in current tenant (none)
+      .mockResolvedValueOnce([updatedUser]);       // 9. usersTable re-fetch
 
     const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
 
@@ -333,6 +342,10 @@ describe("POST /api/users/me/sync — migrating off an unused self-provisioned t
       .mockResolvedValueOnce([invite])
       .mockResolvedValueOnce([{ count: 2 }])  // another teammate already exists in this tenant
       .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
       .mockResolvedValueOnce([existingUser]); // re-fetch: unchanged
 
     const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
@@ -353,6 +366,104 @@ describe("POST /api/users/me/sync — migrating off an unused self-provisioned t
       .mockResolvedValueOnce([invite])
       .mockResolvedValueOnce([{ count: 1 }])
       .mockResolvedValueOnce([{ count: 3 }])  // this tenant already has real trips
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([existingUser]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBe("tenant-placeholder");
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not migrate a user whose placeholder tenant already has clients but no trips", async () => {
+    stubClerkUser("vendedor.novo@example.com");
+    const existingUser = makeExistingUser({ tenantId: "tenant-placeholder", role: ROLES.AGENCY_ADMIN });
+    const invite = makeInvite({ tenantId: "tenant-real-agency", role: ROLES.SALES });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser])
+      .mockResolvedValueOnce([invite])
+      .mockResolvedValueOnce([{ count: 1 }])  // sole member
+      .mockResolvedValueOnce([{ count: 0 }])  // no trips
+      .mockResolvedValueOnce([{ count: 5 }])  // real clients already created under this placeholder
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([existingUser]); // re-fetch: unchanged
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBe("tenant-placeholder");
+    // The client data must never be silently orphaned — the invite is never
+    // touched and the user stays put alongside their own data.
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not migrate a user whose placeholder tenant already has reservations but no trips", async () => {
+    stubClerkUser("vendedor.novo@example.com");
+    const existingUser = makeExistingUser({ tenantId: "tenant-placeholder", role: ROLES.AGENCY_ADMIN });
+    const invite = makeInvite({ tenantId: "tenant-real-agency", role: ROLES.SALES });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser])
+      .mockResolvedValueOnce([invite])
+      .mockResolvedValueOnce([{ count: 1 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 2 }])  // real reservations already created under this placeholder
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([existingUser]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBe("tenant-placeholder");
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not migrate a user whose placeholder tenant's store already has listed products", async () => {
+    stubClerkUser("vendedor.novo@example.com");
+    const existingUser = makeExistingUser({ tenantId: "tenant-placeholder", role: ROLES.AGENCY_ADMIN });
+    const invite = makeInvite({ tenantId: "tenant-real-agency", role: ROLES.SALES });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser])
+      .mockResolvedValueOnce([invite])
+      .mockResolvedValueOnce([{ count: 1 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 3 }])  // the auto-created store already has real products listed
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([existingUser]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tenantId).toBe("tenant-placeholder");
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not migrate a user whose placeholder tenant's store already has real orders", async () => {
+    stubClerkUser("vendedor.novo@example.com");
+    const existingUser = makeExistingUser({ tenantId: "tenant-placeholder", role: ROLES.AGENCY_ADMIN });
+    const invite = makeInvite({ tenantId: "tenant-real-agency", role: ROLES.SALES });
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser])
+      .mockResolvedValueOnce([invite])
+      .mockResolvedValueOnce([{ count: 1 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([{ count: 1 }])  // the store already has a real order
       .mockResolvedValueOnce([existingUser]);
 
     const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
@@ -415,7 +526,11 @@ describe("POST /api/users/me/sync — reconciling despite the placeholder tenant
       .mockResolvedValueOnce([invite])         // 2. invitesTable byEmail
       .mockResolvedValueOnce([{ count: 1 }])   // 3. teammate count in current tenant (self only)
       .mockResolvedValueOnce([{ count: 0 }])   // 4. trip count in current tenant (none)
-      .mockResolvedValueOnce([updatedUser]);   // 5. usersTable re-fetch
+      .mockResolvedValueOnce([{ count: 0 }])   // 5. client count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])   // 6. reservation count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])   // 7. store product count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])   // 8. store order count in current tenant (none)
+      .mockResolvedValueOnce([updatedUser]);   // 9. usersTable re-fetch
 
     const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
 
@@ -566,7 +681,11 @@ describe("POST /api/users/me/sync — refusing to reconcile onto a blocked targe
       .mockResolvedValueOnce([existingUser])   // 1. usersTable lookup
       .mockResolvedValueOnce([invite])         // 2. invitesTable byEmail
       .mockResolvedValueOnce([{ count: 1 }])   // 3. teammate count in current tenant (self only)
-      .mockResolvedValueOnce([{ count: 0 }]);  // 4. trip count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])   // 4. trip count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])   // 5. client count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])   // 6. reservation count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }])   // 7. store product count in current tenant (none)
+      .mockResolvedValueOnce([{ count: 0 }]);  // 8. store order count in current tenant (none)
 
     const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
 
