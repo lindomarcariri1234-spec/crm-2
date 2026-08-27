@@ -90,7 +90,12 @@ router.all("/cron/:job", async (req: Request, res: Response) => {
     return;
   }
 
-  const jobName = req.params["job"];
+  const jobParam = req.params["job"];
+  const jobName = Array.isArray(jobParam) ? jobParam[0] : jobParam;
+  if (!jobName) {
+    res.status(404).json({ error: "UNKNOWN_JOB" });
+    return;
+  }
   const handler = JOBS[jobName];
   if (!handler) {
     res.status(404).json({ error: "UNKNOWN_JOB", job: jobName });

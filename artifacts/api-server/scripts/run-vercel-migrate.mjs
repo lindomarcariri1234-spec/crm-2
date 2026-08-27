@@ -1,8 +1,8 @@
 // Bundles src/scripts/vercel-migrate.ts (which pulls in @workspace/db,
 // lib/seed-plans.ts and lib/credential-backfill.ts — all TypeScript) into a
-// throwaway temp file and runs it. Invoked from vercel.json's buildCommand,
-// AFTER `pnpm --filter @workspace/db exec tsc --build` and BEFORE the
-// frontend/API bundling steps.
+// throwaway temp file and runs it. Invoked from vercel.json's buildCommand
+// before API bundling. The workspace libraries export TypeScript source, so
+// esbuild bundles them directly without a separate tsc --build pre-step.
 //
 // The output deliberately does NOT live under artifacts/api-server/../../api/
 // — anything placed in the repo-root `api/` directory is auto-detected by

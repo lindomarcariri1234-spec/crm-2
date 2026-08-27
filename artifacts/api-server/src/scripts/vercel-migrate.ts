@@ -8,10 +8,10 @@
  * whatever DATABASE_URL is configured for that Vercel environment
  * (Production / Preview).
  *
- * Must run AFTER `pnpm --filter @workspace/db exec tsc --build` (the
- * workspace lib needs its dist/*.d.ts + dist/*.js built first) and BEFORE the
- * frontend/API bundling steps, so a broken migration fails the build loudly
- * instead of deploying against a stale schema.
+ * The workspace package exports point directly to TypeScript source, so the
+ * Vercel esbuild runner does not need a separate workspace-lib TypeScript
+ * prebuild. Run this before bundling the API so a broken migration fails the
+ * build loudly instead of deploying against a stale schema.
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
