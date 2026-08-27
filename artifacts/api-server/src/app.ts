@@ -194,6 +194,13 @@ app.use(cors({
   },
 }));
 app.use(cookieParser());
+
+// Backup restore uploads can be a large JSON file (potentially years of
+// agency data). Registered BEFORE the global express.json() below with a
+// higher limit, scoped to this one route only; body-parser marks the
+// request body as already parsed, so the global parser skips it.
+app.use("/api/backup/import", express.json({ limit: "25mb" }));
+
 app.use(
   express.json({
     limit: "1mb",

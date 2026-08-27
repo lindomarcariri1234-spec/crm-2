@@ -1,7 +1,11 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { and, asc, eq, gt, inArray, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
+import { createHash } from "crypto";
 import {
   db,
+  backupImportBatchesTable,
+  type BackupImportReport,
   tenantsTable,
   usersTable,
   clientsTable,
@@ -100,8 +104,33 @@ import {
   auditLogsTable,
 } from "@workspace/db";
 import { requireAuth, ROLES } from "../lib/tenant.js";
-import { ForbiddenError, NotFoundError } from "../lib/errors.js";
+import { ForbiddenError, NotFoundError, ValidationError, AppError } from "../lib/errors.js";
 import { JsonStreamWriter } from "../lib/json-stream-writer.js";
+import { generateId } from "../lib/id.js";
+import {
+  emptyReport,
+  loadLedger,
+  resolveUsers,
+  importAgencia,
+  importClientes,
+  importViagens,
+  importBoardingLocations,
+  findExistingStoreId,
+  importLojaProdutos,
+  importLojaCupons,
+  importLojaPedidos,
+  importLojaItensPedido,
+  importReservas,
+  importPassageiros,
+  importCheckins,
+  importAutomacoes,
+  importAutomacaoAcoes,
+  importAutomacaoLogs,
+  importIndicacoes,
+  importPagamentos,
+  importDespesas,
+} from "../lib/backup-import.js";
+import { logger } from "../lib/logger.js";
 
 const router: Router = Router();
 
@@ -1009,5 +1038,185 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
     next(err);
   }
 });
+
+const BackupImportRequest = z.object({
+  idempotencyKey: z.string().trim().min(1).max(200),
+  backup: z.object({
+    format: z.string(),
+    version: z.number(),
+    tenant: z.object({ id: z.string() }).passthrough(),
+    data: z.record(z.unknown()),
+  }).passthrough(),
+}).strict();
+
+/**
+ * Restores an agency's own backup file. Always scoped to the importer's
+ * tenant — the file's `tenant.id` must match, so a file from another agency
+ * (or an incompatible/unknown format) is rejected before any write happens.
+ *
+ * Idempotent both at the whole-request level (`backupImportBatchesTable`,
+ * replays an identical request under the same idempotency key) and at the
+ * per-row level (`backupImportRecordsTable`, so re-uploading the same or a
+ * partially-imported file later — even under a new idempotency key — never
+ * duplicates already-restored rows).
+ */
+router.post("/backup/import", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+
+    if (me.role !== ROLES.AGENCY_ADMIN) {
+      next(new ForbiddenError("Apenas administradores da agência podem restaurar backups.", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const parsedRequest = BackupImportRequest.safeParse(req.body);
+    if (!parsedRequest.success) {
+      next(new ValidationError(`Arquivo de backup inválido: ${parsedRequest.error.message}`, "BACKUP_IMPORT_INVALID"));
+      return;
+    }
+    const { idempotencyKey, backup } = parsedRequest.data;
+
+    if (backup.format !== BACKUP_FORMAT) {
+      next(new ValidationError(
+        "Este arquivo não é um backup de agência do VisiteCRM reconhecido.",
+        "BACKUP_IMPORT_UNKNOWN_FORMAT",
+      ));
+      return;
+    }
+    if (backup.version !== BACKUP_VERSION) {
+      next(new ValidationError(
+        `Versão do backup (${backup.version}) incompatível com a versão suportada (${BACKUP_VERSION}).`,
+        "BACKUP_IMPORT_VERSION_MISMATCH",
+      ));
+      return;
+    }
+    if (backup.tenant.id !== me.tenantId) {
+      next(new ValidationError(
+        "Este arquivo de backup pertence a outra agência e não pode ser restaurado aqui.",
+        "BACKUP_IMPORT_TENANT_MISMATCH",
+      ));
+      return;
+    }
+    const data = backup.data as Record<string, unknown>;
+    const requiredBlocks = ["agencia", "usuarios", "clientes", "viagens", "reservas", "embarqueCheckin", "automacoes", "indicacoes", "loja", "financeiro"];
+    const missingBlocks = requiredBlocks.filter((key) => !(key in data));
+    if (missingBlocks.length > 0) {
+      next(new ValidationError(
+        `Arquivo de backup incompleto: faltam as seções ${missingBlocks.join(", ")}.`,
+        "BACKUP_IMPORT_MISSING_SECTIONS",
+      ));
+      return;
+    }
+
+    const requestHash = createHash("sha256").update(JSON.stringify(backup)).digest("hex");
+
+    type ImportTransactionResult =
+      | { kind: "replay"; report: BackupImportReport }
+      | { kind: "conflict" }
+      | { kind: "response"; report: BackupImportReport; batchId: string };
+
+    let transactionResult: ImportTransactionResult;
+    try {
+      transactionResult = await db.transaction(async (tx): Promise<ImportTransactionResult> => {
+        await tx.execute(sqlForUpdate(me.tenantId));
+
+        const [existingBatch] = await tx.select().from(backupImportBatchesTable)
+          .where(and(
+            eq(backupImportBatchesTable.tenantId, me.tenantId),
+            eq(backupImportBatchesTable.idempotencyKey, idempotencyKey),
+          ))
+          .limit(1);
+        if (existingBatch) {
+          if (existingBatch.requestHash !== requestHash) return { kind: "conflict" };
+          return { kind: "replay", report: existingBatch.report };
+        }
+
+        const report = emptyReport();
+        const ledger = await loadLedger(tx, me.tenantId);
+
+        report.agencia = await importAgencia(tx, me.tenantId, data.agencia);
+
+        const usuarios = data.usuarios as Record<string, unknown> | undefined;
+        const users = await resolveUsers(tx, me.tenantId, me.id, usuarios?.users);
+        report.usuarios = { matched: users.matched, fallbackToImporter: users.fallbackToImporter, fallbackDetails: users.fallbackDetails };
+
+        const clientes = data.clientes as Record<string, unknown> | undefined;
+        await importClientes(tx, ledger, me.tenantId, me.id, users, clientes?.clients, report.clientes);
+
+        const viagens = data.viagens as Record<string, unknown> | undefined;
+        await importViagens(tx, ledger, me.tenantId, me.id, users, viagens?.trips, report.viagens);
+
+        const embarque = data.embarqueCheckin as Record<string, unknown> | undefined;
+        await importBoardingLocations(tx, ledger, me.tenantId, embarque?.boardingLocations, report.embarqueLocais);
+
+        const storeId = await findExistingStoreId(tx, me.tenantId);
+        const loja = data.loja as Record<string, unknown> | undefined;
+        await importLojaProdutos(tx, ledger, me.tenantId, storeId, loja?.products, report.lojaProdutos);
+        await importLojaCupons(tx, ledger, me.tenantId, storeId, loja?.coupons, report.lojaCupons);
+        await importLojaPedidos(tx, ledger, me.tenantId, storeId, loja?.orders, report.lojaPedidos);
+        await importLojaItensPedido(tx, ledger, me.tenantId, loja?.orderItems, report.lojaItensPedido);
+
+        const reservas = data.reservas as Record<string, unknown> | undefined;
+        await importReservas(tx, ledger, me.tenantId, me.id, users, reservas?.reservations, report.reservas);
+        await importPassageiros(tx, ledger, me.tenantId, reservas?.passengers, report.passageiros);
+
+        await importCheckins(tx, ledger, me.tenantId, users, embarque?.checkins, report.checkins);
+
+        const automacoes = data.automacoes as Record<string, unknown> | undefined;
+        await importAutomacoes(tx, ledger, me.tenantId, automacoes?.automations, report.automacoes);
+        await importAutomacaoAcoes(tx, ledger, me.tenantId, automacoes?.actions, report.automacaoAcoes);
+        await importAutomacaoLogs(tx, ledger, me.tenantId, automacoes?.logs, report.automacaoLogs);
+
+        const indicacoes = data.indicacoes as Record<string, unknown> | undefined;
+        await importIndicacoes(tx, ledger, me.tenantId, indicacoes?.referrals, report.indicacoes);
+
+        const financeiro = data.financeiro as Record<string, unknown> | undefined;
+        await importPagamentos(tx, ledger, me.tenantId, financeiro?.payments, report.pagamentos);
+        await importDespesas(tx, ledger, me.tenantId, me.id, users, financeiro?.expenses, report.despesas);
+
+        const batchId = generateId();
+        await tx.insert(backupImportBatchesTable).values({
+          id: batchId,
+          tenantId: me.tenantId,
+          idempotencyKey,
+          requestHash,
+          status: "completed",
+          report,
+          createdById: me.id,
+        });
+
+        return { kind: "response", report, batchId };
+      });
+    } catch (error) {
+      logger.error({ err: error, tenantId: me.tenantId, idempotencyKey }, "[backup] import transaction rolled back");
+      next(new AppError(
+        "Restauração não concluída; nenhuma alteração foi feita. Tente novamente com a mesma chave.",
+        500,
+        "BACKUP_IMPORT_FAILED",
+      ));
+      return;
+    }
+
+    if (transactionResult.kind === "conflict") {
+      res.status(409).json({
+        error: "A chave de importação já foi usada com outro arquivo.",
+        code: "BACKUP_IMPORT_IDEMPOTENCY_CONFLICT",
+      });
+      return;
+    }
+    if (transactionResult.kind === "replay") {
+      res.status(200).json({ replayed: true, report: transactionResult.report });
+      return;
+    }
+    res.status(200).json({ importId: transactionResult.batchId, report: transactionResult.report });
+  } catch (err) {
+    next(err);
+  }
+});
+
+function sqlForUpdate(tenantId: string) {
+  return sql`SELECT id FROM tenants WHERE id = ${tenantId} FOR UPDATE`;
+}
 
 export default router;

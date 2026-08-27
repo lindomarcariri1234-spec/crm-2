@@ -4,6 +4,7 @@ export * from "./clients";
 export * from "./notes";
 export * from "./trips";
 export * from "./trip-imports";
+export * from "./backup-imports";
 export * from "./reservations";
 export * from "./payments";
 export * from "./pipeline";

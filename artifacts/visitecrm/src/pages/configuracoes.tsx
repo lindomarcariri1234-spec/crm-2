@@ -105,6 +105,10 @@ import {
   Save,
   DatabaseBackup,
   Download,
+  Upload,
+  FileJson,
+  XCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
 import { interpolateWhatsAppPreview, renderWhatsAppPreview } from "@/lib/whatsappPreview";
@@ -3886,10 +3890,163 @@ function parseBackupFilename(contentDisposition: string | null): string | null {
   return match?.[1] ?? null;
 }
 
+interface BackupImportGroupResult {
+  created: number;
+  duplicate: number;
+  skipped: number;
+  errors: Array<{ sourceId?: string; label?: string; error: string }>;
+}
+
+interface BackupImportUserMatch {
+  sourceId: string;
+  email: string | null;
+  name: string | null;
+}
+
+interface BackupImportReport {
+  agencia: { updated: boolean };
+  usuarios: { matched: number; fallbackToImporter: number; fallbackDetails: BackupImportUserMatch[] };
+  clientes: BackupImportGroupResult;
+  viagens: BackupImportGroupResult;
+  reservas: BackupImportGroupResult;
+  passageiros: BackupImportGroupResult;
+  embarqueLocais: BackupImportGroupResult;
+  checkins: BackupImportGroupResult;
+  automacoes: BackupImportGroupResult;
+  automacaoAcoes: BackupImportGroupResult;
+  automacaoLogs: BackupImportGroupResult;
+  indicacoes: BackupImportGroupResult;
+  lojaProdutos: BackupImportGroupResult;
+  lojaCupons: BackupImportGroupResult;
+  lojaPedidos: BackupImportGroupResult;
+  lojaItensPedido: BackupImportGroupResult;
+  pagamentos: BackupImportGroupResult;
+  despesas: BackupImportGroupResult;
+}
+
+const BACKUP_IMPORT_GROUP_LABELS: Record<keyof Omit<BackupImportReport, "agencia" | "usuarios">, string> = {
+  clientes: "Clientes",
+  viagens: "Viagens",
+  reservas: "Reservas",
+  passageiros: "Passageiros",
+  embarqueLocais: "Locais de embarque",
+  checkins: "Check-ins",
+  automacoes: "Automações",
+  automacaoAcoes: "Ações de automação",
+  automacaoLogs: "Logs de automação",
+  indicacoes: "Indicações",
+  lojaProdutos: "Produtos da loja",
+  lojaCupons: "Cupons da loja",
+  lojaPedidos: "Pedidos da loja",
+  lojaItensPedido: "Itens de pedido da loja",
+  pagamentos: "Pagamentos",
+  despesas: "Despesas",
+};
+
+function BackupImportReportView({ report }: { report: BackupImportReport }) {
+  const groupKeys = Object.keys(BACKUP_IMPORT_GROUP_LABELS) as Array<keyof typeof BACKUP_IMPORT_GROUP_LABELS>;
+  const totalErrors = groupKeys.reduce((acc, key) => acc + report[key].errors.length, 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border p-3 text-sm">
+        <div className="flex items-center gap-2 font-medium">
+          <Building2 className="w-4 h-4 text-muted-foreground" />
+          Agência
+        </div>
+        <p className="text-muted-foreground mt-1">
+          {report.agencia.updated
+            ? "Configurações e marca da agência atualizadas com os dados do backup."
+            : "Nenhum dado de agência encontrado para atualizar."}
+        </p>
+      </div>
+
+      <div className="rounded-lg border p-3 text-sm">
+        <div className="flex items-center gap-2 font-medium">
+          <Users className="w-4 h-4 text-muted-foreground" />
+          Usuários (referência)
+        </div>
+        <p className="text-muted-foreground mt-1">
+          {report.usuarios.matched} associados por e-mail a contas existentes
+          {report.usuarios.fallbackToImporter > 0 && (
+            <> · {report.usuarios.fallbackToImporter} sem conta correspondente (associados a você)</>
+          )}
+          .
+        </p>
+        {report.usuarios.fallbackDetails.length > 0 && (
+          <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground list-disc list-inside">
+            {report.usuarios.fallbackDetails.slice(0, 10).map((u, i) => (
+              <li key={u.sourceId ?? i}>{u.name ?? "Sem nome"} {u.email ? `(${u.email})` : ""}</li>
+            ))}
+            {report.usuarios.fallbackDetails.length > 10 && (
+              <li>e mais {report.usuarios.fallbackDetails.length - 10}...</li>
+            )}
+          </ul>
+        )}
+      </div>
+
+      <div className="rounded-lg border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/50">
+            <tr>
+              <th className="text-left font-medium px-3 py-2">Tipo de registro</th>
+              <th className="text-right font-medium px-3 py-2">Criados</th>
+              <th className="text-right font-medium px-3 py-2">Já existiam</th>
+              <th className="text-right font-medium px-3 py-2">Ignorados</th>
+              <th className="text-right font-medium px-3 py-2">Erros</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupKeys.map((key) => {
+              const g = report[key];
+              const hasErrors = g.errors.length > 0;
+              return (
+                <tr key={key} className="border-t">
+                  <td className="px-3 py-2">{BACKUP_IMPORT_GROUP_LABELS[key]}</td>
+                  <td className="text-right px-3 py-2">{g.created}</td>
+                  <td className="text-right px-3 py-2">{g.duplicate}</td>
+                  <td className="text-right px-3 py-2">{g.skipped}</td>
+                  <td className={`text-right px-3 py-2 ${hasErrors ? "text-destructive font-medium" : ""}`}>{g.errors.length}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {totalErrors > 0 && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm space-y-1">
+          <div className="flex items-center gap-2 font-medium text-destructive">
+            <AlertTriangle className="w-4 h-4" />
+            Detalhes dos erros
+          </div>
+          <ul className="text-xs text-muted-foreground space-y-0.5 max-h-48 overflow-y-auto">
+            {groupKeys.flatMap((key) =>
+              report[key].errors.slice(0, 20).map((e, i) => (
+                <li key={`${key}-${i}`}>
+                  <span className="font-medium">{BACKUP_IMPORT_GROUP_LABELS[key]}:</span> {e.error}
+                </li>
+              )),
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BackupDataTab() {
   const { toast } = useToast();
   const [isGenerating, setIsGenerating] = useState(false);
   const [receivedBytes, setReceivedBytes] = useState(0);
+
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [parsedBackup, setParsedBackup] = useState<Record<string, unknown> | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importReport, setImportReport] = useState<BackupImportReport | null>(null);
+  const [importIdempotencyKey, setImportIdempotencyKey] = useState<string | null>(null);
 
   async function handleGenerateBackup() {
     setIsGenerating(true);
@@ -3938,6 +4095,80 @@ function BackupDataTab() {
     }
   }
 
+  function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    e.target.value = "";
+    setImportReport(null);
+    setParseError(null);
+    setSelectedFile(null);
+    setParsedBackup(null);
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".json")) {
+      setParseError("Selecione um arquivo .json gerado pela exportação de backup.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? "");
+        const parsed = JSON.parse(text) as Record<string, unknown>;
+        if (!parsed || typeof parsed !== "object" || !("format" in parsed) || !("data" in parsed)) {
+          setParseError("Este arquivo não parece ser um backup de agência válido.");
+          return;
+        }
+        setSelectedFile(file);
+        setParsedBackup(parsed);
+        setConfirmOpen(true);
+      } catch {
+        setParseError("Não foi possível interpretar o arquivo como JSON válido.");
+      }
+    };
+    reader.onerror = () => setParseError("Não foi possível ler o arquivo selecionado.");
+    reader.readAsText(file);
+  }
+
+  async function handleConfirmImport() {
+    if (!parsedBackup) return;
+    setConfirmOpen(false);
+    setIsImporting(true);
+    setImportReport(null);
+    try {
+      const idempotencyKey = importIdempotencyKey ?? crypto.randomUUID();
+      setImportIdempotencyKey(idempotencyKey);
+      const response = await fetch(`${BASE}/api/backup/import`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idempotencyKey, backup: parsedBackup }),
+      });
+      const payload = await response.json().catch(() => null) as
+        | { report?: BackupImportReport; replayed?: boolean; message?: string; error?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.message ?? payload?.error ?? "Não foi possível restaurar o backup.");
+      }
+      if (!payload?.report) {
+        throw new Error("Resposta inesperada do servidor.");
+      }
+      setImportReport(payload.report);
+      setImportIdempotencyKey(null);
+      setSelectedFile(null);
+      setParsedBackup(null);
+      toast({
+        title: payload.replayed ? "Backup já havia sido restaurado" : "Backup restaurado com sucesso",
+        description: "Veja o relatório abaixo para os detalhes por tipo de registro.",
+      });
+    } catch (err) {
+      toast({
+        title: "Erro ao restaurar backup",
+        description: err instanceof Error ? err.message : "Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
   function downloadBackupBlob(blob: Blob, contentDisposition: string | null) {
     const filename = parseBackupFilename(contentDisposition) ?? `backup-agencia-${new Date().toISOString().slice(0, 10)}.json`;
     const url = URL.createObjectURL(blob);
@@ -3982,6 +4213,60 @@ function BackupDataTab() {
           enquanto o backup estiver sendo gerado.
         </p>
       )}
+
+      <div className="border-t pt-4 space-y-3">
+        <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
+          <Upload className="w-5 h-5 mt-0.5 text-muted-foreground shrink-0" />
+          <div className="text-sm text-muted-foreground">
+            Envie um arquivo .json gerado por esta exportação para restaurar os dados na sua
+            agência. Usuários não são recriados — registros são associados a contas existentes
+            pelo e-mail, ou a você quando não houver correspondência. Registros já existentes não
+            são duplicados em uma nova tentativa.
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button variant="outline" asChild disabled={isImporting} className="gap-2 cursor-pointer">
+            <label>
+              {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileJson className="w-4 h-4" />}
+              {isImporting ? "Restaurando backup..." : "Selecionar arquivo de backup (.json)"}
+              <input type="file" accept=".json,application/json" className="hidden" disabled={isImporting} onChange={handleFileSelected} />
+            </label>
+          </Button>
+        </div>
+
+        {parseError && (
+          <div className="flex items-center gap-2 text-sm text-destructive">
+            <XCircle className="w-4 h-4 shrink-0" />
+            {parseError}
+          </div>
+        )}
+
+        {importReport && (
+          <div className="pt-2">
+            <h3 className="text-sm font-medium mb-2">Relatório da restauração</h3>
+            <BackupImportReportView report={importReport} />
+          </div>
+        )}
+      </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!open) setConfirmOpen(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restaurar dados deste backup?</AlertDialogTitle>
+            <AlertDialogDescription>
+              O arquivo <strong>{selectedFile?.name}</strong> será usado para recriar clientes,
+              viagens, reservas, embarque/check-in, automações, indicações, loja e financeiro na
+              sua agência. Registros já existentes serão identificados e ignorados — nenhum dado
+              atual será removido. Esta ação não pode ser desfeita automaticamente.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => { setSelectedFile(null); setParsedBackup(null); }}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleConfirmImport}>Restaurar backup</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
