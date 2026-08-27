@@ -263,6 +263,13 @@ app.use((req, res, next) => {
   if (CLERK_BYPASS_PATHS.has(req.path)) {
     return next();
   }
+  // Vercel Cron (or an external scheduler) invokes these with a
+  // CRON_SECRET bearer token, never a Clerk session — the route itself
+  // verifies that token. Skipping clerkMiddleware avoids an unnecessary
+  // Clerk JWKS round-trip on every scheduled invocation.
+  if (req.path.startsWith("/api/cron/")) {
+    return next();
+  }
   return clerkAuth(req, res, next);
 });
 

@@ -18,11 +18,20 @@ const basePath = process.env.BASE_PATH ?? "/";
 //
 // Do not add a hard-coded key or temporary preview URL here. Replit registers
 // the active preview redirect URLs automatically for its managed Clerk tenant.
-const clerkKeyOverride = {
-  "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(
-    process.env.CLERK_PUBLISHABLE_KEY ?? "",
-  ),
-};
+//
+// This override only applies inside Replit's own environment (REPL_ID is
+// always set there). On other hosts (e.g. Vercel) there is no equivalent
+// auto-swapped CLERK_PUBLISHABLE_KEY, so Vite's normal env handling passes
+// VITE_CLERK_PUBLISHABLE_KEY (set directly in that platform's project
+// settings) straight through untouched.
+const clerkKeyOverride =
+  process.env.REPL_ID !== undefined
+    ? {
+        "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(
+          process.env.CLERK_PUBLISHABLE_KEY ?? "",
+        ),
+      }
+    : {};
 
 export default defineConfig({
   base: basePath,

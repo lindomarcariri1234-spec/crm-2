@@ -459,6 +459,17 @@ let _producerConnection: Redis | null = null;
  * Queue producers will still fail-fast.
  */
 export function getBullMQQueueConnection(): Redis | null {
+  // When workers are disabled (e.g. on serverless platforms like Vercel, where
+  // no long-running process exists to consume BullMQ jobs), every queue getter
+  // in queues/index.ts must return null even though Redis itself may be
+  // configured for other purposes (distributed-cron leasing, SSE fan-out).
+  // Every producer call site already has a "queue is null" direct-execution
+  // fallback (see enqueueOrSend, birthday.ts, campaign-automation.ts,
+  // commission-sync-helper.ts, schedule-sync.ts, routes/trips.ts) — without
+  // this check, jobs would be enqueued into Redis with ENABLE_WORKERS=false
+  // and nothing would ever consume them (silent job loss).
+  if (!areWorkersEnabled()) return null;
+
   const conn = getRedisConnection();
   if (!conn) return null;
 
