@@ -14,16 +14,17 @@
  * build loudly instead of deploying against a stale schema.
  */
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { runMigrations } from "@workspace/db";
-import { seedPlansIfMissing } from "../lib/seed-plans";
-import { backfillEncryptedCredentials } from "../lib/credential-backfill";
 
-const __dirnameEsm = path.dirname(fileURLToPath(import.meta.url));
-// This script lives at artifacts/api-server/src/scripts/vercel-migrate.ts
-// (or its esbuild output at the same relative depth) — walk up to the repo
-// root then down to lib/db/drizzle, rather than depending on dist layout.
-const repoRoot = path.resolve(__dirnameEsm, "../../../..");
+// The runner bundles this script to an OS temp directory so Vercel cannot
+// mistake it for an HTTP function. Its original source location is therefore
+// unavailable at runtime; the runner passes the actual repository root in an
+// environment variable instead.
+const repoRoot = process.env["VERCEL_MIGRATION_REPO_ROOT"];
+if (!repoRoot) {
+  throw new Error(
+    "[vercel-migrate] VERCEL_MIGRATION_REPO_ROOT is not configured by the migration runner.",
+  );
+}
 const migrationsFolder = path.resolve(repoRoot, "lib/db/drizzle");
 
 export async function runVercelMigration(): Promise<void> {
@@ -39,6 +40,19 @@ export async function runVercelMigration(): Promise<void> {
       "backfillEncryptedCredentials() can run.",
     );
   }
+
+  // These modules initialize the PostgreSQL connection at import time. Load
+  // them only after configuration has been checked so a missing env variable
+  // produces the actionable errors above instead of a lower-level driver error.
+  const [
+    { runMigrations },
+    { seedPlansIfMissing },
+    { backfillEncryptedCredentials },
+  ] = await Promise.all([
+    import("@workspace/db"),
+    import("../lib/seed-plans"),
+    import("../lib/credential-backfill"),
+  ]);
 
   console.log(`[vercel-migrate] Applying migrations from ${migrationsFolder}`);
   await runMigrations(migrationsFolder);

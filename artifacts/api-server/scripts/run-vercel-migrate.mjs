@@ -9,12 +9,14 @@
 // Vercel as a public serverless function. A migration script must never be
 // reachable over HTTP, so it is bundled to the OS temp dir instead.
 import { build as esbuild } from "esbuild";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdtemp, rm } from "node:fs/promises";
 
 const artifactDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const repoRoot = path.resolve(artifactDir, "../..");
 
 async function main() {
   const tempDir = await mkdtemp(path.join(tmpdir(), "vercel-migrate-"));
@@ -28,6 +30,13 @@ async function main() {
       format: "esm",
       outfile: outFile,
       logLevel: "info",
+      // `pg` is CommonJS and dynamically requires Node built-ins. Give the
+      // ESM bundle the same require bridge used by the API server build.
+      banner: {
+        js: `import { createRequire as __bannerCrReq } from 'node:module';
+globalThis.require = __bannerCrReq(import.meta.url);
+`,
+      },
       // Same native/unbundleable externals as the app build — the migration
       // script transitively imports lib/credential-backfill.ts and
       // lib/seed-plans.ts, which do not touch these, but keeping the list
@@ -37,6 +46,7 @@ async function main() {
     });
 
     console.log(`[run-vercel-migrate] Bundled migration script, executing ${outFile}`);
+    process.env["VERCEL_MIGRATION_REPO_ROOT"] = repoRoot;
     const { runVercelMigration } = await import(outFile);
     await runVercelMigration();
     console.log("[run-vercel-migrate] Migration complete");
