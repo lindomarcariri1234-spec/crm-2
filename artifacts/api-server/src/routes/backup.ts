@@ -1,0 +1,1013 @@
+import { Router, type NextFunction, type Request, type Response } from "express";
+import { and, asc, eq, gt, inArray, type SQL } from "drizzle-orm";
+import {
+  db,
+  tenantsTable,
+  usersTable,
+  clientsTable,
+  notesTable,
+  tripsTable,
+  reservationsTable,
+  passengersTable,
+  reservationInstallmentsTable,
+  boardingLocationsTable,
+  tripCheckinsTable,
+  tripGuideLocationsTable,
+  automationsTable,
+  automationActionsTable,
+  automationLogsTable,
+  referralsTable,
+  referralTrackingTable,
+  referralSettingsTable,
+  referralCampaignsTable,
+  referralCommissionsTable,
+  referralAttemptLogsTable,
+  storesTable,
+  storeCategoriesTable,
+  storeProductsTable,
+  storeOrdersTable,
+  storeOrderItemsTable,
+  storeCouponsTable,
+  storeReviewsTable,
+  storePagesTable,
+  priceAlertSubscriptionsTable,
+  couponsTable,
+  paymentsTable,
+  expensesTable,
+  tripCostsTable,
+  reservationSequencesTable,
+  financialLedgerEntriesTable,
+  settlementItemsTable,
+  suppliersTable,
+  vehiclesTable,
+  vehicleLayoutsTable,
+  accommodationsTable,
+  destinationsTable,
+  systemConfigsTable,
+  calendarEventsTable,
+  documentsTable,
+  salesGoalsTable,
+  commissionRulesTable,
+  commissionsTable,
+  pipelinesTable,
+  pipelineStagesTable,
+  dealsTable,
+  loyaltyProgramsTable,
+  loyaltyMembersTable,
+  loyaltyTransactionsTable,
+  clubConfigTable,
+  clubBenefitsTable,
+  campaignsTable,
+  campaignSendsTable,
+  npsResponsesTable,
+  clientNpsResponsesTable,
+  productsTable,
+  ordersTable,
+  orderItemsTable,
+  messagesTable,
+  messageTemplatesTable,
+  chatbotConversationsTable,
+  chatbotMessagesTable,
+  birthdayMessagesTable,
+  emailLogsTable,
+  whatsappNotificationOutboxTable,
+  tripMediaTable,
+  tripImportBatchesTable,
+  clientAchievementsTable,
+  clientDreamDestinationsTable,
+  clientFavoritesTable,
+  clientNotificationsTable,
+  clientScoresTable,
+  npsInvitationsTable,
+  invitesTable,
+  tenantIntegrationsTable,
+  tenantIntegrationLogsTable,
+  aiIntegrationsTable,
+  aiIntegrationLogsTable,
+  productCategoriesTable,
+  productImagesTable,
+  cartItemsTable,
+  partnersTable,
+  partnerProductsTable,
+  partnerAvailabilityTable,
+  partnerCommissionsTable,
+  distributionOffersTable,
+  distributionOperationsTable,
+  distributionBookingsTable,
+  gemeoAlertsTable,
+  gemeoOpportunitiesTable,
+  insightsChatHistoryTable,
+  auditLogsTable,
+} from "@workspace/db";
+import { requireAuth, ROLES } from "../lib/tenant.js";
+import { ForbiddenError, NotFoundError } from "../lib/errors.js";
+import { JsonStreamWriter } from "../lib/json-stream-writer.js";
+
+const router: Router = Router();
+
+/**
+ * Backup file format version. Bump whenever the shape of a section changes
+ * in a way an importer needs to know about (renamed/removed fields, changed
+ * grouping, etc.) so a future import/restore feature can validate
+ * compatibility and reject files it does not understand.
+ */
+const BACKUP_FORMAT = "visitecrm-agency-backup";
+const BACKUP_VERSION = 4;
+
+// Same batch size used by the trips streaming export — large enough to keep
+// query round-trips low, small enough to bound memory for big tenants.
+const BACKUP_BATCH_SIZE = 500;
+
+/**
+ * Never include OAuth tokens in a user backup — these are live credentials
+ * that grant access to the agency owner's connected Google account.
+ */
+function sanitizeUserRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { googleAccessToken, googleRefreshToken, googleTokenExpiry, ...rest } = row;
+  return rest;
+}
+
+/** Payment-gateway secret keys must never leave the server. */
+function sanitizeStoreRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { stripeSecretKey, stripeWebhookSecret, mpAccessToken, ...rest } = row;
+  return rest;
+}
+
+/**
+ * paymentToken authorizes order status changes; idempotencyKey is a
+ * client-supplied replay token that `handleIdempotentOrderReplay` accepts,
+ * unauthenticated, to return the full existing order (customer + payment
+ * data) on the public checkout endpoint — treat it the same as a credential.
+ */
+function sanitizeStoreOrderRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { paymentToken, idempotencyKey, ...rest } = row;
+  return rest;
+}
+
+/**
+ * expoPushToken is a live device credential — anyone holding it can send
+ * arbitrary push notifications to that client's device. Never export it.
+ */
+function sanitizeClientRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { expoPushToken, ...rest } = row;
+  return rest;
+}
+
+/**
+ * confirmationTokenHash/unsubscribeTokenHash authorize anonymous, unauthenticated
+ * actions (confirming or cancelling a price alert) purely by possession of the
+ * link — treat them the same as a bearer credential.
+ */
+function sanitizePriceAlertSubscriptionRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { confirmationTokenHash, unsubscribeTokenHash, ...rest } = row;
+  return rest;
+}
+
+/** token authorizes anonymous NPS survey submission by possession of the link — treat as a bearer credential. */
+function sanitizeNpsInvitationRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { token, ...rest } = row;
+  return rest;
+}
+
+/** token authorizes anonymous invite acceptance (account creation) by possession of the link. */
+function sanitizeInviteRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { token, ...rest } = row;
+  return rest;
+}
+
+/** secretsEncrypted holds encrypted third-party API keys/tokens — never export even in encrypted form. */
+function sanitizeTenantIntegrationRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { secretsEncrypted, ...rest } = row;
+  return rest;
+}
+
+/** apiKeyEncrypted/accessTokenEncrypted hold encrypted AI-provider credentials — never export even in encrypted form. */
+function sanitizeAiIntegrationRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { apiKeyEncrypted, accessTokenEncrypted, ...rest } = row;
+  return rest;
+}
+
+/** passwordHash is the marketplace partner's own login credential. */
+function sanitizePartnerRow(row: Record<string, unknown>): Record<string, unknown> {
+  const { passwordHash, ...rest } = row;
+  return rest;
+}
+
+type AnyTable = { id: unknown; [column: string]: unknown };
+
+/**
+ * Streams every row of `table` matching `scopeWhere` (already tenant-scoped
+ * by the caller) as a JSON array under `key`, batching via a cursor on `id`
+ * so a large tenant never has its whole table held in memory at once.
+ * Pass `scopeWhere = false` to write an empty array without querying (used
+ * when a prerequisite lookup, e.g. the tenant's store, does not exist).
+ */
+async function streamDirectTable(
+  writer: JsonStreamWriter,
+  key: string,
+  table: AnyTable,
+  scopeWhere: SQL | false,
+  counts: Record<string, number>,
+  sanitize?: (row: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> {
+  await writer.key(key);
+  await writer.beginArray();
+  let total = 0;
+  if (scopeWhere !== false) {
+    let cursor: string | undefined;
+    for (;;) {
+      const condition = cursor ? and(scopeWhere, gt(table.id as never, cursor)) : scopeWhere;
+      const batch = (await db
+        .select()
+        .from(table as never)
+        .where(condition)
+        .orderBy(asc(table.id as never))
+        .limit(BACKUP_BATCH_SIZE)) as Array<Record<string, unknown>>;
+      if (batch.length === 0) break;
+      for (const row of batch) {
+        await writer.arrayItem(sanitize ? sanitize(row) : row);
+        total++;
+      }
+      cursor = batch[batch.length - 1]!.id as string;
+      if (batch.length < BACKUP_BATCH_SIZE) break;
+    }
+  }
+  counts[key] = total;
+  await writer.endArray();
+}
+
+/**
+ * Streams child rows that only reference their tenant indirectly through a
+ * parent row (e.g. passengers → reservations, notes → clients). Walks the
+ * parent table in batches by cursor, then fetches only the children of that
+ * batch — bounding memory the same way streamDirectTable does, without
+ * relying on a subquery-based IN clause.
+ */
+async function streamChildTable(
+  writer: JsonStreamWriter,
+  key: string,
+  parentTable: AnyTable,
+  parentScopeWhere: SQL,
+  childTable: AnyTable,
+  childParentIdColumn: unknown,
+  counts: Record<string, number>,
+  sanitize?: (row: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> {
+  await writer.key(key);
+  await writer.beginArray();
+  let total = 0;
+  let cursor: string | undefined;
+  for (;;) {
+    const condition = cursor ? and(parentScopeWhere, gt(parentTable.id as never, cursor)) : parentScopeWhere;
+    const parentBatch = (await db
+      .select({ id: parentTable.id as never })
+      .from(parentTable as never)
+      .where(condition)
+      .orderBy(asc(parentTable.id as never))
+      .limit(BACKUP_BATCH_SIZE)) as Array<{ id: string }>;
+    if (parentBatch.length === 0) break;
+    const parentIds = parentBatch.map((r) => r.id);
+    const children = (await db
+      .select()
+      .from(childTable as never)
+      .where(inArray(childParentIdColumn as never, parentIds))) as Array<Record<string, unknown>>;
+    for (const child of children) {
+      await writer.arrayItem(sanitize ? sanitize(child) : child);
+      total++;
+    }
+    cursor = parentIds[parentIds.length - 1];
+    if (parentBatch.length < BACKUP_BATCH_SIZE) break;
+  }
+  counts[key] = total;
+  await writer.endArray();
+}
+
+/**
+ * Writes every row of `table` matching `scopeWhere` as a JSON array under
+ * `key` in a single query, with no cursor batching. Only for tables with no
+ * single-column `id` to cursor on (e.g. a composite-key counter table) whose
+ * row count is inherently small and bounded (one row per tenant per period),
+ * unlike the large per-record tables `streamDirectTable` is built for.
+ */
+async function writeSmallTable(
+  writer: JsonStreamWriter,
+  key: string,
+  table: AnyTable,
+  scopeWhere: SQL,
+  counts: Record<string, number>,
+): Promise<void> {
+  await writer.key(key);
+  await writer.beginArray();
+  const rows = (await db.select().from(table as never).where(scopeWhere)) as Array<Record<string, unknown>>;
+  for (const row of rows) {
+    await writer.arrayItem(row);
+  }
+  counts[key] = rows.length;
+  await writer.endArray();
+}
+
+/**
+ * GET /backup/export
+ *
+ * Streams a single versioned .json file containing every tenant-owned data
+ * group of the authenticated user's own agency: branding/config, users for
+ * reference + pending invites, clients (incl. achievements, dream
+ * destinations, favorites, notifications, scores), trips (incl. media and
+ * import-batch history), reservations/passengers/installments, boarding &
+ * check-in (incl. guide location history), the reservation-numbering
+ * sequence counter, automations, referrals, store,
+ * legacy product catalog, price-alert subscriptions, CRM coupons,
+ * financials (payments/expenses/trip costs/settlement ledger), auxiliary
+ * registries (incl. vehicle seat layouts), calendar, documents, sales
+ * goals, commissions, pipeline/deals, loyalty, club benefits, marketing
+ * (campaigns/points catalog/NPS), communication history (messages,
+ * templates, chatbot, birthday messages, email/WhatsApp logs), third-party
+ * integration configuration (non-secret fields only) and logs, AI
+ * insights/alerts history, marketplace partners and distribution ledger,
+ * and the audit trail. Restricted to agency admins of their own tenant —
+ * every query below is scoped by `me.tenantId`. Never includes login/OAuth
+ * credentials, payment-gateway secrets, device push tokens, encrypted
+ * integration secrets, or anonymous-action bearer tokens.
+ *
+ * Deliberately excluded (not tenant-owned operational data):
+ * - `tripGuideTokensTable` — a live bearer credential (grants guide check-in
+ *   access), not a data record.
+ * - `plansTable`/`invoicesTable`/`subscriptionsTable`/`featureFlagsTable`/
+ *   `platformSettingsTable`/`usageTrackingTable` — the tenant's platform/
+ *   billing relationship with VisiteCRM itself, explicitly out of scope
+ *   ("configurações da plataforma").
+ * - the standalone `conversations`/`messages` tables (as opposed to
+ *   `chatbotConversationsTable`/`chatbotMessagesTable`, which are included)
+ *   — no `tenantId` column, so they cannot be safely tenant-scoped.
+ * - `stripeWebhookEventsTable` — a global cross-tenant idempotency ledger
+ *   with no `tenantId` column, not tenant-owned data.
+ */
+router.get("/backup/export", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+
+    if (me.role !== ROLES.AGENCY_ADMIN) {
+      next(new ForbiddenError("Apenas administradores da agência podem gerar backups.", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const tenantId = me.tenantId;
+
+    const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId)).limit(1);
+    if (!tenant) {
+      next(new NotFoundError("Agência não encontrada", "TENANT_NOT_FOUND"));
+      return;
+    }
+
+    const [storeRow] = await db
+      .select({ id: storesTable.id })
+      .from(storesTable)
+      .where(eq(storesTable.tenantId, tenantId))
+      .limit(1);
+    const storeId = storeRow?.id;
+
+    const filenameSlug = (tenant.slug || tenantId).replace(/[^a-zA-Z0-9-]+/g, "-");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+
+    res.status(200);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="backup-${filenameSlug}-${timestamp}.json"`);
+    res.setHeader("Cache-Control", "no-store");
+
+    const writer = new JsonStreamWriter(res);
+    const counts: Record<string, number> = {};
+
+    await writer.beginObject();
+    await writer.key("format");
+    await writer.value(BACKUP_FORMAT);
+    await writer.key("version");
+    await writer.value(BACKUP_VERSION);
+    await writer.key("exportedAt");
+    await writer.value(new Date().toISOString());
+    await writer.key("exportedByUserId");
+    await writer.value(me.id);
+    await writer.key("tenant");
+    await writer.value({ id: tenant.id, name: tenant.name, slug: tenant.slug });
+
+    await writer.key("data");
+    await writer.beginObject();
+
+    // Agência / branding — a single settings object, not paginated.
+    await writer.key("agencia");
+    await writer.value(tenant);
+
+    // Usuários (dados de referência, nunca credenciais) + convites pendentes.
+    await writer.key("usuarios");
+    await writer.beginObject();
+    await streamDirectTable(writer, "users", usersTable as unknown as AnyTable, eq(usersTable.tenantId, tenantId), counts, sanitizeUserRow);
+    await streamDirectTable(writer, "invites", invitesTable as unknown as AnyTable, eq(invitesTable.tenantId, tenantId), counts, sanitizeInviteRow);
+    await writer.endObject();
+
+    // Configurações gerais da agência (chave/valor).
+    await streamDirectTable(
+      writer,
+      "configuracoes",
+      systemConfigsTable as unknown as AnyTable,
+      eq(systemConfigsTable.tenantId, tenantId),
+      counts,
+    );
+
+    // Clientes.
+    await writer.key("clientes");
+    await writer.beginObject();
+    await streamDirectTable(
+      writer,
+      "clients",
+      clientsTable as unknown as AnyTable,
+      eq(clientsTable.tenantId, tenantId),
+      counts,
+      sanitizeClientRow,
+    );
+    await streamChildTable(
+      writer,
+      "notes",
+      clientsTable as unknown as AnyTable,
+      eq(clientsTable.tenantId, tenantId),
+      notesTable as unknown as AnyTable,
+      notesTable.clientId,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "npsResponses",
+      clientNpsResponsesTable as unknown as AnyTable,
+      eq(clientNpsResponsesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "npsInvitations",
+      npsInvitationsTable as unknown as AnyTable,
+      eq(npsInvitationsTable.tenantId, tenantId),
+      counts,
+      sanitizeNpsInvitationRow,
+    );
+    await streamDirectTable(
+      writer,
+      "achievements",
+      clientAchievementsTable as unknown as AnyTable,
+      eq(clientAchievementsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "dreamDestinations",
+      clientDreamDestinationsTable as unknown as AnyTable,
+      eq(clientDreamDestinationsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "favorites",
+      clientFavoritesTable as unknown as AnyTable,
+      eq(clientFavoritesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "notifications",
+      clientNotificationsTable as unknown as AnyTable,
+      eq(clientNotificationsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "scores", clientScoresTable as unknown as AnyTable, eq(clientScoresTable.tenantId, tenantId), counts);
+    await writer.endObject();
+
+    // Viagens (+ mídias e histórico de importações em lote).
+    await writer.key("viagens");
+    await writer.beginObject();
+    await streamDirectTable(writer, "trips", tripsTable as unknown as AnyTable, eq(tripsTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "media", tripMediaTable as unknown as AnyTable, eq(tripMediaTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "importBatches",
+      tripImportBatchesTable as unknown as AnyTable,
+      eq(tripImportBatchesTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Reservas / passageiros / parcelas.
+    await writer.key("reservas");
+    await writer.beginObject();
+    await streamDirectTable(writer, "reservations", reservationsTable as unknown as AnyTable, eq(reservationsTable.tenantId, tenantId), counts);
+    await streamChildTable(
+      writer,
+      "passengers",
+      reservationsTable as unknown as AnyTable,
+      eq(reservationsTable.tenantId, tenantId),
+      passengersTable as unknown as AnyTable,
+      passengersTable.reservationId,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "installments",
+      reservationInstallmentsTable as unknown as AnyTable,
+      eq(reservationInstallmentsTable.tenantId, tenantId),
+      counts,
+    );
+    // Contador de numeração sequencial de reservas por mês/tipo — preservar para
+    // que a agência restaurada não reinicie a numeração e gere duplicatas.
+    await writeSmallTable(
+      writer,
+      "sequences",
+      reservationSequencesTable as unknown as AnyTable,
+      eq(reservationSequencesTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Embarque / check-in / rastreamento de guias.
+    await writer.key("embarqueCheckin");
+    await writer.beginObject();
+    await streamDirectTable(
+      writer,
+      "boardingLocations",
+      boardingLocationsTable as unknown as AnyTable,
+      eq(boardingLocationsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "checkins", tripCheckinsTable as unknown as AnyTable, eq(tripCheckinsTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "guideLocations",
+      tripGuideLocationsTable as unknown as AnyTable,
+      eq(tripGuideLocationsTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Automações + ações/logs.
+    await writer.key("automacoes");
+    await writer.beginObject();
+    await streamDirectTable(writer, "automations", automationsTable as unknown as AnyTable, eq(automationsTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "actions",
+      automationActionsTable as unknown as AnyTable,
+      eq(automationActionsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "logs", automationLogsTable as unknown as AnyTable, eq(automationLogsTable.tenantId, tenantId), counts);
+    await writer.endObject();
+
+    // Indicações.
+    await writer.key("indicacoes");
+    await writer.beginObject();
+    await streamDirectTable(writer, "referrals", referralsTable as unknown as AnyTable, eq(referralsTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "tracking",
+      referralTrackingTable as unknown as AnyTable,
+      eq(referralTrackingTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "settings",
+      referralSettingsTable as unknown as AnyTable,
+      eq(referralSettingsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "campaigns",
+      referralCampaignsTable as unknown as AnyTable,
+      eq(referralCampaignsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "commissions",
+      referralCommissionsTable as unknown as AnyTable,
+      eq(referralCommissionsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "attemptLogs",
+      referralAttemptLogsTable as unknown as AnyTable,
+      eq(referralAttemptLogsTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Loja.
+    await writer.key("loja");
+    await writer.beginObject();
+    await streamDirectTable(writer, "store", storesTable as unknown as AnyTable, eq(storesTable.tenantId, tenantId), counts, sanitizeStoreRow);
+    await streamDirectTable(
+      writer,
+      "categories",
+      storeCategoriesTable as unknown as AnyTable,
+      storeId ? eq(storeCategoriesTable.storeId, storeId) : false,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "products",
+      storeProductsTable as unknown as AnyTable,
+      storeId ? eq(storeProductsTable.storeId, storeId) : false,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "orders",
+      storeOrdersTable as unknown as AnyTable,
+      eq(storeOrdersTable.tenantId, tenantId),
+      counts,
+      sanitizeStoreOrderRow,
+    );
+    await streamChildTable(
+      writer,
+      "orderItems",
+      storeOrdersTable as unknown as AnyTable,
+      eq(storeOrdersTable.tenantId, tenantId),
+      storeOrderItemsTable as unknown as AnyTable,
+      storeOrderItemsTable.orderId,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "coupons",
+      storeCouponsTable as unknown as AnyTable,
+      storeId ? eq(storeCouponsTable.storeId, storeId) : false,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "reviews",
+      storeReviewsTable as unknown as AnyTable,
+      storeId ? eq(storeReviewsTable.storeId, storeId) : false,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "pages",
+      storePagesTable as unknown as AnyTable,
+      storeId ? eq(storePagesTable.storeId, storeId) : false,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "priceAlertSubscriptions",
+      priceAlertSubscriptionsTable as unknown as AnyTable,
+      eq(priceAlertSubscriptionsTable.tenantId, tenantId),
+      counts,
+      sanitizePriceAlertSubscriptionRow,
+    );
+    await writer.endObject();
+
+    // Cupons do CRM (distintos dos cupons da loja).
+    await streamDirectTable(writer, "cuponsCrm", couponsTable as unknown as AnyTable, eq(couponsTable.tenantId, tenantId), counts);
+
+    // Financeiro.
+    await writer.key("financeiro");
+    await writer.beginObject();
+    await streamDirectTable(writer, "payments", paymentsTable as unknown as AnyTable, eq(paymentsTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "expenses", expensesTable as unknown as AnyTable, eq(expensesTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "tripCosts", tripCostsTable as unknown as AnyTable, eq(tripCostsTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "settlementItems",
+      settlementItemsTable as unknown as AnyTable,
+      eq(settlementItemsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "ledgerEntries",
+      financialLedgerEntriesTable as unknown as AnyTable,
+      eq(financialLedgerEntriesTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Metas de vendas.
+    await streamDirectTable(writer, "metasVendas", salesGoalsTable as unknown as AnyTable, eq(salesGoalsTable.tenantId, tenantId), counts);
+
+    // Comissões (regras + lançamentos).
+    await writer.key("comissoes");
+    await writer.beginObject();
+    await streamDirectTable(
+      writer,
+      "rules",
+      commissionRulesTable as unknown as AnyTable,
+      eq(commissionRulesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "entries", commissionsTable as unknown as AnyTable, eq(commissionsTable.tenantId, tenantId), counts);
+    await writer.endObject();
+
+    // Pipeline / negociações.
+    await writer.key("pipeline");
+    await writer.beginObject();
+    await streamDirectTable(writer, "pipelines", pipelinesTable as unknown as AnyTable, eq(pipelinesTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "stages",
+      pipelineStagesTable as unknown as AnyTable,
+      eq(pipelineStagesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "deals", dealsTable as unknown as AnyTable, eq(dealsTable.tenantId, tenantId), counts);
+    await writer.endObject();
+
+    // Fidelidade (programa de pontos).
+    await writer.key("fidelidade");
+    await writer.beginObject();
+    await streamDirectTable(
+      writer,
+      "programs",
+      loyaltyProgramsTable as unknown as AnyTable,
+      eq(loyaltyProgramsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "members",
+      loyaltyMembersTable as unknown as AnyTable,
+      eq(loyaltyMembersTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "transactions",
+      loyaltyTransactionsTable as unknown as AnyTable,
+      eq(loyaltyTransactionsTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Clube de vantagens.
+    await writer.key("clube");
+    await writer.beginObject();
+    await streamDirectTable(writer, "config", clubConfigTable as unknown as AnyTable, eq(clubConfigTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "benefits",
+      clubBenefitsTable as unknown as AnyTable,
+      eq(clubBenefitsTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Marketing: campanhas de e-mail/WhatsApp, envios, NPS de e-commerce e
+    // catálogo de resgate por pontos (distinto da loja/Vitrine).
+    await writer.key("marketing");
+    await writer.beginObject();
+    await streamDirectTable(writer, "campaigns", campaignsTable as unknown as AnyTable, eq(campaignsTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "campaignSends",
+      campaignSendsTable as unknown as AnyTable,
+      eq(campaignSendsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "npsResponses",
+      npsResponsesTable as unknown as AnyTable,
+      eq(npsResponsesTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.key("catalogoPontos");
+    await writer.beginObject();
+    await streamDirectTable(writer, "products", productsTable as unknown as AnyTable, eq(productsTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "orders", ordersTable as unknown as AnyTable, eq(ordersTable.tenantId, tenantId), counts);
+    await streamChildTable(
+      writer,
+      "orderItems",
+      ordersTable as unknown as AnyTable,
+      eq(ordersTable.tenantId, tenantId),
+      orderItemsTable as unknown as AnyTable,
+      orderItemsTable.orderId,
+      counts,
+    );
+    await writer.endObject();
+    await writer.endObject();
+
+    // Comunicação: mensagens, templates, chatbot e mensagens de aniversário.
+    await writer.key("comunicacao");
+    await writer.beginObject();
+    await streamDirectTable(writer, "messages", messagesTable as unknown as AnyTable, eq(messagesTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "messageTemplates",
+      messageTemplatesTable as unknown as AnyTable,
+      eq(messageTemplatesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "chatbotConversations",
+      chatbotConversationsTable as unknown as AnyTable,
+      eq(chatbotConversationsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "chatbotMessages",
+      chatbotMessagesTable as unknown as AnyTable,
+      eq(chatbotMessagesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "birthdayMessages",
+      birthdayMessagesTable as unknown as AnyTable,
+      eq(birthdayMessagesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "emailLogs", emailLogsTable as unknown as AnyTable, eq(emailLogsTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "whatsappOutbox",
+      whatsappNotificationOutboxTable as unknown as AnyTable,
+      eq(whatsappNotificationOutboxTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Integrações de terceiros: configuração não sensível apenas — chaves/tokens
+    // criptografados nunca são exportados, nem em forma cifrada — + logs.
+    await writer.key("integracoes");
+    await writer.beginObject();
+    await streamDirectTable(
+      writer,
+      "tenantIntegrations",
+      tenantIntegrationsTable as unknown as AnyTable,
+      eq(tenantIntegrationsTable.tenantId, tenantId),
+      counts,
+      sanitizeTenantIntegrationRow,
+    );
+    await streamDirectTable(
+      writer,
+      "tenantIntegrationLogs",
+      tenantIntegrationLogsTable as unknown as AnyTable,
+      eq(tenantIntegrationLogsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "aiIntegrations",
+      aiIntegrationsTable as unknown as AnyTable,
+      eq(aiIntegrationsTable.tenantId, tenantId),
+      counts,
+      sanitizeAiIntegrationRow,
+    );
+    await streamDirectTable(
+      writer,
+      "aiIntegrationLogs",
+      aiIntegrationLogsTable as unknown as AnyTable,
+      eq(aiIntegrationLogsTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Inteligência artificial: alertas/oportunidades gerados e histórico do chat de insights.
+    await writer.key("inteligenciaArtificial");
+    await writer.beginObject();
+    await streamDirectTable(writer, "gemeoAlerts", gemeoAlertsTable as unknown as AnyTable, eq(gemeoAlertsTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "gemeoOpportunities",
+      gemeoOpportunitiesTable as unknown as AnyTable,
+      eq(gemeoOpportunitiesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "insightsChatHistory",
+      insightsChatHistoryTable as unknown as AnyTable,
+      eq(insightsChatHistoryTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Catálogo de produtos legado (categorias/imagens/carrinho), distinto do catálogo da loja/Vitrine.
+    await writer.key("catalogoLegado");
+    await writer.beginObject();
+    await streamDirectTable(
+      writer,
+      "categories",
+      productCategoriesTable as unknown as AnyTable,
+      eq(productCategoriesTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "images", productImagesTable as unknown as AnyTable, eq(productImagesTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "cartItems", cartItemsTable as unknown as AnyTable, eq(cartItemsTable.tenantId, tenantId), counts);
+    await writer.endObject();
+
+    // Parceiros de marketplace (nunca inclui o hash de senha do próprio parceiro).
+    await writer.key("parceiros");
+    await writer.beginObject();
+    await streamDirectTable(writer, "partners", partnersTable as unknown as AnyTable, eq(partnersTable.tenantId, tenantId), counts, sanitizePartnerRow);
+    await streamDirectTable(
+      writer,
+      "products",
+      partnerProductsTable as unknown as AnyTable,
+      eq(partnerProductsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamChildTable(
+      writer,
+      "availability",
+      partnerProductsTable as unknown as AnyTable,
+      eq(partnerProductsTable.tenantId, tenantId),
+      partnerAvailabilityTable as unknown as AnyTable,
+      partnerAvailabilityTable.productId,
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "commissions",
+      partnerCommissionsTable as unknown as AnyTable,
+      eq(partnerCommissionsTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Distribuição (ofertas/operações/reservas de integrações externas de distribuição).
+    await writer.key("distribuicao");
+    await writer.beginObject();
+    await streamDirectTable(
+      writer,
+      "offers",
+      distributionOffersTable as unknown as AnyTable,
+      eq(distributionOffersTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "operations",
+      distributionOperationsTable as unknown as AnyTable,
+      eq(distributionOperationsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "bookings",
+      distributionBookingsTable as unknown as AnyTable,
+      eq(distributionBookingsTable.tenantId, tenantId),
+      counts,
+    );
+    await writer.endObject();
+
+    // Auditoria (histórico de alterações).
+    await streamDirectTable(writer, "auditoria", auditLogsTable as unknown as AnyTable, eq(auditLogsTable.tenantId, tenantId), counts);
+
+    // Calendário (eventos sincronizados).
+    await streamDirectTable(
+      writer,
+      "calendario",
+      calendarEventsTable as unknown as AnyTable,
+      eq(calendarEventsTable.tenantId, tenantId),
+      counts,
+    );
+
+    // Documentos.
+    await streamDirectTable(writer, "documentos", documentsTable as unknown as AnyTable, eq(documentsTable.tenantId, tenantId), counts);
+
+    // Cadastros auxiliares.
+    await writer.key("cadastrosAuxiliares");
+    await writer.beginObject();
+    await streamDirectTable(writer, "suppliers", suppliersTable as unknown as AnyTable, eq(suppliersTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "vehicles", vehiclesTable as unknown as AnyTable, eq(vehiclesTable.tenantId, tenantId), counts);
+    await streamDirectTable(
+      writer,
+      "vehicleLayouts",
+      vehicleLayoutsTable as unknown as AnyTable,
+      eq(vehicleLayoutsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(
+      writer,
+      "accommodations",
+      accommodationsTable as unknown as AnyTable,
+      eq(accommodationsTable.tenantId, tenantId),
+      counts,
+    );
+    await streamDirectTable(writer, "destinations", destinationsTable as unknown as AnyTable, eq(destinationsTable.tenantId, tenantId), counts);
+    await writer.endObject();
+
+    await writer.endObject(); // close "data"
+
+    await writer.key("counts");
+    await writer.value(counts);
+    await writer.endObject(); // close root
+
+    res.end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+export default router;

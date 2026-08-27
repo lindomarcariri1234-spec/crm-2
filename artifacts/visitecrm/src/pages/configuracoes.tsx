@@ -103,6 +103,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Save,
+  DatabaseBackup,
+  Download,
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
 import { interpolateWhatsAppPreview, renderWhatsAppPreview } from "@/lib/whatsappPreview";
@@ -3871,8 +3873,124 @@ function PipelineSettingsTab() {
   );
 }
 
+/* ──────────────────── Backup de Dados Tab ──────────────────── */
+function formatBackupBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function parseBackupFilename(contentDisposition: string | null): string | null {
+  if (!contentDisposition) return null;
+  const match = /filename="?([^";]+)"?/i.exec(contentDisposition);
+  return match?.[1] ?? null;
+}
+
+function BackupDataTab() {
+  const { toast } = useToast();
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [receivedBytes, setReceivedBytes] = useState(0);
+
+  async function handleGenerateBackup() {
+    setIsGenerating(true);
+    setReceivedBytes(0);
+    try {
+      const response = await fetch(`${BASE}/api/backup/export`, {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as
+          | { error?: string; message?: string }
+          | null;
+        throw new Error(payload?.message ?? payload?.error ?? "Não foi possível gerar o backup.");
+      }
+      if (!response.body) {
+        // Fallback for environments without streaming response support.
+        const blob = await response.blob();
+        downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const chunks: BlobPart[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value as BlobPart);
+          total += value.byteLength;
+          setReceivedBytes(total);
+        }
+      }
+      const blob = new Blob(chunks, { type: "application/json" });
+      downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
+      toast({ title: "Backup gerado com sucesso", description: "O download do arquivo foi iniciado." });
+    } catch (err) {
+      toast({
+        title: "Erro ao gerar backup",
+        description: err instanceof Error ? err.message : "Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
+  function downloadBackupBlob(blob: Blob, contentDisposition: string | null) {
+    const filename = parseBackupFilename(contentDisposition) ?? `backup-agencia-${new Date().toISOString().slice(0, 10)}.json`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-4">
+        <DatabaseBackup className="w-5 h-5 mt-0.5 text-muted-foreground shrink-0" />
+        <div className="text-sm text-muted-foreground">
+          Gere um arquivo .json com todos os dados da sua agência: clientes, viagens, reservas e
+          passageiros, embarque e check-in, automações, indicações, loja, cupons, pagamentos,
+          despesas e cadastros auxiliares. Nenhuma credencial de acesso é incluída no arquivo.
+          Guarde-o em um local seguro — ele contém dados pessoais dos seus clientes.
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <Button onClick={handleGenerateBackup} disabled={isGenerating} className="gap-2">
+          {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+          {isGenerating ? "Gerando backup..." : "Gerar e baixar backup"}
+        </Button>
+        {isGenerating && (
+          <span className="text-sm text-muted-foreground">
+            {receivedBytes > 0
+              ? `Montando arquivo... ${formatBackupBytes(receivedBytes)} recebidos`
+              : "Preparando exportação..."}
+          </span>
+        )}
+      </div>
+
+      {isGenerating && (
+        <p className="text-xs text-muted-foreground">
+          Para agências com muitos dados, isso pode levar alguns minutos. Não feche esta página
+          enquanto o backup estiver sendo gerado.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /* ──────────────────── Main Settings Page ──────────────────── */
 export default function Configuracoes() {
+  const { data: me } = useGetMe();
+  const isAgencyAdmin = me?.role === ROLES.AGENCY_ADMIN;
+
   return (
     <div className="space-y-6">
       <div>
@@ -3922,6 +4040,12 @@ export default function Configuracoes() {
             <GitBranch className="w-3.5 h-3.5" />
             Pipelines
           </TabsTrigger>
+          {isAgencyAdmin && (
+            <TabsTrigger value="backup" className="flex items-center gap-1.5">
+              <DatabaseBackup className="w-3.5 h-3.5" />
+              Backup de Dados
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <div className="mt-4">
@@ -4066,6 +4190,25 @@ export default function Configuracoes() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {isAgencyAdmin && (
+            <TabsContent value="backup">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <DatabaseBackup className="w-4 h-4" />
+                    Backup de Dados
+                  </CardTitle>
+                  <CardDescription>
+                    Gere e baixe um backup completo dos dados da sua agência em um arquivo .json
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <BackupDataTab />
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
         </div>
       </Tabs>
     </div>

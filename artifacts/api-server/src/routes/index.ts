@@ -56,6 +56,7 @@ import npsPublicRouter from "./nps";
 import whatsappNotificationsRouter from "./whatsapp-notifications";
 import distributionRouter from "./distribution";
 import settlementsRouter from "./settlements";
+import backupRouter from "./backup";
 
 const router: IRouter = Router();
 
@@ -118,6 +119,7 @@ router.use(npsPublicRouter);
 router.use(whatsappNotificationsRouter);
 router.use(distributionRouter);
 router.use(settlementsRouter);
+router.use(backupRouter);
 router.use("/uploadthing", uploadthingRouter);
 router.use("/upload", uploadRouter);
 
