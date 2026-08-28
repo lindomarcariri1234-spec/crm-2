@@ -3,7 +3,7 @@
 # compiled output
 dist
 /api/*
-!/api/index.mjs
+!/api/*.mjs
 !/api/migrations/
 !/api/migrations/**
 /public/

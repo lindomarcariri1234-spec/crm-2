@@ -19,7 +19,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
-import { rm, mkdir, cp, readFile, readdir, access } from "node:fs/promises";
+import { rm, mkdir, cp, readFile, readdir, access, writeFile } from "node:fs/promises";
 
 const require = createRequire(import.meta.url);
 globalThis.require = require;
@@ -27,8 +27,52 @@ globalThis.require = require;
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(artifactDir, "../..");
 const outDir = path.resolve(repoRoot, "api");
-const outFile = path.join(outDir, "index.mjs");
+const outFile = path.join(outDir, "bundle.mjs");
+const indexFile = path.join(outDir, "index.mjs");
+const catchAllFile = path.join(outDir, "[...path].mjs");
 const artifactOutDir = path.resolve(artifactDir, "api");
+
+const FUNCTION_ENTRYPOINT = `let appPromise;
+
+function getMissingPackage(error) {
+  if (!error || typeof error !== "object") return undefined;
+  const message = typeof error.message === "string" ? error.message : "";
+  const match =
+    message.match(/Cannot find package ['"]([^'"]+)['"]/) ??
+    message.match(/Cannot find module ['"]([^'"]+)['"]/);
+  const packageName = match?.[1];
+  return packageName && /^@?[A-Za-z0-9_./-]+$/.test(packageName)
+    ? packageName
+    : undefined;
+}
+
+async function getApp() {
+  appPromise ??= import("./bundle.mjs").then((module) => module.default);
+  return appPromise;
+}
+
+export default async function handler(request, response) {
+  try {
+    const app = await getApp();
+    return app(request, response);
+  } catch (error) {
+    appPromise = undefined;
+    console.error("[vercel] API bundle failed to initialize", error);
+    response.statusCode = 500;
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(
+      JSON.stringify({
+        error: "SERVER_INIT_FAILED",
+        code:
+          error && typeof error === "object" && typeof error.code === "string"
+            ? error.code
+            : undefined,
+        missingPackage: getMissingPackage(error),
+      }),
+    );
+  }
+}
+`;
 
 // Same externals list as build.mjs — see that file for the rationale behind
 // each entry (native modules, fetch-patch ordering, ESM-incompatible
@@ -151,6 +195,11 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     },
   });
 
+  await Promise.all([
+    writeFile(indexFile, FUNCTION_ENTRYPOINT, "utf8"),
+    writeFile(catchAllFile, FUNCTION_ENTRYPOINT, "utf8"),
+  ]);
+
   // stripe-replit-sync reads its SQL migrations at runtime via a
   // __dirname-relative path. Copy them next to the bundle (same rationale
   // as build.mjs).
@@ -200,16 +249,16 @@ async function assertFetchPatchOrder() {
   const bundle = await readFile(outFile, "utf8");
   if (!bundle.includes("_uploadthingPatched")) {
     throw new Error(
-      "[build-vercel] FATAL: _uploadthingPatched marker not found in api/index.mjs.",
+      "[build-vercel] FATAL: _uploadthingPatched marker not found in api/bundle.mjs.",
     );
   }
   if (!bundle.includes('"uploadthing/') && !bundle.includes('"uploadthing"')) {
     throw new Error(
-      "[build-vercel] FATAL: no uploadthing require() found in api/index.mjs.",
+      "[build-vercel] FATAL: no uploadthing require() found in api/bundle.mjs.",
     );
   }
 
-  console.log("[build-vercel] ✓ fetch-patch order verified for api/index.mjs");
+  console.log("[build-vercel] ✓ fetch-patch order verified for api/bundle.mjs");
 }
 
 buildAll()
