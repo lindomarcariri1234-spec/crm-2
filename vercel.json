@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm --filter @workspace/visitecrm run build && pnpm --filter @workspace/api-server run migrate:vercel && pnpm --filter @workspace/api-server run build:vercel",
   "outputDirectory": "artifacts/visitecrm/dist/public",
