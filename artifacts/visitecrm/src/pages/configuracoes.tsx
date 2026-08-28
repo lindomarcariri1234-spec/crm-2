@@ -23,6 +23,7 @@ import {
   type PlanPublic,
   type SubscriptionInvoice,
 } from "@workspace/api-client-react";
+import { parseBackupText, validateBackupDownload, type ParsedBackup } from "@/lib/backup-file";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import type {
@@ -286,12 +287,12 @@ function BackupDataSection() {
     setIsExporting(true);
     setLastExportSize(null);
     try {
-      const res = await fetch("/api/tenants/backup/export", { credentials: "include" });
+      const res = await fetch("/api/backup/export", { credentials: "include" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as { error?: string; message?: string }).message ?? (err as { error?: string }).error ?? "Erro ao gerar backup");
       }
-      const blob = await res.blob();
+      const blob = await validateBackupDownload(await res.blob(), res.headers.get("Content-Type"));
       const disposition = res.headers.get("Content-Disposition") ?? "";
       const match = disposition.match(/filename="([^"]+)"/);
       const filename = match?.[1] ?? "backup.json";
@@ -4114,11 +4115,12 @@ function BackupImportReportView({ report }: { report: BackupImportReport }) {
 
 function BackupDataTab() {
   const { toast } = useToast();
+  const { data: me } = useGetMe();
   const [isGenerating, setIsGenerating] = useState(false);
   const [receivedBytes, setReceivedBytes] = useState(0);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [parsedBackup, setParsedBackup] = useState<Record<string, unknown> | null>(null);
+  const [parsedBackup, setParsedBackup] = useState<ParsedBackup | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -4141,8 +4143,10 @@ function BackupDataTab() {
       }
       if (!response.body) {
         // Fallback for environments without streaming response support.
-        const blob = await response.blob();
+        const blob = await validateBackupDownload(await response.blob(), response.headers.get("Content-Type"));
         downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
+        setReceivedBytes(blob.size);
+        toast({ title: "Backup gerado com sucesso", description: "O download do arquivo foi iniciado." });
         return;
       }
 
@@ -4158,7 +4162,10 @@ function BackupDataTab() {
           setReceivedBytes(total);
         }
       }
-      const blob = new Blob(chunks, { type: "application/json" });
+      const blob = await validateBackupDownload(
+        new Blob(chunks, { type: "application/json" }),
+        response.headers.get("Content-Type"),
+      );
       downloadBackupBlob(blob, response.headers.get("Content-Disposition"));
       toast({ title: "Backup gerado com sucesso", description: "O download do arquivo foi iniciado." });
     } catch (err) {
@@ -4188,16 +4195,12 @@ function BackupDataTab() {
     reader.onload = () => {
       try {
         const text = String(reader.result ?? "");
-        const parsed = JSON.parse(text) as Record<string, unknown>;
-        if (!parsed || typeof parsed !== "object" || !("format" in parsed) || !("data" in parsed)) {
-          setParseError("Este arquivo não parece ser um backup de agência válido.");
-          return;
-        }
+        const parsed = parseBackupText(text);
         setSelectedFile(file);
         setParsedBackup(parsed);
         setConfirmOpen(true);
-      } catch {
-        setParseError("Não foi possível interpretar o arquivo como JSON válido.");
+      } catch (error) {
+        setParseError(error instanceof Error ? error.message : "Não foi possível validar o arquivo selecionado.");
       }
     };
     reader.onerror = () => setParseError("Não foi possível ler o arquivo selecionado.");
@@ -4332,6 +4335,15 @@ function BackupDataTab() {
           <AlertDialogHeader>
             <AlertDialogTitle>Restaurar dados deste backup?</AlertDialogTitle>
             <AlertDialogDescription>
+              <span className="block mb-2">
+                <strong>Origem:</strong>{" "}
+                {String((parsedBackup?.tenant as { name?: string; slug?: string } | undefined)?.name
+                  ?? (parsedBackup?.tenant as { slug?: string } | undefined)?.slug
+                  ?? ((parsedBackup as Record<string, unknown> | null)?.meta as { tenantName?: string } | undefined)?.tenantName
+                  ?? "Agência identificada no backup")}
+                <br />
+                <strong>Destino:</strong> {me?.tenant?.name ?? "sua agência atual"}
+              </span>
               O arquivo <strong>{selectedFile?.name}</strong> será usado para recriar clientes,
               viagens, reservas, embarque/check-in, automações, indicações, loja e financeiro na
               sua agência. Registros já existentes serão identificados e ignorados — nenhum dado

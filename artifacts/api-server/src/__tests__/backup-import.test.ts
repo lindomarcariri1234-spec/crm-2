@@ -647,6 +647,78 @@ describe("POST /api/backup/import", () => {
     expect(res.body.code).toBe("BACKUP_IMPORT_TENANT_MISMATCH");
   });
 
+  it("accepts the same logical agency when its internal tenant id changed", async () => {
+    mockAuthedAs(ROLES.AGENCY_ADMIN, IMPORTER_ID, OTHER_TENANT_ID);
+    const backup = {
+      format: "visitecrm-agency-backup",
+      version: 4,
+      tenant: {
+        id: "source-installation-tenant-id",
+        name: "BI Other Agency",
+        slug: "source-installation-slug",
+        email: `bi-other-${RUN}@agency.com`,
+      },
+      data: {
+        agencia: {},
+        usuarios: { users: [], invites: [] },
+        clientes: { clients: [] },
+        viagens: { trips: [] },
+        reservas: { reservations: [], passengers: [] },
+        embarqueCheckin: { boardingLocations: [], checkins: [] },
+        automacoes: { automations: [], actions: [], logs: [] },
+        indicacoes: { referrals: [] },
+        loja: { products: [], coupons: [], orders: [], orderItems: [] },
+        financeiro: { payments: [], expenses: [] },
+      },
+    };
+
+    const res = await request(buildApp())
+      .post("/api/backup/import")
+      .send({ idempotencyKey: `k-cross-install-${randomUUID()}`, backup });
+
+    expect(res.status).toBe(200);
+    expect(res.body.report.agencia.updated).toBe(false);
+  });
+
+  it("normalizes and restores a supported legacy flat backup through the endpoint", async () => {
+    mockAuthedAs(ROLES.AGENCY_ADMIN, IMPORTER_ID, OTHER_TENANT_ID);
+    const legacyBackup = {
+      meta: {
+        formatVersion: 6,
+        exportedAt: new Date().toISOString(),
+        tenantId: "legacy-source-id",
+        tenantName: "BI Other Agency",
+        tenantSlug: "legacy-source-slug",
+      },
+      tenant: {
+        id: "legacy-source-id",
+        name: "BI Other Agency",
+        slug: "legacy-source-slug",
+        email: `bi-other-${RUN}@agency.com`,
+      },
+      users: [],
+      clients: [],
+      trips: [],
+      reservations: [],
+      boardingLocations: [],
+      automations: [],
+      store: { info: null, products: [], coupons: [], orders: [] },
+      payments: [],
+      expenses: [],
+    };
+
+    const res = await request(buildApp())
+      .post("/api/backup/import")
+      .send({ idempotencyKey: `k-legacy-${randomUUID()}`, backup: legacyBackup });
+
+    expect(res.status).toBe(200);
+    expect(res.body.report).toMatchObject({
+      agencia: { updated: true },
+      clientes: { created: 0, errors: [] },
+      viagens: { created: 0, errors: [] },
+    });
+  });
+
   it("rejects an unknown backup format", async () => {
     mockAuthedAs(ROLES.AGENCY_ADMIN);
     const backup = { ...buildValidBackup(TENANT_ID), format: "some-other-app-backup" };

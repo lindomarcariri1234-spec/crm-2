@@ -130,7 +130,14 @@ const ADMIN = {
 function seedFullTenantFixture() {
   rowsByTable.clear();
   rowsByTable.set(tables.tenantsTable, [
-    { id: TENANT_A, name: "Agência A", slug: "agencia-a", primaryColor: "#000" },
+    {
+      id: TENANT_A,
+      name: "Agência A",
+      slug: "agencia-a",
+      email: "contato@agencia-a.example",
+      cnpj: "12.345.678/0001-90",
+      primaryColor: "#000",
+    },
     { id: TENANT_B, name: "Agência B", slug: "agencia-b", primaryColor: "#fff" },
   ]);
   rowsByTable.set(tables.usersTable, [
@@ -547,7 +554,7 @@ describe("GET /api/backup/export", () => {
     const body = response.body as {
       format: string;
       version: number;
-      tenant: { id: string; name: string; slug: string };
+      tenant: { id: string; name: string; slug: string; email?: string; cnpj?: string };
       data: Record<string, unknown>;
       counts: Record<string, number>;
     };
@@ -555,7 +562,13 @@ describe("GET /api/backup/export", () => {
     // Envelope identifies format/version/source tenant for a future importer.
     expect(body.format).toBe("visitecrm-agency-backup");
     expect(body.version).toBe(4);
-    expect(body.tenant).toEqual({ id: TENANT_A, name: "Agência A", slug: "agencia-a" });
+    expect(body.tenant).toMatchObject({
+      id: TENANT_A,
+      name: "Agência A",
+      slug: "agencia-a",
+      email: "contato@agencia-a.example",
+      cnpj: "12.345.678/0001-90",
+    });
 
     // Every required entity group from the task's acceptance criteria is present.
     const data = body.data as Record<string, unknown>;

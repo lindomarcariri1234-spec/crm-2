@@ -157,6 +157,13 @@ import {
   importDistribuicaoReservas,
 } from "../lib/backup-import.js";
 import { logger } from "../lib/logger.js";
+import {
+  BACKUP_FORMAT,
+  BACKUP_VERSION,
+  BackupContractError,
+  isSameLogicalAgency,
+  normalizeBackupPayload,
+} from "../lib/backup-contract.js";
 
 const router: Router = Router();
 
@@ -166,9 +173,6 @@ const router: Router = Router();
  * grouping, etc.) so a future import/restore feature can validate
  * compatibility and reject files it does not understand.
  */
-const BACKUP_FORMAT = "visitecrm-agency-backup";
-const BACKUP_VERSION = 4;
-
 // Same batch size used by the trips streaming export — large enough to keep
 // query round-trips low, small enough to bound memory for big tenants.
 const BACKUP_BATCH_SIZE = 500;
@@ -443,7 +447,13 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
     await writer.key("exportedByUserId");
     await writer.value(me.id);
     await writer.key("tenant");
-    await writer.value({ id: tenant.id, name: tenant.name, slug: tenant.slug });
+    await writer.value({
+      id: tenant.id,
+      name: tenant.name,
+      slug: tenant.slug,
+      email: tenant.email,
+      cnpj: tenant.cnpj,
+    });
 
     await writer.key("data");
     await writer.beginObject();
@@ -1061,18 +1071,17 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
 
     res.end();
   } catch (err) {
+    if (res.headersSent) {
+      res.destroy(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
     next(err);
   }
 });
 
 const BackupImportRequest = z.object({
   idempotencyKey: z.string().trim().min(1).max(200),
-  backup: z.object({
-    format: z.string(),
-    version: z.number(),
-    tenant: z.object({ id: z.string() }).passthrough(),
-    data: z.record(z.unknown()),
-  }).passthrough(),
+  backup: z.unknown(),
 }).strict();
 
 /**
@@ -1101,25 +1110,32 @@ router.post("/backup/import", async (req: Request, res: Response, next: NextFunc
       next(new ValidationError(`Arquivo de backup inválido: ${parsedRequest.error.message}`, "BACKUP_IMPORT_INVALID"));
       return;
     }
-    const { idempotencyKey, backup } = parsedRequest.data;
+    const { idempotencyKey } = parsedRequest.data;
+    let backup;
+    try {
+      backup = normalizeBackupPayload(parsedRequest.data.backup);
+    } catch (error) {
+      if (error instanceof BackupContractError) {
+        next(new ValidationError(error.message, error.code));
+        return;
+      }
+      throw error;
+    }
 
-    if (backup.format !== BACKUP_FORMAT) {
-      next(new ValidationError(
-        "Este arquivo não é um backup de agência do VisiteCRM reconhecido.",
-        "BACKUP_IMPORT_UNKNOWN_FORMAT",
-      ));
+    const [destinationTenant] = await db.select({
+      id: tenantsTable.id,
+      name: tenantsTable.name,
+      slug: tenantsTable.slug,
+      email: tenantsTable.email,
+      cnpj: tenantsTable.cnpj,
+    }).from(tenantsTable).where(eq(tenantsTable.id, me.tenantId)).limit(1);
+    if (!destinationTenant) {
+      next(new NotFoundError("Agência de destino não encontrada.", "TENANT_NOT_FOUND"));
       return;
     }
-    if (backup.version !== BACKUP_VERSION) {
+    if (!isSameLogicalAgency(backup.tenant, destinationTenant)) {
       next(new ValidationError(
-        `Versão do backup (${backup.version}) incompatível com a versão suportada (${BACKUP_VERSION}).`,
-        "BACKUP_IMPORT_VERSION_MISMATCH",
-      ));
-      return;
-    }
-    if (backup.tenant.id !== me.tenantId) {
-      next(new ValidationError(
-        "Este arquivo de backup pertence a outra agência e não pode ser restaurado aqui.",
+        "A identidade da agência de origem não corresponde à agência de destino. Confira CNPJ, e-mail ou slug antes de restaurar.",
         "BACKUP_IMPORT_TENANT_MISMATCH",
       ));
       return;

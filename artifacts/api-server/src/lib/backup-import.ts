@@ -488,7 +488,10 @@ export async function importClientes(
   for (const { newId, oldReferredById } of pendingReferredBy) {
     const referrerNewId = ledgerGet(ledger, "client", oldReferredById);
     if (referrerNewId) {
-      await tx.update(clientsTable).set({ referredById: referrerNewId }).where(eq(clientsTable.id, newId));
+      await tx.update(clientsTable).set({ referredById: referrerNewId }).where(and(
+        eq(clientsTable.id, newId),
+        eq(clientsTable.tenantId, tenantId),
+      ));
     }
   }
 }
@@ -1101,7 +1104,10 @@ export async function importFinanceiroLancamentos(
   for (const { newId, oldReversalOfEntryId } of pendingReversals) {
     const targetId = ledgerGet(ledger, "financialLedgerEntry", oldReversalOfEntryId);
     if (targetId) {
-      await tx.update(financialLedgerEntriesTable).set({ reversalOfEntryId: targetId }).where(eq(financialLedgerEntriesTable.id, newId));
+      await tx.update(financialLedgerEntriesTable).set({ reversalOfEntryId: targetId }).where(and(
+        eq(financialLedgerEntriesTable.id, newId),
+        eq(financialLedgerEntriesTable.tenantId, tenantId),
+      ));
     }
   }
 }
