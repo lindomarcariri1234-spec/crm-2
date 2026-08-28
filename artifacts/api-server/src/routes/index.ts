@@ -58,6 +58,7 @@ import distributionRouter from "./distribution";
 import settlementsRouter from "./settlements";
 import backupRouter from "./backup";
 import cronRouter from "./cron";
+import spreadsheetImportsRouter from "./spreadsheet-imports";
 
 const router: IRouter = Router();
 
@@ -121,6 +122,7 @@ router.use(whatsappNotificationsRouter);
 router.use(distributionRouter);
 router.use(settlementsRouter);
 router.use(backupRouter);
+router.use(spreadsheetImportsRouter);
 router.use(cronRouter);
 router.use("/uploadthing", uploadthingRouter);
 router.use("/upload", uploadRouter);

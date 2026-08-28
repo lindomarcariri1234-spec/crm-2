@@ -114,7 +114,7 @@ export function ReservationsTable({
         {!isCliente && <>
           <Button variant="outline" size="sm" className="ml-auto shrink-0" onClick={onImport}>
             <Upload className="w-3.5 h-3.5 mr-1.5" />
-            Importar CSV
+            Importar planilha
           </Button>
           <Button
             variant="outline"

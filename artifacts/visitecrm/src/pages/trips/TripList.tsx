@@ -103,7 +103,7 @@ export function TripList() {
           <>
           {!isVendedor && (
             <Button variant="outline" onClick={() => setImportOpen(true)}>
-              <Upload className="w-4 h-4 mr-2" />Importar CSV
+              <Upload className="w-4 h-4 mr-2" />Importar planilha
             </Button>
           )}
           {!isVendedor && (

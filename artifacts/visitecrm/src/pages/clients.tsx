@@ -38,6 +38,7 @@ import { formatDateBR, localToday, isValidBrazilWhatsAppPhone } from "@workspace
 import { useToast } from "@/hooks/use-toast";
 import { SeatMapPicker } from "@/components/SeatMapPicker";
 import { PlanLimitWall, usePlanLimitError } from "@/components/plan-limit-wall";
+import { OperationalImportModal } from "@/components/operational-import-modal";
 
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -106,7 +107,7 @@ function exportClientsCsv(clients: Client[]) {
 
 interface CsvImportModalProps { open: boolean; onClose: () => void; onImported: () => void; }
 
-function CsvImportModal({ open, onClose, onImported }: CsvImportModalProps) {
+function LegacyCsvImportModal({ open, onClose, onImported }: CsvImportModalProps) {
   const { toast } = useToast();
   const createClient = useCreateClient();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -232,6 +233,10 @@ function CsvImportModal({ open, onClose, onImported }: CsvImportModalProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function CsvImportModal(props: CsvImportModalProps) {
+  return <OperationalImportModal entity="clients" title="Importar clientes por planilha" {...props} />;
 }
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
@@ -1691,7 +1696,7 @@ export default function Clients() {
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={() => setIsImportOpen(true)}>
-            <Upload className="w-4 h-4 mr-1" /> Importar CSV
+            <Upload className="w-4 h-4 mr-1" /> Importar planilha
           </Button>
           <Button variant="outline" size="sm" onClick={() => {
             const clients = allClients?.data ?? [];

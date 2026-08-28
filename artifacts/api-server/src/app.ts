@@ -201,6 +201,7 @@ app.use(cookieParser());
 // higher limit, scoped to this one route only; body-parser marks the
 // request body as already parsed, so the global parser skips it.
 app.use("/api/backup/import", express.json({ limit: "25mb" }));
+app.use("/api/spreadsheet-imports", express.json({ limit: "8mb" }));
 
 app.use(
   express.json({
