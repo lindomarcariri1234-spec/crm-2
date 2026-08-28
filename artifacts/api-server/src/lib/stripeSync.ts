@@ -3,7 +3,11 @@ import type Stripe from "stripe";
 import { getStripeSecretKey, getUncachableStripeClient } from "./stripeClient";
 import { logger } from "./logger";
 import { sendStripeWebhookDuplicateAlertEmail } from "@workspace/email";
-import { db, platformSettingsTable } from "@workspace/db";
+import {
+  buildDatabaseConnectionConfig,
+  db,
+  platformSettingsTable,
+} from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { generateId } from "./id";
 
@@ -438,13 +442,18 @@ export async function initStripeSync(): Promise<void> {
   }
 
   try {
+    const databaseConnection = buildDatabaseConnectionConfig(
+      databaseUrl,
+      process.env["NODE_ENV"] === "production",
+    );
+
     // Step 0: runMigrations() — provision the `stripe.*` schema and tables.
     // StripeSync does NOT auto-migrate on construction, so without this the sync
     // engine fails at runtime with `relation "stripe.accounts" does not exist`.
     try {
       await runMigrations({
-        databaseUrl,
-        ssl: process.env["NODE_ENV"] === "production" ? { rejectUnauthorized: true } : undefined,
+        databaseUrl: databaseConnection.connectionString,
+        ssl: databaseConnection.ssl,
         logger,
       });
       logger.info("[stripe-sync] Schema migrations applied");
@@ -453,23 +462,11 @@ export async function initStripeSync(): Promise<void> {
     }
 
     // Step 1: getStripeSync() — create the StripeSync instance
-    // Strip sslmode from the connection URL in production so pg-connection-string
-    // does not emit a deprecation warning; supply explicit ssl options instead.
-    let poolConnectionString = databaseUrl;
-    if (process.env["NODE_ENV"] === "production") {
-      try {
-        const u = new URL(databaseUrl);
-        u.searchParams.delete("sslmode");
-        poolConnectionString = u.toString();
-      } catch {
-        // Non-standard URL format — keep original
-      }
-    }
     _stripeSyncInstance = new StripeSync({
       stripeSecretKey,
       poolConfig: {
-        connectionString: poolConnectionString,
-        ssl: process.env["NODE_ENV"] === "production" ? { rejectUnauthorized: true } : undefined,
+        connectionString: databaseConnection.connectionString,
+        ssl: databaseConnection.ssl,
       },
       logger,
     });
