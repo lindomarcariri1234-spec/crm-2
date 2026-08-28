@@ -13,6 +13,7 @@ import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxy
 import { requestId, errorHandler } from "./middlewares/errorHandler";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { NotFoundError } from "./lib/errors";
 import { handleStripeWebhook } from "./lib/stripeWebhookHandler";
 import {
   buildStorefrontMetadata,
@@ -491,6 +492,9 @@ app.use("/api/admin", (req: Request, res: Response, next: express.NextFunction):
 });
 
 app.use("/api", router);
+app.use("/api", (_req, _res, next) => {
+  next(new NotFoundError("API route not found", "API_ROUTE_NOT_FOUND"));
+});
 
 if (!isDev) {
   const frontendDist = path.join(process.cwd(), "artifacts/visitecrm/dist/public");
