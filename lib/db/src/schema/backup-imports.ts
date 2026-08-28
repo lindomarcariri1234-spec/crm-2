@@ -35,6 +35,39 @@ export interface BackupImportReport {
   lojaItensPedido: BackupImportGroupResult;
   pagamentos: BackupImportGroupResult;
   despesas: BackupImportGroupResult;
+  convites: BackupImportGroupResult;
+  clientesConquistas: BackupImportGroupResult;
+  clientesDestinosSonho: BackupImportGroupResult;
+  clientesNotificacoes: BackupImportGroupResult;
+  fornecedores: BackupImportGroupResult;
+  veiculos: BackupImportGroupResult;
+  layoutsVeiculo: BackupImportGroupResult;
+  hospedagens: BackupImportGroupResult;
+  destinos: BackupImportGroupResult;
+  viagensMidia: BackupImportGroupResult;
+  pipelines: BackupImportGroupResult;
+  etapasPipeline: BackupImportGroupResult;
+  negociacoes: BackupImportGroupResult;
+  fidelidadeProgramas: BackupImportGroupResult;
+  fidelidadeMembros: BackupImportGroupResult;
+  fidelidadeTransacoes: BackupImportGroupResult;
+  financeiroAcertos: BackupImportGroupResult;
+  financeiroLancamentos: BackupImportGroupResult;
+  calendario: BackupImportGroupResult;
+  documentos: BackupImportGroupResult;
+  marketingCampanhas: BackupImportGroupResult;
+  marketingEnvios: BackupImportGroupResult;
+  marketingNps: BackupImportGroupResult;
+  distribuicaoOfertas: BackupImportGroupResult;
+  distribuicaoOperacoes: BackupImportGroupResult;
+  distribuicaoReservas: BackupImportGroupResult;
+  /**
+   * Export section keys (dot-path, matching the export's own JSON structure)
+   * that this importer intentionally does not restore — logs, legacy/
+   * duplicate data, or references too ambiguous to remap safely — so an
+   * admin can't mistake a completed import for a complete restore.
+   */
+  naoRestaurado: string[];
 }
 
 /**

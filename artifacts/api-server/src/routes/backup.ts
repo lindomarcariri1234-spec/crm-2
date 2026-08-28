@@ -129,6 +129,32 @@ import {
   importIndicacoes,
   importPagamentos,
   importDespesas,
+  importFinanceiroAcertos,
+  importFinanceiroLancamentos,
+  importConvites,
+  importClientAchievements,
+  importClientDreamDestinations,
+  importClientNotifications,
+  importFornecedores,
+  importVeiculos,
+  importLayoutsVeiculo,
+  importHospedagens,
+  importDestinos,
+  importViagensMidia,
+  importPipelines,
+  importEtapasPipeline,
+  importNegociacoes,
+  importFidelidadeProgramas,
+  importFidelidadeMembros,
+  importFidelidadeTransacoes,
+  importCalendario,
+  importDocumentos,
+  importMarketingCampanhas,
+  importMarketingEnvios,
+  importMarketingNps,
+  importDistribuicaoOfertas,
+  importDistribuicaoOperacoes,
+  importDistribuicaoReservas,
 } from "../lib/backup-import.js";
 import { logger } from "../lib/logger.js";
 
@@ -1141,11 +1167,25 @@ router.post("/backup/import", async (req: Request, res: Response, next: NextFunc
         const users = await resolveUsers(tx, me.tenantId, me.id, usuarios?.users);
         report.usuarios = { matched: users.matched, fallbackToImporter: users.fallbackToImporter, fallbackDetails: users.fallbackDetails };
 
+        await importConvites(tx, ledger, me.tenantId, users, usuarios?.invites, report.convites);
+
         const clientes = data.clientes as Record<string, unknown> | undefined;
         await importClientes(tx, ledger, me.tenantId, me.id, users, clientes?.clients, report.clientes);
+        await importClientAchievements(tx, ledger, me.tenantId, clientes?.achievements, report.clientesConquistas);
+        await importClientDreamDestinations(tx, ledger, me.tenantId, clientes?.dreamDestinations, report.clientesDestinosSonho);
+        await importClientNotifications(tx, ledger, me.tenantId, clientes?.notifications, report.clientesNotificacoes);
+
+        // Imported before viagens so trip.layoutId can be remapped through the ledger.
+        const cadastrosAuxiliares = data.cadastrosAuxiliares as Record<string, unknown> | undefined;
+        await importFornecedores(tx, ledger, me.tenantId, cadastrosAuxiliares?.suppliers, report.fornecedores);
+        await importVeiculos(tx, ledger, me.tenantId, cadastrosAuxiliares?.vehicles, report.veiculos);
+        await importLayoutsVeiculo(tx, ledger, me.tenantId, cadastrosAuxiliares?.vehicleLayouts, report.layoutsVeiculo);
+        await importHospedagens(tx, ledger, me.tenantId, cadastrosAuxiliares?.accommodations, report.hospedagens);
+        await importDestinos(tx, ledger, me.tenantId, cadastrosAuxiliares?.destinations, report.destinos);
 
         const viagens = data.viagens as Record<string, unknown> | undefined;
         await importViagens(tx, ledger, me.tenantId, me.id, users, viagens?.trips, report.viagens);
+        await importViagensMidia(tx, ledger, me.tenantId, users, viagens?.media, report.viagensMidia);
 
         const embarque = data.embarqueCheckin as Record<string, unknown> | undefined;
         await importBoardingLocations(tx, ledger, me.tenantId, embarque?.boardingLocations, report.embarqueLocais);
@@ -1171,9 +1211,40 @@ router.post("/backup/import", async (req: Request, res: Response, next: NextFunc
         const indicacoes = data.indicacoes as Record<string, unknown> | undefined;
         await importIndicacoes(tx, ledger, me.tenantId, indicacoes?.referrals, report.indicacoes);
 
+        const pipeline = data.pipeline as Record<string, unknown> | undefined;
+        await importPipelines(tx, ledger, me.tenantId, pipeline?.pipelines, report.pipelines);
+        await importEtapasPipeline(tx, ledger, me.tenantId, pipeline?.stages, report.etapasPipeline);
+        await importNegociacoes(tx, ledger, me.tenantId, me.id, users, pipeline?.deals, report.negociacoes);
+
+        const fidelidade = data.fidelidade as Record<string, unknown> | undefined;
+        await importFidelidadeProgramas(tx, ledger, me.tenantId, fidelidade?.programs, report.fidelidadeProgramas);
+        await importFidelidadeMembros(tx, ledger, me.tenantId, fidelidade?.members, report.fidelidadeMembros);
+
         const financeiro = data.financeiro as Record<string, unknown> | undefined;
         await importPagamentos(tx, ledger, me.tenantId, financeiro?.payments, report.pagamentos);
         await importDespesas(tx, ledger, me.tenantId, me.id, users, financeiro?.expenses, report.despesas);
+        await importFinanceiroAcertos(tx, ledger, me.tenantId, users, financeiro?.settlementItems, report.financeiroAcertos);
+        await importFinanceiroLancamentos(tx, ledger, me.tenantId, users, financeiro?.ledgerEntries, report.financeiroLancamentos);
+
+        // Loyalty references reservations, referrals and payments. Import only
+        // after all three ledgers are available so referenceId never retains a
+        // stale identifier from the source installation.
+        await importFidelidadeTransacoes(tx, ledger, me.tenantId, fidelidade?.transactions, report.fidelidadeTransacoes);
+
+        // Calendario references payments, so it's imported after financeiro.
+        await importCalendario(tx, ledger, me.tenantId, users, data.calendario, report.calendario);
+
+        await importDocumentos(tx, ledger, me.tenantId, me.id, users, data.documentos, report.documentos);
+
+        const marketing = data.marketing as Record<string, unknown> | undefined;
+        await importMarketingCampanhas(tx, ledger, me.tenantId, me.id, users, marketing?.campaigns, report.marketingCampanhas);
+        await importMarketingEnvios(tx, ledger, me.tenantId, marketing?.campaignSends, report.marketingEnvios);
+        await importMarketingNps(tx, ledger, me.tenantId, marketing?.npsResponses, report.marketingNps);
+
+        const distribuicao = data.distribuicao as Record<string, unknown> | undefined;
+        await importDistribuicaoOfertas(tx, ledger, me.tenantId, distribuicao?.offers, report.distribuicaoOfertas);
+        await importDistribuicaoOperacoes(tx, ledger, me.tenantId, distribuicao?.operations, report.distribuicaoOperacoes);
+        await importDistribuicaoReservas(tx, ledger, me.tenantId, distribuicao?.bookings, report.distribuicaoReservas);
 
         const batchId = generateId();
         await tx.insert(backupImportBatchesTable).values({

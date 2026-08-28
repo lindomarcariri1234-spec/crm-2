@@ -22,6 +22,32 @@ import {
   paymentsTable,
   expensesTable,
   backupImportRecordsTable,
+  invitesTable,
+  clientAchievementsTable,
+  clientDreamDestinationsTable,
+  clientNotificationsTable,
+  suppliersTable,
+  vehiclesTable,
+  vehicleLayoutsTable,
+  accommodationsTable,
+  destinationsTable,
+  tripMediaTable,
+  pipelinesTable,
+  pipelineStagesTable,
+  dealsTable,
+  loyaltyProgramsTable,
+  loyaltyMembersTable,
+  loyaltyTransactionsTable,
+  settlementItemsTable,
+  financialLedgerEntriesTable,
+  calendarEventsTable,
+  documentsTable,
+  campaignsTable,
+  campaignSendsTable,
+  npsResponsesTable,
+  distributionOffersTable,
+  distributionOperationsTable,
+  distributionBookingsTable,
   type BackupImportGroupResult,
   type BackupImportReport,
   type BackupImportUserMatch,
@@ -58,8 +84,98 @@ export function emptyReport(): BackupImportReport {
     lojaItensPedido: emptyGroupResult(),
     pagamentos: emptyGroupResult(),
     despesas: emptyGroupResult(),
+    convites: emptyGroupResult(),
+    clientesConquistas: emptyGroupResult(),
+    clientesDestinosSonho: emptyGroupResult(),
+    clientesNotificacoes: emptyGroupResult(),
+    fornecedores: emptyGroupResult(),
+    veiculos: emptyGroupResult(),
+    layoutsVeiculo: emptyGroupResult(),
+    hospedagens: emptyGroupResult(),
+    destinos: emptyGroupResult(),
+    viagensMidia: emptyGroupResult(),
+    pipelines: emptyGroupResult(),
+    etapasPipeline: emptyGroupResult(),
+    negociacoes: emptyGroupResult(),
+    fidelidadeProgramas: emptyGroupResult(),
+    fidelidadeMembros: emptyGroupResult(),
+    fidelidadeTransacoes: emptyGroupResult(),
+    financeiroAcertos: emptyGroupResult(),
+    financeiroLancamentos: emptyGroupResult(),
+    calendario: emptyGroupResult(),
+    documentos: emptyGroupResult(),
+    marketingCampanhas: emptyGroupResult(),
+    marketingEnvios: emptyGroupResult(),
+    marketingNps: emptyGroupResult(),
+    distribuicaoOfertas: emptyGroupResult(),
+    distribuicaoOperacoes: emptyGroupResult(),
+    distribuicaoReservas: emptyGroupResult(),
+    naoRestaurado: NOT_RESTORED_SECTIONS,
   };
 }
+
+/**
+ * Export section keys (matching the export's own dot-path JSON structure)
+ * that this importer deliberately does not restore: operational logs,
+ * legacy/duplicate data superseded by other tables, provider secrets/config
+ * that must never be silently re-activated, or references too ambiguous to
+ * remap safely (e.g. free-form polymorphic ids with no ledger entry). Kept
+ * as a static list — the export's shape only changes alongside BACKUP_VERSION,
+ * at which point this list should be revisited too.
+ */
+export const NOT_RESTORED_SECTIONS: string[] = [
+  "configuracoes",
+  "clientes.notes",
+  "clientes.npsResponses",
+  "clientes.npsInvitations",
+  "clientes.favorites",
+  "clientes.scores",
+  "viagens.importBatches",
+  "reservas.installments",
+  "reservas.sequences",
+  "embarqueCheckin.guideLocations",
+  "indicacoes.tracking",
+  "indicacoes.settings",
+  "indicacoes.campaigns",
+  "indicacoes.commissions",
+  "indicacoes.attemptLogs",
+  "loja.categories",
+  "loja.reviews",
+  "loja.pages",
+  "loja.priceAlertSubscriptions",
+  "cuponsCrm",
+  "financeiro.tripCosts",
+  "metasVendas",
+  "comissoes.rules",
+  "comissoes.entries",
+  "clube.config",
+  "clube.benefits",
+  "marketing.catalogoPontos.products",
+  "marketing.catalogoPontos.orders",
+  "marketing.catalogoPontos.orderItems",
+  "comunicacao.messages",
+  "comunicacao.messageTemplates",
+  "comunicacao.chatbotConversations",
+  "comunicacao.chatbotMessages",
+  "comunicacao.birthdayMessages",
+  "comunicacao.emailLogs",
+  "comunicacao.whatsappOutbox",
+  "integracoes.tenantIntegrations",
+  "integracoes.tenantIntegrationLogs",
+  "integracoes.aiIntegrations",
+  "integracoes.aiIntegrationLogs",
+  "inteligenciaArtificial.gemeoAlerts",
+  "inteligenciaArtificial.gemeoOpportunities",
+  "inteligenciaArtificial.insightsChatHistory",
+  "catalogoLegado.categories",
+  "catalogoLegado.images",
+  "catalogoLegado.cartItems",
+  "parceiros.partners",
+  "parceiros.products",
+  "parceiros.availability",
+  "parceiros.commissions",
+  "auditoria",
+];
 
 // ── Row-level dedup ledger ──────────────────────────────────────────────
 // Keyed by (entityType, sourceId-from-the-backup-file) → the id assigned to
@@ -268,6 +384,22 @@ function resolveSoftAttribution(users: UserResolution, oldUserId: unknown): stri
   return null;
 }
 
+function remapFinancialActor(
+  ledger: Ledger,
+  users: UserResolution,
+  tenantId: string,
+  actorType: string | null,
+  oldActorId: string | null,
+): string | null {
+  if (!oldActorId) return null;
+  if (actorType === "agency") return tenantId;
+  if (actorType === "client") return ledgerGet(ledger, "client", oldActorId) ?? null;
+  if (actorType === "user" || actorType === "seller") return resolveSoftAttribution(users, oldActorId);
+  // Partner records are deliberately not restored, and unknown actor types
+  // cannot be mapped safely. Never retain a source-installation identifier.
+  return null;
+}
+
 // ── Agência (branding/config) — update in place, never touches billing/plan fields ──
 
 const AGENCY_ALLOWED_FIELDS = [
@@ -373,8 +505,12 @@ export async function importViagens(
   result: BackupImportGroupResult,
 ): Promise<void> {
   await importRows(tx, ledger, tenantId, "trip", trips, result, async (rtx, row, newId) => {
+    const oldLayoutId = str(row, "layoutId");
+    const layoutId = oldLayoutId ? ledgerGet(ledger, "vehicleLayout", oldLayoutId) ?? null : null;
+    const oldVehicleId = str(row, "vehicleId");
+    const vehicleId = oldVehicleId ? ledgerGet(ledger, "vehicle", oldVehicleId) ?? null : null;
     const values = {
-      ...cleanRow(row, ["id", "tenantId", "createdById", "importFingerprint", "layoutId"]),
+      ...cleanRow(row, ["id", "tenantId", "createdById", "importFingerprint", "layoutId", "vehicleId"]),
       id: newId,
       tenantId,
       createdById: resolveAttribution(users, importerId, row.createdById),
@@ -382,11 +518,94 @@ export async function importViagens(
       // same fingerprint, and dedup for restore is handled by the ledger, not
       // this unique index.
       importFingerprint: null,
-      // Vehicle layouts are out of import scope; the trip's own seatMap/
-      // seatLayout/totalCapacity are cloned as-is, only the named-layout link is cleared.
-      layoutId: null,
+      // Remapped through the ledger when the vehicle-layout catalog was
+      // imported first (see importLayoutsVeiculo); otherwise cleared — the
+      // trip's own seatMap/seatLayout/totalCapacity are cloned as-is
+      // regardless, only the named-layout link depends on this.
+      layoutId,
+      vehicleId,
     };
     await insertRow(rtx, tripsTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Viagens: mídia ───────────────────────────────────────────────────────
+
+export async function importViagensMidia(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  users: UserResolution,
+  media: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "tripMedia", media, result, async (rtx, row, newId) => {
+    const oldTripId = str(row, "tripId");
+    const tripId = oldTripId ? ledgerGet(ledger, "trip", oldTripId) : undefined;
+    if (!tripId) return { status: "skip", reason: "Viagem de origem não foi importada" };
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "tripId", "uploadedByUserId"]),
+      id: newId,
+      tenantId,
+      tripId,
+      uploadedByUserId: resolveSoftAttribution(users, row.uploadedByUserId),
+    };
+    await insertRow(rtx, tripMediaTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Cadastros auxiliares (fornecedores, veículos, layouts, hospedagens, destinos) ──
+// Standalone tenant-scoped catalogs with no cross-entity FKs to remap besides
+// tenantId itself.
+
+export async function importFornecedores(
+  tx: ImportTx, ledger: Ledger, tenantId: string, suppliers: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "supplier", suppliers, result, async (rtx, row, newId) => {
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, suppliersTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importVeiculos(
+  tx: ImportTx, ledger: Ledger, tenantId: string, vehicles: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "vehicle", vehicles, result, async (rtx, row, newId) => {
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, vehiclesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importLayoutsVeiculo(
+  tx: ImportTx, ledger: Ledger, tenantId: string, vehicleLayouts: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "vehicleLayout", vehicleLayouts, result, async (rtx, row, newId) => {
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, vehicleLayoutsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importHospedagens(
+  tx: ImportTx, ledger: Ledger, tenantId: string, accommodations: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "accommodation", accommodations, result, async (rtx, row, newId) => {
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, accommodationsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importDestinos(
+  tx: ImportTx, ledger: Ledger, tenantId: string, destinations: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "destination", destinations, result, async (rtx, row, newId) => {
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, destinationsTable, values);
     return { status: "created" };
   });
 }
@@ -773,14 +992,570 @@ export async function importDespesas(
   await importRows(tx, ledger, tenantId, "expense", despesas, result, async (rtx, row, newId) => {
     const oldTripId = str(row, "tripId");
     const tripId = oldTripId ? ledgerGet(ledger, "trip", oldTripId) ?? null : null;
+    const oldSupplierId = str(row, "supplierId");
+    const supplierId = oldSupplierId ? ledgerGet(ledger, "supplier", oldSupplierId) ?? null : null;
     const values = {
-      ...cleanRow(row, ["id", "tenantId", "tripId", "createdById"]),
+      ...cleanRow(row, ["id", "tenantId", "tripId", "supplierId", "createdById"]),
       id: newId,
       tenantId,
       tripId,
+      supplierId,
       createdById: resolveAttribution(users, importerId, row.createdById),
     };
     await insertRow(rtx, expensesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importFinanceiroAcertos(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  users: UserResolution,
+  settlementItems: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "settlementItem", settlementItems, result, async (rtx, row, newId) => {
+    const oldOrderId = str(row, "orderId");
+    const orderId = oldOrderId ? ledgerGet(ledger, "storeOrder", oldOrderId) : undefined;
+    if (!orderId) return { status: "skip", reason: "Pedido de origem não foi importado" };
+    const oldOrderItemId = str(row, "orderItemId");
+    const orderItemId = oldOrderItemId ? ledgerGet(ledger, "storeOrderItem", oldOrderItemId) : undefined;
+    if (!orderItemId) return { status: "skip", reason: "Item de pedido de origem não foi importado" };
+    const [existing] = await rtx.select({ id: settlementItemsTable.id }).from(settlementItemsTable)
+      .where(eq(settlementItemsTable.orderItemId, orderItemId))
+      .limit(1);
+    if (existing) {
+      await ledgerSet(rtx, ledger, tenantId, "settlementItem", row.id as string, existing.id);
+      return { status: "skip", reason: "Acerto já existe para o item de pedido" };
+    }
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) ?? null : null;
+    const sellerType = str(row, "sellerType");
+    const sellerId = remapFinancialActor(ledger, users, tenantId, sellerType, str(row, "sellerId"));
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "orderId", "orderItemId", "clientId", "sellerId"]),
+      id: newId,
+      tenantId,
+      orderId,
+      orderItemId,
+      clientId,
+      sellerId,
+    };
+    await insertRow(rtx, settlementItemsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importFinanceiroLancamentos(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  users: UserResolution,
+  ledgerEntries: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  // reversalOfEntryId is patched in a second pass below, once every entry in
+  // this backup has a resolved new id — a reversal may reference an entry
+  // appearing later in the array.
+  const pendingReversals: Array<{ newId: string; oldReversalOfEntryId: string }> = [];
+
+  await importRows(tx, ledger, tenantId, "financialLedgerEntry", ledgerEntries, result, async (rtx, row, newId) => {
+    const oldSettlementItemId = str(row, "settlementItemId");
+    const settlementItemId = oldSettlementItemId ? ledgerGet(ledger, "settlementItem", oldSettlementItemId) ?? null : null;
+    const oldOrderId = str(row, "orderId");
+    const orderId = oldOrderId ? ledgerGet(ledger, "storeOrder", oldOrderId) ?? null : null;
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) ?? null : null;
+    const participantType = str(row, "participantType");
+    const participantId = remapFinancialActor(ledger, users, tenantId, participantType, str(row, "participantId"));
+    const oldReversalOfEntryId = str(row, "reversalOfEntryId");
+    if (oldReversalOfEntryId) pendingReversals.push({ newId, oldReversalOfEntryId });
+
+    // idempotencyKey is unique per (tenant, key); the original value is kept
+    // when still free, otherwise a fresh one is minted so the row isn't dropped.
+    let idempotencyKey = str(row, "idempotencyKey");
+    if (idempotencyKey) {
+      const [existing] = await rtx.select({ id: financialLedgerEntriesTable.id }).from(financialLedgerEntriesTable)
+        .where(and(eq(financialLedgerEntriesTable.tenantId, tenantId), eq(financialLedgerEntriesTable.idempotencyKey, idempotencyKey)))
+        .limit(1);
+      if (existing) idempotencyKey = null;
+    }
+    if (!idempotencyKey) idempotencyKey = `restored-${newId}`;
+
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "settlementItemId", "orderId", "clientId", "participantId", "idempotencyKey", "reversalOfEntryId"]),
+      id: newId,
+      tenantId,
+      settlementItemId,
+      orderId,
+      clientId,
+      participantId,
+      idempotencyKey,
+      reversalOfEntryId: null as string | null,
+    };
+    await insertRow(rtx, financialLedgerEntriesTable, values);
+    return { status: "created" };
+  });
+
+  for (const { newId, oldReversalOfEntryId } of pendingReversals) {
+    const targetId = ledgerGet(ledger, "financialLedgerEntry", oldReversalOfEntryId);
+    if (targetId) {
+      await tx.update(financialLedgerEntriesTable).set({ reversalOfEntryId: targetId }).where(eq(financialLedgerEntriesTable.id, newId));
+    }
+  }
+}
+
+// ── Convites (pendentes) ─────────────────────────────────────────────────
+
+export async function importConvites(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  users: UserResolution,
+  invites: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "invite", invites, result, async (rtx, row, newId) => {
+    if (row.accepted === true) {
+      return { status: "skip", reason: "Convite já aceito não é reativado" };
+    }
+    const expiresAt = dateVal(row, "expiresAt");
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      return { status: "skip", reason: "Convite expirado não é reativado" };
+    }
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "invitedBy", "token", "accepted", "acceptedAt"]),
+      id: newId,
+      tenantId,
+      invitedBy: resolveSoftAttribution(users, row.invitedBy),
+      // A fresh bearer token is minted: the original was stripped from the
+      // export (it authorizes anonymous account creation by possession alone).
+      token: generateId(),
+      // Only pending, unexpired invites reach this point. A fresh bearer token
+      // prevents credentials from crossing installations.
+      accepted: false,
+      acceptedAt: null,
+    };
+    await insertRow(rtx, invitesTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Clientes: conquistas / destinos dos sonhos / notificações ───────────
+
+export async function importClientAchievements(
+  tx: ImportTx, ledger: Ledger, tenantId: string, achievements: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "clientAchievement", achievements, result, async (rtx, row, newId) => {
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) : undefined;
+    if (!clientId) return { status: "skip", reason: "Cliente de origem não foi importado" };
+    const badgeKey = str(row, "badgeKey");
+    if (badgeKey) {
+      const [existing] = await rtx.select({ id: clientAchievementsTable.id }).from(clientAchievementsTable)
+        .where(and(
+          eq(clientAchievementsTable.tenantId, tenantId),
+          eq(clientAchievementsTable.clientId, clientId),
+          eq(clientAchievementsTable.badgeKey, badgeKey),
+        ))
+        .limit(1);
+      if (existing) {
+        await ledgerSet(rtx, ledger, tenantId, "clientAchievement", row.id as string, existing.id);
+        return { status: "skip", reason: "Conquista já existe para o cliente" };
+      }
+    }
+    const values = { ...cleanRow(row, ["id", "tenantId", "clientId"]), id: newId, tenantId, clientId };
+    await insertRow(rtx, clientAchievementsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importClientDreamDestinations(
+  tx: ImportTx, ledger: Ledger, tenantId: string, dreamDestinations: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "clientDreamDestination", dreamDestinations, result, async (rtx, row, newId) => {
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) : undefined;
+    if (!clientId) return { status: "skip", reason: "Cliente de origem não foi importado" };
+    const values = { ...cleanRow(row, ["id", "tenantId", "clientId"]), id: newId, tenantId, clientId };
+    await insertRow(rtx, clientDreamDestinationsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importClientNotifications(
+  tx: ImportTx, ledger: Ledger, tenantId: string, notifications: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "clientNotification", notifications, result, async (rtx, row, newId) => {
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) : undefined;
+    if (!clientId) return { status: "skip", reason: "Cliente de origem não foi importado" };
+    const values = { ...cleanRow(row, ["id", "tenantId", "clientId"]), id: newId, tenantId, clientId };
+    await insertRow(rtx, clientNotificationsTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Pipeline / negociações ───────────────────────────────────────────────
+
+export async function importPipelines(
+  tx: ImportTx, ledger: Ledger, tenantId: string, pipelines: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "pipeline", pipelines, result, async (rtx, row, newId) => {
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, pipelinesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importEtapasPipeline(
+  tx: ImportTx, ledger: Ledger, tenantId: string, stages: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "pipelineStage", stages, result, async (rtx, row, newId) => {
+    const oldPipelineId = str(row, "pipelineId");
+    const pipelineId = oldPipelineId ? ledgerGet(ledger, "pipeline", oldPipelineId) : undefined;
+    if (!pipelineId) return { status: "skip", reason: "Pipeline de origem não foi importado" };
+    const name = str(row, "name");
+    if (name) {
+      const [existing] = await rtx.select({ id: pipelineStagesTable.id }).from(pipelineStagesTable)
+        .where(and(eq(pipelineStagesTable.pipelineId, pipelineId), eq(pipelineStagesTable.name, name)))
+        .limit(1);
+      if (existing) {
+        await ledgerSet(rtx, ledger, tenantId, "pipelineStage", row.id as string, existing.id);
+        return { status: "skip", reason: "Etapa já existe no pipeline" };
+      }
+    }
+    const values = { ...cleanRow(row, ["id", "tenantId", "pipelineId"]), id: newId, tenantId, pipelineId };
+    await insertRow(rtx, pipelineStagesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importNegociacoes(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  importerId: string,
+  users: UserResolution,
+  deals: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "deal", deals, result, async (rtx, row, newId) => {
+    const oldStageId = str(row, "stageId");
+    const stageId = oldStageId ? ledgerGet(ledger, "pipelineStage", oldStageId) : undefined;
+    if (!stageId) return { status: "skip", reason: "Etapa de pipeline de origem não foi importada" };
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) ?? null : null;
+    const oldTripId = str(row, "tripId");
+    const tripId = oldTripId ? ledgerGet(ledger, "trip", oldTripId) ?? null : null;
+    // reservationId has no DB-level FK; remap through the ledger when
+    // possible, otherwise drop it rather than leave a dangling id pointing
+    // at nothing in this tenant.
+    const oldReservationId = str(row, "reservationId");
+    const reservationId = oldReservationId ? ledgerGet(ledger, "reservation", oldReservationId) ?? null : null;
+    const status = str(row, "status") ?? "open";
+    if (status === "open" && clientId && tripId) {
+      const [existing] = await rtx.select({ id: dealsTable.id }).from(dealsTable)
+        .where(and(
+          eq(dealsTable.tenantId, tenantId),
+          eq(dealsTable.clientId, clientId),
+          eq(dealsTable.tripId, tripId),
+          eq(dealsTable.status, "open"),
+        ))
+        .limit(1);
+      if (existing) {
+        await ledgerSet(rtx, ledger, tenantId, "deal", row.id as string, existing.id);
+        return { status: "skip", reason: "Negociação aberta já existe para cliente e viagem" };
+      }
+    }
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "stageId", "clientId", "tripId", "reservationId", "ownerId"]),
+      id: newId,
+      tenantId,
+      stageId,
+      clientId,
+      tripId,
+      reservationId,
+      ownerId: resolveAttribution(users, importerId, row.ownerId),
+    };
+    await insertRow(rtx, dealsTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Fidelidade ────────────────────────────────────────────────────────────
+
+export async function importFidelidadeProgramas(
+  tx: ImportTx, ledger: Ledger, tenantId: string, programs: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "loyaltyProgram", programs, result, async (rtx, row, newId) => {
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, loyaltyProgramsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importFidelidadeMembros(
+  tx: ImportTx, ledger: Ledger, tenantId: string, members: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "loyaltyMember", members, result, async (rtx, row, newId) => {
+    const oldProgramId = str(row, "programId");
+    const programId = oldProgramId ? ledgerGet(ledger, "loyaltyProgram", oldProgramId) : undefined;
+    if (!programId) return { status: "skip", reason: "Programa de fidelidade de origem não foi importado" };
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) : undefined;
+    if (!clientId) return { status: "skip", reason: "Cliente de origem não foi importado" };
+    const values = { ...cleanRow(row, ["id", "tenantId", "programId", "clientId"]), id: newId, tenantId, programId, clientId };
+    await insertRow(rtx, loyaltyMembersTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importFidelidadeTransacoes(
+  tx: ImportTx, ledger: Ledger, tenantId: string, transactions: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "loyaltyTransaction", transactions, result, async (rtx, row, newId) => {
+    const oldMemberId = str(row, "memberId");
+    const memberId = oldMemberId ? ledgerGet(ledger, "loyaltyMember", oldMemberId) : undefined;
+    if (!memberId) return { status: "skip", reason: "Membro de fidelidade de origem não foi importado" };
+    const referenceType = str(row, "referenceType");
+    const oldReferenceId = str(row, "referenceId");
+    let referenceId: string | null = null;
+    if (oldReferenceId) {
+      if (referenceType === "reservation") referenceId = ledgerGet(ledger, "reservation", oldReferenceId) ?? null;
+      else if (referenceType === "payment" || referenceType === "payment_reversal") {
+        referenceId = ledgerGet(ledger, "payment", oldReferenceId) ?? null;
+      } else if (referenceType === "referral") {
+        referenceId = ledgerGet(ledger, "referral", oldReferenceId) ?? null;
+      }
+    }
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "memberId", "referenceId"]),
+      id: newId,
+      tenantId,
+      memberId,
+      referenceId,
+    };
+    await insertRow(rtx, loyaltyTransactionsTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Calendário ────────────────────────────────────────────────────────────
+
+export async function importCalendario(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  users: UserResolution,
+  events: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "calendarEvent", events, result, async (rtx, row, newId) => {
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) ?? null : null;
+    const oldTripId = str(row, "tripId");
+    const tripId = oldTripId ? ledgerGet(ledger, "trip", oldTripId) ?? null : null;
+    const oldPaymentId = str(row, "paymentId");
+    const paymentId = oldPaymentId ? ledgerGet(ledger, "payment", oldPaymentId) ?? null : null;
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "userId", "clientId", "tripId", "paymentId"]),
+      id: newId,
+      tenantId,
+      userId: resolveSoftAttribution(users, row.userId),
+      clientId,
+      tripId,
+      paymentId,
+    };
+    await insertRow(rtx, calendarEventsTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Documentos ────────────────────────────────────────────────────────────
+
+export async function importDocumentos(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  importerId: string,
+  users: UserResolution,
+  documents: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "document", documents, result, async (rtx, row, newId) => {
+    const entityType = str(row, "entityType");
+    let entityId = str(row, "entityId");
+    if (entityId) {
+      if (entityType === "client") entityId = ledgerGet(ledger, "client", entityId) ?? null;
+      else if (entityType === "trip") entityId = ledgerGet(ledger, "trip", entityId) ?? null;
+      else if (entityType === "reservation") entityId = ledgerGet(ledger, "reservation", entityId) ?? null;
+      // Other entityType values have no ledger mapping wired up yet — the id
+      // is dropped rather than left dangling at a stale value from the
+      // source tenant.
+      else entityId = null;
+    }
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "uploadedById", "entityId"]),
+      id: newId,
+      tenantId,
+      uploadedById: resolveAttribution(users, importerId, row.uploadedById),
+      entityId,
+    };
+    await insertRow(rtx, documentsTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Marketing: campanhas / envios / NPS ──────────────────────────────────
+
+export async function importMarketingCampanhas(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  importerId: string,
+  users: UserResolution,
+  campaigns: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "campaign", campaigns, result, async (rtx, row, newId) => {
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "createdById"]),
+      id: newId,
+      tenantId,
+      createdById: resolveAttribution(users, importerId, row.createdById),
+    };
+    await insertRow(rtx, campaignsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importMarketingEnvios(
+  tx: ImportTx, ledger: Ledger, tenantId: string, sends: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "campaignSend", sends, result, async (rtx, row, newId) => {
+    const oldCampaignId = str(row, "campaignId");
+    const campaignId = oldCampaignId ? ledgerGet(ledger, "campaign", oldCampaignId) : undefined;
+    if (!campaignId) return { status: "skip", reason: "Campanha de origem não foi importada" };
+    const oldClientId = str(row, "clientId");
+    const clientId = oldClientId ? ledgerGet(ledger, "client", oldClientId) : undefined;
+    if (!clientId) return { status: "skip", reason: "Cliente de origem não foi importado" };
+    const [existing] = await rtx.select({ id: campaignSendsTable.id }).from(campaignSendsTable)
+      .where(and(eq(campaignSendsTable.campaignId, campaignId), eq(campaignSendsTable.clientId, clientId)))
+      .limit(1);
+    if (existing) {
+      await ledgerSet(rtx, ledger, tenantId, "campaignSend", row.id as string, existing.id);
+      return { status: "skip", reason: "Envio já existe para campanha e cliente" };
+    }
+    const values = { ...cleanRow(row, ["id", "tenantId", "campaignId", "clientId"]), id: newId, tenantId, campaignId, clientId };
+    await insertRow(rtx, campaignSendsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importMarketingNps(
+  tx: ImportTx, ledger: Ledger, tenantId: string, responses: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "npsResponse", responses, result, async (rtx, row, newId) => {
+    // userId here historically stores a client id (this legacy e-commerce
+    // NPS predates the clean client/user split) — remap through the client
+    // ledger; a row whose client was never imported can't be safely attributed.
+    const oldUserId = str(row, "userId");
+    const userId = oldUserId ? ledgerGet(ledger, "client", oldUserId) : undefined;
+    if (!userId) return { status: "skip", reason: "Cliente de origem não foi importado" };
+    const oldOrderId = str(row, "orderId");
+    const orderId = oldOrderId ? ledgerGet(ledger, "storeOrder", oldOrderId) ?? null : null;
+    const values = { ...cleanRow(row, ["id", "tenantId", "userId", "orderId"]), id: newId, tenantId, userId, orderId };
+    await insertRow(rtx, npsResponsesTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Distribuição / marketplace ───────────────────────────────────────────
+
+export async function importDistribuicaoOfertas(
+  tx: ImportTx, ledger: Ledger, tenantId: string, offers: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "distributionOffer", offers, result, async (rtx, row, newId) => {
+    const integrationType = str(row, "integrationType");
+    const externalId = str(row, "externalId");
+    const sourceId = row.id as string;
+    if (integrationType && externalId) {
+      const [existing] = await rtx.select({ id: distributionOffersTable.id }).from(distributionOffersTable)
+        .where(and(
+          eq(distributionOffersTable.tenantId, tenantId),
+          eq(distributionOffersTable.integrationType, integrationType),
+          eq(distributionOffersTable.externalId, externalId),
+        )).limit(1);
+      if (existing) {
+        // Already synced live from the provider under the same natural key —
+        // reuse it instead of violating the unique index, and still record
+        // the mapping so operations/bookings below remap to it correctly.
+        await ledgerSet(rtx, ledger, tenantId, "distributionOffer", sourceId, existing.id);
+        return { status: "skip", reason: "Oferta já existe (sincronizada com o provedor)" };
+      }
+    }
+    const values = { ...cleanRow(row, ["id", "tenantId"]), id: newId, tenantId };
+    await insertRow(rtx, distributionOffersTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importDistribuicaoOperacoes(
+  tx: ImportTx, ledger: Ledger, tenantId: string, operations: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "distributionOperation", operations, result, async (rtx, row, newId) => {
+    const oldOfferId = str(row, "offerId");
+    const offerId = oldOfferId ? ledgerGet(ledger, "distributionOffer", oldOfferId) ?? null : null;
+    const integrationType = str(row, "integrationType");
+    let idempotencyKey = str(row, "idempotencyKey");
+    if (integrationType && idempotencyKey) {
+      const [existing] = await rtx.select({ id: distributionOperationsTable.id }).from(distributionOperationsTable)
+        .where(and(
+          eq(distributionOperationsTable.tenantId, tenantId),
+          eq(distributionOperationsTable.integrationType, integrationType),
+          eq(distributionOperationsTable.idempotencyKey, idempotencyKey),
+        )).limit(1);
+      if (existing) idempotencyKey = null;
+    }
+    if (!idempotencyKey) idempotencyKey = `restored-${newId}`;
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "offerId", "idempotencyKey"]),
+      id: newId,
+      tenantId,
+      offerId,
+      idempotencyKey,
+    };
+    await insertRow(rtx, distributionOperationsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importDistribuicaoReservas(
+  tx: ImportTx, ledger: Ledger, tenantId: string, bookings: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "distributionBooking", bookings, result, async (rtx, row, newId) => {
+    const oldOfferId = str(row, "offerId");
+    const offerId = oldOfferId ? ledgerGet(ledger, "distributionOffer", oldOfferId) : undefined;
+    if (!offerId) return { status: "skip", reason: "Oferta de origem não foi importada" };
+    const integrationType = str(row, "integrationType");
+    const externalOrderId = str(row, "externalOrderId");
+    const sourceId = row.id as string;
+    if (integrationType && externalOrderId) {
+      const [existing] = await rtx.select({ id: distributionBookingsTable.id }).from(distributionBookingsTable)
+        .where(and(
+          eq(distributionBookingsTable.tenantId, tenantId),
+          eq(distributionBookingsTable.integrationType, integrationType),
+          eq(distributionBookingsTable.externalOrderId, externalOrderId),
+        )).limit(1);
+      if (existing) {
+        await ledgerSet(rtx, ledger, tenantId, "distributionBooking", sourceId, existing.id);
+        return { status: "skip", reason: "Reserva de distribuição já existe (sincronizada com o provedor)" };
+      }
+    }
+    const values = { ...cleanRow(row, ["id", "tenantId", "offerId"]), id: newId, tenantId, offerId };
+    await insertRow(rtx, distributionBookingsTable, values);
     return { status: "created" };
   });
 }

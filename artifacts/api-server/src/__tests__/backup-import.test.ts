@@ -40,6 +40,32 @@ import {
   expensesTable,
   backupImportBatchesTable,
   backupImportRecordsTable,
+  invitesTable,
+  clientAchievementsTable,
+  clientDreamDestinationsTable,
+  clientNotificationsTable,
+  suppliersTable,
+  vehiclesTable,
+  vehicleLayoutsTable,
+  accommodationsTable,
+  destinationsTable,
+  tripMediaTable,
+  pipelinesTable,
+  pipelineStagesTable,
+  dealsTable,
+  loyaltyProgramsTable,
+  loyaltyMembersTable,
+  loyaltyTransactionsTable,
+  settlementItemsTable,
+  financialLedgerEntriesTable,
+  calendarEventsTable,
+  documentsTable,
+  campaignsTable,
+  campaignSendsTable,
+  npsResponsesTable,
+  distributionOffersTable,
+  distributionOperationsTable,
+  distributionBookingsTable,
 } from "@workspace/db";
 import { ROLES } from "@workspace/permissions";
 
@@ -97,7 +123,35 @@ function buildValidBackup(tenantId: string) {
           { id: "src-user-matched", email: MATCHED_EMAIL.toUpperCase(), name: "Seller Matched" },
           { id: "src-user-unmatched", email: `ghost-${RUN}@nowhere.example.com`, name: "Ghost User" },
         ],
-        invites: [],
+        invites: [
+          {
+            id: "src-invite-accepted",
+            email: `accepted-${RUN}@example.com`,
+            role: "vendedor",
+            invitedBy: "src-user-matched",
+            token: "old-accepted-token",
+            accepted: true,
+            acceptedAt: pastDate(1),
+          },
+          {
+            id: "src-invite-expired",
+            email: `expired-${RUN}@example.com`,
+            role: "vendedor",
+            invitedBy: "src-user-matched",
+            token: "old-expired-token",
+            accepted: false,
+            expiresAt: pastDate(1),
+          },
+          {
+            id: "src-invite-pending",
+            email: `pending-${RUN}@example.com`,
+            role: "vendedor",
+            invitedBy: "src-user-matched",
+            token: "old-pending-token",
+            accepted: false,
+            expiresAt: futureDate(7),
+          },
+        ],
       },
       configuracoes: [],
       clientes: {
@@ -125,6 +179,16 @@ function buildValidBackup(tenantId: string) {
           },
         ],
         notes: [],
+        achievements: [{ id: "src-ach-1", clientId: "src-client-1", badgeKey: "primeira-viagem" }],
+        dreamDestinations: [{ id: "src-dream-1", clientId: "src-client-1", destinationName: "Paris" }],
+        notifications: [{ id: "src-notif-1", clientId: "src-client-1", type: "reservation_cancelled", payload: { title: "Reserva cancelada" } }],
+      },
+      cadastrosAuxiliares: {
+        suppliers: [{ id: "src-supplier-1", name: "Fornecedor Um", type: "transporte" }],
+        vehicles: [{ id: "src-vehicle-1", name: "Ônibus 1", type: "onibus", plate: "ABC1234", capacity: 46 }],
+        vehicleLayouts: [{ id: "src-layout-1", name: "Layout 46 lugares" }],
+        accommodations: [{ id: "src-accom-1", name: "Hotel Praia", type: "hotel" }],
+        destinations: [{ id: "src-dest-1", name: "Fortaleza", city: "Fortaleza", state: "CE" }],
       },
       viagens: {
         trips: [
@@ -143,10 +207,13 @@ function buildValidBackup(tenantId: string) {
             priceAdult: "250.00",
             createdById: "src-user-matched",
             importFingerprint: "old-fingerprint",
-            layoutId: "old-layout-id",
+            layoutId: "src-layout-1",
+            vehicleId: "src-vehicle-1",
           },
         ],
-        media: [],
+        media: [
+          { id: "src-media-1", tripId: "src-trip-1", url: "https://example.com/img.jpg", type: "image", uploadedByUserId: "src-user-matched" },
+        ],
       },
       embarqueCheckin: {
         boardingLocations: [
@@ -254,6 +321,37 @@ function buildValidBackup(tenantId: string) {
           { id: "src-passenger-1", reservationId: "src-res-1", name: "Passageiro Um", isPrimary: true },
         ],
       },
+      pipeline: {
+        pipelines: [{ id: "src-pipeline-1", name: "Pipeline Padrão", isDefault: true }],
+        stages: [{ id: "src-stage-1", pipelineId: "src-pipeline-1", name: "Novo", color: "#0000ff", order: 1 }],
+        deals: [
+          {
+            id: "src-deal-1",
+            stageId: "src-stage-1",
+            title: "Negociação Um",
+            value: "250.00",
+            clientId: "src-client-1",
+            tripId: "src-trip-1",
+            reservationId: "src-res-1",
+            ownerId: "src-user-matched",
+          },
+        ],
+      },
+      fidelidade: {
+        programs: [{ id: "src-loyalty-prog-1", name: "Programa Fidelidade" }],
+        members: [{ id: "src-loyalty-member-1", programId: "src-loyalty-prog-1", clientId: "src-client-1", totalPoints: 100, availablePoints: 100 }],
+        transactions: [
+          {
+            id: "src-loyalty-tx-1",
+            memberId: "src-loyalty-member-1",
+            type: "earn",
+            points: 100,
+            description: "Compra",
+            referenceId: "src-res-1",
+            referenceType: "reservation",
+          },
+        ],
+      },
       financeiro: {
         payments: [
           {
@@ -277,6 +375,129 @@ function buildValidBackup(tenantId: string) {
             amount: "100.00",
             dueDate: pastDate(5),
             createdById: "src-user-unmatched",
+            supplierId: "src-supplier-1",
+          },
+          {
+            id: "src-expense-2",
+            tripId: "src-trip-1",
+            category: "outros",
+            description: "Fornecedor ausente",
+            amount: "50.00",
+            dueDate: pastDate(4),
+            createdById: "src-user-matched",
+            supplierId: "src-supplier-missing",
+          },
+        ],
+        settlementItems: [
+          {
+            id: "src-settlement-1",
+            orderId: "src-order-1",
+            orderItemId: "src-item-1",
+            clientId: "src-client-1",
+            sellerType: "user",
+            sellerId: "src-user-matched",
+            sellerName: "Seller Matched",
+            source: "crm",
+            grossAmount: "250.00",
+            sellerNetAmount: "225.00",
+          },
+        ],
+        ledgerEntries: [
+          {
+            id: "src-ledger-1",
+            settlementItemId: "src-settlement-1",
+            orderId: "src-order-1",
+            clientId: "src-client-1",
+            participantType: "user",
+            participantId: "src-user-matched",
+            category: "commission",
+            direction: "credit",
+            amount: "25.00",
+            eventType: "order_paid",
+            idempotencyKey: "old-ledger-key-1",
+            occurredAt: pastDate(5),
+          },
+          {
+            id: "src-ledger-2",
+            reversalOfEntryId: "src-ledger-1",
+            participantType: "user",
+            participantId: "src-user-matched",
+            category: "commission",
+            direction: "debit",
+            amount: "-25.00",
+            eventType: "order_refunded",
+            idempotencyKey: "old-ledger-key-2",
+            occurredAt: pastDate(4),
+          },
+        ],
+      },
+      calendario: [
+        {
+          id: "src-cal-1",
+          userId: "src-user-matched",
+          clientId: "src-client-1",
+          tripId: "src-trip-1",
+          paymentId: "src-payment-1",
+          googleEventId: "old-google-event-1",
+          eventType: "reserva",
+          title: "Evento de Viagem",
+          startDate: futureDate(2),
+        },
+      ],
+      documentos: [
+        {
+          id: "src-doc-1",
+          name: "Contrato.pdf",
+          type: "contract",
+          url: "https://example.com/contrato.pdf",
+          entityType: "client",
+          entityId: "src-client-1",
+          uploadedById: "src-user-matched",
+        },
+        {
+          id: "src-doc-2",
+          name: "Voucher.pdf",
+          type: "voucher",
+          url: "https://example.com/voucher.pdf",
+          entityType: "reservation",
+          entityId: "src-res-1",
+          uploadedById: "src-user-matched",
+        },
+      ],
+      marketing: {
+        campaigns: [{ id: "src-campaign-1", name: "Campanha Um", content: "Olá!", createdById: "src-user-matched" }],
+        campaignSends: [{ id: "src-send-1", campaignId: "src-campaign-1", clientId: "src-client-1", status: "sent" }],
+        npsResponses: [{ id: "src-nps-1", userId: "src-client-1", orderId: "src-order-1", score: 9, classification: "promoter" }],
+      },
+      distribuicao: {
+        offers: [
+          {
+            id: "src-offer-1",
+            integrationType: "acme-provider",
+            externalId: `ext-offer-${RUN}`,
+            kind: "flight",
+            title: "Oferta Um",
+            price: "500.00",
+          },
+        ],
+        operations: [
+          {
+            id: "src-op-1",
+            offerId: "src-offer-1",
+            integrationType: "acme-provider",
+            operation: "book",
+            idempotencyKey: "old-op-key-1",
+            requestHash: "old-hash-1",
+            status: "completed",
+          },
+        ],
+        bookings: [
+          {
+            id: "src-booking-1",
+            offerId: "src-offer-1",
+            integrationType: "acme-provider",
+            externalOrderId: `ext-order-${RUN}`,
+            quantity: 1,
           },
         ],
       },
@@ -332,6 +553,35 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // New groups first: deals has RESTRICT FKs into clients/trips/users/stages
+  // that would otherwise block the deletes below.
+  await db.delete(distributionBookingsTable).where(eq(distributionBookingsTable.tenantId, TENANT_ID));
+  await db.delete(distributionOperationsTable).where(eq(distributionOperationsTable.tenantId, TENANT_ID));
+  await db.delete(distributionOffersTable).where(eq(distributionOffersTable.tenantId, TENANT_ID));
+  await db.delete(npsResponsesTable).where(eq(npsResponsesTable.tenantId, TENANT_ID));
+  await db.delete(campaignSendsTable).where(eq(campaignSendsTable.tenantId, TENANT_ID));
+  await db.delete(campaignsTable).where(eq(campaignsTable.tenantId, TENANT_ID));
+  await db.delete(documentsTable).where(eq(documentsTable.tenantId, TENANT_ID));
+  await db.delete(calendarEventsTable).where(eq(calendarEventsTable.tenantId, TENANT_ID));
+  await db.delete(financialLedgerEntriesTable).where(eq(financialLedgerEntriesTable.tenantId, TENANT_ID));
+  await db.delete(settlementItemsTable).where(eq(settlementItemsTable.tenantId, TENANT_ID));
+  await db.delete(loyaltyTransactionsTable).where(eq(loyaltyTransactionsTable.tenantId, TENANT_ID));
+  await db.delete(loyaltyMembersTable).where(eq(loyaltyMembersTable.tenantId, TENANT_ID));
+  await db.delete(loyaltyProgramsTable).where(eq(loyaltyProgramsTable.tenantId, TENANT_ID));
+  await db.delete(dealsTable).where(eq(dealsTable.tenantId, TENANT_ID));
+  await db.delete(pipelineStagesTable).where(eq(pipelineStagesTable.tenantId, TENANT_ID));
+  await db.delete(pipelinesTable).where(eq(pipelinesTable.tenantId, TENANT_ID));
+  await db.delete(clientNotificationsTable).where(eq(clientNotificationsTable.tenantId, TENANT_ID));
+  await db.delete(clientDreamDestinationsTable).where(eq(clientDreamDestinationsTable.tenantId, TENANT_ID));
+  await db.delete(clientAchievementsTable).where(eq(clientAchievementsTable.tenantId, TENANT_ID));
+  await db.delete(suppliersTable).where(eq(suppliersTable.tenantId, TENANT_ID));
+  await db.delete(vehiclesTable).where(eq(vehiclesTable.tenantId, TENANT_ID));
+  await db.delete(vehicleLayoutsTable).where(eq(vehicleLayoutsTable.tenantId, TENANT_ID));
+  await db.delete(accommodationsTable).where(eq(accommodationsTable.tenantId, TENANT_ID));
+  await db.delete(destinationsTable).where(eq(destinationsTable.tenantId, TENANT_ID));
+  await db.delete(invitesTable).where(eq(invitesTable.tenantId, TENANT_ID));
+  // tripMediaTable cascades on trip deletion below; no explicit delete needed.
+
   // Delete in FK-dependency order first (store_orders.client_id etc. have no
   // ON DELETE CASCADE), then let the tenant delete cascade the rest.
   await db.delete(paymentsTable).where(eq(paymentsTable.tenantId, TENANT_ID));
@@ -454,6 +704,13 @@ describe("POST /api/backup/import", () => {
       "automacoes", "automacaoAcoes", "automacaoLogs", "indicacoes",
       "lojaProdutos", "lojaCupons", "lojaPedidos", "lojaItensPedido",
       "pagamentos", "despesas",
+      "convites", "clientesConquistas", "clientesDestinosSonho", "clientesNotificacoes",
+      "fornecedores", "veiculos", "layoutsVeiculo", "hospedagens", "destinos", "viagensMidia",
+      "pipelines", "etapasPipeline", "negociacoes",
+      "fidelidadeProgramas", "fidelidadeMembros", "fidelidadeTransacoes",
+      "financeiroAcertos", "financeiroLancamentos", "calendario", "documentos",
+      "marketingCampanhas", "marketingEnvios", "marketingNps",
+      "distribuicaoOfertas", "distribuicaoOperacoes", "distribuicaoReservas",
     ]) {
       expect(report[group].errors, `${group} errors`).toEqual([]);
     }
@@ -472,7 +729,35 @@ describe("POST /api/backup/import", () => {
     expect(report.lojaPedidos.created).toBe(1);
     expect(report.lojaItensPedido.created).toBe(1);
     expect(report.pagamentos.created).toBe(1);
-    expect(report.despesas.created).toBe(1);
+    expect(report.despesas.created).toBe(2);
+    expect(report.convites.created).toBe(1);
+    expect(report.convites.skipped).toBe(2);
+    expect(report.clientesConquistas.created).toBe(1);
+    expect(report.clientesDestinosSonho.created).toBe(1);
+    expect(report.clientesNotificacoes.created).toBe(1);
+    expect(report.fornecedores.created).toBe(1);
+    expect(report.veiculos.created).toBe(1);
+    expect(report.layoutsVeiculo.created).toBe(1);
+    expect(report.hospedagens.created).toBe(1);
+    expect(report.destinos.created).toBe(1);
+    expect(report.viagensMidia.created).toBe(1);
+    expect(report.pipelines.created).toBe(1);
+    expect(report.etapasPipeline.created).toBe(1);
+    expect(report.negociacoes.created).toBe(1);
+    expect(report.fidelidadeProgramas.created).toBe(1);
+    expect(report.fidelidadeMembros.created).toBe(1);
+    expect(report.fidelidadeTransacoes.created).toBe(1);
+    expect(report.financeiroAcertos.created).toBe(1);
+    expect(report.financeiroLancamentos.created).toBe(2);
+    expect(report.calendario.created).toBe(1);
+    expect(report.documentos.created).toBe(2);
+    expect(report.marketingCampanhas.created).toBe(1);
+    expect(report.marketingEnvios.created).toBe(1);
+    expect(report.marketingNps.created).toBe(1);
+    expect(report.distribuicaoOfertas.created).toBe(1);
+    expect(report.distribuicaoOperacoes.created).toBe(1);
+    expect(report.distribuicaoReservas.created).toBe(1);
+    expect(report.naoRestaurado).toEqual(expect.arrayContaining(["configuracoes", "auditoria"]));
 
     // -- Agência updated in place, billing/identity fields untouched --
     const [tenantRow] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, TENANT_ID)).limit(1);
@@ -562,9 +847,103 @@ describe("POST /api/backup/import", () => {
     expect(payment!.clientId).toBe(client1!.id);
     expect(payment!.orderId).toBe(order!.id);
 
-    const [expense] = await db.select().from(expensesTable).where(eq(expensesTable.tenantId, TENANT_ID)).limit(1);
-    expect(expense!.tripId).toBe(trip!.id);
-    expect(expense!.createdById).toBe(IMPORTER_ID); // unmatched user -> importer (attribution)
+    const restoredExpenses = await db.select().from(expensesTable).where(eq(expensesTable.tenantId, TENANT_ID));
+    const expense = restoredExpenses.find((row) => row.description === "Combustível")!;
+    const expenseWithMissingSupplier = restoredExpenses.find((row) => row.description === "Fornecedor ausente")!;
+    const [supplier] = await db.select().from(suppliersTable).where(eq(suppliersTable.tenantId, TENANT_ID)).limit(1);
+    expect(expense.tripId).toBe(trip!.id);
+    expect(expense.supplierId).toBe(supplier!.id);
+    expect(expense.createdById).toBe(IMPORTER_ID); // unmatched user -> importer (attribution)
+    expect(expenseWithMissingSupplier.supplierId).toBeNull();
+
+    // -- Convites: fresh token minted, always starts pending --
+    const [invite] = await db.select().from(invitesTable).where(eq(invitesTable.tenantId, TENANT_ID)).limit(1);
+    expect(invite!.invitedBy).toBe(MATCHED_USER_ID);
+    expect(invite!.email).toBe(`pending-${RUN}@example.com`);
+    expect(invite!.token).not.toBe("old-pending-token");
+    expect(invite!.accepted).toBe(false);
+    expect(invite!.acceptedAt).toBeNull();
+
+    // -- Clientes: conquistas / destinos dos sonhos / notificações --
+    const [achievement] = await db.select().from(clientAchievementsTable).where(eq(clientAchievementsTable.tenantId, TENANT_ID)).limit(1);
+    expect(achievement!.clientId).toBe(client1!.id);
+    const [dream] = await db.select().from(clientDreamDestinationsTable).where(eq(clientDreamDestinationsTable.tenantId, TENANT_ID)).limit(1);
+    expect(dream!.clientId).toBe(client1!.id);
+    const [notification] = await db.select().from(clientNotificationsTable).where(eq(clientNotificationsTable.tenantId, TENANT_ID)).limit(1);
+    expect(notification!.clientId).toBe(client1!.id);
+
+    // -- Cadastros auxiliares + vehicle layout remap onto the trip --
+    const [layout] = await db.select().from(vehicleLayoutsTable).where(eq(vehicleLayoutsTable.tenantId, TENANT_ID)).limit(1);
+    expect(trip!.layoutId).toBe(layout!.id);
+    const [vehicle] = await db.select().from(vehiclesTable).where(eq(vehiclesTable.tenantId, TENANT_ID)).limit(1);
+    expect(trip!.vehicleId).toBe(vehicle!.id);
+    const [media] = await db.select().from(tripMediaTable).where(eq(tripMediaTable.tripId, trip!.id)).limit(1);
+    expect(media!.uploadedByUserId).toBe(MATCHED_USER_ID);
+
+    // -- Pipeline / negociações --
+    const [pipeline] = await db.select().from(pipelinesTable).where(eq(pipelinesTable.tenantId, TENANT_ID)).limit(1);
+    const [stage] = await db.select().from(pipelineStagesTable).where(eq(pipelineStagesTable.pipelineId, pipeline!.id)).limit(1);
+    const [deal] = await db.select().from(dealsTable).where(eq(dealsTable.tenantId, TENANT_ID)).limit(1);
+    expect(deal!.stageId).toBe(stage!.id);
+    expect(deal!.clientId).toBe(client1!.id);
+    expect(deal!.tripId).toBe(trip!.id);
+    expect(deal!.reservationId).toBe(reservation!.id);
+    expect(deal!.ownerId).toBe(MATCHED_USER_ID);
+
+    // -- Fidelidade --
+    const [loyaltyProgram] = await db.select().from(loyaltyProgramsTable).where(eq(loyaltyProgramsTable.tenantId, TENANT_ID)).limit(1);
+    const [loyaltyMember] = await db.select().from(loyaltyMembersTable).where(eq(loyaltyMembersTable.programId, loyaltyProgram!.id)).limit(1);
+    expect(loyaltyMember!.clientId).toBe(client1!.id);
+    const [loyaltyTx] = await db.select().from(loyaltyTransactionsTable).where(eq(loyaltyTransactionsTable.memberId, loyaltyMember!.id)).limit(1);
+    expect(loyaltyTx!.referenceId).toBe(reservation!.id);
+    expect(loyaltyTx!.referenceType).toBe("reservation");
+
+    // -- Financeiro: acertos + lançamentos (reversal two-pass patch) --
+    const [settlementItem] = await db.select().from(settlementItemsTable).where(eq(settlementItemsTable.tenantId, TENANT_ID)).limit(1);
+    expect(settlementItem!.orderId).toBe(order!.id);
+    expect(settlementItem!.orderItemId).toBe(orderItem!.id);
+    expect(settlementItem!.clientId).toBe(client1!.id);
+    expect(settlementItem!.sellerId).toBe(MATCHED_USER_ID);
+    const ledgerEntries = await db.select().from(financialLedgerEntriesTable).where(eq(financialLedgerEntriesTable.tenantId, TENANT_ID));
+    expect(ledgerEntries.length).toBe(2);
+    const originalEntry = ledgerEntries.find((e) => e.eventType === "order_paid")!;
+    const reversalEntry = ledgerEntries.find((e) => e.eventType === "order_refunded")!;
+    expect(originalEntry.settlementItemId).toBe(settlementItem!.id);
+    expect(originalEntry.participantId).toBe(MATCHED_USER_ID);
+    expect(reversalEntry.participantId).toBe(MATCHED_USER_ID);
+    expect(reversalEntry.reversalOfEntryId).toBe(originalEntry.id); // two-pass self-referential patch
+
+    // -- Calendário: user/client/trip/payment remap --
+    const [calendarEvent] = await db.select().from(calendarEventsTable).where(eq(calendarEventsTable.tenantId, TENANT_ID)).limit(1);
+    expect(calendarEvent!.userId).toBe(MATCHED_USER_ID);
+    expect(calendarEvent!.clientId).toBe(client1!.id);
+    expect(calendarEvent!.tripId).toBe(trip!.id);
+    expect(calendarEvent!.paymentId).toBe(payment!.id);
+
+    // -- Documentos: entityId remapped for entityType "client" --
+    const restoredDocuments = await db.select().from(documentsTable).where(eq(documentsTable.tenantId, TENANT_ID));
+    const clientDocument = restoredDocuments.find((row) => row.entityType === "client")!;
+    const reservationDocument = restoredDocuments.find((row) => row.entityType === "reservation")!;
+    expect(clientDocument.entityId).toBe(client1!.id);
+    expect(clientDocument.uploadedById).toBe(MATCHED_USER_ID);
+    expect(reservationDocument.entityId).toBe(reservation!.id);
+    expect(reservationDocument.uploadedById).toBe(MATCHED_USER_ID);
+
+    // -- Marketing: campanhas / envios / NPS (userId is really a client id) --
+    const [campaign] = await db.select().from(campaignsTable).where(eq(campaignsTable.tenantId, TENANT_ID)).limit(1);
+    expect(campaign!.createdById).toBe(MATCHED_USER_ID);
+    const [campaignSend] = await db.select().from(campaignSendsTable).where(eq(campaignSendsTable.campaignId, campaign!.id)).limit(1);
+    expect(campaignSend!.clientId).toBe(client1!.id);
+    const [npsResponse] = await db.select().from(npsResponsesTable).where(eq(npsResponsesTable.tenantId, TENANT_ID)).limit(1);
+    expect(npsResponse!.userId).toBe(client1!.id);
+    expect(npsResponse!.orderId).toBe(order!.id);
+
+    // -- Distribuição: offer/operation/booking chain --
+    const [offer] = await db.select().from(distributionOffersTable).where(eq(distributionOffersTable.tenantId, TENANT_ID)).limit(1);
+    const [operation] = await db.select().from(distributionOperationsTable).where(eq(distributionOperationsTable.tenantId, TENANT_ID)).limit(1);
+    expect(operation!.offerId).toBe(offer!.id);
+    const [booking] = await db.select().from(distributionBookingsTable).where(eq(distributionBookingsTable.tenantId, TENANT_ID)).limit(1);
+    expect(booking!.offerId).toBe(offer!.id);
 
     // -- Re-import under the SAME idempotency key replays the saved report verbatim --
     const replay = await request(buildApp())
@@ -593,13 +972,100 @@ describe("POST /api/backup/import", () => {
     expect(report2.reservas.duplicate).toBe(1);
     expect(report2.lojaPedidos.created).toBe(0);
     expect(report2.lojaPedidos.duplicate).toBe(1);
+    expect(report2.financeiroLancamentos.created).toBe(0);
+    expect(report2.financeiroLancamentos.duplicate).toBe(2);
+    expect(report2.negociacoes.created).toBe(0);
+    expect(report2.negociacoes.duplicate).toBe(1);
+    expect(report2.marketingNps.created).toBe(0);
+    expect(report2.marketingNps.duplicate).toBe(1);
+    expect(report2.distribuicaoOfertas.created).toBe(0);
+    expect(report2.distribuicaoOfertas.duplicate).toBe(1);
+    expect(report2.distribuicaoReservas.created).toBe(0);
+    expect(report2.distribuicaoReservas.duplicate).toBe(1);
 
     const clientsAfter = await db.select().from(clientsTable).where(eq(clientsTable.tenantId, TENANT_ID));
     expect(clientsAfter.length).toBe(2); // no duplicates created
 
+    // -- A backup whose distribution rows have new source IDs but the same
+    // provider natural keys must reuse the live offer/booking. The operation
+    // is retained with a regenerated idempotency key.
+    const naturalKeyBackup = buildValidBackup(TENANT_ID);
+    const naturalKeyData = naturalKeyBackup.data as Record<string, unknown>;
+    const naturalKeyClients = naturalKeyData.clientes as {
+      achievements: Array<Record<string, unknown>>;
+    };
+    const naturalKeyPipeline = naturalKeyData.pipeline as {
+      stages: Array<Record<string, unknown>>;
+      deals: Array<Record<string, unknown>>;
+    };
+    const naturalKeyFinance = naturalKeyData.financeiro as {
+      settlementItems: Array<Record<string, unknown>>;
+    };
+    const naturalKeyMarketing = naturalKeyData.marketing as {
+      campaignSends: Array<Record<string, unknown>>;
+    };
+    const naturalKeyDistribution = naturalKeyData.distribuicao as {
+      offers: Array<Record<string, unknown>>;
+      operations: Array<Record<string, unknown>>;
+      bookings: Array<Record<string, unknown>>;
+    };
+    naturalKeyClients.achievements[0]!.id = "src-ach-natural-key-2";
+    naturalKeyPipeline.stages[0]!.id = "src-stage-natural-key-2";
+    naturalKeyPipeline.deals[0]!.id = "src-deal-natural-key-2";
+    naturalKeyPipeline.deals[0]!.stageId = "src-stage-natural-key-2";
+    naturalKeyFinance.settlementItems[0]!.id = "src-settlement-natural-key-2";
+    naturalKeyMarketing.campaignSends[0]!.id = "src-send-natural-key-2";
+    naturalKeyDistribution.offers[0]!.id = "src-offer-natural-key-2";
+    naturalKeyDistribution.operations[0]!.id = "src-op-natural-key-2";
+    naturalKeyDistribution.operations[0]!.offerId = "src-offer-natural-key-2";
+    naturalKeyDistribution.bookings[0]!.id = "src-booking-natural-key-2";
+    naturalKeyDistribution.bookings[0]!.offerId = "src-offer-natural-key-2";
+
+    const naturalKeyImport = await request(buildApp())
+      .post("/api/backup/import")
+      .send({ idempotencyKey: `k-${randomUUID()}`, backup: naturalKeyBackup });
+    expect(naturalKeyImport.status).toBe(200);
+    const naturalKeyReport = naturalKeyImport.body.report;
+    expect(naturalKeyReport.clientesConquistas.created).toBe(0);
+    expect(naturalKeyReport.clientesConquistas.skipped).toBe(1);
+    expect(naturalKeyReport.clientesConquistas.errors).toEqual([]);
+    expect(naturalKeyReport.etapasPipeline.created).toBe(0);
+    expect(naturalKeyReport.etapasPipeline.skipped).toBe(1);
+    expect(naturalKeyReport.etapasPipeline.errors).toEqual([]);
+    expect(naturalKeyReport.negociacoes.created).toBe(0);
+    expect(naturalKeyReport.negociacoes.skipped).toBe(1);
+    expect(naturalKeyReport.negociacoes.errors).toEqual([]);
+    expect(naturalKeyReport.financeiroAcertos.created).toBe(0);
+    expect(naturalKeyReport.financeiroAcertos.skipped).toBe(1);
+    expect(naturalKeyReport.financeiroAcertos.errors).toEqual([]);
+    expect(naturalKeyReport.marketingEnvios.created).toBe(0);
+    expect(naturalKeyReport.marketingEnvios.skipped).toBe(1);
+    expect(naturalKeyReport.marketingEnvios.errors).toEqual([]);
+    expect(naturalKeyReport.distribuicaoOfertas.created).toBe(0);
+    expect(naturalKeyReport.distribuicaoOfertas.skipped).toBe(1);
+    expect(naturalKeyReport.distribuicaoOfertas.errors).toEqual([]);
+    expect(naturalKeyReport.distribuicaoOperacoes.created).toBe(1);
+    expect(naturalKeyReport.distribuicaoOperacoes.errors).toEqual([]);
+    expect(naturalKeyReport.distribuicaoReservas.created).toBe(0);
+    expect(naturalKeyReport.distribuicaoReservas.skipped).toBe(1);
+    expect(naturalKeyReport.distribuicaoReservas.errors).toEqual([]);
+
+    const offersAfterNaturalKeyImport = await db.select().from(distributionOffersTable)
+      .where(eq(distributionOffersTable.tenantId, TENANT_ID));
+    const bookingsAfterNaturalKeyImport = await db.select().from(distributionBookingsTable)
+      .where(eq(distributionBookingsTable.tenantId, TENANT_ID));
+    const operationsAfterNaturalKeyImport = await db.select().from(distributionOperationsTable)
+      .where(eq(distributionOperationsTable.tenantId, TENANT_ID));
+    expect(offersAfterNaturalKeyImport.length).toBe(1);
+    expect(bookingsAfterNaturalKeyImport.length).toBe(1);
+    expect(operationsAfterNaturalKeyImport.length).toBe(2);
+    expect(operationsAfterNaturalKeyImport.map((row) => row.idempotencyKey)).toEqual(
+      expect.arrayContaining(["old-op-key-1", expect.stringMatching(/^restored-/)]),
+    );
+
     // -- Batches + ledger rows recorded --
     const batches = await db.select().from(backupImportBatchesTable).where(eq(backupImportBatchesTable.tenantId, TENANT_ID));
-    expect(batches.length).toBe(2); // one per distinct idempotency key used above
+    expect(batches.length).toBe(3); // one per distinct idempotency key used above
     const ledgerRows = await db.select().from(backupImportRecordsTable).where(eq(backupImportRecordsTable.tenantId, TENANT_ID));
     expect(ledgerRows.length).toBeGreaterThan(0);
   });

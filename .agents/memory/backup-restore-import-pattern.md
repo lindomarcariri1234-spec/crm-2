@@ -20,4 +20,11 @@ Applying the backup's "agência" section must never touch identity/plan/limit co
 ## Whole-request idempotency vs per-row idempotency are different layers
 A `(tenantId, idempotencyKey)`-unique batch record stores the full computed report and replays it verbatim on a repeated request with the same key (409 if the same key arrives with a different file hash). This is separate from the per-row ledger dedup, which is what makes a *second, independent* upload of the same exported file (different idempotency key, e.g. a fresh browser session) still report "already existed" per row instead of duplicating — both layers matter because a user re-uploading later has no way to reuse the original idempotency key.
 
+## Natural-key collisions must become ledger mappings, not row errors
+When a destination tenant already contains the same business entity under a different source id, importers should find it by a tenant-scoped natural key, map the backup id to that existing row in the ledger, and report a skip/reuse. This lets dependent rows continue remapping correctly during partial restores.
+
+**Why:** the source-id ledger alone cannot recognize equivalent rows created by an earlier partial restore or live synchronization. Treating expected unique-key collisions as row errors commits an apparently successful but incomplete restore.
+
+**How to apply:** for each imported table with a unique business key, reconcile before insert. Only reuse keys that identify the same tenant-owned entity unambiguously; otherwise fail clearly or skip with an explicit report rather than retaining stale source ids.
+
 See also: [Tenant backup/export design decisions](tenant-backup-export-pattern.md) for the export side, and [Per-row SAVEPOINT for continue-on-error import loops](postgres-per-row-savepoint.md) for the transaction mechanics this relies on.
