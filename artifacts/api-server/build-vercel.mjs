@@ -1,6 +1,8 @@
 // Bundles the Vercel serverless entry point (src/vercel-entry.ts) into a
-// single file at the repo root, at api/index.mjs — the path Vercel's
-// zero-config Node.js runtime auto-detects as a serverless function.
+// single tracked file at the repo root, at api/index.mjs — the path Vercel's
+// zero-config Node.js runtime auto-detects as a serverless function. Keeping
+// the generated entry point in git is intentional: Vercel discovers
+// conventional functions before buildCommand creates new files.
 //
 // This mirrors build.mjs (the Replit long-running-process bundle) with two
 // differences:
@@ -129,7 +131,10 @@ async function buildAll() {
     outfile: outFile,
     logLevel: "info",
     external: EXTERNAL,
-    sourcemap: "linked",
+    // Do not emit the ~30 MB external source map into the committed
+    // serverless artifact. Vercel only needs the bundle for function
+    // discovery and regenerates it during every deployment build.
+    sourcemap: false,
     // Make sure CJS-only packages bundled in continue to work in ESM output,
     // and stripe-replit-sync's __dirname-relative migrations lookup resolves
     // to this output directory (migrations copied alongside it below).

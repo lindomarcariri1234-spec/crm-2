@@ -2,7 +2,10 @@
 
 # compiled output
 dist
-/api/
+/api/*
+!/api/index.mjs
+!/api/migrations/
+!/api/migrations/**
 /public/
 tmp
 out-tsc
