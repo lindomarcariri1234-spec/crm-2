@@ -12,8 +12,6 @@ function traceExternalDependenciesForVercel() {
     import("jspdf"),
     import("jspdf-autotable"),
     import("pdfkit"),
-    import("uploadthing/express"),
-    import("uploadthing/server"),
   ]);
 }
 void traceExternalDependenciesForVercel;

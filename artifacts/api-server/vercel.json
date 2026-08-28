@@ -1,0 +1,36 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "cd ../.. && pnpm install --frozen-lockfile --config.node-linker=hoisted",
+  "buildCommand": "cd ../.. && pnpm --filter @workspace/api-server deploy:vercel",
+  "outputDirectory": "public",
+  "functions": {
+    "api/index.mjs": {
+      "includeFiles": "{public/**,api/bundle.mjs,api/migrations/**}",
+      "maxDuration": 60
+    },
+    "api/[...path].mjs": {
+      "includeFiles": "{public/**,api/bundle.mjs,api/migrations/**}",
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    { "source": "/loja/:slug", "destination": "/api" },
+    { "source": "/loja/:slug/:rest*", "destination": "/api" },
+    { "source": "/:path*", "destination": "/index.html" }
+  ],
+  "crons": [
+    { "path": "/api/cron/birthday", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/pipeline-trip-ended", "schedule": "0 5 * * *" },
+    { "path": "/api/cron/uploadthing-orphan", "schedule": "0 5 * * *" },
+    { "path": "/api/cron/client-scores", "schedule": "0 6 * * *" },
+    { "path": "/api/cron/seat-reconciliation", "schedule": "0 7 * * *" },
+    { "path": "/api/cron/abandoned-referrals", "schedule": "0 8 * * *" },
+    { "path": "/api/cron/gemeo-alerts", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/gemeo-opportunities", "schedule": "0 10 * * 1" },
+    { "path": "/api/cron/stripe-health", "schedule": "0 11 * * *" },
+    { "path": "/api/cron/installment-due-reminder", "schedule": "0 11 * * *" },
+    { "path": "/api/cron/trial-expiry", "schedule": "0 12 * * *" },
+    { "path": "/api/cron/favorite-alerts", "schedule": "0 13 * * *" }
+  ]
+}

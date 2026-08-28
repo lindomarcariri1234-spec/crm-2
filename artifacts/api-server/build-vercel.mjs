@@ -46,8 +46,6 @@ function traceExternalDependenciesForVercel() {
     import("jspdf"),
     import("jspdf-autotable"),
     import("pdfkit"),
-    import("uploadthing/express"),
-    import("uploadthing/server"),
   ]);
 }
 void traceExternalDependenciesForVercel;
@@ -99,9 +97,6 @@ export default async function handler(request, response) {
 const EXTERNAL = [
   "*.node",
   "sharp",
-  "uploadthing",
-  "@uploadthing/shared",
-  "@uploadthing/mime-types",
   "http-proxy-middleware",
   "jspdf",
   "jspdf-autotable",
@@ -270,9 +265,9 @@ async function assertFetchPatchOrder() {
       "[build-vercel] FATAL: _uploadthingPatched marker not found in api/bundle.mjs.",
     );
   }
-  if (!bundle.includes('"uploadthing/') && !bundle.includes('"uploadthing"')) {
+  if (!bundle.includes("UploadThingError")) {
     throw new Error(
-      "[build-vercel] FATAL: no uploadthing require() found in api/bundle.mjs.",
+      "[build-vercel] FATAL: bundled UploadThing implementation not found in api/bundle.mjs.",
     );
   }
 
