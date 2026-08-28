@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm --filter @workspace/visitecrm run build && rm -rf public && mkdir -p public && cp -R artifacts/visitecrm/dist/public/. public/ && pnpm --filter @workspace/api-server run migrate:vercel && pnpm --filter @workspace/api-server run build:vercel",
+  "buildCommand": "pnpm --filter @workspace/visitecrm run build && FRONTEND_DIST=artifacts/visitecrm/dist/public; if [ ! -d \"$FRONTEND_DIST\" ]; then FRONTEND_DIST=dist/public; fi; test -f \"$FRONTEND_DIST/index.html\" && rm -rf public && mkdir -p public && cp -R \"$FRONTEND_DIST\"/. public/ && pnpm --filter @workspace/api-server run migrate:vercel && pnpm --filter @workspace/api-server run build:vercel",
   "outputDirectory": "public",
   "functions": {
     "api/index.mjs": {
