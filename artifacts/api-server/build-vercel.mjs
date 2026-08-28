@@ -28,6 +28,7 @@ const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(artifactDir, "../..");
 const outDir = path.resolve(repoRoot, "api");
 const outFile = path.join(outDir, "index.mjs");
+const artifactOutDir = path.resolve(artifactDir, "api");
 
 // Same externals list as build.mjs — see that file for the rationale behind
 // each entry (native modules, fetch-patch ordering, ESM-incompatible
@@ -165,6 +166,14 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   } catch {
     console.log("[build-vercel] stripe-replit-sync migrations not found — skipping (Stripe sync may be unused).");
   }
+
+  // The Vercel project is currently configured with artifacts/api-server as
+  // its effective project root. Keep the same pre-built function entrypoint
+  // there as well as at the repository root so conventional function
+  // discovery succeeds before buildCommand runs.
+  await rm(artifactOutDir, { recursive: true, force: true });
+  await cp(outDir, artifactOutDir, { recursive: true });
+  console.log(`[build-vercel] Mirrored serverless function to ${artifactOutDir}`);
 }
 
 async function assertFetchPatchOrder() {
