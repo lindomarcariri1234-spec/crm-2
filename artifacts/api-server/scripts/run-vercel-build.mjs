@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 const artifactDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.resolve(artifactDir, "../..");
 const frontendDist = path.join(repoRoot, "artifacts/visitecrm/dist/public");
-const vercelPublicDir = path.join(repoRoot, "public");
+const vercelPublicDirs = [
+  path.join(repoRoot, "public"),
+  path.join(repoRoot, "artifacts/visitecrm/public"),
+];
 
 function runPnpm(script, extraArgs = []) {
   const result = spawnSync(
@@ -50,9 +53,11 @@ async function main() {
   buildFrontend();
   await access(path.join(frontendDist, "index.html"));
 
-  await rm(vercelPublicDir, { recursive: true, force: true });
-  await cp(frontendDist, vercelPublicDir, { recursive: true });
-  console.log(`[run-vercel-build] Frontend copied to ${vercelPublicDir}`);
+  for (const vercelPublicDir of vercelPublicDirs) {
+    await rm(vercelPublicDir, { recursive: true, force: true });
+    await cp(frontendDist, vercelPublicDir, { recursive: true });
+    console.log(`[run-vercel-build] Frontend copied to ${vercelPublicDir}`);
+  }
 
   runPnpm("migrate:vercel");
   runPnpm("build:vercel");
