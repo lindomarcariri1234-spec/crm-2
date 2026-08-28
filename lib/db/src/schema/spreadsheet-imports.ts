@@ -2,8 +2,16 @@ import { pgTable, text, timestamp, json, uniqueIndex, index, integer } from "dri
 import { relations } from "drizzle-orm";
 import { tenantsTable } from "./tenants";
 
-export type SpreadsheetImportEntity = "clients" | "trips" | "reservations";
-export type SpreadsheetImportRowAction = "created" | "updated" | "ignored" | "rejected";
+export type SpreadsheetImportEntity =
+  | "clients"
+  | "trips"
+  | "reservations"
+  | "payments"
+  | "expenses"
+  | "referrals"
+  | "commissions"
+  | "deals";
+export type SpreadsheetImportRowAction = "created" | "updated" | "duplicate" | "ignored" | "rejected";
 
 export interface SpreadsheetImportRowResult {
   line: number;

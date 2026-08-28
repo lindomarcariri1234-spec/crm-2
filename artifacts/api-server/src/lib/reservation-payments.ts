@@ -4,7 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { roundMoney } from "./pricing";
 import { RESERVATION_STATUS, PAYMENT_STATUS, type ReservationStatus } from "@workspace/permissions";
 
-export type DbExecutor = typeof db;
+export type DbExecutor = Pick<typeof db, "execute" | "select" | "insert" | "update" | "delete">;
 
 type ReservationUpdate = Partial<typeof reservationsTable.$inferInsert> & {
   status?: ReservationStatus;

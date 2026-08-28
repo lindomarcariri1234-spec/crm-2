@@ -5,7 +5,15 @@ export const SPREADSHEET_IMPORT_VERSION = 1 as const;
 export const SPREADSHEET_MAX_FILE_BYTES = 5 * 1024 * 1024;
 export const SPREADSHEET_MAX_ROWS = 2_000;
 
-export type SpreadsheetEntity = "clients" | "trips" | "reservations";
+export type SpreadsheetEntity =
+  | "clients"
+  | "trips"
+  | "reservations"
+  | "payments"
+  | "expenses"
+  | "referrals"
+  | "commissions"
+  | "deals";
 export type CellRow = Record<string, string>;
 
 export interface ParsedSpreadsheetRow {
@@ -67,7 +75,98 @@ const columns: Record<SpreadsheetEntity, ContractColumn[]> = {
     { key: "parcelas", label: "Parcelas", required: false, format: "inteiro de 1 a 99", example: "3" },
     { key: "observacoes", label: "Observações", required: false, format: "texto", example: "Reserva migrada" },
   ],
+  payments: [
+    { key: "id_externo", label: "ID Externo", required: true, format: "texto único e estável", example: "PAG-001" },
+    { key: "reserva_id_externo", label: "ID Externo da Reserva", required: false, format: "ID importado anteriormente", example: "RES-001" },
+    { key: "cliente_id_externo", label: "ID Externo do Cliente", required: false, format: "ID importado anteriormente", example: "CLI-001" },
+    { key: "tipo", label: "Tipo", required: true, format: "receivable | payable", example: "receivable" },
+    { key: "categoria", label: "Categoria", required: true, format: "texto", example: "reserva" },
+    { key: "descricao", label: "Descrição", required: false, format: "texto", example: "Entrada da reserva" },
+    { key: "valor", label: "Valor", required: true, format: "valor brasileiro", example: "500,00" },
+    { key: "status", label: "Status", required: true, format: "pending | paid | overdue | cancelled | approved | failed | refunded | charged_back", example: "paid" },
+    { key: "forma_pagamento", label: "Forma de Pagamento", required: true, format: "texto", example: "pix" },
+    { key: "vencimento", label: "Vencimento", required: true, format: "DD/MM/AAAA", example: "15/12/2026" },
+    { key: "pago_em", label: "Pago em", required: false, format: "DD/MM/AAAA", example: "10/12/2026" },
+    { key: "numero_parcela", label: "Número da Parcela", required: false, format: "inteiro positivo", example: "1" },
+    { key: "total_parcelas", label: "Total de Parcelas", required: false, format: "inteiro positivo", example: "3" },
+    { key: "observacoes", label: "Observações", required: false, format: "texto", example: "Pagamento migrado" },
+  ],
+  expenses: [
+    { key: "id_externo", label: "ID Externo", required: true, format: "texto único e estável", example: "DES-001" },
+    { key: "viagem_id_externo", label: "ID Externo da Viagem", required: false, format: "ID importado anteriormente", example: "VIA-001" },
+    { key: "categoria", label: "Categoria", required: true, format: "texto", example: "transporte" },
+    { key: "descricao", label: "Descrição", required: true, format: "texto", example: "Fretamento" },
+    { key: "valor", label: "Valor", required: true, format: "valor brasileiro", example: "2.500,00" },
+    { key: "status", label: "Status", required: true, format: "pending | paid | overdue | cancelled", example: "paid" },
+    { key: "forma_pagamento", label: "Forma de Pagamento", required: false, format: "texto", example: "bank_transfer" },
+    { key: "vencimento", label: "Vencimento", required: true, format: "DD/MM/AAAA", example: "15/12/2026" },
+    { key: "pago_em", label: "Pago em", required: false, format: "DD/MM/AAAA", example: "14/12/2026" },
+    { key: "observacoes", label: "Observações", required: false, format: "texto", example: "Despesa migrada" },
+  ],
+  referrals: [
+    { key: "id_externo", label: "ID Externo", required: true, format: "texto único e estável", example: "IND-001" },
+    { key: "indicador_id_externo", label: "ID Externo do Indicador", required: true, format: "ID de cliente importado anteriormente", example: "CLI-001" },
+    { key: "indicado_id_externo", label: "ID Externo do Indicado", required: false, format: "ID de cliente importado anteriormente", example: "CLI-002" },
+    { key: "reserva_id_externo", label: "ID Externo da Reserva", required: false, format: "ID importado anteriormente", example: "RES-001" },
+    { key: "codigo", label: "Código", required: true, format: "código estável da indicação", example: "MARIA123" },
+    { key: "nome_indicado", label: "Nome do Indicado", required: false, format: "texto", example: "João da Silva" },
+    { key: "email_indicado", label: "E-mail do Indicado", required: false, format: "e-mail", example: "joao@example.com" },
+    { key: "telefone_indicado", label: "Telefone do Indicado", required: false, format: "telefone BR com DDD", example: "(88) 99999-9999" },
+    { key: "status", label: "Status", required: true, format: "pending | completed | converted | expired | reversed", example: "completed" },
+    { key: "bonus", label: "Bônus", required: false, format: "valor brasileiro", example: "50,00" },
+    { key: "bonus_pago", label: "Bônus Pago", required: false, format: "sim | não", example: "não" },
+    { key: "bonus_pago_em", label: "Bônus Pago em", required: false, format: "DD/MM/AAAA", example: "20/12/2026" },
+    { key: "convertido_em", label: "Convertido em", required: false, format: "DD/MM/AAAA", example: "18/12/2026" },
+    { key: "origem", label: "Origem", required: false, format: "texto", example: "importacao" },
+    { key: "observacoes", label: "Observações", required: false, format: "texto", example: "Indicação migrada" },
+  ],
+  commissions: [
+    { key: "id_externo", label: "ID Externo", required: true, format: "texto único e estável", example: "COM-001" },
+    { key: "vendedor_email", label: "E-mail do Vendedor", required: true, format: "e-mail exato de usuário existente", example: "vendedor@agencia.com" },
+    { key: "reserva_id_externo", label: "ID Externo da Reserva", required: true, format: "ID importado anteriormente", example: "RES-001" },
+    { key: "valor_base", label: "Valor Base", required: true, format: "valor brasileiro", example: "1.500,00" },
+    { key: "valor_comissao", label: "Valor da Comissão", required: true, format: "valor brasileiro", example: "150,00" },
+    { key: "taxa_comissao", label: "Taxa da Comissão", required: false, format: "percentual brasileiro", example: "10,00" },
+    { key: "tipo_comissao", label: "Tipo da Comissão", required: false, format: "percentage | fixed", example: "percentage" },
+    { key: "status", label: "Status", required: true, format: "pending | approved | paid | cancelled", example: "approved" },
+    { key: "pago_em", label: "Pago em", required: false, format: "DD/MM/AAAA", example: "20/12/2026" },
+  ],
+  deals: [
+    { key: "id_externo", label: "ID Externo", required: true, format: "texto único e estável", example: "NEG-001" },
+    { key: "pipeline_id", label: "ID do Pipeline", required: true, format: "ID atual e explícito do pipeline", example: "pipeline_123" },
+    { key: "etapa_id", label: "ID da Etapa", required: true, format: "ID atual e explícito da etapa", example: "stage_123" },
+    { key: "responsavel_email", label: "E-mail do Responsável", required: true, format: "e-mail exato de usuário existente", example: "vendedor@agencia.com" },
+    { key: "titulo", label: "Título", required: true, format: "texto", example: "Viagem da família Silva" },
+    { key: "valor", label: "Valor", required: true, format: "valor brasileiro", example: "3.500,00" },
+    { key: "status", label: "Status", required: true, format: "open | won | lost", example: "open" },
+    { key: "cliente_id_externo", label: "ID Externo do Cliente", required: false, format: "ID importado anteriormente", example: "CLI-001" },
+    { key: "viagem_id_externo", label: "ID Externo da Viagem", required: false, format: "ID importado anteriormente", example: "VIA-001" },
+    { key: "reserva_id_externo", label: "ID Externo da Reserva", required: false, format: "ID importado anteriormente", example: "RES-001" },
+    { key: "nome_lead", label: "Nome do Lead", required: false, format: "obrigatório quando não há cliente", example: "João da Silva" },
+    { key: "email_lead", label: "E-mail do Lead", required: false, format: "e-mail", example: "joao@example.com" },
+    { key: "whatsapp_lead", label: "WhatsApp do Lead", required: false, format: "telefone BR com DDD", example: "(88) 99999-9999" },
+    { key: "fechamento_previsto", label: "Fechamento Previsto", required: false, format: "DD/MM/AAAA", example: "20/12/2026" },
+    { key: "fechado_em", label: "Fechado em", required: false, format: "DD/MM/AAAA", example: "19/12/2026" },
+    { key: "motivo_perda", label: "Motivo da Perda", required: false, format: "obrigatório quando status=lost", example: "Preço" },
+    { key: "origem", label: "Origem", required: false, format: "texto", example: "importacao" },
+    { key: "descricao", label: "Descrição", required: false, format: "texto", example: "Negociação migrada" },
+  ],
 };
+
+const dependencies: Record<SpreadsheetEntity, SpreadsheetEntity[]> = {
+  clients: [],
+  trips: [],
+  reservations: ["clients", "trips"],
+  payments: ["clients", "reservations"],
+  expenses: ["trips"],
+  referrals: ["clients", "reservations"],
+  commissions: ["reservations"],
+  deals: ["clients", "trips", "reservations"],
+};
+
+export const SPREADSHEET_IMPORT_ORDER: SpreadsheetEntity[] = [
+  "clients", "trips", "reservations", "payments", "expenses", "referrals", "commissions", "deals",
+];
 
 export function getSpreadsheetContract(entity: SpreadsheetEntity) {
   return {
@@ -78,6 +177,17 @@ export function getSpreadsheetContract(entity: SpreadsheetEntity) {
     formats: ["csv", "xlsx"],
     maxFileBytes: SPREADSHEET_MAX_FILE_BYTES,
     maxRows: SPREADSHEET_MAX_ROWS,
+    dependencies: dependencies[entity],
+    importOrder: SPREADSHEET_IMPORT_ORDER,
+    derivedFieldsExcluded: entity === "payments" || entity === "expenses"
+      ? ["saldos", "totais", "lucro", "indicadores"]
+      : entity === "referrals"
+        ? ["totais por indicador", "ranking", "taxa de conversão"]
+        : entity === "commissions"
+          ? ["totais por vendedor", "projeções"]
+          : entity === "deals"
+            ? ["funil agregado", "taxas de conversão", "previsões calculadas"]
+            : [],
   };
 }
 
@@ -191,6 +301,14 @@ export function parseBrazilMoney(value: string, label: string, optional = false)
   const parsed = Number(value.replace(/R\$\s*/g, "").replace(/\./g, "").replace(",", "."));
   if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${label} deve ser um valor não negativo.`);
   return parsed;
+}
+
+export function parseBooleanPt(value: string, label: string, fallback = false): boolean {
+  const normalized = value.trim().normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  if (!normalized) return fallback;
+  if (["sim", "s", "true", "1"].includes(normalized)) return true;
+  if (["nao", "n", "false", "0"].includes(normalized)) return false;
+  throw new Error(`${label} deve ser "sim" ou "não".`);
 }
 
 export function parsePhone(value: string, label: string, optional = false): string | null {

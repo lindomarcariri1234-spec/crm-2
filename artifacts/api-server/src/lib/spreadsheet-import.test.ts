@@ -13,7 +13,16 @@ import {
 
 describe("contratos de importação por planilha", () => {
   it("gera modelos CSV e XLSX versionados que o próprio leitor aceita", async () => {
-    for (const entity of ["clients", "trips", "reservations"] as const) {
+    for (const entity of [
+      "clients",
+      "trips",
+      "reservations",
+      "payments",
+      "expenses",
+      "referrals",
+      "commissions",
+      "deals",
+    ] as const) {
       const contract = getSpreadsheetContract(entity);
       expect(contract.version).toBe(1);
       expect(contract.requiredHeaders).toContain("id_externo");
@@ -26,6 +35,16 @@ describe("contratos de importação por planilha", () => {
       expect(validateHeaders(entity, xlsx.headers)).toEqual([]);
       expect(xlsx.rows).toHaveLength(1);
     }
+  });
+
+  it("explica dependências, ordem e campos derivados que nunca são restaurados", () => {
+    expect(getSpreadsheetContract("commissions").dependencies).toEqual(["reservations"]);
+    expect(getSpreadsheetContract("deals").dependencies).toEqual(["clients", "trips", "reservations"]);
+    expect(getSpreadsheetContract("payments").derivedFieldsExcluded).toContain("saldos");
+    expect(getSpreadsheetContract("commissions").derivedFieldsExcluded).toContain("totais por vendedor");
+    expect(getSpreadsheetContract("deals").importOrder).toEqual([
+      "clients", "trips", "reservations", "payments", "expenses", "referrals", "commissions", "deals",
+    ]);
   });
 
   it("lê datas de células XLSX como datas civis brasileiras", async () => {

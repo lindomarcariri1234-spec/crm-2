@@ -7,6 +7,14 @@ const mocks = vi.hoisted(() => {
     clientsTable: { id: "clients.id", tenantId: "clients.tenantId", cpf: "clients.cpf" },
     tripsTable: { id: "trips.id", tenantId: "trips.tenantId", importFingerprint: "trips.importFingerprint" },
     reservationsTable: { id: "reservations.id", tenantId: "reservations.tenantId", clientId: "reservations.clientId", tripId: "reservations.tripId", status: "reservations.status" },
+    paymentsTable: { id: "payments.id", tenantId: "payments.tenantId" },
+    expensesTable: { id: "expenses.id", tenantId: "expenses.tenantId" },
+    referralsTable: { id: "referrals.id", tenantId: "referrals.tenantId" },
+    commissionsTable: { id: "commissions.id", tenantId: "commissions.tenantId" },
+    usersTable: { id: "users.id", tenantId: "users.tenantId", email: "users.email" },
+    pipelinesTable: { id: "pipelines.id", tenantId: "pipelines.tenantId" },
+    pipelineStagesTable: { id: "pipelineStages.id", tenantId: "pipelineStages.tenantId", pipelineId: "pipelineStages.pipelineId" },
+    dealsTable: { id: "deals.id", tenantId: "deals.tenantId" },
     tenantsTable: { id: "tenants.id" },
     plansTable: { id: "plans.id", slug: "plans.slug" },
     spreadsheetImportBatchesTable: { tenantId: "batches.tenantId", entity: "batches.entity", idempotencyKey: "batches.key", fileHash: "batches.hash" },
@@ -46,6 +54,14 @@ vi.mock("@workspace/db", () => ({
   clientsTable: mocks.clientsTable,
   tripsTable: mocks.tripsTable,
   reservationsTable: mocks.reservationsTable,
+  paymentsTable: mocks.paymentsTable,
+  expensesTable: mocks.expensesTable,
+  referralsTable: mocks.referralsTable,
+  commissionsTable: mocks.commissionsTable,
+  usersTable: mocks.usersTable,
+  pipelinesTable: mocks.pipelinesTable,
+  pipelineStagesTable: mocks.pipelineStagesTable,
+  dealsTable: mocks.dealsTable,
   tenantsTable: mocks.tenantsTable,
   plansTable: mocks.plansTable,
   spreadsheetImportBatchesTable: mocks.spreadsheetImportBatchesTable,
@@ -89,7 +105,11 @@ function app() {
   return instance;
 }
 
-function payload(entity: "clients" | "reservations", csv: string, idempotencyKey?: string) {
+function payload(
+  entity: "clients" | "reservations" | "payments" | "expenses" | "referrals" | "commissions" | "deals",
+  csv: string,
+  idempotencyKey?: string,
+) {
   return {
     entity,
     filename: `${entity}.csv`,
@@ -131,6 +151,81 @@ describe("rotas de importação operacional", () => {
     expect(response.body.report.results[0]).toEqual(expect.objectContaining({
       action: "rejected",
       reason: expect.stringContaining("Cliente e viagem não foram encontrados"),
+    }));
+  });
+
+  it("rejeita pagamento com referência quebrada e status financeiro incompatível", async () => {
+    mocks.queryQueue.push([], []);
+    const missingReference = await request(app()).post("/api/spreadsheet-imports/preview").send(payload(
+      "payments",
+      [
+        "id_externo,reserva_id_externo,tipo,categoria,valor,status,forma_pagamento,vencimento,pago_em",
+        "PAG-1,RES-X,receivable,reserva,\"500,00\",paid,pix,15/12/2026,10/12/2026",
+      ].join("\n"),
+    ));
+    expect(missingReference.status).toBe(200);
+    expect(missingReference.body.report.results[0]).toEqual(expect.objectContaining({
+      action: "rejected",
+      reason: expect.stringContaining("Importe reservas antes de pagamentos"),
+    }));
+
+    mocks.queryQueue.push([], []);
+    const missingPaidAt = await request(app()).post("/api/spreadsheet-imports/preview").send(payload(
+      "payments",
+      [
+        "id_externo,cliente_id_externo,tipo,categoria,valor,status,forma_pagamento,vencimento",
+        "PAG-2,CLI-1,receivable,reserva,\"500,00\",paid,pix,15/12/2026",
+      ].join("\n"),
+    ));
+    expect(missingPaidAt.body.report.results[0]).toEqual(expect.objectContaining({
+      action: "rejected",
+      reason: expect.stringContaining("Pago em é obrigatório"),
+    }));
+  });
+
+  it("bloqueia comissão quando o vendedor não existe na agência", async () => {
+    mocks.queryQueue.push(
+      [],
+      [{ entity: "reservations", sourceKey: "RES-1", targetId: "reservation-a" }],
+      [{ id: "reservation-a", clientId: "client-a", tripId: "trip-a" }],
+      [],
+    );
+    const response = await request(app()).post("/api/spreadsheet-imports/preview").send(payload(
+      "commissions",
+      [
+        "id_externo,vendedor_email,reserva_id_externo,valor_base,valor_comissao,status",
+        "COM-1,ausente@agencia.com,RES-1,\"1.000,00\",\"100,00\",approved",
+      ].join("\n"),
+    ));
+    expect(response.status).toBe(200);
+    expect(response.body.report.results[0]).toEqual(expect.objectContaining({
+      action: "rejected",
+      reason: expect.stringContaining("Usuários ausentes não são recriados"),
+    }));
+  });
+
+  it("exige que etapa e pipeline explícitos pertençam um ao outro", async () => {
+    mocks.queryQueue.push(
+      [],
+      [],
+      [],
+      [],
+      [],
+      [{ id: "owner-a", email: "owner@agencia.com" }],
+      [{ id: "stage-a", pipelineId: "pipeline-b" }],
+      [{ id: "pipeline-a" }],
+    );
+    const response = await request(app()).post("/api/spreadsheet-imports/preview").send(payload(
+      "deals",
+      [
+        "id_externo,pipeline_id,etapa_id,responsavel_email,titulo,valor,status,nome_lead",
+        "NEG-1,pipeline-a,stage-a,owner@agencia.com,Lead teste,\"1.000,00\",open,Lead sem cadastro",
+      ].join("\n"),
+    ));
+    expect(response.status).toBe(200);
+    expect(response.body.report.results[0]).toEqual(expect.objectContaining({
+      action: "rejected",
+      reason: expect.stringContaining("Etapa não pertence ao pipeline"),
     }));
   });
 
