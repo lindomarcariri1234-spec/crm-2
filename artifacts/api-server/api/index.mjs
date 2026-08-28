@@ -1,5 +1,23 @@
 let appPromise;
 
+// Vercel traces dependencies from this small conventional function file, not
+// from bundle.mjs added through includeFiles. Keep literal dynamic imports
+// here so the corresponding external packages are copied into the function.
+// This function is intentionally never executed: bundle.mjs must apply the
+// UploadThing fetch patch before loading uploadthing itself.
+function traceExternalDependenciesForVercel() {
+  return Promise.all([
+    import("googleapis"),
+    import("http-proxy-middleware"),
+    import("jspdf"),
+    import("jspdf-autotable"),
+    import("pdfkit"),
+    import("uploadthing/express"),
+    import("uploadthing/server"),
+  ]);
+}
+void traceExternalDependenciesForVercel;
+
 function getMissingPackage(error) {
   if (!error || typeof error !== "object") return undefined;
   const message = typeof error.message === "string" ? error.message : "";
