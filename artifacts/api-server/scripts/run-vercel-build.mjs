@@ -9,6 +9,7 @@ const frontendDist = path.join(repoRoot, "artifacts/visitecrm/dist/public");
 const vercelPublicDirs = [
   path.join(repoRoot, "public"),
   path.join(repoRoot, "artifacts/visitecrm/public"),
+  path.join(repoRoot, "artifacts/api-server/public"),
 ];
 
 function runPnpm(script, extraArgs = []) {
