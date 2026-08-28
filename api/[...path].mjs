@@ -28,6 +28,15 @@ function getMissingPackage(error) {
     : undefined;
 }
 
+function restoreRewrittenApiPath(request) {
+  const url = new URL(request.url || "/api", "http://vercel.internal");
+  const path = url.searchParams.get("__vercel_api_path");
+  if (path === null) return;
+  url.searchParams.delete("__vercel_api_path");
+  const search = url.searchParams.toString();
+  request.url = `/api/${path}${search ? `?${search}` : ""}`;
+}
+
 async function getApp() {
   appPromise ??= import("./bundle.mjs").then((module) => module.default);
   return appPromise;
@@ -36,6 +45,7 @@ async function getApp() {
 export default async function handler(request, response) {
   try {
     const app = await getApp();
+    restoreRewrittenApiPath(request);
     return app(request, response);
   } catch (error) {
     appPromise = undefined;
