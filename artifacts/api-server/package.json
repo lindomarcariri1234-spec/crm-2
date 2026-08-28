@@ -7,6 +7,7 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "build:vercel": "node ./build-vercel.mjs",
+    "deploy:vercel": "node ./scripts/run-vercel-build.mjs",
     "migrate:vercel": "node ./scripts/run-vercel-migrate.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "NODE_OPTIONS='--max-old-space-size=4096' tsc -p tsconfig.json --noEmit",
