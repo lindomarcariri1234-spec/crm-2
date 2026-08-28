@@ -254,6 +254,21 @@ function sanitizePartnerRow(row: Record<string, unknown>): Record<string, unknow
 
 type AnyTable = { id: unknown; [column: string]: unknown };
 
+class BackupExportStreamError extends Error {
+  readonly group: string;
+
+  constructor(group: string, cause: unknown) {
+    super(`Backup export failed while streaming "${group}"`, { cause });
+    this.name = "BackupExportStreamError";
+    this.group = group;
+  }
+}
+
+function withBackupGroupError(group: string, error: unknown): never {
+  if (error instanceof BackupExportStreamError) throw error;
+  throw new BackupExportStreamError(group, error);
+}
+
 /**
  * Streams every row of `table` matching `scopeWhere` (already tenant-scoped
  * by the caller) as a JSON array under `key`, batching via a cursor on `id`
@@ -269,30 +284,34 @@ async function streamDirectTable(
   counts: Record<string, number>,
   sanitize?: (row: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<void> {
-  await writer.key(key);
-  await writer.beginArray();
-  let total = 0;
-  if (scopeWhere !== false) {
-    let cursor: string | undefined;
-    for (;;) {
-      const condition = cursor ? and(scopeWhere, gt(table.id as never, cursor)) : scopeWhere;
-      const batch = (await db
-        .select()
-        .from(table as never)
-        .where(condition)
-        .orderBy(asc(table.id as never))
-        .limit(BACKUP_BATCH_SIZE)) as Array<Record<string, unknown>>;
-      if (batch.length === 0) break;
-      for (const row of batch) {
-        await writer.arrayItem(sanitize ? sanitize(row) : row);
-        total++;
+  try {
+    await writer.key(key);
+    await writer.beginArray();
+    let total = 0;
+    if (scopeWhere !== false) {
+      let cursor: string | undefined;
+      for (;;) {
+        const condition = cursor ? and(scopeWhere, gt(table.id as never, cursor)) : scopeWhere;
+        const batch = (await db
+          .select()
+          .from(table as never)
+          .where(condition)
+          .orderBy(asc(table.id as never))
+          .limit(BACKUP_BATCH_SIZE)) as Array<Record<string, unknown>>;
+        if (batch.length === 0) break;
+        for (const row of batch) {
+          await writer.arrayItem(sanitize ? sanitize(row) : row);
+          total++;
+        }
+        cursor = batch[batch.length - 1]!.id as string;
+        if (batch.length < BACKUP_BATCH_SIZE) break;
       }
-      cursor = batch[batch.length - 1]!.id as string;
-      if (batch.length < BACKUP_BATCH_SIZE) break;
     }
+    counts[key] = total;
+    await writer.endArray();
+  } catch (error) {
+    withBackupGroupError(key, error);
   }
-  counts[key] = total;
-  await writer.endArray();
 }
 
 /**
@@ -312,33 +331,37 @@ async function streamChildTable(
   counts: Record<string, number>,
   sanitize?: (row: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<void> {
-  await writer.key(key);
-  await writer.beginArray();
-  let total = 0;
-  let cursor: string | undefined;
-  for (;;) {
-    const condition = cursor ? and(parentScopeWhere, gt(parentTable.id as never, cursor)) : parentScopeWhere;
-    const parentBatch = (await db
-      .select({ id: parentTable.id as never })
-      .from(parentTable as never)
-      .where(condition)
-      .orderBy(asc(parentTable.id as never))
-      .limit(BACKUP_BATCH_SIZE)) as Array<{ id: string }>;
-    if (parentBatch.length === 0) break;
-    const parentIds = parentBatch.map((r) => r.id);
-    const children = (await db
-      .select()
-      .from(childTable as never)
-      .where(inArray(childParentIdColumn as never, parentIds))) as Array<Record<string, unknown>>;
-    for (const child of children) {
-      await writer.arrayItem(sanitize ? sanitize(child) : child);
-      total++;
+  try {
+    await writer.key(key);
+    await writer.beginArray();
+    let total = 0;
+    let cursor: string | undefined;
+    for (;;) {
+      const condition = cursor ? and(parentScopeWhere, gt(parentTable.id as never, cursor)) : parentScopeWhere;
+      const parentBatch = (await db
+        .select({ id: parentTable.id as never })
+        .from(parentTable as never)
+        .where(condition)
+        .orderBy(asc(parentTable.id as never))
+        .limit(BACKUP_BATCH_SIZE)) as Array<{ id: string }>;
+      if (parentBatch.length === 0) break;
+      const parentIds = parentBatch.map((r) => r.id);
+      const children = (await db
+        .select()
+        .from(childTable as never)
+        .where(inArray(childParentIdColumn as never, parentIds))) as Array<Record<string, unknown>>;
+      for (const child of children) {
+        await writer.arrayItem(sanitize ? sanitize(child) : child);
+        total++;
+      }
+      cursor = parentIds[parentIds.length - 1];
+      if (parentBatch.length < BACKUP_BATCH_SIZE) break;
     }
-    cursor = parentIds[parentIds.length - 1];
-    if (parentBatch.length < BACKUP_BATCH_SIZE) break;
+    counts[key] = total;
+    await writer.endArray();
+  } catch (error) {
+    withBackupGroupError(key, error);
   }
-  counts[key] = total;
-  await writer.endArray();
 }
 
 /**
@@ -355,14 +378,18 @@ async function writeSmallTable(
   scopeWhere: SQL,
   counts: Record<string, number>,
 ): Promise<void> {
-  await writer.key(key);
-  await writer.beginArray();
-  const rows = (await db.select().from(table as never).where(scopeWhere)) as Array<Record<string, unknown>>;
-  for (const row of rows) {
-    await writer.arrayItem(row);
+  try {
+    await writer.key(key);
+    await writer.beginArray();
+    const rows = (await db.select().from(table as never).where(scopeWhere)) as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      await writer.arrayItem(row);
+    }
+    counts[key] = rows.length;
+    await writer.endArray();
+  } catch (error) {
+    withBackupGroupError(key, error);
   }
-  counts[key] = rows.length;
-  await writer.endArray();
 }
 
 /**
@@ -402,6 +429,7 @@ async function writeSmallTable(
  *   with no `tenantId` column, not tenant-owned data.
  */
 router.get("/backup/export", async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  let exportTenantId: string | undefined;
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
@@ -412,6 +440,7 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
     }
 
     const tenantId = me.tenantId;
+    exportTenantId = tenantId;
 
     const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId)).limit(1);
     if (!tenant) {
@@ -1072,6 +1101,14 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
     res.end();
   } catch (err) {
     if (res.headersSent) {
+      logger.error(
+        {
+          err,
+          tenantId: exportTenantId,
+          group: err instanceof BackupExportStreamError ? err.group : "envelope",
+        },
+        "[backup] export stream failed after response started",
+      );
       res.destroy(err instanceof Error ? err : new Error(String(err)));
       return;
     }

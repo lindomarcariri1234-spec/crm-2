@@ -8,9 +8,11 @@ import request from "supertest";
 // the same eq/and/gt/inArray conditions the route passes to `.where()`. This
 // lets a single fixture set exercise tenant scoping exactly the way the real
 // query would, regardless of the order routes/backup.ts queries tables in.
-const { rowsByTable, mockRequireAuth, tables, makeChain } = vi.hoisted(() => {
+const { rowsByTable, rejectedTable, mockRequireAuth, mockLogError, tables, makeChain } = vi.hoisted(() => {
   const rowsByTable = new Map<unknown, Record<string, unknown>[]>();
+  const rejectedTable = { current: undefined as unknown };
   const mockRequireAuth = vi.fn();
+  const mockLogError = vi.fn();
 
   function makeTableProxy() {
     return new Proxy(
@@ -76,6 +78,9 @@ const { rowsByTable, mockRequireAuth, tables, makeChain } = vi.hoisted(() => {
       orderBy: () => chain,
       limit: () => chain,
       then: (resolve: (rows: unknown[]) => unknown, reject: (err: unknown) => unknown) => {
+        if (fromTable === rejectedTable.current) {
+          return Promise.reject(new Error("simulated database failure")).then(resolve, reject);
+        }
         const rows = rowsByTable.get(fromTable) ?? [];
         return Promise.resolve(rows.filter((r) => matchesCondition(r, condition))).then(resolve, reject);
       },
@@ -83,7 +88,7 @@ const { rowsByTable, mockRequireAuth, tables, makeChain } = vi.hoisted(() => {
     return chain;
   }
 
-  return { rowsByTable, mockRequireAuth, tables, makeChain };
+  return { rowsByTable, rejectedTable, mockRequireAuth, mockLogError, tables, makeChain };
 });
 
 vi.mock("@workspace/db", () => ({
@@ -102,6 +107,10 @@ vi.mock("drizzle-orm", () => ({
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: mockRequireAuth,
   ROLES,
+}));
+
+vi.mock("../lib/logger.js", () => ({
+  logger: { error: mockLogError },
 }));
 
 import backupRouter from "../routes/backup.js";
@@ -537,6 +546,8 @@ function seedFullTenantFixture() {
 
 beforeEach(() => {
   mockRequireAuth.mockReset();
+  mockLogError.mockReset();
+  rejectedTable.current = undefined;
   rowsByTable.clear();
 });
 
@@ -673,5 +684,24 @@ describe("GET /api/backup/export", () => {
 
     const response = await request(buildApp()).get("/api/backup/export").expect(403);
     expect(response.body.code).toBe("FORBIDDEN_ROLE");
+  });
+
+  it("logs the failing data group when a streamed query fails after headers were sent", async () => {
+    seedFullTenantFixture();
+    mockRequireAuth.mockResolvedValue(ADMIN);
+    rejectedTable.current = tables.clientsTable;
+
+    await expect(request(buildApp()).get("/api/backup/export")).rejects.toThrow();
+
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: TENANT_A,
+        group: "clients",
+        err: expect.objectContaining({
+          message: 'Backup export failed while streaming "clients"',
+        }),
+      }),
+      "[backup] export stream failed after response started",
+    );
   });
 });
