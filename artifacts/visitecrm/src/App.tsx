@@ -111,7 +111,24 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error
   }
 }
 
-const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+function normalizeClerkPublishableKey(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  const quote = trimmed[0];
+  if (
+    trimmed.length >= 2 &&
+    (quote === "\"" || quote === "'") &&
+    trimmed.at(-1) === quote
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+const clerkPubKey = normalizeClerkPublishableKey(
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+);
+const clerkPubKeyIsValid = /^pk_(?:test|live)_[A-Za-z0-9_-]+$/.test(clerkPubKey);
 // Clerk proxy: only used when explicitly overridden via VITE_CLERK_PROXY_URL.
 // Auto-deriving a proxy URL for the Replit dev preview does NOT work — Clerk
 // requires every proxyUrl to be registered in the Clerk Dashboard, and the
@@ -629,8 +646,18 @@ function Router() {
 function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
 
-  if (!clerkPubKey) {
-    return <div className="p-8 text-red-500">Configuração de autenticação ausente.</div>;
+  if (!clerkPubKeyIsValid) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-8">
+        <div className="max-w-lg rounded-lg border border-red-200 bg-red-50 p-6 text-red-800">
+          <h1 className="mb-2 text-lg font-semibold">Configuração de autenticação inválida</h1>
+          <p className="text-sm">
+            A variável VITE_CLERK_PUBLISHABLE_KEY precisa conter uma chave pública
+            válida do Clerk.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (

@@ -11,6 +11,11 @@ const vercelPublicDirs = [
   path.join(repoRoot, "artifacts/visitecrm/public"),
   path.join(repoRoot, "artifacts/api-server/public"),
 ];
+const builtApiDir = path.join(repoRoot, "api");
+const vercelApiDirs = [
+  path.join(repoRoot, "artifacts/visitecrm/api"),
+  path.join(repoRoot, "artifacts/api-server/api"),
+];
 
 function runPnpm(script, extraArgs = []) {
   const result = spawnSync(
@@ -62,6 +67,13 @@ async function main() {
 
   runPnpm("migrate:vercel");
   runPnpm("build:vercel");
+
+  await access(path.join(builtApiDir, "index.mjs"));
+  for (const vercelApiDir of vercelApiDirs) {
+    await rm(vercelApiDir, { recursive: true, force: true });
+    await cp(builtApiDir, vercelApiDir, { recursive: true });
+    console.log(`[run-vercel-build] API copied to ${vercelApiDir}`);
+  }
 }
 
 main().catch((error) => {
