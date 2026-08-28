@@ -47,6 +47,11 @@ globalThis.require = __bannerCrReq(import.meta.url);
 
     console.log(`[run-vercel-migrate] Bundled migration script, executing ${outFile}`);
     process.env["VERCEL_MIGRATION_REPO_ROOT"] = repoRoot;
+    // The migration runs as part of Vercel's production build, but Vercel
+    // does not guarantee NODE_ENV is set while executing buildCommand.
+    // Force production before importing the bundle so pino does not try to
+    // resolve the development-only pino-pretty transport.
+    process.env["NODE_ENV"] = "production";
     const { runVercelMigration } = await import(outFile);
     await runVercelMigration();
     console.log("[run-vercel-migrate] Migration complete");
