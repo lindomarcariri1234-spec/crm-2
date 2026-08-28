@@ -24,6 +24,7 @@ import {
   downloadPdf,
 } from "./downloads-utils.js";
 import { ManifestImportModal } from "./ManifestImportModal";
+import { OperationalImportModal, type ImportEntity } from "@/components/operational-import-modal";
 
 function downloadCsv(rows: string[][], filename: string) {
   const content = rows.map(r => r.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -95,14 +96,35 @@ export default function Downloads() {
   const [quickEnd, setQuickEnd] = useState(today);
 
   // Bounded datasets — kept as eager hooks (these never approach 5 000 records)
-  const { data: referralsData } = useListReferrals();
-  const { data: commissionsData } = useListCommissions();
-  const { data: openDealsData } = useListDeals({ status: "open" });
-  const { data: lostDealsData } = useListDeals({ status: "lost" });
+  const { data: referralsData, refetch: refetchReferrals } = useListReferrals();
+  const { data: commissionsData, refetch: refetchCommissions } = useListCommissions();
+  const { data: openDealsData, refetch: refetchOpenDeals } = useListDeals({ status: "open" });
+  const { data: lostDealsData, refetch: refetchLostDeals } = useListDeals({ status: "lost" });
 
   // Track which quick-download card is currently loading
   const [quickLoading, setQuickLoading] = useState<string | null>(null);
   const [manifestImportOpen, setManifestImportOpen] = useState(false);
+  const [importEntity, setImportEntity] = useState<ImportEntity | null>(null);
+
+  const importTitles: Record<ImportEntity, string> = {
+    clients: "Importar clientes por planilha",
+    trips: "Importar viagens por planilha",
+    reservations: "Importar reservas por planilha",
+    payments: "Importar pagamentos por planilha",
+    expenses: "Importar despesas por planilha",
+    referrals: "Importar indicações por planilha",
+    commissions: "Importar comissões por planilha",
+    deals: "Importar pipeline por planilha",
+  };
+
+  function imported(entity: ImportEntity) {
+    if (entity === "referrals") void refetchReferrals();
+    if (entity === "commissions") void refetchCommissions();
+    if (entity === "deals") {
+      void refetchOpenDeals();
+      void refetchLostDeals();
+    }
+  }
 
   async function serverExport(fmt: ExportFormat) {
     setExporting(fmt);
@@ -240,24 +262,31 @@ export default function Downloads() {
       description: "Lista completa de clientes com dados de contato e histórico",
       icon: Users,
       formats: makeFormats("Clientes", _prepareClients, "clientes"),
+      importEntities: [{ entity: "clients" as const, label: "Clientes" }],
     },
     {
       label: "Viagens",
       description: "Catálogo de viagens com datas, preços e ocupação (filtro por data de saída)",
       icon: Map,
       formats: makeFormats("Viagens", _prepareTrips, "viagens"),
+      importEntities: [{ entity: "trips" as const, label: "Viagens" }],
     },
     {
       label: "Reservas",
       description: "Relatório de reservas com status e valores",
       icon: CalendarCheck,
       formats: makeFormats("Reservas", _prepareReservations, "reservas"),
+      importEntities: [{ entity: "reservations" as const, label: "Reservas" }],
     },
     {
       label: "Relatório Financeiro",
       description: "Receitas, despesas, pagamentos e balanço",
       icon: DollarSign,
       formats: makeFormats("Financeiro", preparePayments, "financeiro"),
+      importEntities: [
+        { entity: "payments" as const, label: "Pagamentos" },
+        { entity: "expenses" as const, label: "Despesas" },
+      ],
     },
     {
       label: "Lista de Passageiros (ANTT)",
@@ -271,18 +300,21 @@ export default function Downloads() {
       description: "Programa de indicações e bônus pagos",
       icon: Users,
       formats: makeFormats("Indicações", _prepareReferrals, "indicacoes"),
+      importEntities: [{ entity: "referrals" as const, label: "Indicações" }],
     },
     {
       label: "Comissões de Vendedores",
       description: "Relatório de comissões por vendedor e por período",
       icon: DollarSign,
       formats: makeFormats("Comissões", _prepareCommissions, "comissoes"),
+      importEntities: [{ entity: "commissions" as const, label: "Comissões" }],
     },
     {
       label: "Pipeline de Negócios",
       description: "Leads, negócios abertos e perdidos com motivo de perda",
       icon: BarChart2,
       formats: makeFormats("Pipeline", _preparePipeline, "pipeline"),
+      importEntities: [{ entity: "deals" as const, label: "Pipeline" }],
     },
   ];
 
@@ -293,7 +325,7 @@ export default function Downloads() {
       <div>
         <h1 className="text-2xl font-bold">Downloads e Exportações</h1>
         <p className="text-sm text-muted-foreground">
-          Exporte relatórios completos em CSV, Excel ou PDF, ou faça downloads rápidos diretamente no navegador.
+          Exporte relatórios ou importe dados por modelos versionados. Arquivos PDF são relatórios somente para leitura e não podem ser importados.
         </p>
       </div>
 
@@ -452,12 +484,45 @@ export default function Downloads() {
                       </Button>
                     )}
                 </div>
+                {exp.importEntities && (
+                  <div className="mt-4 space-y-3 border-t pt-4">
+                    {exp.importEntities.map(option => (
+                      <div key={option.entity} className="space-y-2">
+                        {exp.importEntities.length > 1 && <p className="text-xs font-medium">{option.label}</p>}
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={`/api/spreadsheet-imports/templates/${option.entity}.csv`}>
+                              <Download className="mr-1.5 h-3.5 w-3.5" />Modelo CSV
+                            </a>
+                          </Button>
+                          <Button variant="outline" size="sm" asChild>
+                            <a href={`/api/spreadsheet-imports/templates/${option.entity}.xlsx`}>
+                              <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" />Modelo XLSX
+                            </a>
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => setImportEntity(option.entity)}>
+                            <Upload className="mr-1.5 h-3.5 w-3.5" />Importar CSV/XLSX
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
         })}
       </div>
       <ManifestImportModal open={manifestImportOpen} onClose={() => setManifestImportOpen(false)} />
+      {importEntity && (
+        <OperationalImportModal
+          entity={importEntity}
+          title={importTitles[importEntity]}
+          open
+          onClose={() => setImportEntity(null)}
+          onImported={() => imported(importEntity)}
+        />
+      )}
     </div>
   );
 }
