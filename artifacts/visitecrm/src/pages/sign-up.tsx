@@ -102,10 +102,16 @@ export default function SignUpPage() {
             </div>
           </div>
 
+          <p className="text-sm text-muted-foreground">
+            Crie sua conta com o Google ou usando e-mail e senha.
+          </p>
+
           <SignUp
             routing="path"
             path={`${basePath}/sign-up`}
             signInUrl={`${basePath}/sign-in`}
+            fallbackRedirectUrl={`${basePath}/`}
+            oauthFlow="redirect"
             appearance={{
               elements: {
                 rootBox: "w-full",

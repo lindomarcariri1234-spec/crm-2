@@ -83,3 +83,4 @@
 - [Test files excluded from typecheck](test-files-excluded-from-typecheck.md) — a tsconfig used by the official typecheck workflow can exclude test directories entirely; a broken test file passes CI silently unless checked separately.
 - [Drizzle enum literal in insert array](drizzle-enum-literal-insert-array.md) — an insert `.values([...])` array with a wrong string literal for an enum-typed column surfaces as a generic "No overload matches this call" error, not a clear "invalid value" message.
 - [Vercel monorepo framework detection](vercel-monorepo-framework-detection.md) — explicitly select Vite or Vercel may classify the combined frontend/API monorepo as Express and reject the static output directory.
+- [Clerk social login](clerk-social-login.md) — native provider buttons plus redirect OAuth and BASE_PATH-aware fallbacks keep agency login reliable across Clerk environments.
