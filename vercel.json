@@ -14,6 +14,19 @@
       "maxDuration": 60
     }
   },
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "visitecrm.vercel.app"
+        }
+      ],
+      "destination": "https://visitecrm.com/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     { "source": "/loja/:slug", "destination": "/api" },
     { "source": "/loja/:slug/:rest*", "destination": "/api" },
