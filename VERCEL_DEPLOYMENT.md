@@ -4,6 +4,20 @@ Este repositório é preparado para **um único projeto Vercel**, com a raiz do
 projeto apontando para a raiz deste monorepo. Esse projeto entrega o frontend
 do VisiteCRM e uma única função serverless Express para todas as rotas da API.
 
+## Configuração do projeto Vercel
+
+No projeto VisiteCRM, deixe **Root Directory** vazio (a raiz do repositório).
+O `vercel.json` na raiz define o build combinado do frontend e da API. O
+`ignoreCommand` versionado em `scripts/vercel-ignore-build.sh` só ignora o
+deploy quando nenhuma parte publicada nem seus pacotes internos mudou; por
+isso, uma alteração somente em `artifacts/visitecrm/**` inicia um novo deploy
+sem precisar alterar `vercel.json` junto.
+
+Se o painel ainda mostrar `artifacts/api-server` como Root Directory, corrija
+esse campo para a raiz do repositório antes do próximo deploy. A configuração
+espelhada em `artifacts/api-server/vercel.json` mantém o critério seguro durante
+essa transição, mas a raiz do monorepo é a configuração definitiva.
+
 ## Primeiro deploy
 
 1. No painel da Vercel, importe o repositório GitHub e mantenha o **Root
