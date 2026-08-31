@@ -237,10 +237,9 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     console.log("[build-vercel] stripe-replit-sync migrations not found — skipping (Stripe sync may be unused).");
   }
 
-  // The Vercel project is currently configured with artifacts/api-server as
-  // its effective project root. Keep the same pre-built function entrypoint
-  // there as well as at the repository root so conventional function
-  // discovery succeeds before buildCommand runs.
+  // Keep the pre-built function entrypoint at both the repository root and the
+  // legacy artifact root. The Vercel project should use the repository root,
+  // but the mirror keeps function discovery safe while that setting migrates.
   await rm(artifactOutDir, { recursive: true, force: true });
   await cp(outDir, artifactOutDir, { recursive: true });
   console.log(`[build-vercel] Mirrored serverless function to ${artifactOutDir}`);
