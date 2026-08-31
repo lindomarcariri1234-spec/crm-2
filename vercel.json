@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
+  "ignoreCommand": "bash scripts/vercel-ignore-build.sh",
   "installCommand": "pnpm install --frozen-lockfile --config.node-linker=hoisted",
   "buildCommand": "pnpm --filter @workspace/api-server deploy:vercel",
   "outputDirectory": "public",
