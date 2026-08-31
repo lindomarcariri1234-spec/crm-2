@@ -1,7 +1,9 @@
 import { SignIn } from "@clerk/react";
 import { Map, ShieldCheck, Users, TrendingUp } from "lucide-react";
+import { getSafeRedirectTarget } from "@/lib/safe-redirect";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+const defaultRedirect = `${basePath}/`;
 
 const BENEFITS = [
   { icon: Users, text: "Gestão completa de clientes e passageiros" },
@@ -11,6 +13,12 @@ const BENEFITS = [
 ];
 
 export default function SignInPage() {
+  const redirectTarget = getSafeRedirectTarget(
+    window.location.search,
+    "redirect_url",
+    defaultRedirect,
+  );
+
   return (
     <div className="min-h-screen flex">
       <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-primary via-primary/90 to-blue-700 flex-col justify-between p-12 text-white relative overflow-hidden">
@@ -93,7 +101,7 @@ export default function SignInPage() {
             routing="path"
             path={`${basePath}/sign-in`}
             signUpUrl={`${basePath}/sign-up`}
-            fallbackRedirectUrl={`${basePath}/`}
+            fallbackRedirectUrl={redirectTarget}
             oauthFlow="redirect"
             appearance={{
               elements: {

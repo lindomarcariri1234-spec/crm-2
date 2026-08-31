@@ -4,15 +4,7 @@ import { useUser } from "@clerk/react";
 import { useEffect, useRef } from "react";
 import { PublicStore } from "@/lib/storeApi";
 import { useSyncMe } from "@workspace/api-client-react";
-
-function getRedirectTarget(): string {
-  const params = new URLSearchParams(window.location.search);
-  const redirect = params.get("redirect");
-  // Accept only safe relative paths: must start with "/" but not "//" or "/\"
-  // to prevent open-redirect attacks like //evil.com or /\evil.com
-  if (redirect && /^\/[^/\\]/.test(redirect)) return redirect;
-  return "/perfil";
-}
+import { getSafeRedirectTarget } from "@/lib/safe-redirect";
 
 export default function VitrineSignIn({
   store,
@@ -22,7 +14,7 @@ export default function VitrineSignIn({
 }) {
   const { isSignedIn, user } = useUser();
   const [, navigate] = useLocation();
-  const redirectTarget = getRedirectTarget();
+  const redirectTarget = getSafeRedirectTarget(window.location.search, "redirect", "/perfil");
   const syncMe = useSyncMe();
   const syncStartedRef = useRef(false);
 

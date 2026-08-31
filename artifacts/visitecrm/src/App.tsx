@@ -11,6 +11,7 @@ import { useSyncMe, useGetMe } from "@workspace/api-client-react";
 import { useApiTimeout } from "@/hooks/useApiTimeout";
 import { ApiTimeoutFallback } from "@/components/api-timeout-fallback";
 import { AccessBlockedWall, extractBlockedCode, extractBlockedScope, type BlockedAccessScope } from "@/components/access-blocked-wall";
+import { getRoleRedirectPath } from "@/lib/role-redirect";
 
 import Layout from "@/components/layout";
 import AdminLayout from "@/components/admin-layout";
@@ -232,19 +233,7 @@ function RoleRedirect() {
       return;
     }
 
-    if (me.role === ROLES.SUPER_ADMIN) {
-      setLocation("/admin");
-    } else if (!me.tenantId) {
-      setLocation("/onboarding");
-    } else if (me.role === ROLES.SALES) {
-      setLocation("/meu-painel");
-    } else if (me.role === ROLES.AGENCY_ADMIN || me.role === ROLES.AGENCY_MANAGER || me.role === ROLES.SUPPORT) {
-      setLocation("/dashboard");
-    } else if (me.role === ROLES.CLIENT) {
-      setLocation("/perfil");
-    } else {
-      setLocation("/dashboard");
-    }
+    setLocation(getRoleRedirectPath(me));
   }, [synced, me, isLoading, timedOut]);
 
   function handleRetry() {

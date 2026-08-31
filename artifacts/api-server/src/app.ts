@@ -122,6 +122,7 @@ const isDev = process.env["NODE_ENV"] !== "production";
 const additionalOrigins = (process.env["ADDITIONAL_ORIGINS"] ?? "")
   .split(",")
   .map((o) => o.trim())
+  .map((o) => o.replace(/\/+$/, ""))
   .filter(Boolean);
 
 // REPLIT_DOMAINS is a platform-managed secret containing all domains attached to this
@@ -137,11 +138,17 @@ const replitDomains = (process.env["REPLIT_DOMAINS"] ?? "")
 const frontendUrls = (process.env["FRONTEND_URL"] ?? "")
   .split(",")
   .map((u) => u.trim())
+  .map((u) => u.replace(/\/+$/, ""))
   .filter(Boolean);
 
 const ALLOWED_ORIGINS = new Set(
   [
     ...frontendUrls,
+    // The production frontend is hosted on Vercel while the API is served
+    // from Replit. Keep the canonical web origin allowed even when
+    // FRONTEND_URL is not configured in the API environment.
+    "https://visitecrm.com",
+    "https://www.visitecrm.com",
     process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : undefined,
     ...replitDomains,
     ...additionalOrigins,

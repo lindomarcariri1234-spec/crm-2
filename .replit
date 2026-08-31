@@ -1,4 +1,4 @@
-modules = ["web", "bash", "nodejs-24", "postgresql-16", "python-base-3.13"]
+modules = ["web", "bash", "nodejs-24", "python-base-3.13", "postgresql-16"]
 
   [[artifacts]]
   id = "artifacts/visitecrm"
@@ -13,7 +13,6 @@ modules = ["web", "bash", "nodejs-24", "postgresql-16", "python-base-3.13"]
   router = "application"
 deploymentTarget = "autoscale"
 run = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
-build = ["bash", "-c", "pnpm --filter @workspace/visitecrm run build && pnpm --filter @workspace/api-server run build"]
 
   [deployment.postBuild]
   args = ["pnpm", "store", "prune"]
@@ -189,7 +188,7 @@ RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
   [userenv.shared]
   VITE_UPLOADTHING_URL = "/api/uploadthing"
 SUPERADMIN_CLERK_ID = "user_3HaDzC14MwYlHVrzWU6jTFtsZGi"
-FRONTEND_URL = "https://visitecrm.com/"
+FRONTEND_URL = "https://visitecrm.com"
 VITE_APP_URL = "https://visitecrm.com/"
 VITE_STRIPE_PUBLIC_KEY = "pk_live_51TSu3dKLGMGrnwqHxjXo5fRdJdAyFQHsuFoWG6BaJKx6GGza4pjg2PPMQzFch9OMDVeLOHU07SxYp3J4v27FL5lT00yZoKCeXr"
 
@@ -201,8 +200,16 @@ localPort = 5000
 externalPort = 5000
 
 [[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
 localPort = 8081
 externalPort = 8081
+
+[[ports]]
+localPort = 8082
+externalPort = 3002
 
 [[ports]]
 localPort = 19000
@@ -211,6 +218,10 @@ externalPort = 3000
 [[ports]]
 localPort = 19951
 externalPort = 3001
+
+[[ports]]
+localPort = 19952
+externalPort = 3003
 
 [[ports]]
 localPort = 21508
