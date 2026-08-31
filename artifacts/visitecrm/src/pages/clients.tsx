@@ -90,9 +90,9 @@ function downloadCsv(rows: string[][], filename: string) {
 }
 
 function exportClientsCsv(clients: Client[]) {
-  const headers = ["Código", "Nome", "E-mail", "WhatsApp", "Telefone", "CPF", "Nascimento", "Gênero", "Cidade", "Estado", "Instagram", "Classificação", "Status", "Pipeline", "Total Gasto", "Saldo Devedor", "Tags", "Destinos Sonhados", "Observações", "Cadastrado em"];
+  const headers = ["Nome", "E-mail", "WhatsApp", "Telefone", "CPF", "Nascimento", "Gênero", "Cidade", "Estado", "Instagram", "Classificação", "Status", "Pipeline", "Total Gasto (R$)", "Saldo Devedor (R$)", "Tags", "Destinos Sonhados", "Observações", "Cadastrado em"];
   const rows = clients.map(c => [
-    c.customerCode ?? "", c.name, c.email, c.whatsapp, c.phone ?? "", c.cpf ?? "",
+    c.name, c.email, c.whatsapp, c.phone ?? "", c.cpf ?? "",
     c.birthDate ? formatDateBR(c.birthDate) : "",
     c.gender ?? "", c.addressCity ?? "", c.addressState ?? "", c.instagram ?? "",
     c.classification ?? "", c.status ?? "", c.pipelineStage ?? "",

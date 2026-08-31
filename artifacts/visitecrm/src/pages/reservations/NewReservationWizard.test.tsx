@@ -12,6 +12,7 @@ vi.mock("@workspace/api-client-react", () => ({
   useListClients: () => ({ data: { data: [] } }),
   useListBoardingLocations: () => ({ data: [] }),
   useListUsers: () => ({ data: [] }),
+  useGetMe: () => ({ data: undefined }),
   useCreateReservation: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useUpdateDeal: () => ({ mutateAsync: vi.fn() }),
   useValidateReservationCoupon: () => ({ mutateAsync: vi.fn() }),
