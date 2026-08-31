@@ -16,26 +16,71 @@
     }
   },
   "rewrites": [
-    { "source": "/loja/:slug", "destination": "/api" },
-    { "source": "/loja/:slug/:rest*", "destination": "/api" },
+    {
+      "source": "/loja/:slug",
+      "destination": "/api"
+    },
+    {
+      "source": "/loja/:slug/:rest*",
+      "destination": "/api"
+    },
     {
       "source": "/api/:path*",
-      "destination": "/api?__vercel_api_path=:path*"
+      "destination": "https://crm-2-lindomarcariri.replit.app/api/:path*"
     },
-    { "source": "/:path*", "destination": "/index.html" }
+    {
+      "source": "/:path*",
+      "destination": "/index.html"
+    }
   ],
   "crons": [
-    { "path": "/api/cron/birthday", "schedule": "0 3 * * *" },
-    { "path": "/api/cron/pipeline-trip-ended", "schedule": "0 5 * * *" },
-    { "path": "/api/cron/uploadthing-orphan", "schedule": "0 5 * * *" },
-    { "path": "/api/cron/client-scores", "schedule": "0 6 * * *" },
-    { "path": "/api/cron/seat-reconciliation", "schedule": "0 7 * * *" },
-    { "path": "/api/cron/abandoned-referrals", "schedule": "0 8 * * *" },
-    { "path": "/api/cron/gemeo-alerts", "schedule": "0 9 * * *" },
-    { "path": "/api/cron/gemeo-opportunities", "schedule": "0 10 * * 1" },
-    { "path": "/api/cron/stripe-health", "schedule": "0 11 * * *" },
-    { "path": "/api/cron/installment-due-reminder", "schedule": "0 11 * * *" },
-    { "path": "/api/cron/trial-expiry", "schedule": "0 12 * * *" },
-    { "path": "/api/cron/favorite-alerts", "schedule": "0 13 * * *" }
+    {
+      "path": "/api/cron/birthday",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/pipeline-trip-ended",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/uploadthing-orphan",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/client-scores",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/seat-reconciliation",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/abandoned-referrals",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/gemeo-alerts",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/gemeo-opportunities",
+      "schedule": "0 10 * * 1"
+    },
+    {
+      "path": "/api/cron/stripe-health",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/installment-due-reminder",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/trial-expiry",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/favorite-alerts",
+      "schedule": "0 13 * * *"
+    }
   ]
 }
