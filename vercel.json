@@ -3,8 +3,8 @@
   "framework": "vite",
   "ignoreCommand": "bash scripts/vercel-ignore-build.sh",
   "installCommand": "pnpm install --frozen-lockfile --config.node-linker=hoisted",
-  "buildCommand": "pnpm --filter @workspace/api-server deploy:vercel",
-  "outputDirectory": "public",
+  "buildCommand": "pnpm --filter @workspace/visitecrm run build",
+  "outputDirectory": "artifacts/visitecrm/dist/public",
   "functions": {
     "api/index.mjs": {
       "includeFiles": "{artifacts/visitecrm/dist/public/**,api/bundle.mjs,api/migrations/**}",
