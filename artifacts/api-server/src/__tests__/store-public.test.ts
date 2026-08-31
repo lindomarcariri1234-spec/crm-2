@@ -170,6 +170,10 @@ vi.mock("../lib/pricing.js", () => ({
 
 import storePublicRouter from "../routes/store-public.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
+import {
+  resolveClerkPublishableKey,
+  shouldBypassClerkForPath,
+} from "../lib/clerk-request.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Express app
@@ -197,6 +201,21 @@ function buildApp() {
   app.use(errorHandler);
   return app;
 }
+
+describe("public storefront Clerk boundary", () => {
+  it("keeps the public store API outside Clerk without matching lookalike paths", () => {
+    expect(shouldBypassClerkForPath("/api/public/store/minha-loja")).toBe(true);
+    expect(shouldBypassClerkForPath("/api/public/store/minha-loja/orders")).toBe(true);
+    expect(shouldBypassClerkForPath("/api/publicity")).toBe(false);
+    expect(shouldBypassClerkForPath("/api/users/me")).toBe(false);
+  });
+
+  it("uses the frontend publishable key when Vercel exposes only the VITE name", () => {
+    expect(resolveClerkPublishableKey({
+      VITE_CLERK_PUBLISHABLE_KEY: " pk_live_frontend ",
+    })).toBe("pk_live_frontend");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Fixture data

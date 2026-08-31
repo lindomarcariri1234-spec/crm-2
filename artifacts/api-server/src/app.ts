@@ -20,6 +20,10 @@ import {
   injectStorefrontMetadata,
   productSlugFromStorefrontPath,
 } from "./lib/storefront-metadata";
+import {
+  resolveClerkPublishableKey,
+  shouldBypassClerkForPath,
+} from "./lib/clerk-request";
 
 const app: Express = express();
 
@@ -168,6 +172,13 @@ if (ALLOWED_ORIGINS.size === 0 && !isDev) {
 if (!process.env["CLERK_SECRET_KEY"]) {
   logger.error("🚨 CLERK_SECRET_KEY is not set. Clerk authentication WILL NOT WORK in production. Re-run Clerk setup to provision keys.");
 }
+const clerkPublishableKey = resolveClerkPublishableKey();
+if (!clerkPublishableKey) {
+  logger.error(
+    "🚨 CLERK_PUBLISHABLE_KEY and VITE_CLERK_PUBLISHABLE_KEY are not set. " +
+    "Clerk authentication WILL NOT WORK in production.",
+  );
+}
 
 // Canonical proxy: only active in production (NODE_ENV=production).
 // In production the proxy derives its proxyUrl dynamically from the request host —
@@ -245,14 +256,10 @@ if (authorizedParties.length > 0) {
   logger.info("[clerk] authorizedParties is empty — all Clerk azp values are accepted");
 }
 
-const clerkAuth = clerkMiddleware(authorizedParties.length > 0 ? { authorizedParties } : {});
-
-const CLERK_BYPASS_PATHS = new Set([
-  "/api",
-  "/api/health",
-  "/api/healthz",
-  "/api/health/auth",
-]);
+const clerkAuth = clerkMiddleware({
+  ...(authorizedParties.length > 0 ? { authorizedParties } : {}),
+  ...(clerkPublishableKey ? { publishableKey: clerkPublishableKey } : {}),
+});
 
 app.use((req, res, next) => {
   // UploadThing CDN posts completion callbacks here without a user session.
@@ -262,14 +269,7 @@ app.use((req, res, next) => {
   if (req.path === "/api/uploadthing" && req.query["actionType"] === "callback") {
     return next();
   }
-  if (CLERK_BYPASS_PATHS.has(req.path)) {
-    return next();
-  }
-  // Vercel Cron (or an external scheduler) invokes these with a
-  // CRON_SECRET bearer token, never a Clerk session — the route itself
-  // verifies that token. Skipping clerkMiddleware avoids an unnecessary
-  // Clerk JWKS round-trip on every scheduled invocation.
-  if (req.path.startsWith("/api/cron/")) {
+  if (shouldBypassClerkForPath(req.path)) {
     return next();
   }
   return clerkAuth(req, res, next);
