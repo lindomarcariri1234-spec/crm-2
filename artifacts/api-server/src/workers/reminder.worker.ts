@@ -1,9 +1,9 @@
 import { Worker } from "bullmq";
 import { db, reservationsTable, tripsTable, clientsTable, tenantsTable, paymentsTable, emailLogsTable, storesTable, usersTable, referralsTable, referralSettingsTable, systemConfigsTable, npsInvitationsTable, reservationInstallmentsTable } from "@workspace/db";
 import { eq, and, gt, sql, gte, lt, lte, isNull, isNotNull, notLike, like, inArray, not, exists } from "drizzle-orm";
-import { sendReminderHtmlEmail, sendReservationConfirmationEmail, sendReferralExpiringSoonEmail, sendNpsSurveyEmail, sendTrialExpiryEmail } from "@workspace/email";
-import { dispatchReferralExpiredEmail, dispatchReferralExpiringSoonEmail, dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
-import { dispatchWhatsAppBoardingReminder, dispatchWhatsAppPagamentoPendente, getWhatsAppNotificationSettings } from "../queues/whatsapp-helpers";
+import { renderNpsSurveyEmail, renderTrialExpiryEmail } from "@workspace/email";
+import { dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
+import { getWhatsAppNotificationSettings } from "../queues/whatsapp-helpers";
 import { getRedisConnection } from "../lib/redis";
 import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
@@ -22,6 +22,7 @@ import {
   resetStaleReservationReminderClaims,
 } from "../services/checkout/reservation-confirmation-outbox";
 import { retryPendingAttendanceReplies } from "../services/whatsapp-attendance";
+import { dispatchOutboundMessage, htmlToWhatsAppText } from "../services/outbound-delivery";
 
 const BRAZIL_TZ = "America/Sao_Paulo";
 
@@ -140,41 +141,12 @@ export async function processBoardingReminders(): Promise<void> {
       daysUntilDeparture = Math.round((depNoonUTC - todayNoonUTC) / (1000 * 60 * 60 * 24));
     }
 
-    // WhatsApp boarding reminder — check if today is a configured reminder day for this tenant
+    // Boarding reminder — check if today is a configured reminder day for this tenant.
     const settings = await getTenantSettings(row.tenantId);
     const reminderDays = settings.boardingReminderDaysBeforeTrip?.length
       ? settings.boardingReminderDaysBeforeTrip
       : [1];
-    if (reminderDays.includes(daysUntilDeparture)) {
-      const waPoints = (row.boardingPoints ?? []) as { id: string; name: string; time?: string }[];
-      const referenceDate = localToday();
-      const delivery = await deliverReservationReminderOnce({
-        reservationId: row.reservationId,
-        tenantId: row.tenantId,
-        type: "boarding_reminder",
-        referenceDate,
-        deliver: async () => {
-          return dispatchWhatsAppBoardingReminder({
-            reservationId: row.reservationId,
-            tenantId: row.tenantId,
-            tripName: row.tripDestination ?? row.tripName,
-            departureDate: depDate,
-            boardingPoints: waPoints,
-            tenantName: row.agencyName,
-            delivery: "direct",
-          });
-        },
-      });
-      if (delivery === "failed") {
-        logger.warn({ reservationId: row.reservationId }, "[reminder:boarding] WhatsApp dispatch failed — will retry");
-      }
-    }
-
-    // Email + push only for D-1 (traditional behavior) and only for clients with an email
-    if (daysUntilDeparture !== 1) continue;
-
-    // Email + push only for clients who have an email address
-    if (!row.clientEmail) continue;
+    if (!reminderDays.includes(daysUntilDeparture)) continue;
 
     const points = (row.boardingPoints ?? []) as { name: string; time?: string; address?: string }[];
     const boardingHtml =
@@ -216,25 +188,38 @@ export async function processBoardingReminders(): Promise<void> {
 </body>
 </html>`;
 
-    const boardingResult = await sendReminderHtmlEmail({
-      to: row.clientEmail,
-      subject: `🚌 Lembrete: Sua viagem para ${row.tripDestination ?? row.tripName} é amanhã!`,
-      html,
-      fromName: row.agencyName,
+    const waPoints = (row.boardingPoints ?? []) as { id: string; name: string; time?: string }[];
+    const whatsapp = `🚌 Lembrete de embarque\n\nOlá, ${row.clientName ?? "cliente"}! Sua viagem para ${row.tripDestination ?? row.tripName} é ${daysUntilDeparture === 1 ? "amanhã" : `em ${daysUntilDeparture} dias`}, ${depDate}.\n\nPontos de embarque:\n${waPoints.map((p) => `• ${p.name}${p.time ? ` — ${p.time}` : ""}`).join("\n") || "• Consulte a agência para informações de embarque"}\n\nLeve seu documento e voucher.`;
+    const delivery = await deliverReservationReminderOnce({
+      reservationId: row.reservationId,
+      tenantId: row.tenantId,
+      type: "boarding_reminder",
+      referenceDate: localToday(),
+      deliver: async () => {
+        const result = await dispatchOutboundMessage({
+          tenantId: row.tenantId,
+          eventType: "boarding_reminder",
+          idempotencyKey: `boarding_reminder:${row.reservationId}:d${daysUntilDeparture}`,
+          recipient: { type: "client", id: row.clientId! },
+          email: daysUntilDeparture === 1 && row.clientEmail ? {
+            subject: `🚌 Lembrete: Sua viagem para ${row.tripDestination ?? row.tripName} é amanhã!`,
+            html,
+            senderName: row.agencyName,
+          } : undefined,
+          whatsapp: { text: whatsapp },
+          metadata: { reservationId: row.reservationId, daysUntilDeparture },
+        });
+        return result.message.status !== "failed";
+      },
     });
-    if (boardingResult.success) {
-      sent++;
-      logger.info(
-        { reservationId: row.reservationId, email: row.clientEmail },
-        "[reminder:boarding] Sent D-1 boarding reminder",
-      );
-    } else {
+    if (delivery === "sent") sent++;
+    else if (delivery === "failed") {
       failed++;
-      logger.error(
-        { error: boardingResult.error, reservationId: row.reservationId, email: row.clientEmail },
-        "[reminder:boarding] Failed to send D-1 reminder",
-      );
+      logger.warn({ reservationId: row.reservationId }, "[reminder:boarding] Outbound dispatch failed — will retry");
     }
+
+    // Push remains D-1-only, as in the legacy worker.
+    if (daysUntilDeparture !== 1 || !row.clientEmail) continue;
 
     // #18: Push notification alongside the email when the client has a registered token.
     // A push failure is logged per-recipient but must NOT abort the batch.
@@ -280,6 +265,7 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
     .select({
       reservationId: reservationsTable.id,
       tenantId: reservationsTable.tenantId,
+      clientId: reservationsTable.clientId,
       balance: reservationsTable.balance,
       departureDate: tripsTable.departureDate,
       tripName: tripsTable.name,
@@ -342,15 +328,18 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
       type: "payment_pending",
       referenceDate: localToday(),
       deliver: async () => {
-        return dispatchWhatsAppPagamentoPendente({
-          reservationId: row.reservationId,
+        const text = `💰 Pagamento pendente\n\nSua viagem para ${row.tripDestination ?? row.tripName} parte em ${depDateStr}. Saldo restante: ${formatBRL(Number(row.balance ?? 0))}. Entre em contato com ${row.agencyName} para efetuar o pagamento.`;
+        const html = `<p>Olá! Sua viagem para <strong>${escapeHtml(row.tripDestination ?? row.tripName)}</strong> parte em ${escapeHtml(depDateStr)}.</p><p>Saldo restante: <strong>${escapeHtml(formatBRL(Number(row.balance ?? 0)))}</strong>.</p><p>Entre em contato com ${escapeHtml(row.agencyName)} para efetuar o pagamento.</p>`;
+        const result = await dispatchOutboundMessage({
           tenantId: row.tenantId,
-          tripName: row.tripDestination ?? row.tripName,
-          departureDate: depDateStr,
-          remainingBalance: Number(row.balance ?? 0),
-          tenantName: row.agencyName,
-          delivery: "direct",
+          eventType: "payment_pending",
+          idempotencyKey: `payment_pending:${row.reservationId}:d${daysUntilDeparture}`,
+          recipient: { type: "client", id: row.clientId! },
+          email: { subject: `💰 Pagamento pendente — ${row.tripDestination ?? row.tripName}`, html, senderName: row.agencyName },
+          whatsapp: { text },
+          metadata: { reservationId: row.reservationId, daysUntilDeparture },
         });
+        return result.message.status !== "failed";
       },
     });
     if (delivery === "sent") dispatched++;
@@ -432,6 +421,7 @@ async function processPaymentReminders(): Promise<void> {
       totalValue: reservationsTable.totalValue,
       paidValue: reservationsTable.paidValue,
       tenantId: reservationsTable.tenantId,
+      clientId: reservationsTable.clientId,
       tripName: tripsTable.name,
       tripDestination: tripsTable.destination,
       departureDate: tripsTable.departureDate,
@@ -464,8 +454,6 @@ async function processPaymentReminders(): Promise<void> {
   let failed = 0;
 
   for (const row of rows) {
-    if (!row.clientEmail) continue;
-
     const balance = formatBRL(Number(row.balance ?? 0));
     const total = formatBRL(Number(row.totalValue ?? 0));
     const paid = formatBRL(Number(row.paidValue ?? 0));
@@ -525,13 +513,16 @@ async function processPaymentReminders(): Promise<void> {
 </body>
 </html>`;
 
-    const paymentResult = await sendReminderHtmlEmail({
-      to: row.clientEmail,
-      subject: `💰 Pagamento vencendo em ${dueStr} — ${row.tripDestination ?? row.tripName}`,
-      html,
-      fromName: row.agencyName,
+    const paymentResult = await dispatchOutboundMessage({
+      tenantId: row.tenantId,
+      eventType: "payment_due",
+      idempotencyKey: `payment_due:${row.paymentId}:d3`,
+      recipient: { type: "client", id: row.clientId! },
+      email: { subject: `💰 Pagamento vencendo em ${dueStr} — ${row.tripDestination ?? row.tripName}`, html, senderName: row.agencyName },
+      whatsapp: { text: `💰 Pagamento vencendo em ${dueStr}\n\nValor da parcela: ${paymentAmount}\nSaldo restante: ${balance}\nViagem: ${row.tripDestination ?? row.tripName}\n\nEntre em contato com ${row.agencyName} para efetuar o pagamento.` },
+      metadata: { paymentId: row.paymentId, reservationId: row.reservationId, window: "d3" },
     });
-    if (paymentResult.success) {
+    if (paymentResult.message.status !== "failed") {
       sent++;
       logger.info(
         { reservationId: row.reservationId, email: row.clientEmail },
@@ -540,7 +531,7 @@ async function processPaymentReminders(): Promise<void> {
     } else {
       failed++;
       logger.error(
-        { error: paymentResult.error, reservationId: row.reservationId, email: row.clientEmail },
+        { reservationId: row.reservationId },
         "[reminder:payment] Failed to send D-3 reminder",
       );
     }
@@ -733,23 +724,25 @@ async function notifyStaffOfExhaustedRetries(
   let lastError: string | undefined;
 
   for (const recipient of recipients) {
-    const result = await sendReminderHtmlEmail({
-      to: recipient,
-      subject,
-      html,
-      fromName: row.agencyName,
+    const result = await dispatchOutboundMessage({
+      tenantId,
+      eventType: "reservation_confirmation_retry_exhausted_alert",
+      idempotencyKey: `reservation_confirmation_retry_exhausted_alert:${reservationId}:${recipient}`,
+      recipient: { type: "direct", email: recipient, name: row.agencyName },
+      email: { subject, html, senderName: row.agencyName },
+      whatsapp: { text: htmlToWhatsAppText(html) },
+      metadata: { reservationId, alert: "retry_exhausted" },
     });
-    if (result.success) {
+    if (result.message.status !== "failed") {
       overallSuccess = true;
-      if (!firstMessageId) firstMessageId = result.messageId;
       logger.info(
         { reservationId, recipient },
         "[email-retry] Exhausted-retry staff alert delivered to recipient",
       );
     } else {
-      lastError = result.error;
+      lastError = "outbound_dispatch_failed";
       logger.error(
-        { reservationId, recipient, error: result.error },
+        { reservationId, recipient },
         "[email-retry] Failed to deliver exhausted-retry staff alert to recipient",
       );
     }
@@ -916,18 +909,30 @@ export async function retryFailedBookingEmails(): Promise<void> {
       isAutoRetry: true,
     });
 
-    const result = await sendReservationConfirmationEmail(props);
+    const result = await dispatchOutboundMessage({
+      tenantId: log.tenantId,
+      eventType: "reservation_confirmation_retry",
+      idempotencyKey: `reservation_confirmation_retry:${reservationId}:${attemptsInWindow + 1}`,
+      recipient: { type: "direct", email: props.clientEmail, name: props.clientName },
+      email: {
+        subject: log.subject,
+        html: `<p>Olá, ${escapeHtml(props.clientName)}!</p><p>Sua reserva foi confirmada. Consulte os detalhes da sua viagem no portal da agência.</p>`,
+        senderName: props.agencyName,
+      },
+      whatsapp: { text: `✅ Reserva confirmada!\n\nOlá, ${props.clientName}. Sua reserva foi confirmada. Consulte os detalhes da sua viagem no portal da agência.` },
+      metadata: { reservationId, autoRetry: true, attempt: attemptsInWindow + 1 },
+    });
 
     await db
       .update(emailLogsTable)
       .set({
-        status: result.success ? "sent" : "failed",
-        messageId: result.messageId ?? null,
-        errorMessage: result.error ?? null,
+        status: result.message.status === "failed" ? "failed" : "sent",
+        outboundMessageId: result.message.id,
+        errorMessage: result.message.status === "failed" ? "outbound_dispatch_failed" : null,
       })
       .where(eq(emailLogsTable.id, newLogId));
 
-    if (result.success) {
+    if (result.message.status !== "failed") {
       retried++;
       logger.info(
         { newLogId, reservationId, attempt: attemptsInWindow + 1 },
@@ -936,7 +941,7 @@ export async function retryFailedBookingEmails(): Promise<void> {
     } else {
       errors++;
       logger.error(
-        { newLogId, reservationId, attempt: attemptsInWindow + 1, error: result.error },
+        { newLogId, reservationId, attempt: attemptsInWindow + 1 },
         "[email-retry] Auto-retry send failed",
       );
     }
@@ -1074,8 +1079,8 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
       .where(and(eq(clientsTable.id, referral.referrerId), eq(clientsTable.tenantId, log.tenantId)))
       .limit(1);
 
-    if (!referrer?.email) {
-      logger.warn({ referralId }, "[expiry-warning-retry] Referrer has no email — skipping");
+    if (!referrer) {
+      logger.warn({ referralId }, "[expiry-warning-retry] Referrer not found — skipping");
       skipped++;
       continue;
     }
@@ -1103,33 +1108,38 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
       id: newLogId,
       tenantId: log.tenantId,
       referralId,
-      recipient: referrer.email,
+      recipient: referrer.email ?? "",
       subject: log.subject,
       status: "queued",
       isAutoRetry: true,
     });
 
-    const result = await sendReferralExpiringSoonEmail({
-      referrerName: referrer.name ?? referrer.email,
-      referrerEmail: referrer.email,
-      referralCode: referral.code,
-      expiresAt: formattedDate,
-      daysLeft,
-      agencyName,
-      agencyLogo: tenant?.logoUrl ?? null,
-      shareUrl,
+    const referralHtml = `<p>Olá, <strong>${escapeHtml(referrer.name ?? referrer.email)}</strong>!</p><p>Seu código de indicação <strong>${escapeHtml(referral.code)}</strong> expira em <strong>${escapeHtml(formattedDate)}</strong> (${daysLeft} dias).</p><p>Compartilhe: <a href="${shareUrl}">${shareUrl}</a></p>`;
+    const result = await dispatchOutboundMessage({
+      tenantId: log.tenantId,
+      eventType: "referral_expiring",
+      idempotencyKey: `referral_expiring:${referralId}:retry_${windowLogs.length + 1}`,
+      recipient: { type: "client", id: referral.referrerId },
+      email: {
+        subject: log.subject,
+        html: referralHtml,
+        senderName: agencyName,
+      },
+      whatsapp: {
+        text: `⏰ Seu código ${referral.code} expira em ${formattedDate} (${daysLeft} dias).\n\nCompartilhe com seus amigos: ${defaultShareMessage}`,
+      },
+      metadata: { referralId, autoRetry: true, attempt: windowLogs.length + 1 },
     });
 
     await db
       .update(emailLogsTable)
       .set({
-        status: result.success ? "sent" : "failed",
-        messageId: result.messageId ?? null,
-        errorMessage: result.error ?? null,
+        status: result.message.status === "failed" ? "failed" : "sent",
+        errorMessage: result.message.status === "failed" ? "outbound_dispatch_failed" : null,
       })
       .where(eq(emailLogsTable.id, newLogId));
 
-    if (result.success) {
+    if (result.message.status !== "failed") {
       retried++;
       logger.info(
         { newLogId, referralId, attempt: windowLogs.length + 1 },
@@ -1138,7 +1148,7 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
     } else {
       errors++;
       logger.error(
-        { newLogId, referralId, attempt: windowLogs.length + 1, error: result.error },
+        { newLogId, referralId, attempt: windowLogs.length + 1 },
         "[expiry-warning-retry] Auto-retry send failed",
       );
     }
@@ -1164,6 +1174,8 @@ async function processExpiredReferralNotifications(): Promise<void> {
       id: referralsTable.id,
       referrerId: referralsTable.referrerId,
       tenantId: referralsTable.tenantId,
+      code: referralsTable.code,
+      expiresAt: referralsTable.expiresAt,
     })
     .from(referralsTable)
     .where(
@@ -1201,7 +1213,18 @@ async function processExpiredReferralNotifications(): Promise<void> {
       }
       transitioned++;
 
-      await dispatchReferralExpiredEmail(referral.referrerId, referral.tenantId);
+      const [referrer] = await db.select({ name: clientsTable.name, email: clientsTable.email })
+        .from(clientsTable).where(and(eq(clientsTable.id, referral.referrerId), eq(clientsTable.tenantId, referral.tenantId))).limit(1);
+      const [tenant] = await db.select({ name: tenantsTable.name }).from(tenantsTable).where(eq(tenantsTable.id, referral.tenantId)).limit(1);
+      await dispatchOutboundMessage({
+        tenantId: referral.tenantId,
+        eventType: "referral_expired",
+        idempotencyKey: `referral_expired:${referral.id}:expired`,
+        recipient: { type: "client", id: referral.referrerId },
+        email: { subject: "⏰ Seu código de indicação expirou", html: `<p>Olá, ${escapeHtml(referrer?.name ?? "cliente")}!</p><p>Seu código de indicação <strong>${escapeHtml(referral.code)}</strong> expirou.</p>`, senderName: tenant?.name },
+        whatsapp: { text: `⏰ Seu código de indicação ${referral.code} expirou.` },
+        metadata: { referralId: referral.id, window: "expired" },
+      });
       notified++;
     } catch (err) {
       errors++;
@@ -1312,27 +1335,24 @@ async function processExpiringSoonReferralNotifications(): Promise<void> {
         continue;
       }
 
-      // Fetch referrer email (needed by dispatchReferralExpiringSoonEmail).
+      // Resolve the client for both-channel ledger delivery.
       const [referrer] = await db
-        .select({ email: clientsTable.email })
+        .select({ name: clientsTable.name })
         .from(clientsTable)
         .where(and(eq(clientsTable.id, referral.referrerId), eq(clientsTable.tenantId, referral.tenantId)))
         .limit(1);
 
-      if (!referrer?.email) {
-        skippedNoEmail++;
-        logger.info({ referralId: referral.id }, "[expiry-warning] Skipping — referrer has no email");
-        continue;
-      }
-
-      await dispatchReferralExpiringSoonEmail(
-        referral.referrerId,
-        referral.tenantId,
-        referral.code,
-        referral.expiresAt,
-        windowLabel,
-        referral.id,
-      );
+      const [tenant] = await db.select({ name: tenantsTable.name }).from(tenantsTable).where(eq(tenantsTable.id, referral.tenantId)).limit(1);
+      const daysLeft = windowLabel;
+      await dispatchOutboundMessage({
+        tenantId: referral.tenantId,
+        eventType: "referral_expiring",
+        idempotencyKey: `referral_expiring:${referral.id}:d${windowLabel}`,
+        recipient: { type: "client", id: referral.referrerId },
+        email: { subject: `⏰ Seu código expira em ${daysLeft} dia${daysLeft === 1 ? "" : "s"}`, html: `<p>Olá, ${escapeHtml(referrer?.name ?? "cliente")}!</p><p>Seu código <strong>${escapeHtml(referral.code)}</strong> expira em ${daysLeft} dias.</p>`, senderName: tenant?.name },
+        whatsapp: { text: `⏰ Seu código ${referral.code} expira em ${daysLeft} dia${daysLeft === 1 ? "" : "s"}.` },
+        metadata: { referralId: referral.id, window: windowLabel },
+      });
 
       // Task #151: mark the warning as sent on the referral row.
       await db
@@ -1524,6 +1544,7 @@ export async function processInstallmentDueReminders(): Promise<void> {
       voucherCode: reservationsTable.voucherCode,
       installments: reservationsTable.installments,
       tenantId: reservationsTable.tenantId,
+      clientId: reservationsTable.clientId,
       tripName: tripsTable.name,
       tripDestination: tripsTable.destination,
       departureDate: tripsTable.departureDate,
@@ -1551,8 +1572,6 @@ export async function processInstallmentDueReminders(): Promise<void> {
   let failed = 0;
 
   for (const row of rows) {
-    if (!row.clientEmail) continue;
-
     const amount = formatBRL(Number(row.amount ?? 0));
     const dueStr = row.dueDate ? formatDateBRServer(row.dueDate) : "Em 3 dias";
     const depDate = row.departureDate ? formatDateBRServer(row.departureDate) : "";
@@ -1579,18 +1598,21 @@ export async function processInstallmentDueReminders(): Promise<void> {
 </body>
 </html>`;
 
-    const result = await sendReminderHtmlEmail({
-      to: row.clientEmail,
-      subject: `📅 ${instLabel} vence em ${dueStr} — ${row.tripDestination ?? row.tripName}`,
-      html,
-      fromName: row.agencyName,
+    const result = await dispatchOutboundMessage({
+      tenantId: row.tenantId,
+      eventType: "installment_due",
+      idempotencyKey: `installment_due:${row.installmentId}:d3`,
+      recipient: { type: "client", id: row.clientId! },
+      email: { subject: `📅 ${instLabel} vence em ${dueStr} — ${row.tripDestination ?? row.tripName}`, html, senderName: row.agencyName },
+      whatsapp: { text: `📅 ${instLabel} vence em ${dueStr}\n\nValor: ${amount}. Viagem: ${row.tripName ?? row.tripDestination ?? ""}. Entre em contato com ${row.agencyName} para efetuar o pagamento.` },
+      metadata: { installmentId: row.installmentId, reservationId: row.reservationId, window: "d3" },
     });
-    if (result.success) {
+    if (result.message.status !== "failed") {
       sent++;
-      logger.info({ installmentId: row.installmentId, email: row.clientEmail }, "[reminder:installment] Sent D-3 reminder");
+      logger.info({ installmentId: row.installmentId }, "[reminder:installment] Dispatched D-3 reminder");
     } else {
       failed++;
-      logger.error({ error: result.error, installmentId: row.installmentId }, "[reminder:installment] Failed to send D-3 reminder");
+      logger.error({ installmentId: row.installmentId }, "[reminder:installment] Failed D-3 reminder");
     }
   }
 
@@ -1667,7 +1689,6 @@ export async function processNpsDispatch(): Promise<void> {
             isNotNull(tripsTable.returnDate),
             lt(tripsTable.returnDate, cutoff),
             gte(tripsTable.returnDate, lookback),
-            isNotNull(clientsTable.email),
             not(
               exists(
                 db
@@ -1689,7 +1710,6 @@ export async function processNpsDispatch(): Promise<void> {
       const portalUrl = clientPortalBase ? `${clientPortalBase}/perfil?openNps=1` : null;
 
       for (const row of eligible) {
-        if (!row.clientEmail) { skipped++; continue; }
         try {
           const token = generateId() + generateId();
           const [newInvitation] = await db
@@ -1710,9 +1730,9 @@ export async function processNpsDispatch(): Promise<void> {
             continue;
           }
 
-          const result = await sendNpsSurveyEmail({
+           const npsProps = {
             clientName: row.clientName ?? "Cliente",
-            clientEmail: row.clientEmail,
+             clientEmail: row.clientEmail ?? "",
             agencyName: tenant.name,
             agencyLogo: tenant.logoUrl ?? null,
             tripName: row.tripName,
@@ -1720,12 +1740,28 @@ export async function processNpsDispatch(): Promise<void> {
             surveyBaseUrl: baseUrl,
             token: newInvitation.token,
             portalUrl,
-          });
+           };
+           const npsHtml = renderNpsSurveyEmail(npsProps);
+           const result = await dispatchOutboundMessage({
+             tenantId,
+             eventType: "nps_survey",
+             idempotencyKey: `nps_survey:${row.reservationId}:post_return`,
+             recipient: { type: "client", id: row.clientId! },
+             email: {
+               subject: `${npsProps.clientName.split(" ")[0]}, como foi sua viagem? Deixe sua avaliação ✈️`,
+               html: npsHtml,
+               senderName: tenant.name,
+             },
+             whatsapp: {
+               text: `✈️ Como foi sua viagem?\n\nOlá, ${npsProps.clientName}! Conte para ${tenant.name} como foi sua viagem para ${row.tripName}. Avalie de 0 a 10: ${baseUrl}/api/nps/respond?token=${newInvitation.token}&score=10`,
+             },
+             metadata: { reservationId: row.reservationId, invitationId: newInvitation.id },
+           });
 
-          if (result.success) {
+           if (result.message.status !== "failed") {
             sent++;
           } else {
-            logger.warn({ tenantId, reservationId: row.reservationId, err: result.error }, "[nps-dispatch] Email failed — rolling back invitation for retry");
+             logger.warn({ tenantId, reservationId: row.reservationId }, "[nps-dispatch] Outbound dispatch failed — rolling back invitation for retry");
             await db.delete(npsInvitationsTable).where(eq(npsInvitationsTable.id, newInvitation.id)).catch(() => {});
             errors++;
           }
@@ -1752,7 +1788,7 @@ type TrialNotificationWindow = "warning" | "expired";
 type TrialNotificationTenant = {
   id: string;
   name: string;
-  email: string;
+  email: string | null;
   trialEndsAt: Date | null;
 };
 
@@ -1806,7 +1842,7 @@ export async function processTrialExpiryNotifications(): Promise<void> {
   let failed = 0;
 
   const notify = async (tenant: TrialNotificationTenant, window: TrialNotificationWindow): Promise<void> => {
-    if (!tenant.trialEndsAt || !tenant.email) {
+    if (!tenant.trialEndsAt) {
       skipped++;
       return;
     }
@@ -1837,24 +1873,42 @@ export async function processTrialExpiryNotifications(): Promise<void> {
       return;
     }
 
-    const result = await sendTrialExpiryEmail({
+    const trialProps = {
       agencyName: tenant.name,
-      agencyEmail: tenant.email,
+      agencyEmail: tenant.email ?? "",
       trialEndsAt: formatDateBRServer(tenant.trialEndsAt),
       upgradeUrl,
       supportEmail,
       expired: window === "expired",
+    };
+    const trialHtml = renderTrialExpiryEmail(trialProps);
+    const result = await dispatchOutboundMessage({
+      tenantId: tenant.id,
+      eventType: "trial_expiry",
+      idempotencyKey: slotKey,
+      recipient: { type: "admin" },
+      email: {
+        subject: trialProps.expired
+          ? "Seu período de teste no VisiteCRM terminou"
+          : `Seu período de teste no VisiteCRM termina em ${trialProps.trialEndsAt}`,
+        html: trialHtml,
+        senderName: "VisiteCRM",
+      },
+      whatsapp: {
+        text: `${trialProps.expired ? "⏰ Seu período de teste terminou" : "⚠️ Seu período de teste está terminando"}\n\nOlá, ${tenant.name}. ${trialProps.expired ? `O período terminou em ${trialProps.trialEndsAt}.` : `O período termina em ${trialProps.trialEndsAt}.`} Escolha um plano: ${upgradeUrl}`,
+      },
+      metadata: { window, trialEndsAt: trialEndKey },
     });
 
-    if (result.success) {
+    if (result.message.status !== "failed") {
       sent++;
       return;
     }
 
     failed++;
     logger.warn(
-      { tenantId: tenant.id, window, err: result.error },
-      "[trial-expiry] Email failed — notification claim released for retry",
+      { tenantId: tenant.id, window },
+      "[trial-expiry] Outbound dispatch failed — notification claim released for retry",
     );
 
     await db.execute(sql`

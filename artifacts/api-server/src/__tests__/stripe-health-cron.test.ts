@@ -11,6 +11,19 @@ type Plan = {
   createdAt: Date;
 };
 
+type OutboundDelivery = {
+  channel: string;
+  status: string;
+  externalId?: string;
+  lastError?: string;
+};
+
+type OutboundDispatchResult = {
+  message: { id: string; status: string };
+  created: boolean;
+  deliveries: OutboundDelivery[];
+};
+
 const h = vi.hoisted(() => {
   const settings = new Map<string, string>();
   const plans: Plan[] = [];
@@ -22,8 +35,17 @@ const h = vi.hoisted(() => {
     stripePrices,
     plansTable: {},
     platformSettingsTable: {},
+    tenantsTable: {},
     sendAlert: vi.fn(async () => ({ success: true, messageId: "alert-1" })),
     sendRecovery: vi.fn(async () => ({ success: true, messageId: "recovery-1" })),
+    dispatchOutboundMessage: vi.fn<() => Promise<OutboundDispatchResult>>(async () => ({
+      message: { id: "outbound-1", status: "accepted" },
+      created: true,
+      deliveries: [
+        { channel: "email", status: "accepted", externalId: "alert-1" },
+        { channel: "whatsapp", status: "accepted", externalId: "wa-1" },
+      ],
+    })),
     error: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
@@ -36,6 +58,9 @@ vi.mock("@workspace/db", () => {
       from: (table: unknown) => {
         if (table === h.plansTable) {
           return { orderBy: () => Promise.resolve(h.plans) };
+        }
+        if (table === h.tenantsTable) {
+          return { limit: () => Promise.resolve([{ id: "tenant-health" }]) };
         }
         return {
           where: (condition: { value?: string }) => ({
@@ -105,6 +130,7 @@ vi.mock("@workspace/db", () => {
     db,
     plansTable: h.plansTable,
     platformSettingsTable: h.platformSettingsTable,
+    tenantsTable: h.tenantsTable,
   };
 });
 
@@ -135,6 +161,10 @@ vi.mock("stripe", () => ({
 vi.mock("@workspace/email", () => ({
   sendStripeHealthAlertEmail: h.sendAlert,
   sendStripeHealthRecoveryEmail: h.sendRecovery,
+}));
+
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: h.dispatchOutboundMessage,
 }));
 
 vi.mock("../lib/logger", () => ({
@@ -172,41 +202,54 @@ describe("runStripeHealthCheckCron — recovery notification", () => {
     h.stripePrices.clear();
     h.sendAlert.mockClear();
     h.sendRecovery.mockClear();
+    h.dispatchOutboundMessage.mockClear();
     h.sendAlert.mockResolvedValue({ success: true, messageId: "alert-1" });
     h.sendRecovery.mockResolvedValue({ success: true, messageId: "recovery-1" });
+    h.dispatchOutboundMessage.mockResolvedValue({
+      message: { id: "outbound-1", status: "accepted" },
+      created: true,
+      deliveries: [
+        { channel: "email", status: "accepted", externalId: "alert-1" },
+        { channel: "whatsapp", status: "accepted", externalId: "wa-1" },
+      ],
+    });
     process.env["SUPERADMIN_EMAIL"] = "admin@example.com";
   });
 
   it("sends one recovery email after a delivered alert and clears the event", async () => {
     await runStripeHealthCheckCron();
 
-    expect(h.sendAlert).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "admin@example.com" }),
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-health", recipient: { type: "direct", email: "admin@example.com" } }),
     );
     expect(h.settings.get("stripe_health_was_unhealthy")).toBe("unhealthy");
 
     setHealthyStripePrices();
     await runStripeHealthCheckCron();
 
-    expect(h.sendRecovery).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "admin@example.com" }),
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "stripe_health_recovery", recipient: { type: "direct", email: "admin@example.com" } }),
     );
     expect(h.settings.has("stripe_health_was_unhealthy")).toBe(false);
 
     await runStripeHealthCheckCron();
-    expect(h.sendRecovery).toHaveBeenCalledTimes(1);
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledTimes(2);
   });
 
   it("restores the pending recovery event when delivery fails so a later run retries", async () => {
     h.settings.set("stripe_health_was_unhealthy", "unhealthy");
     setHealthyStripePrices();
-    h.sendRecovery.mockResolvedValueOnce({ success: false, error: "Resend unavailable" });
+    h.dispatchOutboundMessage.mockResolvedValueOnce({
+      message: { id: "outbound-failed", status: "failed" },
+      created: true,
+      deliveries: [{ channel: "email", status: "failed", lastError: "Resend unavailable" }],
+    });
 
     await runStripeHealthCheckCron();
     expect(h.settings.get("stripe_health_was_unhealthy")).toBe("unhealthy");
 
     await runStripeHealthCheckCron();
-    expect(h.sendRecovery).toHaveBeenCalledTimes(2);
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledTimes(2);
     expect(h.settings.has("stripe_health_was_unhealthy")).toBe(false);
   });
 });

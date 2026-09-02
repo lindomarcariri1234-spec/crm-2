@@ -11,16 +11,21 @@ const {
   processors,
   failedHandlers,
   updateWheres,
+  updateSets,
 } = vi.hoisted(() => {
   const processors: Array<(job: unknown) => Promise<unknown>> = [];
   const failedHandlers: Array<(job: unknown, err: Error) => Promise<unknown>> = [];
   const updateWheres: unknown[] = [];
-  const set = vi.fn(() => ({
-    where: vi.fn((condition: unknown) => {
-      updateWheres.push(condition);
-      return Promise.resolve();
-    }),
-  }));
+  const updateSets: unknown[] = [];
+  const set = vi.fn((values: unknown) => {
+    updateSets.push(values);
+    return {
+      where: vi.fn((condition: unknown) => {
+        updateWheres.push(condition);
+        return Promise.resolve();
+      }),
+    };
+  });
 
   return {
     mockSelect: vi.fn(),
@@ -41,6 +46,7 @@ const {
     processors,
     failedHandlers,
     updateWheres,
+    updateSets,
   };
 });
 
@@ -116,6 +122,7 @@ describe("email worker tenant-scoped email logs", () => {
     processors.length = 0;
     failedHandlers.length = 0;
     updateWheres.length = 0;
+    updateSets.length = 0;
   });
 
   it("skips a job whose email log is not owned by the payload tenant", async () => {
@@ -162,6 +169,10 @@ describe("email worker tenant-scoped email logs", () => {
       to: "client@example.com",
     });
     expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(updateSets).toEqual([{
+      status: "sent",
+      messageId: "provider-message-1",
+    }]);
     expect(updateWheres).toEqual([
       {
         conditions: [
@@ -170,6 +181,68 @@ describe("email worker tenant-scoped email logs", () => {
         ],
       },
     ]);
+  });
+
+  it("records a definitive worker failure only after all retries are exhausted", async () => {
+    mockScopedLogLookup([{ id: "log-1" }]);
+    mockSendReservationConfirmationEmail.mockResolvedValue({
+      success: false,
+      error: "recipient rejected",
+    });
+    startEmailWorker();
+
+    const job = {
+      id: "job-failed",
+      name: "reservation-confirmation",
+      attemptsMade: 3,
+      opts: { attempts: 3 },
+      data: {
+        emailLogId: "log-1",
+        tenantId: "tenant-a",
+        to: "client@example.com",
+      },
+    };
+
+    await expect(processors[0](job)).rejects.toThrow("recipient rejected");
+    await failedHandlers[0](job, new Error("recipient rejected"));
+
+    expect(updateSets).toEqual([{
+      status: "failed",
+      errorMessage: "recipient rejected",
+    }]);
+    expect(updateWheres).toEqual([{
+      conditions: [
+        { column: "email_logs.id", value: "log-1" },
+        { column: "email_logs.tenant_id", value: "tenant-a" },
+      ],
+    }]);
+  });
+
+  it("does not mark the legacy log failed while BullMQ still has retries", async () => {
+    mockScopedLogLookup([{ id: "log-1" }]);
+    mockSendReservationConfirmationEmail.mockResolvedValue({
+      success: false,
+      error: "provider unavailable",
+    });
+    startEmailWorker();
+
+    const job = {
+      id: "job-retry",
+      name: "reservation-confirmation",
+      attemptsMade: 1,
+      opts: { attempts: 3 },
+      data: {
+        emailLogId: "log-1",
+        tenantId: "tenant-a",
+        to: "client@example.com",
+      },
+    };
+
+    await expect(processors[0](job)).rejects.toThrow("provider unavailable");
+    await failedHandlers[0](job, new Error("provider unavailable"));
+
+    expect(updateSets).toEqual([]);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
 

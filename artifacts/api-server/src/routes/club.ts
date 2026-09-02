@@ -9,23 +9,16 @@ import {
   tripsTable,
   tenantsTable,
 } from "@workspace/db";
-import { eq, and, desc, sql, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, asc, desc, gte, lt, sql, inArray, isNotNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import { requireAuth, MANAGEMENT_ROLES } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { REFERRAL_STATUS, RESERVATION_STATUS } from "@workspace/permissions";
 import { generateId } from "../lib/id";
+import { RANKING_ELIGIBLE_STATUSES, brazilMonthPeriod, maskRankingName, rankingMetadata } from "../lib/ranking-contract";
 
 const router = Router();
 
 // ──────────────────── Helpers ────────────────────
-
-function maskName(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0] ?? name;
-  const lastName = parts[parts.length - 1] ?? "";
-  return `${parts[0]} ${lastName.charAt(0).toUpperCase()}.`;
-}
 
 /**
  * Resolve the tenant for public club routes.
@@ -125,6 +118,7 @@ router.get("/club/ranking", async (req, res, next: NextFunction): Promise<void> 
     const resolved = await resolveClubTenant(req, res, next);
     if (!resolved) return;
     const { tenantId, isAdmin } = resolved;
+    const period = brazilMonthPeriod();
 
     const referrersRaw = await db
       .select({
@@ -136,18 +130,19 @@ router.get("/club/ranking", async (req, res, next: NextFunction): Promise<void> 
       .innerJoin(
         clientsTable,
         isAdmin
-          ? eq(clientsTable.id, referralsTable.referrerId)
-          : and(eq(clientsTable.id, referralsTable.referrerId), eq(clientsTable.ambassadorOptIn, true)),
+          ? and(eq(clientsTable.id, referralsTable.referrerId), eq(clientsTable.tenantId, tenantId))
+          : and(eq(clientsTable.id, referralsTable.referrerId), eq(clientsTable.tenantId, tenantId), eq(clientsTable.ambassadorOptIn, true)),
       )
       .where(
         and(
           eq(referralsTable.tenantId, tenantId),
-          inArray(referralsTable.status, [REFERRAL_STATUS.COMPLETED, REFERRAL_STATUS.CONVERTED]),
-          sql`DATE_TRUNC('month', ${referralsTable.createdAt}) = DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Sao_Paulo')`,
+          inArray(referralsTable.status, RANKING_ELIGIBLE_STATUSES.referral),
+          gte(referralsTable.createdAt, period.start),
+          lt(referralsTable.createdAt, period.end),
         ),
       )
       .groupBy(referralsTable.referrerId, clientsTable.name)
-      .orderBy(desc(sql`COUNT(${referralsTable.id})`))
+       .orderBy(desc(sql`COUNT(${referralsTable.id})`), asc(clientsTable.name), asc(referralsTable.referrerId))
       .limit(10);
 
     // Only COMPLETED trips (return_date in current month) — not "confirmed pending" trips
@@ -158,13 +153,14 @@ router.get("/club/ranking", async (req, res, next: NextFunction): Promise<void> 
         count: sql<number>`COUNT(${reservationsTable.id})::int`,
       })
       .from(reservationsTable)
-      .innerJoin(tripsTable, eq(tripsTable.id, reservationsTable.tripId))
+      .innerJoin(tripsTable, and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, tenantId)))
       .innerJoin(
         clientsTable,
         isAdmin
-          ? and(eq(clientsTable.id, reservationsTable.clientId), isNotNull(reservationsTable.clientId))
+          ? and(eq(clientsTable.id, reservationsTable.clientId), eq(clientsTable.tenantId, tenantId), isNotNull(reservationsTable.clientId))
           : and(
               eq(clientsTable.id, reservationsTable.clientId),
+               eq(clientsTable.tenantId, tenantId),
               eq(clientsTable.ambassadorOptIn, true),
               isNotNull(reservationsTable.clientId),
             ),
@@ -172,27 +168,32 @@ router.get("/club/ranking", async (req, res, next: NextFunction): Promise<void> 
       .where(
         and(
           eq(reservationsTable.tenantId, tenantId),
-          eq(reservationsTable.status, RESERVATION_STATUS.COMPLETED),
+          inArray(reservationsTable.status, RANKING_ELIGIBLE_STATUSES.traveler),
           isNotNull(reservationsTable.clientId),
-          sql`DATE_TRUNC('month', ${tripsTable.returnDate}) = DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Sao_Paulo')`,
+          gte(tripsTable.returnDate, period.start),
+          lt(tripsTable.returnDate, period.end),
         ),
       )
       .groupBy(reservationsTable.clientId, clientsTable.name)
-      .orderBy(desc(sql`COUNT(${reservationsTable.id})`))
+       .orderBy(desc(sql`COUNT(${reservationsTable.id})`), asc(clientsTable.name), asc(reservationsTable.clientId))
       .limit(10);
 
     res.json({
       referrers: referrersRaw.map((r, i) => ({
         rank: i + 1,
-        name: isAdmin ? r.name : maskName(r.name),
+         name: isAdmin ? r.name : maskRankingName(r.name),
         count: r.count,
       })),
       travelers: travelersRaw.map((r, i) => ({
         rank: i + 1,
-        name: isAdmin ? r.name : maskName(r.name),
+         name: isAdmin ? r.name : maskRankingName(r.name),
         count: r.count,
       })),
-      month: new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 7),
+       month: period.key,
+       rankingMeta: {
+         referrers: rankingMetadata("referral", isAdmin ? "admin" : "public", period),
+         travelers: rankingMetadata("traveler", isAdmin ? "admin" : "public", period),
+       },
     });
   } catch (err) {
     next(err);
@@ -369,6 +370,7 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
       next(new ForbiddenError("Acesso restrito a administradores", "FORBIDDEN_ROLE"));
       return;
     }
+    const period = brazilMonthPeriod();
 
     const referrersRaw = await db
       .select({
@@ -379,16 +381,20 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
         count: sql<number>`COUNT(${referralsTable.id})::int`,
       })
       .from(referralsTable)
-      .innerJoin(clientsTable, eq(clientsTable.id, referralsTable.referrerId))
+      .innerJoin(clientsTable, and(
+        eq(clientsTable.id, referralsTable.referrerId),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
       .where(
         and(
           eq(referralsTable.tenantId, me.tenantId),
-          inArray(referralsTable.status, [REFERRAL_STATUS.COMPLETED, REFERRAL_STATUS.CONVERTED]),
-          sql`DATE_TRUNC('month', ${referralsTable.createdAt}) = DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Sao_Paulo')`,
+          inArray(referralsTable.status, RANKING_ELIGIBLE_STATUSES.referral),
+          gte(referralsTable.createdAt, period.start),
+          lt(referralsTable.createdAt, period.end),
         ),
       )
       .groupBy(referralsTable.referrerId, clientsTable.name, clientsTable.email, clientsTable.ambassadorOptIn)
-      .orderBy(desc(sql`COUNT(${referralsTable.id})`))
+       .orderBy(desc(sql`COUNT(${referralsTable.id})`), asc(clientsTable.name), asc(referralsTable.referrerId))
       .limit(50);
 
     const travelersRaw = await db
@@ -400,25 +406,26 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
         count: sql<number>`COUNT(${reservationsTable.id})::int`,
       })
       .from(reservationsTable)
-      .innerJoin(tripsTable, eq(tripsTable.id, reservationsTable.tripId))
+      .innerJoin(tripsTable, and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, me.tenantId)))
       .innerJoin(
         clientsTable,
-        and(eq(clientsTable.id, reservationsTable.clientId), isNotNull(reservationsTable.clientId)),
+        and(eq(clientsTable.id, reservationsTable.clientId), eq(clientsTable.tenantId, me.tenantId), isNotNull(reservationsTable.clientId)),
       )
       .where(
         and(
           eq(reservationsTable.tenantId, me.tenantId),
-          eq(reservationsTable.status, RESERVATION_STATUS.COMPLETED),
+          inArray(reservationsTable.status, RANKING_ELIGIBLE_STATUSES.traveler),
           isNotNull(reservationsTable.clientId),
-          sql`DATE_TRUNC('month', ${tripsTable.returnDate}) = DATE_TRUNC('month', NOW() AT TIME ZONE 'America/Sao_Paulo')`,
+          gte(tripsTable.returnDate, period.start),
+          lt(tripsTable.returnDate, period.end),
         ),
       )
       .groupBy(reservationsTable.clientId, clientsTable.name, clientsTable.email, clientsTable.ambassadorOptIn)
-      .orderBy(desc(sql`COUNT(${reservationsTable.id})`))
+       .orderBy(desc(sql`COUNT(${reservationsTable.id})`), asc(clientsTable.name), asc(reservationsTable.clientId))
       .limit(50);
 
     if (req.query["export"] === "csv") {
-      const month = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 7);
+      const month = period.key;
       const lines: string[] = [
         `RANKING DE INDICADORES - ${month}`,
         "Posição,Nome,Email,Indicações,Embaixador",
@@ -441,7 +448,11 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
     res.json({
       referrers: referrersRaw.map((r, i) => ({ rank: i + 1, ...r })),
       travelers: travelersRaw.map((r, i) => ({ rank: i + 1, ...r })),
-      month: new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 7),
+      month: period.key,
+      rankingMeta: {
+        referrers: rankingMetadata("referral", "admin", period),
+        travelers: rankingMetadata("traveler", "admin", period),
+      },
     });
   } catch (err) {
     next(err);

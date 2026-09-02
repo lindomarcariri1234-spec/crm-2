@@ -2,14 +2,15 @@ import { StripeSync, runMigrations } from "stripe-replit-sync";
 import type Stripe from "stripe";
 import { getStripeSecretKey, getUncachableStripeClient } from "./stripeClient";
 import { logger } from "./logger";
-import { sendStripeWebhookDuplicateAlertEmail } from "@workspace/email";
 import {
   buildDatabaseConnectionConfig,
   db,
   platformSettingsTable,
+  tenantsTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { generateId } from "./id";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 let _stripeSyncInstance: StripeSync | null = null;
 
@@ -169,6 +170,11 @@ async function getAlertEmail(): Promise<string | null> {
     // DB unavailable — fall back to env var
   }
   return process.env["SUPERADMIN_EMAIL"]?.trim() ?? null;
+}
+
+async function getAlertTenantId(): Promise<string | null> {
+  const [tenant] = await db.select({ id: tenantsTable.id }).from(tenantsTable).limit(1);
+  return tenant?.id ?? null;
 }
 
 /**
@@ -339,14 +345,35 @@ async function auditDuplicateWebhookEndpoints(): Promise<void> {
             }
 
             const stripeDashboardUrl = "https://dashboard.stripe.com/webhooks";
-            const result = await sendStripeWebhookDuplicateAlertEmail({
-              to: alertEmail,
-              count: matching.length,
-              endpoints: matching,
-              stripeDashboardUrl,
+            const tenantId = await getAlertTenantId();
+            if (!tenantId) {
+              _lastDuplicateWebhookAlertSentAt = null;
+              logger.warn("[stripe-sync] No tenant available for duplicate webhook alert — skipping");
+              return;
+            }
+            const endpointRows = matching
+              .map((e) => `<li><code>${e.id}</code> — ${e.url}</li>`).join("");
+            const dashboardLink = `<p><a href="${stripeDashboardUrl}">Abrir Stripe Dashboard — Webhooks</a></p>`;
+            const outbound = await dispatchOutboundMessage({
+              tenantId,
+              eventType: "stripe_webhook_duplicate",
+              idempotencyKey: `stripe-webhook-duplicate:${Math.floor(now / DUPLICATE_WEBHOOK_ALERT_RATE_LIMIT_MS)}:${matching.map((e) => e.id).sort().join(",")}`,
+              recipient: { type: "direct", email: alertEmail },
+              email: {
+                subject: `[VisiteCRM] Alerta: ${matching.length} endpoints de webhook Stripe duplicados`,
+                html: `<h2>⚠️ Alerta Stripe — Endpoints de Webhook Duplicados</h2><p>Foram detectados <strong>${matching.length} endpoints habilitados</strong> apontando para /api/stripe/webhook.</p><ul>${endpointRows}</ul>${dashboardLink}`,
+                senderName: "VisiteCRM",
+              },
+              whatsapp: {
+                text: `Alerta VisiteCRM: ${matching.length} endpoints de webhook Stripe duplicados. ${stripeDashboardUrl}`,
+              },
+              origin: "stripe-sync",
+              metadata: { count: matching.length, endpoints: matching, stripeDashboardUrl },
             });
+            const delivery = outbound.deliveries.find((item) => item.channel === "email");
+            const success = delivery?.status === "accepted" || delivery?.status === "pending";
 
-            if (result.success) {
+            if (success) {
               logger.warn(
                 { count: matching.length, to: alertEmail },
                 "[stripe-sync] Duplicate webhook alert email sent",
@@ -371,7 +398,7 @@ async function auditDuplicateWebhookEndpoints(): Promise<void> {
               }
             } else {
               logger.error(
-                { error: result.error },
+                { error: delivery?.lastError ?? delivery?.skippedReason },
                 "[stripe-sync] Failed to send duplicate webhook alert email — clearing rate-limit so next startup can retry",
               );
               _lastDuplicateWebhookAlertSentAt = null; // allow retry

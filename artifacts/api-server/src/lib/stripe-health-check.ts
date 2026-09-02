@@ -31,17 +31,14 @@
  * row when it was newly created) so the next cron run can retry delivery.
  */
 
-import { db, plansTable, platformSettingsTable } from "@workspace/db";
+import { db, plansTable, platformSettingsTable, tenantsTable } from "@workspace/db";
 import { asc, eq, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import Stripe from "stripe";
 import { getStripeSecretKey } from "./stripeClient";
-import {
-  sendStripeHealthAlertEmail,
-  sendStripeHealthRecoveryEmail,
-} from "@workspace/email";
 import { logger } from "./logger";
 import { generateId } from "./id";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -83,6 +80,26 @@ async function getAlertEmail(): Promise<string | null> {
     // fall through
   }
   return process.env["SUPERADMIN_EMAIL"]?.trim() ?? null;
+}
+
+async function getAlertTenantId(): Promise<string | null> {
+  const [tenant] = await db.select({ id: tenantsTable.id }).from(tenantsTable).limit(1);
+  return tenant?.id ?? null;
+}
+
+function healthRecoveryHtml(dashboardUrl: string | null): string {
+  return `<h2>✅ Preços Stripe restaurados</h2><p>O monitoramento diário confirmou que todos os planos pagos possuem novamente os preços Stripe mensais e anuais esperados.</p><p>O problema informado no alerta anterior foi resolvido e os clientes podem voltar a assinar os planos normalmente.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Ver planos no painel de administração</a></p>` : ""}`;
+}
+
+function healthAlertHtml(
+  missingPlans: Array<{ name: string; slug: string; monthlyOk: boolean; annualOk: boolean }>,
+  dashboardUrl: string | null,
+): string {
+  const rows = missingPlans.map((plan) => {
+    const missing = [!plan.monthlyOk ? "mensal" : "", !plan.annualOk ? "anual" : ""].filter(Boolean).join(", ");
+    return `<tr><td>${plan.name} (<code>${plan.slug}</code>)</td><td>${missing} ausente</td></tr>`;
+  }).join("");
+  return `<h2>⚠️ Alerta: Preços Stripe ausentes</h2><p>O monitoramento diário detectou <strong>${missingPlans.length} plano(s)</strong> sem um preço Stripe correspondente.</p><table><thead><tr><th>Plano</th><th>Problema</th></tr></thead><tbody>${rows}</tbody></table><p>Acesse o painel de administração → Planos para verificar e corrigir o mapeamento de preços no Stripe.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Ver planos no painel de administração</a></p>` : ""}`;
 }
 
 // ─── Atomic slot claim ────────────────────────────────────────────────────────
@@ -418,10 +435,40 @@ export async function runStripeHealthCheckCron(): Promise<void> {
 
       const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
       const dashboardUrl = appUrl ? `${appUrl}/admin/plans` : null;
-      const emailResult = await sendStripeHealthRecoveryEmail({
-        to: alertEmail,
-        dashboardUrl,
-      });
+      const tenantId = await getAlertTenantId();
+      if (!tenantId) {
+        await releaseRecoverySlot(recoveryClaim.claimToken);
+        logger.warn("[stripe-health] No tenant available for recovery alert — recovery slot released");
+        return;
+      }
+      let outbound: Awaited<ReturnType<typeof dispatchOutboundMessage>>;
+      try {
+        outbound = await dispatchOutboundMessage({
+          tenantId,
+          eventType: "stripe_health_recovery",
+          idempotencyKey: `stripe-health-recovery:${brazilDateString()}`,
+          recipient: { type: "direct", email: alertEmail },
+          email: {
+            subject: "[VisiteCRM] Preços Stripe restaurados — sistema normalizado",
+            html: healthRecoveryHtml(dashboardUrl),
+            senderName: "VisiteCRM",
+          },
+          whatsapp: {
+            text: `VisiteCRM: os preços Stripe foram restaurados e o sistema está normalizado.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}`,
+          },
+          origin: "stripe-health-recovery",
+          metadata: { dashboardUrl },
+        });
+      } catch (err) {
+        await releaseRecoverySlot(recoveryClaim.claimToken);
+        logger.error({ err }, "[stripe-health] Failed to dispatch recovery email — slot released");
+        return;
+      }
+      const recoveryDelivery = outbound.deliveries.find((item) => item.channel === "email");
+      const emailResult = {
+        success: recoveryDelivery?.status === "accepted" || recoveryDelivery?.status === "pending",
+        error: recoveryDelivery?.lastError ?? recoveryDelivery?.skippedReason,
+      };
 
       if (emailResult.success) {
         await completeRecoverySlot(recoveryClaim.claimToken);
@@ -478,16 +525,46 @@ export async function runStripeHealthCheckCron(): Promise<void> {
   const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
   const dashboardUrl = appUrl ? `${appUrl}/admin/plans` : null;
 
-  const emailResult = await sendStripeHealthAlertEmail({
-    to: alertEmail,
-    missingPlans: unhealthy.map((r) => ({
-      name: r.name,
-      slug: r.slug,
-      monthlyOk: r.monthlyOk,
-      annualOk: r.annualOk,
-    })),
-    dashboardUrl,
-  });
+  const tenantId = await getAlertTenantId();
+  if (!tenantId) {
+    await releaseAlertSlot(today, claim.claimToken, claim.previousValue, claim.rowExisted);
+    logger.warn("[stripe-health] No tenant available for Stripe health alert — slot released");
+    return;
+  }
+  const missingPlans = unhealthy.map((r) => ({
+    name: r.name,
+    slug: r.slug,
+    monthlyOk: r.monthlyOk,
+    annualOk: r.annualOk,
+  }));
+  let outbound: Awaited<ReturnType<typeof dispatchOutboundMessage>>;
+  try {
+    outbound = await dispatchOutboundMessage({
+      tenantId,
+      eventType: "stripe_health_alert",
+      idempotencyKey: `stripe-health-alert:${today}`,
+      recipient: { type: "direct", email: alertEmail },
+      email: {
+        subject: `[VisiteCRM] Alerta: ${missingPlans.length} plano(s) com preço Stripe ausente`,
+        html: healthAlertHtml(missingPlans, dashboardUrl),
+        senderName: "VisiteCRM",
+      },
+      whatsapp: {
+        text: `Alerta VisiteCRM: ${missingPlans.length} plano(s) estão sem preço Stripe correspondente.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}`,
+      },
+      origin: "stripe-health",
+      metadata: { dashboardUrl, plans: missingPlans },
+    });
+  } catch (err) {
+    await releaseAlertSlot(today, claim.claimToken, claim.previousValue, claim.rowExisted);
+    logger.error({ err }, "[stripe-health] Failed to dispatch alert email — slot released");
+    return;
+  }
+  const alertDelivery = outbound.deliveries.find((item) => item.channel === "email");
+  const emailResult = {
+    success: alertDelivery?.status === "accepted" || alertDelivery?.status === "pending",
+    error: alertDelivery?.lastError ?? alertDelivery?.skippedReason,
+  };
 
   if (emailResult.success) {
     // Slot stays written with today's date+token — other instances will skip.

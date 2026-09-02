@@ -1,7 +1,8 @@
 import { db, clientFavoritesTable, tripsTable, clientsTable, tenantsTable } from "@workspace/db";
 import { eq, and, lte, isNull, gt } from "drizzle-orm";
-import { sendFavoriteLowAvailabilityEmail } from "@workspace/email";
+import { renderFavoriteLowAvailabilityEmail } from "@workspace/email";
 import { logger } from "./logger";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 const LOW_AVAILABILITY_THRESHOLD = 5;
 
@@ -69,18 +70,13 @@ export async function runFavoriteLowAvailabilityAlertCron(): Promise<void> {
   let failed = 0;
 
   for (const row of rows) {
-    if (!row.clientEmail) {
-      logger.warn({ favoriteId: row.favoriteId }, "[favorite-alerts] Client has no email — skipping");
-      continue;
-    }
-
     const tripUrl = storePublicBase
       ? `${storePublicBase}/viagem/${row.tripSlug}`
       : "";
 
-    const result = await sendFavoriteLowAvailabilityEmail({
+    const emailProps = {
       clientName: row.clientName,
-      clientEmail: row.clientEmail,
+      clientEmail: row.clientEmail ?? "",
       agencyName: row.agencyName,
       agencyEmail: row.agencyEmail ?? "",
       agencyPhone: row.agencyPhone ?? "",
@@ -89,24 +85,47 @@ export async function runFavoriteLowAvailabilityAlertCron(): Promise<void> {
       departureDate: formatDateBRServer(row.departureDate),
       availableSeats: row.availableSeats,
       tripUrl,
-    });
-
-    if (result.success) {
-      await db
-        .update(clientFavoritesTable)
-        .set({ lowAvailabilityNotifiedAt: new Date() })
-        .where(eq(clientFavoritesTable.id, row.favoriteId));
-      sent++;
-      logger.info(
-        { favoriteId: row.favoriteId, tripName: row.tripName, clientEmail: row.clientEmail },
-        "[favorite-alerts] Alert sent",
+    };
+    try {
+      const result = await dispatchOutboundMessage({
+        tenantId: row.tenantId,
+        eventType: "favorite-low-availability",
+        idempotencyKey: `favorite-low-availability:${row.tenantId}:${row.clientId}:${row.itemId}`,
+        recipient: { type: "client", id: row.clientId },
+        email: {
+          subject: `⚠️ Últimas vagas! "${row.tripName}" está quase esgotada`,
+          html: renderFavoriteLowAvailabilityEmail(emailProps),
+          senderName: row.agencyName,
+        },
+        whatsapp: {
+          text: `⚠️ Últimas vagas!\n\nOlá, ${row.clientName.split(" ")[0]}! A viagem "${row.tripName}" para ${row.tripDestination} está quase esgotada.\nRestam apenas ${row.availableSeats} ${row.availableSeats === 1 ? "vaga" : "vagas"}.\n\n📅 Saída: ${emailProps.departureDate}${tripUrl ? `\n\nGaranta sua vaga: ${tripUrl}` : ""}`,
+        },
+        origin: "favorite-alerts",
+        metadata: { favoriteId: row.favoriteId, clientId: row.clientId, itemId: row.itemId },
+      });
+      const hasDeliverable = result.deliveries.some((delivery) =>
+        delivery.status === "pending" || delivery.status === "processing" || delivery.status === "accepted",
       );
-    } else {
+      if (hasDeliverable) {
+        await db
+          .update(clientFavoritesTable)
+          .set({ lowAvailabilityNotifiedAt: new Date() })
+          .where(eq(clientFavoritesTable.id, row.favoriteId));
+        sent++;
+        logger.info(
+          { favoriteId: row.favoriteId, tripName: row.tripName, clientEmail: row.clientEmail },
+          "[favorite-alerts] Alert sent",
+        );
+      } else {
+        failed++;
+        logger.warn(
+          { favoriteId: row.favoriteId, error: "No channel available" },
+          "[favorite-alerts] Failed to send alert",
+        );
+      }
+    } catch (error) {
       failed++;
-      logger.warn(
-        { favoriteId: row.favoriteId, error: result.error },
-        "[favorite-alerts] Failed to send alert",
-      );
+      logger.warn({ favoriteId: row.favoriteId, error }, "[favorite-alerts] Failed to queue alert");
     }
   }
 

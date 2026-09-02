@@ -42,6 +42,13 @@ export function isEventNotFoundError(err: unknown): boolean {
   return status === 404;
 }
 
+export function isEventAlreadyExistsError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const anyErr = err as { code?: number | string; response?: { status?: number } };
+  const status = anyErr.response?.status ?? (typeof anyErr.code === "number" ? anyErr.code : undefined);
+  return status === 409;
+}
+
 export function isTransientCalendarError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const anyErr = err as { code?: number | string; response?: { status?: number; data?: { error?: string } }; message?: string };
@@ -301,6 +308,11 @@ export interface CalendarEventData {
   endDateTime?: Date;
   attendees?: string[];
   colorId?: string;
+  /**
+   * Stable Google event ID used to make inserts idempotent.
+   * Google returns 409 when a previous insert with this ID already succeeded.
+   */
+  googleEventId?: string;
 }
 
 export class GoogleCalendarService {
@@ -326,6 +338,7 @@ export class GoogleCalendarService {
     try {
       const end = data.endDateTime ?? data.startDateTime;
       const event = {
+        ...(data.googleEventId ? { id: data.googleEventId } : {}),
         summary: data.summary,
         description: data.description,
         location: data.location,
@@ -348,6 +361,13 @@ export class GoogleCalendarService {
       });
       return { id: response.data.id! };
     } catch (err) {
+      // A request may have reached Google even if the response was lost. A
+      // deterministic event ID lets a later retry recover that event rather
+      // than inserting a second copy.
+      if (data.googleEventId && isEventAlreadyExistsError(err)) {
+        logger.info({ ...ctx, googleEventId: data.googleEventId }, "google-calendar: idempotent create recovered existing event");
+        return { id: data.googleEventId };
+      }
       // Re-throw transient errors (429, 5xx, network) so withCalendarRetry and
       // BullMQ can retry them with exponential backoff. Only swallow permanent
       // failures (invalid_grant, 400, etc.) after logging them.

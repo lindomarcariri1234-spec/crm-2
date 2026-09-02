@@ -298,8 +298,10 @@ export default function LojaConfiguracoes() {
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
 
-  const generateQr = useCallback(async (slug: string) => {
-    const fullUrl = `${window.location.origin}/loja/${slug}`;
+  const generateQr = useCallback(async (slug: string, updatedAt: string) => {
+    const cacheVersion = Date.parse(updatedAt);
+    const version = Number.isFinite(cacheVersion) ? String(cacheVersion) : encodeURIComponent(updatedAt);
+    const fullUrl = `${window.location.origin}/loja/${slug}?v=${version}`;
     try {
       const dataUrl = await QRCodeLib.toDataURL(fullUrl, {
         width: 300,
@@ -318,7 +320,7 @@ export default function LojaConfiguracoes() {
       .then((s) => {
         setStore(s);
         setForm(s);
-        generateQr(s.slug);
+        generateQr(s.slug, s.updatedAt);
       })
       .catch(() => setStore(null))
       .finally(() => setLoading(false));
@@ -331,9 +333,13 @@ export default function LojaConfiguracoes() {
   async function save() {
     setSaving(true);
     try {
-      const updated = await storeApi.updateSettings(form);
-      setStore(updated);
-      setForm(updated);
+      await storeApi.updateSettings(form);
+      // Re-read the row without browser/intermediary cache so the form always
+      // reflects the version that is actually persisted by the server.
+      const latest = await storeApi.getSettings();
+      setStore(latest);
+      setForm(latest);
+      await generateQr(latest.slug, latest.updatedAt);
       toast({ title: "Configurações salvas com sucesso!" });
     } catch (err: unknown) {
       toast({
@@ -377,6 +383,11 @@ export default function LojaConfiguracoes() {
   }
 
   const storeUrl = `/loja/${store.slug}`;
+  const shareCacheVersion = Date.parse(store.updatedAt);
+  const shareVersion = Number.isFinite(shareCacheVersion)
+    ? String(shareCacheVersion)
+    : encodeURIComponent(store.updatedAt);
+  const shareUrl = `${window.location.origin}${storeUrl}?v=${shareVersion}`;
   const paymentMethodsSelected = (form.paymentMethods as string[]) ?? [];
 
   return (
@@ -1273,12 +1284,12 @@ export default function LojaConfiguracoes() {
                 <div className="text-center space-y-1">
                   <p className="text-sm font-medium text-muted-foreground">Aponta para:</p>
                   <a
-                    href={`/loja/${store.slug}`}
+                    href={shareUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-sm text-primary hover:underline flex items-center justify-center gap-1 font-mono"
                   >
-                    {window.location.origin}/loja/{store.slug}
+                    {shareUrl}
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
@@ -1303,7 +1314,7 @@ export default function LojaConfiguracoes() {
                 <Button
                   variant="outline"
                   onClick={() => {
-                    const url = `${window.location.origin}/loja/${store.slug}`;
+                     const url = shareUrl;
                     navigator.clipboard.writeText(url).then(() => {
                       toast({ title: "Link copiado!", description: url });
                     });

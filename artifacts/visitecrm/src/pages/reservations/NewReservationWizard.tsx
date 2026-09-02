@@ -266,6 +266,7 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
           email: newClientEmail.trim() || "",
           whatsapp: newClientWhatsapp.trim(),
           cpf: cpfClean,
+          allowMissingData: true,
         },
       });
       const isNew = result.isNew ?? true;

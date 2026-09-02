@@ -121,7 +121,13 @@ function makeTx() {
       updateSetCalls.push(payload);
       return u;
     });
-    u.where = vi.fn(() => Promise.resolve(undefined));
+    u.where = vi.fn(() => ({
+      then: (
+        resolve: (v: undefined) => unknown,
+        reject: (e: unknown) => unknown,
+      ) => Promise.resolve(undefined).then(resolve, reject),
+      returning: vi.fn(() => Promise.resolve([{ id: "existing-ref-row-1" }])),
+    }));
     return u;
   });
 
@@ -240,7 +246,13 @@ describe("recordReferralConversion — UPDATE path (existingReferralId non-null)
         return {
           where: vi.fn((expr: unknown) => {
             whereArgs.push(expr);
-            return Promise.resolve(undefined);
+            return {
+              then: (
+                resolve: (v: undefined) => unknown,
+                reject: (e: unknown) => unknown,
+              ) => Promise.resolve(undefined).then(resolve, reject),
+              returning: vi.fn(() => Promise.resolve([{ id: "existing-ref-row-1" }])),
+            };
           }),
         };
       }),

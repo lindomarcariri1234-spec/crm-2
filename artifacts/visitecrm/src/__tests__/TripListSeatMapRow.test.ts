@@ -7,6 +7,7 @@ import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js
 // ---------------------------------------------------------------------------
 const mockGetMe = vi.hoisted(() => vi.fn());
 const mockGetTenant = vi.hoisted(() => vi.fn());
+const mockUseTrips = vi.hoisted(() => vi.fn());
 const mockExportTrips = vi.hoisted(() => vi.fn());
 const mockToast = vi.hoisted(() => vi.fn());
 const mockBuildTripCsvHeader = vi.hoisted(() => vi.fn());
@@ -31,7 +32,10 @@ vi.mock("@workspace/api-client-react", () => ({
 }));
 
 vi.mock("@/hooks/useTrips", () => ({
-  useTrips: () => ({
+  useTrips: () => mockUseTrips(),
+}));
+
+const defaultTripsHook = {
     trips: [
       {
         id: "trip-1",
@@ -81,8 +85,7 @@ vi.mock("@/hooks/useTrips", () => ({
     handleDelete: vi.fn(),
     hasActiveFilters: false,
     clearFilters: vi.fn(),
-  }),
-}));
+};
 
 vi.mock("@/components/ui/button", () => ({
   Button: ({ children, onClick, className, ...rest }: { children: unknown; onClick?: () => void; className?: string; [k: string]: unknown }) =>
@@ -190,6 +193,8 @@ async function renderInListMode(seatMapEnabled: boolean | undefined) {
 beforeEach(() => {
   mockGetMe.mockReturnValue(makeMe());
   mockGetTenant.mockReturnValue(makeTenantData(false));
+  mockUseTrips.mockReset();
+  mockUseTrips.mockReturnValue(defaultTripsHook);
   mockExportTrips.mockReset();
   mockToast.mockReset();
   mockBuildTripCsvHeader.mockReset();
@@ -291,5 +296,47 @@ describe("TripList — complete CSV export", () => {
       title: "Exportação concluída",
       description: "1 viagem(ns) incluída(s) no CSV.",
     }));
+  });
+});
+
+describe("TripList — loading failures and empty results", () => {
+  it("shows a retryable error instead of the empty state when trips fail to load", async () => {
+    const refetch = vi.fn();
+    mockUseTrips.mockReturnValue({
+      ...defaultTripsHook,
+      trips: [],
+      isError: true,
+      error: new Error("Falha temporária"),
+      refetch,
+    });
+
+    const { container } = await renderComponent(createElement(TripList));
+
+    expect(container.textContent).toContain("Não foi possível carregar as viagens");
+    expect(container.textContent).toContain("Tentar novamente");
+    expect(container.textContent).not.toContain("Nenhuma viagem encontrada");
+
+    const retryButton = Array.from(container.querySelectorAll("button"))
+      .find(button => button.textContent?.includes("Tentar novamente"));
+    expect(retryButton).toBeDefined();
+    await flushAct(() => {
+      retryButton?.click();
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the empty state only when the trip query succeeds with no results", async () => {
+    mockUseTrips.mockReturnValue({
+      ...defaultTripsHook,
+      trips: [],
+      isError: false,
+      error: null,
+    });
+
+    const { container } = await renderComponent(createElement(TripList));
+
+    expect(container.textContent).toContain("Nenhuma viagem encontrada");
+    expect(container.textContent).not.toContain("Não foi possível carregar as viagens");
+    expect(container.textContent).not.toContain("Tentar novamente");
   });
 });

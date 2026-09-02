@@ -2393,6 +2393,253 @@ paths:
               schema:
                 $ref: "#/components/schemas/Message"
 
+  /outbound-messages:
+    get:
+      operationId: listOutboundMessages
+      tags: [messages]
+      summary: List persistent multichannel outbound messages
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: channel
+          in: query
+          schema:
+            type: string
+            enum: [email, whatsapp]
+        - name: deliveryStatus
+          in: query
+          description: Filter messages that have a delivery with this status
+          schema:
+            type: string
+            enum: [pending, processing, accepted, failed, skipped]
+        - name: provider
+          in: query
+          description: Filter messages that have a delivery handled by this provider
+          schema: { type: string }
+        - name: bounceType
+          in: query
+          description: Filter messages by the validated Resend bounce classification
+          schema:
+            type: string
+            enum: [permanent, temporary]
+        - name: clientId
+          in: query
+          schema: { type: string }
+        - name: origin
+          in: query
+          schema: { type: string }
+        - name: eventType
+          in: query
+          schema: { type: string }
+        - name: campaignId
+          in: query
+          schema: { type: string }
+        - name: automationId
+          in: query
+          schema: { type: string }
+        - name: dateFrom
+          in: query
+          schema: { type: string }
+        - name: dateTo
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: Outbound messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OutboundMessage"
+    post:
+      operationId: createOutboundMessage
+      tags: [messages]
+      summary: Create and dispatch a persistent multichannel message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOutboundMessageBody"
+      responses:
+        "200":
+          description: Existing idempotent message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundMessageResult"
+        "201":
+          description: Created outbound message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundMessageResult"
+
+  /outbound-messages/provider-failure-summary:
+    get:
+      operationId: listOutboundProviderFailureSummary
+      tags: [messages]
+      summary: Summarize outbound delivery failures by provider
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: channel
+          in: query
+          schema:
+            type: string
+            enum: [email, whatsapp]
+        - name: deliveryStatus
+          in: query
+          description: Keep only messages that have a delivery with this status
+          schema:
+            type: string
+            enum: [pending, processing, accepted, failed, skipped]
+        - name: provider
+          in: query
+          description: Keep only deliveries handled by this provider
+          schema: { type: string }
+        - name: bounceType
+          in: query
+          description: Keep only deliveries with this validated Resend bounce classification
+          schema:
+            type: string
+            enum: [permanent, temporary]
+        - name: clientId
+          in: query
+          schema: { type: string }
+        - name: origin
+          in: query
+          schema: { type: string }
+        - name: eventType
+          in: query
+          schema: { type: string }
+        - name: campaignId
+          in: query
+          schema: { type: string }
+        - name: automationId
+          in: query
+          schema: { type: string }
+        - name: dateFrom
+          in: query
+          schema: { type: string }
+        - name: dateTo
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Failed deliveries grouped by provider
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OutboundProviderFailureSummary"
+
+  /outbound-messages/export:
+    get:
+      operationId: exportOutboundMessages
+      tags: [messages]
+      summary: Export persistent multichannel outbound messages for audit
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [csv, pdf]
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: channel
+          in: query
+          schema:
+            type: string
+            enum: [email, whatsapp]
+        - name: deliveryStatus
+          in: query
+          description: Filter exported rows by delivery status
+          schema:
+            type: string
+            enum: [pending, processing, accepted, failed, skipped]
+        - name: provider
+          in: query
+          description: Filter exported rows by provider
+          schema: { type: string }
+        - name: bounceType
+          in: query
+          description: Filter exported rows by the validated Resend bounce classification
+          schema:
+            type: string
+            enum: [permanent, temporary]
+        - name: clientId
+          in: query
+          schema: { type: string }
+        - name: origin
+          in: query
+          schema: { type: string }
+        - name: eventType
+          in: query
+          schema: { type: string }
+        - name: campaignId
+          in: query
+          schema: { type: string }
+        - name: automationId
+          in: query
+          schema: { type: string }
+        - name: dateFrom
+          in: query
+          schema: { type: string }
+        - name: dateTo
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Audit export
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+            application/pdf:
+              schema: { type: string, format: binary }
+
+  /outbound-messages/{deliveryId}/retry:
+    post:
+      operationId: retryOutboundDelivery
+      tags: [messages]
+      summary: Retry one failed or skipped delivery
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Delivery queued for retry
+
+  /outbound-deliveries/{deliveryId}/retry:
+    post:
+      operationId: retryOutboundDeliveryDirect
+      tags: [messages]
+      summary: Retry one delivery by delivery resource ID
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Delivery queued for retry
+
   # ─── TEMPLATES ────────────────────────────────────────────────────
   /message-templates:
     get:
@@ -5071,6 +5318,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/Referral"
 
+  /referrals/{id}/reverse-paid-bonus:
+    post:
+      operationId: reversePaidReferralBonus
+      tags: [Referrals]
+      summary: Financially reverse an already paid referral bonus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReversePaidReferralBonusBody"
+      responses:
+        "200":
+          description: Referral with financial reversal details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReversePaidReferralBonusResponse"
+
   /referral-settings/test-whatsapp:
     post:
       operationId: testWhatsAppMessage
@@ -5541,6 +5813,26 @@ components:
       properties:
         reason: { type: string, minLength: 1 }
       required: [reason]
+    ReversePaidReferralBonusBody:
+      type: object
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+        confirmed: { type: boolean }
+      required: [reason, confirmed]
+    ReversePaidReferralBonusResponse:
+      allOf:
+        - $ref: "#/components/schemas/Referral"
+        - type: object
+          properties:
+            reversal:
+              type: object
+              properties:
+                id: { type: string }
+                amount: { type: string }
+                reason: { type: string }
+                alreadyApplied: { type: boolean }
+              required: [id, amount, reason, alreadyApplied]
+          required: [reversal]
     TestWhatsAppMessageBody:
       type: object
       properties:
@@ -5952,9 +6244,13 @@ components:
         name:
           type: string
         email:
-          type: string
+          type: ["string", "null"]
         whatsapp:
-          type: string
+          type: ["string", "null"]
+        emailOptIn:
+          type: boolean
+        whatsappOptIn:
+          type: boolean
         phone:
           type: ["string", "null"]
         cpf:
@@ -6097,7 +6393,7 @@ components:
         phone:
           type: ["string", "null"]
         cpf:
-          type: string
+          type: ["string", "null"]
         rg:
           type: ["string", "null"]
         birthDate:
@@ -6149,7 +6445,10 @@ components:
         forceCreate:
           type: boolean
           description: If true, skip the duplicate name+WhatsApp check and create the client anyway.
-      required: [name, email, whatsapp, cpf]
+        allowMissingData:
+          type: boolean
+          description: If true, allow agency staff to create the client with missing email, WhatsApp, or CPF.
+      required: [name]
 
     UpdateClientBody:
       type: object
@@ -8027,6 +8326,11 @@ components:
           type: ["string", "null"]
         clientName:
           type: ["string", "null"]
+        metadata:
+          type: ["object", "null"]
+          additionalProperties: true
+        outboundMessageId:
+          type: ["string", "null"]
       required: [id, channel, content, status, sentAt]
 
     SendMessageBody:
@@ -8041,6 +8345,128 @@ components:
         mediaUrl:
           type: ["string", "null"]
       required: [toClientId, channel, content]
+
+    OutboundDeliveryAttempt:
+      type: object
+      properties:
+        id: { type: string }
+        deliveryId: { type: string }
+        attemptNumber: { type: integer }
+        provider: { type: ["string", "null"] }
+        externalId: { type: ["string", "null"] }
+        status: { type: string }
+        error: { type: ["string", "null"] }
+        startedAt: { type: string }
+        completedAt: { type: ["string", "null"] }
+      required: [id, deliveryId, attemptNumber, status, startedAt]
+
+    OutboundDelivery:
+      type: object
+      properties:
+        id: { type: string }
+        outboundMessageId: { type: string }
+        channel: { type: string, enum: [email, whatsapp] }
+        recipient: { type: ["string", "null"] }
+        subject: { type: ["string", "null"] }
+        content: { type: string }
+        status: { type: string, enum: [pending, processing, accepted, failed, skipped] }
+        attempts: { type: integer }
+        maxAttempts: { type: integer }
+        provider: { type: ["string", "null"] }
+        externalId: { type: ["string", "null"] }
+        bounceType: { type: ["string", "null"], enum: [permanent, temporary, null] }
+        lastError: { type: ["string", "null"] }
+        skippedReason: { type: ["string", "null"] }
+        nextAttemptAt: { type: string }
+        claimedAt: { type: ["string", "null"] }
+        acceptedAt: { type: ["string", "null"] }
+        failedAt: { type: ["string", "null"] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        attemptHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutboundDeliveryAttempt"
+      required: [id, outboundMessageId, channel, content, status, attempts, maxAttempts, nextAttemptAt, createdAt, updatedAt, attemptHistory]
+
+    OutboundMessage:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        idempotencyKey: { type: string }
+        eventType: { type: string }
+        origin: { type: string }
+        originChannel: { type: ["string", "null"] }
+        recipientType: { type: string }
+        recipientId: { type: ["string", "null"] }
+        recipientName: { type: ["string", "null"] }
+        status: { type: string, enum: [pending, processing, accepted, partial, failed, skipped] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        deliveries:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutboundDelivery"
+      required: [id, tenantId, idempotencyKey, eventType, origin, recipientType, status, deliveries, createdAt, updatedAt]
+
+    OutboundProviderFailureSummary:
+      type: object
+      properties:
+        provider: { type: ["string", "null"] }
+        failureCount: { type: integer }
+        totalFailures: { type: integer }
+        failurePercentage: { type: number }
+      required: [provider, failureCount, totalFailures, failurePercentage]
+
+    CreateOutboundMessageBody:
+      type: object
+      properties:
+        eventType: { type: string }
+        idempotencyKey: { type: string }
+        recipient:
+          oneOf:
+            - type: object
+              properties: { type: { const: client }, id: { type: string } }
+              required: [type, id]
+            - type: object
+              properties: { type: { const: user }, id: { type: string } }
+              required: [type, id]
+            - type: object
+              properties: { type: { const: admin } }
+              required: [type]
+            - type: object
+              properties:
+                type: { const: direct }
+                name: { type: ["string", "null"] }
+                email: { type: ["string", "null"], format: email }
+                whatsapp: { type: ["string", "null"] }
+              required: [type]
+        email:
+          type: object
+          properties:
+            subject: { type: string }
+            html: { type: string }
+            senderName: { type: ["string", "null"] }
+          required: [subject, html]
+        whatsapp:
+          type: object
+          properties: { text: { type: string } }
+          required: [text]
+        origin: { type: string }
+        originChannel: { type: ["string", "null"], enum: [email, whatsapp, null] }
+        metadata: { type: object, additionalProperties: true }
+        isReplication: { type: boolean }
+        replicatedFromId: { type: ["string", "null"] }
+      required: [eventType, idempotencyKey, recipient]
+
+    OutboundMessageResult:
+      allOf:
+        - $ref: "#/components/schemas/OutboundMessage"
+        - type: object
+          properties:
+            created: { type: boolean }
+          required: [created]
 
     MessageTemplate:
       type: object
@@ -8954,6 +9380,10 @@ components:
           type: string
         avatarUrl:
           type: ["string", "null"]
+        cpf:
+          type: ["string", "null"]
+          maxLength: 20
+          description: CPF do usuário. Quando informado, é usado para localizar ou vincular o cadastro de cliente dentro da agência.
         storeSlug:
           type: string
           description: When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users.

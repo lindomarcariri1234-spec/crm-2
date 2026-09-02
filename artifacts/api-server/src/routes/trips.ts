@@ -18,7 +18,6 @@ import { deriveAgeCategory, getAgeYears, syncIsChildUnder7 } from "../lib/passen
 import { CreateTripBody, UpdateTripBody } from "@workspace/api-zod";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { scheduleCalendarSyncTrip, scheduleCalendarDeleteEventsForTrip } from "../lib/google-calendar/schedule-sync";
-import { sendManifestEmail } from "@workspace/email";
 import {
   dispatchReferralReversedEmail,
   enqueueReservationCancellationEmail,
@@ -41,9 +40,10 @@ import {
   type ManifestPassenger,
   type ManifestPanel,
 } from "../lib/manifest-helpers.js";
-import { RESERVATION_STATUS, REFERRAL_STATUS, TRIP_STATUS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
+import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, hasPermission, RESOURCES, ACTIONS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
 import { parseTripStatus } from "../lib/status-validators";
 import { getPassengerExportFinancialValues } from "../lib/passenger-export";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 import { AppError, ForbiddenError, NotFoundError, UnprocessableEntityError, ValidationError } from "../lib/errors";
 
@@ -527,6 +527,8 @@ router.get("/trips/export", async (req, res, next: NextFunction): Promise<void> 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // Export is intentionally narrower than TRIPS.VIEW because it returns the
+    // complete tenant dataset, not the paginated view available to staff.
     if (!MANAGEMENT_ROLES.includes(me.role)) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
       return;
@@ -613,6 +615,8 @@ router.post("/trips/import", async (req, res, next: NextFunction): Promise<void>
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // Bulk import is intentionally admin-only: one request can create up to
+    // 500 trips and bypasses the normal single-trip review flow.
     if (!ADMIN_ROLES.includes(me.role)) {
       next(new ForbiddenError("Apenas administradores podem importar viagens", "FORBIDDEN_ROLE"));
       return;
@@ -814,7 +818,7 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Apenas administradores podem criar viagens", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.CREATE)) { next(new ForbiddenError("Apenas administradores podem criar viagens", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateTripBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
     const isTripCsvImport = req.get("x-visitecrm-import") === "trip-csv";
@@ -971,7 +975,7 @@ router.get("/trips/media", async (req, res, next: NextFunction): Promise<void> =
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
 
     const limitRaw = Math.min(Math.max(parseInt(String(req.query.limit ?? "50")) || 50, 1), 200);
     const offsetRaw = Math.max(parseInt(String(req.query.offset ?? "0")) || 0, 0);
@@ -1045,7 +1049,7 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdateTripBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
 
@@ -1138,7 +1142,7 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
           .where(and(
             eq(reservationsTable.tripId, req.params.id),
             eq(reservationsTable.tenantId, me.tenantId),
-            inArray(reservationsTable.status, [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED]),
+            inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
           ));
         const occupiedSet = new Set<string>(activeResRows.flatMap(r => r.seats));
         const conflictingSeats = fpSeats.filter(s => occupiedSet.has(s));
@@ -1243,7 +1247,7 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
           .where(and(
             eq(reservationsTable.tripId, req.params.id),
             eq(reservationsTable.tenantId, me.tenantId),
-            inArray(reservationsTable.status, [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED]),
+            inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
           ));
 
         let reservedSeats = 0;
@@ -1281,7 +1285,7 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
         .where(and(
           eq(reservationsTable.tripId, req.params.id),
           eq(reservationsTable.tenantId, me.tenantId),
-          inArray(reservationsTable.status, [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED]),
+          inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
         ));
       const allActiveReservationIds = allActiveReservations.map(r => r.id);
 
@@ -1293,6 +1297,7 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
         ? await db
             .select({
               id: referralsTable.id,
+              reservationId: referralsTable.reservationId,
               referrerId: referralsTable.referrerId,
               referredId: referralsTable.referredId,
               bonusAmount: referralsTable.bonusAmount,
@@ -1363,6 +1368,8 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
           bonusAmount: ref.bonusAmount,
           tenantId: me.tenantId,
           reason: "trip_cancelled",
+          referralId: ref.id,
+          reservationId: ref.reservationId,
         }).catch((err) => req.log.error({ err, referralId: ref.id }, "Error sending trip cancellation referral reversal email"));
       }
     } else {
@@ -1408,7 +1415,7 @@ router.delete("/trips/:id", async (req, res, next: NextFunction): Promise<void> 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const [existing] = await db.select({ coverImage: tripsTable.coverImage })
       .from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
@@ -1457,12 +1464,11 @@ router.get("/trips/:id/seat-map", async (req, res, next: NextFunction): Promise<
       if (layout) numberingType = layout.numberingType;
     }
 
-    const ACTIVE_STATUSES = [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED];
     const reservations = await db.select().from(reservationsTable)
       .where(and(
         eq(reservationsTable.tripId, req.params.id),
         eq(reservationsTable.tenantId, me.tenantId),
-        inArray(reservationsTable.status, ACTIVE_STATUSES),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
       ));
 
     const occupiedSeats: Record<string, { reservationId: string; seatStatus: string }> = {};
@@ -1515,7 +1521,7 @@ router.post("/trips/:id/regenerate-seat-map", async (req, res, next: NextFunctio
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const features = await getTenantSupportedFeatures(me.tenantId);
     if (!hasSeatMapFeature(features)) {
       next(new ForbiddenError("Mapa de assentos não está disponível no seu plano atual", "FEATURE_NOT_IN_PLAN"));
@@ -1555,7 +1561,7 @@ router.post("/trips/:id/regenerate-seat-map", async (req, res, next: NextFunctio
       .where(and(
         eq(reservationsTable.tripId, req.params.id),
         eq(reservationsTable.tenantId, me.tenantId),
-        inArray(reservationsTable.status, [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED]),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
       ));
 
     const confirmedReservations = activeReservations.filter(r => r.status === RESERVATION_STATUS.CONFIRMED);
@@ -1707,7 +1713,7 @@ router.post("/trips/:id/sync-seat-counters", async (req, res, next: NextFunction
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Apenas administradores podem sincronizar contadores", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Apenas administradores podem sincronizar contadores", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
@@ -1719,7 +1725,7 @@ router.post("/trips/:id/sync-seat-counters", async (req, res, next: NextFunction
       .where(and(
         eq(reservationsTable.tripId, req.params.id),
         eq(reservationsTable.tenantId, me.tenantId),
-        inArray(reservationsTable.status, [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED]),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
       ));
 
     let reservedSeats = 0;
@@ -1797,6 +1803,8 @@ router.get("/trips/:id/boarding-panel", async (req, res, next: NextFunction): Pr
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // The boarding panel contains passenger-level operational data; it is
+    // intentionally restricted to administrators rather than TRIPS.VIEW.
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select().from(tripsTable)
@@ -1989,7 +1997,7 @@ router.post("/trips/:id/free-passengers/:fpId/check-in", async (req, res, next: 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
@@ -2014,7 +2022,7 @@ router.delete("/trips/:id/free-passengers/:fpId/check-in", async (req, res, next
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
@@ -2038,6 +2046,8 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // This is a complete passenger export with contact and financial fields;
+    // it is intentionally limited to management, unlike TRIPS.VIEW.
     if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select().from(tripsTable)
@@ -2181,7 +2191,7 @@ router.post("/trips/:id/sync-passengers", async (req, res, next: NextFunction): 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select({ id: tripsTable.id })
       .from(tripsTable)
@@ -2260,7 +2270,7 @@ router.patch("/trips/:tripId/passengers/:passengerId", async (req, res, next: Ne
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const { tripId, passengerId } = req.params;
     const parsedBody = UpdatePassengerBody.safeParse(req.body);
@@ -2349,7 +2359,7 @@ router.post("/trips/:id/manifest/send", async (req, res, next: NextFunction): Pr
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const parsed = SendManifestBody.safeParse(req.body);
     if (!parsed.success) {
@@ -2460,18 +2470,33 @@ router.post("/trips/:id/manifest/send", async (req, res, next: NextFunction): Pr
         generateManifestPdf(panel),
       ]);
 
-      const result = await sendManifestEmail({
-        to,
-        tripName: trip.name,
-        manifestNumber: trip.manifestNumber ?? null,
-        agencyName: tenant?.name ?? "VisiteCRM",
-        htmlContent: html,
-        pdfAttachment: pdfBuffer,
+      // The outbound ledger does not currently carry binary attachments. Keep
+      // generating the PDF (and associate its size with the durable event),
+      // while letting the ledger own the email delivery and retries.
+      const outbound = await dispatchOutboundMessage({
+        tenantId: me.tenantId,
+        eventType: "manifest_email",
+        idempotencyKey: `manifest:${trip.id}:${to}`,
+        recipient: { type: "direct", email: to },
+        email: {
+          subject: `Manifesto — ${trip.name}`,
+          html,
+          senderName: tenant?.name ?? "VisiteCRM",
+        },
+        metadata: {
+          tripId: trip.id,
+          manifestNumber: trip.manifestNumber ?? null,
+          pdfBytes: pdfBuffer.byteLength,
+        },
+        origin: "pdf-manifest",
+        originChannel: "email",
+        createdById: me.id,
       });
-
-      if (!result.success) {
-        req.log.error({ error: result.error }, "Failed to send manifest email");
-        next(new AppError(result.error ?? "Falha ao enviar e-mail", 500, "MANIFEST_EMAIL_FAILED"));
+      const emailDelivery = outbound.deliveries.find((delivery) => delivery.channel === "email");
+      if (!emailDelivery || emailDelivery.status === "failed" || emailDelivery.status === "skipped") {
+        const error = emailDelivery?.lastError ?? emailDelivery?.skippedReason ?? "Falha ao enviar e-mail";
+        req.log.error({ error }, "Failed to send manifest email");
+        next(new AppError(error, 500, "MANIFEST_EMAIL_FAILED"));
         return;
       }
 
@@ -2508,6 +2533,12 @@ router.post("/trips/:id/manifest/send", async (req, res, next: NextFunction): Pr
 
       const digits = to.replace(/\D/g, "");
       const phone = digits.startsWith("55") ? digits : `55${digits}`;
+      const { enqueueWhatsAppMessage } = await import("../queues/whatsapp-helpers.js");
+      await enqueueWhatsAppMessage(to, messageParts, me.tenantId, {
+        eventType: "manifest_whatsapp",
+        idempotencyKey: `manifest:${trip.id}:whatsapp:${phone}`,
+        emailSubject: `Manifesto — ${trip.name}`,
+      });
       const whatsappUrl = `https://wa.me/${phone}?text=${encodeURIComponent(messageParts)}`;
 
       await db.insert(auditLogsTable).values({
@@ -2533,7 +2564,7 @@ router.get("/trips/:id/manifest/pdf", async (req, res, next: NextFunction): Prom
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select().from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
@@ -2632,7 +2663,7 @@ router.get("/trips/:id/media", async (req, res, next: NextFunction): Promise<voi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select({ id: tripsTable.id }).from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).limit(1);
@@ -2660,7 +2691,7 @@ router.post("/trips/:id/media", async (req, res, next: NextFunction): Promise<vo
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
 
     const [trip] = await db.select({ id: tripsTable.id }).from(tripsTable)
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).limit(1);
@@ -2688,7 +2719,7 @@ router.delete("/trips/:id/media/:mediaId", async (req, res, next: NextFunction):
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
 
     const [media] = await db.select()
       .from(tripMediaTable)
@@ -2713,7 +2744,7 @@ router.get("/trips/:id/checkins", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) {
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
     const [trip] = await db.select({ id: tripsTable.id })
@@ -2732,7 +2763,7 @@ router.post("/trips/:id/checkins", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) {
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
     const { passengerId, reservationId, notes, status } = z.object({
@@ -2790,7 +2821,7 @@ router.delete("/trips/:id/checkins/:passengerId", async (req, res, next: NextFun
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) {
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
     const [trip] = await db.select({ id: tripsTable.id })
@@ -3016,7 +3047,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.MANAGE)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
 
     const parsed = WhatsAppBroadcastBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
@@ -3126,7 +3157,10 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
       });
 
       try {
-        await enqueueWhatsAppMessage(phone, message, me.tenantId);
+        await enqueueWhatsAppMessage(phone, message, me.tenantId, {
+          eventType: "trip_whatsapp_broadcast",
+          idempotencyKey: `trip:${trip.id}:whatsapp-broadcast:${parsed.data.filter}:${normalizedPhone}`,
+        });
         queued++;
       } catch {
         skipped++;
@@ -3155,7 +3189,10 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
       });
 
       try {
-        await enqueueWhatsAppMessage(phone, message, me.tenantId);
+        await enqueueWhatsAppMessage(phone, message, me.tenantId, {
+          eventType: "trip_whatsapp_broadcast",
+          idempotencyKey: `trip:${trip.id}:whatsapp-broadcast:${parsed.data.filter}:${normalizedPhone}`,
+        });
         queued++;
       } catch {
         skipped++;

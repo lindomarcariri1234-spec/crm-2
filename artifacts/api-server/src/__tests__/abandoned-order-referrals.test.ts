@@ -89,9 +89,9 @@ vi.mock("../lib/logger.js", () => ({
   },
 }));
 
-const mockSendAbandonedReferralAlertEmail = vi.fn();
-vi.mock("@workspace/email", () => ({
-  sendAbandonedReferralAlertEmail: (opts: unknown) => mockSendAbandonedReferralAlertEmail(opts),
+const mockDispatchOutboundMessage = vi.fn();
+vi.mock("../services/outbound-delivery", () => ({
+  dispatchOutboundMessage: (opts: unknown) => mockDispatchOutboundMessage(opts),
 }));
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,14 @@ function resetMocks() {
   updateSetCalls = [];
   updateWhereCalls = [];
   vi.clearAllMocks();
-  mockSendAbandonedReferralAlertEmail.mockResolvedValue({ success: true, messageId: "msg-123" });
+  mockDispatchOutboundMessage.mockResolvedValue({
+    message: { id: "outbound-alert-1", status: "accepted" },
+    created: true,
+    deliveries: [
+      { channel: "email", status: "accepted", externalId: "msg-123" },
+      { channel: "whatsapp", status: "accepted", externalId: "wa-123" },
+    ],
+  });
   mockEq.mockImplementation((col: unknown, val: unknown) => ({ _eq: [col, val] }));
   mockInArray.mockImplementation((col: unknown, vals: unknown) => ({ _inArray: [col, vals] }));
   mockDb.select.mockImplementation(() => buildSelectChain(selectQueue.shift() ?? []));
@@ -426,14 +433,28 @@ describe("runAbandonedOrderReferralCleanup", () => {
 
       await runAbandonedOrderReferralCleanup();
 
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "ops@visitecrm.com" }),
+      await Promise.resolve();
+      expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: TENANT_ID,
+          eventType: "abandoned_referral_alert",
+          recipient: { type: "direct", email: "ops@visitecrm.com" },
+          email: expect.objectContaining({ subject: expect.any(String), html: expect.any(String) }),
+          whatsapp: expect.objectContaining({ text: expect.any(String) }),
+        }),
       );
     });
 
-    it("clears rate limit when email send fails so next run can retry", async () => {
+    it("treats a partial result as sent when the operator email is accepted", async () => {
       vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
-      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: false, error: "network" });
+      mockDispatchOutboundMessage.mockResolvedValueOnce({
+        message: { id: "outbound-alert-partial", status: "partial" },
+        created: true,
+        deliveries: [
+          { channel: "email", status: "accepted", externalId: "msg-partial" },
+          { channel: "whatsapp", status: "failed", lastError: "network" },
+        ],
+      });
 
       const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({
         id: `order-skip-${Math.random()}`,
@@ -446,8 +467,12 @@ describe("runAbandonedOrderReferralCleanup", () => {
 
       await runAbandonedOrderReferralCleanup();
 
-      expect(mockDb.update).not.toHaveBeenCalled();
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+      expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        expect.objectContaining({ to: "ops@visitecrm.com" }),
+        "[abandoned-referrals] All-skipped alert email sent",
+      );
     });
 
     it("rate-limits alert to 24h — second run within window is suppressed", async () => {
@@ -464,12 +489,12 @@ describe("runAbandonedOrderReferralCleanup", () => {
       }
 
       await runAbandonedOrderReferralCleanup();
+      await Promise.resolve();
 
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
+      expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
       expect(mockLogError).not.toHaveBeenCalled();
 
-      // Second run should retry because rate limit was cleared on failure
-      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: true, messageId: "msg-456" });
+      // A successful dispatch claims the rate-limit window.
       selectQueue.push([...orders]);
       for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
         selectQueue.push([]);
@@ -477,14 +502,20 @@ describe("runAbandonedOrderReferralCleanup", () => {
 
       await runAbandonedOrderReferralCleanup();
 
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "ops@visitecrm.com" }),
-      );
+      await Promise.resolve();
+      expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
     });
 
-    it("clears rate limit when email send fails so next run can retry", async () => {
+    it("clears rate limit after a failed dispatch so the next run retries", async () => {
       vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
-      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: false, error: "network" });
+      mockDispatchOutboundMessage.mockResolvedValueOnce({
+        message: { id: "outbound-alert-failed", status: "failed" },
+        created: true,
+        deliveries: [
+          { channel: "email", status: "failed", lastError: "network" },
+          { channel: "whatsapp", status: "failed", lastError: "network" },
+        ],
+      });
 
       const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({
         id: `order-skip-${Math.random()}`,
@@ -497,64 +528,31 @@ describe("runAbandonedOrderReferralCleanup", () => {
       }
 
       await runAbandonedOrderReferralCleanup();
+      await Promise.resolve();
 
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "ops@visitecrm.com" }),
-      );
-    });
-
-    it("clears rate limit when email send fails so next run can retry", async () => {
-      vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
-      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: false, error: "network" });
-
-      const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({
-        id: `order-skip-${Math.random()}`,
-        tenantId: TENANT_ID,
-        pendingReferral: { code: REFERRAL_CODE, referrerId: "ref-xyz", referralId: "ref-gone-001" },
-      }));
-      selectQueue.push(orders);
-      for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
-        selectQueue.push([]);
-      }
-
-      await runAbandonedOrderReferralCleanup();
-
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledWith(
-        expect.objectContaining({ to: "ops@visitecrm.com" }),
-      );
-    });
-
-    it("clears rate limit when email send fails so next run can retry", async () => {
-      vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
-      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: false, error: "network" });
-
-      const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({
-        id: `order-skip-${Math.random()}`,
-        tenantId: TENANT_ID,
-        pendingReferral: { code: REFERRAL_CODE, referrerId: "ref-xyz", referralId: "ref-gone-001" },
-      }));
-      selectQueue.push(orders);
-      for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
-        selectQueue.push([]);
-      }
-
-      await runAbandonedOrderReferralCleanup();
-
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(1);
+      expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
       expect(mockLogError).toHaveBeenCalledWith(
         expect.objectContaining({ error: "network" }),
         "[abandoned-referrals] Failed to send all-skipped alert email — clearing rate limit so next run can retry",
       );
 
       // Second run should retry because rate limit was cleared on failure
-      mockSendAbandonedReferralAlertEmail.mockResolvedValueOnce({ success: true, messageId: "msg-456" });
+      mockDispatchOutboundMessage.mockResolvedValueOnce({
+        message: { id: "outbound-alert-retry", status: "accepted" },
+        created: true,
+        deliveries: [
+          { channel: "email", status: "accepted", externalId: "msg-retry" },
+          { channel: "whatsapp", status: "accepted", externalId: "wa-retry" },
+        ],
+      });
       selectQueue.push([...orders]);
       for (let i = 0; i < ABANDONED_REFERRAL_ALERT_THRESHOLD; i++) {
         selectQueue.push([]);
       }
       await runAbandonedOrderReferralCleanup();
+      await Promise.resolve();
 
-      expect(mockSendAbandonedReferralAlertEmail).toHaveBeenCalledTimes(2);
+      expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
     });
   });
 });

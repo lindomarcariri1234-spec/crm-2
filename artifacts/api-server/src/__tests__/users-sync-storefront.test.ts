@@ -15,6 +15,7 @@ import { ROLES } from "@workspace/permissions";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
+import { ConflictError } from "../lib/errors.js";
 
 // ---------------------------------------------------------------------------
 // vi.hoisted — factories must exist before any vi.mock factory executes
@@ -27,11 +28,16 @@ const {
   mockSelect,
   mockInsertValues,
   mockInsert,
+  mockUpdateSet,
+  mockUpdateReturning,
   mockUpdate,
+  mockTransaction,
+  mockExecute,
   mockSyncMeBodySafeParse,
   mockGetUser,
   mockCheckPlanLimit,
   mockCheckTenantAccess,
+  mockReconcileClientIdentity,
 } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
@@ -41,19 +47,28 @@ const {
   const mockInsertValues = vi.fn().mockResolvedValue([]);
   const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
 
-  const mockUpdateWhere = vi.fn().mockResolvedValue([]);
+  const mockUpdateReturning = vi.fn().mockResolvedValue([]);
+  const mockUpdateWhere = vi.fn(() => ({ returning: mockUpdateReturning }));
   const mockUpdateSet = vi.fn(() => ({ where: mockUpdateWhere }));
   const mockUpdate = vi.fn(() => ({ set: mockUpdateSet }));
+  const mockTransaction = vi.fn();
+  const mockExecute = vi.fn().mockResolvedValue([]);
 
   const mockSyncMeBodySafeParse = vi.fn();
   const mockGetUser = vi.fn();
   const mockCheckPlanLimit = vi.fn().mockResolvedValue(true);
   const mockCheckTenantAccess = vi.fn().mockResolvedValue(true);
+  const mockReconcileClientIdentity = vi.fn().mockResolvedValue({
+    clientId: "client-identity-001",
+    created: true,
+    linked: true,
+  });
 
   return {
     mockLimit, mockWhere, mockFrom, mockSelect,
-    mockInsertValues, mockInsert, mockUpdate,
+    mockInsertValues, mockInsert, mockUpdateSet, mockUpdateReturning, mockUpdate, mockTransaction, mockExecute,
     mockSyncMeBodySafeParse, mockGetUser, mockCheckPlanLimit, mockCheckTenantAccess,
+    mockReconcileClientIdentity,
   };
 });
 
@@ -66,7 +81,7 @@ vi.mock("@workspace/db", () => ({
     select: mockSelect,
     insert: mockInsert,
     update: mockUpdate,
-    transaction: vi.fn(),
+    transaction: mockTransaction,
   },
   usersTable: {},
   tenantsTable: {},
@@ -80,6 +95,7 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn((...a: unknown[]) => a),
   or: vi.fn((...a: unknown[]) => a),
   gt: vi.fn(() => "gt"),
+  isNull: vi.fn(() => "isNull"),
   sql: Object.assign(vi.fn(() => "sql"), { raw: vi.fn() }),
 }));
 
@@ -116,6 +132,11 @@ vi.mock("@workspace/api-zod", () => ({
   SyncMeResponse: { parse: vi.fn((x: unknown) => x) },
 }));
 
+vi.mock("../services/client-identity.js", () => ({
+  normalizeCpfInput: vi.fn((value: string | null | undefined) => value?.replace(/\D/g, "") || null),
+  reconcileClientIdentity: mockReconcileClientIdentity,
+}));
+
 // ---------------------------------------------------------------------------
 // App factory
 // ---------------------------------------------------------------------------
@@ -149,6 +170,18 @@ function stubClerkUser(email = "traveller@example.com") {
   });
 }
 
+function stubVerifiedClerkUser(email = "traveller@example.com") {
+  mockGetUser.mockResolvedValue({
+    emailAddresses: [{
+      id: "ea_1",
+      emailAddress: email,
+      verification: { status: "verified" },
+    }],
+    primaryEmailAddressId: "ea_1",
+    publicMetadata: {},
+  });
+}
+
 const BASE_BODY = { name: "Ana Viajante", email: "traveller@example.com", avatarUrl: null };
 
 // ---------------------------------------------------------------------------
@@ -161,6 +194,18 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
     // Reset queues that clearAllMocks doesn't drain
     mockLimit.mockReset();
     mockInsertValues.mockReset().mockResolvedValue([]);
+    mockUpdateReturning.mockReset().mockResolvedValue([{ id: "client-001" }]);
+    mockReconcileClientIdentity.mockReset().mockResolvedValue({
+      clientId: "client-identity-001",
+      created: true,
+      linked: true,
+    });
+    mockTransaction.mockReset().mockImplementation(async (callback) => callback({
+      select: mockSelect,
+      insert: mockInsert,
+      update: mockUpdate,
+      execute: mockExecute,
+    }));
     mockCheckPlanLimit.mockReset().mockResolvedValue(true);
     mockCheckTenantAccess.mockReset().mockResolvedValue(true);
   });
@@ -511,5 +556,264 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
     expect(mockInsertValues).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockCheckPlanLimit).not.toHaveBeenCalled();
+  });
+
+  it("creates and links a client account for one normalized verified email match", async () => {
+    stubVerifiedClerkUser("  TRAVELLER@EXAMPLE.COM ");
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: { ...BASE_BODY },
+    });
+
+    const client = {
+      id: "client-001",
+      tenantId: "tenant-client",
+      userId: null,
+    };
+    const newUserRow = {
+      id: "gen-user-id",
+      clerkId: "clerk_new_user",
+      tenantId: "tenant-client",
+      name: "Ana Viajante",
+      email: "  TRAVELLER@EXAMPLE.COM ",
+      role: ROLES.CLIENT,
+      avatarUrl: null,
+      isActive: true,
+      referralCode: "CLI123",
+      referralBalance: "0",
+      createdAt: new Date(),
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([client])
+      .mockResolvedValueOnce([newUserRow]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe(ROLES.CLIENT);
+    expect(res.body.tenantId).toBe("tenant-client");
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockReconcileClientIdentity).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        tenantId: "tenant-client",
+        userId: "gen-user-id",
+        email: "  TRAVELLER@EXAMPLE.COM ",
+      }),
+    );
+    expect(mockCheckTenantAccess).toHaveBeenCalledWith(
+      "tenant-client",
+      expect.any(Object),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("keeps storefront duplicate checks scoped to the selected agency", async () => {
+    stubVerifiedClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: { ...BASE_BODY, storeSlug: "agencia-a" },
+    });
+    const store = { tenantId: "tenant-a" };
+    const scopedClient = {
+      id: "client-a",
+      tenantId: "tenant-a",
+      userId: null,
+    };
+    const newUserRow = {
+      id: "gen-user-id",
+      clerkId: "clerk_new_user",
+      tenantId: "tenant-a",
+      name: "Ana Viajante",
+      email: "traveller@example.com",
+      role: ROLES.CLIENT,
+      avatarUrl: null,
+      isActive: true,
+      referralCode: "STORE123",
+      referralBalance: "0",
+      createdAt: new Date(),
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([store])
+      .mockResolvedValueOnce([scopedClient])
+      .mockResolvedValueOnce([newUserRow]);
+
+    const res = await request(buildApp())
+      .post("/api/users/me/sync")
+      .send({ ...BASE_BODY, storeSlug: "agencia-a" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe(ROLES.CLIENT);
+    expect(res.body.tenantId).toBe("tenant-a");
+    expect(mockReconcileClientIdentity).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ tenantId: "tenant-a", userId: "gen-user-id" }),
+    );
+  });
+
+  it("reconciles an old tenant-less default account with its client record", async () => {
+    stubVerifiedClerkUser("traveller@example.com");
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: { ...BASE_BODY },
+    });
+
+    const existingUser = {
+      id: "existing-user-id",
+      clerkId: "clerk_new_user",
+      tenantId: null,
+      name: "Ana Viajante",
+      email: "traveller@example.com",
+      role: ROLES.AGENCY_ADMIN,
+      avatarUrl: null,
+      isActive: true,
+      referralCode: "OLD123",
+      referralBalance: "0",
+      createdAt: new Date(),
+    };
+    const client = {
+      id: "client-001",
+      tenantId: "tenant-client",
+      userId: null,
+    };
+    const updatedUser = {
+      ...existingUser,
+      tenantId: "tenant-client",
+      role: ROLES.CLIENT,
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([existingUser])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([client])
+      .mockResolvedValueOnce([client])
+      .mockResolvedValueOnce([updatedUser]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe(ROLES.CLIENT);
+    expect(res.body.tenantId).toBe("tenant-client");
+    expect(mockUpdateSet).toHaveBeenCalledWith({ userId: "existing-user-id" });
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+      role: ROLES.CLIENT,
+      tenantId: "tenant-client",
+    }));
+  });
+
+  it("does not auto-link an ambiguous email across multiple client records", async () => {
+    stubVerifiedClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: { ...BASE_BODY },
+    });
+    const defaultUser = {
+      id: "gen-user-id",
+      clerkId: "clerk_new_user",
+      tenantId: null,
+      name: "Ana Viajante",
+      email: "traveller@example.com",
+      role: ROLES.AGENCY_ADMIN,
+      avatarUrl: null,
+      isActive: true,
+      referralCode: "DEF123",
+      referralBalance: "0",
+      createdAt: new Date(),
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: "client-001", tenantId: "tenant-a", userId: null },
+        { id: "client-002", tenantId: "tenant-b", userId: null },
+      ])
+      .mockResolvedValueOnce([defaultUser]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe(ROLES.AGENCY_ADMIN);
+    expect(res.body.tenantId).toBeNull();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not take a client link that belongs to another user", async () => {
+    stubVerifiedClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: { ...BASE_BODY },
+    });
+    const defaultUser = {
+      id: "gen-user-id",
+      clerkId: "clerk_new_user",
+      tenantId: null,
+      name: "Ana Viajante",
+      email: "traveller@example.com",
+      role: ROLES.AGENCY_ADMIN,
+      avatarUrl: null,
+      isActive: true,
+      referralCode: "DEF123",
+      referralBalance: "0",
+      createdAt: new Date(),
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: "client-001",
+        tenantId: "tenant-client",
+        userId: "different-user",
+      }])
+      .mockResolvedValueOnce([defaultUser]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe(ROLES.AGENCY_ADMIN);
+    expect(res.body.tenantId).toBeNull();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("aborts when a duplicate client appears before the protected recheck", async () => {
+    stubVerifiedClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: { ...BASE_BODY },
+    });
+    const initialCandidate = {
+      id: "client-001",
+      tenantId: "tenant-client",
+      userId: null,
+    };
+
+    const conflict = new ConflictError(
+      "O e-mail corresponde a mais de um cadastro de cliente.",
+      "CLIENT_EMAIL_AMBIGUOUS",
+    );
+    mockReconcileClientIdentity.mockRejectedValueOnce(conflict);
+
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([initialCandidate]);
+
+    const res = await request(buildApp()).post("/api/users/me/sync").send(BASE_BODY);
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("CLIENT_EMAIL_AMBIGUOUS");
+    expect(mockReconcileClientIdentity).toHaveBeenCalledTimes(1);
+    // User and client reconciliation share one transaction, so the user insert
+    // is rolled back when the identity service reports ambiguity.
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).not.toHaveBeenCalledWith({ userId: "gen-user-id" });
   });
 });

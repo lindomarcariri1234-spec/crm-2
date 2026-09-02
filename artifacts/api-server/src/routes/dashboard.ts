@@ -8,13 +8,14 @@ function brazilUTC(year: number, month1Based: number, day: number): Date {
 }
 import { db } from "@workspace/db";
 import { clientsTable, tripsTable, reservationsTable, paymentsTable, dealsTable, npsResponsesTable, expensesTable, passengersTable, loyaltyMembersTable } from "@workspace/db";
-import { eq, and, gte, lte, lt, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, asc, gte, lte, lt, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/tenant";
 import { roundMoney } from "../lib/pricing";
 import { ForbiddenError, ValidationError } from "../lib/errors";
-import { ROLES, RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, DEAL_STATUS, TRIP_STATUS } from "@workspace/permissions";
+import { ROLES, RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, PAYMENT_STATUS, PAYMENT_TYPE, DEAL_STATUS, TRIP_STATUS } from "@workspace/permissions";
 import { z } from "zod";
 import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
+import { rankingMetadata } from "../lib/ranking-contract";
 
 const RevenueChartQuery = z.object({
   period: z.enum(["7d", "30d", "90d", "12m"]).default("30d"),
@@ -186,7 +187,11 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
     if (activeTripIds.length > 0) {
       const activeResIds = (await db.select({ id: reservationsTable.id })
         .from(reservationsTable)
-        .where(and(eq(reservationsTable.tenantId, tenantId), inArray(reservationsTable.tripId, activeTripIds))))
+        .where(and(
+          eq(reservationsTable.tenantId, tenantId),
+          inArray(reservationsTable.tripId, activeTripIds),
+          inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+        )))
         .map(r => r.id);
       if (activeResIds.length > 0) {
         const activePayments = await db.select({ amount: paymentsTable.amount, type: paymentsTable.type, status: paymentsTable.status })
@@ -853,7 +858,7 @@ router.get("/dashboard/top-customers", async (req, res, next: NextFunction): Pro
       photoUrl: clientsTable.photoUrl,
     }).from(clientsTable)
       .where(eq(clientsTable.tenantId, tenantId))
-      .orderBy(desc(sql`cast(${clientsTable.totalSpent} as numeric)`))
+       .orderBy(desc(sql`cast(${clientsTable.totalSpent} as numeric)`), asc(clientsTable.name), asc(clientsTable.id))
       .limit(5);
 
     const clientIds = topClients.map(c => c.id);
@@ -877,6 +882,10 @@ router.get("/dashboard/top-customers", async (req, res, next: NextFunction): Pro
       reservationCount: reservationCounts[c.id] ?? 0,
     }));
 
+    // Keep this long-standing endpoint's array body for existing dashboard
+    // consumers. The same common contract is available without changing the
+    // payload shape for callers that opt into ranking metadata.
+    res.setHeader("X-Ranking-Metadata", JSON.stringify(rankingMetadata("client", "admin", "all-time")));
     res.json(result);
   } catch (err) {
     next(err);

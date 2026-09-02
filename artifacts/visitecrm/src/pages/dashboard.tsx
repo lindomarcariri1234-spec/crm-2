@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Link, Redirect } from "wouter";
+import { QueryErrorState } from "@/components/query-error-state";
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, PieChart, Pie, Cell, LineChart, Line,
@@ -32,6 +33,8 @@ import { format, parseISO, differenceInDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 import { formatCurrency } from "@/lib/utils";
+import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
+import { useFinancialMetrics } from "@/lib/financial-metrics-api";
 
 const TASKS_KEY = "visite-crm-tasks";
 
@@ -178,13 +181,20 @@ function AgencyDashboard() {
     setBannerDismissed(true);
   }
 
-  const { data: summary, isLoading: loadingSummary } = useGetDashboardSummary();
-  const { data: charts, isLoading: loadingCharts } = useGetDashboardCharts({ period: chartPeriod as GetDashboardChartsPeriod });
-  const { data: funnel, isLoading: loadingFunnel } = useGetDashboardFunnel();
-  const { data: upcomingTrips, isLoading: loadingTrips } = useGetDashboardUpcomingTrips();
-  const { data: paymentSummary, isLoading: loadingPaySummary } = useGetPaymentsSummary();
-  const { data: pendingPaymentsList, isLoading: loadingPendingPayments } = useListPayments({ status: PAYMENT_STATUS.PENDING, limit: 5, type: PAYMENT_TYPE.RECEIVABLE });
-  const { data: topCustomers, isLoading: loadingTopCustomers } = useGetDashboardTopCustomers();
+  const { data: summary, isLoading: loadingSummary, isError: summaryError, error: summaryQueryError, refetch: refetchSummary } = useGetDashboardSummary();
+  const { data: charts, isLoading: loadingCharts, isError: chartsError, error: chartsQueryError, refetch: refetchCharts } = useGetDashboardCharts({ period: chartPeriod as GetDashboardChartsPeriod });
+  const { data: funnel, isLoading: loadingFunnel, isError: funnelError, error: funnelQueryError, refetch: refetchFunnel } = useGetDashboardFunnel();
+  const { data: upcomingTrips, isLoading: loadingTrips, isError: tripsError, error: tripsQueryError, refetch: refetchTrips } = useGetDashboardUpcomingTrips();
+  const { data: paymentSummary, isLoading: loadingPaySummary, isError: paymentSummaryError, error: paymentSummaryQueryError, refetch: refetchPaymentSummary } = useGetPaymentsSummary();
+  const { data: pendingPaymentsList, isLoading: loadingPendingPayments, isError: pendingPaymentsError, error: pendingPaymentsQueryError, refetch: refetchPendingPayments } = useListPayments({ status: PAYMENT_STATUS.PENDING, limit: 5, type: PAYMENT_TYPE.RECEIVABLE });
+  const { data: topCustomers, isLoading: loadingTopCustomers, isError: topCustomersError, error: topCustomersQueryError, refetch: refetchTopCustomers } = useGetDashboardTopCustomers();
+  const {
+    data: financialMetrics,
+    isLoading: loadingFinancialMetrics,
+    isError: financialMetricsError,
+    error: financialMetricsQueryError,
+    refetch: refetchFinancialMetrics,
+  } = useFinancialMetrics();
 
   const npsLabel = summary?.averageNps != null ? `${summary.averageNps.toFixed(1)} / 10` : "—";
   const totalRevenue = summary?.totalRevenue ?? 0;
@@ -215,6 +225,9 @@ function AgencyDashboard() {
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
+
+  const dashboardError = summaryError || chartsError || funnelError || tripsError || paymentSummaryError || pendingPaymentsError || topCustomersError || financialMetricsError;
+  const dashboardQueryError = summaryQueryError ?? chartsQueryError ?? funnelQueryError ?? tripsQueryError ?? paymentSummaryQueryError ?? pendingPaymentsQueryError ?? topCustomersQueryError ?? financialMetricsQueryError;
 
   const ESSENTIAL_INTEGRATION_TYPES = ["whatsapp_evolution", "stripe_account", "mercadopago"];
   const integrationIssues = (integrationStatuses ?? []).filter(
@@ -255,6 +268,27 @@ function AgencyDashboard() {
 
     return tips;
   }, [summary, charts, margin, totalRevenue]);
+
+  if (dashboardError) {
+    return (
+      <QueryErrorState
+        resourceLabel="o painel"
+        error={dashboardQueryError}
+        onRetry={() => {
+          void Promise.all([
+            refetchSummary(),
+            refetchCharts(),
+            refetchFunnel(),
+            refetchTrips(),
+            refetchPaymentSummary(),
+            refetchPendingPayments(),
+            refetchTopCustomers(),
+            refetchFinancialMetrics(),
+          ]);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -343,37 +377,38 @@ function AgencyDashboard() {
             <h2 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide">Financeiro</h2>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <KpiCard title="Receita Total" value={formatCurrency(totalRevenue)} sub={`${formatCurrency(summary?.revenueThisMonth ?? 0)} este mês`} icon={TrendingUp} loading={loadingSummary} color="text-emerald-600" highlight="green" />
-            <KpiCard title="Despesas" value={formatCurrency(totalExpenses)} sub="Total de despesas registradas" icon={TrendingDown} loading={loadingSummary} color="text-red-500" />
+            <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub="Caixa recebido no mês atual (BRT)" icon={TrendingUp} loading={loadingFinancialMetrics} color="text-emerald-600" highlight="green" />
+            <KpiCard title="Custos Pagos" value={formatCurrency(financialMetrics?.totals.operatingCostsPaid ?? 0)} sub="Despesas gerais + custos de viagem" icon={TrendingDown} loading={loadingFinancialMetrics} color="text-red-500" />
             <KpiCard
               title="Lucro Líquido"
-              value={formatCurrency(summary?.profit ?? netProfit)}
-              sub={`Margem: ${(summary?.profitMargin ?? margin).toFixed(1)}%`}
+              value={formatCurrency(financialMetrics?.totals.profit ?? 0)}
+              sub={`Margem: ${(financialMetrics?.totals.margin ?? 0).toFixed(1)}%`}
               icon={DollarSign}
-              loading={loadingSummary}
-              color={(summary?.profit ?? netProfit) >= 0 ? "text-emerald-600" : "text-red-600"}
-              highlight={(summary?.profit ?? netProfit) >= 0 ? "green" : "red"}
+              loading={loadingFinancialMetrics}
+              color={(financialMetrics?.totals.profit ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}
+              highlight={(financialMetrics?.totals.profit ?? 0) >= 0 ? "green" : "red"}
             />
             <KpiCard
               title="Margem de Lucro"
-              value={`${(summary?.profitMargin ?? margin).toFixed(1)}%`}
-              sub={(summary?.profit ?? netProfit) >= 0 ? "Resultado positivo" : "Resultado negativo"}
+              value={`${(financialMetrics?.totals.margin ?? 0).toFixed(1)}%`}
+              sub={(financialMetrics?.totals.profit ?? 0) >= 0 ? "Resultado positivo" : "Resultado negativo"}
               icon={Percent}
-              loading={loadingSummary}
-              color={(summary?.profitMargin ?? margin) >= 20 ? "text-emerald-600" : (summary?.profitMargin ?? margin) >= 10 ? "text-yellow-600" : "text-red-600"}
+              loading={loadingFinancialMetrics}
+              color={(financialMetrics?.totals.margin ?? 0) >= 20 ? "text-emerald-600" : (financialMetrics?.totals.margin ?? 0) >= 10 ? "text-yellow-600" : "text-red-600"}
             />
             <KpiCard title="Ticket Médio" value={formatCurrency(summary?.avgTicket ?? 0)} sub="Por reserva confirmada" icon={Target} loading={loadingSummary} color="text-purple-600" />
             <KpiCard
               title="Contas Vencidas"
-              value={formatCurrency(summary?.overduePayments ?? 0)}
+              value={formatCurrency(financialMetrics?.totals.overdueReceivable ?? 0)}
               sub={`${summary?.overduePaymentsCount ?? 0} cobranças em atraso`}
               icon={AlertTriangle}
-              loading={loadingSummary}
+              loading={loadingFinancialMetrics}
               color={(summary?.overduePaymentsCount ?? 0) > 0 ? "text-red-600" : "text-muted-foreground"}
               highlight={(summary?.overduePaymentsCount ?? 0) > 0 ? "red" : undefined}
             />
           </div>
         </section>
+        <FinancialMetricsOverview />
 
         {/* VENDAS */}
         <section className="rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50/60 to-indigo-50/30 dark:from-blue-950/20 dark:to-indigo-950/10 dark:border-blue-900/30 p-4">
@@ -1258,9 +1293,9 @@ function AgencyDashboard() {
 
 
 function ClientDashboard() {
-  const { data: summary, isLoading } = useGetDashboardSummary();
-  const { data: upcomingTrips, isLoading: loadingTrips } = useGetDashboardUpcomingTrips();
-  const { data: pendingPayments, isLoading: loadingPayments } = useListPayments({ status: PAYMENT_STATUS.PENDING, limit: 5 });
+  const { data: summary, isLoading, isError: summaryError, error: summaryQueryError, refetch: refetchSummary } = useGetDashboardSummary();
+  const { data: upcomingTrips, isLoading: loadingTrips, isError: tripsError, error: tripsQueryError, refetch: refetchTrips } = useGetDashboardUpcomingTrips();
+  const { data: pendingPayments, isLoading: loadingPayments, isError: paymentsError, error: paymentsQueryError, refetch: refetchPayments } = useListPayments({ status: PAYMENT_STATUS.PENDING, limit: 5 });
   const { data: me } = useGetMe();
   const [voucherOpen, setVoucherOpen] = useState(false);
   const [voucherAutoDownload, setVoucherAutoDownload] = useState(false);
@@ -1274,6 +1309,20 @@ function ClientDashboard() {
     { query: { queryKey: ["dashboard-reservation", nextTrip?.id], enabled: !!nextTrip?.id } }
   );
   const myReservation = (nextTripReservations?.data?.[0] ?? null) as Reservation | null;
+  const dashboardError = summaryError || tripsError || paymentsError;
+  const dashboardQueryError = summaryQueryError ?? tripsQueryError ?? paymentsQueryError;
+
+  if (dashboardError) {
+    return (
+      <QueryErrorState
+        resourceLabel="a sua área"
+        error={dashboardQueryError}
+        onRetry={() => {
+          void Promise.all([refetchSummary(), refetchTrips(), refetchPayments()]);
+        }}
+      />
+    );
+  }
 
   const referralLink = `https://visitecrm.com.br/ref/${me?.referralCode ?? "—"}`;
 

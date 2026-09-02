@@ -34,7 +34,9 @@ export interface DeferredReferralResult {
  * Applies the referral conversion + referral-credit consumption that are
  * deferred from checkout to payment time, so anonymous/unpaid storefront orders
  * can never credit a referrer's conversion or burn a customer's referral credit
- * before money is captured. The intent is persisted on the order at checkout
+ * before money is captured. A positive receivable payment is sufficient for a
+ * reservation-backed order; the order may remain pending until all reservations
+ * are paid. The intent is persisted on the order at checkout
  * (store_orders.pending_referral / pending_credit_spend).
  *
  * Runs in its OWN transaction, invoked AFTER the payment/reservation transaction
@@ -52,7 +54,10 @@ export interface DeferredReferralResult {
  * amount, so any race/double-spend shortfall is consumed up to the available
  * balance and logged — it never throws.
  */
-export async function applyDeferredOrderCredits(orderId: string): Promise<DeferredReferralResult> {
+export async function applyDeferredOrderCredits(
+  orderId: string,
+  options: { allowPartialPayment?: boolean } = {},
+): Promise<DeferredReferralResult> {
   return db.transaction(async (tx) => {
     const [order] = await tx
       .select({
@@ -77,8 +82,14 @@ export async function applyDeferredOrderCredits(orderId: string): Promise<Deferr
     if (!order) return { conversionApplied: false };
     // Idempotency: effects already applied for this order.
     if (order.referralEffectsAppliedAt != null) return { conversionApplied: false };
-    // Only apply once payment is actually confirmed.
-    if (order.paymentStatus !== STORE_PAYMENT_STATUS.PAID) return { conversionApplied: false };
+    // Gateway/manual order confirmation uses PAID. Reservation payments may
+    // leave the storefront order pending until every sibling reservation is
+    // settled; in that path a positive received payment is still enough to
+    // convert the referral. The caller can opt into that narrower partial
+    // payment path only after a paid receivable was persisted.
+    if (order.paymentStatus !== STORE_PAYMENT_STATUS.PAID && !options.allowPartialPayment) {
+      return { conversionApplied: false };
+    }
 
     // 1) Consume referral credit (best-effort — money is already captured, so a
     //    shortfall is logged and capped, never thrown).

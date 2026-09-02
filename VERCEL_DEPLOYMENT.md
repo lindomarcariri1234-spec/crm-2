@@ -18,6 +18,96 @@ esse campo para a raiz do repositório antes do próximo deploy. A configuraçã
 espelhada em `artifacts/api-server/vercel.json` mantém o critério seguro durante
 essa transição, mas a raiz do monorepo é a configuração definitiva.
 
+## Domínio canônico
+
+O domínio público principal do VisiteCRM é:
+
+```text
+https://visitecrm.com
+```
+
+`www.visitecrm.com` deve permanecer cadastrado no mesmo projeto Vercel e
+redirecionar para o domínio apex `https://visitecrm.com`. O alias
+`visitecrm.vercel.app` também deve redirecionar para o domínio canônico; esse
+último comportamento é reforçado no frontend por
+`artifacts/visitecrm/src/main.tsx`.
+
+### Como cadastrar ou revisar os domínios
+
+1. Abra o projeto **VisiteCRM** no painel da Vercel.
+2. Em **Settings → Domains**, adicione `visitecrm.com` e
+   `www.visitecrm.com` caso ainda não estejam listados.
+3. Defina `visitecrm.com` como domínio principal.
+4. Configure o redirecionamento de `www.visitecrm.com` para
+   `https://visitecrm.com`.
+5. Não adicione os domínios a outro projeto Vercel.
+6. Aguarde a validação DNS e a emissão do certificado HTTPS antes de trocar o
+   DNS do domínio em produção.
+
+### DNS
+
+Os registros DNS devem ser aplicados no provedor autoritativo do domínio. A
+Vercel é a fonte de verdade para os valores de validação: copie os registros
+exibidos em **Settings → Domains** para cada host, sem substituir por valores
+memorizados ou de outro projeto. Remova somente registros conflitantes para
+`@` ou `www`; não altere nameservers nem outros registros sem autorização do
+proprietário do domínio.
+
+Depois de aplicar os registros, confirme no painel da Vercel que os dois hosts
+estão com configuração válida e HTTPS ativo. A propagação pode demorar; não
+considere o domínio pronto apenas porque o registro já aparece em uma consulta
+DNS isolada.
+
+### Origens, callbacks e links públicos
+
+Depois de o apex estar validado, as URLs de produção devem usar
+`https://visitecrm.com`, e não o alias `vercel.app`, nas variáveis aplicáveis:
+
+```text
+APP_URL
+FRONTEND_URL
+VITE_APP_URL
+STORE_PUBLIC_BASE
+STORE_PUBLIC_URL
+CLIENT_PORTAL_URL
+```
+
+Revise também os callbacks que dependem do domínio:
+
+```text
+/api/uploadthing
+/api/stripe/webhook
+/api/webhooks/*
+Google Calendar OAuth redirect
+Clerk sign-in/sign-up redirects
+```
+
+Não coloque chaves ou secrets no repositório. Variáveis privadas continuam no
+ambiente de produção da Vercel; apenas URLs públicas devem ser atualizadas
+para o domínio canônico.
+
+### Verificação mínima
+
+Após a validação, confira:
+
+```text
+https://visitecrm.com
+https://www.visitecrm.com
+https://visitecrm.vercel.app
+https://visitecrm.com/api/healthz
+https://visitecrm.com/sign-in
+```
+
+O resultado esperado é:
+
+- o apex carrega a aplicação sem redirecionar para `vercel.app`;
+- `www` redireciona para o apex;
+- o alias `vercel.app` redireciona para o apex;
+- uma rota interna do SPA abre diretamente;
+- `/api/healthz` responde pela mesma origem;
+- o Clerk permite login e cadastro no domínio canônico;
+- uploads, pagamentos, webhooks e links públicos usam o domínio final.
+
 ## Primeiro deploy
 
 1. No painel da Vercel, importe o repositório GitHub e mantenha o **Root

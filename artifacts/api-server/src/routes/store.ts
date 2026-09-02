@@ -11,10 +11,11 @@ import {
   pipelineStagesTable,
   dealsTable,
   reservationsTable,
+  referralsTable,
   partnerProductsTable,
   priceAlertSubscriptionsTable,
 } from "@workspace/db";
-import { eq, and, desc, asc, count, ilike, or, sql, ne } from "drizzle-orm";
+import { eq, and, desc, asc, count, ilike, or, sql, ne, inArray } from "drizzle-orm";
 import { z } from "zod/v4";
 import { randomBytes, createHash } from "crypto";
 import { generateId } from "../lib/id";
@@ -33,12 +34,19 @@ import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../s
 import { encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
 import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
+import { linkedReferral, linkedReservation, linkedOrder } from "../lib/linked-data";
 import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
 // links point at the Vitrine; the unsubscribe link points at the public API,
 // which is served from the same origin in production.
 const STORE_PUBLIC_BASE = (process.env["STORE_PUBLIC_URL"] ?? `https://${process.env["REPLIT_DEV_DOMAIN"] ?? "visitecrm.com"}`).replace(/\/$/, "");
+
+/** Admin APIs must not leak checkout authorization or deferred-referral state. */
+export function safeAdminOrder<T extends { pendingReferral?: unknown; paymentToken?: unknown }>(order: T) {
+  const { pendingReferral: _pendingReferral, paymentToken: _paymentToken, ...safe } = order;
+  return safe;
+}
 
 function productEffectivePrice(p: { price: unknown; onSale: unknown; salePrice: unknown }): number {
   const base = Number(p.price ?? 0);
@@ -327,6 +335,7 @@ router.get("/store/settings", async (req, res, next: NextFunction): Promise<void
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const store = await getStoreForTenant(me.tenantId);
     if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    res.setHeader("Cache-Control", "no-store, max-age=0");
     res.json(redactStore(store as unknown as Record<string, unknown>));
   } catch (err) {
     next(err);
@@ -353,6 +362,7 @@ router.put("/store/settings", async (req, res, next: NextFunction): Promise<void
         ...data,
       });
       const [newStore] = await db.select().from(storesTable).where(eq(storesTable.id, id)).limit(1);
+      res.setHeader("Cache-Control", "no-store, max-age=0");
       res.status(201).json(redactStore(newStore as unknown as Record<string, unknown>));
       return;
     }
@@ -372,6 +382,7 @@ router.put("/store/settings", async (req, res, next: NextFunction): Promise<void
 
     const [updated] = await db.select().from(storesTable)
       .where(eq(storesTable.tenantId, me.tenantId)).limit(1);
+    res.setHeader("Cache-Control", "no-store, max-age=0");
     res.json(redactStore(updated as unknown as Record<string, unknown>));
   } catch (err) {
     next(err);
@@ -687,6 +698,8 @@ router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> 
         taxAmount: storeOrdersTable.taxAmount,
         shippingAmount: storeOrdersTable.shippingAmount,
         totalAmount: storeOrdersTable.totalAmount,
+        depositAmount: storeOrdersTable.depositAmount,
+        amountRemaining: storeOrdersTable.amountRemaining,
         couponId: storeOrdersTable.couponId,
         couponCode: storeOrdersTable.couponCode,
         paymentMethod: storeOrdersTable.paymentMethod,
@@ -720,7 +733,31 @@ router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> 
       .limit(limit)
       .offset(offset);
 
-    res.json({ data: orders, total, page, limit });
+    const orderNumbers = orders.map(o => o.orderNumber);
+    const reservations = orderNumbers.length ? await db.select().from(reservationsTable)
+      .where(and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))) : [];
+    const reservationMap = new Map<string, typeof reservations>();
+    for (const reservation of reservations) {
+      const list = reservationMap.get(reservation.storeOrderId ?? "") ?? [];
+      list.push(reservation); reservationMap.set(reservation.storeOrderId ?? "", list);
+    }
+    const [referralRows, linkedDeals] = reservations.length ? await Promise.all([
+      db.select().from(referralsTable).where(and(
+      eq(referralsTable.tenantId, me.tenantId), inArray(referralsTable.reservationId, reservations.map(r => r.id)),
+      )),
+      db.select().from(dealsTable).where(and(
+        eq(dealsTable.tenantId, me.tenantId), inArray(dealsTable.reservationId, reservations.map(r => r.id)),
+      )),
+    ]) : [[], []] as [(typeof referralsTable.$inferSelect)[], (typeof dealsTable.$inferSelect)[]];
+    res.json({ data: orders.map(order => ({
+      ...order,
+      linkedOrder: linkedOrder(order),
+      linkedReservations: (reservationMap.get(order.orderNumber) ?? []).map(linkedReservation),
+      linkedReferral: linkedReferral(referralRows.find(r => (reservationMap.get(order.orderNumber) ?? []).some(x => x.id === r.reservationId))),
+      linkedDeals: linkedDeals.filter(d => (reservationMap.get(order.orderNumber) ?? []).some(r => r.id === d.reservationId)).map(d => ({
+        id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value),
+      })),
+    })), total, page, limit });
   } catch (err) {
     next(err);
   }
@@ -765,7 +802,20 @@ router.get("/store/orders/:id", async (req, res, next: NextFunction): Promise<vo
         metadata: item.metadata,
       };
     });
-    res.json({ ...order, items });
+    const reservations = await db.select().from(reservationsTable).where(and(
+      eq(reservationsTable.tenantId, me.tenantId), eq(reservationsTable.storeOrderId, order.orderNumber),
+    ));
+    const [referrals, linkedDeals] = reservations.length ? await Promise.all([
+      db.select().from(referralsTable).where(and(
+      eq(referralsTable.tenantId, me.tenantId), inArray(referralsTable.reservationId, reservations.map(r => r.id)),
+      )),
+      db.select().from(dealsTable).where(and(
+        eq(dealsTable.tenantId, me.tenantId), inArray(dealsTable.reservationId, reservations.map(r => r.id)),
+      )),
+    ]) : [[], []] as [(typeof referralsTable.$inferSelect)[], (typeof dealsTable.$inferSelect)[]];
+    // pendingReferral/paymentToken are internal checkout state and must never cross this boundary.
+    const safeOrder = safeAdminOrder(order);
+    res.json({ ...safeOrder, items, linkedOrder: linkedOrder(order), linkedReservations: reservations.map(linkedReservation), linkedReferral: linkedReferral(referrals[0]), linkedDeals: linkedDeals.map(d => ({ id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value) })) });
   } catch (err) {
     next(err);
   }
@@ -1005,7 +1055,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
       });
     }
 
-    res.json(order);
+    res.json(safeAdminOrder(order));
   } catch (err) {
     next(err);
   }

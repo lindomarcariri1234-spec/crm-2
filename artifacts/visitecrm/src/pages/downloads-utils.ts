@@ -58,7 +58,7 @@ export function prepareClients(
     "Observações", "Cadastrado em",
   ];
   const rows = clients.map((c) => [
-    c.name, c.email, c.whatsapp, c.phone ?? "", c.cpf ?? "",
+    c.name, c.email ?? "", c.whatsapp ?? "", c.phone ?? "", c.cpf ?? "",
     fmtDate(c.birthDate), c.gender ?? "", c.addressCity ?? "", c.addressState ?? "",
     c.instagram ?? "", c.classification ?? "", c.status ?? "", c.pipelineStage ?? "",
     fmtCur(c.totalSpent), fmtCur(c.outstandingBalance),

@@ -32,6 +32,7 @@ import {
   GitMerge, ChevronDown, ChevronUp, Loader2, ShieldAlert,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { formatDateBR, localToday, isValidBrazilWhatsAppPhone } from "@workspace/shared";
@@ -92,7 +93,7 @@ function downloadCsv(rows: string[][], filename: string) {
 function exportClientsCsv(clients: Client[]) {
   const headers = ["Nome", "E-mail", "WhatsApp", "Telefone", "CPF", "Nascimento", "Gênero", "Cidade", "Estado", "Instagram", "Classificação", "Status", "Pipeline", "Total Gasto (R$)", "Saldo Devedor (R$)", "Tags", "Destinos Sonhados", "Observações", "Cadastrado em"];
   const rows = clients.map(c => [
-    c.name, c.email, c.whatsapp, c.phone ?? "", c.cpf ?? "",
+    c.name, c.email ?? "", c.whatsapp ?? "", c.phone ?? "", c.cpf ?? "",
     c.birthDate ? formatDateBR(c.birthDate) : "",
     c.gender ?? "", c.addressCity ?? "", c.addressState ?? "", c.instagram ?? "",
     c.classification ?? "", c.status ?? "", c.pipelineStage ?? "",
@@ -324,7 +325,7 @@ interface ClientFormData {
   musicalPreferences: string; foodPreferences: string;
   dreamDestinations: string; tags: string;
   npsScore: string; companyFeedback: string;
-  travelInterests: string[]; ambassadorOptIn: boolean;
+  travelInterests: string[]; ambassadorOptIn: boolean; allowMissingData: boolean;
 }
 
 const EMPTY_CLIENT: ClientFormData = {
@@ -339,7 +340,7 @@ const EMPTY_CLIENT: ClientFormData = {
   professionalArea: "", favoriteDrink: "", musicalPreferences: "", foodPreferences: "",
   dreamDestinations: "", tags: "",
   npsScore: "", companyFeedback: "",
-  travelInterests: [], ambassadorOptIn: false,
+  travelInterests: [], ambassadorOptIn: false, allowMissingData: false,
 };
 
 function sanitizeBirthDateInput(isoStr: string): string {
@@ -353,7 +354,7 @@ function sanitizeBirthDateInput(isoStr: string): string {
 
 function clientToForm(c: Client): ClientFormData {
   return {
-    name: c.name, email: c.email, whatsapp: c.whatsapp, phone: c.phone ?? "",
+    name: c.name, email: c.email ?? "", whatsapp: c.whatsapp ?? "", phone: c.phone ?? "",
     cpf: c.cpf ?? "", rg: c.rg ?? "", birthDate: c.birthDate ? sanitizeBirthDateInput(c.birthDate) : "",
     gender: c.gender ?? "none", addressCity: c.addressCity ?? "", addressState: c.addressState ?? "",
     instagram: c.instagram ?? "", pipelineStage: c.pipelineStage ?? "none",
@@ -370,7 +371,7 @@ function clientToForm(c: Client): ClientFormData {
     npsScore: c.companyNps != null ? String(c.companyNps) : (c.npsScore != null ? String(c.npsScore) : ""),
     companyFeedback: c.companyFeedback ?? "",
     travelInterests: c.travelInterests ?? [],
-    ambassadorOptIn: c.ambassadorOptIn ?? false,
+    ambassadorOptIn: c.ambassadorOptIn ?? false, allowMissingData: false,
   };
 }
 
@@ -487,13 +488,22 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const faltaPagar = valorComDesconto - amountPaid;
 
   const handleSubmit = async (forceCreate = false) => {
-    if (!form.name || !form.whatsapp) {
-      toast({ title: "Nome e WhatsApp são obrigatórios", variant: "destructive" });
+    if (!form.name.trim()) {
+      toast({ title: "Nome completo é obrigatório", variant: "destructive" });
       return;
     }
-    if (!isEditing) {
-      if (!form.cpf) {
-        toast({ title: "CPF é obrigatório", variant: "destructive" });
+    if (!isEditing && !form.allowMissingData) {
+      const missingFields = [
+        !form.email.trim() ? "e-mail" : null,
+        !form.whatsapp.trim() ? "WhatsApp" : null,
+        !form.cpf.trim() ? "CPF" : null,
+      ].filter((field): field is string => field !== null);
+      if (missingFields.length > 0) {
+        toast({
+          title: "Preencha os dados obrigatórios",
+          description: `Faltando: ${missingFields.join(", ")}. Ou marque "Permitir cadastro com dados ausentes".`,
+          variant: "destructive",
+        });
         return;
       }
     }
@@ -573,7 +583,16 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
           }
         }
       } else {
-        const result = await createClient.mutateAsync({ data: { ...base, cpf: cleanCPF(form.cpf), forceCreate: forceCreate || undefined } });
+        const result = await createClient.mutateAsync({
+          data: {
+            ...base,
+            email: form.email.trim() || undefined,
+            whatsapp: form.whatsapp.trim() || undefined,
+            cpf: cleanCPF(form.cpf) || undefined,
+            allowMissingData: form.allowMissingData || undefined,
+            forceCreate: forceCreate || undefined,
+          },
+        });
         savedId = result.id;
         if (result.isNew === false) {
           toast({ title: "Cliente já cadastrado", description: "Os dados do cadastro existente foram atualizados com sucesso." });
@@ -747,7 +766,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 <Input placeholder="Maria Silva" value={form.name} onChange={e => set("name")(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label>WhatsApp *</Label>
+                <Label>WhatsApp {!isEditing && <span className="text-destructive">*</span>}</Label>
                 <Input placeholder="+55 31 99999-9999" value={form.whatsapp} onChange={e => set("whatsapp")(e.target.value)} />
                 {whatsappHasInvalidFormat && (
                   <p className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400" role="status">
@@ -769,7 +788,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 )}
               </div>
               <div className="space-y-2">
-                <Label>E-mail</Label>
+                <Label>E-mail {!isEditing && <span className="text-destructive">*</span>}</Label>
                 <Input type="email" placeholder="maria@email.com" value={form.email} onChange={e => set("email")(e.target.value)} />
               </div>
               <div className="space-y-2">
@@ -825,6 +844,23 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 </Select>
               </div>
             </div>
+            {!isEditing && (
+              <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-800 dark:bg-amber-950/20">
+                <Checkbox
+                  id="allowMissingData"
+                  checked={form.allowMissingData}
+                  onCheckedChange={value => setForm(prev => ({ ...prev, allowMissingData: !!value }))}
+                />
+                <div className="space-y-0.5">
+                  <Label htmlFor="allowMissingData" className="cursor-pointer font-medium">
+                    Permitir cadastro com dados ausentes
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Use quando o cliente ainda não informou o WhatsApp, CPF ou e-mail.
+                  </p>
+                </div>
+              </div>
+            )}
           </TabsContent>
 
           {/* Aba 2 — Viagem */}
@@ -1302,7 +1338,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
 
         <div className="flex justify-end gap-2 pt-4 border-t mt-2">
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => handleSubmit()} disabled={isPending || !!limitError || !form.name || !form.whatsapp}>
+          <Button onClick={() => handleSubmit()} disabled={isPending || !!limitError || !form.name}>
             {isPending ? "Salvando..." : isEditing ? "Salvar Alterações" : "Criar Cliente"}
           </Button>
         </div>
@@ -1512,6 +1548,7 @@ function SortableHeader({ label, field, currentSort, currentOrder, onSort }: Sor
 
 export default function Clients() {
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
   const searchStr = useSearch();
   const [search, setSearch] = useState(() => new URLSearchParams(searchStr).get("search") ?? "");
   const [page, setPage] = useState(() => parseInt(new URLSearchParams(searchStr).get("page") ?? "1") || 1);
@@ -1581,7 +1618,7 @@ export default function Clients() {
     return {};
   }, [filterScoreBand]);
 
-  const { data: clientsData, isLoading, refetch } = useListClients({
+  const { data: clientsData, isLoading, isError, refetch } = useListClients({
     search: search || undefined,
     status: filterStatus !== "all" ? filterStatus : undefined,
     pipelineStage: filterPipelineStage !== "all" ? filterPipelineStage : undefined,
@@ -1599,7 +1636,7 @@ export default function Clients() {
     ...scoreBandFilter,
   });
 
-  const { data: allClients } = useListClients({ limit: 1000, page: 1 });
+  const { data: allClients } = useListClients({ limit: 500, page: 1 });
 
   const stats = useMemo(() => {
     const all = allClients?.data ?? [];
@@ -1665,7 +1702,27 @@ export default function Clients() {
       toast({ title: "Cliente excluído com sucesso" });
       setDeleteClient(null);
       setDeleteConfirmText("");
-      refetch();
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ["/api/clients"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/reservations"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/reservations/stats"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/trips"] }),
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = JSON.stringify(query.queryKey).toLowerCase();
+            return [
+              "dashboard",
+              "analytics",
+              "insights",
+              "financial-metrics",
+              "payments",
+              "reservation",
+              "trip",
+            ].some(term => key.includes(term));
+          },
+        }),
+      ]);
     } catch {
       toast({ title: "Erro ao excluir cliente", variant: "destructive" });
     }
@@ -1853,6 +1910,12 @@ export default function Clients() {
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>{Array.from({ length: 13 }).map((__, j) => <TableCell key={j}><Skeleton className="h-8 w-full" /></TableCell>)}</TableRow>
                 ))
+              ) : isError ? (
+                <ListLoadErrorRow
+                  colSpan={13}
+                  onRetry={refetch}
+                  message="Não foi possível carregar os clientes."
+                />
               ) : birthdayFilter ? (
                 birthdayClients.length === 0 ? (
                   <TableRow>
@@ -2027,7 +2090,7 @@ export default function Clients() {
                             <DropdownMenuItem onClick={() => setViewClientId(client.id)}>Ver detalhes 360°</DropdownMenuItem>
                             <DropdownMenuItem onClick={() => { setEditClient(client); setIsCreateOpen(true); }}>Editar dados</DropdownMenuItem>
                             <DropdownMenuItem asChild>
-                              <a href={`https://wa.me/${client.whatsapp.replace(/\D/g, "")}`} target="_blank" rel="noreferrer">Abrir WhatsApp</a>
+                              <a href={`https://wa.me/${(client.whatsapp ?? "").replace(/\D/g, "")}`} target="_blank" rel="noreferrer">Abrir WhatsApp</a>
                             </DropdownMenuItem>
                             {isAdmin && (
                               <DropdownMenuItem
@@ -2102,7 +2165,7 @@ export default function Clients() {
               <span className="block mt-2">
                 Se este cliente tiver uma conta na vitrine, o acesso ao portal também será removido.
               </span>
-              <span className="block mt-2 text-destructive font-medium">O histórico de reservas e pagamentos é preservado. Esta ação não pode ser desfeita.</span>
+              <span className="block mt-2 text-destructive font-medium">Reservas pendentes ou confirmadas serão canceladas operacionalmente e os assentos serão liberados. O histórico de reservas, passageiros e pagamentos será preservado. Esta ação não pode ser desfeita.</span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="px-1 py-2">

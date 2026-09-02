@@ -9,6 +9,7 @@ import { z } from "zod";
 import { ADMIN_ROLES, MANAGEMENT_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
 import { resendEmailLog } from "../queues/email-helpers";
 import { LIST_SAFETY_CAP } from "../lib/list-limits";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 const router = Router();
 
@@ -57,6 +58,7 @@ function formatMessage(m: typeof messagesTable.$inferSelect) {
     sentAt: m.sentAt.toISOString(),
     deliveredAt: m.deliveredAt?.toISOString() ?? null, readAt: m.readAt?.toISOString() ?? null,
     metadata: m.metadata,
+    outboundMessageId: m.outboundMessageId,
   };
 }
 
@@ -110,6 +112,22 @@ router.post("/messages", async (req, res, next: NextFunction): Promise<void> => 
       if (!client) { next(new ValidationError(String("Client not found or not in tenant" ), "VALIDATION_ERROR")); return; }
     }
 
+    const idempotencyKey = req.get("Idempotency-Key")?.trim() || `manual:${me.id}:${generateId()}`;
+    const deliveryEvent = parsed.data.channel === "email" || parsed.data.channel === "whatsapp"
+      ? await dispatchOutboundMessage({
+        tenantId: me.tenantId,
+        eventType: "manual_message",
+        idempotencyKey,
+        recipient: parsed.data.toClientId ? { type: "client", id: parsed.data.toClientId } : { type: "admin" },
+        email: parsed.data.channel === "email"
+          ? { subject: "Mensagem da agência", html: parsed.data.content, senderName: me.name }
+          : { subject: "Mensagem da agência", html: parsed.data.content, senderName: me.name },
+        whatsapp: { text: parsed.data.content },
+        origin: "user",
+        originChannel: parsed.data.channel,
+        createdById: me.id,
+      })
+      : null;
     const id = generateId();
     await db.insert(messagesTable).values({
       id,
@@ -118,7 +136,9 @@ router.post("/messages", async (req, res, next: NextFunction): Promise<void> => 
       toClientId: parsed.data.toClientId ?? null,
       channel: parsed.data.channel,
       content: parsed.data.content,
-      status: "sent",
+      status: deliveryEvent?.message.status ?? "sent",
+      metadata: deliveryEvent ? { outboundMessageId: deliveryEvent.message.id } : null,
+      outboundMessageId: deliveryEvent?.message.id ?? null,
     });
     const [message] = await db.select().from(messagesTable)
       .where(and(eq(messagesTable.id, id), eq(messagesTable.tenantId, me.tenantId)))

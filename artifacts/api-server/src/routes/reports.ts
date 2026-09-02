@@ -7,8 +7,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import ExcelJS from "exceljs";
 import { jsPDF } from "jspdf";
 import { applyPlugin } from "jspdf-autotable";
-import { MANAGEMENT_ROLES } from '../lib/tenant';
-import { RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, EXPENSE_STATUS } from "@workspace/permissions";
+import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, PAYMENT_STATUS, PAYMENT_TYPE, EXPENSE_STATUS, ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 import { formatBRLPlain, localToday } from "@workspace/shared";
 import { z } from "zod/v4";
 import { MAX_REPORT_RANGE_DAYS, MAX_EXPORT_ROWS } from "../lib/list-limits";
@@ -76,7 +75,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
     const me = await requireAuth(req, res);
     if (!me) return;
 
-    if (!MANAGEMENT_ROLES.includes(me.role)) {
+    if (!hasPermission(me.role, RESOURCES.REPORTS, ACTIONS.VIEW)) {
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 
@@ -595,7 +594,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
           eq(reservationsTable.tenantId, tenantId),
           gte(tripsTable.departureDate, start),
           lte(tripsTable.departureDate, end),
-          inArray(reservationsTable.status, [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED]),
+          inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
         )).limit(MAX_EXPORT_ROWS + 1);
 
       if (passengers.length > MAX_EXPORT_ROWS) {

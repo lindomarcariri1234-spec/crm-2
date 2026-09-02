@@ -154,6 +154,15 @@ function mockStagingEmpty() {
     .mockResolvedValueOnce([]); // write existence check → insert path
 }
 
+function writtenStaging(): Array<{ key: string; stagedAt: number }> {
+  const updateCall = (mockDbUpdateSet.mock.calls as unknown[][])[0];
+  const updatePayload = updateCall?.[0] as
+    | { value?: unknown }
+    | undefined;
+  expect(typeof updatePayload?.value).toBe("string");
+  return JSON.parse(String(updatePayload?.value ?? "[]")) as Array<{ key: string; stagedAt: number }>;
+}
+
 // ── Shared beforeEach ─────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -244,7 +253,7 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(mockDeleteFiles).not.toHaveBeenCalled();
 
       // Key must be retained in staging with original stagedAt
-      const written = JSON.parse(mockDbUpdateSet.mock.calls[0][0].value);
+      const written = writtenStaging();
       expect(written).toHaveLength(1);
       expect(written[0].key).toBe(KEY);
       expect(written[0].stagedAt).toBe(recentStagedAt);
@@ -270,7 +279,7 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(mockDeleteFiles).toHaveBeenCalledWith([KEY]);
 
       // Deleted key removed from staging
-      const written = JSON.parse(mockDbUpdateSet.mock.calls[0][0].value);
+      const written = writtenStaging();
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeUndefined();
     });
 
@@ -291,7 +300,7 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(result.deleted).toBe(0);
       expect(mockDeleteFiles).not.toHaveBeenCalled();
       // Rescued key should not be in staging either (it's now referenced)
-      const written = JSON.parse(mockDbUpdateSet.mock.calls[0][0].value);
+      const written = writtenStaging();
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeUndefined();
     });
 
@@ -372,7 +381,7 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
         expect.stringContaining("Batch deletion failed"),
       );
       // Key should be retained in staging for retry
-      const written = JSON.parse(mockDbUpdateSet.mock.calls[0][0].value);
+      const written = writtenStaging();
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeDefined();
     });
 
@@ -405,7 +414,7 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       // KEY not in currentOrphanKeys (it's referenced), so it's de-staged
       expect(result.newlyStaged).toBe(0);
       expect(result.deleted).toBe(0);
-      const written = JSON.parse(mockDbUpdateSet.mock.calls[0][0].value);
+      const written = writtenStaging();
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeUndefined();
     });
   });

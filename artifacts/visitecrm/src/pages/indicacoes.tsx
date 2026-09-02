@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "wouter";
 import { localToday } from "@workspace/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -25,6 +26,7 @@ import {
   useTestWhatsAppMessage,
   useGetCurrentSubscription,
   useGetReferralCommissionReport,
+  useReversePaidReferralBonus,
 } from "@workspace/api-client-react";
 import type { Referral, ReferralSettings, ReferralTierConfig, ReferralAnalyticsPeriod, ReferralCampaign } from "@workspace/api-client-react";
 import { REFERRAL_STATUS, ROLES } from "@workspace/permissions";
@@ -102,6 +104,7 @@ import {
 } from "lucide-react";
 import { ReferralAnalyticsCharts } from "@/components/referral-analytics-charts";
 import { PlanFeatureWall, canUpgradeForFeature, getRequiredPlanLabel } from "@/components/plan-limit-wall";
+import type { LinkedData } from "@/lib/linked-data";
 
 const DEFAULT_TIERS: ReferralTierConfig[] = [
   { level: "bronze",  label: "Bronze",   minReferrals: 0,  bonusMultiplier: 1.0 },
@@ -161,7 +164,7 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant={s.variant}>{s.label}</Badge>;
 }
 
-type EnrichedReferral = Referral & {
+type EnrichedReferral = Referral & LinkedData & {
   referrerWhatsapp?: string | null;
   bonusReleasesAt?: string | null;
   bonusBlocked?: boolean;
@@ -221,6 +224,7 @@ export default function Indicacoes() {
   const resendWarning = useResendExpiryWarning();
   const resendBonus = useResendBonusRelease();
   const reverseBonus = useReverseReferralBonus();
+  const reversePaidBonus = useReversePaidReferralBonus();
   const testWhatsApp = useTestWhatsAppMessage();
   const { data: me } = useGetMe();
   const queryClient = useQueryClient();
@@ -487,8 +491,19 @@ export default function Indicacoes() {
       return;
     }
     try {
-      const updated = await reverseBonus.mutateAsync({ id: reverseBonusTarget.id, data: { reason: reverseBonusReason.trim() } });
-      toast({ title: "Bônus revertido com sucesso", description: "O indicador será notificado por e-mail." });
+      const updated = reverseBonusTarget.bonusPaid
+        ? await reversePaidBonus.mutateAsync({
+            id: reverseBonusTarget.id,
+            data: { reason: reverseBonusReason.trim(), confirmed: true },
+          })
+        : await reverseBonus.mutateAsync({
+            id: reverseBonusTarget.id,
+            data: { reason: reverseBonusReason.trim() },
+          });
+      toast({
+        title: reverseBonusTarget.bonusPaid ? "Estorno financeiro registrado" : "Bônus revertido com sucesso",
+        description: "O indicador será notificado por e-mail.",
+      });
       refetch();
       setReverseBonusDialogOpen(false);
       setReverseBonusTarget(null);
@@ -497,7 +512,10 @@ export default function Indicacoes() {
         setSelectedReferral(updated as EnrichedReferral);
       }
     } catch {
-      toast({ title: "Erro ao reverter bônus", variant: "destructive" });
+      toast({
+        title: reverseBonusTarget.bonusPaid ? "Erro ao registrar estorno financeiro" : "Erro ao reverter bônus",
+        variant: "destructive",
+      });
     }
   }
 
@@ -1620,6 +1638,7 @@ export default function Indicacoes() {
                       {tabVal === "suspicious" && <TableHead className="text-red-600">Motivo</TableHead>}
                       <TableHead>Bônus</TableHead>
                       <TableHead>Desconto</TableHead>
+                      <TableHead>Vínculos</TableHead>
                       <TableHead>Visitas</TableHead>
                       <TableHead>Última visita</TableHead>
                       <TableHead>Expira em</TableHead>
@@ -1744,6 +1763,36 @@ export default function Indicacoes() {
                             ? fmtCurrency(r.discountAmount)
                             : `${r.discountValue}%`}
                         </TableCell>
+                        <TableCell className="text-xs">
+                          {r.linkedOrder ? (
+                            <div data-testid={`text-referral-order-${r.id}`}>
+                              Pedido <span className="font-mono">{r.linkedOrder.orderNumber}</span>
+                              {r.linkedReservations?.length ? (
+                                <> · {r.linkedReservations.map((reservation, index) => (
+                                  <span key={reservation.id}>
+                                    {index > 0 ? ", " : ""}
+                                    <Link href={`/reservations/${reservation.id}`} className="font-mono text-primary hover:underline" data-testid={`link-referral-reservation-${reservation.id}`}>
+                                      {reservation.reservationNumber}
+                                    </Link>
+                                  </span>
+                                ))}</>
+                              ) : ""}
+                            </div>
+                          ) : r.linkedReservations?.length ? (
+                            <div data-testid={`text-referral-reservations-${r.id}`}>
+                              {r.linkedReservations.map((reservation, index) => (
+                                <span key={reservation.id}>
+                                  {index > 0 ? ", " : ""}
+                                  <Link href={`/reservations/${reservation.id}`} className="font-mono text-primary hover:underline" data-testid={`link-referral-reservation-${reservation.id}`}>
+                                    {reservation.reservationNumber}
+                                  </Link>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
                         <TableCell>{r.visitsCount ?? 0}</TableCell>
                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{fmtDateTime(r.lastVisit)}</TableCell>
                         <TableCell className="whitespace-nowrap">
@@ -1794,7 +1843,7 @@ export default function Indicacoes() {
                                 variant="ghost"
                                 className="text-red-600 hover:text-red-700 hover:bg-red-50"
                                 onClick={() => openReverseBonusDialog(r)}
-                                title="Reverter bônus"
+                                title={r.bonusPaid ? "Estornar bônus já pago" : "Reverter bônus"}
                               >
                                 <XCircle className="w-3 h-3" />
                               </Button>
@@ -2068,10 +2117,12 @@ export default function Indicacoes() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-700">
               <XCircle className="w-5 h-5" />
-              Reverter Bônus de Indicação
+              {reverseBonusTarget?.bonusPaid ? "Estornar Bônus Pago" : "Reverter Bônus de Indicação"}
             </DialogTitle>
             <DialogDescription>
-              Esta ação reverterá o bônus, decrementará os ganhos do indicador e enviará uma notificação por e-mail. Não pode ser desfeita.
+              {reverseBonusTarget?.bonusPaid
+                ? "Esta ação registrará um estorno financeiro para um bônus já pago, ajustará o saldo, a comissão e os pontos do indicador e enviará uma notificação. Não pode ser desfeita."
+                : "Esta ação reverterá o bônus, decrementará os ganhos do indicador e enviará uma notificação por e-mail. Não pode ser desfeita."}
             </DialogDescription>
           </DialogHeader>
           {reverseBonusTarget && (
@@ -2099,22 +2150,28 @@ export default function Indicacoes() {
                   placeholder="Ex: Contestação do cliente, reembolso parcial..."
                   value={reverseBonusReason}
                   onChange={(e) => setReverseBonusReason(e.target.value)}
-                  disabled={reverseBonus.isPending}
+                  disabled={reverseBonus.isPending || reversePaidBonus.isPending}
                 />
               </div>
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setReverseBonusDialogOpen(false)} disabled={reverseBonus.isPending}>
+            <Button
+              variant="outline"
+              onClick={() => setReverseBonusDialogOpen(false)}
+              disabled={reverseBonus.isPending || reversePaidBonus.isPending}
+            >
               Cancelar
             </Button>
             <Button
               onClick={confirmReverseBonus}
-              disabled={reverseBonus.isPending || !reverseBonusReason.trim()}
+              disabled={(reverseBonus.isPending || reversePaidBonus.isPending) || !reverseBonusReason.trim()}
               className="bg-red-600 hover:bg-red-700 text-white"
             >
               <XCircle className="w-4 h-4 mr-2" />
-              {reverseBonus.isPending ? "Processando..." : "Confirmar reversão"}
+              {(reverseBonus.isPending || reversePaidBonus.isPending)
+                ? "Processando..."
+                : reverseBonusTarget?.bonusPaid ? "Confirmar estorno financeiro" : "Confirmar reversão"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2217,6 +2274,36 @@ export default function Indicacoes() {
                     </>
                   )}
                 </div>
+                {selectedReferral.linkedOrder && (
+                  <div className="col-span-2 rounded-md border bg-muted/30 p-3 space-y-1" data-testid={`card-referral-order-${selectedReferral.id}`}>
+                    <p className="text-xs font-medium text-muted-foreground">Pedido vinculado</p>
+                    <p className="text-sm">
+                      <span className="font-mono font-semibold">{selectedReferral.linkedOrder.orderNumber}</span>
+                      {" · "}Base {fmtCurrency(selectedReferral.linkedOrder.subtotal)}
+                      {" · "}Desconto {fmtCurrency(selectedReferral.linkedOrder.discountAmount)}
+                      {" · "}Total {fmtCurrency(selectedReferral.linkedOrder.totalAmount)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedReferral.linkedOrder.paymentStatus === "paid" ? "Pago" : "Pagamento pendente"} · saldo {fmtCurrency(selectedReferral.linkedOrder.amountRemaining ?? 0)}
+                    </p>
+                  </div>
+                )}
+                {selectedReferral.linkedReservations?.length ? (
+                  <div className="col-span-2 rounded-md border bg-muted/30 p-3" data-testid={`card-referral-reservations-${selectedReferral.id}`}>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Reservas vinculadas</p>
+                    {selectedReferral.linkedReservations.map((reservation) => (
+                      <p key={reservation.id} className="text-sm">
+                        <span className="font-mono font-semibold">{reservation.reservationNumber}</span>
+                        {" · "}Total {fmtCurrency(reservation.totalValue)} · Pago {fmtCurrency(reservation.paidValue)} · Saldo {fmtCurrency(reservation.balance)}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
+                {selectedReferral.linkedDeals?.length ? (
+                  <div className="col-span-2 text-xs text-muted-foreground" data-testid={`text-referral-deals-${selectedReferral.id}`}>
+                    {selectedReferral.linkedDeals.length} negócio{selectedReferral.linkedDeals.length > 1 ? "s" : ""} vinculado{selectedReferral.linkedDeals.length > 1 ? "s" : ""}
+                  </div>
+                ) : null}
                 {(() => {
                   const allByReferrer = referrals.filter(r => r.referrerId === selectedReferral.referrerId && r.status === REFERRAL_STATUS.COMPLETED);
                   const totalBonus = allByReferrer.reduce((s, r) => s + (parseFloat(String(r.bonusAmount ?? "0")) || 0), 0);

@@ -37,6 +37,7 @@ import { DEAL_STATUS, ROLES } from "@workspace/permissions";
 import { formatCurrency } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { mergePipelineDeals } from "./pipeline-deals";
+import type { LinkedData } from "@/lib/linked-data";
 
 const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -297,6 +298,7 @@ interface ClientCardProps {
 }
 
 function ClientCardContent({ deal, tripsById, onEditClient, onView360, onDelete, onCreateReservation, onViewReservation, onOpenMarkModal, isFinalStage, isLostStage, isDragging }: ClientCardProps) {
+  const linked = deal as Deal & LinkedData;
   const name = deal.clientName ?? deal.leadName ?? "Lead Desconhecido";
   const whatsapp = deal.clientWhatsapp ?? deal.leadWhatsapp;
   const email = deal.clientEmail ?? deal.leadEmail;
@@ -465,6 +467,40 @@ function ClientCardContent({ deal, tripsById, onEditClient, onView360, onDelete,
             <Bell className="w-2.5 h-2.5 shrink-0" />
             <span className="truncate">{deal.followUpNote}</span>
           </span>
+        </div>
+      )}
+
+      {(linked.linkedOrder || linked.linkedReferral || linked.linkedReservations?.length) && (
+        <div className="mb-2 rounded border bg-muted/30 px-2 py-1.5 text-xs space-y-0.5" data-testid={`card-deal-links-${deal.id}`}>
+          {linked.linkedOrder && (
+            <p data-testid={`text-deal-order-${deal.id}`}>
+              Pedido <span className="font-mono font-medium">{linked.linkedOrder.orderNumber}</span>
+              {" · "}Total {formatCurrency(Number(linked.linkedOrder.totalAmount))}
+            </p>
+          )}
+          {linked.linkedReservations?.length ? (
+            <div data-testid={`text-deal-reservations-${deal.id}`}>
+              Reserva{linked.linkedReservations.length > 1 ? "s" : ""}{" "}
+              {linked.linkedReservations.map((reservation, index) => (
+                <span key={reservation.id}>
+                  {index > 0 ? ", " : ""}
+                  <button
+                    type="button"
+                    className="font-mono font-medium text-primary hover:underline"
+                    onClick={(event) => { event.stopPropagation(); onViewReservation(reservation.id); }}
+                    data-testid={`button-deal-reservation-${reservation.id}`}
+                  >
+                    {reservation.reservationNumber}
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {linked.linkedReferral && (
+            <p data-testid={`text-deal-referral-${deal.id}`}>
+              Indicação <span className="font-mono font-medium">{linked.linkedReferral.code}</span>
+            </p>
+          )}
         </div>
       )}
 

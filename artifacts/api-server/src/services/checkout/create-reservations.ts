@@ -27,6 +27,7 @@ import { syncReservationPaymentStatus, paymentExistsForGatewayTx, type DbExecuto
 import type { Tx } from "./tx";
 import { syncClientDeal, type PipelineExecutor } from "../pipeline-deal-sync";
 import { moveDealToStage } from "../pipeline-automation";
+import { getStorefrontInitialPipelineStage } from "./storefront-pipeline";
 
 export interface CreateReservationsResult {
   reservationIds: string[];
@@ -419,7 +420,7 @@ export async function createReservationsForOrder(
         {
           reservationId,
           source: "website",
-          targetStageName: isDepositConfirmed ? "Reserva Criada" : "Vitrine",
+          targetStageName: getStorefrontInitialPipelineStage(isDepositConfirmed),
           executor: exec as unknown as PipelineExecutor,
         },
       );

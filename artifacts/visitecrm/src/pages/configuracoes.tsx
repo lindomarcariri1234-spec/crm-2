@@ -110,11 +110,14 @@ import {
   FileJson,
   XCircle,
   AlertTriangle,
+  Wrench,
 } from "lucide-react";
 import { formatCurrencyBRL } from "@/lib/utils";
 import { interpolateWhatsAppPreview, renderWhatsAppPreview } from "@/lib/whatsappPreview";
 import { ROLES, INVOICE_STATUS } from "@workspace/permissions";
 import { FeaturesTab } from "./FeaturesTab";
+import { LinkedDataIntegrityPanel } from "@/components/linked-data-integrity-panel";
+import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -1629,6 +1632,19 @@ function DistributionHealthCard() {
 function IntegrationsTab() {
   return (
     <div className="space-y-4">
+      <Card className="border-blue-200 bg-blue-50/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Controles de comunicação multicanal</CardTitle>
+          <CardDescription>
+            Cada envio registra E-mail e WhatsApp como entregas independentes da mesma mensagem.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-sm md:grid-cols-3">
+          <div><p className="font-medium">Consentimento</p><p className="text-muted-foreground">Opt-out por canal é respeitado antes do envio.</p></div>
+          <div><p className="font-medium">Disponibilidade</p><p className="text-muted-foreground">Contato ausente aparece como “ignorado” no histórico, sem tentativa artificial.</p></div>
+          <div><p className="font-medium">Integração responsável</p><p className="text-muted-foreground">E-mail usa Resend e WhatsApp usa a integração configurada abaixo. Nenhum segredo é exibido.</p></div>
+        </CardContent>
+      </Card>
       <GoogleCalendarCard />
       <AICard />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4420,6 +4436,12 @@ export default function Configuracoes() {
               Backup de Dados
             </TabsTrigger>
           )}
+          {isAgencyAdmin && (
+            <TabsTrigger value="integrity" className="flex items-center gap-1.5" data-testid="tab-linked-data-integrity">
+              <Wrench className="w-3.5 h-3.5" />
+              Integridade
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <div className="mt-4">
@@ -4530,6 +4552,15 @@ export default function Configuracoes() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {isAgencyAdmin && (
+            <TabsContent value="integrity">
+              <div className="space-y-4">
+                <LinkedDataIntegrityPanel />
+                <FinancialMetricsOverview />
+              </div>
+            </TabsContent>
+          )}
 
           <TabsContent value="clube">
             <Card>

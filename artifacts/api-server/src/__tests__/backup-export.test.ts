@@ -40,7 +40,8 @@ const { rowsByTable, rejectedTable, mockRequireAuth, mockLogError, tables, makeC
     "campaignSendsTable", "npsResponsesTable", "clientNpsResponsesTable", "productsTable",
     "ordersTable", "orderItemsTable", "messagesTable", "messageTemplatesTable",
     "chatbotConversationsTable", "chatbotMessagesTable", "birthdayMessagesTable",
-    "emailLogsTable", "whatsappNotificationOutboxTable", "tripMediaTable", "tripImportBatchesTable",
+    "emailLogsTable", "whatsappNotificationOutboxTable", "outboundMessagesTable",
+    "outboundDeliveriesTable", "outboundDeliveryAttemptsTable", "tripMediaTable", "tripImportBatchesTable",
     "clientAchievementsTable", "clientDreamDestinationsTable", "clientFavoritesTable",
     "clientNotificationsTable", "clientScoresTable", "npsInvitationsTable", "invitesTable",
     "tenantIntegrationsTable", "tenantIntegrationLogsTable", "aiIntegrationsTable", "aiIntegrationLogsTable",
@@ -572,7 +573,7 @@ describe("GET /api/backup/export", () => {
 
     // Envelope identifies format/version/source tenant for a future importer.
     expect(body.format).toBe("visitecrm-agency-backup");
-    expect(body.version).toBe(4);
+    expect(body.version).toBe(5);
     expect(body.tenant).toMatchObject({
       id: TENANT_A,
       name: "Agência A",
@@ -622,6 +623,9 @@ describe("GET /api/backup/export", () => {
     expect((data.comunicacao as { messages: unknown[]; chatbotMessages: unknown[]; emailLogs: unknown[]; whatsappOutbox: unknown[] }).chatbotMessages).toHaveLength(1);
     expect((data.comunicacao as { emailLogs: unknown[] }).emailLogs).toHaveLength(1);
     expect((data.comunicacao as { whatsappOutbox: unknown[] }).whatsappOutbox).toHaveLength(1);
+    expect((data.comunicacao as { outboundMessages: unknown[] }).outboundMessages).toEqual([]);
+    expect((data.comunicacao as { outboundDeliveries: unknown[] }).outboundDeliveries).toEqual([]);
+    expect((data.comunicacao as { outboundDeliveryAttempts: unknown[] }).outboundDeliveryAttempts).toEqual([]);
     expect(
       (data.integracoes as { tenantIntegrations: unknown[]; tenantIntegrationLogs: unknown[]; aiIntegrations: unknown[]; aiIntegrationLogs: unknown[] })
         .tenantIntegrations,

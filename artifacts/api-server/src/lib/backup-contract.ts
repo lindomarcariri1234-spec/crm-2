@@ -1,5 +1,5 @@
 export const BACKUP_FORMAT = "visitecrm-agency-backup";
-export const BACKUP_VERSION = 4;
+export const BACKUP_VERSION = 5;
 export const LEGACY_FLAT_BACKUP_MIN_VERSION = 1;
 export const LEGACY_FLAT_BACKUP_MAX_VERSION = 6;
 
@@ -212,7 +212,7 @@ function normalizeLegacyFlatBackup(root: Record<string, unknown>): CanonicalBack
           orderItems: flattenChildren(array(marketing.orders), "items", "orderId"),
         },
       },
-      comunicacao: { messages: [], messageTemplates: array(root.messageTemplates), chatbotConversations: [], chatbotMessages: [], birthdayMessages: [], emailLogs: [], whatsappOutbox: [] },
+      comunicacao: { messages: [], messageTemplates: array(root.messageTemplates), chatbotConversations: [], chatbotMessages: [], birthdayMessages: [], emailLogs: [], whatsappOutbox: [], outboundMessages: [], outboundDeliveries: [], outboundDeliveryAttempts: [] },
       integracoes: { tenantIntegrations: [], tenantIntegrationLogs: [], aiIntegrations: [], aiIntegrationLogs: [] },
       inteligenciaArtificial: { gemeoAlerts: [], gemeoOpportunities: [], insightsChatHistory: [] },
       catalogoLegado: { categories: array(marketing.productCategories), images: flattenChildren(array(marketing.products), "images", "productId"), cartItems: [] },

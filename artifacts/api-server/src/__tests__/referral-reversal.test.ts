@@ -23,7 +23,10 @@ import pino from "pino";
 
 const { mockLimit, mockWhere, mockFrom, mockSelect, mockTransaction } = vi.hoisted(() => {
   const mockLimit = vi.fn();
-  const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+  // Reservation cancellation locks the row with `.for("update")` instead of
+  // calling `.limit()`. Both terminal methods consume the shared response
+  // queue so the transaction mock follows the real query builder.
+  const mockWhere = vi.fn(() => ({ limit: mockLimit, for: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
   const mockTransaction = vi.fn();
@@ -447,7 +450,7 @@ describe("PATCH /api/trips/:id — cancellation reverses referrals (trip_cancell
     vi.clearAllMocks();
     mockLimit.mockReset();
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
-    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockWhere.mockReturnValue({ limit: mockLimit, for: mockLimit });
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
@@ -457,11 +460,13 @@ describe("PATCH /api/trips/:id — cancellation reverses referrals (trip_cancell
 
     // mockLimit queue for a completed referral linked to the reservation:
     // 1. requireReservationAccess → existing reservation
-    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → referral
-    // 3. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
-    // 4. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
-    // 5. formatReservation: db.select(emailLogs).limit(1) → []
+    // 2. tx.select(reservations FOR UPDATE) → existing reservation
+    // 3. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → referral
+    // 4. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
+    // 5. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
+    // 6. formatReservation: db.select(emailLogs).limit(1) → []
     mockLimit
+      .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([FAKE_REFERRAL])
       .mockResolvedValueOnce([UPDATED_RESERVATION])
@@ -503,13 +508,15 @@ describe("PATCH /api/trips/:id — cancellation reverses referrals (trip_cancell
 
     // mockLimit queue for an already-reversed referral:
     // 1. requireReservationAccess → existing reservation
-    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → []
-    // 3. tx.select(referrals WHERE code AND status=COMPLETED).limit(1) → []
-    // 4. tx.select(referrals WHERE code AND status=REVERSED).limit(1) → already reversed
-    // 5. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
-    // 6. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
-    // 7. formatReservation: db.select(emailLogs).limit(1) → []
+    // 2. tx.select(reservations FOR UPDATE) → existing reservation
+    // 3. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → []
+    // 4. tx.select(referrals WHERE code AND status=COMPLETED).limit(1) → []
+    // 5. tx.select(referrals WHERE code AND status=REVERSED).limit(1) → already reversed
+    // 6. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
+    // 7. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
+    // 8. formatReservation: db.select(emailLogs).limit(1) → []
     mockLimit
+      .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
@@ -553,7 +560,7 @@ describe("PATCH /api/reservations/:id — cancellation reverses linked referral 
     vi.clearAllMocks();
     mockLimit.mockReset();
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
-    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockWhere.mockReturnValue({ limit: mockLimit, for: mockLimit });
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
@@ -563,11 +570,13 @@ describe("PATCH /api/reservations/:id — cancellation reverses linked referral 
 
     // mockLimit queue for a completed referral linked to the reservation:
     // 1. requireReservationAccess → existing reservation
-    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → referral
-    // 3. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
-    // 4. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
-    // 5. formatReservation: db.select(emailLogs).limit(1) → []
+    // 2. tx.select(reservations FOR UPDATE) → existing reservation
+    // 3. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → referral
+    // 4. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
+    // 5. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
+    // 6. formatReservation: db.select(emailLogs).limit(1) → []
     mockLimit
+      .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([FAKE_REFERRAL])
       .mockResolvedValueOnce([UPDATED_RESERVATION])
@@ -604,13 +613,15 @@ describe("PATCH /api/reservations/:id — cancellation reverses linked referral 
 
     // mockLimit queue for the already-reversed path:
     // 1. requireReservationAccess → existing reservation
-    // 2. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → [] (byReservation: none)
-    // 3. tx.select(referrals WHERE code AND status=COMPLETED).limit(1) → [] (byCode: none)
-    // 4. tx.select(referrals WHERE code AND status=REVERSED).limit(1) → [{id:"ref-001"}] (alreadyReversed)
-    // 5. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
-    // 6. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
-    // 7. formatReservation: db.select(emailLogs).limit(1) → []
+    // 2. tx.select(reservations FOR UPDATE) → existing reservation
+    // 3. tx.select(referrals WHERE reservationId AND status=COMPLETED).limit(1) → [] (byReservation: none)
+    // 4. tx.select(referrals WHERE code AND status=COMPLETED).limit(1) → [] (byCode: none)
+    // 5. tx.select(referrals WHERE code AND status=REVERSED).limit(1) → [{id:"ref-001"}] (alreadyReversed)
+    // 6. tx.select(reservations after update).limit(1) → UPDATED_RESERVATION
+    // 7. formatReservation: db.select(trips).limit(1) → FAKE_TRIP_FOR_FORMAT
+    // 8. formatReservation: db.select(emailLogs).limit(1) → []
     mockLimit
+      .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([EXISTING_RESERVATION])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])

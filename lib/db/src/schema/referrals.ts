@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, numeric, boolean, integer, json, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, boolean, integer, json, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -63,11 +63,37 @@ export const referralsTable = pgTable("referrals", {
   reversalAt: timestamp("reversal_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  index("referrals_financial_bonus_paid_idx").on(t.tenantId, t.status, t.bonusPaidAt),
+  index("referrals_financial_credit_used_idx").on(t.tenantId, t.status, t.bonusCreditUsedAt),
+]);
 
 export const insertReferralSchema = createInsertSchema(referralsTable).omit({ createdAt: true, updatedAt: true });
 export type InsertReferral = z.infer<typeof insertReferralSchema>;
 export type Referral = typeof referralsTable.$inferSelect;
+
+/**
+ * Append-only audit record for a financial reversal of a bonus that was
+ * already paid. The referral row remains the source of the original fact;
+ * this table records the compensating operation and its operator.
+ */
+export const referralBonusReversalsTable = pgTable("referral_bonus_reversals", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  referralId: text("referral_id").notNull(),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  reason: text("reason").notNull(),
+  initiatedById: text("initiated_by_id").notNull(),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("referral_bonus_reversals_tenant_referral_unique").on(t.tenantId, t.referralId),
+  index("referral_bonus_reversals_tenant_created_idx").on(t.tenantId, t.createdAt),
+]);
+
+export const insertReferralBonusReversalSchema = createInsertSchema(referralBonusReversalsTable).omit({ createdAt: true });
+export type InsertReferralBonusReversal = z.infer<typeof insertReferralBonusReversalSchema>;
+export type ReferralBonusReversal = typeof referralBonusReversalsTable.$inferSelect;
 
 export const referralTrackingTable = pgTable("referral_tracking", {
   id: text("id").primaryKey(),
@@ -186,7 +212,10 @@ export const referralCommissionsTable = pgTable("referral_commissions", {
   reversedAt: timestamp("reversed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  index("referral_commissions_financial_created_idx").on(t.tenantId, t.status, t.createdAt),
+  index("referral_commissions_financial_paid_idx").on(t.tenantId, t.status, t.paidAt),
+]);
 
 export const insertReferralCommissionSchema = createInsertSchema(referralCommissionsTable).omit({ createdAt: true, updatedAt: true });
 export type InsertReferralCommission = z.infer<typeof insertReferralCommissionSchema>;

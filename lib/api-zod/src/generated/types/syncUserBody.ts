@@ -12,6 +12,12 @@ export interface SyncUserBody {
   email: string;
   /** @nullable */
   avatarUrl?: string | null;
+  /**
+   * CPF do usuário. Quando informado, é usado para localizar ou vincular o cadastro de cliente dentro da agência.
+   * @maxLength 20
+   * @nullable
+   */
+  cpf?: string | null;
   /** When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users. */
   storeSlug?: string;
 }

@@ -37,6 +37,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { ListLoadError } from "@/components/list-load-error";
 import {
   Plus,
   Pencil,
@@ -1416,7 +1417,7 @@ export default function LayoutsPage() {
     !(subData.plan?.supportedFeatures ?? []).includes("seatMap");
   const seatMapCanUpgrade = canUpgradeForFeature(subData, "seatMap");
 
-  const { data: layouts = [], isLoading, refetch } = useListLayouts({ query: { queryKey: ["layouts"] } });
+  const { data: layouts = [], isLoading, isError, refetch } = useListLayouts({ query: { queryKey: ["layouts"] } });
   const createLayout = useCreateLayout();
   const updateLayout = useUpdateLayout();
   const deleteLayout = useDeleteLayout();
@@ -1604,6 +1605,8 @@ export default function LayoutsPage() {
             <div key={i} className="border rounded-xl p-4 h-48 animate-pulse bg-muted/30" />
           ))}
         </div>
+      ) : isError ? (
+        <ListLoadError onRetry={refetch} message="Não foi possível carregar os layouts." />
       ) : layouts.length === 0 ? (
         <div className="border-2 border-dashed rounded-xl p-12 text-center space-y-3">
           <Armchair className="h-12 w-12 mx-auto text-muted-foreground/40" />

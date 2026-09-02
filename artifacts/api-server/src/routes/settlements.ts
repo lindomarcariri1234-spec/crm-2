@@ -2,8 +2,9 @@ import { Router, type NextFunction } from "express";
 import { db, clientsTable, financialLedgerEntriesTable, settlementItemsTable } from "@workspace/db";
 import { and, desc, eq, gte, lte } from "drizzle-orm";
 import { z } from "zod/v4";
-import { MANAGEMENT_ROLES, requireAuth } from "../lib/tenant";
+import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 import {
   createClientBenefitEntry,
   expireClientBenefits,
@@ -22,7 +23,7 @@ router.get("/financial/settlement", async (req, res, next: NextFunction): Promis
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) {
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.VIEW)) {
       next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE"));
       return;
     }
@@ -103,7 +104,7 @@ router.post("/financial/benefits", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) {
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.CREATE)) {
       next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE"));
       return;
     }

@@ -12,7 +12,7 @@ import { applyDeferredOrderCredits } from "./deferred-referral-effects";
 import { scheduleReservationConfirmedWhatsApp } from "./reservation-confirmation-outbox";
 import { dispatchReferralConvertedEmail, dispatchReferralTierUpgradeEmail, dispatchReferralLoyaltyPointsEmail } from "../../queues/email-helpers";
 import { dispatchWhatsAppReferralConverted, dispatchWhatsAppReservationConfirmed, dispatchWhatsAppPaymentReceived } from "../../queues/whatsapp-helpers";
-import { RESERVATION_STATUS } from "@workspace/permissions";
+import { RESERVATION_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 
 /**
  * Side effects that must only happen AFTER a store order's payment is confirmed
@@ -38,14 +38,19 @@ import { RESERVATION_STATUS } from "@workspace/permissions";
  * notification is dispatched by the webhook handler, so it is not duplicated.
  *
  * @param orderId - The store_orders.id whose payment was just confirmed.
+ * @param options.allowPartialPayment - Run only referral/credit effects when a
+ * positive reservation payment was received but the order is not fully paid.
  */
-export async function runPostPaymentSideEffects(orderId: string): Promise<void> {
+export async function runPostPaymentSideEffects(
+  orderId: string,
+  options: { allowPartialPayment?: boolean } = {},
+): Promise<void> {
   // Deferred referral conversion + referral-credit consumption. Runs first, in
   // its own transaction, gated behind confirmed payment and idempotent. Wrapped
   // in try/catch so a credit/referral failure never blocks the rest of the
   // post-payment side effects (or the already-confirmed payment).
   try {
-    const deferred = await applyDeferredOrderCredits(orderId);
+    const deferred = await applyDeferredOrderCredits(orderId, options);
     if (deferred.conversionApplied && deferred.referrerId && deferred.tenantId) {
       dispatchReferralConvertedEmail(
         deferred.referrerId,
@@ -104,13 +109,21 @@ export async function runPostPaymentSideEffects(orderId: string): Promise<void> 
       customerName: storeOrdersTable.customerName,
       customerEmail: storeOrdersTable.customerEmail,
       customerPhone: storeOrdersTable.customerPhone,
+      customerCpf: storeOrdersTable.customerCpf,
       totalAmount: storeOrdersTable.totalAmount,
+      paymentStatus: storeOrdersTable.paymentStatus,
     })
     .from(storeOrdersTable)
     .where(eq(storeOrdersTable.id, orderId))
     .limit(1);
 
   if (!order) return;
+
+  // A reservation deposit/partial payment must not be presented as a fully
+  // confirmed storefront order. Referral conversion above is intentionally
+  // already complete; code minting, order activity, portal/payment messaging,
+  // and other full-payment effects wait for the order's PAID transition.
+  if (options.allowPartialPayment && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID) return;
 
   // Auto-generate a referral code for the paying client (generate-if-missing).
   // Gated behind payment so anonymous checkout submissions cannot mint codes.
@@ -276,6 +289,7 @@ export async function runPostPaymentSideEffects(orderId: string): Promise<void> 
     await ensurePortalAccount({
       email: order.customerEmail,
       name: order.customerName,
+      cpf: order.customerCpf,
       tenantId: order.tenantId,
       storeBase,
       loginUrl,

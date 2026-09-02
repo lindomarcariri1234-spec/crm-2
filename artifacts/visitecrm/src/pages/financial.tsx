@@ -37,6 +37,8 @@ import {
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS } from "@/lib/labels";
 import { PageHeader } from "@/components/page-header";
+import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
+import { useFinancialMetrics } from "@/lib/financial-metrics-api";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -254,19 +256,19 @@ export default function Financial() {
     reader.readAsDataURL(file);
   }, []);
 
-  const { data: summary, isLoading: loadingSummary, refetch: refetchSummary } = useGetPaymentsSummary();
+  const { refetch: refetchSummary } = useGetPaymentsSummary();
   const { data: paymentsData, isLoading: loadingPayments, refetch: refetchPayments } = useListPayments({
     type: tab === "receivable" || tab === "payable" ? tab : undefined,
     status: statusFilter || undefined,
     limit: 50,
   });
   const { data: allReceivedPayments } = useListPayments({ type: PAYMENT_TYPE.RECEIVABLE, status: PAYMENT_STATUS.PAID, limit: 500 });
-  const { data: allExpensesData } = useListExpenses({ limit: 500 });
   const { data: expensesData, isLoading: loadingExpenses, refetch: refetchExpenses } = useListExpenses({ limit: 50 });
   const { data: commissionsData, isLoading: loadingCommissions, refetch: refetchCommissions } = useListCommissions();
   const { data: rulesData, isLoading: loadingRules, refetch: refetchRules } = useListCommissionRules();
   const { data: chartData } = useGetDashboardRevenueChart({ period: "12m" });
   const { data: clientsData } = useListClients({ limit: 500, page: 1 });
+  const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics();
 
   const clientMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -274,25 +276,9 @@ export default function Financial() {
     return map;
   }, [clientsData]);
 
-  const totalRevenue = useMemo(() =>
-    (allReceivedPayments?.data ?? []).reduce((s, p) => s + Number(p.amount), 0),
-    [allReceivedPayments]
-  );
-
-  const totalExpensesSum = useMemo(() =>
-    (allExpensesData?.data ?? []).filter(e => e.status === EXPENSE_STATUS.PAID).reduce((s, e) => s + Number(e.amount), 0),
-    [allExpensesData]
-  );
-
-  const overdueExpensesSum = useMemo(() =>
-    (allExpensesData?.data ?? []).filter(e => e.status === EXPENSE_STATUS.OVERDUE).reduce((s, e) => s + Number(e.amount), 0),
-    [allExpensesData]
-  );
-
-  const pendingExpensesSum = useMemo(() =>
-    (allExpensesData?.data ?? []).filter(e => e.status === EXPENSE_STATUS.PENDING).reduce((s, e) => s + Number(e.amount), 0),
-    [allExpensesData]
-  );
+  const canonicalTotals = financialMetrics?.totals;
+  const canonicalRevenue = canonicalTotals?.receivedRevenue ?? 0;
+  const canonicalCosts = canonicalTotals?.operatingCostsPaid ?? 0;
 
   const createPayment = useCreatePayment();
   const updatePayment = useUpdatePayment();
@@ -446,42 +432,44 @@ export default function Financial() {
         }
       />
 
+      <FinancialMetricsOverview />
+
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <KpiCard
           icon={TrendingUp}
-          label="Receita Total"
-          value={allReceivedPayments ? fmt(totalRevenue) : "—"}
-          sub={`Recebido no mês: ${fmt(summary?.collectedThisMonth ?? 0)}`}
+          label="Receita Recebida"
+          value={loadingFinancialMetrics ? "—" : fmt(canonicalRevenue)}
+          sub="Caixa recebido no mês atual (BRT)"
           color="text-green-600"
           trend="up"
         />
         <KpiCard
           icon={CheckCircle}
-          label="Total Recebido"
-          value={loadingSummary ? "—" : fmt(summary?.collectedThisMonth ?? 0)}
-          sub={`Pendente: ${fmt(summary?.totalReceivable ?? 0)}`}
+          label="Receita Contratada"
+          value={loadingFinancialMetrics ? "—" : fmt(canonicalTotals?.bookedRevenue ?? 0)}
+          sub={`Descontos: ${fmt(canonicalTotals?.discounts ?? 0)}`}
           color="text-blue-600"
         />
         <KpiCard
           icon={AlertCircle}
-          label="Total Pendente"
-          value={loadingSummary ? "—" : fmt(summary?.totalReceivable ?? 0)}
-          sub={`Vencido: ${fmt(summary?.overdueReceivable ?? 0)}`}
+          label="A Receber"
+          value={loadingFinancialMetrics ? "—" : fmt(canonicalTotals?.receivable ?? 0)}
+          sub={`Vencido: ${fmt(canonicalTotals?.overdueReceivable ?? 0)}`}
           color="text-yellow-600"
           trend="down"
         />
         <KpiCard
           icon={TrendingDown}
-          label="Total Despesas"
-          value={allExpensesData ? fmt(totalExpensesSum) : "—"}
-          sub={`A pagar: ${fmt(summary?.totalPayable ?? 0)}`}
+          label="Custos Operacionais Pagos"
+          value={loadingFinancialMetrics ? "—" : fmt(canonicalCosts)}
+          sub={`A pagar: ${fmt(canonicalTotals?.payable ?? 0)}`}
           color="text-red-600"
         />
       </div>
 
       {(() => {
-        const netProfit = totalRevenue - totalExpensesSum;
-        const margin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+        const netProfit = canonicalTotals?.profit ?? 0;
+        const margin = canonicalTotals?.margin ?? 0;
         const isProfit = netProfit >= 0;
         return (
           <Card className={`border-2 ${isProfit ? "border-emerald-200 bg-emerald-50/30 dark:border-emerald-800 dark:bg-emerald-950/20" : "border-red-200 bg-red-50/30 dark:border-red-800 dark:bg-red-950/20"}`}>
@@ -501,34 +489,34 @@ export default function Financial() {
                 </div>
                 <div className="md:col-span-3 grid grid-cols-2 md:grid-cols-3 gap-3">
                   <div className="rounded-lg bg-muted/60 p-3">
-                    <p className="text-xs text-muted-foreground">Receita Bruta</p>
-                    <p className="text-lg font-semibold text-green-600">{fmt(totalRevenue)}</p>
-                    <p className="text-[10px] text-muted-foreground">Recebido no mês: {fmt(summary?.collectedThisMonth ?? 0)}</p>
+                    <p className="text-xs text-muted-foreground">Receita Recebida</p>
+                    <p className="text-lg font-semibold text-green-600">{fmt(canonicalRevenue)}</p>
+                    <p className="text-[10px] text-muted-foreground">Contratada: {fmt(canonicalTotals?.bookedRevenue ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">Despesas Pagas</p>
-                    <p className="text-lg font-semibold text-red-600">{fmt(totalExpensesSum)}</p>
-                    <p className="text-[10px] text-muted-foreground">A pagar: {fmt(pendingExpensesSum)}</p>
+                    <p className="text-lg font-semibold text-red-600">{fmt(canonicalCosts)}</p>
+                    <p className="text-[10px] text-muted-foreground">A pagar: {fmt(canonicalTotals?.payable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">A Receber</p>
-                    <p className="text-lg font-semibold text-blue-600">{fmt(summary?.totalReceivable ?? 0)}</p>
-                    <p className="text-[10px] text-muted-foreground">Vencido: {fmt(summary?.overdueReceivable ?? 0)}</p>
+                    <p className="text-lg font-semibold text-blue-600">{fmt(canonicalTotals?.receivable ?? 0)}</p>
+                    <p className="text-[10px] text-muted-foreground">Vencido: {fmt(canonicalTotals?.overdueReceivable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">A Pagar Pendente</p>
-                    <p className="text-lg font-semibold text-orange-600">{fmt(pendingExpensesSum)}</p>
-                    <p className="text-[10px] text-muted-foreground">Vencido: {fmt(overdueExpensesSum)}</p>
+                    <p className="text-lg font-semibold text-orange-600">{fmt(canonicalTotals?.payable ?? 0)}</p>
+                    <p className="text-[10px] text-muted-foreground">Vencido: {fmt(canonicalTotals?.overduePayable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
-                    <p className="text-xs text-muted-foreground">Recebido (Mês)</p>
-                    <p className="text-lg font-semibold">{fmt(summary?.collectedThisMonth ?? 0)}</p>
-                    <p className="text-[10px] text-muted-foreground">Acumulado: {fmt(totalRevenue)}</p>
+                    <p className="text-xs text-muted-foreground">Dívidas com Usuários</p>
+                    <p className="text-lg font-semibold">{fmt(canonicalTotals?.userDebt ?? 0)}</p>
+                    <p className="text-[10px] text-muted-foreground">Saldos e comissões não pagas</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
-                    <p className="text-xs text-muted-foreground">Despesas Vencidas</p>
-                    <p className={`text-lg font-semibold ${overdueExpensesSum > 0 ? "text-red-500" : "text-muted-foreground"}`}>{fmt(overdueExpensesSum)}</p>
-                    <p className="text-[10px] text-muted-foreground">Aguardando pagamento</p>
+                    <p className="text-xs text-muted-foreground">Bônus e Créditos</p>
+                    <p className="text-lg font-semibold text-violet-600">{fmt((canonicalTotals?.clientReferralBonuses ?? 0) + (canonicalTotals?.clientReferralCredits ?? 0))}</p>
+                    <p className="text-[10px] text-muted-foreground">Benefícios de indicação no período</p>
                   </div>
                 </div>
               </div>

@@ -104,7 +104,7 @@ function pastDate(days: number) {
 function buildValidBackup(tenantId: string) {
   return {
     format: "visitecrm-agency-backup",
-    version: 4,
+    version: 5,
     exportedAt: new Date().toISOString(),
     exportedByUserId: IMPORTER_ID,
     tenant: { id: tenantId, name: "Old Name", slug: "old-slug" },
@@ -651,7 +651,7 @@ describe("POST /api/backup/import", () => {
     mockAuthedAs(ROLES.AGENCY_ADMIN, IMPORTER_ID, OTHER_TENANT_ID);
     const backup = {
       format: "visitecrm-agency-backup",
-      version: 4,
+      version: 5,
       tenant: {
         id: "source-installation-tenant-id",
         name: "BI Other Agency",

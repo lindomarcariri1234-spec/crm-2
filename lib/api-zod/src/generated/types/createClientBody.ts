@@ -8,11 +8,12 @@
 
 export interface CreateClientBody {
   name: string;
-  email: string;
-  whatsapp: string;
+  email?: string;
+  whatsapp?: string;
   /** @nullable */
   phone?: string | null;
-  cpf: string;
+  /** @nullable */
+  cpf?: string | null;
   /** @nullable */
   rg?: string | null;
   /** @nullable */
@@ -54,4 +55,6 @@ export interface CreateClientBody {
   companyNps?: number | null;
   /** If true, skip the duplicate name+WhatsApp check and create the client anyway. */
   forceCreate?: boolean;
+  /** If true, allow agency staff to create the client with missing email, WhatsApp, or CPF. */
+  allowMissingData?: boolean;
 }

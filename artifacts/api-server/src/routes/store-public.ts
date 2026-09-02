@@ -42,7 +42,7 @@ import
 
 import 
 {
- RESERVATION_STATUS 
+  RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES
 }
  from "@workspace/permissions"
 ;
@@ -213,73 +213,8 @@ import
 }
  from "../lib/client-notifications"
 ;
+import { recordReferralVisit } from "../services/referral-tracking";
 
-
-function generateCookieId(): string 
-{
-
-  return randomBytes(16).toString("hex")
-;
-
-}
-
-
-function detectDeviceType(ua: string): string 
-{
-
-  if (/mobile/i.test(ua)) return "mobile"
-;
-
-  if (/tablet/i.test(ua)) return "tablet"
-;
-
-  return "desktop"
-;
-
-}
-
-function detectBrowser(ua: string): string 
-{
-
-  if (/edg/i.test(ua)) return "Edge"
-;
-
-  if (/chrome/i.test(ua)) return "Chrome"
-;
-
-  if (/firefox/i.test(ua)) return "Firefox"
-;
-
-  if (/safari/i.test(ua)) return "Safari"
-;
-
-  return "Unknown"
-;
-
-}
-
-function detectOS(ua: string): string 
-{
-
-  if (/windows/i.test(ua)) return "Windows"
-;
-
-  if (/android/i.test(ua)) return "Android"
-;
-
-  if (/iphone|ipad|ios/i.test(ua)) return "iOS"
-;
-
-  if (/mac/i.test(ua)) return "MacOS"
-;
-
-  if (/linux/i.test(ua)) return "Linux"
-;
-
-  return "Unknown"
-;
-
-}
 
 
 const router = Router()
@@ -430,6 +365,7 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
       .where(eq(storesTable.id, store.id))
 ;
 
+    res.setHeader("Cache-Control", "no-store, max-age=0");
     res.json(publicData)
 ;
 
@@ -1102,13 +1038,12 @@ router.get("/public/store/:slug/trips/:tripId/seat-map", async (req, res, next: 
       if (layout) numberingType = layout.numberingType;
     }
 
-    const ACTIVE_STATUSES = [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED];
     const reservations = await db.select({ seats: reservationsTable.seats, status: reservationsTable.status })
       .from(reservationsTable)
       .where(and(
         eq(reservationsTable.tripId, trip.id),
         eq(reservationsTable.tenantId, store.tenantId),
-        inArray(reservationsTable.status, [...ACTIVE_STATUSES]),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
       ));
 
     const occupiedSeats: Record<string, string> = {};
@@ -2572,187 +2507,42 @@ router.post("/public/store/:slug/referral/track", async (req, res, next: NextFun
     const userAgent = req.headers["user-agent"] ?? "";
     const ipAddress = getClientIp(req) ?? "";
 
-    // Only accept server-issued cookie IDs (those that exist in DB for this tenant)
-    // Never trust client-provided IDs that don't match an existing record
-    let cookieId: string
-;
+    const tracking = await db.transaction((tx) => recordReferralVisit(tx, {
+      tenantId: store.tenantId,
+      code,
+      serverCookieId: parsed.data.serverCookieId,
+      landingPage: parsed.data.landingPage,
+      utmSource: parsed.data.utmSource,
+      utmMedium: parsed.data.utmMedium,
+      utmCampaign: parsed.data.utmCampaign,
+      utmContent: parsed.data.utmContent,
+      utmTerm: parsed.data.utmTerm,
+      ipAddress,
+      userAgent,
+    }));
 
-    let existingRecord: 
-{
- id: string
-;
- pagesVisited: unknown
-;
- referralCode: string 
-}
- | undefined
-;
-
-
-    if (parsed.data.serverCookieId) 
-{
-
-      // Verify the provided ID is actually server-issued (exists in DB for this tenant)
-      const [found] = await db.select(
-{
-
-        id: referralTrackingTable.id,
-        pagesVisited: referralTrackingTable.pagesVisited,
-        referralCode: referralTrackingTable.referralCode,
-      
-}
-)
-        .from(referralTrackingTable)
-        .where(and(
-          eq(referralTrackingTable.tenantId, store.tenantId),
-          eq(referralTrackingTable.cookieId, parsed.data.serverCookieId),
-        )).limit(1)
-;
-
-      if (found) 
-{
-
-        // Recognized server-issued ID — update existing record
-        cookieId = parsed.data.serverCookieId
-;
-
-        existingRecord = found
-;
-
-      
-}
- else 
-{
-
-        // Unrecognized — ignore and issue a new one
-        cookieId = generateCookieId()
-;
-
-      
-}
-
-    
-}
- else 
-{
-
-      // First visit — always generate server-side
-      cookieId = generateCookieId()
-;
-
-    
-}
-
-
-    const now = new Date()
-;
-
-    if (existingRecord) 
-{
-
-      const pages = Array.isArray(existingRecord.pagesVisited) ? existingRecord.pagesVisited as string[] : []
-;
-
-      if (parsed.data.landingPage) pages.push(parsed.data.landingPage)
-;
-
-      await db.update(referralTrackingTable).set(
-{
-
-        lastVisit: now,
-        visitsCount: sql`visits_count + 1`,
-        pagesVisited: pages,
-        updatedAt: now,
-      
-}
-).where(and(
-        eq(referralTrackingTable.tenantId, store.tenantId),
-        eq(referralTrackingTable.cookieId, cookieId),
-      ))
-;
-
-    
-}
- else 
-{
-
-      await db.insert(referralTrackingTable).values(
-{
-
-        id: generateId(),
-        tenantId: store.tenantId,
-        cookieId,
-        referralCode: code,
-        ipAddress,
-        userAgent,
-        deviceType: detectDeviceType(userAgent),
-        browser: detectBrowser(userAgent),
-        os: detectOS(userAgent),
-        pagesVisited: parsed.data.landingPage ? [parsed.data.landingPage] : [],
-        utmSource: parsed.data.utmSource,
-        utmMedium: parsed.data.utmMedium,
-        utmCampaign: parsed.data.utmCampaign,
-        utmContent: parsed.data.utmContent,
-        utmTerm: parsed.data.utmTerm,
-      
-}
-)
-;
-
-
-      // Notify the referrer that someone has clicked their link (first visit only)
-      db.select(
-{
- clientId: clientsTable.id, name: clientsTable.name 
-}
-)
+    // Notifications are deliberately outside the transaction: a provider or
+    // notification failure must not roll back the already synchronized visit.
+    if (tracking.firstVisit) {
+      void db.select({ clientId: clientsTable.id })
         .from(clientsTable)
-        .where(and(eq(clientsTable.tenantId, store.tenantId), eq(clientsTable.referralCode, code)))
+        .where(and(
+          eq(clientsTable.tenantId, store.tenantId),
+          eq(clientsTable.referralCode, tracking.referralCode),
+        ))
         .limit(1)
-        .then(([referrer]) => 
-{
+        .then(([referrer]) => {
+          if (!referrer) return;
+          return insertClientNotification(referrer.clientId, store.tenantId, "referral_link_clicked", {
+            referralCode: tracking.referralCode,
+          });
+        })
+        .catch(() => undefined);
+    }
 
-          if (!referrer) return
-;
-
-          return insertClientNotification(referrer.clientId, store.tenantId, "referral_link_clicked", 
-{
-
-            referralCode: code,
-          
-}
-)
-;
-
-        
-}
-)
-        .catch(() => undefined)
-;
-
-    
-}
-
-
-    // Sync lastVisit and visitsCount back to the referrals table so the admin panel shows live data.
-    // Use the tracking record's original referralCode (not the request's code) to prevent
-    // misattribution when a returning visitor's cookie is tied to a different code.
-    const syncCode = existingRecord ? existingRecord.referralCode : code;
-    await db.update(referralsTable)
-      .set({
-        lastVisit: now,
-        visitsCount: sql`visits_count + 1`,
-        updatedAt: now,
-      })
-      .where(and(
-        eq(referralsTable.tenantId, store.tenantId),
-        eq(referralsTable.code, syncCode),
-      ));
-
-    // Always return the server-issued cookie ID in header for client persistence
-    res.setHeader("X-Referral-Cookie-Id", cookieId);
-
-    res.json({ cookieId, tracked: true });
+    // Return the server-issued cookie ID for client persistence.
+    res.setHeader("X-Referral-Cookie-Id", tracking.cookieId);
+    res.json({ cookieId: tracking.cookieId, tracked: true });
   } catch (err) {
     next(err);
   }

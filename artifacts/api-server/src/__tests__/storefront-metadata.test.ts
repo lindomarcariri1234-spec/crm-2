@@ -4,6 +4,7 @@ import {
   injectStorefrontMetadata,
   productSlugFromStorefrontPath,
 } from "../lib/storefront-metadata.js";
+import { shouldBypassClerkForPath } from "../lib/clerk-request.js";
 
 const store = {
   name: "Visite Cariri Cearense Receptivo",
@@ -25,6 +26,14 @@ afterEach(() => {
 });
 
 describe("storefront sharing metadata", () => {
+  it("keeps storefront HTML routes public before metadata injection", () => {
+    expect(shouldBypassClerkForPath("/loja/visite-cariri-cearense-receptivo")).toBe(true);
+    expect(shouldBypassClerkForPath(
+      "/loja/visite-cariri-cearense-receptivo/produtos/roteiro-cariri",
+    )).toBe(true);
+    expect(shouldBypassClerkForPath("/lojista/configuracoes")).toBe(false);
+  });
+
   it("uses agency SEO, identity assets, and the shared storefront URL", () => {
     vi.stubEnv("STORE_PUBLIC_URL", "https://visitecrm.com");
 

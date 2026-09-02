@@ -120,8 +120,8 @@ function buildApp() {
 }
 
 function parseBinaryResponse(
-  response: NodeJS.ReadableStream,
-  callback: (error: Error | null, body: Buffer) => void,
+  response: { on(event: string, listener: (...args: any[]) => void): unknown },
+  callback: (error: Error | null, body: any) => void,
 ) {
   const chunks: Buffer[] = [];
   response.on("data", (chunk: Buffer | Uint8Array) => {
@@ -226,7 +226,9 @@ describe("GET /api/referrals/analytics/export", () => {
 
     expect(response.headers["content-type"]).toContain("spreadsheetml");
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(response.body as unknown as Buffer);
+    await workbook.xlsx.load(
+      response.body as unknown as Parameters<typeof workbook.xlsx.load>[0],
+    );
 
     const resultSheet = workbook.getWorksheet("Resultado Comercial");
     expect(resultSheet).toBeDefined();
@@ -311,7 +313,9 @@ describe("GET /api/referrals/analytics/export", () => {
       .expect(200);
 
     const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(response.body as unknown as Buffer);
+    await workbook.xlsx.load(
+      response.body as unknown as Parameters<typeof workbook.xlsx.load>[0],
+    );
     const resultSheet = workbook.getWorksheet("Resultado Comercial");
     expect(resultSheet?.getCell("B2").value).toBe(0);
     expect(resultSheet?.getCell("B8").value).toBe("0.00");

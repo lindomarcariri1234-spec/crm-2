@@ -121,13 +121,11 @@ describe("drizzle migration journal ordering", () => {
     const script = readFileSync(postMergeScriptPath, "utf8");
 
     expect(script).toContain("pnpm install --frozen-lockfile");
-    expect(script).toContain("pnpm --filter @workspace/db run check");
-    expect(script).toContain("pnpm --filter @workspace/db run validate-coverage");
-    expect(script).toContain("pnpm --filter @workspace/db run validate-columns");
-    expect(script).toContain("pnpm --filter @workspace/db run validate-tables");
     expect(script).toContain("pnpm --filter @workspace/db run migrate");
     expect(script).toContain("pnpm --filter @workspace/scripts seed:plans");
-    expect(script).toContain("pnpm --filter @workspace/db run verify-db");
+    expect(script).toContain("pnpm --filter @workspace/db run schema-drift");
+    expect(script.indexOf("pnpm --filter @workspace/db run schema-drift"))
+      .toBeGreaterThan(script.indexOf("pnpm --filter @workspace/db run migrate"));
     expect(script).not.toMatch(/pnpm\s+install\s+--no-frozen-lockfile/);
   });
 });

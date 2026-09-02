@@ -6,6 +6,9 @@ export default defineConfig({
     include: [
       "src/__tests__/admin-cancel-referral-integration.test.ts",
       "src/__tests__/backup-export-integration.test.ts",
+      "src/__tests__/referral-payment-concurrency-integration.test.ts",
+      "src/__tests__/reservation-referral-payment-reversal-integration.test.ts",
+      "src/__tests__/unlink-client-from-trips-concurrency-integration.test.ts",
     ],
   },
 });

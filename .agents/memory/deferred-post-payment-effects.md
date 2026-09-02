@@ -31,7 +31,9 @@ Product-only orders create **no `payments` rows**, so `paymentExistsForGatewayTx
 product-only branch every time. This is only safe because every post-payment step is
 idempotent on its own:
 - `applyDeferredOrderCredits` runs in its OWN tx, locks the order `FOR UPDATE`, and
-  no-ops once `referralEffectsAppliedAt` is set (and unless `paymentStatus === PAID`).
+  no-ops once `referralEffectsAppliedAt` is set. Normal gateway/manual order
+  confirmation requires `paymentStatus === PAID`; reservation-payment sync may
+  explicitly authorize the partial-payment path after a positive receivable.
   The marker is written at the END so a mid-tx failure stays retryable.
 - `generateAndAssignReferralCode` returns the existing code if one exists.
 - `ensurePortalAccount` no-ops if the portal user exists; product-only orders skip it.
@@ -40,3 +42,18 @@ idempotent on its own:
 marker/state — do NOT rely on `paymentExistsForGatewayTx` to gate it, especially for
 product-only orders. The manual mark-paid path (store.ts order status PUT) already
 calls `runPostPaymentSideEffects` unconditionally on the PAID transition.
+
+## CRM and storefront reservation referrals follow the same rule
+
+Creating a reservation directly in the CRM may apply the customer's referral
+discount immediately, but it must create only a pending referral record. Conversion,
+referrer earnings, and successful-referral counters happen after the first positive
+receivable payment; the reservation/order may still have an outstanding balance.
+
+**Why:** reservation creation is not proof of payment, while waiting for zero balance
+delays attribution for deposit-based bookings. Payment receipt and full financial
+settlement are separate lifecycle events.
+
+**How to apply:** payment synchronization may attempt conversion repeatedly, but it
+must select only the pending referral and pass its existing ID through the
+idempotent conversion service.

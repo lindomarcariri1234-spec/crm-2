@@ -1,9 +1,9 @@
 import { db, emailLogsTable, reservationsTable, tripsTable, clientsTable, referralSettingsTable, tenantsTable, storesTable, usersTable } from "@workspace/db";
 import { eq, and, inArray, isNull } from "drizzle-orm";
 import { generateId } from "../lib/id";
-import { getEmailQueue, getCancellationEmailQueue, getNewBookingNotificationEmailQueue, getReferralEmailQueue } from "./index";
+import { getReferralEmailQueue } from "./index";
 import type { ReferralBonusPaidEmailJobData, ReferralConvertedEmailJobData, ReferralExpiredEmailJobData, ReferralExpiringSoonEmailJobData, ReferralBonusReleasedEmailJobData, ReferralLoyaltyPointsEmailJobData } from "./index";
-import { sendReservationConfirmationEmail, sendReservationCancellationEmail, sendWelcomeCredentialsEmail, sendNewBookingNotificationEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReferralTierUpgradeEmail, sendReferralReversedEmail, sendReminderHtmlEmail, sendReferralCodeSuspendedEmail, sendAgencySuspendedEmail, sendAgencyReactivatedEmail, sendReferralLoyaltyPointsEmail, sendPixOrderAlertEmail } from "@workspace/email";
+import { sendWelcomeCredentialsEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReferralTierUpgradeEmail, sendReferralReversedEmail, sendReferralCodeSuspendedEmail, sendAgencySuspendedEmail, sendAgencyReactivatedEmail, sendReferralLoyaltyPointsEmail } from "@workspace/email";
 import { ROLES } from "@workspace/permissions";
 import { formatBRL } from "@workspace/shared";
 import { logger } from "../lib/logger";
@@ -11,6 +11,84 @@ import type { ReservationConfirmationEmailProps, ReservationCancellationEmailPro
 import { insertClientNotification } from "../lib/client-notifications";
 import { areWorkersEnabled } from "../lib/redis";
 import { dispatchWhatsAppReferralReversed } from "./whatsapp-helpers.js";
+import { dispatchOutboundMessage, retryOutboundDelivery } from "../services/outbound-delivery";
+
+/** Single referral delivery path. Keeping the rendering here intentionally
+ * plain makes the same content available to both channels without invoking
+ * the legacy provider sender a second time. */
+async function dispatchReferralOutbound(
+  tenantId: string,
+  eventType: string,
+  key: string,
+  recipient: { id?: string; name: string; email: string; whatsapp?: string | null },
+  subject: string,
+  html: string,
+  whatsappText: string,
+  metadata?: Record<string, unknown>,
+  referralId?: string,
+  reservationId?: string | null,
+): Promise<void> {
+  const outbound = await dispatchOutboundMessage({
+    tenantId,
+    eventType,
+    idempotencyKey: `referral:${key}:${eventType}`,
+    recipient: recipient.id ? { type: "client", id: recipient.id } : {
+      type: "direct", name: recipient.name, email: recipient.email, whatsapp: recipient.whatsapp,
+    },
+    email: { subject, html, senderName: undefined },
+    whatsapp: { text: whatsappText },
+    origin: `referral-${eventType}`,
+    metadata: { ...metadata, referralId, reservationId },
+  });
+  await projectOutboundEmailLog(tenantId, reservationId ?? null, recipient.email, subject, outbound, referralId ?? null);
+
+  // The idempotency key intentionally returns the existing message on a
+  // repeated callback. If its provider attempt was exhausted, reopen that
+  // same delivery instead of creating a second message (or applying the
+  // financial reversal again). A newly-created message is left to the normal
+  // queue/recovery flow; this branch is specifically for a later callback
+  // recovering a previous transient failure.
+  if (eventType === "reversed" && !outbound.created) {
+    const emailDelivery = outbound.deliveries.find((delivery) => delivery.channel === "email");
+    if (emailDelivery?.status === "failed") {
+      await retryOutboundDelivery(tenantId, emailDelivery.id);
+      await db.update(emailLogsTable)
+        .set({ status: "queued", errorMessage: null })
+        .where(and(
+          eq(emailLogsTable.tenantId, tenantId),
+          referralId ? eq(emailLogsTable.referralId, referralId) : isNull(emailLogsTable.referralId),
+          reservationId ? eq(emailLogsTable.reservationId, reservationId) : isNull(emailLogsTable.reservationId),
+          eq(emailLogsTable.subject, subject),
+        ));
+    }
+  }
+}
+
+async function projectOutboundEmailLog(
+  tenantId: string,
+  reservationId: string | null,
+  recipient: string,
+  subject: string,
+  outbound: Awaited<ReturnType<typeof dispatchOutboundMessage>>,
+  referralId: string | null = null,
+): Promise<void> {
+  if (!outbound.created) return;
+  const delivery = outbound.deliveries.find((item) => item.channel === "email");
+  const status = delivery?.status === "accepted" ? "sent" :
+    delivery?.status === "failed" || delivery?.status === "skipped" ? "failed" : "queued";
+  await db.insert(emailLogsTable).values({
+    id: generateId(),
+    tenantId,
+    reservationId,
+    referralId,
+    outboundMessageId: outbound.message.id,
+    recipient,
+    subject,
+    status,
+    messageId: delivery?.externalId ?? null,
+    errorMessage: delivery?.lastError ?? delivery?.skippedReason ?? null,
+  });
+}
 
 interface EnqueueEmailOpts {
   tenantId: string;
@@ -27,67 +105,18 @@ interface EnqueueEmailOpts {
  */
 export async function enqueueReservationConfirmationEmail(opts: EnqueueEmailOpts): Promise<void> {
   const { tenantId, reservationId, subject, props } = opts;
-  const emailLogId = generateId();
-
-  const queue = getEmailQueue();
-
-  if (queue) {
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
-      tenantId,
-      reservationId: reservationId ?? null,
-      recipient: props.clientEmail,
-      subject,
-      status: "queued",
-    });
-
-    try {
-      await queue.add("reservation-confirmation", {
-        ...props,
-        emailLogId,
-        tenantId,
-        reservationId,
-      });
-      logger.info({ emailLogId, reservationId }, "[email-queue] Email job enqueued");
-    } catch (enqueueErr) {
-      logger.warn({ emailLogId, err: enqueueErr }, "[email-queue] Failed to enqueue — falling back to direct send");
-      const result = await sendReservationConfirmationEmail(props);
-      await db
-        .update(emailLogsTable)
-        .set({
-          status: result.success ? "sent" : "failed",
-          messageId: result.messageId ?? null,
-          errorMessage: result.error ?? null,
-        })
-        .where(eq(emailLogsTable.id, emailLogId));
-      logger.info({ emailLogId, reservationId, success: result.success }, "[email-queue] Fallback direct send result");
-    }
-  } else {
-    // No queue — send directly and log the outcome immediately
-    if (!areWorkersEnabled()) {
-      logger.warn(
-        { reservationId, tenantId, jobType: "reservation-confirmation" },
-        "[workers-disabled] ENABLE_WORKERS=false — sending confirmation email directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
-      );
-    }
-    const result = await sendReservationConfirmationEmail(props);
-
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
-      tenantId,
-      reservationId: reservationId ?? null,
-      recipient: props.clientEmail,
-      subject,
-      status: result.success ? "sent" : "failed",
-      messageId: result.messageId ?? null,
-      errorMessage: result.error ?? null,
-    });
-
-    logger.info(
-      { emailLogId, reservationId, success: result.success },
-      "[email-queue] Email sent directly (no queue)",
-    );
-  }
+  const html = `<h2>Reserva Confirmada! 🎉</h2><p>Olá, ${escapeHtmlEmail(props.clientName)}!</p><p><strong>Reserva:</strong> ${escapeHtmlEmail(props.reservationNumber)}</p><p><strong>Viagem:</strong> ${escapeHtmlEmail(props.tripTitle)}<br><strong>Destino:</strong> ${escapeHtmlEmail(props.destination)}<br><strong>Saída:</strong> ${escapeHtmlEmail(props.departureDate)}<br><strong>Valor total:</strong> ${formatBRL(props.totalAmount)}</p><p><a href="${props.voucherUrl}">Baixar voucher</a></p>`;
+  const outbound = await dispatchOutboundMessage({
+    tenantId, eventType: "reservation_confirmation",
+    idempotencyKey: `reservation:${reservationId ?? props.reservationNumber}:confirmation`,
+    recipient: { type: "direct", name: props.clientName, email: props.clientEmail, whatsapp: props.clientPhone },
+    email: { subject, html, senderName: props.agencyName },
+    whatsapp: { text: `Olá, ${props.clientName}! Sua reserva ${props.reservationNumber} foi confirmada. Viagem: ${props.tripTitle}, destino: ${props.destination}, saída: ${props.departureDate}. Voucher: ${props.voucherUrl}` },
+    origin: "reservation-confirmation",
+    metadata: { reservationId },
+  });
+  await projectOutboundEmailLog(tenantId, reservationId ?? null, props.clientEmail, subject, outbound);
+  logger.info({ reservationId, success: outbound.message.status === "accepted" }, "[outbound] Confirmation dispatched");
 }
 
 // ── Enqueue / send a cancellation email ───────────────────────────────────────
@@ -104,62 +133,18 @@ export async function enqueueReservationCancellationEmail(
 
   const emailLogId = generateId();
   const subject = `Reserva Cancelada — ${props.reservationNumber}`;
-  const queue = getCancellationEmailQueue();
-
-  if (queue) {
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
-      tenantId,
-      reservationId,
-      recipient: props.clientEmail,
-      subject,
-      status: "queued",
-    });
-
-    try {
-      await queue.add("reservation-cancellation", {
-        ...props,
-        emailLogId,
-        tenantId,
-        reservationId,
-      });
-      logger.info({ emailLogId, reservationId }, "[email-queue] Cancellation email job enqueued");
-    } catch (enqueueErr) {
-      logger.warn({ emailLogId, err: enqueueErr }, "[email-queue] Failed to enqueue cancellation — falling back to direct send");
-      const result = await sendReservationCancellationEmail(props);
-      await db
-        .update(emailLogsTable)
-        .set({
-          status: result.success ? "sent" : "failed",
-          messageId: result.messageId ?? null,
-          errorMessage: result.error ?? null,
-        })
-        .where(eq(emailLogsTable.id, emailLogId));
-      logger.info({ emailLogId, reservationId, success: result.success }, "[email-queue] Fallback direct send result (cancellation)");
-    }
-  } else {
-    if (!areWorkersEnabled()) {
-      logger.warn(
-        { reservationId, tenantId, jobType: "reservation-cancellation" },
-        "[workers-disabled] ENABLE_WORKERS=false — sending cancellation email directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
-      );
-    }
-    const result = await sendReservationCancellationEmail(props);
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
-      tenantId,
-      reservationId,
-      recipient: props.clientEmail,
-      subject,
-      status: result.success ? "sent" : "failed",
-      messageId: result.messageId ?? null,
-      errorMessage: result.error ?? null,
-    });
-    logger.info(
-      { emailLogId, reservationId, success: result.success },
-      "[email-queue] Cancellation email sent directly (no queue)",
-    );
-  }
+  const html = `<h2>Reserva Cancelada</h2><p>Olá, ${escapeHtmlEmail(props.clientName)}!</p><p>Sua reserva <strong>${escapeHtmlEmail(props.reservationNumber)}</strong> para ${escapeHtmlEmail(props.destination)} foi cancelada.</p><p>Valor total: ${formatBRL(props.totalAmount)}</p><p>Em caso de dúvidas ou reembolso, fale com a agência pelo WhatsApp.</p>`;
+  const outbound = await dispatchOutboundMessage({
+    tenantId, eventType: "reservation_cancellation",
+    idempotencyKey: `reservation:${reservationId}:cancellation`,
+    recipient: { type: "direct", name: props.clientName, email: props.clientEmail },
+    email: { subject, html, senderName: props.agencyName },
+    whatsapp: { text: `Olá, ${props.clientName}! Sua reserva ${props.reservationNumber} para ${props.destination} foi cancelada. Para dúvidas ou reembolso, fale com a agência: ${props.agencyPhone || props.agencyName}.` },
+    origin: "reservation-cancellation",
+    metadata: { reservationId },
+  });
+  await projectOutboundEmailLog(tenantId, reservationId, props.clientEmail, subject, outbound);
+  logger.info({ reservationId, success: outbound.message.status === "accepted" }, "[outbound] Cancellation dispatched");
 }
 
 /**
@@ -249,30 +234,26 @@ export async function dispatchTripRestorationNotification(
       <p style="font-size:12px;color:#6b7280;margin-top:28px;">Esta mensagem foi enviada porque você tinha uma reserva nesta viagem.</p>
     </div>`;
 
-  const emailLogId = generateId();
   try {
-    const result = await sendReminderHtmlEmail({
-      to: row.clientEmail,
-      subject,
-      html,
-      fromName: agencyName,
-    });
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
+    const outbound = await dispatchOutboundMessage({
       tenantId,
-      reservationId,
-      recipient: row.clientEmail,
-      subject,
-      status: result.success ? "sent" : "failed",
-      messageId: result.messageId ?? null,
-      errorMessage: result.error ?? null,
+      eventType: "trip_restoration",
+      idempotencyKey: `reservation:${reservationId}:trip-restoration`,
+      recipient: { type: "direct", name: row.clientName, email: row.clientEmail },
+      email: { subject, html, senderName: agencyName },
+      whatsapp: {
+        text: `Olá, ${row.clientName ?? ""}! A viagem ${tripName} está disponível novamente. Saída: ${departureDate}. Sua reserva anterior (${reservationNumber}) continua cancelada; acesse o portal ou fale com a agência para fazer uma nova reserva.`,
+      },
+      origin: "trip-restoration",
+      metadata: { reservationId },
     });
-    logger.info({ emailLogId, reservationId, tenantId, success: result.success }, "[trip-restoration] Email processed");
+    await projectOutboundEmailLog(tenantId, reservationId, row.clientEmail, subject, outbound);
+    logger.info({ reservationId, tenantId, success: outbound.message.status === "accepted" }, "[trip-restoration] Email dispatched");
   } catch (err) {
-    logger.warn({ err, reservationId, tenantId }, "[trip-restoration] Email send failed");
+    logger.warn({ err, reservationId, tenantId }, "[trip-restoration] Email dispatch failed");
     try {
       await db.insert(emailLogsTable).values({
-        id: emailLogId,
+        id: generateId(),
         tenantId,
         reservationId,
         recipient: row.clientEmail,
@@ -372,76 +353,22 @@ export async function enqueueNewBookingNotificationEmail(
     return;
   }
 
-  const emailLogId = generateId();
   const subject = `Nova reserva — ${props.reservationNumber} (${props.destination})`;
-  const queue = getNewBookingNotificationEmailQueue();
   const primaryRecipient = recipients[0];
-
-  if (queue) {
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
-      tenantId,
-      reservationId,
-      recipient: primaryRecipient,
-      subject,
-      status: "queued",
-    });
-
-    try {
-      await queue.add("new-booking-notification", {
-        ...props,
-        emailLogId,
-        tenantId,
-        reservationId,
-        recipients,
-        cc,
-      });
-      logger.info(
-        { emailLogId, reservationId, recipients, cc },
-        "[email-queue] New-booking notification enqueued",
-      );
-    } catch (enqueueErr) {
-      logger.warn(
-        { emailLogId, err: enqueueErr },
-        "[email-queue] Failed to enqueue new-booking notification — falling back to direct send",
-      );
-      const result = await sendNewBookingNotificationEmail(props, { to: recipients, cc });
-      await db
-        .update(emailLogsTable)
-        .set({
-          status: result.success ? "sent" : "failed",
-          messageId: result.messageId ?? null,
-          errorMessage: result.error ?? null,
-        })
-        .where(eq(emailLogsTable.id, emailLogId));
-      logger.info(
-        { emailLogId, reservationId, success: result.success },
-        "[email-queue] Fallback direct send result (new-booking notification)",
-      );
-    }
-  } else {
-    if (!areWorkersEnabled()) {
-      logger.warn(
-        { reservationId, tenantId, jobType: "new-booking-notification" },
-        "[workers-disabled] ENABLE_WORKERS=false — sending new-booking notification directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
-      );
-    }
-    const result = await sendNewBookingNotificationEmail(props, { to: recipients, cc });
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
-      tenantId,
-      reservationId,
-      recipient: primaryRecipient,
-      subject,
-      status: result.success ? "sent" : "failed",
-      messageId: result.messageId ?? null,
-      errorMessage: result.error ?? null,
-    });
-    logger.info(
-      { emailLogId, reservationId, success: result.success },
-      "[email-queue] New-booking notification sent directly (no queue)",
-    );
-  }
+  const html = `<h2>Nova reserva recebida</h2><p>Uma nova reserva foi criada pela vitrine pública e precisa ser atendida.</p><p><strong>Reserva:</strong> ${escapeHtmlEmail(props.reservationNumber)}<br><strong>Cliente:</strong> ${escapeHtmlEmail(props.clientName)}<br><strong>Destino:</strong> ${escapeHtmlEmail(props.destination)}<br><strong>Embarque:</strong> ${escapeHtmlEmail(props.departureDate)}<br><strong>Valor total:</strong> ${formatBRL(props.totalValue)}</p><p><a href="${props.crmReservationUrl}">Abrir reserva no CRM</a></p>`;
+  const outbound = await dispatchOutboundMessage({
+    tenantId, eventType: "new_booking_notification",
+    idempotencyKey: `reservation:${reservationId}:new-booking-notification`,
+    recipient: { type: "direct", email: primaryRecipient },
+    email: { subject, html, senderName: props.agencyName },
+    whatsapp: {
+      text: `Nova reserva recebida! Reserva ${props.reservationNumber}, cliente ${props.clientName}, destino ${props.destination}, embarque ${props.departureDate}, valor ${formatBRL(props.totalValue)}. Acesse: ${props.crmReservationUrl}`,
+    },
+    origin: "new-booking-notification",
+    metadata: { reservationId, recipients, cc },
+  });
+  await projectOutboundEmailLog(tenantId, reservationId, primaryRecipient, subject, outbound);
+  logger.info({ reservationId, recipients, cc, success: outbound.message.status === "accepted" }, "[outbound] New-booking notification dispatched");
 }
 
 interface BuiltNewBookingNotification {
@@ -670,21 +597,14 @@ export async function sendWelcomeEmail(
   const emailLogId = generateId();
   const subject = `Bem-vindo(a)! Acesse sua Área do Cliente — ${props.agencyName}`;
 
-  const result = await sendWelcomeCredentialsEmail(props);
-
-  await db.insert(emailLogsTable).values({
-    id: emailLogId,
-    tenantId,
-    reservationId: null,
-    recipient: props.clientEmail,
-    subject,
-    status: result.success ? "sent" : "failed",
-    messageId: result.messageId ?? null,
-    errorMessage: result.error ?? null,
-  });
+  await dispatchReferralOutbound(tenantId, "welcome_credentials", props.clientEmail, {
+    name: props.clientName, email: props.clientEmail,
+  }, subject,
+    `<h2>Bem-vindo(a)!</h2><p>Olá, ${escapeHtmlEmail(props.clientName)}!</p><p>Acesse sua Área do Cliente da ${escapeHtmlEmail(props.agencyName)} para acompanhar suas viagens e indicações.</p>`,
+    `Olá, ${props.clientName}! Bem-vindo(a) à Área do Cliente da ${props.agencyName}. Acesse o portal para acompanhar suas viagens e indicações.`);
 
   logger.info(
-    { emailLogId, recipient: props.clientEmail, success: result.success },
+    { emailLogId, recipient: props.clientEmail, success: true },
     "[email-queue] Welcome email sent",
   );
 }
@@ -694,10 +614,19 @@ export async function sendWelcomeEmail(
 export async function enqueueReferralBonusPaidEmail(
   props: ReferralBonusPaidEmailProps,
   tenantId: string,
+  clientId?: string,
+  referralId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `Seu bônus de indicação foi pago! — ${props.agencyName}`;
-  const queue = getReferralEmailQueue();
+  await dispatchReferralOutbound(tenantId, "bonus_paid", clientId ?? props.referrerEmail, {
+    id: clientId, name: props.referrerName, email: props.referrerEmail,
+  }, subject,
+    `<h2>Bônus de indicação pago!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>A ${escapeHtmlEmail(props.agencyName)} confirmou o pagamento do seu bônus de <strong>${formatBRL(props.bonusAmount)}</strong>, em ${escapeHtmlEmail(props.paidDate)}.</p>`,
+    `Olá, ${props.referrerName}! A ${props.agencyName} confirmou o pagamento do seu bônus de indicação: ${formatBRL(props.bonusAmount)} em ${props.paidDate}.`,
+    { bonusAmount: props.bonusAmount }, referralId);
+  return;
+  const queue = getReferralEmailQueue()!;
 
   if (queue) {
     await db.insert(emailLogsTable).values({
@@ -752,10 +681,19 @@ export async function enqueueReferralBonusPaidEmail(
 export async function enqueueReferralConvertedEmail(
   props: ReferralConvertedEmailProps,
   tenantId: string,
+  clientId?: string,
+  referralId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `Sua indicação foi confirmada! — ${props.agencyName}`;
-  const queue = getReferralEmailQueue();
+  await dispatchReferralOutbound(tenantId, "converted", clientId ?? props.referrerEmail, {
+    id: clientId, name: props.referrerName, email: props.referrerEmail,
+  }, subject,
+    `<h2>Indicação confirmada!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>${escapeHtmlEmail(props.referredName)} realizou uma compra usando seu código. Seu bônus de <strong>${formatBRL(props.bonusAmount)}</strong> será liberado em breve.</p>`,
+    `Olá, ${props.referrerName}! ${props.referredName} realizou uma compra usando seu código. Seu bônus de ${formatBRL(props.bonusAmount)} será liberado em breve.`,
+    { referredName: props.referredName, bonusAmount: props.bonusAmount }, referralId);
+  return;
+  const queue = getReferralEmailQueue()!;
 
   if (queue) {
     await db.insert(emailLogsTable).values({
@@ -810,10 +748,19 @@ export async function enqueueReferralConvertedEmail(
 export async function enqueueReferralExpiredEmail(
   props: ReferralExpiredEmailProps,
   tenantId: string,
+  clientId?: string,
+  referralId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `Sua indicação expirou — compartilhe novamente! — ${props.agencyName}`;
-  const queue = getReferralEmailQueue();
+  await dispatchReferralOutbound(tenantId, "expired", clientId ?? props.referrerEmail, {
+    id: clientId, name: props.referrerName, email: props.referrerEmail,
+  }, subject,
+    `<h2>Sua indicação expirou</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu código de indicação expirou sem utilização. Acesse sua Área do Cliente para gerar um novo código e continuar ganhando bônus.</p>`,
+    `Olá, ${props.referrerName}! Seu código de indicação expirou sem utilização. Acesse sua Área do Cliente para gerar um novo código e continuar ganhando bônus.`,
+    undefined, referralId);
+  return;
+  const queue = getReferralEmailQueue()!;
 
   if (queue) {
     await db.insert(emailLogsTable).values({
@@ -905,6 +852,7 @@ export async function dispatchReferralConvertedEmail(
       agencyLogo: tenant?.logoUrl ?? null,
     },
     tenantId,
+    referrerId,
   );
 
   insertClientNotification(referrerId, tenantId, "referral_converted", {
@@ -947,6 +895,7 @@ export async function dispatchReferralExpiredEmail(
       agencyLogo: tenant?.logoUrl ?? null,
     },
     tenantId,
+    referrerId,
   );
 }
 
@@ -956,11 +905,19 @@ export async function enqueueReferralExpiringSoonEmail(
   props: ReferralExpiringSoonEmailProps,
   tenantId: string,
   referralId?: string,
+  clientId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const daysLabel = props.daysLeft <= 1 ? "1 dia" : `${props.daysLeft} dias`;
   const subject = `⏰ Seu código ${props.referralCode} vence em ${daysLabel} — ${props.agencyName}`;
-  const queue = getReferralEmailQueue();
+  await dispatchReferralOutbound(tenantId, "expiring_soon", clientId ?? props.referrerEmail, {
+    id: clientId, name: props.referrerName, email: props.referrerEmail,
+  }, subject,
+    `<h2>Seu código vence em ${escapeHtmlEmail(daysLabel)}</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu código <strong>${escapeHtmlEmail(props.referralCode)}</strong> vence em ${escapeHtmlEmail(props.expiresAt)}. Compartilhe agora para ganhar seu bônus.</p>${props.shareUrl ? `<p><a href="${props.shareUrl}">Compartilhar código</a></p>` : ""}`,
+    `Olá, ${props.referrerName}! Seu código ${props.referralCode} vence em ${daysLabel} (${props.expiresAt}). Compartilhe agora para ganhar seu bônus.${props.shareUrl ? ` ${props.shareUrl}` : ""}`,
+    { referralCode: props.referralCode, expiresAt: props.expiresAt }, referralId);
+  return;
+  const queue = getReferralEmailQueue()!;
 
   if (queue) {
     await db.insert(emailLogsTable).values({
@@ -1070,6 +1027,7 @@ export async function dispatchReferralExpiringSoonEmail(
     },
     tenantId,
     referralId,
+    referrerId,
   );
 }
 
@@ -1079,10 +1037,18 @@ export async function enqueueReferralBonusReleasedEmail(
   props: ReferralBonusReleasedEmailProps,
   tenantId: string,
   referralId?: string,
+  clientId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `🎉 Seu bônus de indicação está disponível para resgate! — ${props.agencyName}`;
-  const queue = getReferralEmailQueue();
+  await dispatchReferralOutbound(tenantId, "bonus_released", referralId ?? clientId ?? props.referrerEmail, {
+    id: clientId, name: props.referrerName, email: props.referrerEmail,
+  }, subject,
+    `<h2>Seu bônus está disponível!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu bônus de indicação de <strong>${formatBRL(props.bonusAmount)}</strong> está disponível para resgate desde ${escapeHtmlEmail(props.releaseDate)}.</p>`,
+    `Olá, ${props.referrerName}! Seu bônus de indicação de ${formatBRL(props.bonusAmount)} está disponível para resgate desde ${props.releaseDate}.`,
+    { bonusAmount: props.bonusAmount, releaseDate: props.releaseDate }, referralId);
+  return;
+  const queue = getReferralEmailQueue()!;
 
   if (queue) {
     await db.insert(emailLogsTable).values({
@@ -1171,6 +1137,7 @@ export async function dispatchReferralBonusReleasedEmail(
     },
     tenantId,
     referralId,
+    referrerId,
   );
 
   insertClientNotification(referrerId, tenantId, "referral_bonus_released", {
@@ -1188,10 +1155,18 @@ export async function dispatchReferralBonusReleasedEmail(
 async function enqueueReferralLoyaltyPointsEmail(
   props: ReferralLoyaltyPointsEmailProps,
   tenantId: string,
+  clientId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `⭐ Você ganhou ${props.pointsEarned} pontos de fidelidade! — ${props.agencyName}`;
-  const queue = getReferralEmailQueue();
+  await dispatchReferralOutbound(tenantId, "loyalty_points", clientId ?? props.referrerEmail, {
+    id: clientId, name: props.referrerName, email: props.referrerEmail,
+  }, subject,
+    `<h2>Você ganhou pontos de fidelidade!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Você ganhou <strong>${props.pointsEarned} pontos</strong>. Seu saldo atual é de ${props.currentBalance} pontos.</p>${props.profileUrl ? `<p><a href="${props.profileUrl}">Ver meu perfil</a></p>` : ""}`,
+    `Olá, ${props.referrerName}! Você ganhou ${props.pointsEarned} pontos de fidelidade. Seu saldo atual é de ${props.currentBalance} pontos.${props.profileUrl ? ` ${props.profileUrl}` : ""}`,
+    { pointsEarned: props.pointsEarned, currentBalance: props.currentBalance });
+  return;
+  const queue = getReferralEmailQueue()!;
 
   if (queue) {
     await db.insert(emailLogsTable).values({
@@ -1278,6 +1253,7 @@ export async function dispatchReferralLoyaltyPointsEmail(
       profileUrl,
     },
     tenantId,
+    referrerId,
   );
 }
 
@@ -1286,10 +1262,18 @@ export async function dispatchReferralLoyaltyPointsEmail(
 export async function enqueueReferralWelcomeEmail(
   props: ReferralWelcomeEmailProps,
   tenantId: string,
+  clientId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `🎁 Seu código de indicação ${props.referralCode} está pronto! — ${props.agencyName}`;
-  const queue = getReferralEmailQueue();
+  await dispatchReferralOutbound(tenantId, "welcome", clientId ?? props.referrerEmail, {
+    id: clientId, name: props.referrerName, email: props.referrerEmail,
+  }, subject,
+    `<h2>Seu código de indicação está pronto!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu código é <strong>${escapeHtmlEmail(props.referralCode)}</strong>. Compartilhe e ganhe ${formatBRL(props.bonusValue)} de bônus.</p><p><a href="${props.referralLink}">Compartilhar código</a></p>`,
+    `Olá, ${props.referrerName}! Seu código de indicação é ${props.referralCode}. Compartilhe e ganhe ${formatBRL(props.bonusValue)} de bônus: ${props.referralLink}`,
+    { referralCode: props.referralCode, referralLink: props.referralLink });
+  return;
+  const queue = getReferralEmailQueue()!;
 
   if (queue) {
     await db.insert(emailLogsTable).values({
@@ -1432,6 +1416,7 @@ export async function dispatchReferralWelcomeEmail(opts: {
       agencyLogo: tenant?.logoUrl ?? null,
     },
     tenantId,
+    clientId,
   );
 
   logger.info({ clientId, referralCode, tenantId }, "[email-queue] Referral welcome email dispatched");
@@ -1500,8 +1485,10 @@ export async function dispatchReferralReversedEmail(opts: {
   bonusAmount: string;
   tenantId: string;
   reason?: string | null;
+  referralId?: string | null;
+  reservationId?: string | null;
 }): Promise<void> {
-  const { referrerId, referredId, bonusAmount, tenantId, reason } = opts;
+  const { referrerId, referredId, bonusAmount, tenantId, reason, referralId, reservationId } = opts;
 
   const [referrer] = await db
     .select({ name: clientsTable.name, email: clientsTable.email, referralEarnings: clientsTable.referralEarnings })
@@ -1535,42 +1522,16 @@ export async function dispatchReferralReversedEmail(opts: {
   const bonusAmountNum = parseFloat(bonusAmount) || 0;
   const newPendingBalance = parseFloat(String(referrer.referralEarnings ?? "0")) || 0;
 
-  const emailLogId = generateId();
   const subject = `Atualização sobre sua indicação — ${agencyName}`;
 
-  const sendResult = await sendReferralReversedEmail({
-    referrerName,
-    referrerEmail: referrer.email,
-    agencyName,
-    agencyLogo: tenant?.logoUrl ?? null,
-    referredName,
-    bonusAmount: bonusAmountNum,
-    newPendingBalance,
-    reason: reason ?? null,
-  });
-
-  await db.insert(emailLogsTable).values({
-    id: emailLogId,
-    tenantId,
-    reservationId: null,
-    recipient: referrer.email,
-    subject,
-    status: sendResult.success ? "sent" : "failed",
-    messageId: sendResult.messageId ?? null,
-    errorMessage: sendResult.error ?? null,
-  });
-
-  logger.info({ emailLogId, referrerId, tenantId, success: sendResult.success }, "[email-queue] Referral reversed email sent");
-
-  // WhatsApp (best-effort, non-blocking)
-  const { dispatchWhatsAppReferralReversed } = await import("./whatsapp-helpers.js");
-  dispatchWhatsAppReferralReversed({
-    referrerId,
-    referredName: referredName ?? "",
-    bonusAmount: bonusAmountNum,
-    newPendingBalance,
-    tenantId,
-  }).catch((err) => logger.warn({ err, referrerId, tenantId }, "[email-queue] WhatsApp referral reversed dispatch failed"));
+  await dispatchReferralOutbound(tenantId, "reversed", referralId ?? `${referrerId}:${referredId ?? "unknown"}`, {
+    id: referrerId, name: referrerName, email: referrer.email,
+  }, subject,
+    `<h2>Atualização sobre sua indicação</h2><p>Olá, ${escapeHtmlEmail(referrerName)}!</p><p>A indicação${referredName ? ` de ${escapeHtmlEmail(referredName)}` : ""} foi revertida. O valor ajustado é ${formatBRL(bonusAmountNum)} e seu saldo pendente é ${formatBRL(newPendingBalance)}.${reason ? ` Motivo: ${escapeHtmlEmail(reason)}` : ""}</p>`,
+    `Olá, ${referrerName}! Sua indicação${referredName ? ` de ${referredName}` : ""} foi revertida. Valor ajustado: ${formatBRL(bonusAmountNum)}. Saldo pendente: ${formatBRL(newPendingBalance)}.${reason ? ` Motivo: ${reason}` : ""}`,
+    { referredName, bonusAmount: bonusAmountNum, newPendingBalance, reason }, referralId ?? undefined, reservationId);
+  logger.info({ referrerId, tenantId, referralId, reservationId }, "[email-queue] Referral reversed dispatched");
+  return;
 }
 
 // ── Referral: upgrade de tier (#137) ─────────────────────────────────────────
@@ -1601,29 +1562,15 @@ export async function dispatchReferralTierUpgradeEmail(
 
   const agencyName = tenant?.name ?? "Agência";
 
-  const result = await sendReferralTierUpgradeEmail({
-    referrerName: referrer.name ?? referrer.email,
-    referrerEmail: referrer.email,
-    newTierLabel,
-    newTierLevel,
-    bonusMultiplier,
-    agencyName,
-    agencyLogo: tenant?.logoUrl ?? null,
-  });
-
   const emailLogId = generateId();
-  await db.insert(emailLogsTable).values({
-    id: emailLogId,
-    tenantId,
-    reservationId: null,
-    recipient: referrer.email,
-    subject: `Você subiu para o nível ${newTierLabel}! — ${agencyName}`,
-    status: result.success ? "sent" : "failed",
-    messageId: result.messageId ?? null,
-    errorMessage: result.error ?? null,
-  });
+  const subject = `Você subiu para o nível ${newTierLabel}! — ${agencyName}`;
+  await dispatchReferralOutbound(tenantId, "tier_upgrade", referrerId, {
+    id: referrerId, name: referrer.name ?? referrer.email, email: referrer.email,
+  }, subject,
+    `<h2>Você subiu de nível!</h2><p>Olá, ${escapeHtmlEmail(referrer.name ?? referrer.email)}! Você alcançou o nível <strong>${escapeHtmlEmail(newTierLabel)}</strong> (${escapeHtmlEmail(newTierLevel)}), com multiplicador de bônus ${bonusMultiplier}x.</p>`,
+    `Olá, ${referrer.name ?? referrer.email}! Você alcançou o nível ${newTierLabel} (${newTierLevel}), com multiplicador de bônus ${bonusMultiplier}x.`);
 
-  logger.info({ emailLogId, referrerId, tenantId, newTierLevel, success: result.success }, "[email-queue] Referral tier upgrade email sent");
+  logger.info({ emailLogId, referrerId, tenantId, newTierLevel, success: true }, "[email-queue] Referral tier upgrade dispatched");
 }
 
 // ── Price-drop alerts (public Vitrine, double opt-in) ─────────────────────────
@@ -1672,19 +1619,19 @@ export async function sendPriceAlertConfirmationEmail(opts: PriceAlertConfirmati
     <p style="font-size:12px;color:#9ca3af;margin-top:24px;">Não quer mais receber? <a href="${unsubscribeUrl}" style="color:#9ca3af;">Cancelar</a></p>
   </div>`;
   try {
-    const result = await sendReminderHtmlEmail({ to, subject, html, fromName: storeName });
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
+    const outbound = await dispatchOutboundMessage({
       tenantId,
-      reservationId: null,
-      recipient: to,
-      subject,
-      status: result.success ? "sent" : "failed",
-      messageId: result.messageId ?? null,
-      errorMessage: result.error ?? null,
+      eventType: "price_alert_confirmation",
+      idempotencyKey: `price-alert:confirmation:${to}:${confirmUrl}`,
+      recipient: { type: "direct", email: to },
+      email: { subject, html, senderName: storeName },
+      whatsapp: { text: `Confirme seu alerta de preço para ${productName} na loja ${storeName}: ${confirmUrl}` },
+      origin: "price-alert-confirmation",
+      metadata: { productName, confirmUrl, unsubscribeUrl },
     });
-    logger.info({ emailLogId, tenantId, success: result.success }, "[price-alert] Confirmation email processed");
-    return result.success;
+    const delivery = outbound.deliveries.find((item) => item.channel === "email");
+    logger.info({ emailLogId, tenantId, success: delivery?.status === "accepted" }, "[price-alert] Confirmation email processed");
+    return delivery?.status !== "failed" && delivery?.status !== "skipped";
   } catch (err) {
     logger.warn({ emailLogId, tenantId, err }, "[price-alert] Confirmation email send threw — recording as failed");
     try {
@@ -1741,19 +1688,19 @@ export async function sendPriceDropAlertEmail(opts: PriceDropEmailOpts): Promise
     <p style="font-size:12px;color:#9ca3af;margin-top:24px;">Não quer mais receber alertas deste produto? <a href="${unsubscribeUrl}" style="color:#9ca3af;">Cancelar</a></p>
   </div>`;
   try {
-    const result = await sendReminderHtmlEmail({ to, subject, html, fromName: storeName });
-    await db.insert(emailLogsTable).values({
-      id: emailLogId,
+    const outbound = await dispatchOutboundMessage({
       tenantId,
-      reservationId: null,
-      recipient: to,
-      subject,
-      status: result.success ? "sent" : "failed",
-      messageId: result.messageId ?? null,
-      errorMessage: result.error ?? null,
+      eventType: "price_drop_alert",
+      idempotencyKey: `price-alert:drop:${to}:${productUrl}:${oldPrice}:${newPrice}`,
+      recipient: { type: "direct", email: to },
+      email: { subject, html, senderName: storeName },
+      whatsapp: { text: `O preço de ${productName} caiu na loja ${storeName}: ${formatBRL(oldPrice)} → ${formatBRL(newPrice)}. Veja a oferta: ${productUrl}` },
+      origin: "price-drop-alert",
+      metadata: { productName, oldPrice, newPrice, productUrl, unsubscribeUrl },
     });
-    logger.info({ emailLogId, tenantId, success: result.success }, "[price-alert] Price-drop email processed");
-    return result.success;
+    const delivery = outbound.deliveries.find((item) => item.channel === "email");
+    logger.info({ emailLogId, tenantId, success: delivery?.status === "accepted" }, "[price-alert] Price-drop email processed");
+    return delivery?.status !== "failed" && delivery?.status !== "skipped";
   } catch (err) {
     logger.warn({ emailLogId, tenantId, err }, "[price-alert] Price-drop email send threw — recording as failed");
     try {
@@ -2001,20 +1948,17 @@ export async function enqueuePixOrderAlertEmail({
 
   const adminPanelUrl = `${process.env["STORE_PUBLIC_BASE"] ?? "https://app.visitecrm.com"}/loja/pedidos`;
 
-  const result = await sendPixOrderAlertEmail({
-    to: recipients,
-    agencyName: storeName,
-    orderNumber,
-    customerName,
-    customerEmail,
-    customerPhone: customerPhone ?? undefined,
-    totalAmount,
-    productName,
-    adminPanelUrl,
-  });
-
-  logger.info(
-    { tenantId, orderNumber, success: result.success, recipients: recipients.length },
-    "[pix-alert] PIX order alert dispatched",
-  );
+  const html = `<h2>Novo pedido PIX recebido</h2><p>Pedido <strong>${escapeHtmlEmail(orderNumber)}</strong> na loja ${escapeHtmlEmail(storeName)}.</p><p>Cliente: ${escapeHtmlEmail(customerName)} (${escapeHtmlEmail(customerEmail)})<br>Produto: ${escapeHtmlEmail(productName)}<br>Valor: ${formatBRL(totalAmount)}<br>Telefone: ${escapeHtmlEmail(customerPhone ?? "não informado")}</p><p><a href="${adminPanelUrl}">Abrir pedidos</a></p>`;
+  const text = `Novo pedido PIX: ${orderNumber}. Cliente: ${customerName} (${customerEmail}). Produto: ${productName}. Valor: ${formatBRL(totalAmount)}. Pedidos: ${adminPanelUrl}`;
+  const results = await Promise.all(recipients.map((recipient) => dispatchOutboundMessage({
+    tenantId,
+    eventType: "pix_order_alert",
+    idempotencyKey: `pix-order-alert:${orderNumber}:${recipient}`,
+    recipient: { type: "direct", email: recipient },
+    email: { subject: `Novo pedido PIX — ${orderNumber}`, html, senderName: storeName },
+    whatsapp: { text },
+    origin: "pix-order-alert",
+    metadata: { orderNumber, customerName, customerEmail, customerPhone, totalAmount, productName, adminPanelUrl },
+  })));
+  logger.info({ tenantId, orderNumber, success: results.every((result) => result.message.status !== "failed"), recipients: recipients.length }, "[pix-alert] PIX order alert dispatched");
 }

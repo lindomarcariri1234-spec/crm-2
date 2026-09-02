@@ -3,23 +3,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   mockDbSelect,
   mockDbInsert,
-  mockSendReservationCancellationEmail,
-  mockSendReminderHtmlEmail,
+  mockDbUpdate,
+  mockDispatchOutboundMessage,
+  mockRetryOutboundDelivery,
   mockGetCancellationEmailQueue,
   mockInsertClientNotification,
+  mockInsertValues,
 } = vi.hoisted(() => ({
   mockDbSelect: vi.fn(),
   mockDbInsert: vi.fn(),
-  mockSendReservationCancellationEmail: vi.fn(),
-  mockSendReminderHtmlEmail: vi.fn(),
+  mockDbUpdate: vi.fn(),
+  mockDispatchOutboundMessage: vi.fn(),
+  mockRetryOutboundDelivery: vi.fn(),
   mockGetCancellationEmailQueue: vi.fn(),
   mockInsertClientNotification: vi.fn(),
+  mockInsertValues: [] as unknown[],
 }));
 
 vi.mock("@workspace/db", () => ({
   db: {
     select: mockDbSelect,
     insert: mockDbInsert,
+    update: mockDbUpdate,
   },
   emailLogsTable: {},
   reservationsTable: {},
@@ -38,25 +43,9 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn(() => "isNull"),
 }));
 
-vi.mock("@workspace/email", () => ({
-  sendReservationConfirmationEmail: vi.fn(),
-  sendReservationCancellationEmail: mockSendReservationCancellationEmail,
-  sendWelcomeCredentialsEmail: vi.fn(),
-  sendNewBookingNotificationEmail: vi.fn(),
-  sendReferralBonusPaidEmail: vi.fn(),
-  sendReferralConvertedEmail: vi.fn(),
-  sendReferralExpiredEmail: vi.fn(),
-  sendReferralExpiringSoonEmail: vi.fn(),
-  sendReferralBonusReleasedEmail: vi.fn(),
-  sendReferralWelcomeEmail: vi.fn(),
-  sendReferralTierUpgradeEmail: vi.fn(),
-  sendReferralReversedEmail: vi.fn(),
-  sendReminderHtmlEmail: mockSendReminderHtmlEmail,
-  sendReferralCodeSuspendedEmail: vi.fn(),
-  sendAgencySuspendedEmail: vi.fn(),
-  sendAgencyReactivatedEmail: vi.fn(),
-  sendReferralLoyaltyPointsEmail: vi.fn(),
-  sendPixOrderAlertEmail: vi.fn(),
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
+  retryOutboundDelivery: mockRetryOutboundDelivery,
 }));
 
 vi.mock("../queues/index.js", () => ({
@@ -88,6 +77,7 @@ vi.mock("../queues/whatsapp-helpers.js", () => ({
 
 import {
   dispatchTripRestorationNotification,
+  dispatchReferralReversedEmail,
   enqueueReservationCancellationEmail,
 } from "../queues/email-helpers.js";
 
@@ -133,39 +123,119 @@ function setReservationRow(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockInsertValues.length = 0;
   mockGetCancellationEmailQueue.mockReturnValue(null);
-  mockDbInsert.mockReturnValue({
-    values: vi.fn().mockResolvedValue([]),
+  mockDbInsert.mockImplementation(() => ({
+    values: vi.fn((values: unknown) => {
+      mockInsertValues.push(values);
+      return Promise.resolve([]);
+    }),
+  }));
+  mockDbUpdate.mockReturnValue({
+    set: vi.fn(() => ({
+      where: vi.fn().mockResolvedValue([]),
+    })),
   });
+  mockRetryOutboundDelivery.mockResolvedValue(undefined);
+  mockDispatchOutboundMessage.mockResolvedValue({
+    created: true,
+    message: { status: "accepted" },
+    deliveries: [
+      { channel: "email", status: "accepted", externalId: "message-1" },
+      { channel: "whatsapp", status: "skipped", skippedReason: "whatsapp_address_missing" },
+    ],
+  });
+});
+
+it("reopens a failed reversal delivery on a repeated callback without creating a second outbound message", async () => {
+  const referrer = {
+    name: "Indicador",
+    email: "indicador@example.com",
+    referralEarnings: "100.00",
+  };
+  const tenant = { name: "Agência", logoUrl: null };
+  const referred = { name: "Viajante" };
+  mockDbSelect
+    .mockReturnValueOnce(makeSelectQuery(referrer))
+    .mockReturnValueOnce(makeSelectQuery(tenant))
+    .mockReturnValueOnce(makeSelectQuery(referred))
+    .mockReturnValueOnce(makeSelectQuery(referrer))
+    .mockReturnValueOnce(makeSelectQuery(tenant))
+    .mockReturnValueOnce(makeSelectQuery(referred));
+  mockDispatchOutboundMessage.mockResolvedValueOnce({
+    created: true,
+    message: { id: "message-reversal", status: "accepted" },
+    deliveries: [
+      { id: "delivery-reversal", channel: "email", status: "accepted", externalId: "message-1" },
+      { id: "delivery-whatsapp", channel: "whatsapp", status: "skipped", skippedReason: "whatsapp_address_missing" },
+    ],
+  }).mockResolvedValueOnce({
+    created: false,
+    message: { status: "failed" },
+    deliveries: [
+      { id: "delivery-reversal", channel: "email", status: "failed" },
+      { id: "delivery-whatsapp", channel: "whatsapp", status: "skipped" },
+    ],
+  });
+
+  const callback = {
+    referrerId: "client-referrer",
+    referredId: "client-referred",
+    bonusAmount: "25.00",
+    tenantId: "tenant-1",
+    reason: "payment_refunded",
+    referralId: "referral-1",
+    reservationId: "reservation-1",
+  };
+  await dispatchReferralReversedEmail(callback);
+  await dispatchReferralReversedEmail(callback);
+
+  expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
+  expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
+    idempotencyKey: "referral:referral-1:reversed",
+    metadata: expect.objectContaining({
+      referralId: "referral-1",
+      reservationId: "reservation-1",
+    }),
+  }));
+  expect(mockDispatchOutboundMessage.mock.calls[1][0]).toEqual(expect.objectContaining({
+    idempotencyKey: "referral:referral-1:reversed",
+    metadata: expect.objectContaining({
+      referralId: "referral-1",
+      reservationId: "reservation-1",
+    }),
+  }));
+  expect(mockRetryOutboundDelivery).toHaveBeenCalledWith("tenant-1", "delivery-reversal");
+  expect(mockRetryOutboundDelivery).toHaveBeenCalledOnce();
+  expect(mockDbInsert).toHaveBeenCalledOnce();
+  expect(mockInsertValues).toEqual([expect.objectContaining({
+    tenantId: "tenant-1",
+    referralId: "referral-1",
+    reservationId: "reservation-1",
+    outboundMessageId: "message-reversal",
+  })]);
+  expect(mockDbUpdate).toHaveBeenCalledOnce();
 });
 
 
 describe("enqueueReservationCancellationEmail", () => {
   it("sends the cancellation email with Portuguese date formatting and agency details", async () => {
     setReservationRow();
-    mockSendReservationCancellationEmail.mockResolvedValue({
-      success: true,
-      messageId: "message-1",
-    });
-
     await enqueueReservationCancellationEmail("reservation-1", "tenant-1");
 
-    expect(mockSendReservationCancellationEmail).toHaveBeenCalledWith({
-      reservationNumber: "RES-2026-0042",
-      voucherCode: "VCHR-0042",
-      clientName: "João da Silva",
-      clientEmail: "joao@example.com",
-      tripTitle: "Rota das Falésias",
-      destination: "Canoa Quebrada",
-      departureDate: "01/08/2026",
-      totalAmount: 1250.5,
-      agencyName: "Cariri Turismo",
-      agencyLogo: "https://cdn.example/logo.png",
-      agencyPhone: "(88) 99999-1234",
-      agencyEmail: "contato@cariri.example",
-      agencyWebsite: "https://cariri.example",
-      whatsappUrl: "https://wa.me/88999991234",
-    });
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: "tenant-1",
+      eventType: "reservation_cancellation",
+      idempotencyKey: "reservation:reservation-1:cancellation",
+      recipient: { type: "direct", name: "João da Silva", email: "joao@example.com" },
+      email: expect.objectContaining({
+        subject: "Reserva Cancelada — RES-2026-0042",
+        senderName: "Cariri Turismo",
+        html: expect.stringContaining("Canoa Quebrada"),
+      }),
+      whatsapp: expect.objectContaining({ text: expect.stringContaining("RES-2026-0042") }),
+      metadata: { reservationId: "reservation-1" },
+    }));
     expect(mockDbInsert).toHaveBeenCalledWith(expect.anything());
   });
 
@@ -176,7 +246,7 @@ describe("enqueueReservationCancellationEmail", () => {
       enqueueReservationCancellationEmail("reservation-without-email", "tenant-1"),
     ).resolves.toBeUndefined();
 
-    expect(mockSendReservationCancellationEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockDbInsert).not.toHaveBeenCalled();
   });
 });
@@ -200,8 +270,6 @@ describe("dispatchTripRestorationNotification", () => {
 
   it("writes the portal notice and sends an email that says the old booking remains cancelled", async () => {
     setTripRestorationRow();
-    mockSendReminderHtmlEmail.mockResolvedValue({ success: true, messageId: "message-2" });
-
     await dispatchTripRestorationNotification("reservation-1", "tenant-1");
 
     expect(mockInsertClientNotification).toHaveBeenCalledWith("client-1", "tenant-1", "trip_restored", {
@@ -212,11 +280,16 @@ describe("dispatchTripRestorationNotification", () => {
       reservationNumber: "RES-2026-0042",
       agencyName: "Cariri Turismo",
     });
-    expect(mockSendReminderHtmlEmail).toHaveBeenCalledWith(expect.objectContaining({
-      to: "joao@example.com",
-      subject: "Viagem retomada — Rota das Falésias",
-      fromName: "Cariri Turismo",
-      html: expect.stringContaining("continua cancelada e não foi reativada automaticamente"),
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: "tenant-1",
+      eventType: "trip_restoration",
+      idempotencyKey: "reservation:reservation-1:trip-restoration",
+      email: expect.objectContaining({
+        subject: "Viagem retomada — Rota das Falésias",
+        senderName: "Cariri Turismo",
+        html: expect.stringContaining("continua cancelada e não foi reativada automaticamente"),
+      }),
+      whatsapp: expect.objectContaining({ text: expect.stringContaining("continua cancelada") }),
     }));
     expect(mockDbInsert).toHaveBeenCalledWith(expect.anything());
   });
@@ -227,7 +300,7 @@ describe("dispatchTripRestorationNotification", () => {
     await dispatchTripRestorationNotification("reservation-without-email", "tenant-1");
 
     expect(mockInsertClientNotification).toHaveBeenCalledOnce();
-    expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockDbInsert).not.toHaveBeenCalled();
   });
 });

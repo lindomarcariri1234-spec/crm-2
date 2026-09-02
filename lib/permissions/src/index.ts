@@ -18,6 +18,10 @@ export const RESERVATION_STATUS = {
   FAILED: "failed",
 } as const;
 export type ReservationStatus = (typeof RESERVATION_STATUS)[keyof typeof RESERVATION_STATUS];
+export const ACTIVE_RESERVATION_STATUSES = [
+  RESERVATION_STATUS.PENDING,
+  RESERVATION_STATUS.CONFIRMED,
+] as const;
 
 export const PAYMENT_STATUS = {
   PENDING: "pending",
@@ -245,7 +249,26 @@ export function hasPermission(role: string, resource: Resource, action: Action):
   return resourceActions.includes(action);
 }
 
+/**
+ * These role groups are compatibility aliases for legacy, domain-specific
+ * routes. They are not substitutes for a matrix permission on a resource
+ * represented by PERMISSIONS_MATRIX. In particular, MANAGEMENT_ROLES includes
+ * AGENCY_MANAGER even though managers are view-only for financial data and
+ * cannot delete reservations.
+ *
+ * Matrix-backed routes must call hasPermission with the operation's resource
+ * and action. A direct group check is intentional only when the endpoint is a
+ * documented operational exception (for example, bulk import or full export)
+ * or its domain is not represented in this matrix yet.
+ */
 export const ADMIN_ROLES: string[] = [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN];
+
+/**
+ * Management roles can perform management-only actions across the application.
+ * Reservation deletion is narrower: only SUPER_ADMIN and AGENCY_ADMIN have
+ * RESERVATIONS.DELETE in the permission matrix. Consumers must check that
+ * matrix permission instead of using MANAGEMENT_ROLES for reservation DELETE.
+ */
 export const MANAGEMENT_ROLES: string[] = [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER];
 export const AGENCY_STAFF_ROLES: string[] = [ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER, ROLES.SALES, ROLES.SUPPORT];
 export const ALL_STAFF_ROLES: string[] = [ROLES.SUPER_ADMIN, ROLES.AGENCY_ADMIN, ROLES.AGENCY_MANAGER, ROLES.SALES, ROLES.SUPPORT];

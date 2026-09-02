@@ -486,11 +486,16 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
       container.querySelectorAll<HTMLInputElement>("input"),
     ).find((el) => el.placeholder?.includes("000.000.000"));
 
+    const emailInput = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input"),
+    ).find((el) => el.placeholder?.includes("maria@email.com"));
+
     await flushAct(() => {
       if (nameInput) setNativeInputValue(nameInput, "Maria Silva");
       if (whatsappInput) setNativeInputValue(whatsappInput, "+5531999999999");
       // CPF goes through maskCPF → "111.444.777-35" which passes isValidCPF
       if (cpfInput) setNativeInputValue(cpfInput, VALID_CPF_DIGITS);
+      if (emailInput) setNativeInputValue(emailInput, "maria@example.com");
     });
 
     // Select the trip — triggers tripId state update + the useEffect that
@@ -549,10 +554,15 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
       container.querySelectorAll<HTMLInputElement>("input"),
     ).find((el) => el.placeholder?.includes("000.000.000"));
 
+    const emailInput = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input"),
+    ).find((el) => el.placeholder?.includes("maria@email.com"));
+
     await flushAct(() => {
       if (nameInput) setNativeInputValue(nameInput, "João Souza");
       if (whatsappInput) setNativeInputValue(whatsappInput, "+5531888888888");
       if (cpfInput) setNativeInputValue(cpfInput, VALID_CPF_DIGITS);
+      if (emailInput) setNativeInputValue(emailInput, "joao@example.com");
     });
     // No trip selected — tripId stays "none"
 
@@ -611,10 +621,15 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
       container.querySelectorAll<HTMLInputElement>("input"),
     ).find((el) => el.placeholder?.includes("000.000.000"));
 
+    const emailInput = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input"),
+    ).find((el) => el.placeholder?.includes("maria@email.com"));
+
     await flushAct(() => {
       if (nameInput) setNativeInputValue(nameInput, "Pedro Lima");
       if (whatsappInput) setNativeInputValue(whatsappInput, "+5531777777777");
       if (cpfInput) setNativeInputValue(cpfInput, VALID_CPF_DIGITS);
+      if (emailInput) setNativeInputValue(emailInput, "pedro@example.com");
     });
 
     await flushAct(() => {

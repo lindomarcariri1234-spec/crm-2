@@ -21,5 +21,6 @@ export function shouldBypassClerkForPath(pathname: string): boolean {
   return CLERK_BYPASS_PATHS.has(pathname)
     || isPathWithin(pathname, "/api/cron")
     || isPathWithin(pathname, "/api/public")
+    || isPathWithin(pathname, "/api/webhooks")
     || isPathWithin(pathname, "/loja");
 }

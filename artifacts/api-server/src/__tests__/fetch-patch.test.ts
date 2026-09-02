@@ -24,7 +24,9 @@ describe("UploadThing fetch patch", () => {
     );
 
     expect(nativeFetch).toHaveBeenCalledTimes(1);
-    const [url, init] = nativeFetch.mock.calls[0];
+    const call = nativeFetch.mock.calls[0] as unknown[] | undefined;
+    const url = call?.[0] as string | undefined;
+    const init = call?.[1] as RequestInit | undefined;
     expect(url).toBe("https://sea1.ingest.uploadthing.com/file?type=text%2Fplain&name=Visite%20Cariri");
     expect(new Headers(init?.headers).has("range")).toBe(false);
     expect(new Headers(init?.headers).get("x-uploadthing-version")).toBe("7.7.4");

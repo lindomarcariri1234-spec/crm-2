@@ -2,7 +2,7 @@ import { db } from "@workspace/db";
 import { reservationsTable, tripsTable, clientsTable } from "@workspace/db";
 import { and, eq, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { logger } from "./logger";
-import { RESERVATION_STATUS } from "@workspace/permissions";
+import { ACTIVE_RESERVATION_STATUSES, RESERVATION_STATUS } from "@workspace/permissions";
 import { cancelDealOnReservationCancellation } from "../services/pipeline-automation";
 
 type DriftRow = {
@@ -68,10 +68,7 @@ export async function runSeatReconciliationCron(): Promise<SeatReconciliationRes
             and(
               eq(reservationsTable.tripId, trip.id),
               eq(reservationsTable.tenantId, trip.tenantId),
-              inArray(reservationsTable.status, [
-                RESERVATION_STATUS.PENDING,
-                RESERVATION_STATUS.CONFIRMED,
-              ]),
+              inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
             ),
           );
 
@@ -203,10 +200,7 @@ export async function repairSeatDriftOnly(): Promise<{ fixed: number; skipped: n
             and(
               eq(reservationsTable.tripId, trip.id),
               eq(reservationsTable.tenantId, trip.tenantId),
-              inArray(reservationsTable.status, [
-                RESERVATION_STATUS.PENDING,
-                RESERVATION_STATUS.CONFIRMED,
-              ]),
+              inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
             ),
           );
 
@@ -301,10 +295,7 @@ export async function getDriftSnapshot(): Promise<{ tripsChecked: number; tripsW
           and(
             eq(reservationsTable.tripId, trip.id),
             eq(reservationsTable.tenantId, trip.tenantId),
-            inArray(reservationsTable.status, [
-              RESERVATION_STATUS.PENDING,
-              RESERVATION_STATUS.CONFIRMED,
-            ]),
+            inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
           ),
         );
 

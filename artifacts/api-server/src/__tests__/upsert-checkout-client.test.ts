@@ -28,6 +28,7 @@ vi.mock("@workspace/db", () => ({
 vi.mock("drizzle-orm", () => ({
   eq: vi.fn((col: unknown, val: unknown) => ({ type: "eq", col, val })),
   and: vi.fn((...args: unknown[]) => ({ type: "and", args })),
+  sql: vi.fn(() => "sql"),
 }));
 
 vi.mock("../lib/id.js", () => ({
@@ -97,6 +98,7 @@ describe("upsertCheckoutClient", () => {
     const { tx, spies } = makeMockTx([
       [], // existing client lookup by email → none found
       [], // CPF fallback lookup → none found
+      [], // WhatsApp fallback lookup → none found
       [], // CPF uniqueness check → not taken
     ]);
 
@@ -153,6 +155,27 @@ describe("upsertCheckoutClient", () => {
     expect(spies.updateSet).toHaveBeenCalledWith(
       expect.objectContaining({ birthDate: BASE_ARGS.birthDate }),
     );
+    expect(spies.insert).not.toHaveBeenCalled();
+  });
+
+  it("reuses an existing client when only the normalized WhatsApp matches", async () => {
+    const { tx, spies } = makeMockTx([
+      [], // email lookup → no match
+      [{ id: "phone-client-id", email: "old@example.com", cpf: null, birthDate: null, whatsapp: "5511999991234" }],
+    ]);
+
+    const result = await upsertCheckoutClient(tx, {
+      ...BASE_ARGS,
+      email: "new@example.com",
+      cpf: undefined,
+      phone: "(11) 99999-1234",
+    });
+
+    expect(result).toEqual({ clientId: "phone-client-id", isNew: false });
+    expect(spies.update).toHaveBeenCalledTimes(1);
+    expect(spies.updateSet).toHaveBeenCalledWith({
+      birthDate: BASE_ARGS.birthDate,
+    });
     expect(spies.insert).not.toHaveBeenCalled();
   });
 

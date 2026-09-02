@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
+import { cleanCpf, formatCpf, isValidCpf } from "@/lib/cpf";
 
 export default function SignUpScreen() {
   const colors = useColors();
@@ -25,6 +26,7 @@ export default function SignUpScreen() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
+  const [cpf, setCpf] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -33,6 +35,11 @@ export default function SignUpScreen() {
   async function handleSubmit() {
     if (!isLoaded) return;
     setError(null);
+    const normalizedCpf = cleanCpf(cpf);
+    if (!isValidCpf(normalizedCpf)) {
+      setError("Informe um CPF válido para vincular seu cadastro à agência.");
+      return;
+    }
     setLoading(true);
     try {
       await signUp.create({
@@ -40,6 +47,7 @@ export default function SignUpScreen() {
         lastName: lastName.trim() || undefined,
         emailAddress: email.trim(),
         password,
+        unsafeMetadata: { cpf: normalizedCpf },
       });
       await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
       setStep("verify");
@@ -136,6 +144,20 @@ export default function SignUpScreen() {
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoComplete="email"
+                editable={!loading}
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={[styles.label, { color: colors.mutedForeground }]}>CPF</Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.muted, color: colors.foreground, borderColor: colors.border }]}
+                value={formatCpf(cpf)}
+                onChangeText={setCpf}
+                placeholder="000.000.000-00"
+                placeholderTextColor={colors.mutedForeground}
+                keyboardType="number-pad"
+                autoComplete="off"
                 editable={!loading}
               />
             </View>

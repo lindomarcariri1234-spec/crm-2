@@ -22,9 +22,8 @@ const {
   mockDbUpdate,
   mockDbExecute,
   mockBuildEmailProps,
-  mockSendReservationConfirmationEmail,
-  mockSendReminderHtmlEmail,
-  mockSendTrialExpiryEmail,
+  mockDispatchOutboundMessage,
+  mockRenderTrialExpiryEmail,
   mockGenerateId,
   mockLogInfo,
   mockLogWarn,
@@ -36,9 +35,8 @@ const {
   mockDbUpdate: vi.fn(),
   mockDbExecute: vi.fn(),
   mockBuildEmailProps: vi.fn(),
-  mockSendReservationConfirmationEmail: vi.fn(),
-  mockSendReminderHtmlEmail: vi.fn(),
-  mockSendTrialExpiryEmail: vi.fn(),
+  mockDispatchOutboundMessage: vi.fn(),
+  mockRenderTrialExpiryEmail: vi.fn(() => "<p>trial notice</p>"),
   mockGenerateId: vi.fn(() => "generated-id"),
   mockLogInfo: vi.fn(),
   mockLogWarn: vi.fn(),
@@ -96,9 +94,12 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 vi.mock("@workspace/email", () => ({
-  sendReservationConfirmationEmail: mockSendReservationConfirmationEmail,
-  sendReminderHtmlEmail: mockSendReminderHtmlEmail,
-  sendTrialExpiryEmail: mockSendTrialExpiryEmail,
+  renderTrialExpiryEmail: mockRenderTrialExpiryEmail,
+}));
+
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
+  htmlToWhatsAppText: (html: string) => html.replace(/<[^>]+>/g, ""),
 }));
 
 vi.mock("../queues/email-helpers.js", () => ({
@@ -179,6 +180,23 @@ const emailProps = {
   reservationId: RESERVATION_ID,
 };
 
+function outboundSnapshot(status: "accepted" | "pending" | "failed", error?: string) {
+  const channelStatuses = status === "pending"
+    ? ["accepted", "pending"]
+    : [status, status];
+  return {
+    // An accepted e-mail with a still-pending WhatsApp delivery is a partial
+    // message, and is still a successful business outcome for these workers.
+    message: { id: "outbound-message-001", status: status === "pending" ? "partial" : status },
+    deliveries: [
+      { id: "email-delivery-001", channel: "email", status: channelStatuses[0] },
+      { id: "whatsapp-delivery-001", channel: "whatsapp", status: channelStatuses[1] },
+    ],
+    created: true,
+    ...(error ? { error } : {}),
+  };
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("retryFailedBookingEmails", () => {
@@ -197,7 +215,7 @@ describe("retryFailedBookingEmails", () => {
     await retryFailedBookingEmails();
 
     expect(mockBuildEmailProps).not.toHaveBeenCalled();
-    expect(mockSendReservationConfirmationEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockLogDebug).toHaveBeenCalledWith(
       expect.stringContaining("No failed booking"),
     );
@@ -214,7 +232,7 @@ describe("retryFailedBookingEmails", () => {
     await retryFailedBookingEmails();
 
     expect(mockBuildEmailProps).not.toHaveBeenCalled();
-    expect(mockSendReservationConfirmationEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockLogInfo).toHaveBeenCalledWith(
       expect.objectContaining({ reservationId: RESERVATION_ID }),
       expect.stringContaining("successful send already exists"),
@@ -232,7 +250,7 @@ describe("retryFailedBookingEmails", () => {
 
     await retryFailedBookingEmails();
 
-    expect(mockSendReservationConfirmationEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   // ── Max auto-retry ceiling ─────────────────────────────────────────────────
@@ -252,7 +270,7 @@ describe("retryFailedBookingEmails", () => {
     await retryFailedBookingEmails();
 
     expect(mockBuildEmailProps).not.toHaveBeenCalled();
-    expect(mockSendReservationConfirmationEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockLogWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         reservationId: RESERVATION_ID,
@@ -276,13 +294,13 @@ describe("retryFailedBookingEmails", () => {
     ]);
 
     mockBuildEmailProps.mockResolvedValue(emailProps);
-    mockSendReservationConfirmationEmail.mockResolvedValue({ success: true, messageId: "msg-001" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
 
     await retryFailedBookingEmails();
 
     // autoRetriesDone = 0 (all entries are manual), so the retry must proceed
     expect(mockBuildEmailProps).toHaveBeenCalledWith(RESERVATION_ID, TENANT_ID);
-    expect(mockSendReservationConfirmationEmail).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
   });
 
   it("retries when 2 auto-retries are done and ceiling is 3", async () => {
@@ -296,13 +314,13 @@ describe("retryFailedBookingEmails", () => {
     ]);
 
     mockBuildEmailProps.mockResolvedValue(emailProps);
-    mockSendReservationConfirmationEmail.mockResolvedValue({ success: true, messageId: "msg-002" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("pending"));
 
     await retryFailedBookingEmails();
 
     // autoRetriesDone = 2 < 3, so retry must proceed
     expect(mockBuildEmailProps).toHaveBeenCalledWith(RESERVATION_ID, TENANT_ID);
-    expect(mockSendReservationConfirmationEmail).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
   });
 
   it("respects the ceiling exactly: 3 auto + any manual = skipped, 2 auto + any manual = retried", async () => {
@@ -335,14 +353,14 @@ describe("retryFailedBookingEmails", () => {
     ]);
 
     mockBuildEmailProps.mockResolvedValue({ ...emailProps, reservationId: res2Id });
-    mockSendReservationConfirmationEmail.mockResolvedValue({ success: true, messageId: "msg-003" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
 
     await retryFailedBookingEmails();
 
     // Only res-002 should be retried
     expect(mockBuildEmailProps).toHaveBeenCalledTimes(1);
     expect(mockBuildEmailProps).toHaveBeenCalledWith(res2Id, TENANT_ID);
-    expect(mockSendReservationConfirmationEmail).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
   });
 
   // ── Successful retry ──────────────────────────────────────────────────────
@@ -357,7 +375,7 @@ describe("retryFailedBookingEmails", () => {
     mockDbInsert.mockReturnValue({ values: insertValuesMock });
 
     mockBuildEmailProps.mockResolvedValue(emailProps);
-    mockSendReservationConfirmationEmail.mockResolvedValue({ success: true, messageId: "mid" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
 
     await retryFailedBookingEmails();
 
@@ -381,12 +399,12 @@ describe("retryFailedBookingEmails", () => {
     mockDbUpdate.mockReturnValue({ set: setMock });
 
     mockBuildEmailProps.mockResolvedValue(emailProps);
-    mockSendReservationConfirmationEmail.mockResolvedValue({ success: true, messageId: "msg-sent" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
 
     await retryFailedBookingEmails();
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "sent", messageId: "msg-sent" }),
+      expect.objectContaining({ status: "sent", errorMessage: null }),
     );
     expect(mockLogInfo).toHaveBeenCalledWith(
       expect.objectContaining({ reservationId: RESERVATION_ID }),
@@ -406,12 +424,12 @@ describe("retryFailedBookingEmails", () => {
     mockDbUpdate.mockReturnValue({ set: setMock });
 
     mockBuildEmailProps.mockResolvedValue(emailProps);
-    mockSendReservationConfirmationEmail.mockResolvedValue({ success: false, error: "SMTP timeout" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("failed", "SMTP timeout"));
 
     await retryFailedBookingEmails();
 
     expect(setMock).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "failed", errorMessage: "SMTP timeout" }),
+      expect.objectContaining({ status: "failed", errorMessage: "outbound_dispatch_failed" }),
     );
     expect(mockLogError).toHaveBeenCalledWith(
       expect.objectContaining({ reservationId: RESERVATION_ID }),
@@ -431,7 +449,7 @@ describe("retryFailedBookingEmails", () => {
 
     await retryFailedBookingEmails();
 
-    expect(mockSendReservationConfirmationEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockLogWarn).toHaveBeenCalledWith(
       expect.objectContaining({ reservationId: RESERVATION_ID }),
       expect.stringContaining("Cannot rebuild email props"),
@@ -451,12 +469,12 @@ describe("retryFailedBookingEmails", () => {
     ]);
 
     mockBuildEmailProps.mockResolvedValue(emailProps);
-    mockSendReservationConfirmationEmail.mockResolvedValue({ success: true, messageId: "mid" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
 
     await retryFailedBookingEmails();
 
     expect(mockBuildEmailProps).toHaveBeenCalledTimes(1);
-    expect(mockSendReservationConfirmationEmail).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -471,7 +489,7 @@ describe("processTrialExpiryNotifications", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupUpdateMock();
-    mockSendTrialExpiryEmail.mockResolvedValue({ success: true, messageId: "trial-email-1" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
     mockDbExecute.mockResolvedValue({ rows: [{ value: "claim-token" }] });
     process.env["FRONTEND_URL"] = "https://app.example.com";
   });
@@ -481,13 +499,15 @@ describe("processTrialExpiryNotifications", () => {
 
     await processTrialExpiryNotifications();
 
-    expect(mockSendTrialExpiryEmail).toHaveBeenCalledTimes(1);
-    expect(mockSendTrialExpiryEmail).toHaveBeenCalledWith(
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        agencyName: "Agência Teste",
-        agencyEmail: "agencia@example.com",
-        upgradeUrl: "https://app.example.com/configuracoes?tab=plan",
-        expired: false,
+        tenantId: TENANT_ID,
+        eventType: "trial_expiry",
+        recipient: { type: "admin" },
+        email: expect.objectContaining({
+          subject: expect.stringContaining("termina"),
+        }),
       }),
     );
   });
@@ -497,9 +517,13 @@ describe("processTrialExpiryNotifications", () => {
 
     await processTrialExpiryNotifications();
 
-    expect(mockSendTrialExpiryEmail).toHaveBeenCalledTimes(1);
-    expect(mockSendTrialExpiryEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ expired: true }),
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "trial_expiry",
+        recipient: { type: "admin" },
+        metadata: expect.objectContaining({ window: "expired" }),
+      }),
     );
   });
 
@@ -509,12 +533,12 @@ describe("processTrialExpiryNotifications", () => {
 
     await processTrialExpiryNotifications();
 
-    expect(mockSendTrialExpiryEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("releases a failed delivery claim so a later run can retry", async () => {
     setupSelectQueue([[trialTenant], []]);
-    mockSendTrialExpiryEmail.mockResolvedValue({ success: false, error: "Resend unavailable" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("failed", "Resend unavailable"));
 
     await processTrialExpiryNotifications();
 
@@ -570,16 +594,16 @@ describe("notifyStaffOfExhaustedRetries (via exhaustion path)", () => {
       [{ email: "admin@agency.com" }], // staff users
     ]);
 
-    mockSendReminderHtmlEmail.mockResolvedValue({ success: true, messageId: "alert-mid" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
 
     await retryFailedBookingEmails();
 
-    expect(mockSendReminderHtmlEmail).toHaveBeenCalledTimes(2);
-    expect(mockSendReminderHtmlEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "store@agency.com" }),
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ recipient: expect.objectContaining({ email: "store@agency.com" }) }),
     );
-    expect(mockSendReminderHtmlEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "admin@agency.com" }),
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ recipient: expect.objectContaining({ email: "admin@agency.com" }) }),
     );
   });
 
@@ -593,7 +617,7 @@ describe("notifyStaffOfExhaustedRetries (via exhaustion path)", () => {
       [],
     ]);
 
-    mockSendReminderHtmlEmail.mockResolvedValue({ success: true, messageId: "mid" });
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
 
     await retryFailedBookingEmails();
 
@@ -612,7 +636,7 @@ describe("notifyStaffOfExhaustedRetries (via exhaustion path)", () => {
 
     await retryFailedBookingEmails();
 
-    expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockLogDebug).toHaveBeenCalledWith(
       expect.objectContaining({ reservationId: RESERVATION_ID }),
       expect.stringContaining("Staff alert already successfully sent"),
@@ -631,7 +655,7 @@ describe("notifyStaffOfExhaustedRetries (via exhaustion path)", () => {
 
     await retryFailedBookingEmails();
 
-    expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockLogWarn).toHaveBeenCalledWith(
       expect.objectContaining({ reservationId: RESERVATION_ID }),
       expect.stringContaining("No staff recipients"),
@@ -648,7 +672,7 @@ describe("notifyStaffOfExhaustedRetries (via exhaustion path)", () => {
 
     await retryFailedBookingEmails();
 
-    expect(mockSendReminderHtmlEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(mockLogWarn).toHaveBeenCalledWith(
       expect.objectContaining({ reservationId: RESERVATION_ID }),
       expect.stringContaining("Cannot fetch reservation for staff alert"),

@@ -76,6 +76,10 @@ vi.mock("@workspace/email", () => ({
 }));
 
 vi.mock("@workspace/db", () => ({
+  buildDatabaseConnectionConfig: vi.fn((connectionString: string) => ({
+    connectionString,
+    ssl: undefined,
+  })),
   db: {
     select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => []) })) })) })),
     insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn(async () => []) })) })),

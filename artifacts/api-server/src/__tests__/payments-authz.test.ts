@@ -99,10 +99,16 @@ vi.mock("../queues/email-helpers.js", () => ({
 vi.mock("../services/pipeline-automation.js", () => ({
   moveDealToStage: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../services/settlements/financial-ledger.js", () => ({
+  createClientBenefitEntry: vi.fn(),
+  expireClientBenefits: vi.fn(),
+  getClientBenefitBalances: vi.fn(),
+}));
 
 import { requireAuth } from "../lib/tenant.js";
 import paymentsRouter from "../routes/payments.js";
 import tripCostsRouter from "../routes/trip-costs.js";
+import settlementsRouter from "../routes/settlements.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
 function stubLogger(
@@ -206,6 +212,36 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     const res = await request(buildApp(paymentsRouter))
       .post("/api/payments")
       .send({ clientId: "client-001", amount: 100 });
+    expect(res.status).toBe(403);
+  });
+
+  it("POST /payments → 403 for AGENCY_MANAGER (financial view does not grant create)", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_MANAGER) as never);
+    const res = await request(buildApp(paymentsRouter))
+      .post("/api/payments")
+      .send({ clientId: "client-001", amount: 100 });
+    expect(res.status).toBe(403);
+  });
+
+  it("DELETE /payments/:id → 403 for AGENCY_MANAGER (financial view does not grant delete)", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_MANAGER) as never);
+    const res = await request(buildApp(paymentsRouter)).delete("/api/payments/pay-001");
+    expect(res.status).toBe(403);
+  });
+
+  it("POST /financial/benefits → 403 for AGENCY_MANAGER (financial view does not grant create)", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_MANAGER) as never);
+    const res = await request(buildApp(settlementsRouter))
+      .post("/api/financial/benefits")
+      .send({
+        clientId: "client-001",
+        category: "wallet",
+        operation: "credit",
+        amount: 10,
+        description: "Ajuste manual",
+        idempotencyKey: "benefit-test-001",
+        consentConfirmed: true,
+      });
     expect(res.status).toBe(403);
   });
 

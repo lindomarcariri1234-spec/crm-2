@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 import { Plus, Pencil, Trash2, Search, Eye } from "lucide-react";
 import { formatCurrencyBRL as formatCurrency } from "@/lib/utils";
 
@@ -223,7 +224,7 @@ function SupplierDetailModal({
 
 export default function Fornecedores() {
   const { toast } = useToast();
-  const { data: suppliers = [], refetch } = useListSuppliers();
+  const { data: suppliers = [], isError, refetch } = useListSuppliers();
   const createSupplier = useCreateSupplier();
   const updateSupplier = useUpdateSupplier();
   const deleteSupplier = useDeleteSupplier();
@@ -366,7 +367,13 @@ export default function Fornecedores() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 ? (
+            {isError ? (
+              <ListLoadErrorRow
+                colSpan={9}
+                onRetry={refetch}
+                message="Não foi possível carregar os fornecedores."
+              />
+            ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center text-muted-foreground py-10">
                   Nenhum fornecedor encontrado

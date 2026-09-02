@@ -58,9 +58,15 @@ export interface BackupImportReport {
   marketingCampanhas: BackupImportGroupResult;
   marketingEnvios: BackupImportGroupResult;
   marketingNps: BackupImportGroupResult;
+  outboundMessages: BackupImportGroupResult;
+  outboundDeliveries: BackupImportGroupResult;
+  outboundDeliveryAttempts: BackupImportGroupResult;
   distribuicaoOfertas: BackupImportGroupResult;
   distribuicaoOperacoes: BackupImportGroupResult;
   distribuicaoReservas: BackupImportGroupResult;
+  comunicacaoEventos: BackupImportGroupResult;
+  comunicacaoEntregas: BackupImportGroupResult;
+  comunicacaoTentativas: BackupImportGroupResult;
   /**
    * Export section keys (dot-path, matching the export's own JSON structure)
    * that this importer intentionally does not restore — logs, legacy/

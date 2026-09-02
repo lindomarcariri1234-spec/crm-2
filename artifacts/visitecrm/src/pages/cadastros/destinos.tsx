@@ -31,13 +31,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 import { Plus, Pencil, Trash2, Search, MapPin, Star } from "lucide-react";
 
 const SEASONS = ["Janeiro-Março", "Abril-Junho", "Julho-Setembro", "Outubro-Dezembro", "Ano todo"];
 
 export default function Destinos() {
   const { toast } = useToast();
-  const { data: destinations = [], refetch } = useListDestinations();
+  const { data: destinations = [], isError, refetch } = useListDestinations();
   const createDest = useCreateDestination();
   const updateDest = useUpdateDestination();
   const deleteDest = useDeleteDestination();
@@ -173,7 +174,13 @@ export default function Destinos() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 ? (
+            {isError ? (
+              <ListLoadErrorRow
+                colSpan={7}
+                onRetry={refetch}
+                message="Não foi possível carregar os destinos."
+              />
+            ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
                   <MapPin className="w-8 h-8 mx-auto mb-2 opacity-30" />

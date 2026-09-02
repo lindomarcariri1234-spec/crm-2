@@ -21,6 +21,7 @@ import {
   processInstallmentDueReminders,
   processTrialExpiryNotifications,
 } from "../workers/reminder.worker";
+import { recoverOutboundDeliveries } from "../services/outbound-delivery";
 
 /**
  * Serverless-platform (Vercel) cron entry points.
@@ -58,6 +59,7 @@ const JOBS: Record<string, () => Promise<unknown>> = {
   "campaign-automation": runCampaignAutomationCron,
   "whatsapp-outbox": retryPendingReservationConfirmedWhatsApps,
   "chatbot-delivery": retryPendingAttendanceReplies,
+  "outbound-delivery-recovery": async () => { await recoverOutboundDeliveries(); },
   "expired-reservations": runExpiredReservationsCron,
   "email-retry": retryFailedBookingEmails,
   "expiry-warning-retry": retryFailedExpiryWarningEmails,

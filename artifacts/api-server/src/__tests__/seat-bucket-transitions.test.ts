@@ -272,6 +272,7 @@ interface QueryChain extends Promise<unknown[]> {
   limit(n?: number): Promise<unknown[]>;
   where(cond?: unknown): QueryChain;
   from(table?: unknown): QueryChain;
+  for(lockMode: string): QueryChain;
   orderBy(...args: unknown[]): Promise<unknown[]>;
 }
 
@@ -280,6 +281,7 @@ function makeChain(data: unknown[]): QueryChain {
     limit: vi.fn().mockResolvedValue(data),
     where: vi.fn().mockImplementation(() => makeChain(data)),
     from: vi.fn().mockImplementation(() => makeChain(data)),
+    for: vi.fn().mockImplementation(() => makeChain(data)),
     orderBy: vi.fn().mockResolvedValue(data),
   }) as QueryChain;
 }
@@ -367,7 +369,7 @@ describe("Seat bucket counters — status transition paths", () => {
         delete: vi.fn().mockImplementation(() => ({
           where: vi.fn().mockResolvedValue([]),
         })),
-        select: vi.fn().mockImplementation(() => makeChain([])),
+        select: vi.fn().mockImplementation(() => makeChain([existing])),
         insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
       };
       return cb(tx);
@@ -403,7 +405,7 @@ describe("Seat bucket counters — status transition paths", () => {
         delete: vi.fn().mockImplementation(() => ({
           where: vi.fn().mockResolvedValue([]),
         })),
-        select: vi.fn().mockImplementation(() => makeChain([])),
+        select: vi.fn().mockImplementation(() => makeChain([existing])),
         insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
       };
       return cb(tx);
@@ -418,5 +420,36 @@ describe("Seat bucket counters — status transition paths", () => {
     expect(seatUpdate).toBeDefined();
     expect(seatUpdate!.availableSeats).toBe("sql");
     expect(seatUpdate!.reservedSeats).toBe("sql");
+  });
+
+  it.each([
+    RESERVATION_STATUS.CANCELLED,
+    RESERVATION_STATUS.REFUNDED,
+  ])("DELETE %s reservation does not release capacity again", async (status) => {
+    const app = buildApp();
+    const existing = makeReservation({ status });
+
+    mockLimit.mockResolvedValueOnce([existing]);
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        execute: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
+        update: vi.fn().mockImplementation(() => ({
+          set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
+            capturedSets.push(setArg);
+            return { where: vi.fn().mockResolvedValue([]) };
+          }),
+        })),
+        delete: vi.fn().mockImplementation(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+        select: vi.fn().mockImplementation(() => makeChain([existing])),
+        insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
+      };
+      return cb(tx);
+    });
+
+    const res = await request(app).delete("/api/reservations/res-001");
+    expect(res.status).toBe(200);
+    expect(capturedSets).toHaveLength(0);
   });
 });

@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
+import { Link } from "wouter";
 import { localToday } from "@workspace/shared";
 import { useToast } from "@/hooks/use-toast";
 import { storeApi, StoreOrder } from "@/lib/storeApi";
+import type { LinkedReservation } from "@/lib/linked-data";
 import { PAYMENT_METHOD_LABELS as PAYMENT_METHODS } from "@/lib/labels";
 import { formatDateTime as formatDate } from "@/lib/utils";
 import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
@@ -31,6 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ListLoadError } from "@/components/list-load-error";
 import {
   ShoppingCart,
   Loader2,
@@ -43,6 +46,7 @@ import {
   Copy,
   CheckCircle,
   ExternalLink,
+  Link2,
 } from "lucide-react";
 
 const ORDER_STATUSES = [
@@ -85,6 +89,28 @@ function paymentColor(s: string, paymentMethod?: string | null) {
 function paymentLabel(s: string, paymentMethod?: string | null) {
   if (s === STORE_PAYMENT_STATUS.PENDING && paymentMethod === "pix") return "PIX Pendente";
   return PAYMENT_STATUSES.find((x) => x.value === s)?.label ?? s;
+}
+
+function money(value: string | number | null | undefined) {
+  return `R$ ${Number(value ?? 0).toFixed(2)}`;
+}
+
+function ReservationLinks({ reservations }: { reservations?: LinkedReservation[] }) {
+  if (!reservations?.length) return null;
+  return (
+    <div className="space-y-1">
+      {reservations.map((reservation) => (
+        <div key={reservation.id} className="flex justify-between gap-2 text-sm" data-testid={`text-linked-reservation-${reservation.id}`}>
+          <Link href={`/reservations/${reservation.id}`} className="font-mono text-primary hover:underline" data-testid={`link-linked-reservation-${reservation.id}`}>
+            Reserva {reservation.reservationNumber}
+          </Link>
+          <span className={Number(reservation.balance) > 0 ? "text-amber-700" : "text-green-700"}>
+            Saldo {money(reservation.balance)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 
@@ -190,7 +216,7 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
           </CardHeader>
           <CardContent className="space-y-1">
             <div className="flex justify-between text-sm">
-              <span>Subtotal</span>
+              <span>Subtotal (base)</span>
               <span>R$ {parseFloat(order.subtotal).toFixed(2)}</span>
             </div>
             {parseFloat(order.discountAmount) > 0 && (
@@ -209,18 +235,18 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
               <span>Total</span>
               <span>R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
             </div>
-            {order.depositAmount && Number(order.depositAmount) > 0 && Number(order.depositAmount) < parseFloat(order.totalAmount) && (
+            {order.depositAmount && Number(order.depositAmount) > 0 && (
               <>
                 <div className="flex justify-between text-sm text-blue-700 pt-1">
-                  <span>Depósito pago agora</span>
+                  <span>Pago</span>
                   <span className="font-semibold">R$ {parseFloat(order.depositAmount).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-sm text-amber-700">
-                  <span>Restante a pagar</span>
-                  <span className="font-semibold">R$ {parseFloat(order.amountRemaining ?? "0").toFixed(2)}</span>
                 </div>
               </>
             )}
+            <div className="flex justify-between text-sm text-amber-700">
+              <span>Saldo</span>
+              <span className="font-semibold">R$ {parseFloat(order.amountRemaining ?? order.totalAmount).toFixed(2)}</span>
+            </div>
             <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
               <p>Pagamento: {PAYMENT_METHODS[order.paymentMethod ?? ""] ?? order.paymentMethod ?? "Não informado"}</p>
               {order.installments && order.installments > 1 && (
@@ -230,6 +256,32 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
           </CardContent>
         </Card>
       </div>
+
+      {(order.linkedReservations?.length || order.linkedReferral || order.linkedDeals?.length) ? (
+        <Card data-testid={`card-order-links-${order.id}`}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Link2 className="w-4 h-4" /> Vínculos do pedido
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <ReservationLinks reservations={order.linkedReservations} />
+            {order.linkedReferral && (
+              <div className="text-sm border-t pt-2" data-testid={`text-linked-referral-${order.linkedReferral.id}`}>
+                <span className="text-muted-foreground">Indicação:</span>{" "}
+                <span className="font-mono font-medium">{order.linkedReferral.code}</span>
+                {" · "}{order.linkedReferral.referrerName ?? "Indicador não informado"}
+                {" · desconto "}{money(order.linkedReferral.discountAmount)}
+              </div>
+            )}
+            {!!order.linkedDeals?.length && (
+              <div className="text-sm border-t pt-2 text-muted-foreground" data-testid={`text-linked-deals-${order.id}`}>
+                {order.linkedDeals.length} negócio{order.linkedDeals.length > 1 ? "s" : ""} vinculado{order.linkedDeals.length > 1 ? "s" : ""}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader className="pb-2">
@@ -423,6 +475,7 @@ export default function LojaPedidos() {
   const [orders, setOrders] = useState<StoreOrder[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
 
   const [search, setSearch] = useState("");
@@ -435,6 +488,7 @@ export default function LojaPedidos() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const res = await storeApi.getOrders({
         status: statusFilter,
@@ -448,9 +502,11 @@ export default function LojaPedidos() {
       setOrders(res.data);
       setTotal(res.total);
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoadError(message);
       toast({
         title: "Erro ao carregar pedidos",
-        description: err instanceof Error ? err.message : String(err),
+        description: message,
         variant: "destructive",
       });
     } finally {
@@ -570,6 +626,12 @@ export default function LojaPedidos() {
         <div className="flex items-center justify-center h-48">
           <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <Card>
+          <CardContent>
+            <ListLoadError onRetry={load} message={loadError} />
+          </CardContent>
+        </Card>
       ) : orders.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
@@ -587,6 +649,7 @@ export default function LojaPedidos() {
                   <TableHead>Cliente</TableHead>
                   <TableHead>Itens</TableHead>
                   <TableHead>Total</TableHead>
+                  <TableHead>Vínculos</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Pagamento</TableHead>
                   <TableHead>Data</TableHead>
@@ -610,7 +673,20 @@ export default function LojaPedidos() {
                       </div>
                     </TableCell>
                     <TableCell className="font-medium text-sm">
-                      R$ {parseFloat(order.totalAmount).toFixed(2)}
+                      <div data-testid={`text-order-total-${order.id}`}>{money(order.totalAmount)}</div>
+                      <div className="text-xs text-muted-foreground">Base {money(order.subtotal)} · Desc. {money(order.discountAmount)}</div>
+                      <div className="text-xs text-muted-foreground">Pago {money(order.depositAmount)} · Saldo {money(order.amountRemaining ?? order.totalAmount)}</div>
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {order.linkedReservations?.length ? (
+                        <div data-testid={`text-order-reservations-${order.id}`}>
+                          {order.linkedReservations.map((reservation) => reservation.reservationNumber).join(", ")}
+                        </div>
+                      ) : order.linkedReferral ? (
+                        <div data-testid={`text-order-referral-${order.id}`}>Indicação {order.linkedReferral.code}</div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColor(order.status)}`}>

@@ -8,7 +8,7 @@ import { generateAndAssignReferralCode } from "../lib/referral-code";
 import { dispatchReferralWelcomeEmail, dispatchReferralCodeSuspendedEmail } from "../queues/email-helpers";
 import { requireAuth, getTenantUser } from "../lib/tenant";
 import { validateCPF, cleanCPF } from "../lib/cpf";
-import { localToday } from "@workspace/shared";
+import { localToday, normalizeBrazilPhone } from "@workspace/shared";
 import { checkPlanLimit } from "../lib/planLimits";
 import {
   CreateClientBody,
@@ -20,13 +20,17 @@ import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { scheduleCalendarSyncBirthday } from "../lib/google-calendar/schedule-sync";
 import { logger } from "../lib/logger";
 import { ADMIN_ROLES, MANAGEMENT_ROLES } from '../lib/tenant';
-import { ROLES } from "@workspace/permissions";
+import { ACTIONS, hasPermission, RESOURCES, ROLES } from "@workspace/permissions";
 import { clerkClient } from "@clerk/express";
 import { calculateScoresForClient } from "../lib/client-scores";
 import { getRedisConnection } from "../lib/redis";
 import { getAIClientForTenant } from "../lib/ai-client";
 import { z } from "zod";
 import { clientSellerScopeCondition } from "../lib/seller-scope";
+import { normalizedClientWhatsappSql } from "../lib/client-phone";
+import { reconcileClientIdentity } from "../services/client-identity";
+import { unlinkClientFromTrips } from "../services/unlink-client-from-trips";
+import { broadcastSeatUpdate } from "../lib/realtime";
 
 const ListClientsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -78,6 +82,8 @@ function formatClient(c: typeof clientsTable.$inferSelect, extra?: { isNew?: boo
     name: c.name,
     email: c.email,
     whatsapp: c.whatsapp,
+    emailOptIn: c.emailOptIn,
+    whatsappOptIn: c.whatsappOptIn,
     phone: c.phone,
     cpf: c.cpf,
     rg: c.rg,
@@ -289,15 +295,48 @@ router.post("/clients", async (req, res, next: NextFunction): Promise<void> => {
     const parsed = CreateClientBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
 
-    // Duplicate name+WhatsApp check — unless the caller explicitly overrides
-    if (!parsed.data.forceCreate) {
+    const name = parsed.data.name.trim();
+    const email = parsed.data.email?.trim() ?? "";
+    const whatsapp = parsed.data.whatsapp?.trim() ?? "";
+    const cpfInput = parsed.data.cpf?.trim() ?? "";
+    const missingRequiredFields = [
+      !name ? "Nome completo" : null,
+      !email ? "e-mail" : null,
+      !whatsapp ? "WhatsApp" : null,
+      !cpfInput ? "CPF" : null,
+    ].filter((field): field is string => field !== null);
+    if (missingRequiredFields.length > 0 && !parsed.data.allowMissingData) {
+      next(new ValidationError(
+        `Preencha os dados obrigatórios: ${missingRequiredFields.join(", ")}. Para salvar com dados ausentes, marque "Permitir cadastro com dados ausentes".`,
+        "CLIENT_REQUIRED_DATA",
+      ));
+      return;
+    }
+
+    let cleanedCpf: string | null = null;
+    if (cpfInput) {
+      try {
+        cleanedCpf = validateCPF(cpfInput);
+      } catch (err) {
+        next(new ValidationError(err instanceof Error ? err.message : "CPF inválido", "CPF_INVALID")); return;
+      }
+    }
+
+    // CPF is the primary identity key. Only run the legacy name+WhatsApp
+    // duplicate guard when no CPF was supplied, otherwise a valid CPF match
+    // must be allowed to enrich the existing canonical record.
+    if (!parsed.data.forceCreate && !cleanedCpf && whatsapp) {
+      const normalizedWhatsapp = normalizeBrazilPhone(whatsapp);
+      const whatsappCondition = normalizedWhatsapp
+        ? sql`${normalizedClientWhatsappSql()} = ${normalizedWhatsapp}`
+        : eq(clientsTable.whatsapp, whatsapp);
       const [nameWaDupe] = await db
         .select({ id: clientsTable.id, name: clientsTable.name, customerCode: clientsTable.customerCode, whatsapp: clientsTable.whatsapp })
         .from(clientsTable)
         .where(and(
           eq(clientsTable.tenantId, me.tenantId),
-          sql`lower(trim(${clientsTable.name})) = lower(trim(${parsed.data.name}))`,
-          eq(clientsTable.whatsapp, parsed.data.whatsapp),
+           sql`lower(trim(${clientsTable.name})) = lower(trim(${name}))`,
+          whatsappCondition,
           sql`${clientsTable.status} != 'merged'`,
         ))
         .limit(1);
@@ -315,19 +354,10 @@ router.post("/clients", async (req, res, next: NextFunction): Promise<void> => {
       }
     }
 
-    let cleanedCpf: string | null = null;
-    if (parsed.data.cpf != null && parsed.data.cpf.trim() !== "") {
-      try {
-        cleanedCpf = validateCPF(parsed.data.cpf);
-      } catch (err) {
-        next(new ValidationError(err instanceof Error ? err.message : "CPF inválido", "CPF_INVALID")); return;
-      }
-    }
-
     const sharedFields = {
-      name: parsed.data.name,
-      email: parsed.data.email,
-      whatsapp: parsed.data.whatsapp,
+      name,
+      email,
+      whatsapp,
       phone: parsed.data.phone ?? null,
       rg: parsed.data.rg ?? null,
       birthDate: parsed.data.birthDate ? parseSafeBirthDate(parsed.data.birthDate) : null,
@@ -352,47 +382,48 @@ router.post("/clients", async (req, res, next: NextFunction): Promise<void> => {
       ambassadorOptIn: parsed.data.ambassadorOptIn ?? undefined,
     };
 
-    const id = generateId();
-    const [upserted] = await db.transaction(async (tx) => {
-      let existing: { id: string } | undefined;
-      if (cleanedCpf) {
-        [existing] = await tx
-          .select({ id: clientsTable.id })
-          .from(clientsTable)
-          .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.cpf, cleanedCpf)))
-          .limit(1);
+    const { client: upserted, isNew } = await db.transaction(async (tx) => {
+      const identity = await reconcileClientIdentity(tx, {
+        tenantId: me.tenantId,
+        cpf: cleanedCpf,
+        name,
+        email: email || undefined,
+        phone: whatsapp || undefined,
+        createdById: me.id,
+        createIfMissing: true,
+        profile: sharedFields,
+      });
+      if (!identity.clientId) {
+        throw new AppError("Failed to create client", 500, "CLIENT_CREATE_FAILED");
       }
 
-      let customerCode: string | null = null;
-      if (!existing) {
+      // Customer codes are assigned only to genuinely new canonical records.
+      // Existing CPF records keep their code and all trusted business data.
+      if (identity.created) {
         const [tenantRow] = await tx
           .update(tenantsTable)
           .set({ lastClientSeq: sql`${tenantsTable.lastClientSeq} + 1` })
           .where(eq(tenantsTable.id, me.tenantId))
-          .returning({ lastClientSeq: tenantsTable.lastClientSeq, reservationPrefix: tenantsTable.reservationPrefix, slug: tenantsTable.slug });
+          .returning({
+            lastClientSeq: tenantsTable.lastClientSeq,
+            reservationPrefix: tenantsTable.reservationPrefix,
+            slug: tenantsTable.slug,
+          });
         const seq = tenantRow?.lastClientSeq ?? 1;
         const rawPrefix = tenantRow?.reservationPrefix?.trim() || tenantRow?.slug?.slice(0, 3) || "CLI";
         const prefix = rawPrefix.toUpperCase();
-        // Use Brazil calendar YYYYMM so codes assigned at 21h-midnight get the correct BRT month
         const yyyymm = localToday().slice(0, 7).replace("-", "");
-        customerCode = `${prefix}-${yyyymm}-${String(seq).padStart(5, "0")}`;
+        const customerCode = `${prefix}-${yyyymm}-${String(seq).padStart(5, "0")}`;
+        await tx.update(clientsTable)
+          .set({ customerCode, updatedAt: new Date() })
+          .where(and(eq(clientsTable.id, identity.clientId), eq(clientsTable.tenantId, me.tenantId)));
       }
 
-      return await tx.insert(clientsTable)
-        .values({
-          id,
-          tenantId: me.tenantId,
-          cpf: cleanedCpf,
-          ...sharedFields,
-          createdById: me.id,
-          customerCode,
-        })
-        .onConflictDoUpdate({
-          target: [clientsTable.tenantId, clientsTable.cpf],
-          targetWhere: sql`${clientsTable.cpf} IS NOT NULL`,
-          set: { ...sharedFields, updatedAt: new Date() },
-        })
-        .returning();
+      const [client] = await tx.select().from(clientsTable)
+        .where(and(eq(clientsTable.id, identity.clientId), eq(clientsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!client) throw new AppError("Failed to load client after reconciliation", 500, "CLIENT_CREATE_FAILED");
+      return { client, isNew: identity.created };
     }).catch((err: unknown) => {
       const pgErr = err as { code?: string };
       if (pgErr?.code === "23505") {
@@ -401,9 +432,6 @@ router.post("/clients", async (req, res, next: NextFunction): Promise<void> => {
       throw err;
     });
 
-    if (!upserted) { next(new AppError("Failed to create client", 500, "CLIENT_CREATE_FAILED")); return; }
-
-    const isNew = upserted.id === id;
     const message = isNew ? "Cliente cadastrado com sucesso." : "Cliente já cadastrado — dados atualizados.";
     const statusCode = isNew ? 201 : 200;
     res.status(statusCode).json(formatClient(upserted, { isNew, message }));
@@ -443,6 +471,8 @@ router.get("/clients/duplicates", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // Duplicate discovery exposes cross-client identity data and remains an
+    // administrator-only operational audit, not ordinary CLIENTS.VIEW.
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const pairs: Array<{ reason: string; clients: ReturnType<typeof formatClient>[] }> = [];
@@ -480,17 +510,18 @@ router.get("/clients/duplicates", async (req, res, next: NextFunction): Promise<
 
     const cpfDupeIds = new Set(pairs.flatMap(p => p.clients.map(c => c.id)));
 
+    const normalizedWhatsapp = normalizedClientWhatsappSql();
     const nameWaGroups = await db
       .select({
         normName: sql<string>`lower(trim(${clientsTable.name}))`,
-        whatsapp: clientsTable.whatsapp,
+        whatsapp: normalizedWhatsapp,
       })
       .from(clientsTable)
       .where(and(
         eq(clientsTable.tenantId, me.tenantId),
         sql`${clientsTable.status} != 'merged'`
       ))
-      .groupBy(sql`lower(trim(${clientsTable.name}))`, clientsTable.whatsapp)
+      .groupBy(sql`lower(trim(${clientsTable.name}))`, normalizedWhatsapp)
       .having(sql`count(*) > 1`);
 
     for (const group of nameWaGroups) {
@@ -498,7 +529,7 @@ router.get("/clients/duplicates", async (req, res, next: NextFunction): Promise<
         .where(and(
           eq(clientsTable.tenantId, me.tenantId),
           sql`lower(trim(${clientsTable.name})) = ${group.normName}`,
-          eq(clientsTable.whatsapp, group.whatsapp),
+          sql`${normalizedWhatsapp} = ${group.whatsapp}`,
           sql`${clientsTable.status} != 'merged'`
         ))
         .orderBy(clientsTable.createdAt);
@@ -637,7 +668,7 @@ router.delete("/clients/:id", async (req, res, next: NextFunction): Promise<void
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [client] = await db.select().from(clientsTable)
       .where(and(eq(clientsTable.id, req.params.id), eq(clientsTable.tenantId, me.tenantId)))
@@ -667,9 +698,9 @@ router.delete("/clients/:id", async (req, res, next: NextFunction): Promise<void
       }
     }
 
-    await db.transaction(async (tx) => {
+    const affectedTripIds = await db.transaction(async (tx) => {
+      const tripIds = await unlinkClientFromTrips(tx, me.tenantId, client.id);
       await Promise.all([
-        tx.update(reservationsTable).set({ clientId: sql`NULL` }).where(eq(reservationsTable.clientId, client.id)),
         tx.update(paymentsTable).set({ clientId: null }).where(eq(paymentsTable.clientId, client.id)),
         tx.update(dealsTable).set({ clientId: null }).where(eq(dealsTable.clientId, client.id)),
         tx.update(storeOrdersTable).set({ clientId: null }).where(eq(storeOrdersTable.clientId, client.id)),
@@ -680,9 +711,18 @@ router.delete("/clients/:id", async (req, res, next: NextFunction): Promise<void
       }
       await tx.delete(clientsTable)
         .where(and(eq(clientsTable.id, client.id), eq(clientsTable.tenantId, me.tenantId)));
+      return tripIds;
     });
 
     res.json({ success: true });
+    for (const tripId of affectedTripIds) {
+      broadcastSeatUpdate(tripId, me.tenantId).catch((err) => {
+        req.log?.warn({ err, tripId, clientId: client.id }, "[clients] seat update after client deletion failed");
+      });
+      CalendarSyncService.syncTrip(tripId).catch((err) => {
+        req.log?.warn({ err, tripId, clientId: client.id }, "[clients] calendar sync after client deletion failed");
+      });
+    }
   } catch (err) {
     next(err);
   }
@@ -870,6 +910,8 @@ router.post("/clients/:clientId/referral/generate", async (req, res, next: NextF
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // Referral-code issuance triggers client communication and is intentionally
+    // limited to management, although ordinary CLIENTS.CREATE is broader.
     if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const client = await requireClientAccess(me, req.params.clientId);
 
@@ -911,6 +953,8 @@ router.patch("/clients/:id/referral-code", async (req, res, next: NextFunction):
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // Changing referral availability affects an external incentive program;
+    // keep this operational control at management level.
     if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const client = await requireClientAccess(me, req.params.id);
     const parsed = z.object({
@@ -947,7 +991,7 @@ router.post("/clients/:id/recalculate-score", async (req, res, next: NextFunctio
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const client = await requireClientAccess(me, req.params.id);
     calculateScoresForClient(client.id, me.tenantId).catch((err) => {
       req.log.warn({ err, clientId: client.id }, "[scores] Background recalculation failed");
@@ -1212,7 +1256,7 @@ router.post("/clients/:id/merge", async (req, res, next: NextFunction): Promise<
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const primaryId = req.params.id;
     const parsedBody = MergeClientBody.safeParse(req.body);

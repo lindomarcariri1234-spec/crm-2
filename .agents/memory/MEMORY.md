@@ -21,6 +21,7 @@
 - [drizzle-orm mock completeness](drizzle-orm-mock.md) — endpoint tests vi.mock drizzle-orm by listing each operator; omitting one (e.g. notInArray) → undefined() at runtime → 500 in tests. Extend the mock object when the route uses a new operator.
 - [store-public test mock layout](store-public-test-mock-layout.md) — shared mockLimit covers both db and tx selects; ALL slots must be queued upfront before the request (slots added inside a mockTransaction callback go AFTER already-queued slots → wrong order); referral-code.js must be mocked or generateAndAssignReferralCode consumes extra slots fire-and-forget.
 - [Calendar dedup not-found pattern](calendar-dedup.md) — updateEvent returns boolean|"not-found"; "not-found"=404 means event deleted externally; upsertCalendarEvent deletes stale DB record and recreates. isEventNotFoundError exported from calendar-service.ts.
+- [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
 - [STORE_ORDER_STATUS PROCESSING](store-order-status.md) — STORE_ORDER_STATUS in permissions has PENDING/CONFIRMED/PROCESSING/COMPLETED/CANCELLED; PROCESSING was added when pedidos.tsx was migrated to typed constants.
 - [Migration journal timestamps](migration-journal-timestamps.md) — squash baseline + validate-coverage CI: 0000 must be kept complete (updated June 2026); run `pnpm --filter @workspace/db validate-coverage` after any ADD COLUMN migration.
 - [Host-header token links](host-header-token-links.md) — public/anonymous email links carrying secret tokens must use trusted `STORE_PUBLIC_BASE`, never req Host header (phishing/token-capture).
@@ -32,6 +33,7 @@
 - [Referral CHECK constraint gap](referral-check-constraint-gap.md) — referrals_crm_requires_reservation_id is in live DBs but missing from Drizzle schema + squash baseline; fresh DBs would silently lack it.
 - [Frontend SSE component tests](frontend-sse-component-tests.md) — shared eventSourceHarness.ts stubs EventSource; mocked hooks (useToast/wouter) MUST return stable refs or effects loop & act() hangs; vitest needs esbuild jsx:automatic for .tsx.
 - [Endpoint test db mock exports](endpoint-test-db-mock-exports.md) — endpoints.test.ts mocks @workspace/db with a hand-listed table set; a handler touching an unlisted table throws → 500 (not the expected 4xx). Add the table when a positive control reaches new DB reads.
+- [Drizzle query rejection mocks](drizzle-query-rejection-mocks.md) — to exercise a handler catch around a query, let select().from() build normally and reject from the terminal where/execute promise.
 - [Clerk dev proxy](clerk-dev-proxy.md) — canonical proxy is production-only (NODE_ENV guard); derives proxyUrl from request host dynamically; http-proxy-middleware must be external in esbuild (entities ESM issue) + symlinked in api-server/node_modules.
 - [Clerk live key dev failure](clerk-live-key-dev.md) — VITE_CLERK_PUBLISHABLE_KEY secret is the live key (uses clerk.visitecrm.com FAPI custom domain); that domain doesn't exist in dev → "failed_to_load_clerk_js". Fix: vite.config.ts `define` overrides the key with CLERK_PUBLISHABLE_KEY (test, no VITE_ prefix) when NODE_ENV≠production.
 - [Post-merge build check](post-merge-build-check.md) — green tests ≠ working deploy; vitest mocks hide wrong-module imports that esbuild's static export check (api-server prod build) rejects. Run `pnpm --filter @workspace/api-server run build` after any merge.
@@ -58,6 +60,7 @@
 - [broadcastSeatUpdate dual-query mock](broadcast-seat-update-dual-query.md) — realtime.ts makes 2 db.select() calls (reservations then trip freePassengers); use mock.calls.length to route different chains per call.
 - [SSL sslmode strip pattern](ssl-sslmode-strip.md) — explicit ssl option alongside sslmode=require in connectionString does NOT suppress pg-connection-string warning; must strip sslmode from URL before passing to Pool.
 - [Test suite batching](test-suite-batching.md) — 76 backend + 16 frontend test files; full run exceeds 120s bash limit; run backend in batches of ~20 files (a-c/d-l/m-r/s-z+workers); frontend in batches of 8 files.
+- [Vitest mock call typing](vitest-mock-call-typing.md) — strict TypeScript infers vi.fn() calls as zero-argument tuples; type mocks or cast call arrays before inspecting arguments.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
@@ -74,6 +77,7 @@
 - [Resend production verification](resend-production-verification.md) — the connected production credential may be send-only; verify the exact sender domain externally before testing delivery.
 - [GitHub Actions IPv4-mapped loopback](github-actions-ipv4-mapped-loopback.md) — GitHub runners may expose localhost as ::ffff:127.0.0.1; queue/audit payloads should use the canonical client-IP helper.
 - [Pipeline lifecycle scope](pipeline-lifecycle-scope.md) — reservation cards stay tenant+trip-scoped in the default pipeline; only trip-less leads may be adopted.
+- [Manual reservation payment propagation](manual-reservation-payment-propagation.md) — a fully paid reservation may promote its storefront order only after all sibling reservations are paid, under the order lock.
 - [Invite reconciliation robustness](invite-reconciliation-robustness.md) — email match must be case/whitespace-tolerant; a user with an existing (placeholder) tenantId can still need invite reconciliation, gated by strict safety checks.
 - [Tenant backup/export design decisions](tenant-backup-export-pattern.md) — credential scrubbing is field-by-field, not table-by-table; "complete backup" means audit the whole schema for tenantId tables, not just the spec's example list; tenant-isolation test pattern.
 - [JSON backup restore/import design decisions](backup-restore-import-pattern.md) — ledger-by-original-id for dedup+FK remap; global-unique codes regenerated inline; users matched by email only, never recreated; two idempotency layers.
@@ -85,3 +89,16 @@
 - [Vercel monorepo framework detection](vercel-monorepo-framework-detection.md) — explicitly select Vite or Vercel may classify the combined frontend/API monorepo as Express and reject the static output directory.
 - [Clerk social login](clerk-social-login.md) — native provider buttons plus redirect OAuth and BASE_PATH-aware fallbacks keep agency login reliable across Clerk environments.
 - [Clerk production aliases](clerk-production-aliases.md) — Clerk rejects shared hosting domains such as *.vercel.app for production; redirect aliases to the registered custom domain before Clerk initializes.
+- [Artifact publish build duplication](artifact-publish-build-duplication.md) — registered artifacts build automatically; repeating them in deployment config can exhaust the publish time limit.
+- [Vercel deployment alias SSO](vercel-deployment-alias-sso.md) — deployment and git aliases may require Vercel SSO; validate anonymous output through the project's custom domain instead.
+- [Query error branches and hook order](query-error-hook-order.md) — aggregate query-error UI must not return before later React hooks in the same component.
+- [Migration validator parsing](migration-validator-alter-table.md) — recognize optional IF EXISTS and every comma-separated ADD COLUMN in one ALTER TABLE statement.
+- [Canonical financial metric semantics](canonical-financial-metrics.md) — keep cash, accrual, credits, commissions and user liabilities separate; never merge cross-source rows by similarity.
+- [Financial snapshot scaling](financial-snapshot-scaling.md) — period rows may be bounded, but current overdue/debt snapshots must be SQL aggregates or historical liabilities still grow API memory.
+- [Multichannel delivery history](multichannel-delivery-history.md) — preserve numeric delivery attempts and expose detailed provider attempts under a separate history field.
+- [PostgreSQL parameter casts](postgres-parameter-casts.md) — raw SQL arithmetic needs explicit casts when interpolated values arrive as unknown parameters.
+- [Client deletion and trip history](client-deletion-trip-history.md) — anonymize reservation ownership on account removal while preserving passengers, seats, payments, and history
+- [Referral tracking synchronization](referral-tracking-sync.md) — keep SI visit events and CRM referral summaries atomic, tenant-scoped, and notification-independent
+- [Referral financial state transitions](referral-financial-state-transitions.md) — claim payment rows atomically before side effects; admin edits cannot bypass conversion or reversal effects
+- [Production one-off repair access](production-one-off-repair-access.md) — the production SQL replica is read-only; one-off mutations need a separately exposed operational runtime connection
+- [Cross-trip swap test fixtures](cross-trip-swap-fixtures.md) — reciprocal active reservation moves need distinct clients because the partial client+trip uniqueness constraint rejects direct swaps

@@ -366,12 +366,12 @@ describe("GET /api/clients/duplicates — duplicate detection", () => {
     expect(res.body.pairs[0].clients[1].id).toBe("c-002");
   });
 
-  it("returns a name+whatsapp duplicate pair when clients share the same name and whatsapp", async () => {
-    const client3 = makeFakeClient({ id: "c-003", cpf: null, name: "João Costa", whatsapp: "+5511888888888" });
-    const client4 = makeFakeClient({ id: "c-004", cpf: null, name: "João Costa", whatsapp: "+5511888888888" });
+  it("returns a name+whatsapp duplicate pair when formatted WhatsApps normalize to the same number", async () => {
+    const client3 = makeFakeClient({ id: "c-003", cpf: null, name: "João Costa", whatsapp: "(11) 88888-8888" });
+    const client4 = makeFakeClient({ id: "c-004", cpf: null, name: "João Costa", whatsapp: "+55 11 88888-8888" });
 
     mockHaving.mockResolvedValueOnce([]);                                                           // CPF groups
-    mockHaving.mockResolvedValueOnce([{ normName: "joão costa", whatsapp: "+5511888888888" }]);     // name+WA groups
+    mockHaving.mockResolvedValueOnce([{ normName: "joão costa", whatsapp: "5511888888888" }]);     // normalized name+WA groups
     mockOrderBy.mockResolvedValueOnce([client3, client4]);                                          // fetch name+WA dupes
 
     const res = await request(buildApp()).get("/api/clients/duplicates");
@@ -381,6 +381,7 @@ describe("GET /api/clients/duplicates — duplicate detection", () => {
     expect(res.body.pairs[0].reason).toBe("name_whatsapp");
     expect(res.body.pairs[0].clients[0].id).toBe("c-003");
     expect(res.body.pairs[0].clients[1].id).toBe("c-004");
+    expect(mockGroupBy).toHaveBeenNthCalledWith(2, "sql", "sql");
   });
 
   it("excludes clients whose status is 'merged' from duplicate pairs", async () => {

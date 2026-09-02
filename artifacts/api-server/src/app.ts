@@ -581,7 +581,7 @@ if (!isDev) {
         : [];
       const metadata = buildStorefrontMetadata(store, req.path, req.get("host"), product);
       const html = injectStorefrontMetadata(await getStorefrontIndexHtml(), metadata);
-      res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+       res.setHeader("Cache-Control", "no-store, max-age=0");
       res.type("html").send(html);
     } catch (error) {
       next(error);

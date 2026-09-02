@@ -45,6 +45,9 @@ import {
   campaignsTable,
   campaignSendsTable,
   npsResponsesTable,
+  outboundMessagesTable,
+  outboundDeliveriesTable,
+  outboundDeliveryAttemptsTable,
   distributionOffersTable,
   distributionOperationsTable,
   distributionBookingsTable,
@@ -107,9 +110,15 @@ export function emptyReport(): BackupImportReport {
     marketingCampanhas: emptyGroupResult(),
     marketingEnvios: emptyGroupResult(),
     marketingNps: emptyGroupResult(),
+    outboundMessages: emptyGroupResult(),
+    outboundDeliveries: emptyGroupResult(),
+    outboundDeliveryAttempts: emptyGroupResult(),
     distribuicaoOfertas: emptyGroupResult(),
     distribuicaoOperacoes: emptyGroupResult(),
     distribuicaoReservas: emptyGroupResult(),
+    comunicacaoEventos: emptyGroupResult(),
+    comunicacaoEntregas: emptyGroupResult(),
+    comunicacaoTentativas: emptyGroupResult(),
     naoRestaurado: NOT_RESTORED_SECTIONS,
   };
 }
@@ -1478,6 +1487,77 @@ export async function importMarketingNps(
   });
 }
 
+export async function importCommunicationEvents(
+  tx: ImportTx, ledger: Ledger, tenantId: string, users: UserResolution, events: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "outboundMessage", events, result, async (rtx, row, newId) => {
+    const recipientType = str(row, "recipientType");
+    let recipientId: string | null = null;
+    if (recipientType === "client") {
+      recipientId = ledgerGet(ledger, "client", str(row, "recipientId")) ?? null;
+    } else if (recipientType === "user") {
+      recipientId = users.map.get(str(row, "recipientId") ?? "") ?? null;
+    }
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "recipientId"]),
+      id: newId,
+      tenantId,
+      recipientId,
+    };
+    await insertRow(rtx, outboundMessagesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importOutboundMessages(
+  tx: ImportTx, ledger: Ledger, tenantId: string, rows: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "outboundMessage", rows, result, async (rtx, row, newId) => {
+    const sourceId = row.id as string;
+    const originalKey = str(row, "idempotencyKey") ?? `restored-${sourceId}`;
+    const [existing] = await rtx.select({ id: outboundMessagesTable.id }).from(outboundMessagesTable)
+      .where(and(eq(outboundMessagesTable.tenantId, tenantId), eq(outboundMessagesTable.idempotencyKey, originalKey))).limit(1);
+    if (existing) {
+      await ledgerSet(rtx, ledger, tenantId, "outboundMessage", sourceId, existing.id);
+      return { status: "skip", reason: "Evento multicanal já restaurado" };
+    }
+    const values = { ...cleanRow(row, ["id", "tenantId", "idempotencyKey"]), id: newId, tenantId, idempotencyKey: originalKey };
+    await insertRow(rtx, outboundMessagesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importOutboundDeliveries(
+  tx: ImportTx, ledger: Ledger, tenantId: string, rows: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "outboundDelivery", rows, result, async (rtx, row, newId) => {
+    const outboundMessageId = ledgerGet(ledger, "outboundMessage", str(row, "outboundMessageId"));
+    if (!outboundMessageId) return { status: "skip", reason: "Evento multicanal de origem não foi importado" };
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "outboundMessageId", "claimedAt"]),
+      id: newId,
+      tenantId,
+      outboundMessageId,
+      claimedAt: null,
+      status: row.status === "processing" ? "retry" : row.status,
+    };
+    await insertRow(rtx, outboundDeliveriesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importOutboundDeliveryAttempts(
+  tx: ImportTx, ledger: Ledger, tenantId: string, rows: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "outboundDeliveryAttempt", rows, result, async (rtx, row, newId) => {
+    const deliveryId = ledgerGet(ledger, "outboundDelivery", str(row, "deliveryId"));
+    if (!deliveryId) return { status: "skip", reason: "Entrega multicanal de origem não foi importada" };
+    const values = { ...cleanRow(row, ["id", "tenantId", "deliveryId"]), id: newId, tenantId, deliveryId };
+    await insertRow(rtx, outboundDeliveryAttemptsTable, values);
+    return { status: "created" };
+  });
+}
+
 // ── Distribuição / marketplace ───────────────────────────────────────────
 
 export async function importDistribuicaoOfertas(
@@ -1562,6 +1642,40 @@ export async function importDistribuicaoReservas(
     }
     const values = { ...cleanRow(row, ["id", "tenantId", "offerId"]), id: newId, tenantId, offerId };
     await insertRow(rtx, distributionBookingsTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importCommunicationDeliveries(
+  tx: ImportTx, ledger: Ledger, tenantId: string, deliveries: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "outboundDelivery", deliveries, result, async (rtx, row, newId) => {
+    const outboundMessageId = ledgerGet(ledger, "outboundMessage", str(row, "outboundMessageId"));
+    if (!outboundMessageId) return { status: "skip", reason: "Evento de comunicação de origem não foi importado" };
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "outboundMessageId"]),
+      id: newId,
+      tenantId,
+      outboundMessageId,
+    };
+    await insertRow(rtx, outboundDeliveriesTable, values);
+    return { status: "created" };
+  });
+}
+
+export async function importCommunicationAttempts(
+  tx: ImportTx, ledger: Ledger, tenantId: string, attempts: unknown, result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "outboundDeliveryAttempt", attempts, result, async (rtx, row, newId) => {
+    const deliveryId = ledgerGet(ledger, "outboundDelivery", str(row, "deliveryId"));
+    if (!deliveryId) return { status: "skip", reason: "Entrega de comunicação de origem não foi importada" };
+    const values = {
+      ...cleanRow(row, ["id", "tenantId", "deliveryId"]),
+      id: newId,
+      tenantId,
+      deliveryId,
+    };
+    await insertRow(rtx, outboundDeliveryAttemptsTable, values);
     return { status: "created" };
   });
 }

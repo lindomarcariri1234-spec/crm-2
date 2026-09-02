@@ -4,9 +4,9 @@ import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import { db, auditLogsTable } from "@workspace/db";
 import { generateId } from "../lib/id";
-import { sendManifestEmail } from "@workspace/email";
 import type { PdfJobData } from "../queues/index";
 import { generateManifestHtml, generateManifestPdf, loadManifestPanelForTenant } from "../lib/manifest-helpers";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 let _worker: Worker<PdfJobData> | null = null;
 
@@ -27,17 +27,32 @@ export async function processPdfJob(data: PdfJobData, jobId?: string | number): 
       generateManifestPdf(panel),
     ]);
 
-    const result = await sendManifestEmail({
-      to: recipientEmail,
-      tripName: panel.tripName,
-      manifestNumber: panel.manifestNumber,
-      agencyName: panel.tenantName || "VisiteCRM",
-      htmlContent,
-      pdfAttachment: pdfBuffer,
+    const outbound = await dispatchOutboundMessage({
+      tenantId,
+      eventType: "manifest_email",
+      idempotencyKey: `manifest:${tripId}:${recipientEmail}`,
+      recipient: { type: "direct", email: recipientEmail },
+      email: {
+        subject: `Manifesto — ${panel.tripName}`,
+        html: htmlContent,
+        senderName: panel.tenantName || "VisiteCRM",
+      },
+      whatsapp: {
+        text: `O manifesto ${panel.manifestNumber} da viagem ${panel.tripName} está disponível. O PDF foi enviado por e-mail para ${recipientEmail}.`,
+      },
+      origin: "pdf-manifest",
+      metadata: {
+        tripId,
+        manifestNumber: panel.manifestNumber,
+        // Keep the generated artifact associated with the durable event for
+        // auditing; outbound delivery currently renders HTML content only.
+        pdfBytes: pdfBuffer.byteLength,
+      },
     });
 
-    if (!result.success) {
-      throw new Error(result.error ?? "sendManifestEmail failed");
+    const emailDelivery = outbound.deliveries.find((delivery) => delivery.channel === "email");
+    if (emailDelivery?.status === "failed" || emailDelivery?.status === "skipped") {
+      throw new Error(emailDelivery.lastError ?? emailDelivery.skippedReason ?? "manifest outbound delivery failed");
     }
 
     await db.insert(auditLogsTable).values({

@@ -943,8 +943,10 @@ export const ListClientsResponse = zod.object({
     zod.object({
       id: zod.string(),
       name: zod.string(),
-      email: zod.string(),
-      whatsapp: zod.string(),
+      email: zod.string().nullable(),
+      whatsapp: zod.string().nullable(),
+      emailOptIn: zod.boolean().optional(),
+      whatsappOptIn: zod.boolean().optional(),
       phone: zod.string().nullish(),
       cpf: zod.string().nullish(),
       rg: zod.string().nullish(),
@@ -1003,10 +1005,10 @@ export const ListClientsResponse = zod.object({
  */
 export const CreateClientBody = zod.object({
   name: zod.string(),
-  email: zod.string(),
-  whatsapp: zod.string(),
+  email: zod.string().optional(),
+  whatsapp: zod.string().optional(),
   phone: zod.string().nullish(),
-  cpf: zod.string(),
+  cpf: zod.string().nullish(),
   rg: zod.string().nullish(),
   birthDate: zod.string().nullish(),
   gender: zod.string().nullish(),
@@ -1034,6 +1036,12 @@ export const CreateClientBody = zod.object({
     .describe(
       "If true, skip the duplicate name+WhatsApp check and create the client anyway.",
     ),
+  allowMissingData: zod
+    .boolean()
+    .optional()
+    .describe(
+      "If true, allow agency staff to create the client with missing email, WhatsApp, or CPF.",
+    ),
 });
 
 /**
@@ -1046,8 +1054,10 @@ export const GetClientParams = zod.object({
 export const GetClientResponse = zod.object({
   id: zod.string(),
   name: zod.string(),
-  email: zod.string(),
-  whatsapp: zod.string(),
+  email: zod.string().nullable(),
+  whatsapp: zod.string().nullable(),
+  emailOptIn: zod.boolean().optional(),
+  whatsappOptIn: zod.boolean().optional(),
   phone: zod.string().nullish(),
   cpf: zod.string().nullish(),
   rg: zod.string().nullish(),
@@ -1140,8 +1150,10 @@ export const UpdateClientBody = zod.object({
 export const UpdateClientResponse = zod.object({
   id: zod.string(),
   name: zod.string(),
-  email: zod.string(),
-  whatsapp: zod.string(),
+  email: zod.string().nullable(),
+  whatsapp: zod.string().nullable(),
+  emailOptIn: zod.boolean().optional(),
+  whatsappOptIn: zod.boolean().optional(),
   phone: zod.string().nullish(),
   cpf: zod.string().nullish(),
   rg: zod.string().nullish(),
@@ -1232,8 +1244,10 @@ export const UpdateClientPipelineStageBody = zod.object({
 export const UpdateClientPipelineStageResponse = zod.object({
   id: zod.string(),
   name: zod.string(),
-  email: zod.string(),
-  whatsapp: zod.string(),
+  email: zod.string().nullable(),
+  whatsapp: zod.string().nullable(),
+  emailOptIn: zod.boolean().optional(),
+  whatsappOptIn: zod.boolean().optional(),
   phone: zod.string().nullish(),
   cpf: zod.string().nullish(),
   rg: zod.string().nullish(),
@@ -3811,6 +3825,8 @@ export const ListMessagesResponseItem = zod.object({
   deliveredAt: zod.string().nullish(),
   readAt: zod.string().nullish(),
   clientName: zod.string().nullish(),
+  metadata: zod.record(zod.string(), zod.unknown()).nullish(),
+  outboundMessageId: zod.string().nullish(),
 });
 export const ListMessagesResponse = zod.array(ListMessagesResponseItem);
 
@@ -3822,6 +3838,316 @@ export const SendMessageBody = zod.object({
   channel: zod.string(),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
+});
+
+/**
+ * @summary List persistent multichannel outbound messages
+ */
+export const listOutboundMessagesQueryLimitDefault = 100;
+
+export const ListOutboundMessagesQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  channel: zod.enum(["email", "whatsapp"]).optional(),
+  deliveryStatus: zod
+    .enum(["pending", "processing", "accepted", "failed", "skipped"])
+    .optional()
+    .describe("Filter messages that have a delivery with this status"),
+  provider: zod.coerce
+    .string()
+    .optional()
+    .describe("Filter messages that have a delivery handled by this provider"),
+  bounceType: zod
+    .enum(["permanent", "temporary"])
+    .optional()
+    .describe("Filter messages by the validated Resend bounce classification"),
+  clientId: zod.coerce.string().optional(),
+  origin: zod.coerce.string().optional(),
+  eventType: zod.coerce.string().optional(),
+  campaignId: zod.coerce.string().optional(),
+  automationId: zod.coerce.string().optional(),
+  dateFrom: zod.coerce.string().optional(),
+  dateTo: zod.coerce.string().optional(),
+  limit: zod.coerce.number().default(listOutboundMessagesQueryLimitDefault),
+});
+
+export const ListOutboundMessagesResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  idempotencyKey: zod.string(),
+  eventType: zod.string(),
+  origin: zod.string(),
+  originChannel: zod.string().nullish(),
+  recipientType: zod.string(),
+  recipientId: zod.string().nullish(),
+  recipientName: zod.string().nullish(),
+  status: zod.enum([
+    "pending",
+    "processing",
+    "accepted",
+    "partial",
+    "failed",
+    "skipped",
+  ]),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+  deliveries: zod.array(
+    zod.object({
+      id: zod.string(),
+      outboundMessageId: zod.string(),
+      channel: zod.enum(["email", "whatsapp"]),
+      recipient: zod.string().nullish(),
+      subject: zod.string().nullish(),
+      content: zod.string(),
+      status: zod.enum([
+        "pending",
+        "processing",
+        "accepted",
+        "failed",
+        "skipped",
+      ]),
+      attempts: zod.number(),
+      maxAttempts: zod.number(),
+      provider: zod.string().nullish(),
+      externalId: zod.string().nullish(),
+      bounceType: zod
+        .union([
+          zod.literal("permanent"),
+          zod.literal("temporary"),
+          zod.literal(null),
+        ])
+        .nullish(),
+      lastError: zod.string().nullish(),
+      skippedReason: zod.string().nullish(),
+      nextAttemptAt: zod.string(),
+      claimedAt: zod.string().nullish(),
+      acceptedAt: zod.string().nullish(),
+      failedAt: zod.string().nullish(),
+      createdAt: zod.string(),
+      updatedAt: zod.string(),
+      attemptHistory: zod.array(
+        zod.object({
+          id: zod.string(),
+          deliveryId: zod.string(),
+          attemptNumber: zod.number(),
+          provider: zod.string().nullish(),
+          externalId: zod.string().nullish(),
+          status: zod.string(),
+          error: zod.string().nullish(),
+          startedAt: zod.string(),
+          completedAt: zod.string().nullish(),
+        }),
+      ),
+    }),
+  ),
+});
+export const ListOutboundMessagesResponse = zod.array(
+  ListOutboundMessagesResponseItem,
+);
+
+/**
+ * @summary Create and dispatch a persistent multichannel message
+ */
+export const CreateOutboundMessageBody = zod.object({
+  eventType: zod.string(),
+  idempotencyKey: zod.string(),
+  recipient: zod.union([
+    zod.object({
+      type: zod.unknown(),
+      id: zod.string(),
+    }),
+    zod.object({
+      type: zod.unknown(),
+      id: zod.string(),
+    }),
+    zod.object({
+      type: zod.unknown(),
+    }),
+    zod.object({
+      type: zod.unknown(),
+      name: zod.string().nullish(),
+      email: zod.string().email().nullish(),
+      whatsapp: zod.string().nullish(),
+    }),
+  ]),
+  email: zod
+    .object({
+      subject: zod.string(),
+      html: zod.string(),
+      senderName: zod.string().nullish(),
+    })
+    .optional(),
+  whatsapp: zod
+    .object({
+      text: zod.string(),
+    })
+    .optional(),
+  origin: zod.string().optional(),
+  originChannel: zod
+    .union([zod.literal("email"), zod.literal("whatsapp"), zod.literal(null)])
+    .nullish(),
+  metadata: zod.record(zod.string(), zod.unknown()).optional(),
+  isReplication: zod.boolean().optional(),
+  replicatedFromId: zod.string().nullish(),
+});
+
+export const CreateOutboundMessageResponse = zod
+  .object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    idempotencyKey: zod.string(),
+    eventType: zod.string(),
+    origin: zod.string(),
+    originChannel: zod.string().nullish(),
+    recipientType: zod.string(),
+    recipientId: zod.string().nullish(),
+    recipientName: zod.string().nullish(),
+    status: zod.enum([
+      "pending",
+      "processing",
+      "accepted",
+      "partial",
+      "failed",
+      "skipped",
+    ]),
+    createdAt: zod.string(),
+    updatedAt: zod.string(),
+    deliveries: zod.array(
+      zod.object({
+        id: zod.string(),
+        outboundMessageId: zod.string(),
+        channel: zod.enum(["email", "whatsapp"]),
+        recipient: zod.string().nullish(),
+        subject: zod.string().nullish(),
+        content: zod.string(),
+        status: zod.enum([
+          "pending",
+          "processing",
+          "accepted",
+          "failed",
+          "skipped",
+        ]),
+        attempts: zod.number(),
+        maxAttempts: zod.number(),
+        provider: zod.string().nullish(),
+        externalId: zod.string().nullish(),
+        bounceType: zod
+          .union([
+            zod.literal("permanent"),
+            zod.literal("temporary"),
+            zod.literal(null),
+          ])
+          .nullish(),
+        lastError: zod.string().nullish(),
+        skippedReason: zod.string().nullish(),
+        nextAttemptAt: zod.string(),
+        claimedAt: zod.string().nullish(),
+        acceptedAt: zod.string().nullish(),
+        failedAt: zod.string().nullish(),
+        createdAt: zod.string(),
+        updatedAt: zod.string(),
+        attemptHistory: zod.array(
+          zod.object({
+            id: zod.string(),
+            deliveryId: zod.string(),
+            attemptNumber: zod.number(),
+            provider: zod.string().nullish(),
+            externalId: zod.string().nullish(),
+            status: zod.string(),
+            error: zod.string().nullish(),
+            startedAt: zod.string(),
+            completedAt: zod.string().nullish(),
+          }),
+        ),
+      }),
+    ),
+  })
+  .and(
+    zod.object({
+      created: zod.boolean(),
+    }),
+  );
+
+/**
+ * @summary Summarize outbound delivery failures by provider
+ */
+export const ListOutboundProviderFailureSummaryQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  channel: zod.enum(["email", "whatsapp"]).optional(),
+  deliveryStatus: zod
+    .enum(["pending", "processing", "accepted", "failed", "skipped"])
+    .optional()
+    .describe("Keep only messages that have a delivery with this status"),
+  provider: zod.coerce
+    .string()
+    .optional()
+    .describe("Keep only deliveries handled by this provider"),
+  bounceType: zod
+    .enum(["permanent", "temporary"])
+    .optional()
+    .describe(
+      "Keep only deliveries with this validated Resend bounce classification",
+    ),
+  clientId: zod.coerce.string().optional(),
+  origin: zod.coerce.string().optional(),
+  eventType: zod.coerce.string().optional(),
+  campaignId: zod.coerce.string().optional(),
+  automationId: zod.coerce.string().optional(),
+  dateFrom: zod.coerce.string().optional(),
+  dateTo: zod.coerce.string().optional(),
+});
+
+export const ListOutboundProviderFailureSummaryResponseItem = zod.object({
+  provider: zod.string().nullable(),
+  failureCount: zod.number(),
+  totalFailures: zod.number(),
+  failurePercentage: zod.number(),
+});
+export const ListOutboundProviderFailureSummaryResponse = zod.array(
+  ListOutboundProviderFailureSummaryResponseItem,
+);
+
+/**
+ * @summary Export persistent multichannel outbound messages for audit
+ */
+export const ExportOutboundMessagesQueryParams = zod.object({
+  format: zod.enum(["csv", "pdf"]),
+  status: zod.coerce.string().optional(),
+  channel: zod.enum(["email", "whatsapp"]).optional(),
+  deliveryStatus: zod
+    .enum(["pending", "processing", "accepted", "failed", "skipped"])
+    .optional()
+    .describe("Filter exported rows by delivery status"),
+  provider: zod.coerce
+    .string()
+    .optional()
+    .describe("Filter exported rows by provider"),
+  bounceType: zod
+    .enum(["permanent", "temporary"])
+    .optional()
+    .describe(
+      "Filter exported rows by the validated Resend bounce classification",
+    ),
+  clientId: zod.coerce.string().optional(),
+  origin: zod.coerce.string().optional(),
+  eventType: zod.coerce.string().optional(),
+  campaignId: zod.coerce.string().optional(),
+  automationId: zod.coerce.string().optional(),
+  dateFrom: zod.coerce.string().optional(),
+  dateTo: zod.coerce.string().optional(),
+});
+
+/**
+ * @summary Retry one failed or skipped delivery
+ */
+export const RetryOutboundDeliveryParams = zod.object({
+  deliveryId: zod.coerce.string(),
+});
+
+/**
+ * @summary Retry one delivery by delivery resource ID
+ */
+export const RetryOutboundDeliveryDirectParams = zod.object({
+  deliveryId: zod.coerce.string(),
 });
 
 /**
@@ -4734,11 +5060,20 @@ export const GetMeResponse = zod.object({
 /**
  * @summary Sync Clerk user into DB after login
  */
+export const syncMeBodyCpfMax = 20;
+
 export const SyncMeBody = zod.object({
   clerkId: zod.string(),
   name: zod.string(),
   email: zod.string(),
   avatarUrl: zod.string().nullish(),
+  cpf: zod
+    .string()
+    .max(syncMeBodyCpfMax)
+    .nullish()
+    .describe(
+      "CPF do usuário. Quando informado, é usado para localizar ou vincular o cadastro de cliente dentro da agência.",
+    ),
   storeSlug: zod
     .string()
     .optional()
@@ -7063,6 +7398,73 @@ export const ReverseReferralBonusResponse = zod.object({
   expiryWarning1SentAt: zod.string().nullish(),
   bonusReleaseNotifiedAt: zod.string().nullish(),
 });
+
+/**
+ * @summary Financially reverse an already paid referral bonus
+ */
+export const ReversePaidReferralBonusParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const reversePaidReferralBonusBodyReasonMax = 1000;
+
+export const ReversePaidReferralBonusBody = zod.object({
+  reason: zod.string().min(1).max(reversePaidReferralBonusBodyReasonMax),
+  confirmed: zod.boolean(),
+});
+
+export const ReversePaidReferralBonusResponse = zod
+  .object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    referrerId: zod.string(),
+    referredId: zod.string().nullish(),
+    referredEmail: zod.string().nullish(),
+    referredName: zod.string().nullish(),
+    referredPhone: zod.string().nullish(),
+    referrerName: zod.string().nullish(),
+    referrerEmail: zod.string().nullish(),
+    referrerPhone: zod.string().nullish(),
+    code: zod.string(),
+    status: zod.string(),
+    bonusAmount: zod.string(),
+    bonusPaid: zod.boolean(),
+    bonusPaidAt: zod.string().nullish(),
+    discountType: zod.string(),
+    discountValue: zod.string(),
+    discountApplied: zod.boolean(),
+    discountAmount: zod.string().nullish(),
+    cookieId: zod.string().nullish(),
+    ipAddress: zod.string().nullish(),
+    utmSource: zod.string().nullish(),
+    utmMedium: zod.string().nullish(),
+    utmCampaign: zod.string().nullish(),
+    visitsCount: zod.number(),
+    firstVisit: zod.string().nullish(),
+    lastVisit: zod.string().nullish(),
+    expiresAt: zod.string().nullish(),
+    isActive: zod.boolean(),
+    reservationId: zod.string().nullish(),
+    notes: zod.string().nullish(),
+    convertedAt: zod.string().nullish(),
+    createdAt: zod.string(),
+    updatedAt: zod.string(),
+    fraudFlag: zod.boolean().nullish(),
+    fraudReason: zod.string().nullish(),
+    expiryWarning7SentAt: zod.string().nullish(),
+    expiryWarning1SentAt: zod.string().nullish(),
+    bonusReleaseNotifiedAt: zod.string().nullish(),
+  })
+  .and(
+    zod.object({
+      reversal: zod.object({
+        id: zod.string(),
+        amount: zod.string(),
+        reason: zod.string(),
+        alreadyApplied: zod.boolean(),
+      }),
+    }),
+  );
 
 /**
  * @summary Send a referral WhatsApp test message to the configured agency number

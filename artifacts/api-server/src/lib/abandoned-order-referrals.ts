@@ -1,8 +1,8 @@
 import { db, referralsTable, storeOrdersTable } from "@workspace/db";
 import { and, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { REFERRAL_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
-import { sendAbandonedReferralAlertEmail } from "@workspace/email";
 import { logger } from "./logger";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 /**
  * How old a store order must be (in hours) before its PENDING referral row is
@@ -211,11 +211,11 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
   // something is misaligned (stale referralIds, schema drift, etc.).
   // Rate-limit to 24 h so a persistent issue doesn't flood the operator.
   if (skipped > 0 && reversed === 0 && orders.length >= ABANDONED_REFERRAL_ALERT_THRESHOLD) {
-    void maybeSendAllSkippedAlert(orders.length, skipped);
+    void maybeSendAllSkippedAlert(orders[0].tenantId, orders.length, skipped);
   }
 }
 
-async function maybeSendAllSkippedAlert(total: number, skipped: number): Promise<void> {
+async function maybeSendAllSkippedAlert(tenantId: string, total: number, skipped: number): Promise<void> {
   if (_lastAlertSentAt !== null && Date.now() - _lastAlertSentAt < ALERT_RATE_LIMIT_MS) {
     logger.info(
       { total, skipped, rateLimitHrs: 24 },
@@ -242,16 +242,28 @@ async function maybeSendAllSkippedAlert(total: number, skipped: number): Promise
   const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
   const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
 
-  sendAbandonedReferralAlertEmail({ to: alertEmail, skipped, total, dashboardUrl })
+  const subject = "[VisiteCRM] Alertas de indicação abandonada";
+  const html = `<h2>Indicações abandonadas não revertidas</h2><p>A rotina encontrou ${total} pedidos abandonados, mas não conseguiu reverter ${skipped} indicações pendentes.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel administrativo</a></p>` : ""}`;
+  dispatchOutboundMessage({
+    tenantId,
+    eventType: "abandoned_referral_alert",
+    idempotencyKey: `abandoned-referrals:all-skipped:${new Date().toISOString().slice(0, 10)}`,
+    recipient: { type: "direct", email: alertEmail },
+    email: { subject, html, senderName: "VisiteCRM" },
+    whatsapp: { text: `Alerta: ${total} pedidos abandonados foram encontrados e ${skipped} indicações pendentes não puderam ser revertidas.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+    origin: "abandoned-referral-sweep",
+    metadata: { total, skipped, dashboardUrl },
+  })
     .then((result) => {
-      if (result.success) {
+      const delivery = result.deliveries.find((item) => item.channel === "email");
+      if (delivery?.status === "accepted") {
         logger.warn(
           { total, skipped, to: alertEmail },
           "[abandoned-referrals] All-skipped alert email sent",
         );
       } else {
         logger.error(
-          { total, skipped, error: result.error },
+          { total, skipped, error: delivery?.lastError ?? delivery?.skippedReason },
           "[abandoned-referrals] Failed to send all-skipped alert email — clearing rate limit so next run can retry",
         );
         _lastAlertSentAt = null;

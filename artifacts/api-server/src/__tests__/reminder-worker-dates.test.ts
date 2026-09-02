@@ -3,16 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   mockSelect,
   mockLocalToday,
-  mockDispatchBoarding,
-  mockDispatchPagamentoPendente,
+  mockDispatchOutboundMessage,
   mockNotificationSettings,
   mockGte,
   mockLt,
 } = vi.hoisted(() => ({
   mockSelect: vi.fn(),
   mockLocalToday: vi.fn(),
-  mockDispatchBoarding: vi.fn(),
-  mockDispatchPagamentoPendente: vi.fn(),
+  mockDispatchOutboundMessage: vi.fn(),
   mockNotificationSettings: vi.fn(),
   mockGte: vi.fn(),
   mockLt: vi.fn(),
@@ -47,8 +45,6 @@ vi.mock("drizzle-orm", async (importOriginal) => {
 });
 
 vi.mock("../queues/whatsapp-helpers.js", () => ({
-  dispatchWhatsAppBoardingReminder: mockDispatchBoarding,
-  dispatchWhatsAppPagamentoPendente: mockDispatchPagamentoPendente,
   getWhatsAppNotificationSettings: mockNotificationSettings,
 }));
 
@@ -58,6 +54,11 @@ vi.mock("../services/checkout/reservation-confirmation-outbox.js", () => ({
     await deliver();
     return "sent";
   }),
+}));
+
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
+  htmlToWhatsAppText: (html: string) => html.replace(/<[^>]+>/g, ""),
 }));
 
 import {
@@ -80,6 +81,17 @@ function selectRows(rows: unknown[]) {
 const departureAtBrazilMidnight = new Date("2026-08-23T03:00:00.000Z");
 const departureAtBrazilD7 = new Date("2026-08-29T03:00:00.000Z");
 
+function outboundSnapshot(status: "accepted" | "pending" | "failed") {
+  return {
+    message: { id: "outbound-message-001", status },
+    deliveries: [
+      { id: "email-delivery-001", channel: "email", status },
+      { id: "whatsapp-delivery-001", channel: "whatsapp", status },
+    ],
+    created: true,
+  };
+}
+
 describe("reminder worker Brazil calendar dates", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -87,8 +99,7 @@ describe("reminder worker Brazil calendar dates", () => {
     vi.setSystemTime(new Date("2026-08-23T02:59:59.000Z"));
     vi.clearAllMocks();
     mockLocalToday.mockReturnValue("2026-08-22");
-    mockDispatchBoarding.mockResolvedValue(undefined);
-    mockDispatchPagamentoPendente.mockResolvedValue(undefined);
+    mockDispatchOutboundMessage.mockResolvedValue(outboundSnapshot("accepted"));
   });
 
   afterEach(() => {
@@ -113,11 +124,10 @@ describe("reminder worker Brazil calendar dates", () => {
     await processBoardingReminders();
 
     expect(mockLocalToday).toHaveBeenCalled();
-    expect(mockDispatchBoarding).toHaveBeenCalledWith(expect.objectContaining({
-      reservationId: "reservation-1",
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: "tenant-1",
-      tripName: "Maceió",
-      departureDate: "23/08/2026",
+      eventType: "boarding_reminder",
+      metadata: { reservationId: "reservation-1", daysUntilDeparture: 1 },
     }));
   });
 
@@ -138,11 +148,10 @@ describe("reminder worker Brazil calendar dates", () => {
 
     await processBoardingReminders();
 
-    expect(mockDispatchBoarding).toHaveBeenCalledWith(expect.objectContaining({
-      reservationId: "reservation-d7",
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: "tenant-1",
-      tripName: "Maceió",
-      departureDate: "29/08/2026",
+      eventType: "boarding_reminder",
+      metadata: { reservationId: "reservation-d7", daysUntilDeparture: 7 },
     }));
   });
 
@@ -163,7 +172,7 @@ describe("reminder worker Brazil calendar dates", () => {
 
     await processBoardingReminders();
 
-    expect(mockDispatchBoarding).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("queries only the D-1 through D-14 window, excluding reservations from D-15 onward", async () => {
@@ -179,7 +188,7 @@ describe("reminder worker Brazil calendar dates", () => {
       expect.anything(),
       new Date("2026-09-06T03:00:00.000Z"),
     );
-    expect(mockDispatchBoarding).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("fires the pending-payment reminder for the next Brazil calendar day", async () => {
@@ -200,12 +209,12 @@ describe("reminder worker Brazil calendar dates", () => {
     await processWhatsAppPagamentoPendente();
 
     expect(mockLocalToday).toHaveBeenCalled();
-    expect(mockDispatchPagamentoPendente).toHaveBeenCalledWith(expect.objectContaining({
-      reservationId: "reservation-2",
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
       tenantId: "tenant-1",
-      tripName: "Maceió",
-      departureDate: "23/08/2026",
-      remainingBalance: 175.5,
+      eventType: "payment_pending",
+      metadata: { reservationId: "reservation-2", daysUntilDeparture: 1 },
+      email: expect.objectContaining({ subject: expect.stringContaining("Maceió") }),
+      whatsapp: expect.objectContaining({ text: expect.stringContaining("175,50") }),
     }));
   });
 
@@ -226,6 +235,6 @@ describe("reminder worker Brazil calendar dates", () => {
 
     await processWhatsAppPagamentoPendente();
 
-    expect(mockDispatchPagamentoPendente).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });

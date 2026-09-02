@@ -3,8 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { generateId } from "./id";
 import { logger } from "./logger";
 import { insertClientNotification } from "./client-notifications";
-import { sendLoyaltyTierUpgradeEmail } from "@workspace/email";
-import { enqueueOrSend } from "../queues/whatsapp-helpers";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 export function calculateTier(totalPoints: number): string {
   if (totalPoints >= 5000) return "diamond";
@@ -81,6 +80,14 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
   const pointsToNext = nextTierMin !== null ? Math.max(0, nextTierMin - totalPoints) : null;
   const formattedPoints = totalPoints.toLocaleString("pt-BR");
 
+  const escapeHtml = (value: string): string =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
   const interpolateWhatsappTemplate = (template: string): string =>
     template
       .replace(/\{\{?nome\}?\}/gi, firstName)
@@ -88,61 +95,58 @@ export async function sendLoyaltyTierUpgradeNotification(opts: {
       .replace(/\{\{?pontos\}?\}/gi, formattedPoints)
       .replace(/\{\{?proximo_nivel\}?\}/gi, nextTierLabel ?? "nível máximo");
 
-  const sendEmailFallback = () => {
-    if (client.emailOptIn === false || !client.email) return;
+  const nextLine =
+    pointsToNext !== null && nextTierLabel
+      ? `\n\n📈 Próximo nível: *${nextTierLabel}* — faltam *${pointsToNext.toLocaleString("pt-BR")} pts*`
+      : `\n\n🏆 Você atingiu o nível máximo do programa! Aproveite todos os benefícios.`;
 
-    sendLoyaltyTierUpgradeEmail({
-      clientName: client.name,
-      clientEmail: client.email,
-      newTierLabel,
-      totalPoints,
-      nextTierLabel,
-      pointsToNext,
-      agencyName,
-    })
-      .then((result) => {
-        if (!result.success) {
-          logger.warn(
-            { clientId, tenantId, error: result.error },
-            "[loyalty] Email tier-upgrade send failed",
-          );
-        }
-      })
-      .catch((err) =>
-        logger.warn({ err, clientId, tenantId }, "[loyalty] Email tier-upgrade send failed"),
-      );
-  };
+  const storedTemplate = (settings?.value as { tierUpgradeWhatsappMessage?: unknown } | null)
+    ?.tierUpgradeWhatsappMessage;
+  const template = typeof storedTemplate === "string" ? storedTemplate.trim() : "";
+  const whatsappText = template
+    ? interpolateWhatsappTemplate(template)
+    : `🎉 Parabéns, ${firstName}! Você subiu para o nível *${newTierLabel}* no programa de fidelidade da ${agencyName}!\n\n` +
+      `💎 Pontos acumulados: *${formattedPoints} pts*${nextLine}`;
 
-  if (client.whatsappOptIn !== false && client.whatsapp) {
-    const nextLine =
-      pointsToNext !== null && nextTierLabel
-        ? `\n\n📈 Próximo nível: *${nextTierLabel}* — faltam *${pointsToNext.toLocaleString("pt-BR")} pts*`
-        : `\n\n🏆 Você atingiu o nível máximo do programa! Aproveite todos os benefícios.`;
+  // Keep both channel deliveries in one durable event. Each channel is
+  // independently skipped/retried by outbound-delivery (including opt-ins).
+  const safeFirstName = escapeHtml(firstName);
+  const safeTierLabel = escapeHtml(newTierLabel);
+  const safeAgencyName = escapeHtml(agencyName);
+  const nextGoalHtml = nextTierLabel && pointsToNext !== null
+    ? `Faltam ${pointsToNext.toLocaleString("pt-BR")} pontos para chegar ao nível ${escapeHtml(nextTierLabel)}.`
+    : "Você atingiu o nível máximo do programa de fidelidade!";
+  const emailHtml = `
+    <div style="font-family:Arial,sans-serif;line-height:1.6;color:#374151;max-width:600px">
+      <h1 style="color:#b45309">🎉 Você subiu de nível!</h1>
+      <p>Parabéns por essa conquista no programa de fidelidade da <strong>${safeAgencyName}</strong>.</p>
+      <p>Parabéns, ${safeFirstName}!</p>
+      <p>Você acaba de alcançar o nível <strong>${safeTierLabel}</strong> no programa de fidelidade da <strong>${safeAgencyName}</strong>.</p>
+      <p style="background:#fffbeb;border:2px solid #fcd34d;padding:20px;text-align:center">
+        <strong>Seu novo nível</strong><br><span style="font-size:28px;color:#b45309">${safeTierLabel}</span><br>
+        <strong>Pontos acumulados</strong><br><span style="font-size:24px">${formattedPoints} pts</span>
+      </p>
+      <p>${nextGoalHtml}</p>
+      <p>Continue viajando com a gente para aproveitar ainda mais benefícios.</p>
+      <hr><small>${safeAgencyName}<br>Você está recebendo este email porque participa do programa de fidelidade.</small>
+    </div>`;
 
-    const storedTemplate = (settings?.value as { tierUpgradeWhatsappMessage?: unknown } | null)
-      ?.tierUpgradeWhatsappMessage;
-    const template = typeof storedTemplate === "string" ? storedTemplate.trim() : "";
-    const message = template
-      ? interpolateWhatsappTemplate(template)
-      : `🎉 Parabéns, ${firstName}! Você subiu para o nível *${newTierLabel}* no programa de fidelidade da ${agencyName}!\n\n` +
-        `💎 Pontos acumulados: *${formattedPoints} pts*${nextLine}`;
-
-    enqueueOrSend(client.whatsapp, message, tenantId)
-      .then((result) => {
-        if (
-          result.mode === "direct" &&
-          !result.success &&
-          result.error === "credentials_not_configured"
-        ) {
-          sendEmailFallback();
-        }
-      })
-      .catch((err) =>
-        logger.warn({ err, clientId, tenantId }, "[loyalty] WhatsApp tier-upgrade send failed"),
-      );
-  } else {
-    sendEmailFallback();
-  }
+  void dispatchOutboundMessage({
+    tenantId,
+    eventType: "loyalty-tier-upgraded",
+    idempotencyKey: `loyalty-tier-upgraded:${tenantId}:${clientId}:${newTier}`,
+    recipient: { type: "client", id: clientId },
+    email: {
+      subject: `🎉 Você subiu de nível, ${firstName}!`,
+      html: emailHtml,
+      senderName: agencyName,
+    },
+    whatsapp: { text: whatsappText },
+    origin: "loyalty",
+    metadata: { clientId, newTier, totalPoints },
+  }).catch((err) =>
+    logger.warn({ err, clientId, tenantId }, "[loyalty] tier-upgrade outbound dispatch failed"),
+  );
 
   await insertClientNotification(clientId, tenantId, "loyalty_tier_upgraded", {
     newTier,

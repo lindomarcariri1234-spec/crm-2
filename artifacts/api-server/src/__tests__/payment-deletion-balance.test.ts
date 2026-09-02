@@ -26,6 +26,7 @@ const {
     chain.from = returnChain;
     chain.where = returnChain;
     chain.limit = returnChain;
+    chain.for = returnChain;
     chain.orderBy = returnChain;
     chain.offset = returnChain;
     chain.then = (resolve: (rows: unknown[]) => unknown) => resolve(getRows());
@@ -60,6 +61,7 @@ vi.mock("@workspace/db", () => ({
       })),
     })),
     delete: mockDelete,
+    transaction: vi.fn(),
   },
   paymentsTable,
   expensesTable: {},
@@ -192,6 +194,13 @@ function buildApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(db.transaction).mockImplementation(async (callback) => callback({
+    select: db.select,
+    execute: db.execute,
+    insert: db.insert,
+    update: db.update,
+    delete: db.delete,
+  } as never));
   dbState.payments = [makePayment(), makePayment(TENANT_ID, "200.00")];
   dbState.payments[1]!.id = "payment-to-keep";
   dbState.reservations = [makeReservation()];

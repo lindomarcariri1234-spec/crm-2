@@ -46,7 +46,9 @@ const {
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
-  const mockExecute = vi.fn(() => Promise.resolve({ rows: [] as unknown[] }));
+  const mockExecute = vi.fn<(statement: unknown) => Promise<{ rows: unknown[] }>>(
+    (_statement) => Promise.resolve({ rows: [] }),
+  );
 
   const mockUpdateWhere = vi.fn(() => Promise.resolve([]));
   const mockUpdateSet = vi.fn((payload: Record<string, unknown>) => {
@@ -500,6 +502,54 @@ describe("GET /api/alerts — referral-reversal gap detection", () => {
       (a) => a.id === "referral-reversal-skipped",
     );
     expect(alert).toBeUndefined();
+  });
+
+  it("surfaces storefront reservations without Pipeline cards as an actionable alert", async () => {
+    const app = buildAlertsApp();
+
+    mockExecute.mockImplementation(async (statement) => {
+      const renderedSql = dialect.sqlToQuery(statement as never).sql;
+      if (/inner join store_orders so/i.test(renderedSql)) {
+        return {
+          rows: [
+            {
+              reservation_id: "res-storefront-1",
+              reservation_number: "AG-VI-202608-0001",
+              order_number: "#2026-ABC123",
+              trip_id: "trip-1",
+              total_count: 1,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const res = await request(app).get("/api/alerts");
+    expect(res.status).toBe(200);
+
+    const alert = (
+      res.body.alerts as Array<{
+        id: string;
+        category: string;
+        description: string;
+        actionHref: string;
+        count: number;
+        reservationIds?: string[];
+      }>
+    ).find((candidate) =>
+      candidate.id === "storefront-reservations-without-pipeline-card"
+    );
+
+    expect(alert).toMatchObject({
+      category: "Pipeline",
+      count: 1,
+      actionHref: "/pipeline",
+      reservationIds: ["res-storefront-1"],
+    });
+    expect(alert?.description).toContain("#AG-VI-202608-0001");
+    expect(alert?.description).toContain("pedido #2026-ABC123");
+    expect(alert?.description).toContain("manualmente");
   });
 });
 

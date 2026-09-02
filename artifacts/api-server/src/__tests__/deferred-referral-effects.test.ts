@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // can never credit a referrer or burn a customer's referral credit before money
 // is captured. This verifies the payment-time applier:
 //   - applies exactly once (idempotent under webhook retries / "mark paid")
-//   - only runs once payment_status === PAID
+//   - runs for PAID orders or an explicitly authorized positive partial payment
 //   - links the conversion to the first reservation of the order (null for
 //     product-only orders)
 //   - consumes referral credit best-effort: a shortfall is capped + logged,
@@ -222,6 +222,25 @@ describe("applyDeferredOrderCredits", () => {
     expect(result.conversionApplied).toBe(false);
     expect(mockRecordReferralConversion).not.toHaveBeenCalled();
     expect(updateSetCalls).toHaveLength(0);
+  });
+
+  it("converts on a positive partial reservation payment while the order remains pending", async () => {
+    installTx([
+      [{
+        ...PAID_ORDER,
+        paymentStatus: "pending",
+        pendingReferral: REFERRAL,
+      }],
+      [{ id: "res-1" }], // first reservation for order
+    ]);
+
+    const result = await applyDeferredOrderCredits("order-1", { allowPartialPayment: true });
+
+    expect(result.conversionApplied).toBe(true);
+    expect(mockRecordReferralConversion).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      reservationId: "res-1",
+    }));
+    expect(updateSetCalls.at(-1)?.referralEffectsAppliedAt).toBeInstanceOf(Date);
   });
 
   it("passes a null reservationId for a product-only order (no reservation)", async () => {

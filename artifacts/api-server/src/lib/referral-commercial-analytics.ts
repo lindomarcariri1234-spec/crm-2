@@ -156,7 +156,8 @@ export function calculateReferralCommercialAnalytics(
         (a, b) =>
           b.attributedRevenue - a.attributedRevenue ||
           b.conversions - a.conversions ||
-          a.referrerName.localeCompare(b.referrerName, "pt-BR"),
+          a.referrerName.localeCompare(b.referrerName, "pt-BR") ||
+          a.referrerId.localeCompare(b.referrerId),
       )
       .slice(0, 10),
   };

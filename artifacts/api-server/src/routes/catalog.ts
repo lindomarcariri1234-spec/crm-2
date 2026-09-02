@@ -3,8 +3,9 @@ import { db, productCategoriesTable, productImagesTable, cartItemsTable } from "
 import { eq, and, desc } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
-import { requireAuth, ADMIN_ROLES } from '../lib/tenant';
+import { requireAuth } from '../lib/tenant';
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 
 const router = Router();
 
@@ -48,7 +49,7 @@ router.post("/product-categories", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CATALOG, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateCategoryBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
     const id = generateId();
@@ -64,7 +65,7 @@ router.patch("/product-categories/:id", async (req, res, next: NextFunction): Pr
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CATALOG, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateCategoryBody.partial().safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
     await db.update(productCategoriesTable).set(parsed.data)
@@ -82,7 +83,7 @@ router.delete("/product-categories/:id", async (req, res, next: NextFunction): P
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CATALOG, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     await db.delete(productCategoriesTable)
       .where(and(eq(productCategoriesTable.id, req.params.id), eq(productCategoriesTable.tenantId, me.tenantId)));
     res.status(204).end();
@@ -108,7 +109,7 @@ router.post("/product-images", async (req, res, next: NextFunction): Promise<voi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CATALOG, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateProductImageBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
     const id = generateId();
@@ -124,7 +125,7 @@ router.delete("/product-images/:id", async (req, res, next: NextFunction): Promi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.CATALOG, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     await db.delete(productImagesTable)
       .where(and(eq(productImagesTable.id, req.params.id), eq(productImagesTable.tenantId, me.tenantId)));
     res.status(204).end();

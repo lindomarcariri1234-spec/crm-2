@@ -1,15 +1,63 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable } from "@workspace/db";
-import { eq, and, asc, desc, inArray } from "drizzle-orm";
+import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable, storeOrdersTable, referralsTable, linkedDataReconciliationRunsTable } from "@workspace/db";
+import { eq, and, asc, desc, inArray, count } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, ADMIN_ROLES } from '../lib/tenant';
 import { z } from "zod";
 import { ROLES, DEAL_STATUS, type DealStatus } from "@workspace/permissions";
 import { parseDealStatus } from "../lib/status-validators";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { linkedDeal, linkedOrder, linkedReferral, linkedReservation } from "../lib/linked-data";
+import { reconcileLinkedData } from "../services/linked-data-reconciliation";
 
 const router = Router();
+
+router.post("/admin/linked-data/reconcile", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    res.json(await reconcileLinkedData(me.tenantId, req.body?.repair === true));
+  } catch (err) { next(err); }
+});
+
+const ReconciliationHistoryQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+router.get("/admin/linked-data/reconcile/history", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = ReconciliationHistoryQuery.safeParse(req.query);
+    if (!parsed.success) { next(new ValidationError("Parâmetros de paginação inválidos", "VALIDATION_ERROR")); return; }
+    const { limit, offset } = parsed.data;
+    const where = eq(linkedDataReconciliationRunsTable.tenantId, me.tenantId);
+    const [runs, [{ total }]] = await Promise.all([
+      db.select({
+        id: linkedDataReconciliationRunsTable.id,
+        mode: linkedDataReconciliationRunsTable.mode,
+        executedAt: linkedDataReconciliationRunsTable.executedAt,
+        checkedCount: linkedDataReconciliationRunsTable.checkedCount,
+        repairedCount: linkedDataReconciliationRunsTable.repairedCount,
+        issueCount: linkedDataReconciliationRunsTable.issueCount,
+        summary: linkedDataReconciliationRunsTable.summary,
+      }).from(linkedDataReconciliationRunsTable)
+        .where(where)
+        .orderBy(desc(linkedDataReconciliationRunsTable.executedAt), desc(linkedDataReconciliationRunsTable.id))
+        .limit(limit)
+        .offset(offset),
+      db.select({ total: count() }).from(linkedDataReconciliationRunsTable).where(where),
+    ]);
+    res.json({
+      items: runs,
+      pagination: { limit, offset, total: Number(total), hasMore: offset + runs.length < Number(total) },
+    });
+  } catch (err) { next(err); }
+});
 
 const CreateDealBody = z.object({
   clientId: z.string().optional(),
@@ -311,6 +359,21 @@ router.get("/deals", async (req, res, next: NextFunction): Promise<void> => {
     const clientMap = new Map(clientRows.map(c => [c.id, c]));
 
     const resInfoMap = await getReservationInfoForDeals(deals, me.tenantId);
+    const reservationIds = deals.map(d => d.reservationId).filter((id): id is string => !!id);
+    const linkedReservations = reservationIds.length ? await db.select().from(reservationsTable).where(and(
+      eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.id, reservationIds),
+    )) : [];
+    const linkedReservationMap = new Map(linkedReservations.map(r => [r.id, r]));
+    const orderNumbers = [...new Set(linkedReservations.map(r => r.storeOrderId).filter((x): x is string => !!x))];
+    const [siblingReservations, linkedOrders] = orderNumbers.length ? await Promise.all([
+      db.select().from(reservationsTable).where(and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))),
+      db.select().from(storeOrdersTable).where(and(eq(storeOrdersTable.tenantId, me.tenantId), inArray(storeOrdersTable.orderNumber, orderNumbers))),
+    ]) : [[], []] as [(typeof reservationsTable.$inferSelect)[], (typeof storeOrdersTable.$inferSelect)[]];
+    const allLinkedReservations = [...linkedReservations, ...siblingReservations.filter(r => !linkedReservationMap.has(r.id))];
+    const linkedOrderMap = new Map(linkedOrders.map(o => [o.orderNumber, o]));
+    const linkedReferrals = allLinkedReservations.length ? await db.select().from(referralsTable).where(and(
+      eq(referralsTable.tenantId, me.tenantId), inArray(referralsTable.reservationId, allLinkedReservations.map(r => r.id)),
+    )) : [];
     res.json(deals.map(d => {
       const info = d.reservationId ? resInfoMap.get(d.reservationId) : undefined;
       const client = d.clientId ? clientMap.get(d.clientId) : undefined;
@@ -326,6 +389,15 @@ router.get("/deals", async (req, res, next: NextFunction): Promise<void> => {
         clientClassification: client?.classification ?? null,
         clientOutstandingBalance: client ? Number(client.outstandingBalance ?? 0) : null,
         customerCode: client?.customerCode ?? null,
+        linkedDeal: linkedDeal(d),
+        linkedDeals: [linkedDeal(d)],
+        linkedReservation: d.reservationId ? linkedReservation(linkedReservationMap.get(d.reservationId)) : null,
+        linkedOrder: d.reservationId ? linkedOrder(linkedOrderMap.get(linkedReservationMap.get(d.reservationId)?.storeOrderId ?? "")) : null,
+        linkedReferral: d.reservationId ? linkedReferral(linkedReferrals.find(r => r.reservationId === d.reservationId)) : null,
+        linkedReservations: d.reservationId ? (() => {
+          const canonical = linkedReservationMap.get(d.reservationId);
+          return canonical ? allLinkedReservations.filter(r => canonical.storeOrderId ? r.storeOrderId === canonical.storeOrderId : r.id === canonical.id).map(linkedReservation) : [];
+        })() : [],
       };
     }));
   } catch (err) {

@@ -11,6 +11,8 @@ import {
   useListAutomationLogs,
 } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
+import { ListLoadError } from "@/components/list-load-error";
+import { QueryErrorState } from "@/components/query-error-state";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -78,6 +80,7 @@ const triggerLabels: Record<string, string> = {
 const actionTypeLabels: Record<string, string> = {
   send_whatsapp: "Enviar WhatsApp",
   send_email: "Enviar E-mail",
+  send_unified: "Enviar E-mail + WhatsApp",
   change_pipeline_stage: "Alterar Estágio Pipeline",
   add_tag: "Adicionar Tag",
   create_task: "Criar Tarefa",
@@ -133,6 +136,9 @@ function AutomationDetail({
 }) {
   const [actionType, setActionType] = useState("send_whatsapp");
   const [actionConfig, setActionConfig] = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailContent, setEmailContent] = useState("");
+  const [whatsappContent, setWhatsappContent] = useState("");
   const storedConditions =
     automation.triggerConfig &&
     typeof automation.triggerConfig === "object" &&
@@ -145,8 +151,8 @@ function AutomationDetail({
   const [condOp, setCondOp] = useState("equals");
   const [condVal, setCondVal] = useState("");
 
-  const { data: allActions, refetch: refetchActions } = useListAutomationActions();
-  const { data: allLogs } = useListAutomationLogs();
+  const { data: allActions, isError: actionsError, error: actionsQueryError, refetch: refetchActions } = useListAutomationActions();
+  const { data: allLogs, isError: logsError, error: logsQueryError, refetch: refetchLogs } = useListAutomationLogs();
 
   const actions = (allActions ?? []).filter(
     (a) => a.automationId === automation.id
@@ -165,11 +171,16 @@ function AutomationDetail({
       data: {
         automationId: automation.id,
         type: actionType,
-        config: actionConfig ? { message: actionConfig } : {},
+        config: actionType === "send_unified"
+          ? { email: { subject: emailSubject, html: emailContent }, whatsapp: { text: whatsappContent } }
+          : actionConfig ? { message: actionConfig } : {},
         order: (actions ?? []).length + 1,
       },
     });
     setActionConfig("");
+    setEmailSubject("");
+    setEmailContent("");
+    setWhatsappContent("");
     refetchActions();
   };
 
@@ -230,6 +241,10 @@ function AutomationDetail({
         </TabsList>
 
         <TabsContent value="actions" className="space-y-4">
+          {actionsError ? (
+            <QueryErrorState resourceLabel="as ações da automação" error={actionsQueryError} onRetry={() => { void refetchActions(); }} compact />
+          ) : (
+          <>
           <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/50 border">
             <Zap className="w-4 h-4 text-primary shrink-0" />
             <span className="text-sm font-medium">Gatilho:</span>
@@ -292,6 +307,19 @@ function AutomationDetail({
                 placeholder="Conteúdo / valor"
               />
             </div>
+            {actionType === "send_unified" && (
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Conteúdo do E-mail</Label>
+                  <Input value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} placeholder="Assunto" required />
+                  <Textarea value={emailContent} onChange={(e) => setEmailContent(e.target.value)} placeholder="HTML/texto do e-mail" required />
+                </div>
+                <div className="space-y-2">
+                  <Label>Conteúdo do WhatsApp</Label>
+                  <Textarea value={whatsappContent} onChange={(e) => setWhatsappContent(e.target.value)} placeholder="Texto do WhatsApp" required />
+                </div>
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" size="sm" onClick={onClose}>
                 Fechar
@@ -302,6 +330,8 @@ function AutomationDetail({
               </Button>
             </div>
           </form>
+          </>
+          )}
         </TabsContent>
 
         <TabsContent value="conditions" className="space-y-4">
@@ -390,7 +420,9 @@ function AutomationDetail({
         </TabsContent>
 
         <TabsContent value="logs">
-          {!logs || (logs ?? []).length === 0 ? (
+          {logsError ? (
+            <QueryErrorState resourceLabel="o histórico da automação" error={logsQueryError} onRetry={() => { void refetchLogs(); }} compact />
+          ) : !logs || (logs ?? []).length === 0 ? (
             <div className="text-center py-10 text-muted-foreground">
               <ScrollText className="w-8 h-8 mx-auto mb-2 opacity-30" />
               <p className="text-sm">Nenhuma execução registrada ainda.</p>
@@ -697,7 +729,7 @@ export default function Automations() {
   const [detailAutomation, setDetailAutomation] = useState<Automation | null>(null);
   const [triggerType, setTriggerType] = useState("reservation_created");
 
-  const { data: automations, isLoading, refetch } = useListAutomations();
+  const { data: automations, isLoading, isError, refetch } = useListAutomations();
   const createAutomation = useCreateAutomation();
   const toggleAutomation = useToggleAutomation();
   const deleteAutomation = useDeleteAutomation();
@@ -858,6 +890,12 @@ export default function Automations() {
                 <Skeleton key={i} className="h-40 w-full" />
               ))}
             </div>
+          ) : isError ? (
+            <ListLoadError
+              onRetry={refetch}
+              message="Não foi possível carregar as automações."
+              className="rounded-lg border bg-card"
+            />
           ) : !automations || automations.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground border rounded-lg bg-card">
               <Zap className="w-12 h-12 mx-auto mb-4 opacity-30" />

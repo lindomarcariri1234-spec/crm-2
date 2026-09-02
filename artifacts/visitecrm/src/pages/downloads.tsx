@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useListReferrals, useListCommissions, useListDeals } from "@workspace/api-client-react";
+import { useGetMe, useListAuditLogs, useListReferrals, useListCommissions, useListDeals } from "@workspace/api-client-react";
+import { ADMIN_ROLES } from "@workspace/permissions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -7,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Download, FileText, FileSpreadsheet, Users, Map, CalendarCheck, DollarSign, Bus, Loader2, BarChart2, Upload,
+  Download, FileText, FileSpreadsheet, Users, Map, CalendarCheck, DollarSign, Bus, Loader2, BarChart2, Upload, ClipboardList,
 } from "lucide-react";
 import { format, startOfMonth } from "date-fns";
 import {
@@ -25,6 +26,7 @@ import {
 } from "./downloads-utils.js";
 import { ManifestImportModal } from "./ManifestImportModal";
 import { OperationalImportModal, type ImportEntity } from "@/components/operational-import-modal";
+import { QueryErrorState } from "@/components/query-error-state";
 
 function downloadCsv(rows: string[][], filename: string) {
   const content = rows.map(r => r.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -51,9 +53,10 @@ const REPORT_TYPES = [
   { value: "clients", label: "Clientes", description: "Cadastro e histórico de clientes" },
   { value: "trips", label: "Viagens", description: "Catálogo de viagens por data de saída" },
   { value: "manifest", label: "Manifesto ANTT", description: "Passageiros por período de saída das viagens" },
+  { value: "communication", label: "Histórico multicanal", description: "Destinatários, canais, status, tentativas e falhas para auditoria" },
 ] as const;
 
-type ReportType = "financial" | "sales" | "clients" | "trips" | "manifest";
+type ReportType = "financial" | "sales" | "clients" | "trips" | "manifest" | "communication";
 type ExportFormat = "csv" | "xlsx" | "pdf";
 
 /** Fetches all pages from a paginated API endpoint and returns the merged data array. */
@@ -84,6 +87,20 @@ async function fetchAllPages<T>(
 
 export default function Downloads() {
   const { toast } = useToast();
+  const { data: me } = useGetMe();
+  const isAdmin = !!me && ADMIN_ROLES.includes(me.role);
+  const {
+    data: auditLogs = [],
+    isLoading: auditLogsLoading,
+    isError: auditLogsError,
+    error: auditLogsQueryError,
+    refetch: refetchAuditLogs,
+  } = useListAuditLogs({
+    query: {
+      queryKey: ["/api/audit-logs"],
+      enabled: isAdmin,
+    },
+  });
 
   const [reportType, setReportType] = useState<ReportType>("financial");
   const [startDate, setStartDate] = useState(format(startOfMonth(new Date()), "yyyy-MM-dd"));
@@ -96,15 +113,41 @@ export default function Downloads() {
   const [quickEnd, setQuickEnd] = useState(today);
 
   // Bounded datasets — kept as eager hooks (these never approach 5 000 records)
-  const { data: referralsData, refetch: refetchReferrals } = useListReferrals();
-  const { data: commissionsData, refetch: refetchCommissions } = useListCommissions();
-  const { data: openDealsData, refetch: refetchOpenDeals } = useListDeals({ status: "open" });
-  const { data: lostDealsData, refetch: refetchLostDeals } = useListDeals({ status: "lost" });
+  const { data: referralsData, isError: referralsError, error: referralsQueryError, refetch: refetchReferrals } = useListReferrals();
+  const { data: commissionsData, isError: commissionsError, error: commissionsQueryError, refetch: refetchCommissions } = useListCommissions();
+  const { data: openDealsData, isError: openDealsError, error: openDealsQueryError, refetch: refetchOpenDeals } = useListDeals({ status: "open" });
+  const { data: lostDealsData, isError: lostDealsError, error: lostDealsQueryError, refetch: refetchLostDeals } = useListDeals({ status: "lost" });
+  const quickDataError = referralsError || commissionsError || openDealsError || lostDealsError;
+  const quickDataQueryError = referralsQueryError ?? commissionsQueryError ?? openDealsQueryError ?? lostDealsQueryError;
 
   // Track which quick-download card is currently loading
   const [quickLoading, setQuickLoading] = useState<string | null>(null);
   const [manifestImportOpen, setManifestImportOpen] = useState(false);
   const [importEntity, setImportEntity] = useState<ImportEntity | null>(null);
+
+  const exportAuditLogs = auditLogs.filter(
+    (log) => log.action === "export_outbound_messages" && log.entityType === "outbound_messages_export",
+  );
+
+  function exportAuditDetails(after: unknown) {
+    if (!after || typeof after !== "object" || Array.isArray(after)) return null;
+    const details = after as {
+      format?: unknown;
+      filters?: unknown;
+      rowCount?: unknown;
+    };
+    const filters = details.filters && typeof details.filters === "object" && !Array.isArray(details.filters)
+      ? Object.entries(details.filters as Record<string, unknown>)
+        .filter(([, value]) => value !== null && value !== undefined && value !== "")
+        .map(([key, value]) => `${key}: ${String(value)}`)
+        .join(" · ")
+      : "";
+    return {
+      format: typeof details.format === "string" ? details.format.toUpperCase() : "—",
+      filters: filters || "Sem filtros",
+      rowCount: typeof details.rowCount === "number" ? details.rowCount : 0,
+    };
+  }
 
   const importTitles: Record<ImportEntity, string> = {
     clients: "Importar clientes por planilha",
@@ -129,12 +172,19 @@ export default function Downloads() {
   async function serverExport(fmt: ExportFormat) {
     setExporting(fmt);
     try {
-      const res = await fetch("/api/reports/export", {
-        method: "POST",
+      const isCommunication = reportType === "communication";
+      const params = new URLSearchParams({
+        ...(isCommunication ? { format: fmt, dateFrom: startDate, dateTo: endDate } : {}),
+      });
+      const res = await fetch(
+        isCommunication ? `/api/outbound-messages/export?${params.toString()}` : "/api/reports/export",
+        {
+        method: isCommunication ? "GET" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reportType, format: fmt, startDate, endDate }),
-      });
+        body: isCommunication ? undefined : JSON.stringify({ reportType, format: fmt, startDate, endDate }),
+        },
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error((err as { error?: string }).error ?? "Erro ao gerar relatório");
@@ -147,6 +197,9 @@ export default function Downloads() {
       const a = document.createElement("a");
       a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
+      if (isCommunication && isAdmin) {
+        void refetchAuditLogs();
+      }
       toast({ title: "Relatório exportado com sucesso!" });
     } catch (err) {
       toast({ title: "Erro na exportação", description: String(err), variant: "destructive" });
@@ -178,11 +231,13 @@ export default function Downloads() {
   }
 
   function _prepareReferrals() {
+    if (referralsError) throw referralsQueryError instanceof Error ? referralsQueryError : new Error("Não foi possível carregar as indicações.");
     const all = (referralsData && "data" in referralsData ? referralsData.data : []) ?? [];
     return Promise.resolve(prepareReferrals(all, quickStart, quickEnd));
   }
 
   function _prepareCommissions() {
+    if (commissionsError) throw commissionsQueryError instanceof Error ? commissionsQueryError : new Error("Não foi possível carregar as comissões.");
     return Promise.resolve(prepareCommissions(commissionsData ?? [], quickStart, quickEnd));
   }
 
@@ -218,6 +273,11 @@ export default function Downloads() {
   }
 
   function _preparePipeline() {
+    if (openDealsError || lostDealsError) {
+      throw (openDealsQueryError ?? lostDealsQueryError) instanceof Error
+        ? (openDealsQueryError ?? lostDealsQueryError)
+        : new Error("Não foi possível carregar o pipeline.");
+    }
     const open = openDealsData ?? [];
     const lost = lostDealsData ?? [];
     return Promise.resolve(
@@ -328,6 +388,16 @@ export default function Downloads() {
           Exporte relatórios ou importe dados por modelos versionados. Arquivos PDF são relatórios somente para leitura e não podem ser importados.
         </p>
       </div>
+      {quickDataError && (
+        <QueryErrorState
+          resourceLabel="os dados para exportação"
+          error={quickDataQueryError}
+          onRetry={() => {
+            void Promise.all([refetchReferrals(), refetchCommissions(), refetchOpenDeals(), refetchLostDeals()]);
+          }}
+          compact
+        />
+      )}
 
       {/* Server-side reports panel */}
       <Card className="border-primary/20">
@@ -382,7 +452,7 @@ export default function Downloads() {
             </div>
 
             <div className="flex gap-2 flex-wrap">
-              {(["csv", "xlsx", "pdf"] as ExportFormat[]).map(fmt => {
+              {((reportType === "communication" ? ["csv", "pdf"] : ["csv", "xlsx", "pdf"]) as ExportFormat[]).map(fmt => {
                 const FmtIcon = fmt === "xlsx" ? FileSpreadsheet : FileText;
                 const isLoading = exporting === fmt;
                 return (
@@ -408,6 +478,68 @@ export default function Downloads() {
           </div>
         </CardContent>
       </Card>
+
+      {isAdmin && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <ClipboardList className="w-4 h-4 text-primary" />
+              Auditoria de exportações
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Histórico de exportações do histórico multicanal, com usuário, horário, formato, filtros e quantidade de linhas.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {auditLogsError ? (
+              <QueryErrorState
+                resourceLabel="o histórico de auditoria"
+                error={auditLogsQueryError}
+                onRetry={() => { void refetchAuditLogs(); }}
+                compact
+              />
+            ) : auditLogsLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                <Loader2 className="w-4 h-4 animate-spin" /> Carregando auditoria...
+              </div>
+            ) : exportAuditLogs.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">Nenhuma exportação multicanal registrada.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Data</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Usuário</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Formato</th>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">Filtros</th>
+                      <th className="text-right px-3 py-2 font-medium text-muted-foreground">Linhas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {exportAuditLogs.map((log) => {
+                      const details = exportAuditDetails(log.after);
+                      return (
+                        <tr key={log.id} className="border-b last:border-0">
+                          <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                            {new Date(log.createdAt).toLocaleString("pt-BR")}
+                          </td>
+                          <td className="px-3 py-2 text-xs font-mono">{log.userId ?? "—"}</td>
+                          <td className="px-3 py-2 text-xs">{details?.format ?? "—"}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground max-w-[360px] truncate" title={details?.filters}>
+                            {details?.filters ?? "—"}
+                          </td>
+                          <td className="px-3 py-2 text-right text-xs">{details?.rowCount ?? "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Quick downloads */}
       <div>

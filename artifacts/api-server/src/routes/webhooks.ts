@@ -19,15 +19,46 @@ import { roundMoney } from "../lib/pricing";
 import { ValidationError, AppError } from "../lib/errors";
 import { adjustOrderSettlement, recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
 import { processEvolutionInbound } from "../services/whatsapp-attendance";
+import { processEvolutionDeliveryStatus } from "../services/whatsapp-attendance";
 import { moveDealToStage } from "../services/pipeline-automation";
+import { updateOutboundDeliveryFromWebhook } from "../services/outbound-delivery";
 
 const router = Router();
+
+const RESEND_BOUNCE_TYPES = new Map<string, "permanent" | "temporary">([
+  ["permanent", "permanent"],
+  ["temporary", "temporary"],
+  ["hard", "permanent"],
+  ["soft", "temporary"],
+]);
+
+function parseResendBounceType(data: Record<string, unknown>): "permanent" | "temporary" | undefined {
+  const bounce = data["bounce"] && typeof data["bounce"] === "object"
+    ? data["bounce"] as Record<string, unknown>
+    : null;
+  const rawType = typeof bounce?.["type"] === "string" ? bounce["type"].trim().toLowerCase() : "";
+  return RESEND_BOUNCE_TYPES.get(rawType);
+}
 
 // Evolution calls this endpoint for every inbound WhatsApp event. It is
 // instance-scoped and verifies the integration API key before resolving a
 // tenant; no tenant identifier is accepted from the external caller.
 router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next: NextFunction): Promise<void> => {
   try {
+    const statusOutcome = await processEvolutionDeliveryStatus({
+      instanceName: req.params["instanceName"] ?? "",
+      apiKey: req.header("apikey") ?? req.header("x-api-key") ?? undefined,
+      payload: req.body,
+    });
+    if (statusOutcome !== "not_status") {
+      if (statusOutcome === "unauthorized") {
+        res.status(401).json({ received: false });
+        return;
+      }
+      res.status(200).json({ received: true, outcome: statusOutcome });
+      return;
+    }
+
     const outcome = await processEvolutionInbound({
       instanceName: req.params["instanceName"] ?? "",
       apiKey: req.header("apikey") ?? req.header("x-api-key") ?? undefined,
@@ -43,10 +74,102 @@ router.post("/webhooks/whatsapp/evolution/:instanceName", async (req, res, next:
   }
 });
 
+// Resend sends provider callbacks without a user session. The tenant is
+// explicit in the webhook URL because Resend's email event does not carry an
+// agency identity by default. Configure the same URL and signing secret in
+// Resend for each tenant.
+router.post("/webhooks/resend/:tenantId", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const tenantId = req.params["tenantId"]?.trim();
+    const secret = process.env["RESEND_WEBHOOK_SECRET"]?.trim();
+    if (!tenantId || !secret) {
+      next(new ValidationError("Webhook not configured", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const rawBody = (req as RawBodyRequest).rawBody;
+    if (!rawBody || !verifyResendSignature(rawBody, req, secret)) {
+      logger.warn(
+        { tenantId, signature: req.header("svix-signature") ? "present" : "missing" },
+        "[webhooks/resend] Invalid signature",
+      );
+      next(new ValidationError("Invalid signature", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const body = req.body && typeof req.body === "object"
+      ? req.body as Record<string, unknown>
+      : {};
+    const eventType = typeof body["type"] === "string" ? body["type"].toLowerCase() : "";
+    const data = body["data"] && typeof body["data"] === "object"
+      ? body["data"] as Record<string, unknown>
+      : {};
+    const externalId = typeof data["email_id"] === "string"
+      ? data["email_id"]
+      : typeof data["emailId"] === "string"
+        ? data["emailId"]
+        : typeof data["id"] === "string" ? data["id"] : "";
+
+    const accepted = new Set(["email.delivered", "email.opened", "email.clicked"]);
+    const failed = new Set(["email.bounced", "email.failed", "email.complained"]);
+    if (!externalId || (!accepted.has(eventType) && !failed.has(eventType))) {
+      // Unknown Resend events are acknowledged so they are not retried forever.
+      res.status(200).json({ received: true, outcome: "ignored" });
+      return;
+    }
+
+    const webhookUpdate = {
+      tenantId,
+      provider: "resend",
+      externalId,
+      status: accepted.has(eventType) ? "accepted" : "failed",
+      providerStatus: eventType,
+      error: failed.has(eventType) ? eventType : null,
+    } as const;
+    const bounceType = eventType === "email.bounced" ? parseResendBounceType(data) : undefined;
+    const result = await updateOutboundDeliveryFromWebhook(
+      bounceType ? { ...webhookUpdate, bounceType } : webhookUpdate,
+    );
+    res.status(200).json({ received: true, outcome: result.updated ? "updated" : "not_found" });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Express captures the parsed body via req.body and the raw bytes via
 // req.rawBody (see app.ts express.json verify hook). Webhook signature
 // checks must use rawBody to avoid normalization differences.
 type RawBodyRequest = Request & { rawBody?: Buffer };
+
+const RESEND_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
+
+function verifyResendSignature(rawBody: Buffer, req: Request, secret: string): boolean {
+  const svixId = req.header("svix-id");
+  const svixTimestamp = req.header("svix-timestamp");
+  const svixSignature = req.header("svix-signature");
+  if (svixId && svixTimestamp && svixSignature) {
+    const timestamp = Number(svixTimestamp);
+    if (!Number.isFinite(timestamp) || Math.abs(Date.now() / 1000 - timestamp) > RESEND_SIGNATURE_TOLERANCE_SECONDS) {
+      return false;
+    }
+    const secretBytes = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+    const signed = `${svixId}.${svixTimestamp}.${rawBody.toString("utf8")}`;
+    const expected = crypto.createHmac("sha256", secretBytes).update(signed).digest("base64");
+    return svixSignature.split(" ").some((candidate) => {
+      const encoded = candidate.replace(/^v1,/, "");
+      return timingSafeEqualHex(
+        Buffer.from(expected, "base64").toString("hex"),
+        Buffer.from(encoded, "base64").toString("hex"),
+      );
+    });
+  }
+
+  const signature = req.header("x-resend-signature");
+  if (!signature) return false;
+  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest();
+  const provided = Buffer.from(signature, "base64");
+  return provided.length > 0 && provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
 
 function timingSafeEqualHex(a: string, b: string): boolean {
   try {

@@ -37,6 +37,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 import { Plus, Pencil, Trash2, Search, Hotel, Star, Images, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { GalleryUpload } from "@/components/gallery-upload";
 import { formatCurrencyBRL as formatCurrency } from "@/lib/utils";
@@ -58,7 +59,7 @@ const statusLabel: Record<string, string> = { active: "Ativo", inactive: "Inativ
 
 export default function Hospedagens() {
   const { toast } = useToast();
-  const { data: accommodations = [], refetch } = useListAccommodations();
+  const { data: accommodations = [], isError, refetch } = useListAccommodations();
   const createAcc = useCreateAccommodation();
   const updateAcc = useUpdateAccommodation();
   const deleteAcc = useDeleteAccommodation();
@@ -208,7 +209,13 @@ export default function Hospedagens() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 ? (
+            {isError ? (
+              <ListLoadErrorRow
+                colSpan={9}
+                onRetry={refetch}
+                message="Não foi possível carregar as hospedagens."
+              />
+            ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center text-muted-foreground py-10">
                   <Hotel className="w-8 h-8 mx-auto mb-2 opacity-30" />

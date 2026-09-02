@@ -8,7 +8,8 @@ import {
   paymentsTable,
   calendarEventsTable,
 } from "@workspace/db";
-import { eq, and, type SQL } from "drizzle-orm";
+import { eq, and, sql, type SQL } from "drizzle-orm";
+import { createHash } from "crypto";
 import { format, addHours } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { GoogleCalendarService, refreshTokenIfNeeded, withCalendarRetry } from "./calendar-service";
@@ -32,7 +33,30 @@ function fmtCurrency(v: number | string | null | undefined): string {
   return formatBRLPlain(Number(v ?? 0));
 }
 
-async function upsertCalendarEvent(
+type CalendarDbExecutor = Pick<typeof db, "select" | "update" | "insert" | "delete">;
+
+/**
+ * Google accepts caller-provided event IDs and treats a repeated insert with
+ * the same ID as a conflict. Deriving the ID from the logical calendar record
+ * makes the create operation recoverable when Google succeeds but the local
+ * calendar_events insert does not.
+ */
+function stableGoogleEventId(record: {
+  tenantId: string;
+  userId?: string;
+  clientId?: string;
+  tripId?: string;
+  paymentId?: string;
+  eventType: string;
+}): string {
+  const resourceId = record.tripId ?? record.paymentId ?? record.clientId ?? "unknown";
+  return createHash("sha256")
+    .update(`visitecrm-calendar:${record.tenantId}:${record.userId ?? "unknown"}:${record.eventType}:${resourceId}`)
+    .digest("hex");
+}
+
+async function upsertCalendarEventWithExecutor(
+  executor: CalendarDbExecutor,
   service: GoogleCalendarService,
   filter: SQL[],
   eventData: { summary: string; description?: string; location?: string; startDateTime: Date; endDateTime?: Date; attendees?: string[] },
@@ -45,7 +69,7 @@ async function upsertCalendarEvent(
     eventType: string;
   }
 ): Promise<void> {
-  const [existing] = await db.select().from(calendarEventsTable)
+  const [existing] = await executor.select().from(calendarEventsTable)
     .where(and(...filter)).limit(1);
 
   const logCtx = {
@@ -56,11 +80,15 @@ async function upsertCalendarEvent(
     eventType: record.eventType,
     tenantId: record.tenantId,
   };
+  const createEventData = {
+    ...eventData,
+    googleEventId: stableGoogleEventId(record),
+  };
 
   if (existing) {
     const updated = await withCalendarRetry(() => service.updateEvent(existing.googleEventId, eventData, logCtx));
     if (updated === true) {
-      await db.update(calendarEventsTable).set({
+      await executor.update(calendarEventsTable).set({
         title: eventData.summary,
         description: eventData.description,
         startDate: eventData.startDateTime,
@@ -71,13 +99,13 @@ async function upsertCalendarEvent(
     } else if (updated === "not-found") {
       // Event was deleted externally in Google — remove stale DB record and recreate.
       logger.info({ ...logCtx, googleEventId: existing.googleEventId }, "calendar-sync: stale DB record found; deleting and recreating event");
-      await db.delete(calendarEventsTable).where(eq(calendarEventsTable.id, existing.id));
-      const googleEvent = await withCalendarRetry(() => service.createEvent(eventData, logCtx));
+      await executor.delete(calendarEventsTable).where(eq(calendarEventsTable.id, existing.id));
+      const googleEvent = await withCalendarRetry(() => service.createEvent(createEventData, logCtx));
       if (!googleEvent) {
         logger.warn(logCtx, "calendar-sync: createEvent after external deletion failed; no DB record persisted");
         return;
       }
-      await db.insert(calendarEventsTable).values({
+      await executor.insert(calendarEventsTable).values({
         id: generateId(),
         tenantId: record.tenantId,
         userId: record.userId,
@@ -98,12 +126,12 @@ async function upsertCalendarEvent(
       logger.warn({ ...logCtx, googleEventId: existing.googleEventId }, "calendar-sync: updateEvent permanently failed (auth or data issue); DB record not updated");
     }
   } else {
-    const googleEvent = await withCalendarRetry(() => service.createEvent(eventData, logCtx));
+    const googleEvent = await withCalendarRetry(() => service.createEvent(createEventData, logCtx));
     if (!googleEvent) {
       logger.warn(logCtx, "calendar-sync: createEvent failed; no DB record persisted");
       return;
     }
-    await db.insert(calendarEventsTable).values({
+    await executor.insert(calendarEventsTable).values({
       id: generateId(),
       tenantId: record.tenantId,
       userId: record.userId,
@@ -121,6 +149,42 @@ async function upsertCalendarEvent(
       syncedAt: new Date(),
     });
   }
+}
+
+/**
+ * Serializes trip-event syncs for the same agency, trip, and calendar user.
+ *
+ * The lock deliberately covers the Google API call as well as the local
+ * read/write. A database unique constraint could prevent duplicate rows, but
+ * it would still allow both concurrent callers to create separate Google
+ * events before either insert reaches the database.
+ */
+async function upsertCalendarEvent(
+  service: GoogleCalendarService,
+  filter: SQL[],
+  eventData: { summary: string; description?: string; location?: string; startDateTime: Date; endDateTime?: Date; attendees?: string[] },
+  record: {
+    tenantId: string;
+    userId?: string;
+    clientId?: string;
+    tripId?: string;
+    paymentId?: string;
+    eventType: string;
+  }
+): Promise<void> {
+  if (record.eventType === "trip" && record.tripId && record.userId) {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${record.tenantId} || ':' || ${record.tripId} || ':' || ${record.userId}, 0)
+        )
+      `);
+      await upsertCalendarEventWithExecutor(tx, service, filter, eventData, record);
+    });
+    return;
+  }
+
+  await upsertCalendarEventWithExecutor(db, service, filter, eventData, record);
 }
 
 /** Trip statuses that should have active calendar events. */
@@ -288,6 +352,17 @@ export class CalendarSyncService {
       }
     } catch (err) {
       logger.error({ err }, "calendar-sync: syncTrip failed");
+    }
+  }
+
+  /**
+   * syncTrips — syncs each affected trip once after a reservation move.
+   * Keeping the IDs unique prevents duplicate calendar work when callers
+   * provide the same trip as both the origin and destination.
+   */
+  static async syncTrips(tripIds: Iterable<string>): Promise<void> {
+    for (const tripId of new Set(tripIds)) {
+      await CalendarSyncService.syncTrip(tripId);
     }
   }
 

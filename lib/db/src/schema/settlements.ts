@@ -76,6 +76,7 @@ export const financialLedgerEntriesTable = pgTable("financial_ledger_entries", {
   index("financial_ledger_tenant_order_idx").on(table.tenantId, table.orderId, table.occurredAt),
   index("financial_ledger_participant_idx").on(table.tenantId, table.participantType, table.participantId, table.occurredAt),
   index("financial_ledger_expiry_idx").on(table.tenantId, table.expiresAt),
+  index("financial_ledger_tenant_occurred_idx").on(table.tenantId, table.occurredAt),
 ]);
 
 export const insertSettlementItemSchema = createInsertSchema(settlementItemsTable).omit({ createdAt: true });

@@ -19,6 +19,7 @@ import {
   useGetClientReferral,
   useGenerateClientReferralCode,
   useGetMe,
+  useListOutboundMessages,
 } from "@workspace/api-client-react";
 import { RESERVATION_STATUS, REFERRAL_STATUS, PAYMENT_STATUS, ADMIN_ROLES, MANAGEMENT_ROLES } from "@workspace/permissions";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -162,6 +163,7 @@ function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: bool
   const { data: activities, isLoading, refetch } = useListClientActivities(clientId, {
     query: { enabled: isOpen && !!clientId, queryKey: getListClientActivitiesQueryKey(clientId) },
   });
+  const { data: outboundMessages, isLoading: loadingOutbound } = useListOutboundMessages({ clientId, limit: 100 });
 
   const { mutate: createActivity, isPending } = useCreateClientActivity({
     mutation: {
@@ -184,6 +186,28 @@ function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: bool
 
   return (
     <div className="space-y-3">
+      {(loadingOutbound || (outboundMessages ?? []).length > 0) && (
+        <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
+          <p className="text-sm font-semibold">Mensagens multicanal</p>
+          {loadingOutbound ? <Skeleton className="h-12 w-full" /> : (outboundMessages ?? []).map((message) => (
+            <div key={message.id} className="rounded-md border bg-card p-2.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="outline">{message.origin}</Badge>
+                <span className="text-xs text-muted-foreground">{format(parseISO(message.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span>
+                <Badge className={message.status === "partial" ? "bg-orange-100 text-orange-800" : "bg-muted"}>{message.status === "partial" ? "Falha parcial" : message.status}</Badge>
+              </div>
+              <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                {message.deliveries.map((delivery) => (
+                  <div key={delivery.id} className="text-xs flex items-center justify-between gap-2">
+                    <span>{delivery.channel === "email" ? "E-mail" : "WhatsApp"} · {delivery.recipient ?? "sem contato"}</span>
+                    <span className={delivery.status === "failed" ? "text-red-600" : delivery.status === "skipped" ? "text-amber-700" : "text-muted-foreground"}>{delivery.status}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium text-muted-foreground">
           {isLoading ? "Carregando…" : `${(activities ?? []).length} atividade(s)`}

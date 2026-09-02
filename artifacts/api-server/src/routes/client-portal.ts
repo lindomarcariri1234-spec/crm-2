@@ -41,10 +41,18 @@ import { getRecentNotifications, getUnreadCount, markAllRead } from "../lib/clie
 import { areWorkersEnabled } from "../lib/redis";
 import { logger } from "../lib/logger";
 import { expireClientBenefits, getClientBenefitBalances } from "../services/settlements/financial-ledger";
+import { clerkClient } from "@clerk/express";
+import { normalizeCpfInput, reconcileClientIdentity } from "../services/client-identity";
 
 const router = Router();
 
-async function findClientRecord(tenantId: string, userId: string, email: string) {
+async function findClientRecord(
+  tenantId: string,
+  userId: string,
+  email: string,
+  clerkId: string,
+  cpf?: string | null,
+) {
   let [client] = await db
     .select()
     .from(clientsTable)
@@ -52,19 +60,82 @@ async function findClientRecord(tenantId: string, userId: string, email: string)
     .limit(1);
 
   if (!client) {
-    [client] = await db
-      .select()
-      .from(clientsTable)
-      .where(and(eq(clientsTable.tenantId, tenantId), eq(clientsTable.email, email)))
-      .limit(1);
+    if (cpf) {
+      const identity = await db.transaction((tx) =>
+        reconcileClientIdentity(tx, {
+          tenantId,
+          userId,
+          cpf,
+          email,
+        }),
+      );
+      if (identity.clientId) {
+        [client] = await db
+          .select()
+          .from(clientsTable)
+          .where(and(
+            eq(clientsTable.id, identity.clientId),
+            eq(clientsTable.tenantId, tenantId),
+          ))
+          .limit(1);
+      }
+    }
+  }
 
-    if (client && !client.userId) {
-      await db
+  if (!client) {
+    let verifiedEmail: string | undefined;
+    try {
+      const clerkUser = await clerkClient.users.getUser(clerkId);
+      const primaryEmail = clerkUser.emailAddresses.find(
+        (address) => address.id === clerkUser.primaryEmailAddressId,
+      );
+      if (primaryEmail?.verification?.status === "verified") {
+        verifiedEmail = primaryEmail.emailAddress;
+      }
+    } catch (error) {
+      logger.warn({ error, clerkId }, "Could not verify Clerk email for client fallback");
+    }
+
+    if (
+      !verifiedEmail
+      || verifiedEmail.trim().toLowerCase() !== email.trim().toLowerCase()
+    ) return null;
+
+    const linkedClient = await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(lower(btrim(${verifiedEmail})), 0)
+        )
+      `);
+
+      const matches = await tx
+        .select()
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, tenantId),
+          sql`lower(btrim(${clientsTable.email})) = lower(btrim(${verifiedEmail}))`,
+        ))
+        .limit(2);
+
+      if (matches.length !== 1) return null;
+      const [match] = matches;
+
+      if (match.userId && match.userId !== userId) return null;
+      if (match.userId === userId) return match;
+
+      const [claimed] = await tx
         .update(clientsTable)
         .set({ userId })
-        .where(eq(clientsTable.id, client.id));
-      client = { ...client, userId };
-    }
+        .where(and(
+          eq(clientsTable.id, match.id),
+          eq(clientsTable.tenantId, tenantId),
+          isNull(clientsTable.userId),
+        ))
+        .returning({ id: clientsTable.id });
+      return claimed ? { ...match, userId } : null;
+    });
+    if (!linkedClient) return null;
+    client = linkedClient;
   }
 
   return client ?? null;
@@ -106,7 +177,7 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       .where(eq(tenantsTable.id, me.tenantId))
       .limit(1);
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId, user?.cpf);
 
     let reservations: unknown[] = [];
     let referralStats: {
@@ -515,7 +586,7 @@ router.patch("/client/me/preferences", async (req, res, next: NextFunction): Pro
       next(new ValidationError(String(body.error.message)));
       return;
     }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND"));
       return;
@@ -558,7 +629,7 @@ router.patch("/client/me/ambassador", async (req, res, next: NextFunction): Prom
       next(new ValidationError(String(body.error.message)));
       return;
     }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND"));
       return;
@@ -590,7 +661,7 @@ router.get("/client/me/loyalty", async (req, res, next: NextFunction): Promise<v
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { res.json(null); return; }
 
     const [loyaltyProgram] = await db
@@ -645,7 +716,7 @@ router.get("/client/me/loyalty/transactions", async (req, res, next: NextFunctio
     const limit = 50;
     const offset = (page - 1) * limit;
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       res.json({ data: [], hasMore: false, total: 0 });
       return;
@@ -732,7 +803,7 @@ router.get("/client/me/benefits", async (req, res, next: NextFunction): Promise<
       next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE"));
       return;
     }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       res.json({ balances: { wallet: 0, cashback: 0 }, data: [] });
       return;
@@ -784,7 +855,7 @@ router.post("/client/me/loyalty/redeem", async (req, res, next: NextFunction): P
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND"));
       return;
@@ -976,7 +1047,7 @@ router.post("/client/nps", async (req, res, next: NextFunction): Promise<void> =
       next(new ValidationError(String(body.error.message)));
       return;
     }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND"));
       return;
@@ -1040,7 +1111,7 @@ router.get("/client/reservations/:id/voucher", async (req, res, next: NextFuncti
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND"));
       return;
@@ -1218,35 +1289,60 @@ router.patch("/client/me", async (req, res, next: NextFunction): Promise<void> =
     }
 
     const data = parsed.data;
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
 
     if (!client) {
       next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND"));
       return;
     }
 
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (data.name !== undefined) updates.name = data.name;
-    if (data.phone !== undefined) updates.phone = data.phone;
-    if (data.cpf !== undefined) updates.cpf = data.cpf;
-    if (data.birthDate !== undefined) {
-      updates.birthDate = data.birthDate ? new Date(data.birthDate) : null;
-    }
+    // An existing CPF is a canonical identity value. Profile edits may add a
+    // missing CPF, but an empty/null form value must never erase it.
+    const requestedCpf = data.cpf === undefined ? client.cpf : normalizeCpfInput(data.cpf);
+    const normalizedCpf = requestedCpf ?? client.cpf;
+    const [updated] = await db.transaction(async (tx) => {
+      if (!client.cpf && normalizedCpf) {
+        const identity = await reconcileClientIdentity(tx, {
+          tenantId: me.tenantId,
+          userId: me.id,
+          cpf: normalizedCpf,
+          name: data.name,
+          email: client.email,
+          phone: data.phone,
+          birthDate: data.birthDate ? new Date(data.birthDate) : null,
+        });
 
-    await db
-      .update(clientsTable)
-      .set(updates)
-      .where(and(eq(clientsTable.id, client.id), eq(clientsTable.tenantId, me.tenantId)));
+        if (identity.clientId && identity.clientId !== client.id) {
+          throw new ConflictError(
+            "O CPF informado pertence a outro cadastro de cliente nesta agência.",
+            "CLIENT_IDENTITY_CONFLICT",
+          );
+        }
+      }
 
-    if (data.name) {
-      await db.update(usersTable).set({ name: data.name }).where(eq(usersTable.id, me.id));
-    }
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (data.name !== undefined) updates.name = data.name;
+      if (data.phone !== undefined) updates.phone = data.phone;
+      if (normalizedCpf) updates.cpf = normalizedCpf;
+      if (data.birthDate !== undefined) {
+        updates.birthDate = data.birthDate ? new Date(data.birthDate) : null;
+      }
 
-    const [updated] = await db
-      .select()
-      .from(clientsTable)
-      .where(eq(clientsTable.id, client.id))
-      .limit(1);
+      await tx
+        .update(clientsTable)
+        .set(updates)
+        .where(and(eq(clientsTable.id, client.id), eq(clientsTable.tenantId, me.tenantId)));
+
+      if (data.name !== undefined) {
+        await tx.update(usersTable).set({ name: data.name }).where(eq(usersTable.id, me.id));
+      }
+
+      return tx
+        .select()
+        .from(clientsTable)
+        .where(and(eq(clientsTable.id, client.id), eq(clientsTable.tenantId, me.tenantId)))
+        .limit(1);
+    });
 
     res.json({
       id: updated.id,
@@ -1285,7 +1381,7 @@ router.get("/client/me/referrals", async (req, res, next: NextFunction): Promise
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       res.json({ data: [] });
       return;
@@ -1418,7 +1514,7 @@ router.get("/client/me/referral-campaign", async (req, res, next: NextFunction):
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       res.json(null);
       return;
@@ -1482,7 +1578,7 @@ router.get("/client/notifications", async (req, res, next: NextFunction): Promis
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       res.json({ data: [], unreadCount: 0 });
       return;
@@ -1520,7 +1616,7 @@ router.post("/client/notifications/read-all", async (req, res, next: NextFunctio
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       res.status(204).end();
       return;
@@ -1545,7 +1641,7 @@ router.get("/client/notifications/stream", async (req, res, next: NextFunction):
       return;
     }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       next(new NotFoundError("Client record not found", "NOT_FOUND"));
       return;
@@ -1663,7 +1759,7 @@ router.get("/client/me/favorites", async (req, res, next: NextFunction): Promise
     if (!me) return;
     if (me.role !== ROLES.CLIENT) { next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE")); return; }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND")); return; }
 
     const [tripFavs, productFavs] = await Promise.all([
@@ -1746,7 +1842,7 @@ router.post("/client/me/favorites", async (req, res, next: NextFunction): Promis
     const parsed = AddFavoriteBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError("Dados inválidos", "VALIDATION_ERROR")); return; }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND")); return; }
 
     const { itemType, itemId } = parsed.data;
@@ -1770,7 +1866,7 @@ router.delete("/client/me/favorites/:itemType/:itemId", async (req, res, next: N
     if (!me) return;
     if (me.role !== ROLES.CLIENT) { next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE")); return; }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND")); return; }
 
     const { itemType, itemId } = req.params;
@@ -1855,7 +1951,7 @@ router.get("/client/me/achievements", async (req, res, next: NextFunction): Prom
     if (!me) return;
     if (me.role !== ROLES.CLIENT) { next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE")); return; }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       res.json({ badges: [], stats: { totalTrips: 0, visitedStates: [], uniqueDestinations: [] } });
       return;
@@ -1889,7 +1985,7 @@ router.get("/client/me/memories", async (req, res, next: NextFunction): Promise<
     if (!me) return;
     if (me.role !== ROLES.CLIENT) { next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE")); return; }
 
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { res.json({ memories: [] }); return; }
 
     const now = new Date();
@@ -1975,7 +2071,7 @@ router.get("/client/me/dream-destinations", async (req, res, next: NextFunction)
     const me = await requireAuth(req, res);
     if (!me) return;
     if (me.role !== ROLES.CLIENT) { next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE")); return; }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { res.json({ data: [] }); return; }
     const destinations = await db.select()
       .from(clientDreamDestinationsTable)
@@ -1995,7 +2091,7 @@ router.post("/client/me/dream-destinations", async (req, res, next: NextFunction
     const me = await requireAuth(req, res);
     if (!me) return;
     if (me.role !== ROLES.CLIENT) { next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE")); return; }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { next(new NotFoundError("Cliente não encontrado", "CLIENT_NOT_FOUND")); return; }
     const parsed = AddDreamDestinationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
@@ -2013,7 +2109,7 @@ router.delete("/client/me/dream-destinations/:id", async (req, res, next: NextFu
     const me = await requireAuth(req, res);
     if (!me) return;
     if (me.role !== ROLES.CLIENT) { next(new ForbiddenError("Acesso restrito a clientes", "FORBIDDEN_ROLE")); return; }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) { next(new NotFoundError("Cliente não encontrado", "CLIENT_NOT_FOUND")); return; }
     const [dest] = await db.select({ id: clientDreamDestinationsTable.id })
       .from(clientDreamDestinationsTable)
@@ -2038,7 +2134,7 @@ router.post("/client/push-token", async (req, res, next: NextFunction): Promise<
       next(new ValidationError("Token inválido", "VALIDATION_ERROR"));
       return;
     }
-    const client = await findClientRecord(me.tenantId, me.id, me.email);
+    const client = await findClientRecord(me.tenantId, me.id, me.email, me.clerkId);
     if (!client) {
       next(new NotFoundError("Cliente não encontrado", "NOT_FOUND"));
       return;

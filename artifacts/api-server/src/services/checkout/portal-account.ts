@@ -7,10 +7,11 @@ import { logger } from "../../lib/logger";
 import { clerkClient } from "@clerk/express";
 import { db } from "@workspace/db";
 import { usersTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { generateId, generateReferralCode } from "../../lib/id";
 import { sendWelcomeEmail } from "../../queues/email-helpers";
 import { ROLES } from "@workspace/permissions";
+import { normalizeCpfInput, reconcileClientIdentity } from "../client-identity";
 
 export interface PortalCredentials {
   email: string;
@@ -22,6 +23,7 @@ export interface PortalCredentials {
 export interface EnsurePortalAccountArgs {
   email: string;
   name: string;
+  cpf?: string | null;
   tenantId: string;
   storeBase: string;
   loginUrl: string;
@@ -54,14 +56,29 @@ function generateTemporaryPassword(): string {
 export async function ensurePortalAccount(
   args: EnsurePortalAccountArgs,
 ): Promise<{ credentials?: PortalCredentials }> {
-  const { email, name, tenantId, storeBase, loginUrl, agencyName, agencyLogo } = args;
+  const { email, name, cpf, tenantId, storeBase, loginUrl, agencyName, agencyLogo } = args;
+  const normalizedCpf = normalizeCpfInput(cpf);
 
   const [existingUser] = await db.select({ id: usersTable.id })
     .from(usersTable)
-    .where(and(eq(usersTable.email, email), eq(usersTable.tenantId, tenantId)))
+    .where(and(
+      eq(usersTable.tenantId, tenantId),
+      normalizedCpf
+        ? sql`(${usersTable.email} = ${email} OR ${usersTable.cpf} = ${normalizedCpf})`
+        : eq(usersTable.email, email),
+    ))
     .limit(1);
 
-  if (existingUser) return {};
+  if (existingUser) {
+    await db.transaction((tx) => reconcileClientIdentity(tx, {
+      tenantId,
+      userId: existingUser.id,
+      cpf: normalizedCpf,
+      name,
+      email,
+    }));
+    return {};
+  }
 
   const bootstrapPassword = generateTemporaryPassword();
   let newClerkId: string | null = null;
@@ -90,15 +107,26 @@ export async function ensurePortalAccount(
   const referralBase = generateReferralCode(name);
   const referralSuffix = randomBytes(2).toString("hex").toUpperCase();
   const referralCode = `${referralBase}${referralSuffix}`;
-  await db.insert(usersTable).values({
-    id: generateId(),
-    clerkId: newClerkId,
-    tenantId,
-    name,
-    email,
-    role: ROLES.CLIENT,
-    isActive: true,
-    referralCode,
+  const portalUserId = generateId();
+  await db.transaction(async (tx) => {
+    await tx.insert(usersTable).values({
+      id: portalUserId,
+      clerkId: newClerkId!,
+      tenantId,
+      name,
+      email,
+      role: ROLES.CLIENT,
+      isActive: true,
+      referralCode,
+      ...(normalizedCpf ? { cpf: normalizedCpf } : {}),
+    });
+    await reconcileClientIdentity(tx, {
+      tenantId,
+      userId: portalUserId,
+      cpf: normalizedCpf,
+      name,
+      email,
+    });
   });
 
   const portalUrl = `${storeBase}/perfil`;

@@ -15,20 +15,28 @@ import { enqueueReservationConfirmationEmail, enqueueReservationCancellationEmai
 import { dispatchWhatsAppReservationConfirmed, dispatchWhatsAppCadastroRealizado } from "../queues/whatsapp-helpers";
 import { insertClientNotification } from "../lib/client-notifications";
 import { enqueueCommissionSync } from "../queues/commission-sync-helper";
-import { ADMIN_ROLES, MANAGEMENT_ROLES } from '../lib/tenant';
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { sendPushNotification } from "../lib/push-notifications";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { applyDiscounts, computeBalance, computeEffectiveLoyaltyPoints, roundMoney } from "../lib/pricing";
 import { applyActiveCampaignBonus, referralActivitySegment } from "../lib/referral-campaigns";
 import { calculateTier, loyaltyAwardPointsForReservation } from "../lib/loyalty-helpers";
-import { ROLES, RESERVATION_STATUS, REFERRAL_STATUS, COMMISSION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type ReservationStatus } from "@workspace/permissions";
+import { ROLES, RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, COMMISSION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type ReservationStatus } from "@workspace/permissions";
 import { parseReservationStatus } from "../lib/status-validators";
 import { moveDealToStage, cancelDealOnReservationCancellation } from "../services/pipeline-automation";
 import { syncClientDeal } from "../services/pipeline-deal-sync";
 import { recalculateClientFinancials } from "./payments.js";
 import { detectAndNotifyTripOverlap } from "../lib/trip-overlap-notify";
 import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
+import { linkedDeal, linkedOrder, linkedReferral, linkedReservation } from "../lib/linked-data";
+import { convertPaidReservationReferral } from "../services/reservation-referral-conversion";
+import {
+  cancelLockedReservationAndReleaseCapacity,
+  deleteReservationAndReleaseCapacity,
+  lockReservationForCancellation,
+  moveLockedReservationCapacity,
+  type LockedReservationCapacityRow,
+} from "../services/reservation-capacity";
 
 
 const router = Router();
@@ -205,7 +213,45 @@ function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: Res
   };
 }
 
-async function formatReservation(r: typeof reservationsTable.$inferSelect) {
+async function attachLinkedReservationData<T extends object>(
+  rows: T[],
+  reservations: (typeof reservationsTable.$inferSelect)[],
+  tenantId: string,
+) : Promise<Array<T & { linkedOrder: ReturnType<typeof linkedOrder>; linkedReferral: ReturnType<typeof linkedReferral>; linkedDeals: ReturnType<typeof linkedDeal>[] }>> {
+  if (!reservations.length) return rows.map(row => ({ ...row, linkedOrder: null, linkedReferral: null, linkedDeals: [] }));
+  const ids = reservations.map(r => r.id);
+  const orderNumbers = [...new Set(reservations.map(r => r.storeOrderId).filter((v): v is string => !!v))];
+  // New/manual reservations have no checkout order and cannot yet have a
+  // canonical referral/order link. Avoid unnecessary reads on write paths.
+  if (!orderNumbers.length) {
+    return rows.map(row => ({ ...row, linkedOrder: null, linkedReferral: null, linkedDeals: [] }));
+  }
+  const [orders, siblingReservations] = await Promise.all([
+    orderNumbers.length ? db.select().from(storeOrdersTable).where(and(eq(storeOrdersTable.tenantId, tenantId), inArray(storeOrdersTable.orderNumber, orderNumbers))) : Promise.resolve([] as (typeof storeOrdersTable.$inferSelect)[]),
+    db.select().from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))),
+  ]);
+  const allReservations = [...reservations, ...siblingReservations.filter(r => !ids.includes(r.id))];
+  const [referrals, deals] = await Promise.all([
+    db.select().from(referralsTable).where(and(eq(referralsTable.tenantId, tenantId), inArray(referralsTable.reservationId, allReservations.map(r => r.id)))),
+    db.select().from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), inArray(dealsTable.reservationId, allReservations.map(r => r.id)))),
+  ]);
+  const orderMap = new Map(orders.map(o => [o.orderNumber, o]));
+  const referralMap = new Map(referrals.map(ref => [ref.reservationId, ref]));
+  const dealMap = new Map<string, typeof deals>();
+  for (const deal of deals) {
+    if (!deal.reservationId) continue;
+    const list = dealMap.get(deal.reservationId) ?? []; list.push(deal); dealMap.set(deal.reservationId, list);
+  }
+  return rows.map((row, i) => {
+    const reservation = reservations[i]!;
+    return { ...row, linkedOrder: reservation.storeOrderId ? linkedOrder(orderMap.get(reservation.storeOrderId)) : null,
+      linkedReferral: linkedReferral(referralMap.get(reservation.id)),
+      linkedReservations: reservation.storeOrderId ? allReservations.filter(r => r.storeOrderId === reservation.storeOrderId).map(linkedReservation) : [linkedReservation(reservation)],
+      linkedDeals: (reservation.storeOrderId ? deals.filter(d => allReservations.some(r => r.storeOrderId === reservation.storeOrderId && r.id === d.reservationId)) : (dealMap.get(reservation.id) ?? [])).map(linkedDeal) };
+  });
+}
+
+async function formatReservation(r: typeof reservationsTable.$inferSelect, includeLinkedData = true) {
   const [trip] = await db.select().from(tripsTable).where(and(eq(tripsTable.id, r.tripId), eq(tripsTable.tenantId, r.tenantId))).limit(1);
   const [client] = r.clientId ? await db.select().from(clientsTable).where(and(eq(clientsTable.id, r.clientId), eq(clientsTable.tenantId, r.tenantId))).limit(1) : [];
   const [autoRetryLog] = await db.select({ id: emailLogsTable.id })
@@ -218,12 +264,13 @@ async function formatReservation(r: typeof reservationsTable.$inferSelect) {
         .where(and(eq(vehicleLayoutsTable.id, trip.layoutId), eq(vehicleLayoutsTable.tenantId, r.tenantId)))
         .limit(1)
     : [undefined];
-  return buildReservationView(r, {
+  const view = buildReservationView(r, {
     trip,
     client,
     hasAutoRetry: autoRetryLog !== undefined,
     numberingType: layoutRow?.numberingType ?? null,
   });
+  return includeLinkedData ? (await attachLinkedReservationData([view], [r], r.tenantId))[0] : view;
 }
 
 // Batch-format a page of reservations without per-row queries (avoids N+1):
@@ -307,7 +354,7 @@ export async function batchFormatReservations(
     clientActiveResMap.set(cr.clientId, list);
   }
 
-  return rows.map(r => {
+  const formatted = rows.map(r => {
     const trip = tripMap.get(r.tripId);
     const client = r.clientId ? clientMap.get(r.clientId) : undefined;
     const numberingType = trip?.layoutId ? (layoutMap.get(trip.layoutId) ?? null) : null;
@@ -341,6 +388,7 @@ export async function batchFormatReservations(
       conflictingTrips,
     });
   });
+  return attachLinkedReservationData(formatted, rows, tenantId);
 }
 
 function formatPassenger(p: typeof passengersTable.$inferSelect) {
@@ -1232,18 +1280,17 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
       }
 
       if (serverReferralCode && serverReferralReferrerId && appliedReferralAmount > 0) {
-        // INVARIANT: Every completed referral created on the CRM path MUST carry a
-        // reservationId so that reservation cancellation can find and reverse exactly
-        // this record via reverseReferral(). The variable `id` is the reservation ID
-        // that was just generated for this transaction — it is never null here.
-        // Do NOT insert a completed referral without setting reservationId on this path.
+        // Referral discounts apply at booking time, but conversion/earnings are
+        // strictly payment-gated. The canonical reservation link lets the paid
+        // payment path promote this intent exactly once and lets cancellation
+        // reverse a completed referral if it was subsequently paid.
         if (!id) throw new Error("Assertion failed: reservationId must be set before inserting a completed referral on the CRM path");
         await tx.insert(referralsTable).values({
           id: generateId(),
           tenantId: me.tenantId,
           referrerId: serverReferralReferrerId,
           code: serverReferralCode,
-          status: REFERRAL_STATUS.COMPLETED,
+          status: REFERRAL_STATUS.PENDING,
           source: "crm",
           referredId: parsed.data.clientId,
           reservationId: id,
@@ -1251,19 +1298,10 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
           discountType: "percentage",
           discountValue: serverReferralDiscountPct.toFixed(2),
           discountAmount: appliedReferralAmount.toFixed(2),
-          bonusAmount: serverReferralBonusValue.toFixed(2),
-          convertedAt: serverReferralConversionAt,
+          bonusAmount: "0.00",
           campaignId: serverReferralCampaignId,
           attributionChannel: serverReferralAttributionChannel,
         });
-        // Update referrer client stats (earnings += referrer bonus)
-        await tx.update(clientsTable)
-          .set({
-            totalReferrals: sql`COALESCE(total_referrals, 0) + 1`,
-            successfulReferrals: sql`COALESCE(successful_referrals, 0) + 1`,
-            referralEarnings: sql`COALESCE(referral_earnings, 0) + ${serverReferralBonusValue.toFixed(2)}`,
-          })
-          .where(eq(clientsTable.id, serverReferralReferrerId));
         // Update referred client: set referredById if not already set
         await tx.update(clientsTable)
           .set({ referredById: serverReferralReferrerId })
@@ -1294,7 +1332,17 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
       .where(and(eq(reservationsTable.id, id), eq(reservationsTable.tenantId, me.tenantId)))
       .limit(1);
     if (!reservation) { next(new AppError("Failed to create reservation", 500, "RESERVATION_CREATE_FAILED")); return; }
-    const formatted = await formatReservation(reservation);
+    // The transaction above has committed, so the PENDING referral intent is
+    // now visible to the payment-gated converter. This also covers CRM bookings
+    // created already fully paid; all other states are a cheap no-op.
+    if (
+      reservation.discountReferralCode &&
+      Number(reservation.paidValue ?? 0) > 0 &&
+      !([RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED, RESERVATION_STATUS.FAILED] as string[]).includes(reservation.status)
+    ) {
+      await convertPaidReservationReferral(reservation.id, me.tenantId);
+    }
+    const formatted = await formatReservation(reservation, false);
     res.status(201).json(formatted);
     if (parsed.data.firstDueDate && (parsed.data.installments ?? 1) >= 1) {
       generateInstallments(id, me.tenantId, Number(reservation.totalValue), parsed.data.installments ?? 1, parsed.data.firstDueDate)
@@ -1484,7 +1532,7 @@ router.get("/reservations/:id", async (req, res, next: NextFunction): Promise<vo
 });
 
 const CANCELLING_STATUSES: readonly ReservationStatus[] = [RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED] as const;
-const ACTIVE_STATUSES: readonly ReservationStatus[] = [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED] as const;
+const ACTIVE_STATUSES: readonly ReservationStatus[] = ACTIVE_RESERVATION_STATUSES;
 
 router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
@@ -1542,23 +1590,101 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     const isBeingCancelled = parsed.data.status != null && CANCELLING_STATUSES.includes(parsed.data.status);
     const wasActive = ACTIVE_STATUSES.includes(existing.status);
     const wasConfirmed = existing.status === RESERVATION_STATUS.CONFIRMED;
-    const isBeingConfirmed = parsed.data.status === RESERVATION_STATUS.CONFIRMED && existing.status === RESERVATION_STATUS.PENDING;
-    const isBeingDemoted = parsed.data.status === RESERVATION_STATUS.PENDING && wasConfirmed;
+    let isBeingConfirmed = parsed.data.status === RESERVATION_STATUS.CONFIRMED && existing.status === RESERVATION_STATUS.PENDING;
+    let isBeingDemoted = parsed.data.status === RESERVATION_STATUS.PENDING && wasConfirmed;
+    // These transitions all change the trip's capacity buckets. They must use
+    // the same reservation-first lock so a stale pre-transaction read cannot
+    // apply a second transition after a concurrent request has won.
+    const requiresCapacityTransitionLock = (isBeingCancelled && wasActive)
+      || isBeingConfirmed
+      || isBeingDemoted
+      || tripChanged
+      || (parsed.data.seats != null && wasActive);
 
-    let reversedReferralInfo: { referrerId: string; referredId: string | null; bonusAmount: string } | null = null;
+    let reversedReferralInfo: { referralId: string; referrerId: string; referredId: string | null; bonusAmount: string } | null = null;
+    let cancellationApplied = false;
 
     const reservation = await db.transaction(async (tx) => {
-      if (isBeingCancelled && wasActive) {
-        const seatsCount = existing.seats.length;
-        if (seatsCount > 0) {
-          await tx.update(tripsTable).set({
-            availableSeats: sql`LEAST(total_capacity, GREATEST(0, available_seats + ${seatsCount}))`,
-            ...(wasConfirmed
-              ? { confirmedSeats: sql`GREATEST(0, confirmed_seats - ${seatsCount})` }
-              : { reservedSeats: sql`GREATEST(0, reserved_seats - ${seatsCount})` }),
-          }).where(and(eq(tripsTable.id, existing.tripId), eq(tripsTable.tenantId, me.tenantId)));
-        }
+      let lockedReservation: LockedReservationCapacityRow | undefined;
+      if (requiresCapacityTransitionLock) {
+        lockedReservation = await lockReservationForCancellation(tx, me.tenantId, req.params.id);
+      }
 
+      if (isBeingCancelled && lockedReservation) {
+        cancellationApplied = await cancelLockedReservationAndReleaseCapacity(
+          tx,
+          me.tenantId,
+          lockedReservation,
+        );
+      }
+
+      // Moving an active reservation changes two trip counters. Do it after
+      // the reservation lock and before a status transition so confirmation or
+      // demotion below applies to the destination trip, not the old one.
+      // If cancellation won the reservation lock, its release above already
+      // handled the only capacity transition.
+      if (
+        tripChanged &&
+        !isBeingCancelled &&
+        lockedReservation &&
+        newTripId !== lockedReservation.tripId
+      ) {
+        await moveLockedReservationCapacity(
+          tx,
+          me.tenantId,
+          lockedReservation,
+          newTripId!,
+          parsed.data.seats ?? lockedReservation.seats,
+        );
+        lockedReservation = { ...lockedReservation, tripId: newTripId! };
+      }
+
+      if (isBeingConfirmed) {
+        const confirmationReservation = lockedReservation;
+        if (confirmationReservation?.status === RESERVATION_STATUS.PENDING) {
+          isBeingConfirmed = true;
+          const seatsCount = confirmationReservation.seats.length;
+          if (seatsCount > 0) {
+            await tx.update(tripsTable).set({
+              confirmedSeats: sql`confirmed_seats + ${seatsCount}`,
+              reservedSeats: sql`GREATEST(0, reserved_seats - ${seatsCount})`,
+            }).where(and(
+              eq(tripsTable.id, confirmationReservation.tripId),
+              eq(tripsTable.tenantId, me.tenantId),
+            ));
+          }
+        } else {
+          isBeingConfirmed = false;
+        }
+      }
+
+      if (isBeingDemoted) {
+        const demotionReservation = lockedReservation;
+        if (demotionReservation?.status === RESERVATION_STATUS.CONFIRMED) {
+          isBeingDemoted = true;
+          const seatsCount = demotionReservation.seats.length;
+          if (seatsCount > 0) {
+            await tx.update(tripsTable).set({
+              confirmedSeats: sql`GREATEST(0, confirmed_seats - ${seatsCount})`,
+              reservedSeats: sql`reserved_seats + ${seatsCount}`,
+            }).where(and(
+              eq(tripsTable.id, demotionReservation.tripId),
+              eq(tripsTable.tenantId, me.tenantId),
+            ));
+          }
+        } else {
+          isBeingDemoted = false;
+        }
+      }
+
+      // If another capacity-changing request won the reservation lock, do not
+      // overwrite its status with the stale value from this request. Other
+      // fields in the PATCH remain eligible for the normal update below.
+      if (requiresCapacityTransitionLock && !cancellationApplied && !isBeingConfirmed && !isBeingDemoted) {
+        delete updates.status;
+      }
+
+      if (isBeingCancelled && cancellationApplied) {
         // --- Reversal 1: coupon usage_count ---
         // Two-step lookup mirrors creation: find exact coupon ID by code+store,
         // then decrement by ID — symmetric with creation's WHERE id = serverCouponId.
@@ -1777,11 +1903,76 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
             await tx.update(referralsTable)
               .set({ status: REFERRAL_STATUS.REVERSED, reversalReason: "reservation_cancelled", reversalAt: reversalNow, updatedAt: reversalNow })
               .where(eq(referralsTable.id, referralRecord.id));
+            // Keep the original commission row for auditability; only its
+            // lifecycle status changes when the referral is reversed.
+            await tx.execute(
+              sql`UPDATE referral_commissions
+                  SET status = 'reversed', reversed_at = ${reversalNow}, updated_at = ${reversalNow}
+                  WHERE tenant_id = ${me.tenantId}
+                    AND referral_id = ${referralRecord.id}
+                    AND status IN ('pending', 'approved')`,
+            );
+
+            // Referral conversion awards separate loyalty points to the
+            // referrer. Add a compensating transaction rather than deleting
+            // the original earn record.
+            await tx.execute(
+              sql`SELECT id FROM loyalty_members
+                  WHERE tenant_id = ${me.tenantId} AND client_id = ${referralRecord.referrerId}
+                  LIMIT 1 FOR UPDATE`,
+            );
+            const referralPointsResult = await tx.execute(
+              sql`SELECT lm.id AS member_id, lm.total_points, lm.available_points, lt.points
+                  FROM loyalty_members lm
+                  JOIN loyalty_transactions lt
+                    ON lt.tenant_id = lm.tenant_id
+                   AND lt.member_id = lm.id
+                   AND lt.type = 'referral'
+                   AND lt.reference_id = ${referralRecord.id}
+                   AND lt.reference_type = 'referral'
+                  WHERE lm.tenant_id = ${me.tenantId}
+                    AND lm.client_id = ${referralRecord.referrerId}
+                    AND NOT EXISTS (
+                      SELECT 1 FROM loyalty_transactions reversal
+                      WHERE reversal.tenant_id = ${me.tenantId}
+                        AND reversal.member_id = lm.id
+                        AND reversal.reference_id = ${referralRecord.id}
+                        AND reversal.reference_type = 'referral_reversal'
+                    )
+                  LIMIT 1`,
+            );
+            const referralPointsRow = (referralPointsResult as unknown as {
+              rows: Array<{ member_id: string; total_points: number; available_points: number; points: number }>;
+            }).rows[0];
+            if (referralPointsRow && referralPointsRow.points > 0) {
+                const newTotalPoints = Math.max(0, referralPointsRow.total_points - referralPointsRow.points);
+                await tx.update(loyaltyMembersTable)
+                  .set({
+                    totalPoints: newTotalPoints,
+                    availablePoints: sql`GREATEST(0, ${referralPointsRow.available_points} - ${referralPointsRow.points})`,
+                    tier: calculateTier(newTotalPoints),
+                    lastActivityAt: reversalNow,
+                  })
+                  .where(and(
+                    eq(loyaltyMembersTable.id, referralPointsRow.member_id),
+                    eq(loyaltyMembersTable.tenantId, me.tenantId),
+                  ));
+                await tx.insert(loyaltyTransactionsTable).values({
+                  id: `${referralRecord.id}:reversal`,
+                  tenantId: me.tenantId,
+                  memberId: referralPointsRow.member_id,
+                  type: "redeem",
+                  points: -referralPointsRow.points,
+                  description: `Estorno de pontos — indicação ${referralRecord.id}`,
+                  referenceId: referralRecord.id,
+                  referenceType: "referral_reversal",
+                });
+            }
             // Mark the reversal as completed so re-cancel flows are short-circuited
             // by the explicit idempotency guard above (mirrors couponReversalAt).
             updates.referralReversalAt = new Date();
             // Capture for post-transaction notification (#28)
-            reversedReferralInfo = { referrerId: referralRecord.referrerId, referredId: referralRecord.referredId, bonusAmount: referralRecord.bonusAmount };
+            reversedReferralInfo = { referralId: referralRecord.id, referrerId: referralRecord.referrerId, referredId: referralRecord.referredId, bonusAmount: referralRecord.bonusAmount };
           }
         }
 
@@ -1912,27 +2103,10 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         }
       }
 
-      // --- Seat counter sync for manual status transitions ---
-      // pending → confirmed: move seats from reserved to confirmed bucket
-      if (isBeingConfirmed && existing.seats.length > 0) {
-        const seatsCount = existing.seats.length;
-        await tx.update(tripsTable).set({
-          confirmedSeats: sql`confirmed_seats + ${seatsCount}`,
-          reservedSeats: sql`GREATEST(0, reserved_seats - ${seatsCount})`,
-        }).where(and(eq(tripsTable.id, existing.tripId), eq(tripsTable.tenantId, me.tenantId)));
+      if (Object.keys(updates).length > 0) {
+        await tx.update(reservationsTable).set(updates)
+          .where(and(eq(reservationsTable.id, req.params.id), eq(reservationsTable.tenantId, me.tenantId)));
       }
-
-      // confirmed → pending: revert seats from confirmed back to reserved bucket
-      if (isBeingDemoted && existing.seats.length > 0) {
-        const seatsCount = existing.seats.length;
-        await tx.update(tripsTable).set({
-          confirmedSeats: sql`GREATEST(0, confirmed_seats - ${seatsCount})`,
-          reservedSeats: sql`reserved_seats + ${seatsCount}`,
-        }).where(and(eq(tripsTable.id, existing.tripId), eq(tripsTable.tenantId, me.tenantId)));
-      }
-
-      await tx.update(reservationsTable).set(updates)
-        .where(and(eq(reservationsTable.id, req.params.id), eq(reservationsTable.tenantId, me.tenantId)));
       const [updated] = await tx.select().from(reservationsTable)
         .where(and(eq(reservationsTable.id, req.params.id), eq(reservationsTable.tenantId, me.tenantId)))
         .limit(1);
@@ -1941,7 +2115,10 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
       if (parsed.data.seats != null) {
         const newSeats = parsed.data.seats;
         const newCount = newSeats.length;
-        const priorSeats: string[] = existing.seats ?? [];
+        // Use the row obtained under the reservation lock. A concurrent seat
+        // edit may have committed while this request waited, and capacity as
+        // well as passenger remapping must be based on that committed state.
+        const priorSeats: string[] = lockedReservation?.seats ?? existing.seats ?? [];
 
         // --- Seat counter delta for seat array SIZE changes ---
         // The status-transition blocks above (isBeingConfirmed / isBeingDemoted) already
@@ -1949,24 +2126,29 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         // the NUMBER of seats so the counters remain accurate even when only the seats
         // array changes (e.g. adding a seat to an existing confirmed reservation).
         // Skip when being cancelled — that path restores all seats in its own block.
-        if (!isBeingCancelled && existing.tripId) {
+        // An active reservation seat edit is serialized with cancellation by
+        // the reservation lock above. If cancellation acquired that lock
+        // first, this request may still update the seat data, but it must not
+        // apply a capacity delta to the already-cancelled reservation.
+        const mayAdjustSeatCapacity = !requiresCapacityTransitionLock || lockedReservation !== undefined;
+        if (!isBeingCancelled && mayAdjustSeatCapacity && lockedReservation?.tripId) {
           const seatDelta = newCount - priorSeats.length;
           if (seatDelta !== 0) {
             const finalStatus = isBeingConfirmed
               ? RESERVATION_STATUS.CONFIRMED
               : isBeingDemoted
                 ? RESERVATION_STATUS.PENDING
-                : existing.status;
+                : lockedReservation.status;
             if (finalStatus === RESERVATION_STATUS.CONFIRMED) {
               await tx.update(tripsTable).set({
                 confirmedSeats: sql`GREATEST(0, confirmed_seats + ${seatDelta})`,
                 availableSeats: sql`GREATEST(0, LEAST(total_capacity, available_seats - ${seatDelta}))`,
-              }).where(and(eq(tripsTable.id, existing.tripId), eq(tripsTable.tenantId, me.tenantId)));
+              }).where(and(eq(tripsTable.id, lockedReservation.tripId), eq(tripsTable.tenantId, me.tenantId)));
             } else if (finalStatus === RESERVATION_STATUS.PENDING) {
               await tx.update(tripsTable).set({
                 reservedSeats: sql`GREATEST(0, reserved_seats + ${seatDelta})`,
                 availableSeats: sql`GREATEST(0, LEAST(total_capacity, available_seats - ${seatDelta}))`,
-              }).where(and(eq(tripsTable.id, existing.tripId), eq(tripsTable.tenantId, me.tenantId)));
+              }).where(and(eq(tripsTable.id, lockedReservation.tripId), eq(tripsTable.tenantId, me.tenantId)));
             }
           }
         }
@@ -2123,6 +2305,15 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     });
 
     if (!reservation) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
+    // Run only after the update transaction commits. The converter locks and
+    // selects PENDING, making confirmation/payment replays exactly-once.
+    if (
+      reservation.discountReferralCode &&
+      Number(reservation.paidValue ?? 0) > 0 &&
+      !([RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED, RESERVATION_STATUS.FAILED] as string[]).includes(reservation.status)
+    ) {
+      await convertPaidReservationReferral(reservation.id, me.tenantId);
+    }
     if (parsed.data.totalValue != null && existing.clientId) {
       await syncClientDeal(
         existing.clientId,
@@ -2141,7 +2332,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         tenantId: me.tenantId,
       }).catch((err) => req.log.error({ err }, "Error awarding loyalty points on reservation confirmation"));
     }
-    if (isBeingCancelled && existing.clientId) {
+    if (isBeingCancelled && cancellationApplied && existing.clientId) {
       const code = existing.voucherCode ?? req.params.id.slice(-8).toUpperCase();
       writeClientActivity(existing.clientId, "reservation_cancelled", `Reserva ${code} cancelada`, me.id, { voucherCode: code })
         .catch((err) => req.log.error({ err }, "Error writing cancellation activity"));
@@ -2151,7 +2342,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
       enqueueCommissionSync(req.params.id, me.tenantId)
         .catch((err) => req.log.error({ err }, "Error enqueuing commission sync after reservation update"));
     }
-    const formatted = await formatReservation(reservation);
+    const formatted = await formatReservation(reservation, false);
     res.json(formatted);
     if (parsed.data.firstDueDate) {
       const instCount = parsed.data.installments ?? reservation.installments ?? 1;
@@ -2161,7 +2352,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     }
     // Send cancellation email only on a true active → cancelled transition
     // (not for "refunded", not for repeated patches on already-cancelled reservations)
-    if (!isCsvImport && parsed.data.status === RESERVATION_STATUS.CANCELLED && wasActive && existing.clientId) {
+    if (!isCsvImport && parsed.data.status === RESERVATION_STATUS.CANCELLED && cancellationApplied && existing.clientId) {
       enqueueReservationCancellationEmail(req.params.id, me.tenantId)
         .catch((err) => req.log.error({ err }, "Error enqueueing cancellation email"));
       const loyaltyPointsRefunded = (existing.discountLoyaltyPoints ?? 0) > 0
@@ -2216,18 +2407,43 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     }
     // #28: When a referral is reversed on cancellation, notify the referrer
     if (!isCsvImport && reversedReferralInfo) {
-      const { referrerId: _rrReferrerId, referredId: _rrReferredId, bonusAmount: _rrBonusAmount } = reversedReferralInfo;
-      dispatchReferralReversedEmail({ referrerId: _rrReferrerId, referredId: _rrReferredId, bonusAmount: _rrBonusAmount, tenantId: me.tenantId, reason: "reservation_cancelled" })
+      // TypeScript cannot observe assignments made inside the transaction
+      // callback and narrows the outer variable to `never`; the runtime guard
+      // above is authoritative here.
+      const reversalInfo = reversedReferralInfo as {
+        referralId: string;
+        reservationId?: string;
+        referrerId: string;
+        referredId: string | null;
+        bonusAmount: string;
+      };
+      const { referrerId: _rrReferrerId, referredId: _rrReferredId, bonusAmount: _rrBonusAmount } = reversalInfo;
+      dispatchReferralReversedEmail({ referrerId: _rrReferrerId, referredId: _rrReferredId, bonusAmount: _rrBonusAmount, tenantId: me.tenantId, reason: "reservation_cancelled", referralId: reversalInfo.referralId, reservationId: reversalInfo.reservationId ?? existing.id })
         .catch((err) => req.log.error({ err }, "Error enqueueing referral reversal notification email"));
     }
-    broadcastSeatUpdate(existing.tripId, me.tenantId).catch(() => {});
+    // A trip change affects both seat maps: the origin trip loses the
+    // reservation and the destination trip gains it. Broadcast both after the
+    // transaction has committed so connected SSE clients refresh each view.
+    const affectedTripIds = new Set([existing.tripId, reservation.tripId]);
+    for (const tripId of affectedTripIds) {
+      broadcastSeatUpdate(tripId, me.tenantId).catch(() => {});
+    }
     // Sync Google Calendar events after every reservation PATCH.
-    // Use the dedicated cancellation path for active→cancelled/refunded transitions
-    // (ensures stale seller events and reduced passenger count are reflected explicitly);
-    // fall back to the general syncTrip for all other updates (sellerId, totalValue, etc.)
-    if (isBeingCancelled && wasActive) {
+    // A move affects both trips: the origin must lose the reservation and the
+    // destination must gain it. syncTrips deduplicates the IDs and runs only
+    // after the update transaction has committed.
+    // Use the dedicated cancellation path for active→cancelled/refunded
+    // transitions so stale seller events are removed explicitly.
+    if (isBeingCancelled && cancellationApplied) {
       CalendarSyncService.syncTripOnReservationCancellation(existing.tripId)
         .catch((err) => req.log.error({ err }, "Error syncing Google Calendar after reservation cancellation"));
+      if (tripChanged && reservation.tripId !== existing.tripId) {
+        CalendarSyncService.syncTrip(reservation.tripId)
+          .catch((err) => req.log.error({ err }, "Error syncing destination Google Calendar after reservation cancellation"));
+      }
+    } else if (tripChanged) {
+      CalendarSyncService.syncTrips([existing.tripId, reservation.tripId])
+        .catch((err) => req.log.error({ err }, "Error syncing Google Calendar after reservation trip change"));
     } else {
       CalendarSyncService.syncTrip(existing.tripId)
         .catch((err) => req.log.error({ err }, "Error syncing Google Calendar after reservation update"));
@@ -2403,24 +2619,14 @@ router.delete("/reservations/:id", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.DELETE)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const existing = await requireReservationAccess(me, req.params.id);
 
     await db.transaction(async (tx) => {
-      if (!CANCELLING_STATUSES.includes(existing.status)) {
-        const seatsCount = existing.seats.length;
-        if (seatsCount > 0) {
-          const wasConfirmedOnDelete = existing.status === RESERVATION_STATUS.CONFIRMED;
-          await tx.update(tripsTable).set({
-            availableSeats: sql`LEAST(total_capacity, GREATEST(0, available_seats + ${seatsCount}))`,
-            ...(wasConfirmedOnDelete
-              ? { confirmedSeats: sql`GREATEST(0, confirmed_seats - ${seatsCount})` }
-              : { reservedSeats: sql`GREATEST(0, reserved_seats - ${seatsCount})` }),
-          }).where(and(eq(tripsTable.id, existing.tripId), eq(tripsTable.tenantId, me.tenantId)));
-        }
-      }
-      await tx.delete(reservationsTable)
-        .where(and(eq(reservationsTable.id, req.params.id), eq(reservationsTable.tenantId, me.tenantId)));
+      await deleteReservationAndReleaseCapacity(tx, me.tenantId, req.params.id);
     });
     res.json({ success: true });
     broadcastSeatUpdate(existing.tripId, me.tenantId).catch(() => {});
@@ -2435,7 +2641,10 @@ router.post("/reservations/:id/check-in", async (req, res, next: NextFunction): 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const existing = await requireReservationAccess(me, req.params.id);
     await db.update(reservationsTable).set({
       checkedInAt: new Date(),
@@ -2454,7 +2663,7 @@ router.post("/reservations/:id/check-in", async (req, res, next: NextFunction): 
         forwardOnly: true,
       });
     }
-    const formatted = await formatReservation(reservation);
+    const formatted = await formatReservation(reservation, false);
     res.json(formatted);
     broadcastSeatUpdate(existing.tripId, me.tenantId).catch(() => {});
     if (existing.clientId) {
@@ -2722,7 +2931,10 @@ router.post("/reservations/:reservationId/passengers/:id/check-in", async (req, 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const reservation = await requireReservationAccess(me, req.params.reservationId);
     await db.update(passengersTable)
       .set({ checkedInAt: new Date() })
@@ -2742,7 +2954,10 @@ router.delete("/reservations/:reservationId/passengers/:id/check-in", async (req
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
     const reservation = await requireReservationAccess(me, req.params.reservationId);
     await db.update(passengersTable)
       .set({ checkedInAt: null })
@@ -2762,7 +2977,12 @@ router.post("/reservations/:id/retry-commission-sync", async (req, res, next: Ne
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    // Commission synchronization can affect financial records, so it requires
+    // the matrix's management permission rather than a broad role shortcut.
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.MANAGE)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const [reservation] = await db.select()
       .from(reservationsTable)

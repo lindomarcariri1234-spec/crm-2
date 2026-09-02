@@ -46,6 +46,8 @@ import { startPdfWorker, stopPdfWorker } from "./workers/pdf.worker";
 import { startCommissionSyncWorker, stopCommissionSyncWorker } from "./workers/commission-sync.worker";
 import { startWhatsAppWorker, stopWhatsAppWorker } from "./workers/whatsapp.worker";
 import { startCalendarSyncWorker, stopCalendarSyncWorker } from "./workers/calendar-sync.worker";
+import { startOutboundDeliveryWorker, stopOutboundDeliveryWorker } from "./workers/outbound-delivery.worker";
+import { recoverOutboundDeliveries } from "./services/outbound-delivery";
 import { retryPendingReservationConfirmedWhatsApps } from "./services/checkout/reservation-confirmation-outbox";
 
 process.on("unhandledRejection", (reason: unknown) => {
@@ -174,7 +176,7 @@ async function applyMigrations() {
 // ── Graceful shutdown ──
 const shutdown = async (signal: string) => {
   logger.info({ signal }, "Shutdown signal received");
-  await Promise.all([stopEmailWorker(), stopReminderWorker(), stopPdfWorker(), stopCommissionSyncWorker(), stopWhatsAppWorker(), stopCalendarSyncWorker(), closeQueues(), closeSeatUpdateSubscriber()]);
+  await Promise.all([stopEmailWorker(), stopReminderWorker(), stopPdfWorker(), stopCommissionSyncWorker(), stopWhatsAppWorker(), stopCalendarSyncWorker(), stopOutboundDeliveryWorker(), closeQueues(), closeSeatUpdateSubscriber()]);
   process.exit(0);
 };
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -324,6 +326,10 @@ applyMigrations()
       scheduleDistributedCron("whatsapp-outbox", "*/5 * * * *", async () => {
         await retryPendingReservationConfirmedWhatsApps();
       }, { timezone: "America/Sao_Paulo" });
+      void runScheduledJob("outbound-delivery-startup", async () => { await recoverOutboundDeliveries(); });
+      scheduleDistributedCron("outbound-delivery-recovery", "*/5 * * * *", async () => {
+        await recoverOutboundDeliveries();
+      }, { timezone: "America/Sao_Paulo" });
 
       // ── Seat-map SSE pub/sub fan-out (non-fatal, no-op when Redis absent) ──
       initSeatUpdateSubscriber();
@@ -458,6 +464,7 @@ applyMigrations()
           startCommissionSyncWorker();
           startWhatsAppWorker();
           startCalendarSyncWorker();
+          startOutboundDeliveryWorker();
           logger.info("[queue] BullMQ workers started");
         } catch (err) {
           logger.error({ err }, "[queue] Failed to start BullMQ workers — continuing without them");

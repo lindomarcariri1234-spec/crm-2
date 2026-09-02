@@ -30,12 +30,17 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-function query(rows: unknown[]) {
-  const chain = Object.assign(Promise.resolve(rows), {
-    from: vi.fn(() => chain),
-    where: vi.fn(() => chain),
-    limit: vi.fn().mockResolvedValue(rows),
-  });
+type QueryChain = Promise<unknown[]> & {
+  from: ReturnType<typeof vi.fn>;
+  where: ReturnType<typeof vi.fn>;
+  limit: ReturnType<typeof vi.fn>;
+};
+
+function query(rows: unknown[]): QueryChain {
+  const chain = Promise.resolve(rows) as QueryChain;
+  chain.from = vi.fn(() => chain);
+  chain.where = vi.fn(() => chain);
+  chain.limit = vi.fn().mockResolvedValue(rows);
   return chain;
 }
 

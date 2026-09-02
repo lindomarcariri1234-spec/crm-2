@@ -10,19 +10,40 @@ import { writeClientActivity } from "../lib/activities";
 import { loyaltyAwardPoints, loyaltyAwardPointsForReservation, loyaltyReverseEarnedPoints } from "../lib/loyalty-helpers";
 import { roundMoney } from "../lib/pricing";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
-import { ADMIN_ROLES, MANAGEMENT_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
+import { ALL_STAFF_ROLES } from '../lib/tenant';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
-import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
+import { enqueueNewBookingNotificationEmail, dispatchReferralReversedEmail } from "../queues/email-helpers";
 import { dispatchWhatsAppPaymentReceived } from "../queues/whatsapp-helpers";
 import { ROLES, RESERVATION_STATUS, COMMISSION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type PaymentStatus, type PaymentType, type ExpenseStatus } from "@workspace/permissions";
 import { parsePaymentStatus, parsePaymentType, parseExpenseStatus } from "../lib/status-validators";
 import { moveDealToStage } from "../services/pipeline-automation";
 import { sendPushNotification } from "../lib/push-notifications";
 import { logger } from "../lib/logger";
+import {
+  convertPaidReservationReferral,
+  reverseReservationReferralIfNoEligiblePaymentInTransaction,
+  type ReservationReferralReversalReason,
+} from "../services/reservation-referral-conversion";
+import { syncStoreOrderFromReservationPayment } from "../services/reservation-order-payment-sync";
 
 const router = Router();
+
+function paymentReferralReversalReason(status: string): ReservationReferralReversalReason | null {
+  switch (status) {
+    case PAYMENT_STATUS.CANCELLED:
+      return "payment_cancelled";
+    case PAYMENT_STATUS.REFUNDED:
+      return "payment_refunded";
+    case PAYMENT_STATUS.CHARGED_BACK:
+      return "payment_charged_back";
+    case PAYMENT_STATUS.FAILED:
+      return "payment_failed";
+    default:
+      return null;
+  }
+}
 
 export async function recalculateClientFinancials(clientId: string, tenantId: string): Promise<void> {
   const result = await db.execute(sql`
@@ -448,7 +469,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreatePaymentBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
 
@@ -474,7 +495,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
     const id = generateId();
     const installments = parsed.data.installments ?? 1;
     const receiptUrl = typeof req.body.receiptUrl === "string" ? req.body.receiptUrl : null;
-    const canSetPaymentStatus = MANAGEMENT_ROLES.includes(me.role);
+    const canSetPaymentStatus = hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT);
     const explicitStatus = canSetPaymentStatus && parsed.data.status != null ? parsePaymentStatus(parsed.data.status) : undefined;
     const explicitPaidAt = canSetPaymentStatus && parsed.data.paidAt ? new Date(parsed.data.paidAt) : undefined;
     const isReceivedPayment = explicitStatus === PAYMENT_STATUS.PAID || explicitStatus === PAYMENT_STATUS.APPROVED;
@@ -524,6 +545,10 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
     }
     if (parsed.data.reservationId) {
       await syncReservationPaymentStatus(parsed.data.reservationId, me.tenantId);
+      if (payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
+        await syncStoreOrderFromReservationPayment(parsed.data.reservationId, me.tenantId);
+        await convertPaidReservationReferral(parsed.data.reservationId, me.tenantId);
+      }
       await syncReservationCommission(parsed.data.reservationId, me.tenantId);
     }
     const effectiveClientId = parsed.data.clientId ?? reservationClientId;
@@ -636,18 +661,45 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdatePaymentBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
     const updates: Partial<typeof paymentsTable.$inferInsert> = {};
     if (parsed.data.status != null) updates.status = parsePaymentStatus(parsed.data.status);
     if (parsed.data.paidAt !== undefined) updates.paidAt = parsed.data.paidAt ? new Date(parsed.data.paidAt) : null;
     if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
-    await db.update(paymentsTable).set(updates)
-      .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)));
-    const [payment] = await db.select().from(paymentsTable)
-      .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
-      .limit(1);
+    // Keep the payment mutation and the referral reversal decision in one
+    // transaction. Both the refund callback and payment deletion acquire
+    // the payment lock before the reservation/referral locks, so they cannot
+    // make the same completed referral look reversible twice.
+    const result = await db.transaction(async (tx) => {
+      const [existingPayment] = await tx.select().from(paymentsTable)
+        .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
+        .for("update")
+        .limit(1);
+      if (!existingPayment) return { payment: null, reversal: null };
+
+      await tx.update(paymentsTable).set(updates)
+        .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)));
+      const [updatedPayment] = await tx.select().from(paymentsTable)
+        .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!updatedPayment) return { payment: null, reversal: null };
+
+      const reversalReason = paymentReferralReversalReason(updatedPayment.status);
+      const reversal = updatedPayment.reservationId
+        && updatedPayment.type === PAYMENT_TYPE.RECEIVABLE
+        && reversalReason
+        ? await reverseReservationReferralIfNoEligiblePaymentInTransaction(tx, {
+          reservationId: updatedPayment.reservationId,
+          tenantId: me.tenantId,
+          reason: reversalReason,
+        })
+        : null;
+
+      return { payment: updatedPayment, reversal };
+    });
+    const payment = result.payment;
     if (!payment) { next(new NotFoundError("Payment not found", "NOT_FOUND")); return; }
     if (payment.clientId) {
       try {
@@ -658,6 +710,21 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
     }
     if (payment.reservationId) {
       await syncReservationPaymentStatus(payment.reservationId, me.tenantId);
+      if (payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
+        await syncStoreOrderFromReservationPayment(payment.reservationId, me.tenantId);
+        await convertPaidReservationReferral(payment.reservationId, me.tenantId);
+      }
+      if (result.reversal) {
+        dispatchReferralReversedEmail({
+          referrerId: result.reversal.referrerId,
+          referredId: result.reversal.referredId,
+          bonusAmount: result.reversal.bonusAmount,
+          tenantId: me.tenantId,
+          reason: result.reversal.reason,
+          referralId: result.reversal.referralId,
+          reservationId: result.reversal.reservationId,
+        }).catch((err) => req.log.error({ err }, "Error enqueueing referral payment reversal notification"));
+      }
       await syncReservationCommission(payment.reservationId, me.tenantId);
     }
     if (payment.reservationId && payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
@@ -751,16 +818,35 @@ router.delete("/payments/:id", async (req, res, next: NextFunction): Promise<voi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
-    const [payment] = await db.select().from(paymentsTable)
-      .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
-      .limit(1);
+    // Use the same payment-first lock order as PATCH /payments/:id. The
+    // payment remains locked while the referral reversal checks for other
+    // eligible payments, closing the refund-vs-delete race.
+    const result = await db.transaction(async (tx) => {
+      const [payment] = await tx.select().from(paymentsTable)
+        .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
+        .for("update")
+        .limit(1);
+      if (!payment) return { payment: null, reversal: null };
+
+      await tx.delete(paymentsTable)
+        .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)));
+
+      const wasReferralEligiblePayment = (payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED)
+        && payment.type === PAYMENT_TYPE.RECEIVABLE;
+      const reversal = payment.reservationId && wasReferralEligiblePayment
+        ? await reverseReservationReferralIfNoEligiblePaymentInTransaction(tx, {
+          reservationId: payment.reservationId,
+          tenantId: me.tenantId,
+          reason: "payment_deleted",
+        })
+        : null;
+
+      return { payment, reversal };
+    });
+    const payment = result.payment;
     if (!payment) { next(new NotFoundError("Payment not found", "NOT_FOUND")); return; }
-
-    // Step 1: Delete the payment row
-    await db.delete(paymentsTable)
-      .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)));
 
     // Step 2: Recalculate client aggregate financials
     if (payment.clientId) {
@@ -774,6 +860,8 @@ router.delete("/payments/:id", async (req, res, next: NextFunction): Promise<voi
     const wasPaidReceivable = (payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED)
       && payment.type === PAYMENT_TYPE.RECEIVABLE
       && !!payment.clientId;
+    const wasReferralEligiblePayment = (payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED)
+      && payment.type === PAYMENT_TYPE.RECEIVABLE;
 
     if (payment.reservationId) {
       // Step 3: Sync reservation paidValue/status and commission after deletion
@@ -803,6 +891,17 @@ router.delete("/payments/:id", async (req, res, next: NextFunction): Promise<voi
             req.log.error({ err }, "Error reversing loyalty points on reservation payment deletion — non-fatal");
           }
         }
+      }
+      if (result.reversal) {
+        dispatchReferralReversedEmail({
+          referrerId: result.reversal.referrerId,
+          referredId: result.reversal.referredId,
+          bonusAmount: result.reversal.bonusAmount,
+          tenantId: me.tenantId,
+          reason: result.reversal.reason,
+          referralId: result.reversal.referralId,
+          reservationId: result.reversal.reservationId,
+        }).catch((err) => req.log.error({ err }, "Error enqueueing referral payment deletion reversal notification"));
       }
     } else if (wasPaidReceivable) {
       // Standalone (non-reservation) payment: always reverse its payment-level points
@@ -892,7 +991,7 @@ router.patch("/expenses/:id", async (req, res, next: NextFunction): Promise<void
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdateExpenseBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
     const updates: Partial<typeof expensesTable.$inferInsert> = {};
@@ -917,7 +1016,7 @@ router.delete("/expenses/:id", async (req, res, next: NextFunction): Promise<voi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     await db.delete(expensesTable)
       .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)));
     res.json({ success: true });

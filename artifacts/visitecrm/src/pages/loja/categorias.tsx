@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent } from "@/components/ui/card";
+import { ListLoadError } from "@/components/list-load-error";
 import { FolderOpen, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 
 function CategoryForm({
@@ -162,18 +163,22 @@ export default function LojaCategorias() {
   const { toast } = useToast();
   const [categories, setCategories] = useState<StoreCategory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<StoreCategory | undefined>();
   const [showDialog, setShowDialog] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
+    setLoadError(null);
     try {
       setCategories(await storeApi.getCategories());
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoadError(message);
       toast({
         title: "Erro ao carregar categorias",
-        description: err instanceof Error ? err.message : String(err),
+        description: message,
         variant: "destructive",
       });
     } finally {
@@ -224,6 +229,12 @@ export default function LojaCategorias() {
         <div className="flex items-center justify-center h-48">
           <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <Card>
+          <CardContent>
+            <ListLoadError onRetry={load} message={loadError} />
+          </CardContent>
+        </Card>
       ) : categories.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">

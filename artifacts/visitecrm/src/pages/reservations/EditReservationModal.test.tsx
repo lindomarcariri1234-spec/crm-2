@@ -166,8 +166,8 @@ beforeEach(() => {
     },
   );
   mockInvalidateQueries.mockImplementation(
-    async ({ queryKey }: { queryKey: string[] }) => {
-      if (queryKey[0] !== "payments" || !testState.pendingPayment) return;
+    async ({ queryKey }: { queryKey?: string[] }) => {
+      if (queryKey?.[0] !== "payments" || !testState.pendingPayment) return;
 
       testState.payments = [...testState.payments, testState.pendingPayment];
       testState.pendingPayment = null;

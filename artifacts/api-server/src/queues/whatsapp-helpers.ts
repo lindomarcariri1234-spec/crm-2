@@ -1,12 +1,12 @@
 import { db, referralSettingsTable, clientsTable, tenantsTable, referralsTable, systemConfigsTable, passengersTable, reservationsTable, tripsTable } from "@workspace/db";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { sendTenantWhatsAppMessage, interpolateWhatsAppMessage } from "../lib/whatsapp";
-import { getWhatsAppQueue } from "./index";
 import { logger } from "../lib/logger";
 import { REFERRAL_STATUS } from "@workspace/permissions";
-import { areWorkersEnabled } from "../lib/redis";
 import { formatBRL } from "@workspace/shared";
 import { normalizeBrazilPhone } from "@workspace/shared";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
+import { generateId } from "../lib/id";
 
 const DEFAULT_CONVERTED_MESSAGE =
   "Boa notícia! {{nome}} usou seu código {{codigo}} e comprou com a {{agencia}}. Seu bônus de R$ {{valor}} está sendo processado.";
@@ -24,54 +24,91 @@ export interface WhatsAppDispatchResult {
 }
 
 /** Public wrapper for enqueueing a single WhatsApp job (e.g. from a bulk broadcast route). */
-export async function enqueueWhatsAppMessage(phone: string, message: string, tenantId: string): Promise<void> {
-  await enqueueOrSend(phone, message, tenantId);
+export async function enqueueWhatsAppMessage(
+  phone: string,
+  message: string,
+  tenantId: string,
+  opts?: { idempotencyKey?: string; eventType?: string; emailSubject?: string },
+): Promise<void> {
+  await enqueueOrSend(phone, message, tenantId, opts);
 }
 
 export async function enqueueOrSend(
   phone: string,
   message: string,
   tenantId: string,
+  opts?: { idempotencyKey?: string; eventType?: string; emailSubject?: string },
 ): Promise<WhatsAppDispatchResult> {
   const normalizedPhone = normalizeBrazilPhone(phone);
   if (!normalizedPhone) {
     logger.warn({ phone, tenantId }, "[whatsapp-queue] Invalid Brazilian phone number — skipping");
     return { mode: "direct", success: false, error: "invalid_phone" };
   }
-  const queue = getWhatsAppQueue();
-  if (queue) {
-    try {
-      await queue.add("whatsapp-notification", { phone: normalizedPhone, message, tenantId });
-      logger.info({ phone: normalizedPhone }, "[whatsapp-queue] Job enqueued");
-      return { mode: "queued", success: true };
-    } catch (err) {
-      logger.warn(
-        { err, phone, tenantId },
-        "[whatsapp-queue] Enqueue failed; falling back to direct send",
-      );
-    }
-  }
+  // Prefer the tenant client record when the legacy caller only supplied a
+  // phone number. This preserves the real email address and opt-out decision.
+  const [matchedClient] = await db
+    .select({ id: clientsTable.id })
+    .from(clientsTable)
+    .where(and(
+      eq(clientsTable.tenantId, tenantId),
+      or(eq(clientsTable.whatsapp, normalizedPhone), eq(clientsTable.phone, normalizedPhone)),
+    ))
+    .limit(1);
+  // All WhatsApp producers now publish one logical event. The common ledger
+  // creates the corresponding email delivery as well, records opt-outs and
+  // owns queue/retry behavior. Keep an optional key for callers with a durable
+  // business event; legacy callers get a unique event until they provide one.
+  const result = await dispatchOutboundMessage({
+    tenantId,
+    eventType: opts?.eventType ?? "whatsapp_message",
+    idempotencyKey: opts?.idempotencyKey ?? `whatsapp:${tenantId}:${generateMessageId()}`,
+    recipient: matchedClient ? { type: "client", id: matchedClient.id } : { type: "direct", whatsapp: normalizedPhone },
+    email: {
+      subject: opts?.emailSubject ?? "Mensagem da agência",
+      html: `<p>${escapeHtmlForEmail(message)}</p>`,
+    },
+    whatsapp: { text: message },
+    origin: "legacy_whatsapp",
+    originChannel: "whatsapp",
+  });
 
-  if (!areWorkersEnabled()) {
-    logger.warn(
-      { phone, tenantId, jobType: "whatsapp-notification" },
-      "[workers-disabled] ENABLE_WORKERS=false — sending WhatsApp message directly instead of queuing. Set ENABLE_WORKERS=true to enable async processing.",
-    );
-  }
-  const result = await sendTenantWhatsAppMessage(tenantId, normalizedPhone, message);
-  if (!result.success && result.error !== "credentials_not_configured") {
-    logger.warn({ phone, error: result.error }, "[whatsapp-queue] Direct send failed");
-  }
-  return { mode: "direct", success: result.success, error: result.error };
+  const pending = result.deliveries.some((delivery) => delivery.status === "pending");
+  const accepted = result.deliveries.some((delivery) => delivery.status === "accepted");
+  const failed = result.deliveries.find((delivery) => delivery.status === "failed");
+  const skipped = result.deliveries.find((delivery) => delivery.status === "skipped");
+  return {
+    mode: pending ? "queued" : "direct",
+    success: pending || accepted,
+    error: failed?.lastError ?? skipped?.skippedReason ?? undefined,
+  };
+}
+
+function generateMessageId(): string {
+  // The service's idempotency key only needs a collision-resistant suffix for
+  // legacy callers that have no domain event identifier.
+  return generateId();
+}
+
+function escapeHtmlForEmail(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+    .replace(/\n/g, "<br>");
 }
 
 async function sendDirect(
   phone: string,
   message: string,
   tenantId: string,
+  opts?: { idempotencyKey?: string; eventType?: string; emailSubject?: string },
 ): Promise<WhatsAppDispatchResult> {
-  const result = await sendTenantWhatsAppMessage(tenantId, phone, message);
-  return { mode: "direct", success: result.success, error: result.error };
+  // "direct" is retained as a compatibility name for callers that used to
+  // bypass BullMQ. It must still use the ledger so the email counterpart,
+  // consent decision and retry state are recorded.
+  return enqueueOrSend(phone, message, tenantId, opts);
 }
 
 export async function dispatchWhatsAppReferralConverted(opts: {
@@ -133,7 +170,10 @@ export async function dispatchWhatsAppReferralConverted(opts: {
     agencia: tenant?.name ?? "",
   });
 
-  await enqueueOrSend(phone, message, tenantId);
+  await enqueueOrSend(phone, message, tenantId, {
+    eventType: "referral_converted",
+    idempotencyKey: `referral:${tenantId}:${referrerId}:${referralCode}:converted`,
+  });
 }
 
 export async function dispatchWhatsAppReferralBonusPaid(opts: {
@@ -180,7 +220,10 @@ export async function dispatchWhatsAppReferralBonusPaid(opts: {
     agencia: tenantName,
   });
 
-  await enqueueOrSend(phone, message, tenantId);
+  await enqueueOrSend(phone, message, tenantId, {
+    eventType: "referral_bonus_paid",
+    idempotencyKey: `referral:${tenantId}:${referrerId}:${referralCode ?? "unknown"}:bonus-paid`,
+  });
 }
 
 export async function dispatchWhatsAppReferralReversed(opts: {
@@ -229,7 +272,10 @@ export async function dispatchWhatsAppReferralReversed(opts: {
     saldo: newPendingBalance.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
   });
 
-  await enqueueOrSend(phone, message, tenantId);
+  await enqueueOrSend(phone, message, tenantId, {
+    eventType: "referral_reversed",
+    idempotencyKey: `referral:${tenantId}:${referrerId}:reversed`,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -314,9 +360,19 @@ async function broadcastToReservationPassengers(opts: {
   fallbackPhone?: string | null;
   fallbackName?: string | null;
   delivery?: "queue" | "direct";
+  eventType?: string;
+  idempotencyKeyPrefix?: string;
 }): Promise<WhatsAppDispatchResult[]> {
   const { reservationId, tenantId, buildMessage, fallbackPhone, fallbackName, delivery = "queue" } = opts;
-  const send = delivery === "direct" ? sendDirect : enqueueOrSend;
+  const send = (phone: string, message: string, recipientKey: string) => {
+    const dispatchOpts = {
+      eventType: opts.eventType ?? "whatsapp_reservation_notification",
+      idempotencyKey: `${opts.idempotencyKeyPrefix ?? reservationId}:${recipientKey}`,
+    };
+    return delivery === "direct"
+      ? sendDirect(phone, message, tenantId, dispatchOpts)
+      : enqueueOrSend(phone, message, tenantId, dispatchOpts);
+  };
   const results: WhatsAppDispatchResult[] = [];
 
   // Load passengers for this reservation
@@ -363,7 +419,7 @@ async function broadcastToReservationPassengers(opts: {
       const normalized = p.phone.replace(/\D/g, "");
       if (sentPhones.has(normalized)) continue;
       sentPhones.add(normalized);
-      results.push(await send(p.phone, buildMessage(p.name), tenantId));
+      results.push(await send(p.phone, buildMessage(p.name), `passenger:${normalized}`));
       continue;
     }
     // No passenger phone — fall back to booking client's contact, respecting opt-in.
@@ -371,7 +427,7 @@ async function broadcastToReservationPassengers(opts: {
       const normalized = clientPhone.replace(/\D/g, "");
       if (sentPhones.has(normalized)) continue;
       sentPhones.add(normalized);
-      results.push(await send(clientPhone, buildMessage(p.name), tenantId));
+      results.push(await send(clientPhone, buildMessage(p.name), `client:${normalized}`));
     }
   }
 
@@ -384,7 +440,7 @@ async function broadcastToReservationPassengers(opts: {
       const normalized = phone.replace(/\D/g, "");
       if (!sentPhones.has(normalized)) {
         sentPhones.add(normalized);
-        results.push(await send(phone, buildMessage(name), tenantId));
+        results.push(await send(phone, buildMessage(name), `fallback:${normalized}`));
       }
     }
   }
@@ -433,6 +489,8 @@ export async function dispatchWhatsAppReservationConfirmed(opts: {
       reservationId: opts.reservationId,
       tenantId: opts.tenantId,
       delivery: opts.delivery,
+      eventType: "reservation_confirmed",
+      idempotencyKeyPrefix: `reservation:${opts.reservationId}:confirmed`,
       buildMessage: (nome) =>
         interpolateWhatsAppMessage(template, {
           nome,
@@ -475,6 +533,8 @@ export async function dispatchWhatsAppPaymentReceived(opts: {
     await broadcastToReservationPassengers({
       reservationId: opts.reservationId,
       tenantId: opts.tenantId,
+      eventType: "payment_received",
+      idempotencyKeyPrefix: `reservation:${opts.reservationId}:payment:${opts.amount}:${opts.remainingBalance}`,
       buildMessage: (nome) =>
         interpolateWhatsAppMessage(template, {
           nome,
@@ -566,9 +626,13 @@ export async function dispatchWhatsAppBoardingReminder(opts: {
           horario: boardingTime,
           agencia: opts.tenantName,
         });
-        const result = opts.delivery === "direct"
-          ? await sendDirect(p.phone, message, opts.tenantId)
-          : await enqueueOrSend(p.phone, message, opts.tenantId);
+         const dispatchOpts = {
+           eventType: "boarding_reminder",
+           idempotencyKey: `reservation:${opts.reservationId}:boarding:passenger:${normalized}`,
+         };
+         const result = opts.delivery === "direct"
+           ? await sendDirect(p.phone, message, opts.tenantId, dispatchOpts)
+           : await enqueueOrSend(p.phone, message, opts.tenantId, dispatchOpts);
         if (!result.success) return false;
         continue;
       }
@@ -589,9 +653,13 @@ export async function dispatchWhatsAppBoardingReminder(opts: {
           horario: boardingTime,
           agencia: opts.tenantName,
         });
-        const result = opts.delivery === "direct"
-          ? await sendDirect(clientPhone, message, opts.tenantId)
-          : await enqueueOrSend(clientPhone, message, opts.tenantId);
+         const dispatchOpts = {
+           eventType: "boarding_reminder",
+           idempotencyKey: `reservation:${opts.reservationId}:boarding:client:${normalized}`,
+         };
+         const result = opts.delivery === "direct"
+           ? await sendDirect(clientPhone, message, opts.tenantId, dispatchOpts)
+           : await enqueueOrSend(clientPhone, message, opts.tenantId, dispatchOpts);
         if (!result.success) return false;
       }
     }
@@ -607,9 +675,13 @@ export async function dispatchWhatsAppBoardingReminder(opts: {
         horario: bp?.time ?? "",
         agencia: opts.tenantName,
       });
-      const result = opts.delivery === "direct"
-        ? await sendDirect(clientPhone, message, opts.tenantId)
-        : await enqueueOrSend(clientPhone, message, opts.tenantId);
+       const dispatchOpts = {
+         eventType: "boarding_reminder",
+         idempotencyKey: `reservation:${opts.reservationId}:boarding:fallback:${clientPhone}`,
+       };
+       const result = opts.delivery === "direct"
+         ? await sendDirect(clientPhone, message, opts.tenantId, dispatchOpts)
+         : await enqueueOrSend(clientPhone, message, opts.tenantId, dispatchOpts);
       if (!result.success) return false;
     }
     return true;
@@ -659,6 +731,8 @@ export async function dispatchWhatsAppCadastroRealizado(opts: {
           referencia: ref,
           agencia: row.tenantName,
         }),
+      eventType: "reservation_created",
+      idempotencyKeyPrefix: `reservation:${opts.reservationId}:created`,
     });
   } catch (err) {
     logger.warn({ err, tenantId: opts.tenantId }, "[whatsapp] dispatchWhatsAppCadastroRealizado failed — non-fatal");
@@ -688,6 +762,8 @@ export async function dispatchWhatsAppPagamentoPendente(opts: {
       reservationId: opts.reservationId,
       tenantId: opts.tenantId,
       delivery: opts.delivery,
+      eventType: "payment_pending",
+      idempotencyKeyPrefix: `reservation:${opts.reservationId}:payment-pending`,
       buildMessage: (nome) =>
         interpolateWhatsAppMessage(template, {
           nome,

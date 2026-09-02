@@ -22,6 +22,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { apiFetch } from "@/lib/api";
 import type { ClientPortalProfile } from "@/lib/types";
+import { cleanCpf, formatCpf } from "@/lib/cpf";
 
 type FeatherName = React.ComponentProps<typeof Feather>["name"];
 
@@ -57,6 +58,7 @@ export default function PerfilScreen() {
   const [editing, setEditing] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [phoneInput, setPhoneInput] = useState("");
+  const [cpfInput, setCpfInput] = useState("");
   const [birthDateInput, setBirthDateInput] = useState("");
   const [saving, setSaving] = useState(false);
   const params = useLocalSearchParams<{ openNps?: string }>();
@@ -81,6 +83,7 @@ export default function PerfilScreen() {
   function startEdit() {
     setNameInput(data?.client?.name ?? data?.user?.name ?? "");
     setPhoneInput(data?.client?.phone ?? "");
+    setCpfInput(data?.client?.cpf ?? data?.user?.cpf ?? "");
     const bd = data?.client?.birthDate;
     setBirthDateInput(bd ? new Date(bd + "T00:00:00").toLocaleDateString("pt-BR") : "");
     setEditing(true);
@@ -105,6 +108,7 @@ export default function PerfilScreen() {
       await apiFetch<unknown>(token, "PATCH", "/client/me", {
         name: nameInput.trim() || undefined,
         phone: phoneInput.trim() || null,
+        cpf: cpfInput.trim() || null,
         ...(birthDate !== undefined ? { birthDate } : {}),
       });
       await queryClient.invalidateQueries({ queryKey: ["client-profile"] });
@@ -260,6 +264,19 @@ export default function PerfilScreen() {
               placeholder="(11) 99999-9999"
               placeholderTextColor={colors.mutedForeground}
               keyboardType="phone-pad"
+              editable={!saving}
+            />
+          </View>
+
+          <View style={styles.fieldGroup}>
+            <Text style={[styles.fieldLabel, { color: colors.mutedForeground }]}>CPF</Text>
+            <TextInput
+              style={[styles.fieldInput, { backgroundColor: colors.muted, color: colors.foreground }]}
+              value={formatCpf(cpfInput)}
+              onChangeText={(value) => setCpfInput(cleanCpf(value))}
+              placeholder="000.000.000-00"
+              placeholderTextColor={colors.mutedForeground}
+              keyboardType="number-pad"
               editable={!saving}
             />
           </View>

@@ -13,6 +13,7 @@ export const messagesTable = pgTable("messages", {
   mediaType: text("media_type"),
   status: text("status").notNull().default("sent"),
   externalId: text("external_id"),
+  outboundMessageId: text("outbound_message_id"),
   metadata: json("metadata"),
   sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
   deliveredAt: timestamp("delivered_at", { withTimezone: true }),

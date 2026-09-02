@@ -23,8 +23,11 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { EXPENSE_CATEGORY_LABELS } from "@/lib/labels";
-import { COMMISSION_STATUS, EXPENSE_STATUS, TRIP_STATUS } from "@workspace/permissions";
+import { ACTIVE_RESERVATION_STATUSES, COMMISSION_STATUS, EXPENSE_STATUS, TRIP_STATUS } from "@workspace/permissions";
 import { PageHeader } from "@/components/page-header";
+import { QueryErrorState } from "@/components/query-error-state";
+import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
+import { useFinancialMetrics } from "@/lib/financial-metrics-api";
 
 const fmt = (v: number) => formatCurrency(v);
 const fmtCompact = (v: number) => {
@@ -167,15 +170,24 @@ const EXPENSE_CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Analytics() {
+  const {
+    data: financialMetrics,
+    isLoading: financialMetricsLoading,
+    isError: financialMetricsError,
+    error: financialMetricsQueryError,
+    refetch: refetchFinancialMetrics,
+  } = useFinancialMetrics();
   const [period, setPeriod] = useState<GetDashboardRevenueChartPeriod>("12m");
-  const { data: summary, isLoading } = useGetDashboardSummary();
-  const { data: chartData } = useGetDashboardRevenueChart({ period });
-  const { data: paymentSummary } = useGetPaymentsSummary();
-  const { data: tripsData } = useListTrips({ limit: 20, status: TRIP_STATUS.PUBLISHED });
-  const { data: reservationsData } = useListReservations({ limit: 100 });
-  const { data: commissionsRaw } = useListCommissions();
-  const { data: expensesAllData } = useListExpenses({ limit: 500 });
+  const { data: summary, isLoading, isError: summaryError, error: summaryQueryError, refetch: refetchSummary } = useGetDashboardSummary();
+  const { data: chartData, isError: chartError, error: chartQueryError, refetch: refetchChart } = useGetDashboardRevenueChart({ period });
+  const { data: paymentSummary, isError: paymentError, error: paymentQueryError, refetch: refetchPayments } = useGetPaymentsSummary();
+  const { data: tripsData, isError: tripsError, error: tripsQueryError, refetch: refetchTrips } = useListTrips({ limit: 20, status: TRIP_STATUS.PUBLISHED });
+  const { data: reservationsData, isError: reservationsError, error: reservationsQueryError, refetch: refetchReservations } = useListReservations({ limit: 100 });
+  const { data: commissionsRaw, isError: commissionsError, error: commissionsQueryError, refetch: refetchCommissions } = useListCommissions();
+  const { data: expensesAllData, isError: expensesError, error: expensesQueryError, refetch: refetchExpenses } = useListExpenses({ limit: 500 });
   const commissions = Array.isArray(commissionsRaw) ? commissionsRaw : [];
+  const analyticsError = summaryError || chartError || paymentError || tripsError || reservationsError || commissionsError || expensesError || financialMetricsError;
+  const analyticsQueryError = summaryQueryError ?? chartQueryError ?? paymentQueryError ?? tripsQueryError ?? reservationsQueryError ?? commissionsQueryError ?? expensesQueryError ?? financialMetricsQueryError;
 
   const topTrips = useMemo(() => {
     const trips = tripsData?.data ?? [];
@@ -183,9 +195,9 @@ export default function Analytics() {
     return trips
       .map(t => ({
         ...t,
-        reservationCount: reservations.filter(r => r.tripId === t.id).length,
+        reservationCount: reservations.filter(r => r.tripId === t.id && ACTIVE_RESERVATION_STATUSES.includes(r.status as typeof ACTIVE_RESERVATION_STATUSES[number])).length,
         revenue: reservations
-          .filter(r => r.tripId === t.id)
+          .filter(r => r.tripId === t.id && ACTIVE_RESERVATION_STATUSES.includes(r.status as typeof ACTIVE_RESERVATION_STATUSES[number]))
           .reduce((s, r) => s + r.paidValue, 0),
         occupancy: t.totalCapacity > 0 ? ((t.totalCapacity - t.availableSeats) / t.totalCapacity * 100) : 0,
       }))
@@ -227,14 +239,6 @@ export default function Analytics() {
     [expensesAllData]
   );
 
-  const expensePaidThisMonth = useMemo(() => {
-    // Use Brazil calendar month key so the KPI is correct at 21h-midnight BRT
-    const thisMonth = localToday().slice(0, 7); // "YYYY-MM"
-    return (expensesAllData?.data ?? [])
-      .filter(e => e.status === EXPENSE_STATUS.PAID && e.paymentDate && e.paymentDate.slice(0, 7) === thisMonth)
-      .reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-  }, [expensesAllData]);
-
   const categoryData = useMemo(() => {
     const trips = tripsData?.data ?? [];
     const countByCategory: Record<string, number> = {};
@@ -248,6 +252,27 @@ export default function Analytics() {
       color: colors[i % colors.length],
     }));
   }, [tripsData]);
+
+  if (analyticsError) {
+    return (
+      <QueryErrorState
+        resourceLabel="os dados analíticos"
+        error={analyticsQueryError}
+        onRetry={() => {
+          void Promise.all([
+            refetchSummary(),
+            refetchChart(),
+            refetchPayments(),
+            refetchTrips(),
+            refetchReservations(),
+            refetchCommissions(),
+            refetchExpenses(),
+            refetchFinancialMetrics(),
+          ]);
+        }}
+      />
+    );
+  }
 
   const funnelData = [
     { label: "Leads", count: (summary?.openDeals ?? 0) + (summary?.totalReservations ?? 0), color: "#3B82F6" },
@@ -282,15 +307,17 @@ export default function Analytics() {
       />
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-        <KpiCard icon={DollarSign} label="Receita Total" value={fmtCompact(totalRevenue)} sub={`${fmtCompact(summary?.revenueThisMonth ?? 0)} este mês`} color="text-green-600" loading={isLoading} />
-        <KpiCard icon={TrendingUp} label="Lucro Líquido" value={fmtCompact(totalRevenue - expenseTotalFromList)} sub={`Despesas: ${fmtCompact(expenseTotalFromList)}`} color={(totalRevenue - expenseTotalFromList) >= 0 ? "text-emerald-600" : "text-red-600"} loading={isLoading} />
+        <KpiCard icon={DollarSign} label="Receita Recebida" value={fmtCompact(financialMetrics?.totals.receivedRevenue ?? 0)} sub="Caixa recebido no mês atual (BRT)" color="text-green-600" loading={isLoading || financialMetricsLoading} />
+        <KpiCard icon={TrendingUp} label="Lucro Líquido" value={fmtCompact(financialMetrics?.totals.profit ?? 0)} sub={`Custos pagos: ${fmtCompact(financialMetrics?.totals.operatingCostsPaid ?? 0)}`} color={(financialMetrics?.totals.profit ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"} loading={isLoading || financialMetricsLoading} />
         <KpiCard icon={CalendarCheck} label="Total de Reservas" value={String(summary?.totalReservations ?? 0)} sub={`${summary?.confirmedReservations ?? 0} confirmadas`} color="text-blue-600" loading={isLoading} />
         <KpiCard icon={Target} label="Ticket Medio" value={fmtCompact(avgTicket)} sub="por reserva" color="text-purple-600" loading={isLoading} />
         <KpiCard icon={TrendingUp} label="Taxa de Conversao" value={`${conversionRate.toFixed(1)}%`} sub="Reservas / Negocios" color="text-orange-600" loading={isLoading} />
         <KpiCard icon={Users} label="Total de Clientes" value={String(summary?.totalClients ?? 0)} sub={`+${summary?.newClientsThisMonth ?? 0} este mes`} color="text-teal-600" loading={isLoading} />
         <KpiCard icon={MapPin} label="Viagens Ativas" value={String(summary?.activeTrips ?? 0)} sub={`${summary?.occupancyRate?.toFixed(1) ?? 0}% ocupacao media`} color="text-indigo-600" loading={isLoading} />
-        <KpiCard icon={BarChart2} label="A Receber" value={fmtCompact(paymentSummary?.totalReceivable ?? 0)} sub={`Vencido: ${fmtCompact(paymentSummary?.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading} />
+        <KpiCard icon={BarChart2} label="A Receber" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Vencido: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading} />
       </div>
+
+      <FinancialMetricsOverview />
 
       <Tabs defaultValue="overview">
         <TabsList className="w-full justify-start overflow-x-auto">
@@ -354,7 +381,7 @@ export default function Analytics() {
                   })}
                 </div>
                 <div className="mt-4 pt-3 border-t flex justify-between items-center">
-                  <span className="text-sm text-muted-foreground">Total de Despesas</span>
+                  <span className="text-sm text-muted-foreground">Total dos lançamentos exibidos</span>
                   <span className="font-bold text-red-600">{fmt(expenseTotalFromList)}</span>
                 </div>
               </CardContent>
@@ -369,28 +396,28 @@ export default function Analytics() {
               <CardContent className="space-y-4">
                 <div className="flex justify-between items-center py-2 border-b">
                   <span className="text-sm text-muted-foreground">A Receber</span>
-                  <span className="font-semibold text-green-600">{fmt(paymentSummary?.totalReceivable ?? 0)}</span>
+                  <span className="font-semibold text-green-600">{fmt(financialMetrics?.totals.receivable ?? 0)}</span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b">
                   <span className="text-sm text-muted-foreground">A Pagar</span>
-                  <span className="font-semibold text-red-600">{fmt(paymentSummary?.totalPayable ?? 0)}</span>
+                  <span className="font-semibold text-red-600">{fmt(financialMetrics?.totals.payable ?? 0)}</span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b">
                   <span className="text-sm text-muted-foreground">Recebido no Mes</span>
-                  <span className="font-semibold">{fmt(paymentSummary?.collectedThisMonth ?? 0)}</span>
+                  <span className="font-semibold">{fmt(financialMetrics?.totals.receivedRevenue ?? 0)}</span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b">
                   <span className="text-sm text-muted-foreground">Vencidos (Receber)</span>
-                  <span className="font-semibold text-yellow-600">{fmt(paymentSummary?.overdueReceivable ?? 0)}</span>
+                  <span className="font-semibold text-yellow-600">{fmt(financialMetrics?.totals.overdueReceivable ?? 0)}</span>
                 </div>
                 <div className="flex justify-between items-center py-2 border-b">
                   <span className="text-sm text-muted-foreground">Despesas Pagas (Mês)</span>
-                  <span className="font-semibold text-red-500">{fmt(expensePaidThisMonth)}</span>
+                  <span className="font-semibold text-red-500">{fmt(financialMetrics?.totals.operatingCostsPaid ?? 0)}</span>
                 </div>
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm font-medium">Resultado Líquido</span>
-                  <span className={`font-bold text-base ${(totalRevenue - expenseTotalFromList) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                    {totalRevenue - expenseTotalFromList >= 0 ? "+" : ""}{fmt(totalRevenue - expenseTotalFromList)}
+                  <span className={`font-bold text-base ${(financialMetrics?.totals.profit ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                    {(financialMetrics?.totals.profit ?? 0) >= 0 ? "+" : ""}{fmt(financialMetrics?.totals.profit ?? 0)}
                   </span>
                 </div>
               </CardContent>

@@ -9,8 +9,12 @@
 export interface Client {
   id: string;
   name: string;
-  email: string;
-  whatsapp: string;
+  /** @nullable */
+  email: string | null;
+  /** @nullable */
+  whatsapp: string | null;
+  emailOptIn?: boolean;
+  whatsappOptIn?: boolean;
   /** @nullable */
   phone?: string | null;
   /** @nullable */

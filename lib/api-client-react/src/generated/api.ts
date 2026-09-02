@@ -78,6 +78,7 @@ import type {
   CreateLoyaltyTransactionBody,
   CreateMessageTemplateBody,
   CreateNoteBody,
+  CreateOutboundMessageBody,
   CreatePassengerBody,
   CreatePaymentBody,
   CreatePipelineBody,
@@ -105,6 +106,7 @@ import type {
   Document,
   Expense,
   ExpenseListResponse,
+  ExportOutboundMessagesParams,
   FeatureFlag,
   FinancialSummary,
   FreePassengerCheckIn,
@@ -133,6 +135,8 @@ import type {
   ListMessagesParams,
   ListNpsResponsesParams,
   ListOrdersParams,
+  ListOutboundMessagesParams,
+  ListOutboundProviderFailureSummaryParams,
   ListPaymentsParams,
   ListProductsParams,
   ListReferrals200,
@@ -156,6 +160,9 @@ import type {
   NpsResponse,
   NpsSummary,
   Order,
+  OutboundMessage,
+  OutboundMessageResult,
+  OutboundProviderFailureSummary,
   Passenger,
   PassengerBoardingUpdate,
   Payment,
@@ -179,6 +186,8 @@ import type {
   ReservationListResponse,
   ReservationStats,
   RetryCommissionSync200,
+  ReversePaidReferralBonusBody,
+  ReversePaidReferralBonusResponse,
   ReverseReferralBonusBody,
   SalesCycleData,
   SalesGoal,
@@ -9227,6 +9236,574 @@ export const useSendMessage = <
   TContext
 > => {
   return useMutation(getSendMessageMutationOptions(options));
+};
+
+/**
+ * @summary List persistent multichannel outbound messages
+ */
+export const getListOutboundMessagesUrl = (
+  params?: ListOutboundMessagesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/outbound-messages?${stringifiedParams}`
+    : `/api/outbound-messages`;
+};
+
+export const listOutboundMessages = async (
+  params?: ListOutboundMessagesParams,
+  options?: RequestInit,
+): Promise<OutboundMessage[]> => {
+  return customFetch<OutboundMessage[]>(getListOutboundMessagesUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListOutboundMessagesQueryKey = (
+  params?: ListOutboundMessagesParams,
+) => {
+  return [`/api/outbound-messages`, ...(params ? [params] : [])] as const;
+};
+
+export const getListOutboundMessagesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listOutboundMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListOutboundMessagesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listOutboundMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListOutboundMessagesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listOutboundMessages>>
+  > = ({ signal }) =>
+    listOutboundMessages(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listOutboundMessages>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListOutboundMessagesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listOutboundMessages>>
+>;
+export type ListOutboundMessagesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List persistent multichannel outbound messages
+ */
+
+export function useListOutboundMessages<
+  TData = Awaited<ReturnType<typeof listOutboundMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListOutboundMessagesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listOutboundMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListOutboundMessagesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create and dispatch a persistent multichannel message
+ */
+export const getCreateOutboundMessageUrl = () => {
+  return `/api/outbound-messages`;
+};
+
+export const createOutboundMessage = async (
+  createOutboundMessageBody: CreateOutboundMessageBody,
+  options?: RequestInit,
+): Promise<OutboundMessageResult> => {
+  return customFetch<OutboundMessageResult>(getCreateOutboundMessageUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(createOutboundMessageBody),
+  });
+};
+
+export const getCreateOutboundMessageMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createOutboundMessage>>,
+    TError,
+    { data: BodyType<CreateOutboundMessageBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createOutboundMessage>>,
+  TError,
+  { data: BodyType<CreateOutboundMessageBody> },
+  TContext
+> => {
+  const mutationKey = ["createOutboundMessage"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createOutboundMessage>>,
+    { data: BodyType<CreateOutboundMessageBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createOutboundMessage(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateOutboundMessageMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createOutboundMessage>>
+>;
+export type CreateOutboundMessageMutationBody =
+  BodyType<CreateOutboundMessageBody>;
+export type CreateOutboundMessageMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create and dispatch a persistent multichannel message
+ */
+export const useCreateOutboundMessage = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createOutboundMessage>>,
+    TError,
+    { data: BodyType<CreateOutboundMessageBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createOutboundMessage>>,
+  TError,
+  { data: BodyType<CreateOutboundMessageBody> },
+  TContext
+> => {
+  return useMutation(getCreateOutboundMessageMutationOptions(options));
+};
+
+/**
+ * @summary Summarize outbound delivery failures by provider
+ */
+export const getListOutboundProviderFailureSummaryUrl = (
+  params?: ListOutboundProviderFailureSummaryParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/outbound-messages/provider-failure-summary?${stringifiedParams}`
+    : `/api/outbound-messages/provider-failure-summary`;
+};
+
+export const listOutboundProviderFailureSummary = async (
+  params?: ListOutboundProviderFailureSummaryParams,
+  options?: RequestInit,
+): Promise<OutboundProviderFailureSummary[]> => {
+  return customFetch<OutboundProviderFailureSummary[]>(
+    getListOutboundProviderFailureSummaryUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListOutboundProviderFailureSummaryQueryKey = (
+  params?: ListOutboundProviderFailureSummaryParams,
+) => {
+  return [
+    `/api/outbound-messages/provider-failure-summary`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListOutboundProviderFailureSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof listOutboundProviderFailureSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListOutboundProviderFailureSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listOutboundProviderFailureSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListOutboundProviderFailureSummaryQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listOutboundProviderFailureSummary>>
+  > = ({ signal }) =>
+    listOutboundProviderFailureSummary(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listOutboundProviderFailureSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListOutboundProviderFailureSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listOutboundProviderFailureSummary>>
+>;
+export type ListOutboundProviderFailureSummaryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Summarize outbound delivery failures by provider
+ */
+
+export function useListOutboundProviderFailureSummary<
+  TData = Awaited<ReturnType<typeof listOutboundProviderFailureSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListOutboundProviderFailureSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listOutboundProviderFailureSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListOutboundProviderFailureSummaryQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Export persistent multichannel outbound messages for audit
+ */
+export const getExportOutboundMessagesUrl = (
+  params: ExportOutboundMessagesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/outbound-messages/export?${stringifiedParams}`
+    : `/api/outbound-messages/export`;
+};
+
+export const exportOutboundMessages = async (
+  params: ExportOutboundMessagesParams,
+  options?: RequestInit,
+): Promise<Blob> => {
+  return customFetch<Blob>(getExportOutboundMessagesUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getExportOutboundMessagesQueryKey = (
+  params?: ExportOutboundMessagesParams,
+) => {
+  return [
+    `/api/outbound-messages/export`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getExportOutboundMessagesQueryOptions = <
+  TData = Awaited<ReturnType<typeof exportOutboundMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  params: ExportOutboundMessagesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof exportOutboundMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getExportOutboundMessagesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof exportOutboundMessages>>
+  > = ({ signal }) =>
+    exportOutboundMessages(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof exportOutboundMessages>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ExportOutboundMessagesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof exportOutboundMessages>>
+>;
+export type ExportOutboundMessagesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Export persistent multichannel outbound messages for audit
+ */
+
+export function useExportOutboundMessages<
+  TData = Awaited<ReturnType<typeof exportOutboundMessages>>,
+  TError = ErrorType<unknown>,
+>(
+  params: ExportOutboundMessagesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof exportOutboundMessages>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getExportOutboundMessagesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Retry one failed or skipped delivery
+ */
+export const getRetryOutboundDeliveryUrl = (deliveryId: string) => {
+  return `/api/outbound-messages/${deliveryId}/retry`;
+};
+
+export const retryOutboundDelivery = async (
+  deliveryId: string,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getRetryOutboundDeliveryUrl(deliveryId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRetryOutboundDeliveryMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryOutboundDelivery>>,
+    TError,
+    { deliveryId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof retryOutboundDelivery>>,
+  TError,
+  { deliveryId: string },
+  TContext
+> => {
+  const mutationKey = ["retryOutboundDelivery"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof retryOutboundDelivery>>,
+    { deliveryId: string }
+  > = (props) => {
+    const { deliveryId } = props ?? {};
+
+    return retryOutboundDelivery(deliveryId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RetryOutboundDeliveryMutationResult = NonNullable<
+  Awaited<ReturnType<typeof retryOutboundDelivery>>
+>;
+
+export type RetryOutboundDeliveryMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Retry one failed or skipped delivery
+ */
+export const useRetryOutboundDelivery = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryOutboundDelivery>>,
+    TError,
+    { deliveryId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof retryOutboundDelivery>>,
+  TError,
+  { deliveryId: string },
+  TContext
+> => {
+  return useMutation(getRetryOutboundDeliveryMutationOptions(options));
+};
+
+/**
+ * @summary Retry one delivery by delivery resource ID
+ */
+export const getRetryOutboundDeliveryDirectUrl = (deliveryId: string) => {
+  return `/api/outbound-deliveries/${deliveryId}/retry`;
+};
+
+export const retryOutboundDeliveryDirect = async (
+  deliveryId: string,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getRetryOutboundDeliveryDirectUrl(deliveryId), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRetryOutboundDeliveryDirectMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryOutboundDeliveryDirect>>,
+    TError,
+    { deliveryId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof retryOutboundDeliveryDirect>>,
+  TError,
+  { deliveryId: string },
+  TContext
+> => {
+  const mutationKey = ["retryOutboundDeliveryDirect"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof retryOutboundDeliveryDirect>>,
+    { deliveryId: string }
+  > = (props) => {
+    const { deliveryId } = props ?? {};
+
+    return retryOutboundDeliveryDirect(deliveryId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RetryOutboundDeliveryDirectMutationResult = NonNullable<
+  Awaited<ReturnType<typeof retryOutboundDeliveryDirect>>
+>;
+
+export type RetryOutboundDeliveryDirectMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Retry one delivery by delivery resource ID
+ */
+export const useRetryOutboundDeliveryDirect = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryOutboundDeliveryDirect>>,
+    TError,
+    { deliveryId: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof retryOutboundDeliveryDirect>>,
+  TError,
+  { deliveryId: string },
+  TContext
+> => {
+  return useMutation(getRetryOutboundDeliveryDirectMutationOptions(options));
 };
 
 /**
@@ -20671,6 +21248,97 @@ export const useReverseReferralBonus = <
   TContext
 > => {
   return useMutation(getReverseReferralBonusMutationOptions(options));
+};
+
+/**
+ * @summary Financially reverse an already paid referral bonus
+ */
+export const getReversePaidReferralBonusUrl = (id: string) => {
+  return `/api/referrals/${id}/reverse-paid-bonus`;
+};
+
+export const reversePaidReferralBonus = async (
+  id: string,
+  reversePaidReferralBonusBody: ReversePaidReferralBonusBody,
+  options?: RequestInit,
+): Promise<ReversePaidReferralBonusResponse> => {
+  return customFetch<ReversePaidReferralBonusResponse>(
+    getReversePaidReferralBonusUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(reversePaidReferralBonusBody),
+    },
+  );
+};
+
+export const getReversePaidReferralBonusMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reversePaidReferralBonus>>,
+    TError,
+    { id: string; data: BodyType<ReversePaidReferralBonusBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof reversePaidReferralBonus>>,
+  TError,
+  { id: string; data: BodyType<ReversePaidReferralBonusBody> },
+  TContext
+> => {
+  const mutationKey = ["reversePaidReferralBonus"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof reversePaidReferralBonus>>,
+    { id: string; data: BodyType<ReversePaidReferralBonusBody> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return reversePaidReferralBonus(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReversePaidReferralBonusMutationResult = NonNullable<
+  Awaited<ReturnType<typeof reversePaidReferralBonus>>
+>;
+export type ReversePaidReferralBonusMutationBody =
+  BodyType<ReversePaidReferralBonusBody>;
+export type ReversePaidReferralBonusMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Financially reverse an already paid referral bonus
+ */
+export const useReversePaidReferralBonus = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reversePaidReferralBonus>>,
+    TError,
+    { id: string; data: BodyType<ReversePaidReferralBonusBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof reversePaidReferralBonus>>,
+  TError,
+  { id: string; data: BodyType<ReversePaidReferralBonusBody> },
+  TContext
+> => {
+  return useMutation(getReversePaidReferralBonusMutationOptions(options));
 };
 
 /**

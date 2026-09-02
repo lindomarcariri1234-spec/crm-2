@@ -59,6 +59,8 @@ import settlementsRouter from "./settlements";
 import backupRouter from "./backup";
 import cronRouter from "./cron";
 import spreadsheetImportsRouter from "./spreadsheet-imports";
+import financialMetricsRouter from "./financial-metrics";
+import outboundMessagesRouter from "./outbound-messages";
 
 const router: IRouter = Router();
 
@@ -67,6 +69,7 @@ router.get("/", (_req, res) => {
 });
 
 router.use(adminRouter);
+router.use(financialMetricsRouter);
 router.use(healthRouter);
 router.use(dashboardRouter);
 router.use(tenantsRouter);
@@ -77,6 +80,7 @@ router.use(reservationsRouter);
 router.use(paymentsRouter);
 router.use(pipelineRouter);
 router.use(communicationRouter);
+router.use(outboundMessagesRouter);
 router.use(registrationsRouter);
 router.use(marketingRouter);
 router.use(loyaltyRouter);

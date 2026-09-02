@@ -37,6 +37,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 import {
   Plus,
   Megaphone,
@@ -366,12 +367,12 @@ function SegmentPanel({
 function CampaignsTab() {
   const [isOpen, setIsOpen] = useState(false);
   const [analyticsId, setAnalyticsId] = useState<string | null>(null);
-  const [campaignType, setCampaignType] = useState("email");
+  const [campaignType, setCampaignType] = useState("unified");
   const [segment, setSegment] = useState<Record<string, unknown>>({});
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewCount, setPreviewCount] = useState<number | null>(null);
 
-  const { data: campaigns, isLoading, refetch } = useListCampaigns();
+  const { data: campaigns, isLoading, isError, refetch } = useListCampaigns();
   const { data: trips } = useListTrips({ limit: 100 });
   const createCampaign = useCreateCampaign();
   const updateCampaign = useUpdateCampaign();
@@ -386,15 +387,24 @@ function CampaignsTab() {
       data: {
         name: fd.get("name") as string,
         type: campaignType,
-        subject: (fd.get("subject") as string) || undefined,
-        content: fd.get("content") as string,
+        subject: (fd.get("emailSubject") as string) || undefined,
+        content: fd.get("emailContent") as string,
+        triggerConfig: {
+          channels: {
+            email: {
+              subject: (fd.get("emailSubject") as string) || "",
+              html: (fd.get("emailContent") as string) || "",
+            },
+            whatsapp: { text: (fd.get("whatsappContent") as string) || "" },
+          },
+        },
         targetSegment: segment,
         scheduledAt: fd.get("scheduledAt") ? (fd.get("scheduledAt") as string) : undefined,
         triggerType: "manual",
       },
     });
     setIsOpen(false);
-    setCampaignType("email");
+    setCampaignType("unified");
     setSegment({});
     setPreviewCount(null);
     refetch();
@@ -469,9 +479,9 @@ function CampaignsTab() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="email">E-mail</SelectItem>
-                      <SelectItem value="whatsapp">WhatsApp</SelectItem>
-                      <SelectItem value="sms">SMS</SelectItem>
+                      <SelectItem value="unified">E-mail + WhatsApp</SelectItem>
+                      <SelectItem value="email">Somente E-mail</SelectItem>
+                      <SelectItem value="whatsapp">Somente WhatsApp</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -480,12 +490,9 @@ function CampaignsTab() {
                   <Input name="scheduledAt" type="datetime-local" />
                 </div>
               </div>
-              {campaignType === "email" && (
-                <div className="space-y-2">
-                  <Label>Assunto do e-mail</Label>
-                  <Input name="subject" placeholder="Assunto do e-mail" required />
-                </div>
-              )}
+              <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+                Uma campanha unificada cria uma entrega independente por canal para cada destinatário. Uma falha não duplica nem bloqueia a outra.
+              </div>
               <SegmentPanel
                 value={segment}
                 onChange={(v) => { setSegment(v); setPreviewCount(null); }}
@@ -494,14 +501,21 @@ function CampaignsTab() {
                 previewCount={previewCount}
                 trips={trips?.data ?? []}
               />
-              <div className="space-y-2">
-                <Label>Conteúdo</Label>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                <Label>Assunto e conteúdo do E-mail</Label>
+                <Input name="emailSubject" placeholder="Assunto do e-mail" required={campaignType !== "whatsapp"} />
                 <Textarea
-                  name="content"
-                  required
+                  name="emailContent"
+                  required={campaignType !== "whatsapp"}
                   rows={5}
-                  placeholder="Olá {nome}, temos uma oferta exclusiva para você..."
+                  placeholder="HTML/texto do e-mail..."
                 />
+                </div>
+                <div className="space-y-2">
+                <Label>Conteúdo do WhatsApp</Label>
+                <Textarea name="whatsappContent" required={campaignType !== "email"} rows={7} placeholder="Texto do WhatsApp..." />
+                </div>
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="outline" onClick={() => setIsOpen(false)}>
@@ -585,6 +599,12 @@ function CampaignsTab() {
                   ))}
                 </TableRow>
               ))
+            ) : isError ? (
+              <ListLoadErrorRow
+                colSpan={10}
+                onRetry={refetch}
+                message="Não foi possível carregar as campanhas."
+              />
             ) : manualCampaigns.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={10} className="text-center py-12 text-muted-foreground">

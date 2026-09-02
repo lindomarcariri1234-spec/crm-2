@@ -102,6 +102,9 @@ import {
   gemeoOpportunitiesTable,
   insightsChatHistoryTable,
   auditLogsTable,
+  outboundMessagesTable,
+  outboundDeliveriesTable,
+  outboundDeliveryAttemptsTable,
 } from "@workspace/db";
 import { requireAuth, ROLES } from "../lib/tenant.js";
 import { ForbiddenError, NotFoundError, ValidationError, AppError } from "../lib/errors.js";
@@ -152,6 +155,9 @@ import {
   importMarketingCampanhas,
   importMarketingEnvios,
   importMarketingNps,
+  importOutboundMessages,
+  importOutboundDeliveries,
+  importOutboundDeliveryAttempts,
   importDistribuicaoOfertas,
   importDistribuicaoOperacoes,
   importDistribuicaoReservas,
@@ -928,6 +934,9 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
       eq(whatsappNotificationOutboxTable.tenantId, tenantId),
       counts,
     );
+    await streamDirectTable(writer, "outboundMessages", outboundMessagesTable as unknown as AnyTable, eq(outboundMessagesTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "outboundDeliveries", outboundDeliveriesTable as unknown as AnyTable, eq(outboundDeliveriesTable.tenantId, tenantId), counts);
+    await streamDirectTable(writer, "outboundDeliveryAttempts", outboundDeliveryAttemptsTable as unknown as AnyTable, eq(outboundDeliveryAttemptsTable.tenantId, tenantId), counts);
     await writer.endObject();
 
     // Integrações de terceiros: configuração não sensível apenas — chaves/tokens
@@ -1293,6 +1302,11 @@ router.post("/backup/import", async (req: Request, res: Response, next: NextFunc
         await importMarketingCampanhas(tx, ledger, me.tenantId, me.id, users, marketing?.campaigns, report.marketingCampanhas);
         await importMarketingEnvios(tx, ledger, me.tenantId, marketing?.campaignSends, report.marketingEnvios);
         await importMarketingNps(tx, ledger, me.tenantId, marketing?.npsResponses, report.marketingNps);
+
+        const comunicacao = data.comunicacao as Record<string, unknown> | undefined;
+        await importOutboundMessages(tx, ledger, me.tenantId, comunicacao?.outboundMessages, report.outboundMessages);
+        await importOutboundDeliveries(tx, ledger, me.tenantId, comunicacao?.outboundDeliveries, report.outboundDeliveries);
+        await importOutboundDeliveryAttempts(tx, ledger, me.tenantId, comunicacao?.outboundDeliveryAttempts, report.outboundDeliveryAttempts);
 
         const distribuicao = data.distribuicao as Record<string, unknown> | undefined;
         await importDistribuicaoOfertas(tx, ledger, me.tenantId, distribuicao?.offers, report.distribuicaoOfertas);

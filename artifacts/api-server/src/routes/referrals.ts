@@ -1,19 +1,23 @@
 import { Router, type NextFunction } from "express";
-import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable } from "@workspace/db";
+import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable } from "@workspace/db";
 import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { ADMIN_ROLES, MANAGEMENT_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
-import { REFERRAL_STATUS } from "@workspace/permissions";
+import { ADMIN_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
+import { ACTIONS, hasPermission, REFERRAL_STATUS, RESOURCES } from "@workspace/permissions";
 import { enqueueReferralBonusPaidEmail, dispatchReferralExpiringSoonEmail, dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
-import { dispatchWhatsAppReferralBonusPaid } from "../queues/whatsapp-helpers";
-import { sendTenantWhatsAppMessage, interpolateWhatsAppMessage } from "../lib/whatsapp";
+import { interpolateWhatsAppMessage } from "../lib/whatsapp";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 import { DEFAULT_TIERS as DEFAULT_TIERS_CONFIG, computeReferralTier } from "../lib/referral-tiers";
 import type { ReferralTier } from "../lib/referral-tiers";
 import { formatBRL, localToday } from "@workspace/shared";
 import { calculateReferralCommercialAnalytics } from "../lib/referral-commercial-analytics";
+import { rankingMetadata } from "../lib/ranking-contract";
+import { linkedOrder, linkedReservation } from "../lib/linked-data";
+import { linkedDeal } from "../lib/linked-data";
+import { reversePaidReferralBonus } from "../services/reservation-referral-conversion";
 
 const router = Router();
 const CampaignBonusType = z.enum(["multiplier", "fixed_extra", "fixed_bonus", "percentage_bonus", "reduced_bonus", "no_reward"]);
@@ -270,6 +274,23 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
       .limit(1);
     const gracePeriodDays = tenantRefSettings?.gracePeriodDays ?? 30;
 
+    const reservationIds = rows.map(r => r.reservationId).filter((id): id is string => !!id);
+    const canonicalReservations = reservationIds.length ? await db.select().from(reservationsTable).where(and(
+      eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.id, reservationIds),
+    )) : [];
+    const orderNumbers = [...new Set(canonicalReservations.map(r => r.storeOrderId).filter((id): id is string => !!id))];
+    const [siblingReservations, linkedOrders] = orderNumbers.length ? await Promise.all([
+      db.select().from(reservationsTable).where(and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))),
+      db.select().from(storeOrdersTable).where(and(
+      eq(storeOrdersTable.tenantId, me.tenantId), inArray(storeOrdersTable.orderNumber, orderNumbers),
+      )),
+    ]) : [[], []] as [(typeof reservationsTable.$inferSelect)[], (typeof storeOrdersTable.$inferSelect)[]];
+    const allLinkedReservations = [...canonicalReservations, ...siblingReservations.filter(r => !canonicalReservations.some(c => c.id === r.id))];
+    const reservationMap = new Map(canonicalReservations.map(r => [r.id, r]));
+    const orderMap = new Map(linkedOrders.map(o => [o.orderNumber, o]));
+    const deals = allLinkedReservations.length ? await db.select().from(dealsTable).where(and(
+      eq(dealsTable.tenantId, me.tenantId), inArray(dealsTable.reservationId, allLinkedReservations.map(r => r.id)),
+    )) : [];
     const referrals = rows.map(({ referrerClientName, referrerClientEmail, referrerClientWhatsapp, referrerClientPhone, referrerSuccessfulReferrals, ...r }) => {
       const tracking = trackingMap.get(r.code);
       const bonusReleasesAt = r.convertedAt
@@ -289,6 +310,16 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
         visitsCount: Math.max(r.visitsCount ?? 0, tracking?.visitsCount ?? 0),
         bonusReleasesAt: bonusReleasesAt?.toISOString() ?? null,
         bonusBlocked,
+        linkedReservation: r.reservationId ? linkedReservation(reservationMap.get(r.reservationId)) : null,
+        linkedReservations: r.reservationId ? allLinkedReservations.filter(x => {
+          const canonical = reservationMap.get(r.reservationId!);
+          return canonical ? (canonical.storeOrderId ? x.storeOrderId === canonical.storeOrderId : x.id === canonical.id) : false;
+        }).map(linkedReservation) : [],
+        linkedOrder: r.reservationId ? linkedOrder(orderMap.get(reservationMap.get(r.reservationId)?.storeOrderId ?? "")) : null,
+        linkedDeals: r.reservationId ? deals.filter(d => {
+          const canonical = reservationMap.get(r.reservationId!);
+          return canonical ? (canonical.storeOrderId ? allLinkedReservations.some(x => x.storeOrderId === canonical.storeOrderId && x.id === d.reservationId) : d.reservationId === canonical.id) : false;
+        }).map(linkedDeal) : [],
       };
     });
 
@@ -337,9 +368,15 @@ router.patch("/referrals/:id", async (req, res, next: NextFunction): Promise<voi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = z.object({
-      status: z.string().optional(),
+      status: z.enum([
+        REFERRAL_STATUS.PENDING,
+        REFERRAL_STATUS.COMPLETED,
+        REFERRAL_STATUS.CONVERTED,
+        REFERRAL_STATUS.EXPIRED,
+        REFERRAL_STATUS.REVERSED,
+      ]).optional(),
       bonusPaid: z.boolean().optional(),
       convertedAt: z.string().optional(),
       isActive: z.boolean().optional(),
@@ -348,16 +385,80 @@ router.patch("/referrals/:id", async (req, res, next: NextFunction): Promise<voi
     }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
 
-    const [existing] = await db.select({ expiresAt: referralsTable.expiresAt })
+    const [existing] = await db.select({
+      status: referralsTable.status,
+      bonusPaid: referralsTable.bonusPaid,
+      convertedAt: referralsTable.convertedAt,
+      expiresAt: referralsTable.expiresAt,
+    })
       .from(referralsTable)
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
       .limit(1);
     if (!existing) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
 
+    if (parsed.data.bonusPaid !== undefined) {
+      next(new AppError(
+        "O pagamento do bônus deve ser registrado pelo endpoint de pagamento.",
+        422,
+        "REFERRAL_PAYMENT_STATE",
+      ));
+      return;
+    }
+    if (parsed.data.convertedAt !== undefined) {
+      next(new AppError(
+        "A conversão da indicação só pode ser registrada após a confirmação financeira.",
+        422,
+        "REFERRAL_CONVERSION_STATE",
+      ));
+      return;
+    }
+    if (
+      parsed.data.status !== undefined &&
+      parsed.data.status !== existing.status &&
+      !(existing.status === REFERRAL_STATUS.PENDING && parsed.data.status === REFERRAL_STATUS.EXPIRED)
+    ) {
+      next(new AppError(
+        "A transição de status solicitada não é permitida. Use o fluxo de conversão, pagamento ou reversão correspondente.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+    if (parsed.data.status === REFERRAL_STATUS.EXPIRED && existing.status !== REFERRAL_STATUS.PENDING) {
+      next(new AppError(
+        "Somente indicações pendentes podem ser expiradas manualmente.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+    if (
+      parsed.data.status === REFERRAL_STATUS.EXPIRED &&
+      parsed.data.isActive === true
+    ) {
+      next(new AppError(
+        "Uma indicação expirada deve permanecer inativa.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+    if (parsed.data.isActive === true && existing.status === REFERRAL_STATUS.EXPIRED) {
+      next(new AppError(
+        "Uma indicação expirada não pode ser reativada manualmente.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+
     const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (parsed.data.status !== undefined) updates.status = parsed.data.status;
-    if (parsed.data.bonusPaid != null) updates.bonusPaid = parsed.data.bonusPaid;
-    if (parsed.data.convertedAt) updates.convertedAt = new Date(parsed.data.convertedAt);
+    if (parsed.data.status !== undefined && parsed.data.status !== existing.status) {
+      updates.status = parsed.data.status;
+    }
+    if (parsed.data.status === REFERRAL_STATUS.EXPIRED) {
+      updates.isActive = false;
+    }
     if (parsed.data.isActive != null) updates.isActive = parsed.data.isActive;
     if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes;
     if (parsed.data.expiresAt !== undefined) {
@@ -371,7 +472,13 @@ router.patch("/referrals/:id", async (req, res, next: NextFunction): Promise<voi
     }
 
     await db.update(referralsTable).set(updates)
-      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+      .where(and(
+        eq(referralsTable.id, req.params.id),
+        eq(referralsTable.tenantId, me.tenantId),
+        ...(existing.status === REFERRAL_STATUS.PENDING && parsed.data.status === REFERRAL_STATUS.EXPIRED
+          ? [eq(referralsTable.status, REFERRAL_STATUS.PENDING)]
+          : []),
+      ));
     const [referral] = await db.select().from(referralsTable)
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId))).limit(1);
     if (!referral) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
@@ -385,7 +492,7 @@ router.post("/referrals/:id/pay-bonus", async (req, res, next: NextFunction): Pr
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
       ...getTableColumns(referralsTable),
@@ -413,6 +520,14 @@ router.post("/referrals/:id/pay-bonus", async (req, res, next: NextFunction): Pr
       next(new AppError("Bônus só pode ser pago em indicações convertidas", 422, "UNPROCESSABLE"));
       return;
     }
+    if (!row.convertedAt) {
+      next(new AppError(
+        "A indicação convertida não possui data de conversão confirmada.",
+        422,
+        "REFERRAL_CONVERSION_STATE",
+      ));
+      return;
+    }
     if (row.bonusPaid) {
       next(new AppError("Bônus já foi pago anteriormente", 422, "UNPROCESSABLE"));
       return;
@@ -433,13 +548,23 @@ router.post("/referrals/:id/pay-bonus", async (req, res, next: NextFunction): Pr
     }
 
     const now = new Date();
-    await db.update(referralsTable)
+    const [paidReferral] = await db.update(referralsTable)
       .set({ bonusPaid: true, bonusPaidAt: now, updatedAt: now })
       .where(and(
         eq(referralsTable.id, req.params.id),
         eq(referralsTable.tenantId, me.tenantId),
+        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
         eq(referralsTable.bonusPaid, false),
+      ))
+      .returning({ id: referralsTable.id });
+
+    if (!paidReferral) {
+      next(new ConflictError(
+        "O pagamento não foi confirmado porque a indicação já foi paga ou mudou de estado.",
+        "REFERRAL_PAYMENT_CONFLICT",
       ));
+      return;
+    }
 
     const referrerEmail = row.referrerClientEmail ?? row.referrerEmail;
     const referrerName = row.referrerClientName ?? row.referrerName ?? "Indicador";
@@ -460,21 +585,12 @@ router.post("/referrals/:id/pay-bonus", async (req, res, next: NextFunction): Pr
             agencyLogo: agencyLogoUrl,
           },
           me.tenantId,
+          row.referrerId,
+          req.params.id,
         );
       } catch (emailErr) {
       }
     }
-
-    dispatchWhatsAppReferralBonusPaid({
-      referrerId: row.referrerId,
-      referrerPhone: row.referrerClientWhatsapp ?? row.referrerClientPhone ?? null,
-      referrerName: referrerName,
-      referralCode: row.code ?? null,
-      bonusAmount: bonusValue,
-      tenantId: me.tenantId,
-      tenantName: agencyName,
-    }).catch((err) => {
-      });
 
     const [updated] = await db.select({
       ...getTableColumns(referralsTable),
@@ -509,7 +625,7 @@ router.post("/referrals/:id/resend-expiry-warning", async (req, res, next: NextF
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const windowParam = req.query.window;
     if (windowParam !== "7" && windowParam !== "1") {
@@ -609,7 +725,7 @@ router.post("/referrals/:id/resend-bonus-release", async (req, res, next: NextFu
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
       ...getTableColumns(referralsTable),
@@ -1063,6 +1179,10 @@ router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise
       },
       summary: commercialAnalytics.summary,
       ranking: commercialAnalytics.ranking,
+      rankingMeta: rankingMetadata("referralCommercial", "admin", {
+        key: `last-${period}-days`,
+        semantics: `rolling ${period}-day period ending at response generation time; calendar-month endpoints use America/Sao_Paulo boundaries`,
+      }),
       currentMonth: {
         referrals: Number(currentMonthRow?.referrals ?? 0),
         conversions: Number(currentMonthRow?.conversions ?? 0),
@@ -1088,6 +1208,8 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // Full referral analytics export is an administrator-only audit surface;
+    // COMMISSIONS.VIEW governs ordinary report access below.
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const now = new Date();
@@ -1306,6 +1428,8 @@ router.get("/referrals/export", async (req, res, next: NextFunction): Promise<vo
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    // The raw referral export includes contact and campaign data and remains
+    // an administrator-only export exception to COMMISSIONS.VIEW.
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const format = (req.query.format as string | undefined) ?? "csv";
@@ -1461,15 +1585,13 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { res.status(403).json({ error: "Forbidden" }); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { res.status(403).json({ error: "Forbidden" }); return; }
 
     const parsed = z.object({
       type: z.enum(["converted", "bonusPaid", "reversed", "share"]),
       message: z.string().optional(),
     }).safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-
-    const { sendTenantWhatsAppMessage, interpolateWhatsAppMessage } = await import("../lib/whatsapp");
 
     const [settings] = await db.select().from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
@@ -1514,7 +1636,21 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
         : { nome: "João", codigo: "JOAO123", link: "https://exemplo.com.br/ind/JOAO123", bonus: `R$ ${bonusFormatted}` };
 
     const message = interpolateWhatsAppMessage(template, vars);
-    const result = await sendTenantWhatsAppMessage(me.tenantId, phone, message);
+    const deliveryResult = await dispatchOutboundMessage({
+      tenantId: me.tenantId,
+      eventType: "referral_test_whatsapp",
+      idempotencyKey: `referral-test-whatsapp:${parsed.data.type}:${generateId()}`,
+      recipient: { type: "direct", whatsapp: phone },
+      whatsapp: { text: message },
+      origin: "referral_settings_test",
+      originChannel: "whatsapp",
+      createdById: me.id,
+    });
+    const whatsappDelivery = deliveryResult.deliveries.find((delivery) => delivery.channel === "whatsapp");
+    const result = {
+      success: whatsappDelivery?.status === "pending" || whatsappDelivery?.status === "accepted",
+      error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason ?? undefined,
+    };
 
     if (!result.success) {
       if (result.error === "credentials_not_configured") {
@@ -1535,7 +1671,7 @@ router.get("/referral-settings", async (req, res, next: NextFunction): Promise<v
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const [settings] = await db.select().from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
     if (!settings) {
@@ -1585,7 +1721,7 @@ router.patch("/referral-settings", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const TierSchema = z.object({
       level: z.string(),
       label: z.string(),
@@ -1721,7 +1857,7 @@ router.get("/referrals/commissions/report", async (req, res, next: NextFunction)
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const rows = await db.select({
       status: referralCommissionsTable.status,
       total: sql<string>`COALESCE(SUM(${referralCommissionsTable.amount}), 0)`,
@@ -1798,7 +1934,7 @@ router.patch("/referrals/commissions/:id/status", async (req, res, next: NextFun
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = z.object({ status: z.enum(["approved", "paid", "reversed"]) }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
     const [commission] = await db.select().from(referralCommissionsTable)
@@ -1833,7 +1969,7 @@ router.get("/referrals/campaigns", async (req, res, next: NextFunction): Promise
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const campaigns = await db.select().from(referralCampaignsTable)
       .where(eq(referralCampaignsTable.tenantId, me.tenantId))
@@ -1894,7 +2030,7 @@ router.post("/referrals/campaigns", async (req, res, next: NextFunction): Promis
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const parsed = z.object({
       name: z.string().min(1).max(120),
@@ -1976,7 +2112,7 @@ router.delete("/referrals/campaigns/:id", async (req, res, next: NextFunction): 
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [existing] = await db.select({ id: referralCampaignsTable.id })
       .from(referralCampaignsTable)
@@ -2002,7 +2138,7 @@ router.patch("/referrals/campaigns/:id", async (req, res, next: NextFunction): P
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [existing] = await db.select().from(referralCampaignsTable)
       .where(and(
@@ -2122,7 +2258,7 @@ router.post("/referral-settings/whatsapp-test", async (req, res, next: NextFunct
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const parsed = z.object({
       phone: z.string().min(8),
@@ -2165,7 +2301,21 @@ router.post("/referral-settings/whatsapp-test", async (req, res, next: NextFunct
         .replace(/\{\{?bonus\}?\}/g, bonusCurrencyFormatted);
     }
 
-    const result = await sendTenantWhatsAppMessage(me.tenantId, parsed.data.phone, message);
+    const deliveryResult = await dispatchOutboundMessage({
+      tenantId: me.tenantId,
+      eventType: "referral_test_whatsapp",
+      idempotencyKey: `referral-test-whatsapp:${messageType}:${generateId()}`,
+      recipient: { type: "direct", whatsapp: parsed.data.phone },
+      whatsapp: { text: message },
+      origin: "referral_settings_test",
+      originChannel: "whatsapp",
+      createdById: me.id,
+    });
+    const whatsappDelivery = deliveryResult.deliveries.find((delivery) => delivery.channel === "whatsapp");
+    const result = {
+      success: whatsappDelivery?.status === "pending" || whatsappDelivery?.status === "accepted",
+      error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason ?? undefined,
+    };
 
     if (!result.success) {
       const error = result.error ?? "unknown_error";
@@ -2191,7 +2341,7 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const parsed = z.object({
       reason: z.string().min(1, "Motivo é obrigatório"),
@@ -2200,7 +2350,9 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
 
     const [existing] = await db.select({
       id: referralsTable.id,
+      reservationId: referralsTable.reservationId,
       status: referralsTable.status,
+      bonusPaid: referralsTable.bonusPaid,
       referrerId: referralsTable.referrerId,
       referredId: referralsTable.referredId,
       bonusAmount: referralsTable.bonusAmount,
@@ -2216,14 +2368,22 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
       next(new AppError("Reversão manual só é permitida em indicações com status 'convertida'", 422, "UNPROCESSABLE"));
       return;
     }
+    if (existing.bonusPaid) {
+      next(new AppError(
+        "Um bônus já pago não pode ser revertido por este fluxo.",
+        422,
+        "REFERRAL_PAID_REVERSAL",
+      ));
+      return;
+    }
 
     const reversedInfo = await db.transaction(async (tx) => {
       // Lock the referral row first so concurrent duplicate requests serialize.
       const locked = await tx.execute(
-        sql`SELECT id, status, referrer_id, referred_id, bonus_amount FROM referrals WHERE id = ${existing.id} AND tenant_id = ${me.tenantId} FOR UPDATE`
+        sql`SELECT id, status, bonus_paid, referrer_id, referred_id, bonus_amount FROM referrals WHERE id = ${existing.id} AND tenant_id = ${me.tenantId} FOR UPDATE`
       );
       const lockedRow = (locked.rows as Array<Record<string, unknown>>)[0];
-      if (!lockedRow || lockedRow.status !== REFERRAL_STATUS.COMPLETED) {
+      if (!lockedRow || lockedRow.status !== REFERRAL_STATUS.COMPLETED || lockedRow.bonus_paid === true) {
         // Already reversed by a concurrent request — abort without modifying balances.
         throw new AppError("Reversão manual só é permitida em indicações com status 'convertida'", 422, "UNPROCESSABLE");
       }
@@ -2277,6 +2437,8 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
       bonusAmount: reversedInfo.bonusAmountStr,
       tenantId: me.tenantId,
       reason: parsed.data.reason,
+      referralId: existing.id,
+      reservationId: existing.reservationId,
     }).catch(() => {});
 
     const [updated] = await db.select({
@@ -2296,6 +2458,90 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
     const { referrerClientName, referrerClientEmail, referrerClientWhatsapp, referrerClientPhone, ...rest } = updated;
     res.json({
       ...rest,
+      referrerName: referrerClientName ?? rest.referrerName,
+      referrerEmail: referrerClientEmail ?? rest.referrerEmail,
+      referrerPhone: referrerClientPhone ?? rest.referrerPhone,
+      referrerWhatsapp: referrerClientWhatsapp ?? null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/referrals/:id/reverse-paid-bonus", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const parsed = z.object({
+      reason: z.string().trim().min(1, "Motivo é obrigatório").max(1000),
+      // Accept the names used by current clients while requiring an explicit
+      // affirmative confirmation instead of treating a missing field as yes.
+      confirmed: z.boolean().optional(),
+      confirm: z.boolean().optional(),
+      confirmation: z.boolean().optional(),
+    }).superRefine((body, ctx) => {
+      if (body.confirmed !== true && body.confirm !== true && body.confirmation !== true) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["confirmed"],
+          message: "Confirme o estorno financeiro para continuar",
+        });
+      }
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message), "REFERRAL_REVERSAL_CONFIRMATION"));
+      return;
+    }
+
+    const reversal = await reversePaidReferralBonus(
+      req.params.id,
+      me.tenantId,
+      parsed.data.reason,
+      me.id,
+    );
+
+    if (!reversal.alreadyReversed) {
+      const { dispatchReferralReversedEmail } = await import("../queues/email-helpers.js");
+      dispatchReferralReversedEmail({
+        referrerId: reversal.referrerId,
+        referredId: reversal.referredId,
+        bonusAmount: reversal.bonusAmount,
+        tenantId: me.tenantId,
+        reason: parsed.data.reason,
+        referralId: reversal.referralId,
+        reservationId: reversal.reservationId,
+      }).catch((err) => req.log?.warn?.({ err }, "Falha ao notificar estorno de bônus"));
+    }
+
+    const [updated] = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientName: clientsTable.name,
+      referrerClientEmail: clientsTable.email,
+      referrerClientWhatsapp: clientsTable.whatsapp,
+      referrerClientPhone: clientsTable.phone,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(
+        eq(referralsTable.id, req.params.id),
+        eq(referralsTable.tenantId, me.tenantId),
+      ))
+      .limit(1);
+    if (!updated) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
+
+    const { referrerClientName, referrerClientEmail, referrerClientWhatsapp, referrerClientPhone, ...rest } = updated;
+    res.json({
+      ...rest,
+      reversal: {
+        id: reversal.reversalId,
+        amount: reversal.bonusAmount,
+        reason: reversal.reason,
+        alreadyApplied: reversal.alreadyReversed,
+      },
       referrerName: referrerClientName ?? rest.referrerName,
       referrerEmail: referrerClientEmail ?? rest.referrerEmail,
       referrerPhone: referrerClientPhone ?? rest.referrerPhone,

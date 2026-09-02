@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { reservationsTable, tripsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { emitSeatUpdate, type SeatUpdatePayload } from "./seat-sse";
-import { RESERVATION_STATUS } from "@workspace/permissions";
+import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
 import { getRedisConnection } from "./redis";
 import { logger } from "./logger";
 
@@ -86,7 +86,7 @@ export async function broadcastSeatUpdate(tripId: string, tenantId: string): Pro
       and(
         eq(reservationsTable.tripId, tripId),
         eq(reservationsTable.tenantId, tenantId),
-        inArray(reservationsTable.status, [RESERVATION_STATUS.PENDING, RESERVATION_STATUS.CONFIRMED]),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
       ),
     );
   const occupiedMap: Record<string, string> = {};

@@ -5,6 +5,7 @@ import { logger } from "./logger";
 import { generateId } from "./id";
 import { sendReminderHtmlEmail, type SendEmailResult } from "@workspace/email";
 import { getCampaignEmailQueue, type CampaignEmailJobData } from "../queues/index";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 const TRIGGER_TYPES = [
   "birthday",
@@ -20,6 +21,7 @@ interface ClientRow {
   id: string;
   name: string;
   email: string | null;
+  whatsapp: string | null;
 }
 
 interface QueuedCampaignSendRow {
@@ -81,7 +83,7 @@ async function prepareCampaignJobSlot(
  * campaign and client joins, and the worker independently verifies ownership.
  */
 export async function reconcileStaleQueuedCampaignSends(): Promise<void> {
-  const queue = getCampaignEmailQueue();
+  const queue = getCampaignEmailQueue()!;
   // Queue doubles in callers/tests may only support production enqueueing.
   // A real BullMQ Queue always has getJob; without it we cannot safely decide
   // whether a queued send already has an active job.
@@ -168,7 +170,7 @@ async function resolveClientsByTrigger(
       const targetDay = target.getDate();
 
       return db
-        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email })
+        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email, whatsapp: clientsTable.whatsapp })
         .from(clientsTable)
         .where(
           and(
@@ -197,7 +199,7 @@ async function resolveClientsByTrigger(
       if (rows.length === 0) return [];
       const ids = rows.map((r) => r.clientId).filter((id): id is string => id !== null);
       return db
-        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email })
+        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email, whatsapp: clientsTable.whatsapp })
         .from(clientsTable)
         .where(and(eq(clientsTable.tenantId, tenantId), inArray(clientsTable.id, ids)));
     }
@@ -219,7 +221,7 @@ async function resolveClientsByTrigger(
       if (rows.length === 0) return [];
       const ids = rows.map((r) => r.clientId).filter((id): id is string => id !== null);
       return db
-        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email })
+        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email, whatsapp: clientsTable.whatsapp })
         .from(clientsTable)
         .where(and(eq(clientsTable.tenantId, tenantId), inArray(clientsTable.id, ids)));
     }
@@ -227,7 +229,7 @@ async function resolveClientsByTrigger(
     case "reactivation": {
       const inactiveDays = Number(config["inactiveDays"] ?? 120);
       return db
-        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email })
+        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email, whatsapp: clientsTable.whatsapp })
         .from(clientsTable)
         .where(
           and(
@@ -259,7 +261,7 @@ async function resolveClientsByTrigger(
       if (rows.length === 0) return [];
       const ids = rows.map((r) => r.clientId).filter((id): id is string => id !== null);
       return db
-        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email })
+        .select({ id: clientsTable.id, name: clientsTable.name, email: clientsTable.email, whatsapp: clientsTable.whatsapp })
         .from(clientsTable)
         .where(and(eq(clientsTable.tenantId, tenantId), inArray(clientsTable.id, ids)));
     }
@@ -311,11 +313,13 @@ async function processTenantCampaign(
 
   const sinceDate = getSinceDate(triggerType);
   const alreadySent = await getAlreadySentClientIds(campaign.id, sinceDate);
-  const eligible = clients.filter((c) => !alreadySent.has(c.id) && c.email);
+  const eligible = clients.filter((c) => !alreadySent.has(c.id) && (c.email || c.whatsapp));
 
   if (eligible.length === 0) return;
+  await processTenantCampaignMultichannel(campaign, tenantName, eligible);
+  return;
 
-  const queue = getCampaignEmailQueue();
+  const queue = getCampaignEmailQueue()!;
   let successCount = 0;
   let errorCount = 0;
 
@@ -364,9 +368,9 @@ async function processTenantCampaign(
 
       try {
         const jobData: CampaignEmailJobData = {
-          to: client.email,
+          to: client.email!,
           toName: client.name,
-          subject: campaign.subject,
+          subject: campaign.subject!,
           htmlContent: personalised,
           fromName: tenantName,
           campaignId: campaign.id,
@@ -391,8 +395,8 @@ async function processTenantCampaign(
       let sendResult: SendEmailResult;
       try {
         sendResult = await sendReminderHtmlEmail({
-          to: client.email,
-          subject: campaign.subject,
+          to: client.email!,
+          subject: campaign.subject!,
           html: personalised,
           fromName: tenantName,
         });
@@ -457,6 +461,86 @@ async function processTenantCampaign(
   logger.info(
     { campaignId: campaign.id, trigger: triggerType, successCount, errorCount },
     "[campaign-automation] Processed campaign"
+  );
+}
+
+/**
+ * Campaign execution is intentionally kept separate from the legacy queue
+ * recovery code below. Existing queued jobs can finish during the migration,
+ * while all newly discovered recipients go through the shared ledger.
+ */
+async function processTenantCampaignMultichannel(
+  campaign: typeof campaignsTable.$inferSelect,
+  tenantName: string,
+  eligible: ClientRow[],
+) {
+  let successCount = 0;
+  let errorCount = 0;
+
+  for (const client of eligible) {
+    const personalised = campaign.content
+      .replace(/\{nome\}/gi, client.name)
+      .replace(/\{name\}/gi, client.name);
+    try {
+      const [send] = await db
+        .insert(campaignSendsTable)
+        .values({
+          id: generateId(),
+          campaignId: campaign.id,
+          clientId: client.id,
+          tenantId: campaign.tenantId,
+          status: "queued",
+        })
+        .onConflictDoNothing({
+          target: [campaignSendsTable.campaignId, campaignSendsTable.clientId],
+        })
+        .returning({ id: campaignSendsTable.id });
+      if (!send) continue;
+
+      const result = await dispatchOutboundMessage({
+        tenantId: campaign.tenantId,
+        eventType: "campaign_message",
+        idempotencyKey: `campaign:${campaign.id}:${client.id}`,
+        recipient: { type: "client", id: client.id },
+        email: campaign.subject
+          ? { subject: campaign.subject, html: personalised, senderName: tenantName }
+          : undefined,
+        whatsapp: { text: personalised },
+        origin: "campaign",
+        originChannel: campaign.type === "whatsapp" ? "whatsapp" : "email",
+        metadata: { campaignId: campaign.id, campaignSendId: send.id, clientId: client.id },
+      });
+      const hasPending = result.deliveries.some((delivery) => delivery.status === "pending");
+      const hasAccepted = result.deliveries.some((delivery) => delivery.status === "accepted");
+      const hasFailure = result.deliveries.some((delivery) => delivery.status === "failed");
+      await db.update(campaignSendsTable)
+        .set({
+          // "sent" is the compatibility projection for a logical event that
+          // has been handed to the multichannel ledger. The ledger, not the
+          // legacy campaign queue reconciler, owns pending channel retries.
+          status: hasFailure && !hasPending && !hasAccepted ? "error" : "sent",
+          error: hasFailure ? result.deliveries.find((delivery) => delivery.status === "failed")?.lastError ?? null : null,
+        })
+        .where(and(eq(campaignSendsTable.id, send.id), eq(campaignSendsTable.tenantId, campaign.tenantId)));
+      if (hasPending || hasAccepted) successCount++;
+      else errorCount++;
+    } catch (err) {
+      errorCount++;
+      logger.error({ err, campaignId: campaign.id, clientId: client.id }, "[campaign-automation] Multichannel dispatch failed");
+    }
+  }
+
+  if (successCount > 0 || errorCount > 0) {
+    await db.update(campaignsTable)
+      .set({
+        sentCount: campaign.sentCount + successCount,
+        recipientsCount: campaign.recipientsCount + successCount + errorCount,
+      })
+      .where(eq(campaignsTable.id, campaign.id));
+  }
+  logger.info(
+    { campaignId: campaign.id, successCount, errorCount },
+    "[campaign-automation] Processed multichannel campaign",
   );
 }
 

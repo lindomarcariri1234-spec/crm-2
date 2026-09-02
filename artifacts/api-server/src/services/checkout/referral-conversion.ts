@@ -19,6 +19,7 @@ import { roundMoney } from "../../lib/pricing";
 import { computeReferralTier } from "../../lib/referral-tiers";
 import { detectReferralFraud } from "../../lib/referral-fraud";
 import { calculateTier } from "../../lib/loyalty-helpers";
+import { ConflictError } from "../../lib/errors";
 
 export interface RecordReferralArgs {
   tenantId: string;
@@ -163,7 +164,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
     // UPDATE the pending row that was already inserted at checkout time.
     // INVARIANT: reservationId links this completed referral to the first trip reservation
     // created in the same checkout transaction. It MAY be null for product-only orders.
-    await tx.update(referralsTable)
+    const [promotedReferral] = await tx.update(referralsTable)
       .set({
         status: REFERRAL_STATUS.COMPLETED,
         referredId: referredClientId,
@@ -182,7 +183,19 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
         attributionChannel,
         updatedAt: new Date(),
       })
-      .where(eq(referralsTable.id, existingReferralId));
+      .where(and(
+        eq(referralsTable.id, existingReferralId),
+        eq(referralsTable.tenantId, tenantId),
+        eq(referralsTable.status, REFERRAL_STATUS.PENDING),
+        eq(referralsTable.bonusPaid, false),
+      ))
+      .returning({ id: referralsTable.id });
+    if (!promotedReferral) {
+      throw new ConflictError(
+        "A indicação já foi convertida, paga ou mudou de estado.",
+        "REFERRAL_CONVERSION_CONFLICT",
+      );
+    }
   } else {
     // INSERT a new row (backward-compatible path for orders without a pending row).
     // INVARIANT: reservationId links this completed referral to the first trip reservation

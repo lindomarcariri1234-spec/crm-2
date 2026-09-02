@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useListMessages,
   useSendMessage,
@@ -6,6 +7,10 @@ import {
   useCreateMessageTemplate,
   useUpdateMessageTemplate,
   useDeleteMessageTemplate,
+  useCreateOutboundMessage,
+  useListOutboundMessages,
+  useListOutboundProviderFailureSummary,
+  useRetryOutboundDelivery,
 } from "@workspace/api-client-react";
 import { useListClients } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -50,11 +55,19 @@ import {
   RefreshCcw,
   Mail,
   AlertTriangle,
+  Download,
 } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import type { MessageTemplate, Message } from "@workspace/api-client-react";
+import type {
+  MessageTemplate,
+  Message,
+  OutboundMessage,
+  OutboundDelivery,
+  OutboundProviderFailureSummary,
+} from "@workspace/api-client-react";
+import { QueryErrorState } from "@/components/query-error-state";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -131,8 +144,34 @@ const statusLabels: Record<string, string> = {
   pending: "Pendente",
 };
 
+const outboundStatusLabels: Record<string, string> = {
+  pending: "Pendente",
+  processing: "Processando",
+  accepted: "Aceito pelo provedor",
+  partial: "Falha parcial",
+  failed: "Falhou",
+  skipped: "Ignorado",
+};
+
+const outboundDeliveryStatusLabels: Record<string, string> = {
+  pending: "Pendente",
+  processing: "Processando",
+  accepted: "Aceita pelo provedor",
+  failed: "Falha confirmada",
+  skipped: "Ignorada",
+};
+
+type OutboundDeliveryFilterStatus = "all" | "pending" | "processing" | "accepted" | "failed" | "skipped";
+type BounceTypeFilter = "all" | "permanent" | "temporary";
+const UNKNOWN_PROVIDER_FILTER = "__unknown__";
+const bounceTypeLabels: Record<Exclude<BounceTypeFilter, "all">, string> = {
+  permanent: "Bounce permanente",
+  temporary: "Falha temporária",
+};
+
 export default function Communication() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState("conversations");
   const [isSendOpen, setIsSendOpen] = useState(false);
   const [isTemplateOpen, setIsTemplateOpen] = useState(false);
@@ -142,6 +181,9 @@ export default function Communication() {
   const [selectedClientId, setSelectedClientId] = useState("");
   const [filterChannel, setFilterChannel] = useState("all");
   const [messageContent, setMessageContent] = useState("");
+  const [emailSubject, setEmailSubject] = useState("Mensagem da agência");
+  const [emailContent, setEmailContent] = useState("");
+  const [whatsappContent, setWhatsappContent] = useState("");
   const [tplChannel, setTplChannel] = useState("whatsapp");
 
   const [selectedConversationClientId, setSelectedConversationClientId] = useState<string | null>(null);
@@ -157,8 +199,22 @@ export default function Communication() {
 
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   const [loadingEmailLogs, setLoadingEmailLogs] = useState(false);
+  const [emailLogsError, setEmailLogsError] = useState<string | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [filterAutoRetry, setFilterAutoRetry] = useState<"all" | "auto" | "manual" | "exhausted" | "indicacoes">("all");
+  const [historyChannel, setHistoryChannel] = useState<"all" | "email" | "whatsapp">("all");
+  const [historyStatus, setHistoryStatus] = useState("all");
+  const [historyDeliveryStatus, setHistoryDeliveryStatus] = useState<OutboundDeliveryFilterStatus>("all");
+  const [historyBounceType, setHistoryBounceType] = useState<BounceTypeFilter>("all");
+  const [historyProvider, setHistoryProvider] = useState("all");
+  const [historyOrigin, setHistoryOrigin] = useState("all");
+  const [historyClientId, setHistoryClientId] = useState("all");
+  const [historyDateFrom, setHistoryDateFrom] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
+  const [historyCampaignId, setHistoryCampaignId] = useState("");
+  const [historyAutomationId, setHistoryAutomationId] = useState("");
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [historyExporting, setHistoryExporting] = useState<"csv" | "pdf" | null>(null);
 
   const REFERRAL_EMAIL_RE = /bônus de indicação|indicação foi confirmada|indicação expirou|⏰|vence em \d+ dia/i;
 
@@ -199,12 +255,18 @@ export default function Communication() {
 
   const fetchEmailLogs = useCallback(async () => {
     setLoadingEmailLogs(true);
+    setEmailLogsError(null);
     try {
       const res = await fetch(`${BASE}/api/email-logs`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         setEmailLogs(data ?? []);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        setEmailLogsError(body.error ?? "Erro ao carregar o log de e-mails. Tente novamente.");
       }
+    } catch {
+      setEmailLogsError("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.");
     } finally {
       setLoadingEmailLogs(false);
     }
@@ -315,30 +377,114 @@ export default function Communication() {
     }
   };
 
-  const { data: messages, isLoading: loadingMessages, refetch: refetchMessages } =
+  const { data: messages, isLoading: loadingMessages, isError: messagesError, error: messagesQueryError, refetch: refetchMessages } =
     useListMessages({ limit: 50 });
-  const { data: templates, isLoading: loadingTemplates, refetch: refetchTemplates } =
+  const { data: templates, isLoading: loadingTemplates, isError: templatesError, error: templatesQueryError, refetch: refetchTemplates } =
     useListMessageTemplates();
   const { data: clients } = useListClients({ limit: 200 });
 
   const sendMessage = useSendMessage();
+  const createOutboundMessage = useCreateOutboundMessage();
+  const retryOutboundDelivery = useRetryOutboundDelivery();
+  const {
+    data: outboundMessages,
+    isLoading: loadingOutboundMessages,
+    isError: outboundMessagesError,
+    error: outboundMessagesQueryError,
+    refetch: refetchOutboundMessages,
+  } = useListOutboundMessages({
+    limit: 200,
+    status: historyStatus === "all" ? undefined : historyStatus,
+    channel: historyChannel === "all" ? undefined : historyChannel,
+    deliveryStatus: historyDeliveryStatus === "all" ? undefined : historyDeliveryStatus,
+    bounceType: historyBounceType === "all" ? undefined : historyBounceType,
+    provider: historyProvider === "all" ? undefined : historyProvider,
+    origin: historyOrigin === "all" ? undefined : historyOrigin,
+    clientId: historyClientId === "all" ? undefined : historyClientId,
+    campaignId: historyCampaignId || undefined,
+    automationId: historyAutomationId || undefined,
+    dateFrom: historyDateFrom || undefined,
+    dateTo: historyDateTo || undefined,
+  });
+  const {
+    data: providerFailureSummary,
+    isLoading: loadingProviderFailureSummary,
+    isError: providerFailureSummaryError,
+  } = useListOutboundProviderFailureSummary({
+    status: historyStatus === "all" ? undefined : historyStatus,
+    channel: historyChannel === "all" ? undefined : historyChannel,
+    deliveryStatus: historyDeliveryStatus === "all" ? undefined : historyDeliveryStatus,
+    bounceType: historyBounceType === "all" ? undefined : historyBounceType,
+    provider: historyProvider === "all" ? undefined : historyProvider,
+    origin: historyOrigin === "all" ? undefined : historyOrigin,
+    clientId: historyClientId === "all" ? undefined : historyClientId,
+    campaignId: historyCampaignId || undefined,
+    automationId: historyAutomationId || undefined,
+    dateFrom: historyDateFrom || undefined,
+    dateTo: historyDateTo || undefined,
+  });
+
+  useEffect(() => {
+    const stream = new EventSource(`${BASE}/api/outbound-messages/stream`, { withCredentials: true });
+    const refreshHistory = (event: Event) => {
+      void queryClient.invalidateQueries({ queryKey: ["/api/outbound-messages"] });
+      const data = (event as MessageEvent<string>).data;
+      if (!data) return;
+      try {
+        const payload = JSON.parse(data) as {
+          status?: string;
+          channel?: "email" | "whatsapp";
+          provider?: string;
+        };
+        if (payload.status !== "failed") return;
+        const channel = payload.channel === "email" ? "E-mail" : "WhatsApp";
+        toast({
+          title: "Falha de entrega confirmada",
+          description: `${channel} rejeitado pelo provedor${payload.provider ? ` ${payload.provider}` : ""}. O histórico foi atualizado.`,
+          variant: "destructive",
+        });
+      } catch {
+        // The refresh above is still safe if a future event adds fields.
+      }
+    };
+    stream.addEventListener("outbound-delivery-updated", refreshHistory);
+    stream.onerror = () => {
+      // EventSource retries by itself; each reconnect reuses the authenticated
+      // URL and the next provider event invalidates the same query cache.
+    };
+    return () => {
+      stream.removeEventListener("outbound-delivery-updated", refreshHistory);
+      stream.close();
+    };
+  }, [queryClient, toast]);
   const createTemplate = useCreateMessageTemplate();
   const updateTemplate = useUpdateMessageTemplate();
   const deleteTemplate = useDeleteMessageTemplate();
 
   const handleSend = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    await sendMessage.mutateAsync({
+    const emailHtml = emailContent.trim() || messageContent.trim();
+    const whatsappText = whatsappContent.trim() || messageContent.trim();
+    await createOutboundMessage.mutateAsync({
       data: {
-        toClientId: selectedClientId,
-        channel: sendChannel,
-        content: messageContent,
+        eventType: "manual_message",
+        idempotencyKey: `manual:${crypto.randomUUID()}`,
+        recipient: { type: "client", id: selectedClientId },
+        email: { subject: emailSubject.trim() || "Mensagem da agência", html: emailHtml },
+        whatsapp: { text: whatsappText },
+        origin: "user",
+        originChannel: sendChannel as "email" | "whatsapp",
       },
     });
     setIsSendOpen(false);
     setSelectedClientId("");
     setSendChannel("whatsapp");
     setMessageContent("");
+    setEmailContent("");
+    setWhatsappContent("");
+    setEmailSubject("Mensagem da agência");
+    toast({ title: "Mensagem sincronizada criada", description: "As entregas de E-mail e WhatsApp foram programadas." });
+    refetchOutboundMessages();
     refetchMessages();
   };
 
@@ -382,6 +528,124 @@ export default function Communication() {
     setEditingTemplate(t);
     setTplChannel(t.channel);
     setIsTemplateOpen(true);
+  };
+
+  const selectedClient = (clients?.data ?? []).find((client) => client.id === selectedClientId);
+  const uniqueHistoryOrigins = useMemo(
+    () => Array.from(new Set((outboundMessages ?? []).map((message) => message.origin))).sort(),
+    [outboundMessages],
+  );
+  const uniqueHistoryProviders = useMemo(
+    () => Array.from(new Set([
+      ...(outboundMessages ?? []).flatMap((message) => message.deliveries.map((delivery) => delivery.provider).filter((provider): provider is string => Boolean(provider))),
+      ...(providerFailureSummary ?? []).map((item) => item.provider).filter((provider): provider is string => Boolean(provider)),
+    ])).sort(),
+    [outboundMessages, providerFailureSummary],
+  );
+  const hasUnknownHistoryProvider = useMemo(
+    () => (providerFailureSummary ?? []).some((item) => item.provider === null),
+    [providerFailureSummary],
+  );
+  const filteredOutboundMessages = useMemo(() => {
+    const from = historyDateFrom ? new Date(`${historyDateFrom}T00:00:00`) : null;
+    const to = historyDateTo ? new Date(`${historyDateTo}T23:59:59.999`) : null;
+    return (outboundMessages ?? []).flatMap((message) => {
+      const date = new Date(message.createdAt);
+      if (historyStatus !== "all" && message.status !== historyStatus) return [];
+      if (historyOrigin !== "all" && message.origin !== historyOrigin) return [];
+      if (historyClientId !== "all" && message.recipientId !== historyClientId) return [];
+      if (from && date < from) return [];
+      if (to && date > to) return [];
+      const deliveries = message.deliveries.filter((delivery) => (
+        (historyChannel === "all" || delivery.channel === historyChannel) &&
+        (historyDeliveryStatus === "all" || delivery.status === historyDeliveryStatus) &&
+        (historyBounceType === "all" || delivery.bounceType === historyBounceType) &&
+        (historyProvider === "all" || delivery.provider === historyProvider)
+      ));
+      if (deliveries.length === 0) return [];
+      return [{ ...message, deliveries }];
+    });
+  }, [outboundMessages, historyStatus, historyDeliveryStatus, historyBounceType, historyProvider, historyOrigin, historyClientId, historyDateFrom, historyDateTo, historyChannel]);
+  const failedDeliveryCount = useMemo(
+    () => filteredOutboundMessages.reduce(
+      (count, message) => count + message.deliveries.filter((delivery) => delivery.status === "failed").length,
+      0,
+    ),
+    [filteredOutboundMessages],
+  );
+  const openProviderFailures = (provider: string | null) => {
+    setHistoryProvider(provider ?? UNKNOWN_PROVIDER_FILTER);
+    setHistoryDeliveryStatus("failed");
+    setExpandedHistoryId(null);
+  };
+  const bounceTypeCounts = useMemo(() => ({
+    permanent: filteredOutboundMessages.reduce((count, message) => count + message.deliveries.filter((delivery) => delivery.bounceType === "permanent").length, 0),
+    temporary: filteredOutboundMessages.reduce((count, message) => count + message.deliveries.filter((delivery) => delivery.bounceType === "temporary").length, 0),
+  }), [filteredOutboundMessages]);
+  const openBounceType = (bounceType: Exclude<BounceTypeFilter, "all">) => {
+    setHistoryBounceType(bounceType);
+    setExpandedHistoryId(null);
+  };
+
+  const exportOutboundHistory = async (format: "csv" | "pdf") => {
+    setHistoryExporting(format);
+    try {
+      const params = new URLSearchParams({ format });
+      if (historyStatus !== "all") params.set("status", historyStatus);
+      if (historyDeliveryStatus !== "all") params.set("deliveryStatus", historyDeliveryStatus);
+      if (historyBounceType !== "all") params.set("bounceType", historyBounceType);
+      if (historyProvider !== "all") params.set("provider", historyProvider);
+      if (historyOrigin !== "all") params.set("origin", historyOrigin);
+      if (historyClientId !== "all") params.set("clientId", historyClientId);
+      if (historyChannel !== "all") params.set("channel", historyChannel);
+      if (historyDateFrom) params.set("dateFrom", historyDateFrom);
+      if (historyDateTo) params.set("dateTo", historyDateTo);
+      if (historyCampaignId.trim()) params.set("campaignId", historyCampaignId.trim());
+      if (historyAutomationId.trim()) params.set("automationId", historyAutomationId.trim());
+
+      const response = await fetch(`${BASE}/api/outbound-messages/export?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? "Não foi possível exportar o histórico.");
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? `historico_multicanal.${format}`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast({ title: `Histórico exportado em ${format.toUpperCase()}.` });
+    } catch (error) {
+      toast({
+        title: "Erro na exportação",
+        description: error instanceof Error ? error.message : "Não foi possível gerar o arquivo.",
+        variant: "destructive",
+      });
+    } finally {
+      setHistoryExporting(null);
+    }
+  };
+
+  const handleRetryDelivery = async (delivery: OutboundDelivery) => {
+    try {
+      await retryOutboundDelivery.mutateAsync({ deliveryId: delivery.id });
+      toast({ title: `${delivery.channel === "email" ? "E-mail" : "WhatsApp"} reenfileirado`, description: "Somente esta entrega será tentada novamente." });
+      refetchOutboundMessages();
+    } catch (error) {
+      const message = (error as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      toast({
+        title: "Não foi possível reenviar",
+        description: message === "delivery_not_authorized"
+          ? "Esta entrega foi ignorada por opt-out, contato ausente ou número inválido. Corrija a autorização/contato antes de enviar."
+          : "Verifique a integração responsável e tente novamente.",
+        variant: "destructive",
+      });
+    }
   };
 
   const filteredMessages =
@@ -519,6 +783,9 @@ export default function Communication() {
                     />
                   </div>
                 </div>
+                <div className="rounded-lg border bg-blue-50/60 p-3 text-xs text-blue-900">
+                  Templates são específicos por canal. Para uma mensagem sincronizada, crie/edite um template de E-mail e outro de WhatsApp com o mesmo nome e selecione o conteúdo correspondente no composer.
+                </div>
                 {(tplChannel === "email") && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Assunto</label>
@@ -599,7 +866,7 @@ export default function Communication() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Canal</label>
+                  <label className="text-sm font-medium">Iniciar por</label>
                   <Select value={sendChannel} onValueChange={setSendChannel}>
                     <SelectTrigger>
                       <SelectValue />
@@ -612,13 +879,34 @@ export default function Communication() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    E-mail e WhatsApp são entregas da mesma mensagem. Escolha apenas qual canal deve iniciar o fluxo.
+                  </p>
                 </div>
+                {selectedClient && (
+                  <div className="rounded-lg border bg-muted/30 p-3 text-xs space-y-1">
+                    <p className="font-medium">Disponibilidade de contato</p>
+                    <p className={selectedClient.email ? "text-foreground" : "text-amber-700"}>
+                      E-mail: {selectedClient.email ? "disponível" : "ausente"}{selectedClient.emailOptIn === false ? " · opt-out" : ""}
+                    </p>
+                    <p className={selectedClient.whatsapp ? "text-foreground" : "text-amber-700"}>
+                      WhatsApp: {selectedClient.whatsapp ? "disponível" : "ausente"}{selectedClient.whatsappOptIn === false ? " · opt-out" : ""}
+                    </p>
+                  </div>
+                )}
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Template (opcional)</label>
                   <Select
                     onValueChange={(id) => {
                       const tpl = (templates ?? []).find((x) => x.id === id);
-                      if (tpl) setMessageContent(tpl.content);
+                      if (tpl?.channel === "email") {
+                        setEmailContent(tpl.content);
+                        setMessageContent(tpl.content);
+                        if (tpl.subject) setEmailSubject(tpl.subject);
+                      } else if (tpl) {
+                        setWhatsappContent(tpl.content);
+                        setMessageContent(tpl.content);
+                      }
                     }}
                   >
                     <SelectTrigger>
@@ -635,17 +923,36 @@ export default function Communication() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Mensagem</label>
-                  <Textarea
-                    name="content"
-                    required
-                    rows={4}
-                    placeholder="Digite sua mensagem..."
-                    value={messageContent}
-                    onChange={(e) => setMessageContent(e.target.value)}
-                  />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Conteúdo do E-mail</label>
+                    <Input
+                      value={emailSubject}
+                      onChange={(e) => setEmailSubject(e.target.value)}
+                      placeholder="Assunto do e-mail"
+                      aria-label="Assunto do e-mail"
+                      required
+                    />
+                    <Textarea
+                      rows={5}
+                      placeholder="HTML ou texto do e-mail..."
+                      value={emailContent}
+                      onChange={(e) => { setEmailContent(e.target.value); setMessageContent(e.target.value); }}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Conteúdo do WhatsApp</label>
+                    <Textarea
+                      rows={7}
+                      placeholder="Texto do WhatsApp..."
+                      value={whatsappContent}
+                      onChange={(e) => { setWhatsappContent(e.target.value); setMessageContent(e.target.value); }}
+                    />
+                  </div>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Cada canal usa seu próprio conteúdo. Se um campo ficar vazio, o servidor registrará a entrega como ignorada.
+                </p>
                 <div className="flex justify-end gap-2">
                   <Button
                     type="button"
@@ -656,9 +963,9 @@ export default function Communication() {
                   </Button>
                   <Button
                     type="submit"
-                    disabled={sendMessage.isPending || !selectedClientId}
+                    disabled={createOutboundMessage.isPending || !selectedClientId || (!emailContent.trim() && !whatsappContent.trim())}
                   >
-                    {sendMessage.isPending ? "Enviando..." : "Enviar"}
+                    {createOutboundMessage.isPending ? "Programando..." : "Programar E-mail + WhatsApp"}
                   </Button>
                 </div>
               </form>
@@ -677,7 +984,7 @@ export default function Communication() {
           <TabsTrigger value="messages">Mensagens Enviadas</TabsTrigger>
           <TabsTrigger value="templates">Templates</TabsTrigger>
           <TabsTrigger value="email-logs" className="flex items-center gap-1">
-            <Mail className="w-3.5 h-3.5" /> Log de E-mails
+            <Mail className="w-3.5 h-3.5" /> Histórico Multicanal
           </TabsTrigger>
           <TabsTrigger value="failed-emails" className="flex items-center gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
@@ -696,6 +1003,8 @@ export default function Communication() {
               <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
               <div className="col-span-2"><Skeleton className="h-[400px] w-full" /></div>
             </div>
+          ) : messagesError ? (
+            <QueryErrorState resourceLabel="as mensagens" error={messagesQueryError} onRetry={() => { void refetchMessages(); }} />
           ) : conversations.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-30" />
@@ -926,6 +1235,8 @@ export default function Communication() {
                       ))}
                     </TableRow>
                   ))
+                ) : messagesError ? (
+                  <TableRow><TableCell colSpan={5}><QueryErrorState resourceLabel="as mensagens" error={messagesQueryError} onRetry={() => { void refetchMessages(); }} compact /></TableCell></TableRow>
                 ) : filteredMessages.length === 0 ? (
                   <TableRow>
                     <TableCell
@@ -984,6 +1295,8 @@ export default function Communication() {
                 <Skeleton key={i} className="h-40 w-full" />
               ))}
             </div>
+          ) : templatesError ? (
+            <QueryErrorState resourceLabel="os templates" error={templatesQueryError} onRetry={() => { void refetchTemplates(); }} />
           ) : !templates || templates.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-30" />
@@ -1053,168 +1366,244 @@ export default function Communication() {
         </TabsContent>
 
         <TabsContent value="email-logs" className="mt-4">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <p className="text-sm text-muted-foreground">
-                Histórico de e-mails transacionais enviados pelo sistema.
-              </p>
-              <div className="flex items-center gap-1 flex-wrap">
-                {(["all", "indicacoes", "auto", "manual", "exhausted"] as const).map((f) => (
-                  <button
-                    key={f}
-                    onClick={() => setFilterAutoRetry(f)}
-                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
-                      filterAutoRetry === f
-                        ? f === "exhausted"
-                          ? "bg-orange-500 text-white border-orange-500"
-                          : f === "indicacoes"
-                          ? "bg-amber-500 text-white border-amber-500"
-                          : "bg-primary text-primary-foreground border-primary"
-                        : f === "exhausted"
-                        ? "bg-background border-orange-300 text-orange-700 hover:bg-orange-50"
-                        : f === "indicacoes"
-                        ? "bg-background border-amber-300 text-amber-700 hover:bg-amber-50"
-                        : "bg-background border-border hover:bg-muted"
-                    }`}
+          <div className="rounded-lg border bg-muted/20 p-3 mb-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Histórico multicanal</p>
+                <p className="text-xs text-muted-foreground">Uma linha representa a mensagem; expanda para ver cada entrega.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => { void refetchOutboundMessages(); }} disabled={loadingOutboundMessages || historyExporting !== null}>
+                  <RefreshCcw className={`w-4 h-4 mr-2 ${loadingOutboundMessages ? "animate-spin" : ""}`} /> Atualizar
+                </Button>
+                {(["csv", "pdf"] as const).map((format) => (
+                  <Button
+                    key={format}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { void exportOutboundHistory(format); }}
+                    disabled={historyExporting !== null}
                   >
-                    {f === "all"
-                      ? "Todos"
-                      : f === "indicacoes"
-                      ? "Indicações"
-                      : f === "auto"
-                      ? "Auto-reenviados"
-                      : f === "manual"
-                      ? "Manuais / Originais"
-                      : (
-                        <span className="inline-flex items-center gap-1.5">
-                          Esgotadas
-                          {exhaustedReservationIds.size > 0 && (
-                            <span className={`inline-flex items-center justify-center rounded-full text-xs font-bold min-w-[1rem] h-4 px-1 ${
-                              filterAutoRetry === "exhausted"
-                                ? "bg-white text-orange-600"
-                                : "bg-orange-500 text-white"
-                            }`}>
-                              {exhaustedReservationIds.size}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                  </button>
+                    {historyExporting === format
+                      ? <RefreshCcw className="w-4 h-4 mr-2 animate-spin" />
+                      : <Download className="w-4 h-4 mr-2" />}
+                    {format.toUpperCase()}
+                  </Button>
                 ))}
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={fetchEmailLogs} disabled={loadingEmailLogs}>
-              <RefreshCcw className={`w-4 h-4 mr-2 ${loadingEmailLogs ? "animate-spin" : ""}`} />
-              Atualizar
-            </Button>
-          </div>
-          {loadingEmailLogs ? (
-            <div className="space-y-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <Input type="date" value={historyDateFrom} onChange={(e) => setHistoryDateFrom(e.target.value)} aria-label="Data inicial" />
+              <Input type="date" value={historyDateTo} onChange={(e) => setHistoryDateTo(e.target.value)} aria-label="Data final" />
+              <Select value={historyClientId} onValueChange={setHistoryClientId}>
+                <SelectTrigger><SelectValue placeholder="Cliente" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os clientes</SelectItem>
+                  {(clients?.data ?? []).map((client) => <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={historyChannel} onValueChange={(v) => setHistoryChannel(v as "all" | "email" | "whatsapp")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os canais</SelectItem>
+                  <SelectItem value="email">E-mail</SelectItem>
+                  <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={historyDeliveryStatus} onValueChange={(value) => setHistoryDeliveryStatus(value as OutboundDeliveryFilterStatus)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as entregas</SelectItem>
+                  {Object.entries(outboundDeliveryStatusLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={historyBounceType} onValueChange={(value) => setHistoryBounceType(value as BounceTypeFilter)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os bounces</SelectItem>
+                  <SelectItem value="permanent">Bounces permanentes</SelectItem>
+                  <SelectItem value="temporary">Falhas temporárias</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={historyProvider} onValueChange={setHistoryProvider}>
+                <SelectTrigger><SelectValue placeholder="Provedor" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os provedores</SelectItem>
+                  {uniqueHistoryProviders.map((provider) => <SelectItem key={provider} value={provider}>{provider}</SelectItem>)}
+                  {hasUnknownHistoryProvider && (
+                    <SelectItem value={UNKNOWN_PROVIDER_FILTER}>Provedor não identificado</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+              <Select value={historyStatus} onValueChange={setHistoryStatus}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os status</SelectItem>
+                  {Object.entries(outboundStatusLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+                <Select value={historyOrigin} onValueChange={setHistoryOrigin}>
+                <SelectTrigger><SelectValue placeholder="Origem" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as origens</SelectItem>
+                  {uniqueHistoryOrigins.map((origin) => <SelectItem key={origin} value={origin}>{origin}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Input value={historyCampaignId} onChange={(e) => setHistoryCampaignId(e.target.value)} placeholder="ID da campanha" aria-label="ID da campanha" />
+              <Input value={historyAutomationId} onChange={(e) => setHistoryAutomationId(e.target.value)} placeholder="ID da automação" aria-label="ID da automação" />
+              <Button variant="ghost" onClick={() => {
+                setHistoryDateFrom(""); setHistoryDateTo(""); setHistoryClientId("all");
+                setHistoryChannel("all"); setHistoryStatus("all"); setHistoryDeliveryStatus("all"); setHistoryBounceType("all"); setHistoryProvider("all"); setHistoryOrigin("all");
+                setHistoryCampaignId(""); setHistoryAutomationId("");
+              }}>Limpar filtros</Button>
             </div>
-          ) : emailLogs.length === 0 ? (
+            {failedDeliveryCount > 0 && (
+              <div className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                <p className="text-sm">
+                  <strong>{failedDeliveryCount}</strong> {failedDeliveryCount === 1 ? "entrega foi rejeitada" : "entregas foram rejeitadas"} pelo provedor.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto border-red-300 bg-white text-red-800 hover:bg-red-100"
+                  onClick={() => setHistoryDeliveryStatus("failed")}
+                >
+                  Ver falhas
+                </Button>
+              </div>
+            )}
+            {(bounceTypeCounts.permanent > 0 || bounceTypeCounts.temporary > 0) && (
+              <div className="flex items-center gap-2 flex-wrap rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                <span className="text-sm font-medium text-slate-800">Classificação das falhas:</span>
+                {(["permanent", "temporary"] as const).map((bounceType) => (
+                  <Button
+                    key={bounceType}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={historyBounceType === bounceType ? "border-slate-500 bg-white" : "bg-white"}
+                    onClick={() => openBounceType(bounceType)}
+                  >
+                    {bounceTypeLabels[bounceType]} ({bounceTypeCounts[bounceType]})
+                  </Button>
+                ))}
+              </div>
+            )}
+            <Card className="border-red-100 bg-red-50/40">
+              <CardHeader className="pb-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-sm">Falhas por provedor</CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Participação de cada provedor nas entregas rejeitadas pelos filtros atuais.
+                    </p>
+                  </div>
+                  {providerFailureSummary && providerFailureSummary.length > 0 && (
+                    <Badge variant="outline" className="border-red-200 bg-white text-red-800">
+                      {providerFailureSummary[0].totalFailures} falhas
+                    </Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {loadingProviderFailureSummary ? (
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-16 w-full" />)}
+                  </div>
+                ) : providerFailureSummaryError ? (
+                  <p className="text-sm text-muted-foreground">Não foi possível carregar o resumo por provedor.</p>
+                ) : providerFailureSummary?.length ? (
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {providerFailureSummary.map((item: OutboundProviderFailureSummary) => (
+                      <button
+                        key={item.provider ?? "unknown"}
+                        type="button"
+                        className="rounded-md border bg-white p-3 text-left transition-colors hover:border-red-300 hover:bg-red-50"
+                        onClick={() => openProviderFailures(item.provider)}
+                        title="Abrir as entregas deste indicador"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium">{item.provider ?? "Provedor não identificado"}</span>
+                          <span className="text-lg font-semibold text-red-700">{item.failureCount}</span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{item.failurePercentage.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% das falhas</span>
+                          <span className="text-red-700">Ver entregas →</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Nenhuma falha de entrega nos filtros atuais.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+          {loadingOutboundMessages ? (
+            <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}</div>
+          ) : outboundMessagesError ? (
+            <QueryErrorState resourceLabel="o histórico multicanal" error={outboundMessagesQueryError} onRetry={() => { void refetchOutboundMessages(); }} />
+          ) : filteredOutboundMessages.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
-              <Mail className="w-12 h-12 mx-auto mb-4 opacity-30" />
-              <p>Nenhum log de e-mail encontrado.</p>
+              <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-30" />
+              <p>Nenhum evento encontrado com esses filtros.</p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Data</TableHead>
-                  <TableHead>Destinatário</TableHead>
-                  <TableHead>Tipo</TableHead>
-                  <TableHead>Assunto</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {emailLogs
-                  .filter((log) =>
-                    filterAutoRetry === "all"
-                      ? true
-                      : filterAutoRetry === "indicacoes"
-                      ? REFERRAL_EMAIL_RE.test(log.subject ?? "")
-                      : filterAutoRetry === "auto"
-                      ? log.isAutoRetry
-                      : filterAutoRetry === "exhausted"
-                      ? log.reservationId !== null && exhaustedReservationIds.has(log.reservationId)
-                      : !log.isAutoRetry,
-                  )
-                  .map((log) => (
-                    <TableRow key={log.id}>
-                      <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                        {new Date(log.createdAt).toLocaleString("pt-BR")}
-                      </TableCell>
-                      <TableCell className="text-sm">{log.recipient}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <Badge variant="outline" className="text-xs">
-                            {getEmailTypeLabel(log)}
-                          </Badge>
-                          {!log.reservationId && REFERRAL_EMAIL_RE.test(log.subject ?? "") && /vence em \d+ dia|⏰/.test(log.subject ?? "") && (
-                            <Badge className="text-xs bg-amber-50 text-amber-700 border-amber-300" variant="outline">
-                              <Clock className="w-3 h-3 mr-1" />
-                              Aviso de expiração
+            <div className="space-y-2">
+              {filteredOutboundMessages.map((message: OutboundMessage) => (
+                <div key={message.id} className="rounded-lg border bg-card overflow-hidden">
+                  <button className="w-full text-left p-3 hover:bg-muted/30" onClick={() => setExpandedHistoryId(expandedHistoryId === message.id ? null : message.id)}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="outline">{message.eventType}</Badge>
+                      <Badge className={message.status === "partial" ? "bg-orange-100 text-orange-800" : message.status === "failed" ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"}>{message.status === "partial" ? "Falha parcial" : message.status === "accepted" ? "Aceito" : statusLabels[message.status] ?? message.status}</Badge>
+                      <span className="text-sm font-medium">{message.recipientName ?? message.recipientId ?? "Destinatário não identificado"}</span>
+                      <span className="text-xs text-muted-foreground ml-auto">{new Date(message.createdAt).toLocaleString("pt-BR")}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">Origem: {message.origin}{message.originChannel ? ` · iniciado por ${message.originChannel === "email" ? "E-mail" : "WhatsApp"}` : ""} · {message.deliveries.length} entrega(s)</p>
+                  </button>
+                  {expandedHistoryId === message.id && (
+                    <div className="border-t bg-muted/10 divide-y">
+                      {message.deliveries.map((delivery) => (
+                        <div key={delivery.id} className="p-3 space-y-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <Badge className={channelColors[delivery.channel]}>{delivery.channel === "email" ? "E-mail" : "WhatsApp"}</Badge>
+                            <Badge
+                              variant="outline"
+                              className={delivery.status === "failed" ? "border-red-300 bg-red-100 text-red-800" : delivery.status === "skipped" ? "border-amber-300 bg-amber-100 text-amber-800" : ""}
+                            >
+                              {delivery.status === "accepted" ? "Aceito" : delivery.status === "skipped" ? "Ignorado" : delivery.status === "failed" ? "Falhou" : delivery.status === "processing" ? "Processando" : "Pendente"}
                             </Badge>
-                          )}
-                          {log.isAutoRetry && (
-                            <Badge className="text-xs bg-purple-50 text-purple-700 border-purple-200" variant="outline">
-                              <RefreshCcw className="w-3 h-3 mr-1" />
-                              Auto-reenviado
-                            </Badge>
-                          )}
-                          {log.reservationId && exhaustedReservationIds.has(log.reservationId) && (
-                            <Badge className="text-xs bg-orange-50 text-orange-700 border-orange-300" variant="outline">
-                              <AlertTriangle className="w-3 h-3 mr-1" />
-                              Tentativas esgotadas
-                            </Badge>
-                          )}
+                            {delivery.bounceType && (
+                              <Badge
+                                variant="outline"
+                                className={delivery.bounceType === "permanent" ? "border-red-300 bg-red-50 text-red-800" : "border-amber-300 bg-amber-50 text-amber-800"}
+                              >
+                                {bounceTypeLabels[delivery.bounceType]}
+                              </Badge>
+                            )}
+                            <span className="text-xs text-muted-foreground">
+                              {delivery.attempts} tentativa(s) · {delivery.recipient ?? "sem contato"}
+                              {delivery.provider ? ` · ${delivery.provider}` : ""}
+                            </span>
+                            {(delivery.status === "failed" || (delivery.status === "skipped" && delivery.skippedReason === "provider_unavailable")) && (
+                              <Button size="sm" variant="outline" className="ml-auto" onClick={() => { void handleRetryDelivery(delivery); }} disabled={retryOutboundDelivery.isPending}>
+                                <RefreshCcw className="w-3.5 h-3.5 mr-1" /> Retry só deste canal
+                              </Button>
+                            )}
+                          </div>
+                          {delivery.subject && <p className="text-xs"><strong>Assunto:</strong> {delivery.subject}</p>}
+                          {delivery.lastError && <p className="text-xs text-red-700"><strong>Erro:</strong> {delivery.lastError}</p>}
+                          {delivery.skippedReason && <p className="text-xs text-amber-700"><strong>Motivo ignorado:</strong> {delivery.skippedReason.replaceAll("_", " ")}</p>}
+                          {delivery.externalId && <p className="text-xs text-muted-foreground"><strong>ID externo:</strong> {delivery.externalId}</p>}
+                          {delivery.attemptHistory?.[0] && <div className="text-xs text-muted-foreground">Última tentativa: {new Date(delivery.attemptHistory[0].startedAt).toLocaleString("pt-BR")}{delivery.attemptHistory[0].error ? ` · ${delivery.attemptHistory[0].error}` : ""}</div>}
                         </div>
-                      </TableCell>
-                      <TableCell className="text-sm max-w-[200px] truncate">
-                        {log.subject || "—"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={
-                            log.status === "sent"
-                              ? "bg-green-50 text-green-700 border-green-200"
-                              : log.status === "failed"
-                              ? "bg-red-50 text-red-700 border-red-200"
-                              : log.status === "queued"
-                              ? "bg-yellow-50 text-yellow-700 border-yellow-200"
-                              : "bg-gray-50 text-gray-700 border-gray-200"
-                          }
-                        >
-                          {log.status === "sent" && <Check className="w-3 h-3 mr-1" />}
-                          {log.status === "failed" && <XCircle className="w-3 h-3 mr-1" />}
-                          {log.status === "queued" && <Clock className="w-3 h-3 mr-1" />}
-                          {log.status === "sent" ? "Enviado" : log.status === "failed" ? "Falhou" : log.status === "queued" ? "Na fila" : log.status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {log.status === "failed" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleResend(log.id)}
-                            disabled={resendingId === log.id}
-                            title={log.errorMessage ?? undefined}
-                          >
-                            <RefreshCcw className={`w-3.5 h-3.5 mr-1 ${resendingId === log.id ? "animate-spin" : ""}`} />
-                            Reenviar
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-              </TableBody>
-            </Table>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </TabsContent>
 

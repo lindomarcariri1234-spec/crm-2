@@ -12,7 +12,7 @@ import { decryptOrPassthrough } from "../lib/crypto";
 import { getAIClientForTenant, sanitizeProviderError } from "../lib/ai-client";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
-import { sendTenantWhatsAppMessage } from "../lib/whatsapp";
+import { dispatchOutboundMessage, updateOutboundDeliveryFromWebhook } from "./outbound-delivery";
 
 export type WhatsAppInboundOutcome =
   | "ignored"
@@ -22,6 +22,12 @@ export type WhatsAppInboundOutcome =
   | "human_handoff"
   | "answered"
   | "ai_unavailable";
+
+export type WhatsAppDeliveryWebhookOutcome =
+  | "not_status"
+  | "unauthorized"
+  | "not_found"
+  | "updated";
 
 interface EvolutionInbound {
   instanceName: string;
@@ -79,6 +85,56 @@ export function parseEvolutionInbound(instanceName: string, payload: unknown): E
   };
 }
 
+function parseEvolutionDeliveryStatus(payload: unknown): {
+  externalId: string;
+  status: "accepted" | "failed";
+  providerStatus: string;
+  error: string | null;
+} | null {
+  const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const event = String(root["event"] ?? root["type"] ?? root["eventType"] ?? "").toLowerCase();
+  const data = root["data"] && typeof root["data"] === "object"
+    ? root["data"] as Record<string, unknown>
+    : root;
+  const update = data["update"] && typeof data["update"] === "object"
+    ? data["update"] as Record<string, unknown>
+    : {};
+  const key = data["key"] && typeof data["key"] === "object"
+    ? data["key"] as Record<string, unknown>
+    : {};
+  const rawStatus = update["status"] ?? data["status"] ?? root["status"];
+  const statusText = typeof rawStatus === "string"
+    ? rawStatus.toLowerCase()
+    : typeof rawStatus === "number" ? String(rawStatus) : "";
+  const externalId = typeof key["id"] === "string"
+    ? key["id"]
+    : typeof data["id"] === "string" ? data["id"] : "";
+
+  // Evolution's MESSAGES_UPDATE uses numeric Baileys statuses:
+  // 0=error, 1=pending, 2=server ack, 3=delivery ack, 4=read, 5=played.
+  const isStatusEvent = event.includes("message") && (
+    event.includes("update") || event.includes("status")
+  );
+  if (!isStatusEvent || !externalId || !statusText) return null;
+  if (statusText === "0" || /error|failed|failure|rejected/.test(statusText)) {
+    const rawError = update["error"] ?? data["error"];
+    return {
+      externalId,
+      status: "failed",
+      providerStatus: statusText,
+      error: typeof rawError === "string" ? rawError.slice(0, 500) : null,
+    };
+  }
+  if (statusText === "1" || /pending|processing|queued/.test(statusText)) return null;
+  if (
+    statusText === "2" || statusText === "3" || statusText === "4" || statusText === "5"
+    || /server_ack|delivery_ack|delivered|read|played|sent|ack/.test(statusText)
+  ) {
+    return { externalId, status: "accepted", providerStatus: statusText, error: null };
+  }
+  return null;
+}
+
 function mustHandoff(content: string): boolean {
   return /\b(atendente|humano|pessoa|vendedor|suporte|reclama[çc][ãa]o|cancelar|reembolso)\b/i.test(content);
 }
@@ -119,6 +175,29 @@ function systemPrompt(): string {
 const DELIVERY_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 5;
 
+/** Handles Evolution status callbacks without creating chatbot messages. */
+export async function processEvolutionDeliveryStatus(opts: {
+  instanceName: string;
+  apiKey?: string;
+  payload: unknown;
+}): Promise<WhatsAppDeliveryWebhookOutcome> {
+  const status = parseEvolutionDeliveryStatus(opts.payload);
+  if (!status) return "not_status";
+
+  const integration = await resolveIntegration(opts.instanceName, opts.apiKey);
+  if (!integration) return "unauthorized";
+
+  const result = await updateOutboundDeliveryFromWebhook({
+    tenantId: integration.tenantId,
+    provider: "evolution",
+    externalId: status.externalId,
+    status: status.status,
+    providerStatus: status.providerStatus,
+    error: status.error,
+  });
+  return result.updated ? "updated" : "not_found";
+}
+
 /** Delivers a persisted outbound chat message. The conditional claim lets a
  * replay resume an interrupted webhook without double-sending a fresh reply. */
 export async function deliverAttendanceReply(opts: {
@@ -146,6 +225,7 @@ export async function deliverAttendanceReply(opts: {
     ))
     .returning({
       id: chatbotMessagesTable.id,
+      conversationId: chatbotMessagesTable.conversationId,
       content: chatbotMessagesTable.content,
       deliveryAttempts: chatbotMessagesTable.deliveryAttempts,
     });
@@ -156,19 +236,50 @@ export async function deliverAttendanceReply(opts: {
       .limit(1);
     return message?.deliveryStatus === "sent";
   }
-  const result = await sendTenantWhatsAppMessage(opts.tenantId, opts.phone, claimed[0].content);
-  await db.update(chatbotMessagesTable)
-    .set(
-      result.success
-        ? { deliveryStatus: "sent", deliveryUpdatedAt: new Date(), lastDeliveryError: null }
-        : {
-            deliveryStatus: claimed[0].deliveryAttempts >= MAX_DELIVERY_ATTEMPTS ? "failed" : "pending",
-            deliveryUpdatedAt: new Date(),
-            lastDeliveryError: (result.error ?? "delivery_failed").slice(0, 240),
-          },
-    )
-    .where(and(eq(chatbotMessagesTable.id, opts.messageId), eq(chatbotMessagesTable.tenantId, opts.tenantId)));
-  return result.success;
+  try {
+    // The attendance service only persists/queues the reply. Provider calls
+    // belong to the outbound-delivery worker, so a webhook replay cannot
+    // accidentally send outside the durable ledger.
+    const outbound = await dispatchOutboundMessage({
+      tenantId: opts.tenantId,
+      eventType: "whatsapp_attendance_reply",
+      idempotencyKey: `whatsapp-attendance:${opts.tenantId}:${claimed[0].conversationId}:${claimed[0].id}`,
+      recipient: { type: "direct", whatsapp: opts.phone },
+      whatsapp: { text: claimed[0].content },
+      origin: "whatsapp-attendance",
+      originChannel: "whatsapp",
+      metadata: {
+        chatbotMessageId: claimed[0].id,
+        conversationId: claimed[0].conversationId,
+      },
+    });
+    const whatsappDelivery = outbound.deliveries.find((delivery) => delivery.channel === "whatsapp");
+    // A pending ledger row is queued, not delivered. The attendance outbox
+    // must remain retryable until the outbound worker records acceptance.
+    const delivered = whatsappDelivery?.status === "accepted";
+    await db.update(chatbotMessagesTable)
+      .set(
+        delivered
+          ? { deliveryStatus: "sent", deliveryUpdatedAt: new Date(), lastDeliveryError: null }
+          : {
+              deliveryStatus: claimed[0].deliveryAttempts >= MAX_DELIVERY_ATTEMPTS ? "failed" : "pending",
+              deliveryUpdatedAt: new Date(),
+              lastDeliveryError: whatsappDelivery?.skippedReason ?? "delivery_failed",
+            },
+      )
+      .where(and(eq(chatbotMessagesTable.id, opts.messageId), eq(chatbotMessagesTable.tenantId, opts.tenantId)));
+    return delivered;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await db.update(chatbotMessagesTable)
+      .set({
+        deliveryStatus: claimed[0].deliveryAttempts >= MAX_DELIVERY_ATTEMPTS ? "failed" : "pending",
+        deliveryUpdatedAt: new Date(),
+        lastDeliveryError: reason.slice(0, 240),
+      })
+      .where(and(eq(chatbotMessagesTable.id, opts.messageId), eq(chatbotMessagesTable.tenantId, opts.tenantId)));
+    return false;
+  }
 }
 
 /** Bounded retry sweep for provider failures and interrupted deliveries. It

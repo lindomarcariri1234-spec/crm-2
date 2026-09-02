@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 import { Plus, Pencil, Trash2, Search, Navigation } from "lucide-react";
 
 type FormData = Partial<CreateBoardingLocationBody>;
@@ -49,7 +50,7 @@ const EMPTY_FORM: FormData = {
 
 export default function LocaisEmbarque() {
   const { toast } = useToast();
-  const { data: locations = [], refetch } = useListBoardingLocations({
+  const { data: locations = [], isError, refetch } = useListBoardingLocations({
     query: { queryKey: ["boarding-locations"] },
   });
   const create = useCreateBoardingLocation();
@@ -166,7 +167,13 @@ export default function LocaisEmbarque() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 ? (
+            {isError ? (
+              <ListLoadErrorRow
+                colSpan={5}
+                onRetry={refetch}
+                message="Não foi possível carregar os locais de embarque."
+              />
+            ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="text-center text-muted-foreground py-10">
                   <Navigation className="w-8 h-8 mx-auto mb-2 opacity-30" />

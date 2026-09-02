@@ -22,6 +22,7 @@ const {
   mockSelect,
   mockInsert,
   mockSendManifestEmail,
+  mockDispatchOutboundMessage,
   mockGetPdfQueue,
   mockPdfQueueAdd,
 } = vi.hoisted(() => {
@@ -32,6 +33,14 @@ const {
   const mockInsertValues = vi.fn().mockResolvedValue([]);
   const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
   const mockSendManifestEmail = vi.fn().mockResolvedValue({ success: true });
+  const mockDispatchOutboundMessage = vi.fn().mockResolvedValue({
+    message: { id: "outbound-1", status: "accepted" },
+    created: true,
+    deliveries: [
+      { id: "delivery-email", channel: "email", status: "accepted", externalId: "msg-001" },
+      { id: "delivery-whatsapp", channel: "whatsapp", status: "skipped", skippedReason: "whatsapp_address_missing" },
+    ],
+  });
   const mockGetPdfQueue = vi.fn().mockReturnValue(null);
   const mockPdfQueueAdd = vi.fn().mockResolvedValue(undefined);
   return {
@@ -41,6 +50,7 @@ const {
     mockSelect,
     mockInsert,
     mockSendManifestEmail,
+    mockDispatchOutboundMessage,
     mockGetPdfQueue,
     mockPdfQueueAdd,
   };
@@ -130,6 +140,10 @@ vi.mock("@workspace/email", () => ({
   sendReservationCancellationEmail: vi.fn().mockResolvedValue({ success: true }),
 }));
 
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
+}));
+
 vi.mock("../queues/email-helpers.js", () => ({
   dispatchReferralReversedEmail: vi.fn().mockResolvedValue(undefined),
   enqueueReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined),
@@ -205,7 +219,8 @@ const TENANT_ID = "tenant-001";
 const FAKE_ADMIN = {
   id: "user-001",
   tenantId: TENANT_ID,
-  role: "admin",
+  // "agencia" is the canonical AGENCY_ADMIN value used by the matrix.
+  role: "agencia",
   name: "Admin Teste",
   email: "admin@test.com",
 };
@@ -213,7 +228,8 @@ const FAKE_ADMIN = {
 const FAKE_MANAGER = {
   ...FAKE_ADMIN,
   id: "user-002",
-  role: "manager",
+  // "gerente" is the canonical matrix role; "manager" is only a legacy label.
+  role: "gerente",
 };
 
 /** Trip with departureDate stored as noon Brazil (UTC+15h) per Task #782 fix */
@@ -396,9 +412,17 @@ describe("POST /api/trips/:id/manifest/send — manifest send route wiring", () 
     mockLimit.mockResolvedValue([]);
     mockGetPdfQueue.mockReturnValue(null);
     mockSendManifestEmail.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({
+      message: { id: "outbound-1", status: "accepted" },
+      created: true,
+      deliveries: [
+        { id: "delivery-email", channel: "email", status: "accepted", externalId: "msg-001" },
+        { id: "delivery-whatsapp", channel: "whatsapp", status: "skipped", skippedReason: "whatsapp_address_missing" },
+      ],
+    });
   });
 
-  it("sends email and returns { success: true } for admin user", async () => {
+  it("dispatches the email through the outbound ledger and returns success", async () => {
     requireAuthMock.mockResolvedValue(FAKE_ADMIN as never);
     setupManifestDbMocks();
 
@@ -408,22 +432,30 @@ describe("POST /api/trips/:id/manifest/send — manifest send route wiring", () 
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, channel: "email" });
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: TENANT_ID,
+      recipient: { type: "direct", email: "passageiros@teste.com.br" },
+      originChannel: "email",
+    }));
+    expect(mockDispatchOutboundMessage.mock.results[0]?.value).toBeDefined();
   });
 
-  it("calls sendManifestEmail with correct tripName and recipient", async () => {
+  it("creates accepted email and skipped WhatsApp delivery records", async () => {
     requireAuthMock.mockResolvedValue(FAKE_ADMIN as never);
     setupManifestDbMocks();
 
-    await request(buildApp())
+    const res = await request(buildApp())
       .post("/api/trips/trip-001/manifest/send")
       .send({ channel: "email", to: "passageiros@teste.com.br" });
 
-    expect(mockSendManifestEmail).toHaveBeenCalledTimes(1);
-    const [callArgs] = mockSendManifestEmail.mock.calls;
-    expect(callArgs[0]).toMatchObject({
-      to: "passageiros@teste.com.br",
-      tripName: FAKE_TRIP.name,
-    });
+    expect(res.status).toBe(200);
+    const deliveries = mockDispatchOutboundMessage.mock.results[0]?.value
+      ? await mockDispatchOutboundMessage.mock.results[0].value
+      : null;
+    expect(deliveries.deliveries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ channel: "email", status: "accepted" }),
+      expect.objectContaining({ channel: "whatsapp", status: "skipped" }),
+    ]));
   });
 
   it("queues only manifest identifiers and recipient metadata", async () => {
@@ -451,7 +483,7 @@ describe("POST /api/trips/:id/manifest/send — manifest send route wiring", () 
     expect(payload).not.toHaveProperty("pdfBase64");
   });
 
-  it("passes a non-empty PDF buffer (starts with %PDF-) to sendManifestEmail", async () => {
+  it("stores PDF metadata while dispatching through the outbound ledger", async () => {
     requireAuthMock.mockResolvedValue(FAKE_ADMIN as never);
     setupManifestDbMocks();
 
@@ -459,13 +491,12 @@ describe("POST /api/trips/:id/manifest/send — manifest send route wiring", () 
       .post("/api/trips/trip-001/manifest/send")
       .send({ channel: "email", to: "passageiros@teste.com.br" });
 
-    expect(mockSendManifestEmail).toHaveBeenCalledTimes(1);
-    const callArgs = mockSendManifestEmail.mock.calls[0][0] as { pdfAttachment: Buffer };
-    expect(callArgs.pdfAttachment).toBeInstanceOf(Buffer);
-    expect(callArgs.pdfAttachment.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: expect.objectContaining({ tripId: FAKE_TRIP.id, pdfBytes: expect.any(Number) }),
+    }));
   });
 
-  it("passes non-empty htmlContent (with dd/MM/yyyy departure date) to sendManifestEmail", async () => {
+  it("passes rendered manifest HTML to the outbound email delivery", async () => {
     requireAuthMock.mockResolvedValue(FAKE_ADMIN as never);
     setupManifestDbMocks();
 
@@ -473,10 +504,9 @@ describe("POST /api/trips/:id/manifest/send — manifest send route wiring", () 
       .post("/api/trips/trip-001/manifest/send")
       .send({ channel: "email", to: "passageiros@teste.com.br" });
 
-    const callArgs = mockSendManifestEmail.mock.calls[0][0] as { htmlContent: string };
-    expect(typeof callArgs.htmlContent).toBe("string");
-    expect(callArgs.htmlContent).toContain("04/07/2026");
-    expect(callArgs.htmlContent).toContain("08:30");
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      email: expect.objectContaining({ html: expect.stringContaining("04/07/2026") }),
+    }));
   });
 
   it("returns whatsapp URL for whatsapp channel", async () => {

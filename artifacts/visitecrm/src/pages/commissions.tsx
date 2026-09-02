@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, Pencil, Trash2, DollarSign, CheckCircle, Clock, AlertTriangle, RefreshCw } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { COMMISSION_STATUS_LABELS as STATUS_LABELS, COMMISSION_STATUS_COLORS as STATUS_COLORS } from "@/lib/labels";
+import { QueryErrorState } from "@/components/query-error-state";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 
@@ -58,10 +59,10 @@ export default function Commissions() {
 
   const ruleType = ruleDisplayType === "tiered" ? "percentage" : ruleDisplayType as "percentage" | "fixed";
 
-  const { data: commissionsRaw, isLoading: loadingCommissions, refetch: refetchCommissions } = useListCommissions();
-  const { data: rulesData, isLoading: loadingRules, refetch: refetchRules } = useListCommissionRules();
+  const { data: commissionsRaw, isLoading: loadingCommissions, isError: commissionsError, error: commissionsQueryError, refetch: refetchCommissions } = useListCommissions();
+  const { data: rulesData, isLoading: loadingRules, isError: rulesError, error: rulesQueryError, refetch: refetchRules } = useListCommissionRules();
   const { data: tripsData } = useListTrips({ limit: 100 });
-  const { data: failedSyncData, isLoading: loadingFailedSync, refetch: refetchFailedSync } = useListReservations({ commissionSyncStatus: "failed", limit: 100 });
+  const { data: failedSyncData, isLoading: loadingFailedSync, isError: failedSyncError, error: failedSyncQueryError, refetch: refetchFailedSync } = useListReservations({ commissionSyncStatus: "failed", limit: 100 });
   const updateCommission = useUpdateCommission();
   const createRule = useCreateCommissionRule();
   const updateRule = useUpdateCommissionRule();
@@ -204,7 +205,7 @@ export default function Commissions() {
         </Card>
       </div>
 
-      {(loadingFailedSync || failedSyncReservations.length > 0) && (
+      {(loadingFailedSync || failedSyncError || failedSyncReservations.length > 0) && (
         <Card className="border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/20">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-orange-700 dark:text-orange-400 text-base">
@@ -238,6 +239,12 @@ export default function Commissions() {
                     Array.from({ length: 3 }).map((_, i) => (
                       <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                     ))
+                  ) : failedSyncError ? (
+                    <TableRow>
+                      <TableCell colSpan={6}>
+                        <QueryErrorState resourceLabel="as reservas com falha de sincronização" error={failedSyncQueryError} onRetry={() => { void refetchFailedSync(); }} compact />
+                      </TableCell>
+                    </TableRow>
                   ) : failedSyncReservations.map(r => (
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-sm">{r.reservationNumber ?? r.id.slice(0, 10) + "…"}</TableCell>
@@ -324,6 +331,12 @@ export default function Commissions() {
                   Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>{Array.from({ length: 7 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                   ))
+                ) : commissionsError ? (
+                  <TableRow>
+                    <TableCell colSpan={7}>
+                      <QueryErrorState resourceLabel="as comissões" error={commissionsQueryError} onRetry={() => { void refetchCommissions(); }} compact />
+                    </TableCell>
+                  </TableRow>
                 ) : commissions.length === 0 ? (
                   <TableRow><TableCell colSpan={7} className="text-center py-10 text-muted-foreground">Nenhuma comissão encontrada.</TableCell></TableRow>
                 ) : commissions.map(c => (
@@ -379,6 +392,12 @@ export default function Commissions() {
                   Array.from({ length: 3 }).map((_, i) => (
                     <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                   ))
+                ) : rulesError ? (
+                  <TableRow>
+                    <TableCell colSpan={6}>
+                      <QueryErrorState resourceLabel="as regras de comissão" error={rulesQueryError} onRetry={() => { void refetchRules(); }} compact />
+                    </TableCell>
+                  </TableRow>
                 ) : !rulesData?.length ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">Nenhuma regra cadastrada.</TableCell></TableRow>
                 ) : rulesData.map(rule => (

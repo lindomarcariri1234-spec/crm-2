@@ -13,15 +13,38 @@ import request from "supertest";
 // Hoisted mocks — must be defined before any vi.mock factory runs
 // ---------------------------------------------------------------------------
 
-const { mockSendEmail, capturedUpdates, updateMocks } = vi.hoisted(() => {
+const {
+  mockSendEmail,
+  mockDispatchOutboundMessage,
+  mockReversePaidReferralBonus,
+  mockDispatchReferralReversedEmail,
+  capturedUpdates,
+  updateMocks,
+} = vi.hoisted(() => {
   const capturedUpdates: Array<{ set: Record<string, unknown> }> = [];
-  const where = vi.fn().mockResolvedValue([]);
+  const returning = vi.fn().mockResolvedValue([{ id: "ref-001" }]);
+  const where = vi.fn().mockImplementation(() => ({ returning }));
   const set = vi.fn().mockImplementation((s: Record<string, unknown>) => {
     capturedUpdates.push({ set: s });
-    return { where };
+    return { where, returning };
   });
   const update = vi.fn().mockImplementation(() => ({ set }));
-  return { mockSendEmail: vi.fn(), capturedUpdates, updateMocks: { update, set, where } };
+  const mockDispatchOutboundMessage = vi.fn().mockResolvedValue({
+    message: { id: "outbound-1", status: "accepted" },
+    created: true,
+    deliveries: [
+      { id: "delivery-email", channel: "email", status: "accepted", externalId: "msg-001" },
+      { id: "delivery-whatsapp", channel: "whatsapp", status: "accepted", externalId: "wa-001" },
+    ],
+  });
+  return {
+    mockSendEmail: vi.fn(),
+    mockDispatchOutboundMessage,
+    mockReversePaidReferralBonus: vi.fn(),
+    mockDispatchReferralReversedEmail: vi.fn().mockResolvedValue(undefined),
+    capturedUpdates,
+    updateMocks: { update, set, where, returning },
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -96,6 +119,27 @@ vi.mock("../queues/index.js", () => ({
   getReferralEmailQueue: vi.fn().mockReturnValue(null),
 }));
 
+vi.mock("../queues/email-helpers.js", () => ({
+  enqueueReferralBonusPaidEmail: vi.fn(async (
+    props: { referrerName: string; referrerEmail: string; bonusAmount: number; agencyName: string },
+    tenantId: string,
+    clientId: string,
+    referralId: string,
+  ) => mockDispatchOutboundMessage({
+    tenantId,
+    eventType: "bonus_paid",
+    idempotencyKey: `referral:${clientId}:bonus_paid`,
+    recipient: { type: "client", id: clientId },
+    email: { subject: `Seu bônus de indicação foi pago! — ${props.agencyName}`, html: `<p>${props.referrerName}: ${props.bonusAmount}</p>` },
+    whatsapp: { text: `Bônus pago: ${props.bonusAmount}` },
+    origin: "referral-bonus_paid",
+    metadata: { referralId },
+  })),
+  dispatchReferralReversedEmail: mockDispatchReferralReversedEmail,
+  dispatchReferralExpiringSoonEmail: vi.fn(),
+  dispatchReferralBonusReleasedEmail: vi.fn(),
+}));
+
 vi.mock("../lib/redis.js", () => ({
   areWorkersEnabled: vi.fn().mockReturnValue(false),
   getRedis: vi.fn().mockReturnValue(null),
@@ -112,6 +156,10 @@ vi.mock("../queues/whatsapp-helpers.js", () => ({
   dispatchWhatsAppReferralBonusPaid: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
+}));
+
 vi.mock("../lib/whatsapp.js", () => ({
   sendWhatsAppMessage: vi.fn().mockResolvedValue({ success: true }),
   sendTenantWhatsAppMessage: vi.fn().mockResolvedValue({ success: true }),
@@ -121,6 +169,10 @@ vi.mock("../lib/whatsapp.js", () => ({
 vi.mock("../lib/referral-tiers.js", () => ({
   DEFAULT_TIERS: [],
   computeReferralTier: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock("../services/reservation-referral-conversion.js", () => ({
+  reversePaidReferralBonus: mockReversePaidReferralBonus,
 }));
 
 // ---------------------------------------------------------------------------
@@ -144,6 +196,7 @@ interface DbChain extends PromiseLike<unknown[]> {
   groupBy(...cols: unknown[]): DbChain;
   limit(n: number): DbChain;
   offset(n: number): DbChain;
+  returning(...fields: unknown[]): DbChain;
 }
 
 function makeChain(data: unknown[]): DbChain {
@@ -156,6 +209,7 @@ function makeChain(data: unknown[]): DbChain {
     groupBy:  vi.fn().mockImplementation(() => makeChain(data)),
     limit:    vi.fn().mockImplementation(() => makeChain(data)),
     offset:   vi.fn().mockImplementation(() => makeChain(data)),
+    returning: vi.fn().mockImplementation(() => makeChain(data)),
   } as DbChain;
   return chain;
 }
@@ -182,6 +236,7 @@ function buildApp() {
 // ---------------------------------------------------------------------------
 
 const FAKE_ADMIN  = { id: "user-001", tenantId: "tenant-001", role: ROLES.AGENCY_ADMIN, name: "Admin", email: "admin@ag.com" };
+const FAKE_MANAGER = { id: "user-manager", tenantId: "tenant-001", role: ROLES.AGENCY_MANAGER, name: "Manager", email: "manager@ag.com" };
 const FAKE_VIEWER = { id: "user-002", tenantId: "tenant-001", role: "viewer",            name: "Viewer", email: "viewer@ag.com" };
 
 function makeReferral(overrides: Record<string, unknown> = {}) {
@@ -227,13 +282,15 @@ function makeRefetchRow(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   capturedUpdates.length = 0;
-  updateMocks.where.mockResolvedValue([]);
+  updateMocks.where.mockImplementation(() => ({ returning: updateMocks.returning }));
+  updateMocks.returning.mockResolvedValue([{ id: "ref-001" }]);
   updateMocks.set.mockImplementation((s: Record<string, unknown>) => {
     capturedUpdates.push({ set: s });
-    return { where: updateMocks.where };
+    return { where: updateMocks.where, returning: updateMocks.returning };
   });
   updateMocks.update.mockImplementation(() => ({ set: updateMocks.set }));
   mockSendEmail.mockResolvedValue({ success: true, messageId: "msg-001" });
+  mockReversePaidReferralBonus.mockReset();
 });
 
 // ---------------------------------------------------------------------------
@@ -282,20 +339,37 @@ describe("POST /api/referrals/:id/pay-bonus", () => {
     expect(capturedUpdates).toHaveLength(0);
   });
 
-  it("sends email to the live JOIN email (clientsTable), not the stored snapshot", async () => {
+  it("returns 422 when a completed referral has no confirmed conversion date", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeJoinedRow({ convertedAt: null, bonusPaid: false })]));
+
+    const res = await request(buildApp()).post("/api/referrals/ref-001/pay-bonus").send();
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("REFERRAL_CONVERSION_STATE");
+    expect(capturedUpdates).toHaveLength(0);
+  });
+
+  it("creates accepted email and WhatsApp deliveries for the live referrer", async () => {
     (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
     (db.select as ReturnType<typeof vi.fn>)
       .mockImplementationOnce(() => makeChain([makeJoinedRow()]))
       .mockImplementationOnce(() => makeChain([]))                          // referralSettings (grace period)
       .mockImplementationOnce(() => makeChain([makeRefetchRow({ bonusPaid: true })]));
 
-    await request(buildApp()).post("/api/referrals/ref-001/pay-bonus").send();
+    const res = await request(buildApp()).post("/api/referrals/ref-001/pay-bonus").send();
 
-    expect(mockSendEmail).toHaveBeenCalledOnce();
-    const args = mockSendEmail.mock.calls[0][0] as Record<string, string>;
-    expect(args.to).toBe("maria@live.com");
-    expect(args.fromName).toBe("Agência Teste");
-    expect(args.html).toContain("50,00");
+    expect(res.status).toBe(200);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: "tenant-001",
+      recipient: { type: "client", id: "client-001" },
+    }));
+    const outbound = await mockDispatchOutboundMessage.mock.results[0].value;
+    expect(outbound.deliveries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ channel: "email", status: "accepted" }),
+      expect.objectContaining({ channel: "whatsapp", status: "accepted" }),
+    ]));
   });
 
   it("skips email and still updates when both live and stored referrerEmail are null", async () => {
@@ -308,14 +382,14 @@ describe("POST /api/referrals/:id/pay-bonus", () => {
     const res = await request(buildApp()).post("/api/referrals/ref-001/pay-bonus").send();
 
     expect(res.status).toBe(200);
-    expect(mockSendEmail).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
     expect(capturedUpdates).toHaveLength(1);
     expect(capturedUpdates[0].set.bonusPaid).toBe(true);
   });
 
   it("still marks bonus as paid even when email dispatch throws", async () => {
     (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
-    mockSendEmail.mockRejectedValueOnce(new Error("SMTP error"));
+    mockDispatchOutboundMessage.mockRejectedValueOnce(new Error("dispatch error"));
     (db.select as ReturnType<typeof vi.fn>)
       .mockImplementationOnce(() => makeChain([makeJoinedRow()]))
       .mockImplementationOnce(() => makeChain([]))                          // referralSettings (grace period)
@@ -365,6 +439,211 @@ describe("POST /api/referrals/:id/pay-bonus", () => {
     expect(res.body).not.toHaveProperty("referrerClientWhatsapp");
     expect(res.body).not.toHaveProperty("referrerClientPhone");
     expect(res.body).not.toHaveProperty("tenantName");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/referrals/:id — financial state protection
+// ---------------------------------------------------------------------------
+
+describe("PATCH /api/referrals/:id — financial state protection", () => {
+  it("rejects direct bonus payment edits", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeReferral()]));
+
+    const res = await request(buildApp())
+      .patch("/api/referrals/ref-001")
+      .send({ bonusPaid: true });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("REFERRAL_PAYMENT_STATE");
+    expect(capturedUpdates).toHaveLength(0);
+  });
+
+  it("rejects direct conversion and reversal status edits", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeReferral()]));
+
+    const conversionRes = await request(buildApp())
+      .patch("/api/referrals/ref-001")
+      .send({ convertedAt: "2026-02-01T00:00:00.000Z" });
+
+    expect(conversionRes.status).toBe(422);
+    expect(conversionRes.body.code).toBe("REFERRAL_CONVERSION_STATE");
+
+    vi.clearAllMocks();
+    capturedUpdates.length = 0;
+    updateMocks.returning.mockResolvedValue([{ id: "ref-001" }]);
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeReferral()]));
+
+    const reversalRes = await request(buildApp())
+      .patch("/api/referrals/ref-001")
+      .send({ status: "reversed" });
+
+    expect(reversalRes.status).toBe(422);
+    expect(reversalRes.body.code).toBe("REFERRAL_INVALID_TRANSITION");
+    expect(capturedUpdates).toHaveLength(0);
+  });
+
+  it("allows only the non-financial pending-to-expired transition", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeReferral({ status: "pending" })]))
+      .mockImplementationOnce(() => makeChain([makeReferral({ status: "expired", isActive: false })]));
+
+    const res = await request(buildApp())
+      .patch("/api/referrals/ref-001")
+      .send({ status: "expired", isActive: false });
+
+    expect(res.status).toBe(200);
+    expect(capturedUpdates).toHaveLength(1);
+    expect(capturedUpdates[0].set).toMatchObject({ status: "expired", isActive: false });
+  });
+
+  it("never leaves an expired referral active", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeReferral({ status: "pending" })]));
+
+    const res = await request(buildApp())
+      .patch("/api/referrals/ref-001")
+      .send({ status: "expired", isActive: true });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("REFERRAL_INVALID_TRANSITION");
+    expect(capturedUpdates).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrent payment claim
+// ---------------------------------------------------------------------------
+
+describe("POST /api/referrals/:id/pay-bonus — concurrent claim", () => {
+  it("sends one delivery when two requests race for the same unpaid bonus", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementation(() => makeChain([makeJoinedRow()]));
+    updateMocks.returning
+      .mockResolvedValueOnce([{ id: "ref-001" }])
+      .mockResolvedValueOnce([]);
+
+    const responses = await Promise.all([
+      request(buildApp()).post("/api/referrals/ref-001/pay-bonus").send(),
+      request(buildApp()).post("/api/referrals/ref-001/pay-bonus").send(),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect(capturedUpdates).toHaveLength(2);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/referrals/:id/reverse-paid-bonus
+// ---------------------------------------------------------------------------
+
+describe("POST /api/referrals/:id/reverse-paid-bonus", () => {
+  it("requires financial edit permission before inspecting the confirmation body", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_MANAGER);
+
+    const res = await request(buildApp())
+      .post("/api/referrals/ref-001/reverse-paid-bonus")
+      .send({ reason: "Correção", confirmed: true });
+
+    expect(res.status).toBe(403);
+    expect(mockReversePaidReferralBonus).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit positive confirmation", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+
+    const res = await request(buildApp())
+      .post("/api/referrals/ref-001/reverse-paid-bonus")
+      .send({ reason: "Correção" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("REFERRAL_REVERSAL_CONFIRMATION");
+    expect(mockReversePaidReferralBonus).not.toHaveBeenCalled();
+  });
+
+  it("passes the trimmed reason and authenticated operator to the financial service", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    mockReversePaidReferralBonus.mockResolvedValue({
+      reversalId: "audit-001",
+      referralId: "ref-001",
+      reservationId: "reservation-001",
+      referrerId: "client-001",
+      referredId: "client-002",
+      bonusAmount: "50.00",
+      reason: "Correção financeira",
+      alreadyReversed: false,
+    });
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeRefetchRow({ status: "reversed", bonusPaid: true })]));
+
+    const res = await request(buildApp())
+      .post("/api/referrals/ref-001/reverse-paid-bonus")
+      .send({ reason: "  Correção financeira  ", confirmed: true });
+
+    expect(res.status).toBe(200);
+    expect(mockReversePaidReferralBonus).toHaveBeenCalledWith(
+      "ref-001",
+      FAKE_ADMIN.tenantId,
+      "Correção financeira",
+      FAKE_ADMIN.id,
+    );
+    expect(mockDispatchReferralReversedEmail).toHaveBeenCalledWith(expect.objectContaining({
+      referralId: "ref-001",
+      reason: "Correção financeira",
+      bonusAmount: "50.00",
+    }));
+    expect(res.body.reversal).toEqual({
+      id: "audit-001",
+      amount: "50.00",
+      reason: "Correção financeira",
+      alreadyApplied: false,
+    });
+  });
+
+  it("does not notify again when the service reports an idempotent replay", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    mockReversePaidReferralBonus.mockResolvedValue({
+      reversalId: "audit-001",
+      referralId: "ref-001",
+      reservationId: null,
+      referrerId: "client-001",
+      referredId: null,
+      bonusAmount: "50.00",
+      reason: "Correção original",
+      alreadyReversed: true,
+    });
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([makeRefetchRow({ status: "reversed", bonusPaid: true })]));
+
+    const res = await request(buildApp())
+      .post("/api/referrals/ref-001/reverse-paid-bonus")
+      .send({ reason: "Tentativa repetida", confirmed: true });
+
+    expect(res.status).toBe(200);
+    expect(mockDispatchReferralReversedEmail).not.toHaveBeenCalled();
+    expect(res.body.reversal.alreadyApplied).toBe(true);
+  });
+});
+
+describe("PATCH /api/referrals/:id/reverse", () => {
+  it("blocks AGENCY_MANAGER because referral reversal is a financial mutation", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_MANAGER);
+
+    const res = await request(buildApp())
+      .patch("/api/referrals/ref-001/reverse")
+      .send({ reason: "Correção" });
+
+    expect(res.status).toBe(403);
   });
 });
 

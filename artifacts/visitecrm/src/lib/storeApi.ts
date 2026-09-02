@@ -1,3 +1,5 @@
+import type { LinkedData } from "@/lib/linked-data";
+
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export interface VariantOption {
@@ -17,7 +19,8 @@ async function authHeaders(): Promise<HeadersInit> {
 async function req<T = void>(
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  options?: Pick<RequestInit, "cache">,
 ): Promise<T> {
   const headers = await authHeaders();
   const res = await fetch(`${BASE}/api${path}`, {
@@ -25,6 +28,8 @@ async function req<T = void>(
     headers,
     credentials: "include",
     body: body != null ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+    ...options,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -39,7 +44,7 @@ async function req<T = void>(
 }
 
 export const storeApi = {
-  getSettings: () => req<StoreSettings>("GET", "/store/settings"),
+  getSettings: () => req<StoreSettings>("GET", "/store/settings", undefined, { cache: "no-store" }),
   updateSettings: (data: Partial<StoreSettings>) =>
     req<StoreSettings>("PUT", "/store/settings", data),
   initStore: (data: InitStoreInput) =>
@@ -124,12 +129,15 @@ export class PublicApiError extends Error {
 async function publicReq<T>(
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  options?: Pick<RequestInit, "cache">,
 ): Promise<T> {
   const res = await fetch(`${BASE}/api${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
     body: body != null ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+    ...options,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -140,7 +148,7 @@ async function publicReq<T>(
 
 export const publicStoreApi = {
   getStore: async (slug: string): Promise<PublicStore> => {
-    const raw = await publicReq<Record<string, unknown>>("GET", `/public/store/${slug}`);
+    const raw = await publicReq<Record<string, unknown>>("GET", `/public/store/${slug}`, undefined, { cache: "no-store" });
     return {
       ...raw,
       logoUrl: (raw.logoUrl ?? raw.logo) as string | null,
@@ -202,9 +210,9 @@ export const publicStoreApi = {
     return publicReq<StoreReview[]>("GET", `/public/store/${slug}/reviews${qs}`);
   },
   createOrder: (slug: string, data: CreateOrderInput) =>
-    publicReq<StoreOrder>("POST", `/public/store/${slug}/orders`, data),
+    publicReq<StoreCheckoutOrder>("POST", `/public/store/${slug}/orders`, data),
   getOrder: (slug: string, orderNumber: string, paymentToken: string) =>
-    publicReq<StoreOrder>(
+    publicReq<StoreCheckoutOrder>(
       "GET",
       `/public/store/${slug}/orders/${encodeURIComponent(orderNumber)}?token=${encodeURIComponent(paymentToken)}`
     ),
@@ -526,7 +534,7 @@ export interface StoreOrderItem {
   metadata?: Record<string, unknown> | null;
 }
 
-export interface StoreOrder {
+export interface StoreOrder extends LinkedData {
   id: string;
   storeId: string;
   tenantId: string;
@@ -569,12 +577,16 @@ export interface StoreOrder {
   updatedAt: string;
   itemCount?: number;
   items: StoreOrderItem[];
-  paymentToken?: string | null;
   reservationExpiresAt?: string | null;
   referralDiscountType?: string | null;
   referralDiscountPct?: number | null;
   referralDiscountAmount?: number | null;
   couponDiscountAmount?: number | null;
+}
+
+/** Public checkout response only; administrative order responses never include this token. */
+export interface StoreCheckoutOrder extends StoreOrder {
+  paymentToken?: string | null;
 }
 
 export interface StoreCoupon {

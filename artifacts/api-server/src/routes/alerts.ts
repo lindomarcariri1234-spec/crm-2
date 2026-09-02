@@ -7,6 +7,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { AGENCY_STAFF_ROLES } from '../lib/tenant';
 import { PAYMENT_STATUS, PAYMENT_TYPE, DEAL_STATUS, TRIP_STATUS, REFERRAL_STATUS, ROLES } from "@workspace/permissions";
 import { findReferralReversalGaps, countReferralReversalGaps } from "../lib/referral-reversal-gaps";
+import { findStorefrontPipelineGaps } from "../lib/storefront-pipeline-gaps";
 import { formatBRL, localToday } from "@workspace/shared";
 
 const router = Router();
@@ -68,6 +69,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
       referralReversalGaps,
       referralReversalGapsCount,
       overlapQueryResult,
+      storefrontPipelineGaps,
     ] = await Promise.all([
       // 1. Contas a receber vencendo hoje
       db.select({
@@ -197,6 +199,10 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
           AND t1.departure_date <= COALESCE(t2.return_date, t2.departure_date)
           AND COALESCE(t1.return_date, t1.departure_date) >= t2.departure_date
       `),
+
+      // 11. Reservas ativas da vitrine sem card correspondente no Pipeline.
+      // Read-only reconciliation; the alert directs staff to investigate.
+      findStorefrontPipelineGaps(tenantId),
     ]);
 
     const alerts: Alert[] = [];
@@ -281,6 +287,29 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
         description: "Considere entrar em contato para reativar",
         actionHref: "/pipeline",
         count: staleLeadCount,
+      });
+    }
+
+    if (storefrontPipelineGaps.total > 0) {
+      const MAX_SHOWN = 3;
+      const shown = storefrontPipelineGaps.gaps
+        .slice(0, MAX_SHOWN)
+        .map((gap) => {
+          const reservationRef = gap.reservationNumber ?? gap.reservationId;
+          return `#${reservationRef} (pedido ${gap.orderNumber})`;
+        });
+      const remainder = storefrontPipelineGaps.total - shown.length;
+      const references = shown.join("; ") + (remainder > 0 ? ` e mais ${remainder}` : "");
+
+      alerts.push({
+        id: "storefront-reservations-without-pipeline-card",
+        type: "warning",
+        category: "Pipeline",
+        title: `${storefrontPipelineGaps.total} reserva(s) da vitrine sem card no Pipeline`,
+        description: `${references}. Abra o Pipeline para criar ou associar o card manualmente.`,
+        actionHref: "/pipeline",
+        count: storefrontPipelineGaps.total,
+        reservationIds: storefrontPipelineGaps.gaps.map((gap) => gap.reservationId),
       });
     }
 

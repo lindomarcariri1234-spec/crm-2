@@ -51,7 +51,7 @@ const {
     };
     for (const m of [
       "from", "where", "orderBy", "limit", "offset",
-      "innerJoin", "leftJoin", "having", "groupBy", "returning",
+      "innerJoin", "leftJoin", "having", "groupBy", "returning", "for",
     ]) {
       c[m] = () => c;
     }
@@ -210,7 +210,7 @@ vi.mock("../lib/ai-client.js", () => ({
 // Import route + middleware AFTER all mocks; import eq for call inspection
 // ---------------------------------------------------------------------------
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { requireAuth } from "../lib/tenant.js";
 import clientsRouter from "../routes/clients.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
@@ -417,22 +417,27 @@ describe("POST /api/clients — CPF upsert / deduplication", () => {
 
     mockTransaction.mockImplementationOnce(
       async (cb: (tx: unknown) => Promise<unknown>) => {
-        const txSelect = vi.fn(() => makeChain([])); // no existing CPF match
+        const txSelectResults = [[], [], [], [newClient]];
+        const txSelect = vi.fn(() => makeChain(txSelectResults.shift() ?? [])); // CPF, email, phone, final client
         const txUpdateReturning  = vi.fn().mockResolvedValue(TENANT_UPDATE_RESULT);
         const txUpdateWhere      = vi.fn(() => ({ returning: txUpdateReturning }));
         const txUpdateSet        = vi.fn(() => ({ where: txUpdateWhere }));
         const txUpdate           = vi.fn(() => ({ set: txUpdateSet }));
         const txInsertReturning  = vi.fn().mockResolvedValue([newClient]);
         const txInsertOnConflict = vi.fn(() => ({ returning: txInsertReturning }));
-        const txInsertValues     = vi.fn(() => ({ onConflictDoUpdate: txInsertOnConflict }));
+        const txInsertValues     = vi.fn(() => ({
+          onConflictDoUpdate: txInsertOnConflict,
+          returning: txInsertReturning,
+        }));
         const txInsert           = vi.fn(() => ({ values: txInsertValues }));
-        return cb({ select: txSelect, update: txUpdate, insert: txInsert });
+        const txExecute          = vi.fn().mockResolvedValue([]);
+        return cb({ select: txSelect, update: txUpdate, insert: txInsert, execute: txExecute });
       },
     );
 
     const res = await request(app).post("/api/clients").send(VALID_BODY);
 
-    expect(res.status).toBe(201);
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.isNew).toBe(true);
     expect(res.body.id).toBe("gen-id");
   });
@@ -443,7 +448,8 @@ describe("POST /api/clients — CPF upsert / deduplication", () => {
     mockTransaction.mockImplementationOnce(
       async (cb: (tx: unknown) => Promise<unknown>) => {
         // CPF match found → tx.update (seq bump) is skipped; upsert returns existing row
-        const txSelect           = vi.fn(() => makeChain([{ id: "existing-client-id" }]));
+        const txSelectResults    = [[{ id: "existing-client-id" }], [existingClient]];
+        const txSelect           = vi.fn(() => makeChain(txSelectResults.shift() ?? []));
         const txInsertReturning  = vi.fn().mockResolvedValue([existingClient]);
         const txInsertOnConflict = vi.fn(() => ({ returning: txInsertReturning }));
         const txInsertValues     = vi.fn(() => ({ onConflictDoUpdate: txInsertOnConflict }));
@@ -451,7 +457,8 @@ describe("POST /api/clients — CPF upsert / deduplication", () => {
         const txUpdate           = vi.fn(() => ({
           set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
         }));
-        return cb({ select: txSelect, update: txUpdate, insert: txInsert });
+        const txExecute          = vi.fn().mockResolvedValue([]);
+        return cb({ select: txSelect, update: txUpdate, insert: txInsert, execute: txExecute });
       },
     );
 
@@ -474,38 +481,129 @@ describe("POST /api/clients — CPF upsert / deduplication", () => {
     expect(mockTransaction).not.toHaveBeenCalled();
   });
 
-  it("creates the client and returns HTTP 201 when CPF is absent, bypassing the deduplication select entirely", async () => {
-    // cpf is now optional (zod.string().nullish()). When absent, cleanedCpf stays null,
-    // so the `if (cleanedCpf)` guard in the route skips the dedup tx.select() call.
-    // The insert proceeds normally; the partial unique index (IS NOT NULL) means null
-    // CPF rows never trigger the onConflictDoUpdate clause.
+  it("returns HTTP 409 when the same name has an equivalent formatted WhatsApp", async () => {
+    queueDbResult([{
+      id: "existing-client-id",
+      name: VALID_BODY.name,
+      customerCode: "AG-202608-00001",
+      whatsapp: "5511999999999",
+    }]);
+
+    const formattedWhatsapp = "+55 (11) 99999-9999";
+    const res = await request(app)
+      .post("/api/clients")
+      .send({
+        ...VALID_BODY,
+        cpf: undefined,
+        whatsapp: formattedWhatsapp,
+        allowMissingData: true,
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      conflict: "name_whatsapp",
+      existingClient: { id: "existing-client-id" },
+    });
+    const sqlCalls = vi.mocked(sql).mock.calls as unknown[][];
+    expect(sqlCalls.some((call) => call.includes("5511999999999"))).toBe(true);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("creates the client when CPF is absent and missing-data permission is enabled", async () => {
+    const { cpf: _omit, ...bodyWithoutCpf } = VALID_BODY;
     const newClient = makeFakeClient({ id: "gen-id", cpf: null });
-    let txSelectWasCalled = false;
 
     mockTransaction.mockImplementationOnce(
       async (cb: (tx: unknown) => Promise<unknown>) => {
-        const txSelect = vi.fn((..._args: unknown[]) => {
-          txSelectWasCalled = true;
-          return makeChain([]);
-        });
-        const txUpdateReturning  = vi.fn().mockResolvedValue(TENANT_UPDATE_RESULT);
-        const txUpdateWhere      = vi.fn(() => ({ returning: txUpdateReturning }));
-        const txUpdateSet        = vi.fn(() => ({ where: txUpdateWhere }));
-        const txUpdate           = vi.fn(() => ({ set: txUpdateSet }));
-        const txInsertReturning  = vi.fn().mockResolvedValue([newClient]);
-        const txInsertOnConflict = vi.fn(() => ({ returning: txInsertReturning }));
-        const txInsertValues     = vi.fn(() => ({ onConflictDoUpdate: txInsertOnConflict }));
-        const txInsert           = vi.fn(() => ({ values: txInsertValues }));
-        return cb({ select: txSelect, update: txUpdate, insert: txInsert });
+        const txSelectResults = [[], [], [newClient]];
+        const txSelect = vi.fn(() => makeChain(txSelectResults.shift() ?? []));
+        const txUpdateReturning = vi.fn().mockResolvedValue(TENANT_UPDATE_RESULT);
+        const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
+        const txUpdateSet = vi.fn(() => ({ where: txUpdateWhere }));
+        const txUpdate = vi.fn(() => ({ set: txUpdateSet }));
+        const txInsertReturning = vi.fn().mockResolvedValue([newClient]);
+        const txInsertValues = vi.fn(() => ({ returning: txInsertReturning }));
+        const txInsert = vi.fn(() => ({ values: txInsertValues }));
+        const txExecute = vi.fn().mockResolvedValue([]);
+        return cb({ select: txSelect, update: txUpdate, insert: txInsert, execute: txExecute });
       },
     );
 
-    const { cpf: _omit, ...bodyWithoutCpf } = VALID_BODY;
-    const res = await request(app).post("/api/clients").send(bodyWithoutCpf);
+    const res = await request(app)
+      .post("/api/clients")
+      .send({ ...bodyWithoutCpf, allowMissingData: true, forceCreate: true });
 
     expect(res.status).toBe(201);
     expect(res.body.isNew).toBe(true);
-    // The deduplication select query must NOT have fired — null CPF bypasses it
-    expect(txSelectWasCalled).toBe(false);
+    expect(res.body.id).toBe("gen-id");
+  });
+
+  it("creates the client when email is absent and missing-data permission is enabled", async () => {
+    const { email: _omit, ...bodyWithoutEmail } = VALID_BODY;
+    const newClient = makeFakeClient({ id: "gen-id", email: "" });
+
+    mockTransaction.mockImplementationOnce(
+      async (cb: (tx: unknown) => Promise<unknown>) => {
+        const txSelectResults = [[], [], [newClient]];
+        const txSelect = vi.fn(() => makeChain(txSelectResults.shift() ?? [])); // CPF, phone, final client
+        const txUpdateReturning = vi.fn().mockResolvedValue(TENANT_UPDATE_RESULT);
+        const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
+        const txUpdateSet = vi.fn(() => ({ where: txUpdateWhere }));
+        const txUpdate = vi.fn(() => ({ set: txUpdateSet }));
+        const txInsertReturning = vi.fn().mockResolvedValue([newClient]);
+        const txInsertValues = vi.fn(() => ({ returning: txInsertReturning }));
+        const txInsert = vi.fn(() => ({ values: txInsertValues }));
+        const txExecute = vi.fn().mockResolvedValue([]);
+        return cb({ select: txSelect, update: txUpdate, insert: txInsert, execute: txExecute });
+      },
+    );
+
+    const res = await request(app)
+      .post("/api/clients")
+      .send({ ...bodyWithoutEmail, allowMissingData: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body.isNew).toBe(true);
+    expect(res.body.id).toBe("gen-id");
+  });
+
+  it("creates the client when WhatsApp is absent and missing-data permission is enabled", async () => {
+    const { whatsapp: _omit, ...bodyWithoutWhatsapp } = VALID_BODY;
+    const newClient = makeFakeClient({ id: "gen-id", whatsapp: "" });
+
+    mockTransaction.mockImplementationOnce(
+      async (cb: (tx: unknown) => Promise<unknown>) => {
+        const txSelectResults = [[], [], [newClient]];
+        const txSelect = vi.fn(() => makeChain(txSelectResults.shift() ?? [])); // CPF, email, final client
+        const txUpdateReturning = vi.fn().mockResolvedValue(TENANT_UPDATE_RESULT);
+        const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
+        const txUpdateSet = vi.fn(() => ({ where: txUpdateWhere }));
+        const txUpdate = vi.fn(() => ({ set: txUpdateSet }));
+        const txInsertReturning = vi.fn().mockResolvedValue([newClient]);
+        const txInsertValues = vi.fn(() => ({ returning: txInsertReturning }));
+        const txInsert = vi.fn(() => ({ values: txInsertValues }));
+        const txExecute = vi.fn().mockResolvedValue([]);
+        return cb({ select: txSelect, update: txUpdate, insert: txInsert, execute: txExecute });
+      },
+    );
+
+    const res = await request(app)
+      .post("/api/clients")
+      .send({ ...bodyWithoutWhatsapp, allowMissingData: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body.isNew).toBe(true);
+    expect(res.body.id).toBe("gen-id");
+  });
+
+  it("returns HTTP 400 when CPF is absent without missing-data permission", async () => {
+    const { cpf: _omit, ...bodyWithoutCpf } = VALID_BODY;
+    const res = await request(app)
+      .post("/api/clients")
+      .send(bodyWithoutCpf);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("CLIENT_REQUIRED_DATA");
+    expect(mockTransaction).not.toHaveBeenCalled();
   });
 });

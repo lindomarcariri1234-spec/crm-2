@@ -4,7 +4,7 @@ import { eq, and, desc, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth, ADMIN_ROLES } from "../lib/tenant";
-import { COMMISSION_STATUS } from "@workspace/permissions";
+import { ACTIONS, COMMISSION_STATUS, hasPermission, RESOURCES } from "@workspace/permissions";
 import { roundMoney } from "../lib/pricing";
 import { localToday } from "@workspace/shared";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
@@ -24,7 +24,7 @@ router.get("/commission-rules", async (req, res, next: NextFunction): Promise<vo
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const rules = await db.select().from(commissionRulesTable)
       .where(and(eq(commissionRulesTable.tenantId, me.tenantId), eq(commissionRulesTable.isActive, true)));
     res.json(rules);
@@ -38,7 +38,7 @@ router.post("/commission-rules", async (req, res, next: NextFunction): Promise<v
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateRuleBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     const id = generateId();
@@ -57,7 +57,7 @@ router.patch("/commission-rules/:id", async (req, res, next: NextFunction): Prom
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateRuleBody.partial().safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     await db.update(commissionRulesTable).set(parsed.data)
@@ -76,7 +76,7 @@ router.delete("/commission-rules/:id", async (req, res, next: NextFunction): Pro
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     await db.delete(commissionRulesTable)
       .where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me.tenantId)));
     res.status(204).end();
@@ -217,6 +217,8 @@ router.get("/commissions", async (req, res, next: NextFunction): Promise<void> =
     if (!me) return;
 
     let commissions;
+    // Admins may see the tenant-wide commission ledger; other roles with
+    // COMMISSIONS.VIEW remain restricted to their own commission rows.
     if (ADMIN_ROLES.includes(me.role)) {
       commissions = await db.select(commissionSelect).from(commissionsTable)
         .leftJoin(usersTable, eq(commissionsTable.userId, usersTable.id))
@@ -242,7 +244,7 @@ router.patch("/commissions/:id", async (req, res, next: NextFunction): Promise<v
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = z.object({ status: z.string().optional(), paidAt: z.string().optional() }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
     const updates: Record<string, unknown> = {};

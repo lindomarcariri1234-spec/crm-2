@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS as CATEGORY_LABELS } from "@/lib/labels";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 const CATEGORY_COLORS: Record<string, string> = {
@@ -66,7 +67,7 @@ export default function Expenses() {
 
   const { data: allExpensesForKpi } = useListExpenses({ limit: 500 });
 
-  const { data: expensesData, isLoading, refetch } = useListExpenses({
+  const { data: expensesData, isLoading, isError, refetch } = useListExpenses({
     status: statusFilter || undefined,
     tripId: tripFilter || undefined,
     limit: 200,
@@ -310,6 +311,12 @@ export default function Expenses() {
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
               ))
+            ) : isError ? (
+              <ListLoadErrorRow
+                colSpan={9}
+                onRetry={refetch}
+                message="Não foi possível carregar as despesas."
+              />
             ) : expenses.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">

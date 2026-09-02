@@ -1,9 +1,9 @@
 import { Redis } from "ioredis";
 import { logger } from "./logger";
-import { sendRedisAlertEmail, sendRedisRecoveryEmail, sendRedisDailyLimitAlertEmail } from "@workspace/email";
-import { db, platformSettingsTable, redisAlertLogTable } from "@workspace/db";
+import { db, platformSettingsTable, redisAlertLogTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { generateId } from "./id";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 let _connection: Redis | null = null;
 export let isQueueEnabled = false;
@@ -83,6 +83,11 @@ async function getAlertEmail(): Promise<string | null> {
   return process.env["SUPERADMIN_EMAIL"]?.trim() ?? null;
 }
 
+async function getAlertTenantId(): Promise<string | null> {
+  const [tenant] = await db.select({ id: tenantsTable.id }).from(tenantsTable).limit(1);
+  return tenant?.id ?? null;
+}
+
 // Fire-and-forget: log an alert or recovery event to the DB for audit history.
 function logRedisAlert(eventType: string, alertStatus: string | null, emailTo: string | null): void {
   db.insert(redisAlertLogTable)
@@ -151,10 +156,31 @@ async function maybeFireRedisAlert(): Promise<void> {
   _lastAlertSentAt = Date.now();
   _alertInFlight = true;
 
-  sendRedisAlertEmail({ to: alertEmail, status: currentStatus, dashboardUrl })
-    .then((result) => {
+  const tenantId = await getAlertTenantId();
+  if (!tenantId) {
+    _alertInFlight = false;
+    _lastAlertSentAt = null;
+    logger.error("[redis-alert] No tenant available for outbound alert");
+    return;
+  }
+  dispatchOutboundMessage({
+    tenantId,
+    eventType: "redis_alert",
+    idempotencyKey: `redis-alert:${currentStatus}:${new Date().toISOString().slice(0, 13)}`,
+    recipient: { type: "direct", email: alertEmail },
+    email: {
+      subject: `[VisiteCRM] Redis ${currentStatus}`,
+      html: `<h2>Redis ${currentStatus}</h2><p>A conexão Redis está ${currentStatus}.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+      senderName: "VisiteCRM",
+    },
+    whatsapp: { text: `Alerta VisiteCRM: Redis está ${currentStatus}.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+    origin: "redis-health",
+    metadata: { status: currentStatus, dashboardUrl },
+  }).then((result) => {
+      const delivery = result.deliveries.find((item) => item.channel === "email");
+      const success = delivery?.status === "accepted" || delivery?.status === "pending";
       _alertInFlight = false;
-      if (result.success) {
+      if (success) {
         _hadActiveAlert = true;
         logRedisAlert("alert", currentStatus, alertEmail);
         logger.warn({ status: currentStatus, to: alertEmail }, "[redis-alert] Alert email sent");
@@ -164,7 +190,7 @@ async function maybeFireRedisAlert(): Promise<void> {
           void sendRecoveryEmailIfNeeded();
         }
       } else {
-        logger.error({ status: currentStatus, error: result.error }, "[redis-alert] Failed to send alert email — clearing rate-limit so next error can retry");
+        logger.error({ status: currentStatus, error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-alert] Failed to send alert email — clearing rate-limit so next error can retry");
         _lastAlertSentAt = null;
         _resetPendingRecovery = false; // abort deferred recovery — no alert was delivered
       }
@@ -195,13 +221,28 @@ async function sendRecoveryEmailIfNeeded(): Promise<void> {
   const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
   const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
 
-  sendRedisRecoveryEmail({ to: alertEmail, dashboardUrl })
-    .then((result) => {
-      if (result.success) {
+  const tenantId = await getAlertTenantId();
+  if (!tenantId) return;
+  dispatchOutboundMessage({
+    tenantId,
+    eventType: "redis_recovery",
+    idempotencyKey: `redis-recovery:${new Date().toISOString().slice(0, 13)}`,
+    recipient: { type: "direct", email: alertEmail },
+    email: {
+      subject: "[VisiteCRM] Redis recuperado",
+      html: `<h2>Redis recuperado</h2><p>A conexão Redis foi restabelecida.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+      senderName: "VisiteCRM",
+    },
+    whatsapp: { text: `VisiteCRM: a conexão Redis foi restabelecida.${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+    origin: "redis-health-recovery",
+    metadata: { dashboardUrl },
+  }).then((result) => {
+      const delivery = result.deliveries.find((item) => item.channel === "email");
+      if (delivery?.status === "accepted" || delivery?.status === "pending") {
         logRedisAlert("recovery", null, alertEmail);
         logger.info({ to: alertEmail }, "[redis-recovery] Recovery email sent");
       } else {
-        logger.error({ error: result.error }, "[redis-recovery] Failed to send recovery email");
+        logger.error({ error: delivery?.lastError ?? delivery?.skippedReason }, "[redis-recovery] Failed to send recovery email");
         _lastRecoveryEmailSentAt = null; // reset so next recovery can retry
       }
     })
@@ -630,16 +671,26 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
     const appUrl = (process.env["APP_URL"] ?? "").trim().replace(/\/$/, "");
     const dashboardUrl = appUrl ? `${appUrl}/admin` : null;
 
-    sendRedisDailyLimitAlertEmail({
-      to: alertEmail,
-      usagePct: stats.usagePct,
-      commandCount: stats.commandCount,
-      maxCommands: stats.maxCommands,
-      warningThresholdPct: stats.warningThresholdPct,
-      dashboardUrl,
+    return getAlertTenantId().then((tenantId) => {
+      if (!tenantId) throw new Error("no_tenant_for_outbound_alert");
+      return dispatchOutboundMessage({
+        tenantId,
+        eventType: "redis_daily_limit_alert",
+        idempotencyKey: `redis-daily-limit:${new Date().toISOString().slice(0, 10)}`,
+        recipient: { type: "direct", email: alertEmail },
+        email: {
+          subject: "[VisiteCRM] Limite diário do Redis próxima",
+          html: `<h2>Limite diário do Redis</h2><p>Uso atual: ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}). Limite de alerta: ${stats.warningThresholdPct}%.</p>${dashboardUrl ? `<p><a href="${dashboardUrl}">Abrir painel</a></p>` : ""}`,
+          senderName: "VisiteCRM",
+        },
+        whatsapp: { text: `Alerta VisiteCRM: uso diário do Redis em ${stats.usagePct.toFixed(1)}% (${stats.commandCount}/${stats.maxCommands}).${dashboardUrl ? ` Painel: ${dashboardUrl}` : ""}` },
+        origin: "redis-daily-limit",
+        metadata: { ...stats, dashboardUrl },
+      });
     })
       .then((result) => {
-        if (result.success) {
+        const delivery = result.deliveries.find((item) => item.channel === "email");
+        if (delivery?.status === "accepted" || delivery?.status === "pending") {
           logRedisAlert("daily_limit", null, alertEmail);
           logger.warn(
             { usagePct: Math.round(stats.usagePct * 10) / 10, to: alertEmail },
@@ -647,7 +698,7 @@ export function maybeSendDailyLimitAlert(stats: UpstashDailyStats): void {
           );
         } else {
           logger.error(
-            { error: result.error },
+            { error: delivery?.lastError ?? delivery?.skippedReason },
             "[redis-daily-limit] Failed to send alert email — clearing rate-limit so next check can retry",
           );
           _lastDailyLimitAlertAt = null;

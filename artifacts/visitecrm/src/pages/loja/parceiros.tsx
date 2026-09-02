@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import { ListLoadError } from "@/components/list-load-error";
 import { Plus, Pencil, Download, CheckCircle, XCircle, Clock, Building2, Package, DollarSign, RefreshCw, Store } from "lucide-react";
 
 interface Partner {
@@ -341,30 +342,42 @@ function PartnerProductsPanel({ partnerId }: { partnerId: string }) {
 export default function LojaParceiros() {
   const [partners, setPartners] = useState<Partner[]>([]);
   const [loadingPartners, setLoadingPartners] = useState(true);
+  const [partnersError, setPartnersError] = useState<string | null>(null);
   const [expandedPartner, setExpandedPartner] = useState<string | null>(null);
   const [report, setReport] = useState<CommissionReport[]>([]);
   const [reportPeriod, setReportPeriod] = useState(localToday().slice(0, 7));
   const [loadingReport, setLoadingReport] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const { toast } = useToast();
 
   const loadPartners = useCallback(async () => {
     setLoadingPartners(true);
-    const res = await fetch(`${import.meta.env.BASE_URL}api/parceiros`);
-    if (res.ok) {
+    setPartnersError(null);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/parceiros`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { data: Partner[] };
       setPartners(data.data);
+    } catch (err: unknown) {
+      setPartnersError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingPartners(false);
     }
-    setLoadingPartners(false);
   }, []);
 
   const loadReport = useCallback(async () => {
     setLoadingReport(true);
-    const res = await fetch(`${import.meta.env.BASE_URL}api/parceiros/commissions?period=${reportPeriod}`);
-    if (res.ok) {
+    setReportError(null);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/parceiros/commissions?period=${reportPeriod}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { data: CommissionReport[] };
       setReport(data.data);
+    } catch (err: unknown) {
+      setReportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingReport(false);
     }
-    setLoadingReport(false);
   }, [reportPeriod]);
 
   useEffect(() => { void loadPartners(); }, [loadPartners]);
@@ -434,6 +447,12 @@ export default function LojaParceiros() {
         <TabsContent value="partners" className="mt-4">
           {loadingPartners ? (
             <div className="text-center text-muted-foreground py-12">Carregando parceiros...</div>
+          ) : partnersError ? (
+            <Card>
+              <CardContent>
+                <ListLoadError onRetry={loadPartners} message={partnersError} />
+              </CardContent>
+            </Card>
           ) : partners.length === 0 ? (
             <Card className="text-center py-12">
               <Building2 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
@@ -518,6 +537,8 @@ export default function LojaParceiros() {
             <CardContent className="p-0">
               {loadingReport ? (
                 <div className="text-center py-8 text-muted-foreground">Carregando...</div>
+              ) : reportError ? (
+                <ListLoadError onRetry={loadReport} message={reportError} />
               ) : report.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   Nenhuma comissão registrada em {reportPeriod}.

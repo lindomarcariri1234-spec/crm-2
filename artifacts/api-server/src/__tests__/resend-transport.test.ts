@@ -105,7 +105,7 @@ describe("Replit Resend connector transport", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("RESEND_FROM_EMAIL", "VisiteCRM <reservas@resend.visitecrm.com>");
     const mockSend = vi.fn().mockResolvedValue({ data: { id: "email_direct_123" }, error: null });
-    const directClient = { emails: { send: mockSend } } as Parameters<typeof createApiKeyResend>[1];
+    const directClient = { emails: { send: mockSend } } as unknown as Parameters<typeof createApiKeyResend>[1];
 
     const result = await createApiKeyResend("re_test", directClient).emails.send({
       ...message,
@@ -123,7 +123,7 @@ describe("Replit Resend connector transport", () => {
   it("refuses direct API key delivery in production without a configured sender", async () => {
     vi.stubEnv("NODE_ENV", "production");
     const mockSend = vi.fn();
-    const directClient = { emails: { send: mockSend } } as Parameters<typeof createApiKeyResend>[1];
+    const directClient = { emails: { send: mockSend } } as unknown as Parameters<typeof createApiKeyResend>[1];
 
     const result = await createApiKeyResend("re_test", directClient).emails.send({
       ...message,

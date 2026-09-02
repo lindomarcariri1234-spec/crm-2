@@ -68,14 +68,18 @@ vi.mock("@clerk/express", () => ({
   clerkMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-vi.mock("@workspace/permissions", () => ({
-  ROLES: {
-    SUPER_ADMIN: "superadmin",
-    AGENCY_ADMIN: "admin",
-    MANAGER: "manager",
-  },
-  RESERVATION_STATUS: {},
-}));
+vi.mock("@workspace/permissions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@workspace/permissions")>();
+  return {
+    ...actual,
+    ROLES: {
+      ...actual.ROLES,
+      SUPER_ADMIN: "superadmin",
+      AGENCY_ADMIN: "admin",
+      AGENCY_MANAGER: "manager",
+    },
+  };
+});
 
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: mockRequireAuth,

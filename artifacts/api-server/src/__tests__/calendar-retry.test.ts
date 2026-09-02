@@ -53,6 +53,7 @@ import {
   isTransientCalendarError,
   isInvalidGrantError,
   isEventNotFoundError,
+  isEventAlreadyExistsError,
   CALENDAR_RETRY_DELAYS_MS,
 } from "../lib/google-calendar/calendar-service";
 
@@ -248,6 +249,32 @@ describe("GoogleCalendarService.createEvent", () => {
     await expect(svc.createEvent({ summary: "Test", startDateTime: new Date() })).resolves.toEqual({ id: "evt-123" });
   });
 
+  it("sends the stable Google event ID in the insert request", async () => {
+    mockEventsInsert.mockResolvedValue({ data: { id: "stable-event-id" } });
+    const svc = makeService();
+
+    await svc.createEvent({
+      summary: "Test",
+      startDateTime: new Date(),
+      googleEventId: "stable-event-id",
+    });
+
+    expect(mockEventsInsert).toHaveBeenCalledWith(expect.objectContaining({
+      requestBody: expect.objectContaining({ id: "stable-event-id" }),
+    }));
+  });
+
+  it("recovers an already-created event when Google returns 409", async () => {
+    mockEventsInsert.mockRejectedValue(transientError(409));
+    const svc = makeService();
+
+    await expect(svc.createEvent({
+      summary: "Test",
+      startDateTime: new Date(),
+      googleEventId: "stable-event-id",
+    })).resolves.toEqual({ id: "stable-event-id" });
+  });
+
   it("re-throws transient 429 error (so withCalendarRetry can retry)", async () => {
     mockEventsInsert.mockRejectedValue(transientError(429));
     const svc = makeService();
@@ -268,6 +295,16 @@ describe("GoogleCalendarService.createEvent", () => {
     mockEventsInsert.mockRejectedValue(permanentError("invalid_grant"));
     const svc = makeService();
     await expect(svc.createEvent({ summary: "Test", startDateTime: new Date() })).resolves.toBeNull();
+  });
+});
+
+describe("isEventAlreadyExistsError", () => {
+  it("returns true for HTTP 409", () => {
+    expect(isEventAlreadyExistsError(transientError(409))).toBe(true);
+  });
+
+  it("returns false for other statuses", () => {
+    expect(isEventAlreadyExistsError(transientError(404))).toBe(false);
   });
 });
 

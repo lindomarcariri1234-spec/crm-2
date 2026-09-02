@@ -1,0 +1,2 @@
+ALTER TABLE "email_logs" ADD COLUMN IF NOT EXISTS "outbound_message_id" text;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "email_logs_outbound_message_idx" ON "email_logs" USING btree ("tenant_id","outbound_message_id");

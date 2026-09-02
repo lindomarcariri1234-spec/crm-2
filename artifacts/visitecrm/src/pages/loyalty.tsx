@@ -16,6 +16,7 @@ import { useListClients } from "@workspace/api-client-react";
 import type { CreateLoyaltyTransactionBodyType } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { ListLoadError, ListLoadErrorRow } from "@/components/list-load-error";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -397,11 +398,16 @@ export default function Loyalty() {
   const [selectedClientId, setSelectedClientId] = useState("");
   const [memberTier, setMemberTier] = useState("bronze");
 
-  const { data: programs, isLoading: loadingPrograms, refetch: refetchPrograms } =
+  const { data: programs, isLoading: loadingPrograms, isError: programsError, refetch: refetchPrograms } =
     useListLoyaltyPrograms();
-  const { data: members, isLoading: loadingMembers, refetch: refetchMembers } =
+  const { data: members, isLoading: loadingMembers, isError: membersError, refetch: refetchMembers } =
     useListLoyaltyMembers();
-  const { data: transactions, refetch: refetchTx } = useListLoyaltyTransactions();
+  const {
+    data: transactions,
+    isLoading: loadingTransactions,
+    isError: transactionsError,
+    refetch: refetchTx,
+  } = useListLoyaltyTransactions();
   const { data: clients } = useListClients({ limit: 200 });
   const { data: configs = [], refetch: refetchConfigs } = useListSystemConfigs();
 
@@ -722,6 +728,12 @@ export default function Loyalty() {
 
       {loadingPrograms ? (
         <Skeleton className="h-40 w-full" />
+      ) : programsError ? (
+        <ListLoadError
+          onRetry={refetchPrograms}
+          message="Não foi possível carregar os programas de fidelidade."
+          className="rounded-lg border bg-card"
+        />
       ) : (programs ?? []).length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-12 text-center text-muted-foreground">
@@ -787,6 +799,12 @@ export default function Loyalty() {
                       ))}
                     </TableRow>
                   ))
+                ) : membersError ? (
+                  <ListLoadErrorRow
+                    colSpan={6}
+                    onRetry={refetchMembers}
+                    message="Não foi possível carregar os membros."
+                  />
                 ) : (members ?? []).length === 0 ? (
                   <TableRow>
                     <TableCell
@@ -855,7 +873,23 @@ export default function Loyalty() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(transactions ?? []).length === 0 ? (
+                {loadingTransactions ? (
+                  Array.from({ length: 4 }).map((_, i) => (
+                    <TableRow key={i}>
+                      {Array.from({ length: 4 }).map((__, j) => (
+                        <TableCell key={j}>
+                          <Skeleton className="h-5 w-full" />
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : transactionsError ? (
+                  <ListLoadErrorRow
+                    colSpan={4}
+                    onRetry={refetchTx}
+                    message="Não foi possível carregar as transações."
+                  />
+                ) : (transactions ?? []).length === 0 ? (
                   <TableRow>
                     <TableCell
                       colSpan={4}

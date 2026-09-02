@@ -116,6 +116,11 @@ export interface WhatsAppMessageJobData {
   tenantId: string;
 }
 
+export interface OutboundDeliveryJobData {
+  deliveryId: string;
+  tenantId: string;
+}
+
 export interface ReservationConfirmedWhatsAppJobData {
   kind: "reservation-confirmed";
   outboxId: string;
@@ -150,6 +155,7 @@ const QUEUES = {
   COMMISSION_SYNC: "commission-sync",
   WHATSAPP: "whatsapp-notifications",
   CALENDAR_SYNC: "calendar-sync",
+  OUTBOUND_DELIVERY: "outbound-deliveries",
 } as const;
 
 export type ReferralEmailJobData = ReferralBonusPaidEmailJobData | ReferralConvertedEmailJobData | ReferralExpiredEmailJobData | ReferralExpiringSoonEmailJobData | ReferralBonusReleasedEmailJobData | ReferralWelcomeEmailJobData;
@@ -350,6 +356,7 @@ export function getCampaignEmailQueue(): Queue<CampaignEmailJobData> | null {
 }
 
 let _whatsAppQueue: Queue<WhatsAppNotificationJobData> | null = null;
+let _outboundDeliveryQueue: Queue<OutboundDeliveryJobData> | null = null;
 
 export function getWhatsAppQueue(): Queue<WhatsAppNotificationJobData> | null {
   const conn = getBullMQQueueConnection();
@@ -369,6 +376,22 @@ export function getWhatsAppQueue(): Queue<WhatsAppNotificationJobData> | null {
   return _whatsAppQueue;
 }
 
+export function getOutboundDeliveryQueue(): Queue<OutboundDeliveryJobData> | null {
+  const conn = getBullMQQueueConnection();
+  if (!conn) return null;
+  if (!_outboundDeliveryQueue) {
+    _outboundDeliveryQueue = new Queue<OutboundDeliveryJobData>(QUEUES.OUTBOUND_DELIVERY, {
+      connection: conn,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: { count: 1000 },
+        removeOnFail: { count: 500 },
+      },
+    });
+  }
+  return _outboundDeliveryQueue;
+}
+
 export async function closeQueues(): Promise<void> {
   await Promise.all([
     _emailQueue?.close().catch(() => {}),
@@ -382,6 +405,7 @@ export async function closeQueues(): Promise<void> {
     _calendarSyncQueue?.close().catch(() => {}),
     _campaignEmailQueue?.close().catch(() => {}),
     _whatsAppQueue?.close().catch(() => {}),
+    _outboundDeliveryQueue?.close().catch(() => {}),
   ]);
   _emailQueue = null;
   _cancellationEmailQueue = null;
@@ -393,4 +417,5 @@ export async function closeQueues(): Promise<void> {
   _calendarSyncQueue = null;
   _campaignEmailQueue = null;
   _whatsAppQueue = null;
+  _outboundDeliveryQueue = null;
 }

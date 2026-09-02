@@ -21,6 +21,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 type Endpoint = { id: string; url: string; status: string };
+type OutboundDelivery = {
+  channel: string;
+  status: string;
+  externalId?: string;
+  lastError?: string;
+};
+type OutboundDispatchResult = {
+  message: { id: string; status: string };
+  created: boolean;
+  deliveries: OutboundDelivery[];
+};
 
 // ─── Hoisted mutable state ────────────────────────────────────────────────────
 const h = vi.hoisted(() => ({
@@ -34,6 +45,15 @@ const h = vi.hoisted(() => ({
   // Alert email function spy — resolves to success by default.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   sendAlertEmail: vi.fn(async (_opts: unknown) => ({ success: true, messageId: "msg_1" })),
+  dispatchOutboundMessage: vi.fn<() => Promise<OutboundDispatchResult>>(async () => ({
+    message: { id: "outbound-1", status: "accepted" },
+    created: true,
+    deliveries: [
+      { channel: "email", status: "accepted", externalId: "msg_1" },
+      { channel: "whatsapp", status: "accepted", externalId: "wa_1" },
+    ],
+  })),
+  tenantsTable: {},
   // DB rows to return for each query key — keyed by the platform_settings key.
   // "stripe_duplicate_webhook_alert_sent_at" → controls cross-restart debounce.
   // "redis_alert_email"                      → controls recipient lookup.
@@ -116,14 +136,24 @@ const mockWhere = vi.fn((condition: { b?: string } | unknown) => ({
     return Promise.resolve(rows);
   },
 }));
-const mockFrom = vi.fn(() => ({ where: mockWhere }));
+const mockFrom = vi.fn((table: unknown) => table === h.tenantsTable
+  ? {
+      where: () => ({ limit: () => Promise.resolve([{ id: "tenant-audit" }]) }),
+      limit: () => Promise.resolve([{ id: "tenant-audit" }]),
+    }
+  : { where: mockWhere });
 
 vi.mock("@workspace/db", () => ({
+  buildDatabaseConnectionConfig: vi.fn((connectionString: string) => ({
+    connectionString,
+    ssl: undefined,
+  })),
   db: {
     select: vi.fn(() => ({ from: mockFrom })),
     insert: vi.fn(() => ({ values: mockInsertValues })),
   },
   platformSettingsTable: { key: "key", value: "value" },
+  tenantsTable: h.tenantsTable,
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -132,6 +162,10 @@ vi.mock("drizzle-orm", () => ({
 
 vi.mock("../lib/id", () => ({
   generateId: vi.fn(() => "generated-id"),
+}));
+
+vi.mock("../services/outbound-delivery", () => ({
+  dispatchOutboundMessage: h.dispatchOutboundMessage,
 }));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -191,6 +225,15 @@ function resetAll() {
   h.listThrows = false;
   h.sendAlertEmail.mockClear();
   h.sendAlertEmail.mockResolvedValue({ success: true, messageId: "msg_1" });
+  h.dispatchOutboundMessage.mockClear();
+  h.dispatchOutboundMessage.mockResolvedValue({
+    message: { id: "outbound-1", status: "accepted" },
+    created: true,
+    deliveries: [
+      { channel: "email", status: "accepted", externalId: "msg_1" },
+      { channel: "whatsapp", status: "accepted", externalId: "wa_1" },
+    ],
+  });
   h.dbInsertCalled = false;
   h.dbInsertValues = null;
   h.dbRows = {};
@@ -319,18 +362,19 @@ describe("initStripeSync — duplicate webhook alert email", () => {
     await initStripeSync();
     await flushAsync();
 
-    expect(h.sendAlertEmail).toHaveBeenCalledOnce();
-    expect(h.sendAlertEmail).toHaveBeenCalledWith(
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledOnce();
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "admin@example.com",
-        count: 2,
-        endpoints: expect.arrayContaining([
-          expect.objectContaining({ id: "we_1" }),
-          expect.objectContaining({ id: "we_2" }),
-        ]),
-        stripeDashboardUrl: "https://dashboard.stripe.com/webhooks",
+        tenantId: "tenant-audit",
+        recipient: { type: "direct", email: "admin@example.com" },
+        eventType: "stripe_webhook_duplicate",
       }),
     );
+    const outbound = await h.dispatchOutboundMessage.mock.results[0].value;
+    expect(outbound.deliveries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ channel: "email", status: "accepted" }),
+      expect.objectContaining({ channel: "whatsapp", status: "accepted" }),
+    ]));
   });
 
   it("persists the alert timestamp to the DB after a successful send", async () => {
@@ -351,7 +395,7 @@ describe("initStripeSync — duplicate webhook alert email", () => {
     await initStripeSync();
     await flushAsync();
 
-    expect(h.sendAlertEmail).not.toHaveBeenCalled();
+    expect(h.dispatchOutboundMessage).not.toHaveBeenCalled();
     expect(
       infoMessages().some((m) => /rate-limited.*cross-restart/i.test(m) || /cross-restart.*rate-limited/i.test(m)),
     ).toBe(true);
@@ -363,12 +407,16 @@ describe("initStripeSync — duplicate webhook alert email", () => {
     await initStripeSync();
     await flushAsync();
 
-    expect(h.sendAlertEmail).toHaveBeenCalledOnce();
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledOnce();
   });
 
   it("clears the rate-limit when send fails so the next startup can retry", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    h.sendAlertEmail.mockResolvedValue({ success: false, error: "Resend API error" } as any);
+    h.dispatchOutboundMessage.mockResolvedValue({
+      message: { id: "outbound-failed", status: "failed" },
+      created: true,
+      deliveries: [{ channel: "email", status: "failed", lastError: "Resend API error" }],
+    });
 
     await initStripeSync();
     await flushAsync();
@@ -380,13 +428,17 @@ describe("initStripeSync — duplicate webhook alert email", () => {
     // The in-process rate-limit is cleared on failure, so a second call
     // (simulating next startup) should also try to send.
     _resetDuplicateWebhookAlertStateForTesting();
-    h.sendAlertEmail.mockResolvedValue({ success: true, messageId: "msg_retry" });
+    h.dispatchOutboundMessage.mockResolvedValue({
+      message: { id: "outbound-retry", status: "accepted" },
+      created: true,
+      deliveries: [{ channel: "email", status: "accepted", externalId: "msg_retry" }],
+    });
     h.error.mockClear();
 
     await initStripeSync();
     await flushAsync();
 
-    expect(h.sendAlertEmail).toHaveBeenCalledTimes(2);
+    expect(h.dispatchOutboundMessage).toHaveBeenCalledTimes(2);
   });
 
   it("does not send alert email when no recipient is configured", async () => {
@@ -397,7 +449,7 @@ describe("initStripeSync — duplicate webhook alert email", () => {
     await initStripeSync();
     await flushAsync();
 
-    expect(h.sendAlertEmail).not.toHaveBeenCalled();
+    expect(h.dispatchOutboundMessage).not.toHaveBeenCalled();
     expect(
       warnMessages().some((m) => /No alert email configured/.test(m)),
     ).toBe(true);
@@ -411,7 +463,7 @@ describe("initStripeSync — duplicate webhook alert email", () => {
     await initStripeSync();
     await flushAsync();
 
-    expect(h.sendAlertEmail).not.toHaveBeenCalled();
+    expect(h.dispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("does not send alert email when the audit itself fails (Stripe unreachable)", async () => {
@@ -420,6 +472,6 @@ describe("initStripeSync — duplicate webhook alert email", () => {
     await initStripeSync();
     await flushAsync();
 
-    expect(h.sendAlertEmail).not.toHaveBeenCalled();
+    expect(h.dispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });

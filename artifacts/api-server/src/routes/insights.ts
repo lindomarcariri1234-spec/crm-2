@@ -34,6 +34,7 @@ import {
 } from "@workspace/permissions";
 import { getAIClientForTenant } from "../lib/ai-client";
 import { localToday } from "@workspace/shared";
+import { loadFinancialMetrics } from "../services/financial-metrics";
 
 // Brazil is permanently UTC-3 (no DST since 2019).
 // Returns the UTC Date that corresponds to midnight on the given Brazil calendar date.
@@ -115,6 +116,12 @@ async function expensesInRange(tenantId: string, from: Date, to: Date): Promise<
 async function buildInsightsSummary(tenantId: string, period: string) {
   const { start, end, prevStart, prevEnd, momCurrStart, momCurrEnd, momPrevStart, momPrevEnd, yoyPrevStart, yoyPrevEnd } = getPeriodRange(period);
   const now = new Date();
+  const canonicalFinancial = await loadFinancialMetrics(tenantId, {
+    start,
+    end: new Date(end.getTime() + 1),
+    label: period,
+    asOf: now,
+  });
   // Brazil calendar date for queries that need year/month/day in Brazil time
   const todayBR = localToday();
   const [brYear, brMonth1, brDay] = todayBR.split("-").map(Number);
@@ -331,11 +338,12 @@ async function buildInsightsSummary(tenantId: string, period: string) {
   return {
     period,
     executive: {
-      totalRevenue, totalRevenuePrev, netProfit, netProfitPrev, totalClients,
+      totalRevenue: canonicalFinancial.totals.receivedRevenue, totalRevenuePrev,
+      netProfit: canonicalFinancial.totals.profit, netProfitPrev, totalClients,
       newClients, newClientsPrev, confirmedReservations, confirmedReservationsPrev,
       occupancyRate: Math.round(occupancyRate * 10) / 10, conversionRate: Math.round(conversionRate * 10) / 10,
       conversionRatePrev: Math.round(conversionRatePrev * 10) / 10, averageNps, averageNpsPrev, activeTrips,
-      profitMargin: Math.round(profitMargin * 10) / 10, profitMarginPrev: Math.round(profitMarginPrev * 10) / 10,
+      profitMargin: canonicalFinancial.totals.margin, profitMarginPrev: Math.round(profitMarginPrev * 10) / 10,
       momGrowth: momGrowth !== null ? Math.round(momGrowth * 10) / 10 : null,
       yoyGrowth: yoyGrowth !== null ? Math.round(yoyGrowth * 10) / 10 : null,
     },
@@ -359,12 +367,23 @@ async function buildInsightsSummary(tenantId: string, period: string) {
       campaignRoi: roundMoney(campaignRoi), campaignsByType,
     },
     financial: {
-      totalRevenue, totalRevenuePrev, totalExpenses, totalExpensesPrev, commissions, commissionsPrev,
-      netProfit, netProfitPrev, profitMargin: Math.round(profitMargin * 10) / 10,
+      totalRevenue: canonicalFinancial.totals.receivedRevenue, totalRevenuePrev,
+      totalExpenses: canonicalFinancial.totals.operatingCostsPaid, totalExpensesPrev,
+      commissions: canonicalFinancial.totals.sellerCommissionsPaid + canonicalFinancial.totals.referralCommissionsPaid,
+      commissionsPrev,
+      netProfit: canonicalFinancial.totals.profit, netProfitPrev,
+      profitMargin: canonicalFinancial.totals.margin,
       profitMarginPrev: Math.round(profitMarginPrev * 10) / 10,
-      receivable: Number(receivable[0]?.total ?? 0), payable: Number(payable[0]?.total ?? 0),
-      overdue: Number(overdue[0]?.total ?? 0), avgTicket: roundMoney(avgTicket),
+      receivable: canonicalFinancial.totals.receivable,
+      payable: canonicalFinancial.totals.payable,
+      overdue: canonicalFinancial.totals.overdueReceivable,
+      avgTicket: roundMoney(avgTicket),
       avgTicketPrev: roundMoney(avgTicketPrev), expenseCategories,
+      contract: {
+        period: canonicalFinancial.period,
+        timezone: canonicalFinancial.timezone,
+        formulas: canonicalFinancial.contracts,
+      },
     },
     operational: {
       activeTrips, newTrips, newTripsPrev: newTripsPrevCount,

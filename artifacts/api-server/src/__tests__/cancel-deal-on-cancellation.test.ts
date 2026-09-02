@@ -17,7 +17,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 const { mockInsertValues, mockUpdateSet, mockLogError, mockLogInfo } = vi.hoisted(() => {
   // Typed parameters give TS visibility into calls[0][0] without using Mock<A,B> generics.
-  const mockInsertValues = vi.fn(async (_v: Record<string, unknown>) => [] as unknown[]);
+  const mockInsertValues = vi.fn((_v: Record<string, unknown>) => ({
+    onConflictDoNothing: vi.fn().mockResolvedValue([]),
+  }));
   const mockUpdateSet = vi.fn((_payload: Record<string, unknown>) => ({
     where: vi.fn().mockResolvedValue([]),
   }));
@@ -102,15 +104,13 @@ const PIPELINE_ID = "pipeline-001";
  *  1. Fetch cancelled reservation → { clientId, tripId }
  *  2. Find deal by reservationId → [deal]
  *  3. Active same-trip reservation check → [] (none)
- *  4. Active other-trip reservation check → [] (none)
- *  5. Get current stage → { pipelineId }
- *  6. Get "Cancelado" stage by name → found
+ *  4. Get current stage → { pipelineId }
+ *  5. Get "Cancelado" stage by name → found
  */
 function selectQueueStageExists(): unknown[][] {
   return [
     [{ clientId: CLIENT_ID, tripId: TRIP_ID }],
     [{ id: DEAL_ID, stageId: STAGE_ID }],
-    [],
     [],
     [{ pipelineId: PIPELINE_ID }],
     [{ id: "stage-cancelled-existing" }],
@@ -119,17 +119,18 @@ function selectQueueStageExists(): unknown[][] {
 
 /**
  * Select queue for when "Cancelado" stage is missing.
- *  7. Max order query → { maxOrder: 30 } → new stage order = 40
+ *  6. Max order query → { maxOrder: 30 } → new stage order = 40
+ *  7. Re-read canonical "Cancelado" stage after conflict-safe insert
  */
 function selectQueueStageMissing(): unknown[][] {
   return [
     [{ clientId: CLIENT_ID, tripId: TRIP_ID }],
     [{ id: DEAL_ID, stageId: STAGE_ID }],
     [],
-    [],
     [{ pipelineId: PIPELINE_ID }],
     [],                      // Cancelado stage not found
     [{ maxOrder: 30 }],     // max order for new stage creation
+    [{ id: "new-stage-id" }], // canonical stage after insert
   ];
 }
 
@@ -139,7 +140,9 @@ function selectQueueStageMissing(): unknown[][] {
 describe("cancelDealOnReservationCancellation()", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockInsertValues.mockResolvedValue([]);
+    mockInsertValues.mockImplementation((_payload) => ({
+      onConflictDoNothing: vi.fn().mockResolvedValue([]),
+    }));
     mockUpdateSet.mockImplementation((_payload) => ({
       where: vi.fn().mockResolvedValue([]),
     }));

@@ -23,7 +23,7 @@ import { normalizeBrazilPhone } from "@workspace/shared";
 
 // ─── Hoisted state (must exist before any vi.mock factory runs) ───────────────
 
-const { getQueue, setQueue, mockSendWhatsApp, mockInterpolate, mockDb } = vi.hoisted(() => {
+const { setQueue, mockDispatchOutboundMessage, mockInterpolate, mockDb } = vi.hoisted(() => {
   // Shared select queue — tests populate this before each assertion.
   const queue: unknown[][] = [];
 
@@ -48,7 +48,12 @@ const { getQueue, setQueue, mockSendWhatsApp, mockInterpolate, mockDb } = vi.hoi
     select: vi.fn(() => makeChain()),
   };
 
-  const mockSendWhatsApp = vi.fn().mockResolvedValue({ success: true });
+  const mockDispatchOutboundMessage = vi.fn().mockResolvedValue({
+    deliveries: [
+      { channel: "email", status: "pending" },
+      { channel: "whatsapp", status: "accepted" },
+    ],
+  });
 
   // Capture variables so tests can assert message content in boarding tests.
   const mockInterpolate = vi.fn(
@@ -56,10 +61,9 @@ const { getQueue, setQueue, mockSendWhatsApp, mockInterpolate, mockDb } = vi.hoi
   );
 
   return {
-    getQueue:  () => queue,
     setQueue:  (rows: unknown[][]) => { queue.length = 0; queue.push(...rows); },
     mockDb,
-    mockSendWhatsApp,
+    mockDispatchOutboundMessage,
     mockInterpolate,
   };
 });
@@ -89,17 +93,16 @@ vi.mock("drizzle-orm", () => ({
   isNull:     vi.fn(() => "isNull"),
   isNotNull:  vi.fn(() => "isNotNull"),
   inArray:    vi.fn(() => "inArray"),
+  or:         vi.fn((...a: unknown[]) => a),
   sql:        Object.assign(vi.fn(() => "sql"), { raw: vi.fn() }),
 }));
 
 vi.mock("../lib/whatsapp.js", () => ({
-  sendTenantWhatsAppMessage: mockSendWhatsApp,
   interpolateWhatsAppMessage: mockInterpolate,
 }));
 
-// No BullMQ queue → enqueueOrSend falls through to direct sendTenantWhatsAppMessage.
-vi.mock("../queues/index.js", () => ({
-  getWhatsAppQueue: vi.fn().mockReturnValue(null),
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
 }));
 
 vi.mock("../lib/redis.js", () => ({
@@ -130,7 +133,6 @@ import {
   dispatchWhatsAppReferralReversed,
   enqueueOrSend,
 } from "../queues/whatsapp-helpers.js";
-import { getWhatsAppQueue } from "../queues/index.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -174,8 +176,6 @@ const CLIENT_OPTED_OUT = {
   whatsappOptIn: false,
 };
 
-const mockedGetWhatsAppQueue = vi.mocked(getWhatsAppQueue);
-
 const PASSENGER_A = { id: "p1", name: "Alice", phone: "+5511888880001" };
 const PASSENGER_B = { id: "p2", name: "Bob",   phone: "+5511888880002" };
 /** Same normalized phone as CLIENT_OPTED_IN */
@@ -185,15 +185,18 @@ const PASSENGER_NO_PHONE = { id: "p4", name: "Diana", phone: null };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// sendTenantWhatsAppMessage(tenantId, phone, message) — phone is arg[1], message is arg[2]
 function sentPhones(): string[] {
-  return mockSendWhatsApp.mock.calls.map((c) => c[1] as string);
+  return mockDispatchOutboundMessage.mock.calls.map((c) =>
+    canonicalPhone((c[0] as { recipient: { whatsapp: string } }).recipient.whatsapp),
+  );
 }
 function canonicalPhone(phone: string) {
   return normalizeBrazilPhone(phone)!;
 }
 function sentMessages(): string[] {
-  return mockSendWhatsApp.mock.calls.map((c) => c[2] as string);
+  return mockDispatchOutboundMessage.mock.calls.map((c) =>
+    (c[0] as { whatsapp: { text: string } }).whatsapp.text,
+  );
 }
 
 // ─── Tests: broadcastToReservationPassengers (via dispatchWhatsAppReservationConfirmed) ──
@@ -201,58 +204,50 @@ function sentMessages(): string[] {
 describe("enqueueOrSend", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedGetWhatsAppQueue.mockReturnValue(null);
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    setQueue([]);
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
-  it("enqueues WhatsApp notifications when Redis is available", async () => {
-    const add = vi.fn().mockResolvedValue(undefined);
-    mockedGetWhatsAppQueue.mockReturnValue({ add } as never);
-
-    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
+  it("dispatches both channel payloads with deterministic event options", async () => {
+    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1", {
+      eventType: "reservation_confirmed",
+      idempotencyKey: "reservation:res-1:confirmed:client:5511999990001",
+      emailSubject: "Reserva confirmada",
+    })).resolves.toEqual({
       mode: "queued",
       success: true,
     });
 
-    expect(add).toHaveBeenCalledWith("whatsapp-notification", {
-      phone: canonicalPhone("+5511999990001"),
-      message: "Olá!",
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith({
       tenantId: "tenant-1",
+      eventType: "reservation_confirmed",
+      idempotencyKey: "reservation:res-1:confirmed:client:5511999990001",
+      recipient: { type: "direct", whatsapp: canonicalPhone("+5511999990001") },
+      email: { subject: "Reserva confirmada", html: "<p>Olá!</p>" },
+      whatsapp: { text: "Olá!" },
+      origin: "legacy_whatsapp",
+      originChannel: "whatsapp",
     });
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("keeps the direct-send fallback when Redis is unavailable", async () => {
-    mockSendWhatsApp.mockResolvedValue({
-      success: false,
-      error: "credentials_not_configured",
+  it("reports a failed WhatsApp delivery while preserving the email delivery", async () => {
+    mockDispatchOutboundMessage.mockResolvedValue({
+      deliveries: [
+        { channel: "email", status: "pending" },
+        { channel: "whatsapp", status: "failed", lastError: "gateway_unavailable" },
+      ],
     });
 
     await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
-      mode: "direct",
-      success: false,
-      error: "credentials_not_configured",
-    });
-
-    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", canonicalPhone("+5511999990001"), "Olá!");
-  });
-
-  it("falls back to direct send when adding a Redis job fails", async () => {
-    const add = vi.fn().mockRejectedValue(new Error("Redis unavailable"));
-    mockedGetWhatsAppQueue.mockReturnValue({ add } as never);
-    mockSendWhatsApp.mockResolvedValue({
-      success: false,
+      mode: "queued",
+      success: true,
       error: "gateway_unavailable",
     });
 
-    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
-      mode: "direct",
-      success: false,
-      error: "gateway_unavailable",
+    expect(mockDispatchOutboundMessage.mock.calls[0][0]).toMatchObject({
+      email: { html: "<p>Olá!</p>" },
+      whatsapp: { text: "Olá!" },
     });
-
-    expect(add).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp).toHaveBeenCalledWith("tenant-1", canonicalPhone("+5511999990001"), "Olá!");
   });
 });
 
@@ -263,7 +258,7 @@ describe("broadcastToReservationPassengers", () => {
     mockInterpolate.mockImplementation(
       (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
     );
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("sends one message per passenger when each has a unique phone", async () => {
@@ -282,7 +277,15 @@ describe("broadcastToReservationPassengers", () => {
     });
 
     expect(sentPhones()).toEqual([canonicalPhone(PASSENGER_A.phone), canonicalPhone(PASSENGER_B.phone)]);
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
+    for (const call of mockDispatchOutboundMessage.mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({
+        eventType: "reservation_confirmed",
+        idempotencyKey: expect.stringMatching(/^reservation:res-1:confirmed:(passenger|client):/),
+        email: expect.objectContaining({ html: expect.any(String) }),
+        whatsapp: expect.objectContaining({ text: expect.any(String) }),
+      }));
+    }
   });
 
   it("uses the configured custom template and interpolates reservation variables", async () => {
@@ -299,7 +302,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect(mockInterpolate).toHaveBeenCalledWith(
       RESERVATION_CONFIRMED_TEMPLATE,
       expect.objectContaining({
@@ -319,7 +322,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("deduplicates passengers that share the same normalized phone", async () => {
@@ -340,7 +343,7 @@ describe("broadcastToReservationPassengers", () => {
     });
 
     // Both passengers resolve to the same digits → only one send.
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
     expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
   });
 
@@ -376,7 +379,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
     expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
   });
 
@@ -394,7 +397,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("falls back to client phone when there are zero registered passengers (opt-in)", async () => {
@@ -411,7 +414,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
     expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
   });
 
@@ -429,7 +432,7 @@ describe("broadcastToReservationPassengers", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("deduplicates when a passenger phone matches the client phone", async () => {
@@ -448,7 +451,7 @@ describe("broadcastToReservationPassengers", () => {
     });
 
     // Passenger's own phone is sent once; client phone is the same digits → no second send.
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -468,7 +471,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
     mockInterpolate.mockImplementation(
       (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
     );
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("sends one correctly interpolated message when payment notification is enabled", async () => {
@@ -482,7 +485,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
 
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
     expect(mockInterpolate).toHaveBeenCalledWith(
       expect.stringContaining("{valor}"),
@@ -506,7 +509,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
 
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
     expect(sentPhones()).toEqual([canonicalPhone(PASSENGER_A.phone), canonicalPhone(PASSENGER_B.phone)]);
     expect(mockInterpolate).toHaveBeenCalledTimes(2);
   });
@@ -527,7 +530,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
 
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
   });
 
@@ -542,7 +545,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
 
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect(mockInterpolate).toHaveBeenCalledWith(
       PAYMENT_RECEIVED_TEMPLATE,
       expect.objectContaining({
@@ -558,7 +561,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
 
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("uses the opted-in client as fallback when the passenger has no phone", async () => {
@@ -572,7 +575,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
 
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
     expect(mockInterpolate).toHaveBeenCalledWith(
       expect.stringContaining("{valor}"),
@@ -591,7 +594,7 @@ describe("dispatchWhatsAppPaymentReceived", () => {
 
     await dispatchWhatsAppPaymentReceived(PAYMENT_OPTS);
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -603,7 +606,7 @@ describe("dispatchWhatsAppCadastroRealizado", () => {
     mockInterpolate.mockImplementation(
       (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
     );
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("sends nothing when cadastroRealizado is disabled (default false)", async () => {
@@ -615,7 +618,7 @@ describe("dispatchWhatsAppCadastroRealizado", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("sends to passenger when cadastroRealizado is enabled", async () => {
@@ -632,10 +635,10 @@ describe("dispatchWhatsAppCadastroRealizado", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
     expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_A.phone));
     // Message vars should include the reservation reference.
-    const vars = JSON.parse(mockSendWhatsApp.mock.calls[0][2] as string);
+    const vars = JSON.parse(sentMessages()[0]);
     expect(vars).toMatchObject({ referencia: "R-002", viagem: "Rio de Janeiro" });
   });
 });
@@ -657,7 +660,7 @@ describe("dispatchWhatsAppPagamentoPendente", () => {
     mockInterpolate.mockImplementation(
       (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
     );
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("sends nothing when pagamentoPendente is disabled (default false)", async () => {
@@ -665,7 +668,7 @@ describe("dispatchWhatsAppPagamentoPendente", () => {
 
     await dispatchWhatsAppPagamentoPendente(OPTS);
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("sends to passenger when pagamentoPendente is enabled", async () => {
@@ -678,9 +681,9 @@ describe("dispatchWhatsAppPagamentoPendente", () => {
 
     await dispatchWhatsAppPagamentoPendente(OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
     expect(sentPhones()[0]).toBe(canonicalPhone(PASSENGER_B.phone));
-    const vars = JSON.parse(mockSendWhatsApp.mock.calls[0][2] as string);
+    const vars = JSON.parse(sentMessages()[0]);
     expect(vars).toMatchObject({
       viagem: OPTS.tripName,
       data: OPTS.departureDate,
@@ -700,7 +703,7 @@ describe("dispatchWhatsAppPagamentoPendente", () => {
 
     await dispatchWhatsAppPagamentoPendente(OPTS);
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -724,7 +727,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
     mockInterpolate.mockImplementation(
       (_template: string, vars: Record<string, string>) => JSON.stringify(vars),
     );
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("resolves each passenger's specific boarding point from the bpMap", async () => {
@@ -741,18 +744,18 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
 
-    const calls = mockSendWhatsApp.mock.calls;
-    // First passenger (Alice) → BP_A; phone is arg[1], message is arg[2]
-    expect(calls[0][1]).toBe(canonicalPhone(passengerAtBpA.phone));
-    const aliceVars = JSON.parse(calls[0][2] as string);
+    const calls = mockDispatchOutboundMessage.mock.calls;
+    // First passenger (Alice) → BP_A; both channel payloads share the message.
+    expect((calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone(passengerAtBpA.phone));
+    const aliceVars = JSON.parse((calls[0][0] as any).whatsapp.text);
     expect(aliceVars.local_saida).toBe(BP_A.name);
     expect(aliceVars.horario).toBe(BP_A.time);
 
     // Second passenger (Bob) → BP_B
-    expect(calls[1][1]).toBe(canonicalPhone(passengerAtBpB.phone));
-    const bobVars = JSON.parse(calls[1][2] as string);
+    expect((calls[1][0] as any).recipient.whatsapp).toBe(canonicalPhone(passengerAtBpB.phone));
+    const bobVars = JSON.parse((calls[1][0] as any).whatsapp.text);
     expect(bobVars.local_saida).toBe(BP_B.name);
     expect(bobVars.horario).toBe(BP_B.time);
   });
@@ -773,7 +776,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect(mockInterpolate).toHaveBeenCalledWith(
       BOARDING_REMINDER_TEMPLATE,
       expect.objectContaining({
@@ -809,7 +812,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
     expect(sentPhones()[0]).toBe(canonicalPhone(firstPassenger.phone));
   });
 
@@ -825,8 +828,8 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
-    const vars = JSON.parse(mockSendWhatsApp.mock.calls[0][2] as string);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
+    const vars = JSON.parse(sentMessages()[0]);
     expect(vars.local_saida).toBe(BP_A.name); // first bp fallback
     expect(vars.horario).toBe(BP_A.time);
   });
@@ -841,9 +844,9 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).toHaveBeenCalledTimes(1);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(1);
     expect(sentPhones()[0]).toBe(canonicalPhone(CLIENT_OPTED_IN.whatsapp));
-    const vars = JSON.parse(mockSendWhatsApp.mock.calls[0][2] as string);
+    const vars = JSON.parse(sentMessages()[0]);
     // Client fallback uses first boarding point and clientName.
     expect(vars.local_saida).toBe(BP_A.name);
   });
@@ -858,7 +861,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("respects client opt-out when passenger has no own phone", async () => {
@@ -873,7 +876,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("sends nothing when boardingReminder is disabled", async () => {
@@ -881,7 +884,7 @@ describe("dispatchWhatsAppBoardingReminder", () => {
 
     await dispatchWhatsAppBoardingReminder(BOARDING_OPTS);
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -912,7 +915,7 @@ const LATEST_REFERRAL_ROW = [{ bonusAmount: "50.00" }];
 describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
@@ -930,8 +933,14 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp.mock.calls[0][1]).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
+    expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
+      eventType: "referral_converted",
+      idempotencyKey: "referral:tenant-1:ref-1:CODE1:converted",
+      email: expect.objectContaining({ html: expect.any(String) }),
+      whatsapp: expect.objectContaining({ text: expect.any(String) }),
+    }));
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
@@ -947,7 +956,7 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 
   it("skips when whatsapp is disabled in referral settings", async () => {
@@ -960,14 +969,14 @@ describe("dispatchWhatsAppReferralConverted — whatsappOptIn gate", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });
 
 describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
@@ -986,8 +995,8 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
       tenantName: "Agência Teste",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp.mock.calls[0][1]).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
+    expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
   });
 
   it("skips referrer who has whatsappOptIn = false even when referrerPhone is supplied", async () => {
@@ -1006,14 +1015,14 @@ describe("dispatchWhatsAppReferralBonusPaid — whatsappOptIn gate", () => {
       tenantName: "Agência Teste",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });
 
 describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSendWhatsApp.mockResolvedValue({ success: true });
+    mockDispatchOutboundMessage.mockResolvedValue({ deliveries: [{ channel: "email", status: "pending" }, { channel: "whatsapp", status: "accepted" }] });
   });
 
   it("sends to referrer who has whatsappOptIn = true", async () => {
@@ -1031,8 +1040,8 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).toHaveBeenCalledOnce();
-    expect(mockSendWhatsApp.mock.calls[0][1]).toBe(canonicalPhone("+5511999990001"));
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledOnce();
+    expect((mockDispatchOutboundMessage.mock.calls[0][0] as any).recipient.whatsapp).toBe(canonicalPhone("+5511999990001"));
   });
 
   it("skips referrer who has whatsappOptIn = false", async () => {
@@ -1049,6 +1058,6 @@ describe("dispatchWhatsAppReferralReversed — whatsappOptIn gate", () => {
       tenantId: "tenant-1",
     });
 
-    expect(mockSendWhatsApp).not.toHaveBeenCalled();
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });

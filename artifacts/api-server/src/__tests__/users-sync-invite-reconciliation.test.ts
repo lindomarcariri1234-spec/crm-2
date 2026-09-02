@@ -240,7 +240,7 @@ describe("POST /api/users/me/sync — reconciling a tenant-less existing account
     // Invite must be marked accepted
     expect(mockUpdate).toHaveBeenCalledWith({ __name: "invites" });
     const inviteSetCall = mockUpdateSet.mock.calls.find(
-      (call) => (call[0] as Record<string, unknown>).accepted === true,
+      (call) => ((call as unknown[])[0] as Record<string, unknown> | undefined)?.accepted === true,
     );
     expect(inviteSetCall).toBeTruthy();
   });
@@ -327,7 +327,7 @@ describe("POST /api/users/me/sync — migrating off an unused self-provisioned t
     expect(res.body.role).toBe(ROLES.SALES);
     expect(mockUpdate).toHaveBeenCalledWith({ __name: "invites" });
     const inviteSetCall = mockUpdateSet.mock.calls.find(
-      (call) => (call[0] as Record<string, unknown>).accepted === true,
+      (call) => ((call as unknown[])[0] as Record<string, unknown> | undefined)?.accepted === true,
     );
     expect(inviteSetCall).toBeTruthy();
   });

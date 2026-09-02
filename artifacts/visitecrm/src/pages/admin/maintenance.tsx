@@ -46,6 +46,7 @@ import {
   getGetSystemHealthQueryKey,
   getHealthCheckQueryKey,
 } from "@workspace/api-client-react";
+import { QueryErrorState } from "@/components/query-error-state";
 
 interface OrphanedFile {
   key: string;
@@ -141,11 +142,11 @@ function HealthRow({ icon: Icon, label, description, status }: HealthRowProps) {
 }
 
 function SystemHealthSection() {
-  const { data: systemHealth, isLoading: isLoadingSystemHealth, dataUpdatedAt } = useGetSystemHealth({
+  const { data: systemHealth, isLoading: isLoadingSystemHealth, isError: systemHealthError, error: systemHealthQueryError, refetch: refetchSystemHealth, dataUpdatedAt } = useGetSystemHealth({
     query: { queryKey: getGetSystemHealthQueryKey(), refetchInterval: 60_000 },
   });
 
-  const { data: healthData, isLoading: isLoadingHealth } = useHealthCheck({
+  const { data: healthData, isLoading: isLoadingHealth, isError: healthCheckError, error: healthCheckQueryError, refetch: refetchHealthCheck } = useHealthCheck({
     query: { queryKey: getHealthCheckQueryKey(), refetchInterval: 60_000 },
   });
 
@@ -180,6 +181,18 @@ function SystemHealthSection() {
     : "degraded";
 
   const lastUpdated = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
+
+  if (systemHealthError || healthCheckError) {
+    return (
+      <QueryErrorState
+        resourceLabel="a saúde do sistema"
+        error={systemHealthQueryError ?? healthCheckQueryError}
+        onRetry={() => {
+          void Promise.all([refetchSystemHealth(), refetchHealthCheck()]);
+        }}
+      />
+    );
+  }
 
   return (
     <Card>

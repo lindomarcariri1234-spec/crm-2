@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, numeric, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import type { CommissionStatus } from "@workspace/permissions";
@@ -33,7 +33,10 @@ export const commissionsTable = pgTable("commissions", {
   status: text("status").$type<CommissionStatus>().notNull().default("pending"),
   paidAt: timestamp("paid_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  index("commissions_financial_created_idx").on(t.tenantId, t.status, t.createdAt),
+  index("commissions_financial_paid_idx").on(t.tenantId, t.status, t.paidAt),
+]);
 
 export const insertCommissionSchema = createInsertSchema(commissionsTable).omit({ createdAt: true });
 export type InsertCommission = z.infer<typeof insertCommissionSchema>;

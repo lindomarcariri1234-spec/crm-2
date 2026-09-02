@@ -27,6 +27,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Pencil, Archive, AlertTriangle, RefreshCw, CheckCircle2, ChevronDown, ChevronUp, Zap, Mail, Save } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { QueryErrorState } from "@/components/query-error-state";
 import {
   getListPlansQueryKey,
   useGetSystemHealth,
@@ -503,7 +504,7 @@ function StripeSeedSection({ stripeConfigured, unhealthyCount, isHealthLoading, 
 }
 
 export default function AdminPlans() {
-  const { data: plans = [], isLoading } = useListPlans();
+  const { data: plans = [], isLoading, isError, error, refetch } = useListPlans();
   const { data: stripeHealth, isLoading: isHealthLoading, refetch: refetchHealth } = useGetPlansStripeHealth();
   const archivePlan = useArchivePlan();
   const queryClient = useQueryClient();
@@ -578,6 +579,8 @@ export default function AdminPlans() {
             <div className="flex items-center justify-center h-48">
               <div className="animate-pulse text-muted-foreground">Carregando planos...</div>
             </div>
+          ) : isError ? (
+            <QueryErrorState resourceLabel="os planos" error={error} onRetry={() => { void refetch(); }} />
           ) : plans.length === 0 ? (
             <div className="flex items-center justify-center h-48">
               <p className="text-muted-foreground">Nenhum plano cadastrado</p>

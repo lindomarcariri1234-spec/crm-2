@@ -162,7 +162,7 @@ describe("POST /api/trips/:id/costs — body validation", () => {
     // Trip lookup must succeed so we reach the body-validation step.
     mockLimit.mockResolvedValue([{ id: "trip-001" }]);
     mockWhere.mockReturnValue({ limit: mockLimit });
-    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
 
@@ -231,7 +231,7 @@ describe("PUT /api/trips/:id/costs/:costId — body validation", () => {
     // Existing-cost lookup must succeed so we reach the body-validation step.
     mockLimit.mockResolvedValue([{ id: "cost-001", tripId: "trip-001", paidAt: null }]);
     mockWhere.mockReturnValue({ limit: mockLimit });
-    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
 
@@ -268,7 +268,7 @@ describe("PUT /api/admin/platform-settings/:key — body validation & role", () 
     requireAuthMock.mockResolvedValue(SUPERADMIN_USER as never);
     mockLimit.mockResolvedValue([{ key: "some_key", value: "old" }]);
     mockWhere.mockReturnValue({ limit: mockLimit });
-    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
 
@@ -346,7 +346,7 @@ describe("GET /api/admin/platform-settings — Stripe alert fallback", () => {
     vi.clearAllMocks();
     requireAuthMock.mockResolvedValue(SUPERADMIN_USER as never);
     mockOrderBy.mockResolvedValue([]);
-    mockFrom.mockReturnValue({ orderBy: mockOrderBy });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy });
     vi.stubEnv("SUPERADMIN_EMAIL", "fallback@example.com");
   });
 

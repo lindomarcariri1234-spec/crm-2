@@ -240,12 +240,24 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
         paidAt: now,
       }
     });
+    setPaidValue(previous => String(Math.min(
+      parseFloat(totalValue) || 0,
+      (parseFloat(previous) || 0) + amount,
+    ).toFixed(2)));
+    setPayAmount("");
     await queryClient.invalidateQueries({ queryKey: ["reservation-edit", reservationId] });
     await queryClient.invalidateQueries({ queryKey: ["/api/reservations"] });
     await queryClient.invalidateQueries({ queryKey: ["/api/reservations/stats"] });
     await queryClient.invalidateQueries({ queryKey: ["reservation", reservationId] });
     await queryClient.invalidateQueries({ queryKey: ["payments", reservationId] });
     await queryClient.invalidateQueries({ queryKey: ["/api/payments"] });
+    await queryClient.invalidateQueries({
+      predicate: query => {
+        const key = JSON.stringify(query.queryKey);
+        return ["store/orders", "store-orders", "referrals", "pipeline", "deals", "financial-metrics"]
+          .some(term => key.includes(term));
+      },
+    });
   };
 
   return (

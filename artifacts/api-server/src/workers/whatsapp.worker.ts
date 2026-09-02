@@ -1,10 +1,10 @@
 import { Worker } from "bullmq";
-import { sendTenantWhatsAppMessage } from "../lib/whatsapp";
 import { getRedisConnection } from "../lib/redis";
 import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import type { WhatsAppNotificationJobData, WhatsAppMessageJobData } from "../queues/index";
 import { deliverReservationConfirmedWhatsApp } from "../services/checkout/reservation-confirmation-outbox";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 let _worker: Worker<WhatsAppNotificationJobData> | null = null;
 
@@ -27,9 +27,22 @@ export function startWhatsAppWorker(): Worker<WhatsAppNotificationJobData> | nul
       }
       const msgData = job.data as WhatsAppMessageJobData;
       logger.info({ jobId: job.id, phone: msgData.phone }, "[whatsapp-worker] Processing job");
-      const result = await sendTenantWhatsAppMessage(msgData.tenantId, msgData.phone, msgData.message);
-      if (!result.success && result.error !== "credentials_not_configured") {
-        throw new Error(result.error ?? "send_failed");
+      const result = await dispatchOutboundMessage({
+        tenantId: msgData.tenantId,
+        eventType: "legacy_whatsapp_job",
+        idempotencyKey: `legacy-whatsapp-job:${msgData.tenantId}:${job.id}`,
+        recipient: { type: "direct", whatsapp: msgData.phone },
+        email: {
+          subject: "Mensagem da agência",
+          html: `<p>${escapeHtml(msgData.message)}</p>`,
+        },
+        whatsapp: { text: msgData.message },
+        origin: "legacy_whatsapp_worker",
+        originChannel: "whatsapp",
+      });
+      const whatsappDelivery = result.deliveries.find((delivery) => delivery.channel === "whatsapp");
+      if (whatsappDelivery?.status === "failed") {
+        throw new Error(whatsappDelivery.lastError ?? "send_failed");
       }
     },
     isDev
@@ -44,6 +57,16 @@ export function startWhatsAppWorker(): Worker<WhatsAppNotificationJobData> | nul
   attachCircuitBreaker(_worker, "whatsapp-worker");
 
   return _worker;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+    .replace(/\n/g, "<br>");
 }
 
 export async function stopWhatsAppWorker(): Promise<void> {

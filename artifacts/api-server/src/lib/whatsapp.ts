@@ -8,6 +8,8 @@ import { normalizeBrazilPhone } from "@workspace/shared";
 export interface WhatsAppSendResult {
   success: boolean;
   error?: string;
+  provider?: "evolution" | "z-api";
+  externalId?: string;
 }
 
 /**
@@ -25,13 +27,13 @@ export async function sendWhatsAppMessage(
 
   if (!instanceId || !token) {
     logger.debug("[whatsapp] Credentials not configured — skipping send");
-    return { success: false, error: "credentials_not_configured" };
+    return { success: false, error: "credentials_not_configured", provider: "z-api" };
   }
 
   const e164 = normalizeBrazilPhone(phone);
   if (!e164) {
     logger.warn({ phone }, "[whatsapp] Invalid Brazilian phone number — skipping send");
-    return { success: false, error: "invalid_phone" };
+    return { success: false, error: "invalid_phone", provider: "z-api" };
   }
   const url = `https://api.z-api.io/instances/${instanceId}/token/${token}/send-text`;
 
@@ -46,15 +48,19 @@ export async function sendWhatsAppMessage(
     if (!resp.ok) {
       const body = await resp.text().catch(() => "");
       logger.warn({ phone: e164, status: resp.status, body }, "[whatsapp] Z-API error");
-      return { success: false, error: `zapi_${resp.status}` };
+      return { success: false, error: `zapi_${resp.status}`, provider: "z-api" };
     }
 
+    const responseBody = await resp.json().catch(() => ({})) as Record<string, unknown>;
+    const externalId = typeof responseBody.messageId === "string"
+      ? responseBody.messageId
+      : typeof responseBody.id === "string" ? responseBody.id : undefined;
     logger.info({ phone: e164 }, "[whatsapp] Message sent");
-    return { success: true };
+    return { success: true, provider: "z-api", externalId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ phone: e164, err: msg }, "[whatsapp] Network error");
-    return { success: false, error: msg };
+    return { success: false, error: msg, provider: "z-api" };
   }
 }
 
@@ -94,7 +100,7 @@ export async function sendTenantWhatsAppMessage(
         const e164 = normalizeBrazilPhone(phone);
         if (!e164) {
           logger.warn({ phone, tenantId }, "[whatsapp] Invalid Brazilian phone number — skipping Evolution send");
-          return { success: false, error: "invalid_phone" };
+          return { success: false, error: "invalid_phone", provider: "evolution" };
         }
         const encodedInstance = encodeURIComponent(instanceName);
         const url = `${baseUrl.replace(/\/$/, "")}/message/sendText/${encodedInstance}`;
@@ -112,12 +118,17 @@ export async function sendTenantWhatsAppMessage(
         });
 
         if (result.ok) {
+          const responseBody = result.text ? JSON.parse(result.text) as Record<string, unknown> : {};
+          const key = responseBody.key as Record<string, unknown> | undefined;
+          const externalId = typeof key?.id === "string"
+            ? key.id
+            : typeof responseBody.messageId === "string" ? responseBody.messageId : undefined;
           logger.info({ phone: e164, tenantId }, "[whatsapp] Message sent via Evolution API");
-          return { success: true };
+          return { success: true, provider: "evolution", externalId };
         }
 
         logger.warn({ phone: e164, tenantId, status: result.status }, "[whatsapp] Evolution API error");
-        return { success: false, error: `evolution_${result.status}` };
+        return { success: false, error: `evolution_${result.status}`, provider: "evolution" };
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

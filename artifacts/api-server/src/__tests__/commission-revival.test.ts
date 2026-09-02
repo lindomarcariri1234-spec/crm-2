@@ -100,6 +100,7 @@ function makeReservation(overrides: Record<string, unknown> = {}) {
     status: "confirmed",
     totalValue: "1000.00",
     paidValue: "1000.00",
+    discountTotal: null,
     commissionAmount: "100.00",  // direct commission path
     sellerId: SELLER_ID,
     createdById: "creator-001",

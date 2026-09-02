@@ -390,6 +390,93 @@ export interface ReverseReferralBonusBody {
   reason: string;
 }
 
+export interface ReversePaidReferralBonusBody {
+  /**
+   * @minLength 1
+   * @maxLength 1000
+   */
+  reason: string;
+  confirmed: boolean;
+}
+
+export type ReversePaidReferralBonusResponseReversal = {
+  id: string;
+  amount: string;
+  reason: string;
+  alreadyApplied: boolean;
+};
+
+export interface Referral {
+  id: string;
+  tenantId: string;
+  referrerId: string;
+  /** @nullable */
+  referredId?: string | null;
+  /** @nullable */
+  referredEmail?: string | null;
+  /** @nullable */
+  referredName?: string | null;
+  /** @nullable */
+  referredPhone?: string | null;
+  /** @nullable */
+  referrerName?: string | null;
+  /** @nullable */
+  referrerEmail?: string | null;
+  /** @nullable */
+  referrerPhone?: string | null;
+  code: string;
+  status: string;
+  bonusAmount: string;
+  bonusPaid: boolean;
+  /** @nullable */
+  bonusPaidAt?: string | null;
+  discountType: string;
+  discountValue: string;
+  discountApplied: boolean;
+  /** @nullable */
+  discountAmount?: string | null;
+  /** @nullable */
+  cookieId?: string | null;
+  /** @nullable */
+  ipAddress?: string | null;
+  /** @nullable */
+  utmSource?: string | null;
+  /** @nullable */
+  utmMedium?: string | null;
+  /** @nullable */
+  utmCampaign?: string | null;
+  visitsCount: number;
+  /** @nullable */
+  firstVisit?: string | null;
+  /** @nullable */
+  lastVisit?: string | null;
+  /** @nullable */
+  expiresAt?: string | null;
+  isActive: boolean;
+  /** @nullable */
+  reservationId?: string | null;
+  /** @nullable */
+  notes?: string | null;
+  /** @nullable */
+  convertedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** @nullable */
+  fraudFlag?: boolean | null;
+  /** @nullable */
+  fraudReason?: string | null;
+  /** @nullable */
+  expiryWarning7SentAt?: string | null;
+  /** @nullable */
+  expiryWarning1SentAt?: string | null;
+  /** @nullable */
+  bonusReleaseNotifiedAt?: string | null;
+}
+
+export type ReversePaidReferralBonusResponse = Referral & {
+  reversal: ReversePaidReferralBonusResponseReversal;
+};
+
 export type TestWhatsAppMessageBodyType =
   (typeof TestWhatsAppMessageBodyType)[keyof typeof TestWhatsAppMessageBodyType];
 
@@ -685,8 +772,12 @@ export interface ActivityItem {
 export interface Client {
   id: string;
   name: string;
-  email: string;
-  whatsapp: string;
+  /** @nullable */
+  email: string | null;
+  /** @nullable */
+  whatsapp: string | null;
+  emailOptIn?: boolean;
+  whatsappOptIn?: boolean;
   /** @nullable */
   phone?: string | null;
   /** @nullable */
@@ -779,11 +870,12 @@ export interface ClientListResponse {
 
 export interface CreateClientBody {
   name: string;
-  email: string;
-  whatsapp: string;
+  email?: string;
+  whatsapp?: string;
   /** @nullable */
   phone?: string | null;
-  cpf: string;
+  /** @nullable */
+  cpf?: string | null;
   /** @nullable */
   rg?: string | null;
   /** @nullable */
@@ -825,6 +917,8 @@ export interface CreateClientBody {
   companyNps?: number | null;
   /** If true, skip the duplicate name+WhatsApp check and create the client anyway. */
   forceCreate?: boolean;
+  /** If true, allow agency staff to create the client with missing email, WhatsApp, or CPF. */
+  allowMissingData?: boolean;
 }
 
 export interface UpdateClientBody {
@@ -2199,6 +2293,11 @@ export interface PipelineStage {
   pipelineId?: string;
 }
 
+/**
+ * @nullable
+ */
+export type MessageMetadata = { [key: string]: unknown } | null;
+
 export interface Message {
   id: string;
   /** @nullable */
@@ -2215,6 +2314,10 @@ export interface Message {
   readAt?: string | null;
   /** @nullable */
   clientName?: string | null;
+  /** @nullable */
+  metadata?: MessageMetadata;
+  /** @nullable */
+  outboundMessageId?: string | null;
 }
 
 export interface SendMessageBody {
@@ -2224,6 +2327,192 @@ export interface SendMessageBody {
   /** @nullable */
   mediaUrl?: string | null;
 }
+
+export interface OutboundDeliveryAttempt {
+  id: string;
+  deliveryId: string;
+  attemptNumber: number;
+  /** @nullable */
+  provider?: string | null;
+  /** @nullable */
+  externalId?: string | null;
+  status: string;
+  /** @nullable */
+  error?: string | null;
+  startedAt: string;
+  /** @nullable */
+  completedAt?: string | null;
+}
+
+export type OutboundDeliveryChannel =
+  (typeof OutboundDeliveryChannel)[keyof typeof OutboundDeliveryChannel];
+
+export const OutboundDeliveryChannel = {
+  email: "email",
+  whatsapp: "whatsapp",
+} as const;
+
+export type OutboundDeliveryStatus =
+  (typeof OutboundDeliveryStatus)[keyof typeof OutboundDeliveryStatus];
+
+export const OutboundDeliveryStatus = {
+  pending: "pending",
+  processing: "processing",
+  accepted: "accepted",
+  failed: "failed",
+  skipped: "skipped",
+} as const;
+
+/**
+ * @nullable
+ */
+export type OutboundDeliveryBounceType =
+  | (typeof OutboundDeliveryBounceType)[keyof typeof OutboundDeliveryBounceType]
+  | null;
+
+export const OutboundDeliveryBounceType = {
+  permanent: "permanent",
+  temporary: "temporary",
+} as const;
+
+export interface OutboundDelivery {
+  id: string;
+  outboundMessageId: string;
+  channel: OutboundDeliveryChannel;
+  /** @nullable */
+  recipient?: string | null;
+  /** @nullable */
+  subject?: string | null;
+  content: string;
+  status: OutboundDeliveryStatus;
+  attempts: number;
+  maxAttempts: number;
+  /** @nullable */
+  provider?: string | null;
+  /** @nullable */
+  externalId?: string | null;
+  /** @nullable */
+  bounceType?: OutboundDeliveryBounceType;
+  /** @nullable */
+  lastError?: string | null;
+  /** @nullable */
+  skippedReason?: string | null;
+  nextAttemptAt: string;
+  /** @nullable */
+  claimedAt?: string | null;
+  /** @nullable */
+  acceptedAt?: string | null;
+  /** @nullable */
+  failedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  attemptHistory: OutboundDeliveryAttempt[];
+}
+
+export type OutboundMessageStatus =
+  (typeof OutboundMessageStatus)[keyof typeof OutboundMessageStatus];
+
+export const OutboundMessageStatus = {
+  pending: "pending",
+  processing: "processing",
+  accepted: "accepted",
+  partial: "partial",
+  failed: "failed",
+  skipped: "skipped",
+} as const;
+
+export interface OutboundMessage {
+  id: string;
+  tenantId: string;
+  idempotencyKey: string;
+  eventType: string;
+  origin: string;
+  /** @nullable */
+  originChannel?: string | null;
+  recipientType: string;
+  /** @nullable */
+  recipientId?: string | null;
+  /** @nullable */
+  recipientName?: string | null;
+  status: OutboundMessageStatus;
+  createdAt: string;
+  updatedAt: string;
+  deliveries: OutboundDelivery[];
+}
+
+export interface OutboundProviderFailureSummary {
+  /** @nullable */
+  provider: string | null;
+  failureCount: number;
+  totalFailures: number;
+  failurePercentage: number;
+}
+
+export type CreateOutboundMessageBodyRecipient =
+  | {
+      type: "client";
+      id: string;
+    }
+  | {
+      type: "user";
+      id: string;
+    }
+  | {
+      type: "admin";
+    }
+  | {
+      type: "direct";
+      /** @nullable */
+      name?: string | null;
+      /** @nullable */
+      email?: string | null;
+      /** @nullable */
+      whatsapp?: string | null;
+    };
+
+export type CreateOutboundMessageBodyEmail = {
+  subject: string;
+  html: string;
+  /** @nullable */
+  senderName?: string | null;
+};
+
+export type CreateOutboundMessageBodyWhatsapp = {
+  text: string;
+};
+
+/**
+ * @nullable
+ */
+export type CreateOutboundMessageBodyOriginChannel =
+  | (typeof CreateOutboundMessageBodyOriginChannel)[keyof typeof CreateOutboundMessageBodyOriginChannel]
+  | null;
+
+export const CreateOutboundMessageBodyOriginChannel = {
+  email: "email",
+  whatsapp: "whatsapp",
+} as const;
+
+export type CreateOutboundMessageBodyMetadata = { [key: string]: unknown };
+
+export interface CreateOutboundMessageBody {
+  eventType: string;
+  idempotencyKey: string;
+  recipient: CreateOutboundMessageBodyRecipient;
+  email?: CreateOutboundMessageBodyEmail;
+  whatsapp?: CreateOutboundMessageBodyWhatsapp;
+  origin?: string;
+  /** @nullable */
+  originChannel?: CreateOutboundMessageBodyOriginChannel;
+  metadata?: CreateOutboundMessageBodyMetadata;
+  isReplication?: boolean;
+  /** @nullable */
+  replicatedFromId?: string | null;
+}
+
+export type OutboundMessageResult = OutboundMessage & {
+  created: boolean;
+};
 
 export interface MessageTemplate {
   id: string;
@@ -2916,6 +3205,12 @@ export interface SyncUserBody {
   email: string;
   /** @nullable */
   avatarUrl?: string | null;
+  /**
+   * CPF do usuário. Quando informado, é usado para localizar ou vincular o cadastro de cliente dentro da agência.
+   * @maxLength 20
+   * @nullable
+   */
+  cpf?: string | null;
   /** When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users. */
   storeSlug?: string;
 }
@@ -3272,73 +3567,6 @@ export interface Commission {
 export interface UpdateCommissionBody {
   status?: string;
   paidAt?: string;
-}
-
-export interface Referral {
-  id: string;
-  tenantId: string;
-  referrerId: string;
-  /** @nullable */
-  referredId?: string | null;
-  /** @nullable */
-  referredEmail?: string | null;
-  /** @nullable */
-  referredName?: string | null;
-  /** @nullable */
-  referredPhone?: string | null;
-  /** @nullable */
-  referrerName?: string | null;
-  /** @nullable */
-  referrerEmail?: string | null;
-  /** @nullable */
-  referrerPhone?: string | null;
-  code: string;
-  status: string;
-  bonusAmount: string;
-  bonusPaid: boolean;
-  /** @nullable */
-  bonusPaidAt?: string | null;
-  discountType: string;
-  discountValue: string;
-  discountApplied: boolean;
-  /** @nullable */
-  discountAmount?: string | null;
-  /** @nullable */
-  cookieId?: string | null;
-  /** @nullable */
-  ipAddress?: string | null;
-  /** @nullable */
-  utmSource?: string | null;
-  /** @nullable */
-  utmMedium?: string | null;
-  /** @nullable */
-  utmCampaign?: string | null;
-  visitsCount: number;
-  /** @nullable */
-  firstVisit?: string | null;
-  /** @nullable */
-  lastVisit?: string | null;
-  /** @nullable */
-  expiresAt?: string | null;
-  isActive: boolean;
-  /** @nullable */
-  reservationId?: string | null;
-  /** @nullable */
-  notes?: string | null;
-  /** @nullable */
-  convertedAt?: string | null;
-  createdAt: string;
-  updatedAt: string;
-  /** @nullable */
-  fraudFlag?: boolean | null;
-  /** @nullable */
-  fraudReason?: string | null;
-  /** @nullable */
-  expiryWarning7SentAt?: string | null;
-  /** @nullable */
-  expiryWarning1SentAt?: string | null;
-  /** @nullable */
-  bonusReleaseNotifiedAt?: string | null;
 }
 
 export interface CreateReferralBody {
@@ -4646,6 +4874,169 @@ export type ListMessagesParams = {
   page?: number;
   limit?: number;
 };
+
+export type ListOutboundMessagesParams = {
+  status?: string;
+  channel?: ListOutboundMessagesChannel;
+  /**
+   * Filter messages that have a delivery with this status
+   */
+  deliveryStatus?: ListOutboundMessagesDeliveryStatus;
+  /**
+   * Filter messages that have a delivery handled by this provider
+   */
+  provider?: string;
+  /**
+   * Filter messages by the validated Resend bounce classification
+   */
+  bounceType?: ListOutboundMessagesBounceType;
+  clientId?: string;
+  origin?: string;
+  eventType?: string;
+  campaignId?: string;
+  automationId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  limit?: number;
+};
+
+export type ListOutboundMessagesChannel =
+  (typeof ListOutboundMessagesChannel)[keyof typeof ListOutboundMessagesChannel];
+
+export const ListOutboundMessagesChannel = {
+  email: "email",
+  whatsapp: "whatsapp",
+} as const;
+
+export type ListOutboundMessagesDeliveryStatus =
+  (typeof ListOutboundMessagesDeliveryStatus)[keyof typeof ListOutboundMessagesDeliveryStatus];
+
+export const ListOutboundMessagesDeliveryStatus = {
+  pending: "pending",
+  processing: "processing",
+  accepted: "accepted",
+  failed: "failed",
+  skipped: "skipped",
+} as const;
+
+export type ListOutboundMessagesBounceType =
+  (typeof ListOutboundMessagesBounceType)[keyof typeof ListOutboundMessagesBounceType];
+
+export const ListOutboundMessagesBounceType = {
+  permanent: "permanent",
+  temporary: "temporary",
+} as const;
+
+export type ListOutboundProviderFailureSummaryParams = {
+  status?: string;
+  channel?: ListOutboundProviderFailureSummaryChannel;
+  /**
+   * Keep only messages that have a delivery with this status
+   */
+  deliveryStatus?: ListOutboundProviderFailureSummaryDeliveryStatus;
+  /**
+   * Keep only deliveries handled by this provider
+   */
+  provider?: string;
+  /**
+   * Keep only deliveries with this validated Resend bounce classification
+   */
+  bounceType?: ListOutboundProviderFailureSummaryBounceType;
+  clientId?: string;
+  origin?: string;
+  eventType?: string;
+  campaignId?: string;
+  automationId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+};
+
+export type ListOutboundProviderFailureSummaryChannel =
+  (typeof ListOutboundProviderFailureSummaryChannel)[keyof typeof ListOutboundProviderFailureSummaryChannel];
+
+export const ListOutboundProviderFailureSummaryChannel = {
+  email: "email",
+  whatsapp: "whatsapp",
+} as const;
+
+export type ListOutboundProviderFailureSummaryDeliveryStatus =
+  (typeof ListOutboundProviderFailureSummaryDeliveryStatus)[keyof typeof ListOutboundProviderFailureSummaryDeliveryStatus];
+
+export const ListOutboundProviderFailureSummaryDeliveryStatus = {
+  pending: "pending",
+  processing: "processing",
+  accepted: "accepted",
+  failed: "failed",
+  skipped: "skipped",
+} as const;
+
+export type ListOutboundProviderFailureSummaryBounceType =
+  (typeof ListOutboundProviderFailureSummaryBounceType)[keyof typeof ListOutboundProviderFailureSummaryBounceType];
+
+export const ListOutboundProviderFailureSummaryBounceType = {
+  permanent: "permanent",
+  temporary: "temporary",
+} as const;
+
+export type ExportOutboundMessagesParams = {
+  format: ExportOutboundMessagesFormat;
+  status?: string;
+  channel?: ExportOutboundMessagesChannel;
+  /**
+   * Filter exported rows by delivery status
+   */
+  deliveryStatus?: ExportOutboundMessagesDeliveryStatus;
+  /**
+   * Filter exported rows by provider
+   */
+  provider?: string;
+  /**
+   * Filter exported rows by the validated Resend bounce classification
+   */
+  bounceType?: ExportOutboundMessagesBounceType;
+  clientId?: string;
+  origin?: string;
+  eventType?: string;
+  campaignId?: string;
+  automationId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+};
+
+export type ExportOutboundMessagesFormat =
+  (typeof ExportOutboundMessagesFormat)[keyof typeof ExportOutboundMessagesFormat];
+
+export const ExportOutboundMessagesFormat = {
+  csv: "csv",
+  pdf: "pdf",
+} as const;
+
+export type ExportOutboundMessagesChannel =
+  (typeof ExportOutboundMessagesChannel)[keyof typeof ExportOutboundMessagesChannel];
+
+export const ExportOutboundMessagesChannel = {
+  email: "email",
+  whatsapp: "whatsapp",
+} as const;
+
+export type ExportOutboundMessagesDeliveryStatus =
+  (typeof ExportOutboundMessagesDeliveryStatus)[keyof typeof ExportOutboundMessagesDeliveryStatus];
+
+export const ExportOutboundMessagesDeliveryStatus = {
+  pending: "pending",
+  processing: "processing",
+  accepted: "accepted",
+  failed: "failed",
+  skipped: "skipped",
+} as const;
+
+export type ExportOutboundMessagesBounceType =
+  (typeof ExportOutboundMessagesBounceType)[keyof typeof ExportOutboundMessagesBounceType];
+
+export const ExportOutboundMessagesBounceType = {
+  permanent: "permanent",
+  temporary: "temporary",
+} as const;
 
 export type ListProductsParams = {
   /**

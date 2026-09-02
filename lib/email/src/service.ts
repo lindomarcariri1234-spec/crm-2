@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { getResend } from './resend-transport';
 import { ReservationConfirmationEmail, type ReservationConfirmationEmailProps } from './templates/reservation-confirmation';
 import { ReservationCancellationEmail, type ReservationCancellationEmailProps } from './templates/reservation-cancellation';
@@ -197,6 +198,26 @@ export async function sendBirthdayEmail(
     console.error('[email] Unexpected error sending birthday email:', message);
     return { success: false, error: message };
   }
+}
+
+/** Render the birthday template for durable outbound delivery. */
+export function renderBirthdayEmail(
+  props: BirthdayEmailProps,
+  options?: SendBirthdayEmailOptions,
+): string {
+  const firstName = props.clientName.split(' ')[0];
+  const customMessage = options?.emailMessage
+    ? options.emailMessage
+        .replace(/\{\{name\}\}/gi, firstName)
+        .replace(/\{\{coupon_code\}\}/gi, props.couponCode)
+        .replace(/\{\{discount\}\}/gi, String(props.discountPercent))
+        .replace(/\{\{valid_until\}\}/gi, props.validUntil)
+        .replace(/\{\{agency_name\}\}/gi, props.agencyName)
+    : null;
+  return renderToStaticMarkup(React.createElement(BirthdayEmail, {
+    ...props,
+    customMessage,
+  }));
 }
 
 export async function sendLoyaltyTierUpgradeEmail(
@@ -994,6 +1015,10 @@ export async function sendNpsSurveyEmail(props: NpsSurveyEmailProps): Promise<Se
   }
 }
 
+export function renderNpsSurveyEmail(props: NpsSurveyEmailProps): string {
+  return renderToStaticMarkup(React.createElement(NpsSurveyEmail, props));
+}
+
 export type { NpsSurveyEmailProps };
 
 export async function sendAgencySuspendedEmail(
@@ -1084,6 +1109,10 @@ export async function sendTrialExpiryEmail(
     console.error("[email] Unexpected error sending trial expiry notification:", message);
     return { success: false, error: message };
   }
+}
+
+export function renderTrialExpiryEmail(props: TrialExpiryEmailProps): string {
+  return renderToStaticMarkup(React.createElement(TrialExpiryEmail, props));
 }
 
 export interface PixOrderAlertEmailProps {
@@ -1262,6 +1291,13 @@ export async function sendFavoriteLowAvailabilityEmail(
     console.error('[email] Unexpected error sending favorite-low-availability email:', message);
     return { success: false, error: message };
   }
+}
+
+/** Render the favorite alert template for durable outbound delivery. */
+export function renderFavoriteLowAvailabilityEmail(
+  props: FavoriteLowAvailabilityEmailProps,
+): string {
+  return renderToStaticMarkup(React.createElement(FavoriteLowAvailabilityEmail, props));
 }
 
 export interface SendStripeHealthAlertEmailOptions {

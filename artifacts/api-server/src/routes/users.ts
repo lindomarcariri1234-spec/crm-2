@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, tenantsTable, invitesTable, clientsTable, storesTable, tripsTable, reservationsTable, storeProductsTable, storeOrdersTable } from "@workspace/db";
-import { eq, and, gt, sql } from "drizzle-orm";
+import { eq, and, gt, isNull, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, checkTenantAccess, ADMIN_ROLES } from "../lib/tenant";
 import { checkPlanLimit } from "../lib/planLimits";
@@ -15,6 +15,8 @@ import {
 import { getAuth, clerkClient } from "@clerk/express";
 import { ROLES, RESOURCES, ACTIONS, hasPermission } from "@workspace/permissions";
 import { AppError, ForbiddenError, NotFoundError, ValidationError, ConflictError } from "../lib/errors";
+import { normalizeCpfInput, reconcileClientIdentity } from "../services/client-identity";
+import { unlinkClientFromTrips } from "../services/unlink-client-from-trips";
 
 const router = Router();
 
@@ -97,6 +99,71 @@ router.get("/users/me", async (req, res, next): Promise<void> => {
  */
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+type ClientLoginCandidate = Pick<
+  typeof clientsTable.$inferSelect,
+  "id" | "tenantId" | "userId"
+>;
+
+type ClientLoginQueryExecutor = Pick<typeof db, "select">;
+
+async function resolveClientLoginCandidate(
+  canonicalEmail: string,
+  tenantId?: string,
+  executor: ClientLoginQueryExecutor = db,
+): Promise<ClientLoginCandidate | undefined> {
+  const conditions = [
+    sql`lower(btrim(${clientsTable.email})) = lower(btrim(${canonicalEmail}))`,
+  ];
+  if (tenantId) conditions.push(eq(clientsTable.tenantId, tenantId));
+
+  const matches = await executor
+    .select({
+      id: clientsTable.id,
+      tenantId: clientsTable.tenantId,
+      userId: clientsTable.userId,
+    })
+    .from(clientsTable)
+    .where(and(...conditions))
+    .limit(2);
+
+  if (matches.length !== 1 || matches[0].userId) return undefined;
+  return matches[0];
+}
+
+async function lockClientEmail(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  canonicalEmail: string,
+): Promise<void> {
+  await tx.execute(sql`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(lower(btrim(${canonicalEmail})), 0)
+    )
+  `);
+}
+
+async function claimClientLogin(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  candidate: ClientLoginCandidate,
+  userId: string,
+): Promise<void> {
+  const [claimed] = await tx
+    .update(clientsTable)
+    .set({ userId })
+    .where(and(
+      eq(clientsTable.id, candidate.id),
+      eq(clientsTable.tenantId, candidate.tenantId),
+      isNull(clientsTable.userId),
+    ))
+    .returning({ id: clientsTable.id });
+
+  if (!claimed) {
+    throw new ConflictError(
+      "Este cadastro de cliente acabou de ser vinculado a outra conta.",
+      "CLIENT_LINK_CONFLICT",
+    );
+  }
 }
 
 async function resolveInviteForUser(
@@ -216,16 +283,26 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
     if (!parsed.success) { next(new ValidationError(parsed.error.message, "VALIDATION_ERROR")); return; }
 
     const { name, avatarUrl } = parsed.data;
+    let normalizedCpf = normalizeCpfInput(parsed.data.cpf);
 
     let canonicalEmail = parsed.data.email;
     let inviteIdFromMeta: string | undefined;
     let clerkFetchFailed = false;
+    let canonicalEmailVerified = false;
 
     try {
       const clerkUser = await clerkClient.users.getUser(clerkId);
       const primaryEmail = clerkUser.emailAddresses.find(e => e.id === clerkUser.primaryEmailAddressId);
       if (primaryEmail?.emailAddress) {
         canonicalEmail = primaryEmail.emailAddress;
+        canonicalEmailVerified = primaryEmail.verification?.status === "verified";
+      }
+      // The public storefront and mobile client collect CPF before Clerk
+      // finishes the account flow and store it as unsafe metadata. It is only
+      // a hint; the server still validates it and scopes every match by tenant.
+      if (!normalizedCpf) {
+        const metadataCpf = (clerkUser.unsafeMetadata as Record<string, unknown> | undefined)?.cpf;
+        if (typeof metadataCpf === "string") normalizedCpf = normalizeCpfInput(metadataCpf);
       }
       inviteIdFromMeta = (clerkUser.publicMetadata as Record<string, string> | undefined)?.inviteId;
     } catch (clerkErr) {
@@ -245,6 +322,8 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       }
 
       let linkedTenantId = pendingInvite?.tenantId ?? null;
+      let clientCandidate: ClientLoginCandidate | undefined;
+      let clientCandidateTenantScope: string | undefined;
       // Tracks whether linkedTenantId came from a pending invite (someone
       // else's agency) vs. a direct storefront client registration (the
       // tenant the user is themselves joining). Only the invite case must
@@ -271,7 +350,30 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
           linkedTenantId = storeRow.tenantId;
           linkedTenantIsInviteTarget = false;
           assignedRole = ROLES.CLIENT;
+            if (canonicalEmailVerified && !normalizedCpf) {
+            clientCandidate = await resolveClientLoginCandidate(canonicalEmail, storeRow.tenantId);
+            clientCandidateTenantScope = storeRow.tenantId;
+          }
           req.log.info({ clerkId, storeSlug: parsed.data.storeSlug, tenantId: storeRow.tenantId }, "New user registered via storefront — assigned role CLIENT");
+        }
+      }
+
+      if (
+        !pendingInvite &&
+        !parsed.data.storeSlug &&
+        assignedRole === ROLES.AGENCY_ADMIN &&
+        canonicalEmailVerified
+        && !normalizedCpf
+      ) {
+        clientCandidate = await resolveClientLoginCandidate(canonicalEmail);
+        if (clientCandidate) {
+          linkedTenantId = clientCandidate.tenantId;
+          linkedTenantIsInviteTarget = false;
+          assignedRole = ROLES.CLIENT;
+          req.log.info(
+            { clerkId, tenantId: clientCandidate.tenantId, clientId: clientCandidate.id },
+            "New authenticated user matched one existing client — assigned role CLIENT",
+          );
         }
       }
 
@@ -287,11 +389,29 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
         if (!allowed) return;
       }
 
-      await db.insert(usersTable).values({
+      const userValues = {
         id: userId, clerkId, tenantId: linkedTenantId, name, email: canonicalEmail,
         avatarUrl: avatarUrl ?? null, role: assignedRole,
         referralCode, referralBalance: "0",
-      });
+        ...(normalizedCpf ? { cpf: normalizedCpf } : {}),
+      };
+
+      if (clientCandidate || (assignedRole === ROLES.CLIENT && linkedTenantId)) {
+        await db.transaction(async (tx) => {
+          await tx.insert(usersTable).values(userValues);
+          await reconcileClientIdentity(tx, {
+            tenantId: linkedTenantId!,
+            userId,
+            cpf: normalizedCpf,
+            name,
+            email: canonicalEmail,
+            createdById: userId,
+            createIfMissing: assignedRole === ROLES.CLIENT,
+          });
+        });
+      } else {
+        await db.insert(usersTable).values(userValues);
+      }
 
       if (pendingInvite) {
         await db.update(invitesTable)
@@ -337,6 +457,15 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
           : undefined;
       }
       const winningInvite = reconcileInvite ?? staleTenantInvite;
+      let clientCandidate: ClientLoginCandidate | undefined;
+      if (
+        !winningInvite &&
+        canonicalEmailVerified &&
+        !existing.tenantId &&
+        existing.role === ROLES.AGENCY_ADMIN
+      ) {
+        clientCandidate = await resolveClientLoginCandidate(canonicalEmail);
+      }
 
       // Existing users only need their tenant's access status checked. Applying
       // a users-plan limit here would block someone from logging in merely
@@ -355,17 +484,31 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       if (winningInvite) {
         const targetTenantAllowed = await checkTenantAccess(winningInvite.tenantId, req, res, { scope: "invite_target" });
         if (!targetTenantAllowed) return;
+      } else if (clientCandidate) {
+        const targetTenantAllowed = await checkTenantAccess(clientCandidate.tenantId, req, res);
+        if (!targetTenantAllowed) return;
+        const allowed = await checkPlanLimit(clientCandidate.tenantId, "users", req, res);
+        if (!allowed) return;
       } else if (existing.tenantId && existing.role !== ROLES.SUPER_ADMIN) {
         const allowed = await checkTenantAccess(existing.tenantId, req, res);
         if (!allowed) return;
       }
 
-      const updateSet: Record<string, unknown> = {
-        name,
-        email: canonicalEmail,
-        avatarUrl: avatarUrl ?? null,
-        lastLoginAt: new Date(),
-      };
+      if (normalizedCpf && existing.cpf && existing.cpf !== normalizedCpf) {
+        next(new ConflictError(
+          "Esta conta já possui outro CPF cadastrado nesta agência.",
+          "CLIENT_USER_CPF_CONFLICT",
+        ));
+        return;
+      }
+
+      // Clerk sync is intentionally non-destructive. A missing avatar or a
+      // temporary display-name variation must never erase trusted CRM data.
+      const updateSet: Record<string, unknown> = { lastLoginAt: new Date() };
+      if (!existing.name.trim() && name.trim()) updateSet.name = name;
+      if (!existing.email.trim() && canonicalEmail.trim()) updateSet.email = canonicalEmail;
+      if (!existing.avatarUrl && avatarUrl) updateSet.avatarUrl = avatarUrl;
+      if (normalizedCpf && !existing.cpf) updateSet.cpf = normalizedCpf;
 
       const superadminClerkIdForUpdate = process.env.SUPERADMIN_CLERK_ID;
       if (superadminClerkIdForUpdate && clerkId === superadminClerkIdForUpdate && existing.role !== ROLES.SUPER_ADMIN) {
@@ -391,8 +534,53 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
         }
       }
 
-      await db.update(usersTable).set(updateSet)
-        .where(eq(usersTable.clerkId, clerkId));
+      if (clientCandidate) {
+        updateSet.tenantId = clientCandidate.tenantId;
+        updateSet.role = ROLES.CLIENT;
+      }
+
+      if (clientCandidate) {
+        await db.transaction(async (tx) => {
+          await lockClientEmail(tx, canonicalEmail);
+          const freshCandidate = await resolveClientLoginCandidate(
+            canonicalEmail,
+            undefined,
+            tx,
+          );
+          if (!freshCandidate || freshCandidate.id !== clientCandidate.id) {
+            throw new ConflictError(
+              "O e-mail corresponde a mais de um cadastro de cliente.",
+              "CLIENT_EMAIL_AMBIGUOUS",
+            );
+          }
+          await claimClientLogin(tx, freshCandidate, existing.id);
+          await tx.update(usersTable).set(updateSet)
+            .where(and(
+              eq(usersTable.clerkId, clerkId),
+              eq(usersTable.role, ROLES.AGENCY_ADMIN),
+              isNull(usersTable.tenantId),
+            ));
+        });
+        req.log.info(
+          { clerkId, userId: existing.id, tenantId: clientCandidate.tenantId, clientId: clientCandidate.id },
+          "Reconciled tenant-less default account with one existing client",
+        );
+      } else if (existing.role === ROLES.CLIENT && existing.tenantId) {
+        await db.transaction(async (tx) => {
+          await tx.update(usersTable).set(updateSet)
+            .where(eq(usersTable.clerkId, clerkId));
+          await reconcileClientIdentity(tx, {
+            tenantId: existing.tenantId!,
+            userId: existing.id,
+            cpf: normalizedCpf ?? existing.cpf,
+            name,
+            email: canonicalEmail,
+          });
+        });
+      } else {
+        await db.update(usersTable).set(updateSet)
+          .where(eq(usersTable.clerkId, clerkId));
+      }
       const [updatedUser] = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkId)).limit(1);
       if (!updatedUser) { next(new NotFoundError("User not found after update", "USER_NOT_FOUND")); return; }
       res.json(SyncMeResponse.parse({
@@ -535,9 +723,23 @@ router.delete("/users/me", async (req, res, next): Promise<void> => {
     }
 
     await db.transaction(async (tx) => {
+      if (user.tenantId) {
+        const linkedClients = await tx.select({ id: clientsTable.id })
+          .from(clientsTable)
+          .where(and(
+            eq(clientsTable.userId, user.id),
+            eq(clientsTable.tenantId, user.tenantId),
+          ));
+        await Promise.all(linkedClients.map((linkedClient) =>
+          unlinkClientFromTrips(tx, user.tenantId!, linkedClient.id),
+        ));
+      }
+      const clientLinkCondition = user.tenantId
+        ? and(eq(clientsTable.userId, user.id), eq(clientsTable.tenantId, user.tenantId))
+        : eq(clientsTable.userId, user.id);
       await tx.update(clientsTable)
         .set({ userId: sql`NULL` })
-        .where(eq(clientsTable.userId, user.id));
+        .where(clientLinkCondition);
       await tx.delete(usersTable).where(eq(usersTable.id, user.id));
     });
 

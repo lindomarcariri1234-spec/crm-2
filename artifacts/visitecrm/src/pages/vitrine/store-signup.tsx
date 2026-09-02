@@ -1,5 +1,7 @@
 import { SignUp } from "@clerk/react";
 import { PublicStore } from "@/lib/storeApi";
+import { cleanCpf, formatCpf, isValidCpf } from "@workspace/shared";
+import { useState } from "react";
 
 export default function VitrineSignUp({
   store,
@@ -7,6 +9,18 @@ export default function VitrineSignUp({
   slug: string;
   store: PublicStore;
 }) {
+  const [cpf, setCpf] = useState("");
+  const [cpfError, setCpfError] = useState("");
+  const cpfDigits = cleanCpf(cpf);
+
+  function handleSubmitCapture(event: React.FormEvent) {
+    if (!isValidCpf(cpfDigits)) {
+      event.preventDefault();
+      event.stopPropagation();
+      setCpfError("Informe um CPF válido para vincular sua conta ao cadastro da agência.");
+    }
+  }
+
   return (
     <div className="min-h-[calc(100vh-64px)] flex items-start justify-center pt-10 pb-16 px-4 bg-gray-50">
       <div className="w-full max-w-md space-y-6">
@@ -38,25 +52,56 @@ export default function VitrineSignUp({
           <p className="text-sm text-muted-foreground text-center mb-4">
             Cadastre-se para acompanhar suas reservas e receber novidades.
           </p>
-          <SignUp
-            routing="hash"
-            signInUrl={`/loja/${store.slug}/entrar`}
-            forceRedirectUrl={`/loja/${store.slug}/entrar?novoCliente=1`}
-            appearance={{
-              elements: {
-                rootBox: "w-full",
-                card: "shadow-none border-0 p-0 bg-transparent",
-                headerTitle: "hidden",
-                headerSubtitle: "hidden",
-                socialButtonsBlockButton: "border rounded-lg h-11",
-                formButtonPrimary: "h-11 rounded-lg",
-                footerAction: "hidden",
-              },
-              variables: {
-                colorPrimary: store.primaryColor,
-              },
-            }}
-          />
+          <div onSubmitCapture={handleSubmitCapture}>
+            <div className="space-y-2 mb-4">
+              <label htmlFor="store-signup-cpf" className="text-sm font-medium">
+                CPF
+              </label>
+              <input
+                id="store-signup-cpf"
+                value={cpfDigits.length === 11 ? formatCpf(cpfDigits) : cpf}
+                onChange={(event) => {
+                  setCpf(event.target.value);
+                  setCpfError("");
+                }}
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="000.000.000-00"
+                className="w-full h-11 rounded-lg border bg-background px-3 text-sm"
+                aria-invalid={!!cpfError}
+                aria-describedby={cpfError ? "store-signup-cpf-error" : undefined}
+              />
+              {cpfError ? (
+                <p id="store-signup-cpf-error" className="text-xs text-destructive">
+                  {cpfError}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Usaremos o CPF para localizar ou criar seu único cadastro nesta agência.
+                </p>
+              )}
+            </div>
+            <SignUp
+              routing="hash"
+              signInUrl={`/loja/${store.slug}/entrar`}
+              forceRedirectUrl={`/loja/${store.slug}/entrar?novoCliente=1`}
+              unsafeMetadata={{ cpf: cpfDigits }}
+              appearance={{
+                elements: {
+                  rootBox: "w-full",
+                  card: "shadow-none border-0 p-0 bg-transparent",
+                  headerTitle: "hidden",
+                  headerSubtitle: "hidden",
+                  socialButtonsBlockButton: "border rounded-lg h-11",
+                  formButtonPrimary: "h-11 rounded-lg",
+                  footerAction: "hidden",
+                },
+                variables: {
+                  colorPrimary: store.primaryColor,
+                },
+              }}
+            />
+          </div>
         </div>
 
         <p className="text-center text-xs text-muted-foreground">

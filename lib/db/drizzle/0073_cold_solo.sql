@@ -1,0 +1,1 @@
+ALTER TABLE "outbound_deliveries" ADD COLUMN IF NOT EXISTS "bounce_type" text;

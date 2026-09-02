@@ -22,12 +22,17 @@ const {
   tripImportBatchesTable: { tenantId: "trip_import_batches.tenantId", idempotencyKey: "trip_import_batches.idempotencyKey" },
 }));
 
-function query(data: unknown[]) {
-  const chain = Object.assign(Promise.resolve(data), {
-    from: vi.fn(() => chain),
-    where: vi.fn(() => chain),
-    limit: vi.fn().mockResolvedValue(data),
-  });
+type QueryChain = Promise<unknown[]> & {
+  from: ReturnType<typeof vi.fn>;
+  where: ReturnType<typeof vi.fn>;
+  limit: ReturnType<typeof vi.fn>;
+};
+
+function query(data: unknown[]): QueryChain {
+  const chain = Promise.resolve(data) as QueryChain;
+  chain.from = vi.fn(() => chain);
+  chain.where = vi.fn(() => chain);
+  chain.limit = vi.fn().mockResolvedValue(data);
   return chain;
 }
 

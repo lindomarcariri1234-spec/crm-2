@@ -434,6 +434,123 @@ describe("GET /trips — page, limit, status query param validation", () => {
       },
     });
   });
+
+  it("returns the trip list and count when the stats aggregate fails", async () => {
+    type QueryChain = Promise<unknown[]> & {
+      from: () => QueryChain;
+      where: () => QueryChain;
+      orderBy: () => QueryChain;
+      limit: () => QueryChain;
+      offset: () => QueryChain;
+    };
+    const result = (rows: unknown[]): QueryChain => {
+      const chain = Promise.resolve(rows) as QueryChain;
+      chain.from = () => chain;
+      chain.where = () => chain;
+      chain.orderBy = () => chain;
+      chain.limit = () => chain;
+      chain.offset = () => chain;
+      return chain;
+    };
+    const trip = {
+      id: "trip-1",
+      name: "Viagem de regressão",
+      slug: "viagem-de-regressao",
+      description: null,
+      shortDescription: null,
+      destination: "Fortaleza",
+      destinationCity: "Fortaleza",
+      destinationState: "CE",
+      destinationCountry: null,
+      type: "excursion",
+      category: null,
+      departureDate: new Date("2026-09-15T12:00:00.000Z"),
+      returnDate: null,
+      registrationDeadline: null,
+      totalCapacity: 40,
+      availableSeats: 39,
+      reservedSeats: 1,
+      confirmedSeats: 0,
+      priceAdult: "100",
+      priceChild: null,
+      priceInfant: null,
+      priceSenior: null,
+      reservationFee: null,
+      inclusions: [],
+      exclusions: [],
+      coverImage: null,
+      gallery: [],
+      videos: [],
+      itinerary: [],
+      boardingPoints: [],
+      status: "active",
+      isPublic: true,
+      isFeatured: false,
+      isAvailableInShop: true,
+      vehiclePlate: null,
+      vehicleType: null,
+      driverName: null,
+      driverCnh: null,
+      driverPhone: null,
+      tourGuide: null,
+      tripOrganizer: null,
+      driver1Cpf: null,
+      driver1Cnh: null,
+      driver1CnhCategory: null,
+      driver1CnhExpiry: null,
+      driver2Name: null,
+      driver2Cpf: null,
+      driver2Cnh: null,
+      driver2CnhCategory: null,
+      driver2CnhExpiry: null,
+      tourGuideCpf: null,
+      tourGuideRegistration: null,
+      manifestNumber: null,
+      cancellationPolicy: null,
+      metaTitle: null,
+      metaDescription: null,
+      seatLayout: null,
+      layoutId: null,
+      vehicleId: null,
+      showSeatMap: true,
+      fixedCosts: [],
+      variableCosts: [],
+      freeOrganizers: null,
+      freeGuides: null,
+      originCity: null,
+      originState: null,
+      departureTime: null,
+      returnTime: null,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-01-02T00:00:00.000Z"),
+    };
+
+    mockSelect
+      .mockImplementationOnce(() => result([trip]))
+      .mockImplementationOnce(() => result([{ count: 1 }]))
+      .mockImplementationOnce(() => ({
+        from: () => ({
+          where: () => Promise.reject(new Error("stats query failed")),
+        }),
+      }));
+
+    const res = await request(app).get("/trips");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      data: [{ id: "trip-1", name: "Viagem de regressão" }],
+      total: 1,
+      page: 1,
+      limit: 20,
+      stats: {
+        total: 0,
+        active: 0,
+        totalCapacity: 0,
+        occupiedSeats: 0,
+        totalRevenue: 0,
+      },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

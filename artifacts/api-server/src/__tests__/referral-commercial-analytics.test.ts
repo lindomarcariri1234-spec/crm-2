@@ -183,4 +183,26 @@ describe("calculateReferralCommercialAnalytics", () => {
       commissionAmount: 30,
     })]);
   });
+
+  it("breaks otherwise identical ranking ties by name and then stable referrer id", () => {
+    const base = {
+      tenantId: "tenant-a",
+      status: REFERRAL_STATUS.COMPLETED,
+      convertedAt: new Date("2026-08-12T12:00:00.000Z"),
+      bonusAmount: "0",
+      bonusPaid: false,
+      bonusPaidAt: null,
+      bonusCreditUsedAmount: null,
+      discountAmount: "0",
+      reservationStatus: "confirmed",
+      reservationPaidValue: "100",
+    };
+    const { ranking } = calculateReferralCommercialAnalytics([
+      { ...base, referrerId: "b", referrerName: "Ana" },
+      { ...base, referrerId: "a", referrerName: "Ana" },
+      { ...base, referrerId: "c", referrerName: "Bruno" },
+    ], "tenant-a", since);
+
+    expect(ranking.map((entry) => entry.referrerId)).toEqual(["a", "b", "c"]);
+  });
 });

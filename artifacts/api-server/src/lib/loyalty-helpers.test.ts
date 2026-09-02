@@ -27,12 +27,10 @@ vi.mock("drizzle-orm", () => ({
   eq: vi.fn(),
 }));
 
-vi.mock("@workspace/email", () => ({
-  sendLoyaltyTierUpgradeEmail: vi.fn(),
-}));
+const mockDispatchOutboundMessage = vi.hoisted(() => vi.fn());
 
-vi.mock("../queues/whatsapp-helpers.js", () => ({
-  enqueueOrSend: vi.fn(),
+vi.mock("../services/outbound-delivery.js", () => ({
+  dispatchOutboundMessage: mockDispatchOutboundMessage,
 }));
 
 vi.mock("./client-notifications", () => ({
@@ -44,14 +42,11 @@ vi.mock("./logger", () => ({
 }));
 
 import { db } from "@workspace/db";
-import { sendLoyaltyTierUpgradeEmail } from "@workspace/email";
 import { insertClientNotification } from "./client-notifications";
 import { sendLoyaltyTierUpgradeNotification } from "./loyalty-helpers";
-import { enqueueOrSend } from "../queues/whatsapp-helpers.js";
 
 const mockedDbSelect = vi.mocked(db.select);
-const mockedSendEmail = vi.mocked(sendLoyaltyTierUpgradeEmail);
-const mockedEnqueueOrSend = vi.mocked(enqueueOrSend);
+const mockedDispatch = vi.mocked(mockDispatchOutboundMessage);
 const mockedInsertNotification = vi.mocked(insertClientNotification);
 
 function mockSelectRows(...rows: unknown[][]) {
@@ -76,11 +71,17 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedInsertNotification.mockResolvedValue(undefined);
-    mockedSendEmail.mockResolvedValue({ success: true });
-    mockedEnqueueOrSend.mockResolvedValue({ mode: "direct", success: true });
+    mockedDispatch.mockResolvedValue({
+      created: true,
+      message: { status: "accepted" },
+      deliveries: [
+        { channel: "email", status: "accepted" },
+        { channel: "whatsapp", status: "skipped", skippedReason: "whatsapp_opted_out" },
+      ],
+    });
   });
 
-  it("sends the tier-upgrade email when the client opted out of WhatsApp", async () => {
+  it("preserves the tier-upgrade payload and retains the opted-out WhatsApp counterpart", async () => {
     mockSelectRows(
       [{
         name: "Ana Silva",
@@ -100,16 +101,18 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       totalPoints: 1800,
     });
 
-    expect(mockedEnqueueOrSend).not.toHaveBeenCalled();
-    expect(mockedSendEmail).toHaveBeenCalledWith({
-      clientName: "Ana Silva",
-      clientEmail: "ana@example.com",
-      newTierLabel: "Ouro",
-      totalPoints: 1800,
-      nextTierLabel: "Diamante",
-      pointsToNext: 3200,
-      agencyName: "Agência Teste",
-    });
+    expect(mockedDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: "tenant-1",
+      eventType: "loyalty-tier-upgraded",
+      recipient: { type: "client", id: "client-1" },
+      email: expect.objectContaining({
+        subject: "🎉 Você subiu de nível, Ana!",
+        senderName: "Agência Teste",
+        html: expect.stringContaining("Ouro"),
+      }),
+      whatsapp: expect.objectContaining({ text: expect.stringContaining("Ouro") }),
+      metadata: { clientId: "client-1", newTier: "gold", totalPoints: 1800 },
+    }));
     expect(mockedInsertNotification).toHaveBeenCalledWith(
       "client-1",
       "tenant-1",
@@ -118,7 +121,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
     );
   });
 
-  it("falls back to email when WhatsApp credentials are not configured", async () => {
+  it("preserves a partial ledger outcome without issuing a fallback email", async () => {
     mockSelectRows(
       [{
         name: "Ana Silva",
@@ -130,10 +133,13 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       [{ name: "Agência Teste" }],
       [],
     );
-    mockedEnqueueOrSend.mockResolvedValue({
-      mode: "direct",
-      success: false,
-      error: "credentials_not_configured",
+    mockedDispatch.mockResolvedValue({
+      created: true,
+      message: { status: "partial" },
+      deliveries: [
+        { channel: "email", status: "accepted" },
+        { channel: "whatsapp", status: "skipped", skippedReason: "credentials_not_configured" },
+      ],
     });
 
     await sendLoyaltyTierUpgradeNotification({
@@ -143,24 +149,14 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       totalPoints: 700,
     });
     await flushAsyncNotifications();
-
-    expect(mockedEnqueueOrSend).toHaveBeenCalledOnce();
-    expect(mockedEnqueueOrSend).toHaveBeenCalledWith(
-      "5599999999999",
-      expect.stringContaining("🎉 Parabéns, Ana!"),
-      "tenant-1",
-    );
-    expect(mockedSendEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        newTierLabel: "Prata",
-        totalPoints: 700,
-        nextTierLabel: "Ouro",
-        pointsToNext: 800,
-      }),
-    );
+    expect(mockedDispatch).toHaveBeenCalledOnce();
+    expect(mockedDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      email: expect.objectContaining({ subject: "🎉 Você subiu de nível, Ana!" }),
+      whatsapp: expect.objectContaining({ text: expect.stringContaining("Prata") }),
+    }));
   });
 
-  it("does not duplicate the notification by email after a successful WhatsApp send", async () => {
+  it("does not duplicate the email when WhatsApp is accepted", async () => {
     mockSelectRows(
       [{
         name: "Ana Silva",
@@ -172,7 +168,14 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       [{ name: "Agência Teste" }],
       [],
     );
-    mockedEnqueueOrSend.mockResolvedValue({ mode: "queued", success: true });
+    mockedDispatch.mockResolvedValue({
+      created: true,
+      message: { status: "accepted" },
+      deliveries: [
+        { channel: "email", status: "skipped", skippedReason: "email_opted_out" },
+        { channel: "whatsapp", status: "accepted" },
+      ],
+    });
 
     await sendLoyaltyTierUpgradeNotification({
       clientId: "client-1",
@@ -182,16 +185,14 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
     });
     await flushAsyncNotifications();
 
-    expect(mockedEnqueueOrSend).toHaveBeenCalledOnce();
-    expect(mockedEnqueueOrSend).toHaveBeenCalledWith(
-      "5599999999999",
-      expect.stringContaining("🎉 Parabéns, Ana!"),
-      "tenant-1",
-    );
-    expect(mockedSendEmail).not.toHaveBeenCalled();
+    expect(mockedDispatch).toHaveBeenCalledOnce();
+    expect(mockedDispatch.mock.calls[0][0]).toEqual(expect.objectContaining({
+      email: expect.any(Object),
+      whatsapp: expect.any(Object),
+    }));
   });
 
-  it("does not wait for the fallback email before resolving", async () => {
+  it("resolves after recording the portal notice while dispatch remains fire-and-forget", async () => {
     mockSelectRows(
       [{
         name: "Ana Silva",
@@ -203,7 +204,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       [{ name: "Agência Teste" }],
       [],
     );
-    mockedSendEmail.mockReturnValue(new Promise(() => {}));
+    mockedDispatch.mockReturnValue(new Promise(() => {}));
 
     await expect(
       sendLoyaltyTierUpgradeNotification({
@@ -214,7 +215,7 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(mockedSendEmail).toHaveBeenCalledOnce();
+    expect(mockedDispatch).toHaveBeenCalledOnce();
   });
 
   it("uses the agency WhatsApp template and interpolates its variables", async () => {
@@ -234,7 +235,14 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
         },
       }],
     );
-    mockedEnqueueOrSend.mockResolvedValue({ mode: "direct", success: true });
+    mockedDispatch.mockResolvedValue({
+      created: true,
+      message: { status: "accepted" },
+      deliveries: [
+        { channel: "email", status: "accepted" },
+        { channel: "whatsapp", status: "accepted" },
+      ],
+    });
 
     await sendLoyaltyTierUpgradeNotification({
       clientId: "client-1",
@@ -243,10 +251,8 @@ describe("sendLoyaltyTierUpgradeNotification", () => {
       totalPoints: 700,
     });
 
-    expect(mockedEnqueueOrSend).toHaveBeenCalledWith(
-      "5599999999999",
-      "Oi, Ana! Agora você é Prata, com 700 pontos. Próximo: Ouro.",
-      "tenant-1",
-    );
+    expect(mockedDispatch).toHaveBeenCalledWith(expect.objectContaining({
+      whatsapp: { text: "Oi, Ana! Agora você é Prata, com 700 pontos. Próximo: Ouro." },
+    }));
   });
 });

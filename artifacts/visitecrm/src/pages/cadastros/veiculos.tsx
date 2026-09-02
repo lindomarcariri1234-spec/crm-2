@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { ListLoadErrorRow } from "@/components/list-load-error";
 import { Plus, Pencil, Trash2, Search, Bus, Eye } from "lucide-react";
 import { formatCurrencyBRL as formatCurrency, formatDate } from "@/lib/utils";
 
@@ -315,7 +316,7 @@ function VehicleDetailModal({
 
 export default function Veiculos() {
   const { toast } = useToast();
-  const { data: vehicles = [], refetch } = useListVehicles();
+  const { data: vehicles = [], isError, refetch } = useListVehicles();
   const createVehicle = useCreateVehicle();
   const updateVehicle = useUpdateVehicle();
   const deleteVehicle = useDeleteVehicle();
@@ -469,7 +470,13 @@ export default function Veiculos() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filtered.length === 0 ? (
+            {isError ? (
+              <ListLoadErrorRow
+                colSpan={9}
+                onRetry={refetch}
+                message="Não foi possível carregar os veículos."
+              />
+            ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center text-muted-foreground py-10">
                   <Bus className="w-8 h-8 mx-auto mb-2 opacity-30" />

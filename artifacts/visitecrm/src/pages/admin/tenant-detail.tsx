@@ -35,6 +35,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ChevronLeft, Users, BarChart2, ScrollText, Info, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getGetTenantDetailsQueryKey } from "@workspace/api-client-react";
+import { QueryErrorState } from "@/components/query-error-state";
 
 const STATUS_LABELS: Record<string, string> = {
   [TENANT_STATUS.ACTIVE]: "Ativo",
@@ -76,7 +77,7 @@ const STATUS_INVOICE_LABELS: Record<string, string> = {
 function BillingSection({ tenant }: { tenant: TenantDetails }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { data: invoicesData, isLoading } = useListAdminInvoices({ tenantId: tenant.id });
+  const { data: invoicesData, isLoading, isError, error, refetch } = useListAdminInvoices({ tenantId: tenant.id });
   const confirmPayment = useConfirmInvoicePayment();
   const invoices = (invoicesData as unknown as Array<{ id: string; invoiceNumber: string | null; amount: string; status: string; dueDate: string | null; paidAt: string | null; paymentMethod: string | null }>) ?? [];
 
@@ -114,6 +115,8 @@ function BillingSection({ tenant }: { tenant: TenantDetails }) {
         </div>
         {isLoading ? (
           <p className="text-xs text-muted-foreground">Carregando faturas...</p>
+        ) : isError ? (
+          <QueryErrorState resourceLabel="as faturas" error={error} onRetry={() => { void refetch(); }} compact />
         ) : invoices.length === 0 ? (
           <p className="text-xs text-muted-foreground">Nenhuma fatura encontrada.</p>
         ) : (
@@ -407,9 +410,9 @@ export default function AdminTenantDetail() {
   const id = params.id ?? "";
   const [tab, setTab] = useState<Tab>("info");
 
-  const { data: tenant, isLoading: tenantLoading } = useGetTenantDetails(id);
-  const { data: users = [], isLoading: usersLoading } = useListTenantUsers(id);
-  const { data: logs = [], isLoading: logsLoading } = useListAdminAuditLogs({ tenantId: id });
+  const { data: tenant, isLoading: tenantLoading, isError: tenantError, error: tenantQueryError, refetch: refetchTenant } = useGetTenantDetails(id);
+  const { data: users = [], isLoading: usersLoading, isError: usersError, error: usersQueryError, refetch: refetchUsers } = useListTenantUsers(id);
+  const { data: logs = [], isLoading: logsLoading, isError: logsError, error: logsQueryError, refetch: refetchLogs } = useListAdminAuditLogs({ tenantId: id });
 
   if (tenantLoading) {
     return (
@@ -417,6 +420,10 @@ export default function AdminTenantDetail() {
         <div className="animate-pulse text-muted-foreground">Carregando agência...</div>
       </div>
     );
+  }
+
+  if (tenantError) {
+    return <QueryErrorState resourceLabel="a agência" error={tenantQueryError} onRetry={() => { void refetchTenant(); }} />;
   }
 
   if (!tenant) {
@@ -470,6 +477,8 @@ export default function AdminTenantDetail() {
           <CardContent className="p-0">
             {usersLoading ? (
               <div className="flex items-center justify-center h-40 animate-pulse text-muted-foreground">Carregando...</div>
+            ) : usersError ? (
+              <QueryErrorState resourceLabel="os usuários" error={usersQueryError} onRetry={() => { void refetchUsers(); }} />
             ) : users.length === 0 ? (
               <div className="flex items-center justify-center h-40 text-muted-foreground">Nenhum usuário</div>
             ) : (
@@ -556,6 +565,8 @@ export default function AdminTenantDetail() {
           <CardContent className="p-0">
             {logsLoading ? (
               <div className="flex items-center justify-center h-40 animate-pulse text-muted-foreground">Carregando...</div>
+            ) : logsError ? (
+              <QueryErrorState resourceLabel="os logs" error={logsQueryError} onRetry={() => { void refetchLogs(); }} />
             ) : logs.length === 0 ? (
               <div className="flex items-center justify-center h-40 text-muted-foreground">Nenhum log registrado</div>
             ) : (

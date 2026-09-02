@@ -210,6 +210,9 @@ vi.mock("@workspace/permissions", () => ({
   RESERVATION_STATUS: { PENDING: "pending", CONFIRMED: "confirmed", CANCELLED: "cancelled" },
   REFERRAL_STATUS:    { ACTIVE: "active" },
   TRIP_STATUS:        { DRAFT: "draft", PUBLISHED: "published", ACTIVE: "active", CANCELLED: "cancelled" },
+  RESOURCES:          { TRIPS: "trips", RESERVATIONS: "reservations" },
+  ACTIONS:            { EDIT: "edit", MANAGE: "manage", DELETE: "delete" },
+  hasPermission:      (role: string) => ["admin", "agencia", "gerente"].includes(role),
 }));
 
 // ── App setup ────────────────────────────────────────────────────────────────

@@ -3,9 +3,8 @@ import { localToday } from "@workspace/shared";
 import { eq, and, sql, inArray } from "drizzle-orm";
 import { generateId } from "./id";
 import { logger } from "./logger";
-import { sendBirthdayEmail } from "@workspace/email";
-import { getBirthdayEmailQueue } from "../queues/index";
-import { enqueueOrSend } from "../queues/whatsapp-helpers";
+import { renderBirthdayEmail } from "@workspace/email";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
 
 interface BirthdaySettings {
   enabled: boolean;
@@ -165,11 +164,6 @@ export async function processBirthdayForClient(
     sentEmail: false,
   };
 
-  let sentWhatsapp = false;
-  let sentEmail = false;
-  let whatsappError: string | undefined;
-  let emailError: string | undefined;
-
   const firstName = client.name.split(" ")[0];
   const agencyName = settings.senderName || tenant.name;
 
@@ -182,78 +176,47 @@ export async function processBirthdayForClient(
       .replace(/\{\{agency_name\}\}/gi, agencyName);
   }
 
-  if (settings.sendWhatsapp && client.whatsappOptIn !== false && client.whatsapp) {
-    try {
-      const defaultMsg = settings.whatsappMessage
-        ? interpolateTemplate(settings.whatsappMessage)
-        : `🎂 Feliz Aniversário, ${firstName}!\n\nA ${agencyName} tem um presente especial para você: *${settings.discountPercent}% de desconto* na sua próxima viagem!\n\nUse o cupom: *${couponCode}*\nVálido até ${validUntilStr}\n\nAproveite para planejar a viagem dos seus sonhos! 🌍`;
-
-      const result = await enqueueOrSend(client.whatsapp, defaultMsg, tenantId);
-      if (result.success) {
-        sentWhatsapp = true;
-        logger.info(
-          { tenantId, clientId, mode: result.mode },
-          "[birthday] WhatsApp queued or sent via tenant integration",
-        );
-      } else if (result.error !== "credentials_not_configured") {
-        whatsappError = result.error;
-        logger.warn({ tenantId, clientId, error: result.error }, "[birthday] WhatsApp send failed");
-      }
-    } catch (err) {
-      whatsappError = err instanceof Error ? err.message : String(err);
-      logger.error({ err: whatsappError }, "[birthday] WhatsApp send error");
-    }
-  }
-
-  if (settings.sendEmail && client.emailOptIn !== false && client.email) {
-    try {
-      const birthdayEmailProps = {
-        clientName: client.name,
-        clientEmail: client.email,
-        agencyName: agencyName,
-        agencyEmail: tenant.email,
-        agencyPhone: tenant.phone ?? "",
-        couponCode,
-        discountPercent: settings.discountPercent,
-        validUntil: validUntilStr,
-      };
-      const birthdayEmailOptions = {
-        emailSubject: settings.emailSubject ?? null,
-        senderName: settings.senderName ?? null,
-        emailMessage: settings.emailMessage ? interpolateTemplate(settings.emailMessage) : null,
-      };
-
-      const birthdayQueue = getBirthdayEmailQueue();
-      if (birthdayQueue) {
-        try {
-          await birthdayQueue.add("birthday-email", {
-            ...birthdayEmailProps,
-            tenantId,
-            ...birthdayEmailOptions,
-          });
-          sentEmail = true;
-        } catch (queueErr) {
-          logger.warn({ err: queueErr }, "[birthday] Queue unavailable (Redis down?), falling back to direct send");
-          const result = await sendBirthdayEmail(birthdayEmailProps, birthdayEmailOptions);
-          if (result.success) {
-            sentEmail = true;
-          } else {
-            emailError = result.error;
-          }
-        }
-      } else {
-        const result = await sendBirthdayEmail(birthdayEmailProps, birthdayEmailOptions);
-        if (result.success) {
-          sentEmail = true;
-        } else {
-          emailError = result.error;
-        }
-      }
-    } catch (err) {
-      emailError = err instanceof Error ? err.message : String(err);
-      logger.error({ err: emailError }, "[birthday] Email send error");
-    }
-  }
+  const birthdayEmailProps = {
+    clientName: client.name,
+    clientEmail: client.email ?? "",
+    agencyName,
+    agencyEmail: tenant.email,
+    agencyPhone: tenant.phone ?? "",
+    couponCode,
+    discountPercent: settings.discountPercent,
+    validUntil: validUntilStr,
+  };
+  const birthdayEmailOptions = {
+    emailSubject: settings.emailSubject ? interpolateTemplate(settings.emailSubject) : null,
+    senderName: settings.senderName ?? null,
+    emailMessage: settings.emailMessage ? interpolateTemplate(settings.emailMessage) : null,
+  };
+  const whatsappText = settings.whatsappMessage
+    ? interpolateTemplate(settings.whatsappMessage)
+    : `🎂 Feliz Aniversário, ${firstName}!\n\nA ${agencyName} tem um presente especial para você: *${settings.discountPercent}% de desconto* na sua próxima viagem!\n\nUse o cupom: *${couponCode}*\nVálido até ${validUntilStr}\n\nAproveite para planejar a viagem dos seus sonhos! 🌍`;
+  const dispatched = await dispatchOutboundMessage({
+    tenantId,
+    eventType: "birthday",
+    idempotencyKey: `birthday:${tenantId}:${clientId}:${year}`,
+    recipient: { type: "client", id: clientId },
+    email: settings.sendEmail ? {
+      subject: birthdayEmailOptions.emailSubject ?? `🎂 Feliz Aniversário, ${firstName}! Um presente especial para você`,
+      html: renderBirthdayEmail(birthdayEmailProps, birthdayEmailOptions),
+      senderName: birthdayEmailOptions.senderName,
+    } : undefined,
+    whatsapp: settings.sendWhatsapp ? { text: whatsappText } : undefined,
+    origin: "birthday",
+    createdById: options?.sentById,
+    metadata: { clientId, birthdayYear: year, couponCode },
+  });
+  const emailDelivery = dispatched.deliveries.find((d) => d.channel === "email");
+  const whatsappDelivery = dispatched.deliveries.find((d) => d.channel === "whatsapp");
+  const isDispatched = (status: string | undefined) =>
+    status === "pending" || status === "processing" || status === "accepted";
+  const sentEmail = isDispatched(emailDelivery?.status);
+  const sentWhatsapp = isDispatched(whatsappDelivery?.status);
+  const emailError = emailDelivery?.skippedReason ?? null;
+  const whatsappError = whatsappDelivery?.skippedReason ?? null;
 
   const now = new Date();
   await db.insert(birthdayMessagesTable).values({
@@ -262,8 +225,8 @@ export async function processBirthdayForClient(
     sentEmail,
     whatsappSentAt: sentWhatsapp ? now : undefined,
     emailSentAt: sentEmail ? now : undefined,
-    whatsappError: whatsappError ?? null,
-    emailError: emailError ?? null,
+    whatsappError,
+    emailError,
   });
 
   return {

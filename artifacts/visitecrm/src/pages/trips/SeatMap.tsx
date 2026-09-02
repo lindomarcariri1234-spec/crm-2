@@ -154,6 +154,7 @@ export function SeatMap({ tripId: initialTripId }: { tripId: string }) {
             email: manualEmail,
             whatsapp: manualPhone || "00000000000",
             cpf: manualCpf || "",
+            allowMissingData: true,
           },
         });
         await createReservation.mutateAsync({

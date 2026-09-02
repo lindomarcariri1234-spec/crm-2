@@ -14,6 +14,7 @@
     "reconcile:seller-reservation-ownership": "tsx ./src/reconcile-seller-reservation-ownership.ts",
     "cleanup:pipeline-duplicate-leads": "tsx ./src/cleanup-pipeline-duplicate-leads.ts",
     "cleanup:pipeline-orphan-deals": "tsx ./src/cleanup-pipeline-orphan-deals.ts",
+    "repair:orphan-reservation": "tsx ./src/repair-orphan-reservation.ts",
     "list:duplicate-reservations": "tsx ./src/list-duplicate-reservations.ts",
     "seed:stripe-plans": "tsx ./src/seed-stripe-plans.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"

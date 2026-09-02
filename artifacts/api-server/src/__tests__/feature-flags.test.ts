@@ -18,12 +18,13 @@ import pino from "pino";
 // vi.hoisted: shared mock factories must exist before any vi.mock factory runs
 // ---------------------------------------------------------------------------
 
-const { mockLimit, mockWhere, mockFrom, mockSelect } = vi.hoisted(() => {
+const { mockLimit, mockWhere, mockFrom, mockSelect, mockTransaction } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere: ReturnType<typeof vi.fn> = vi.fn();
   const mockFrom = vi.fn();
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
-  return { mockLimit, mockWhere, mockFrom, mockSelect };
+  const mockTransaction = vi.fn();
+  return { mockLimit, mockWhere, mockFrom, mockSelect, mockTransaction };
 });
 
 // ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ vi.mock("@workspace/db", () => ({
     select: mockSelect,
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
     update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
-    transaction: vi.fn(),
+    transaction: mockTransaction,
   },
   storesTable: {},
   tenantsTable: {},
@@ -274,6 +275,13 @@ beforeEach(() => {
   // clearAllMocks does NOT flush the mockResolvedValueOnce queue; reset explicitly
   // so unconsumed one-time values from previous tests don't bleed through.
   mockLimit.mockReset();
+  mockTransaction.mockReset().mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
+    callback({
+      select: mockSelect,
+      insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
+    }),
+  );
 
   const mockOrderBy = vi.fn().mockReturnValue({ limit: mockLimit });
   mockWhere.mockReturnValue(

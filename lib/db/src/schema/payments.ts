@@ -36,6 +36,8 @@ export const paymentsTable = pgTable("payments", {
   index("payments_reservation_id_idx").on(t.reservationId),
   index("payments_client_id_idx").on(t.clientId),
   index("payments_tenant_id_status_idx").on(t.tenantId, t.status),
+  index("payments_financial_paid_idx").on(t.tenantId, t.type, t.status, t.paidAt),
+  index("payments_financial_due_idx").on(t.tenantId, t.type, t.status, t.dueDate),
 ]);
 
 export const insertPaymentSchema = createInsertSchema(paymentsTable).omit({ createdAt: true, updatedAt: true });
@@ -68,6 +70,8 @@ export const expensesTable = pgTable("expenses", {
 }, (t) => [
   index("expenses_tenant_id_created_at_idx").on(t.tenantId, t.createdAt),
   index("expenses_trip_id_idx").on(t.tripId),
+  index("expenses_financial_due_idx").on(t.tenantId, t.status, t.dueDate),
+  index("expenses_financial_paid_idx").on(t.tenantId, t.status, t.paymentDate),
 ]);
 
 export const insertExpenseSchema = createInsertSchema(expensesTable).omit({ createdAt: true, updatedAt: true });

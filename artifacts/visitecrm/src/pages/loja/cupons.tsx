@@ -29,6 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent } from "@/components/ui/card";
+import { ListLoadError } from "@/components/list-load-error";
 import { Tag, Plus, Pencil, Trash2, Loader2, Package, Search } from "lucide-react";
 
 function CouponForm({
@@ -297,18 +298,22 @@ export default function LojaCupons() {
   const { toast } = useToast();
   const [coupons, setCoupons] = useState<StoreCoupon[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<StoreCoupon | undefined>();
   const [showDialog, setShowDialog] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
+    setLoadError(null);
     try {
       setCoupons(await storeApi.getCoupons());
     } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLoadError(message);
       toast({
         title: "Erro ao carregar cupons",
-        description: err instanceof Error ? err.message : String(err),
+        description: message,
         variant: "destructive",
       });
     } finally {
@@ -366,6 +371,12 @@ export default function LojaCupons() {
         <div className="flex items-center justify-center h-48">
           <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
         </div>
+      ) : loadError ? (
+        <Card>
+          <CardContent>
+            <ListLoadError onRetry={load} message={loadError} />
+          </CardContent>
+        </Card>
       ) : coupons.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">

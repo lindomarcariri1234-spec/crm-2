@@ -44,8 +44,12 @@ const {
   mockInnerJoinWhere,
   mockInnerJoin,
   mockSetWhere,
+  mockReturning,
   mockSet,
   mockUpdate,
+  mockGetClerkUser,
+  mockTransaction,
+  mockExecute,
 } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockGroupBy = vi.fn();
@@ -68,9 +72,13 @@ const {
 
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
 
-  const mockSetWhere = vi.fn().mockResolvedValue([]);
+  const mockReturning = vi.fn().mockResolvedValue([]);
+  const mockSetWhere = vi.fn(() => ({ returning: mockReturning }));
   const mockSet = vi.fn(() => ({ where: mockSetWhere }));
   const mockUpdate = vi.fn(() => ({ set: mockSet }));
+  const mockGetClerkUser = vi.fn();
+  const mockTransaction = vi.fn();
+  const mockExecute = vi.fn();
 
   return {
     mockLimit,
@@ -82,8 +90,12 @@ const {
     mockInnerJoinWhere,
     mockInnerJoin,
     mockSetWhere,
+    mockReturning,
     mockSet,
     mockUpdate,
+    mockGetClerkUser,
+    mockTransaction,
+    mockExecute,
   };
 });
 
@@ -96,7 +108,7 @@ vi.mock("@workspace/db", () => ({
     select: mockSelect,
     update: mockUpdate,
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
-    transaction: vi.fn(),
+    transaction: mockTransaction,
   },
   clientsTable: {},
   usersTable: {},
@@ -139,12 +151,15 @@ vi.mock("drizzle-orm", () => ({
   desc: vi.fn(() => "desc"),
   asc: vi.fn(() => "asc"),
   lt: vi.fn(() => "lt"),
+  isNull: vi.fn(() => "isNull"),
   ilike: vi.fn(() => "ilike"),
   sql: Object.assign(vi.fn(() => "sql"), { raw: vi.fn() }),
 }));
 
 vi.mock("@clerk/express", () => ({
-  clerkClient: vi.fn(),
+  clerkClient: {
+    users: { getUser: mockGetClerkUser },
+  },
   getAuth: vi.fn(() => ({ userId: "user_test" })),
   clerkMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
@@ -239,6 +254,7 @@ function buildClientPortalApp() {
 
 const FAKE_ME_CLIENTE = {
   id: "user-001",
+  clerkId: "clerk-user-001",
   tenantId: "tenant-001",
   role: "cliente",
   name: "Maria Souza",
@@ -312,7 +328,22 @@ function setupDefaultDbMocks() {
   // update chain
   mockUpdate.mockReturnValue({ set: mockSet });
   mockSet.mockReturnValue({ where: mockSetWhere });
-  mockSetWhere.mockResolvedValue([]);
+  mockSetWhere.mockReturnValue({ returning: mockReturning });
+  mockReturning.mockResolvedValue([{ id: "client-001" }]);
+  mockExecute.mockResolvedValue([]);
+  mockTransaction.mockImplementation(async (callback) => callback({
+    select: mockSelect,
+    update: mockUpdate,
+    execute: mockExecute,
+  }));
+  mockGetClerkUser.mockResolvedValue({
+    primaryEmailAddressId: "email-001",
+    emailAddresses: [{
+      id: "email-001",
+      emailAddress: "maria@example.com",
+      verification: { status: "verified" },
+    }],
+  });
 
   // re-establish computeReferralTier after vi.resetAllMocks() clears it
   vi.mocked(computeReferralTier).mockReturnValue({
@@ -416,6 +447,122 @@ describe("GET /api/client/me", () => {
     expect(mockUpdate).toHaveBeenCalledTimes(1);
     expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ userId: FAKE_ME_CLIENTE.id }));
     expect(res.body.client).toMatchObject({ id: "client-001" });
+  });
+
+  it("matches the email fallback ignoring case and surrounding spaces", async () => {
+    requireAuthMock.mockResolvedValue({
+      ...FAKE_ME_CLIENTE,
+      email: "  MARIA@EXAMPLE.COM  ",
+    } as never);
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_USER_ROW])
+      .mockResolvedValueOnce([FAKE_TENANT_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID]);
+
+    const res = await request(buildClientPortalApp()).get("/api/client/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.client).toMatchObject({ id: "client-001" });
+  });
+
+  it("does not expose an ambiguous email shared by multiple client records", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_USER_ROW])
+      .mockResolvedValueOnce([FAKE_TENANT_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        FAKE_CLIENT_NO_USERID,
+        { ...FAKE_CLIENT_NO_USERID, id: "client-002" },
+      ]);
+
+    const res = await request(buildClientPortalApp()).get("/api/client/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.client).toBeNull();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not expose a client record already linked to another user", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_USER_ROW])
+      .mockResolvedValueOnce([FAKE_TENANT_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        ...FAKE_CLIENT_WITH_USERID,
+        userId: "different-user",
+      }]);
+
+    const res = await request(buildClientPortalApp()).get("/api/client/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.client).toBeNull();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("returns no client when a concurrent account wins the conditional link", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+    mockReturning.mockResolvedValueOnce([]);
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_USER_ROW])
+      .mockResolvedValueOnce([FAKE_TENANT_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([FAKE_CLIENT_NO_USERID]);
+
+    const res = await request(buildClientPortalApp()).get("/api/client/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.client).toBeNull();
+  });
+
+  it("does not claim when the protected lookup sees a newly duplicated client", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_USER_ROW])
+      .mockResolvedValueOnce([FAKE_TENANT_ROW])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        FAKE_CLIENT_NO_USERID,
+        { ...FAKE_CLIENT_NO_USERID, id: "client-002" },
+      ]);
+
+    const res = await request(buildClientPortalApp()).get("/api/client/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.client).toBeNull();
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not use or claim the email fallback when Clerk has not verified it", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+    mockGetClerkUser.mockResolvedValueOnce({
+      primaryEmailAddressId: "email-001",
+      emailAddresses: [{
+        id: "email-001",
+        emailAddress: "maria@example.com",
+        verification: { status: "unverified" },
+      }],
+    });
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_USER_ROW])
+      .mockResolvedValueOnce([FAKE_TENANT_ROW])
+      .mockResolvedValueOnce([]);
+
+    const res = await request(buildClientPortalApp()).get("/api/client/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.client).toBeNull();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockLimit).toHaveBeenCalledTimes(3);
   });
 
   it("returns null client and empty reservations when no client record exists", async () => {
@@ -774,7 +921,7 @@ describe("PATCH /api/client/me", () => {
 
     // clientsTable update: cpf present and birthDate stored as a Date instance
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ cpf: "987.654.321-00", birthDate: expect.any(Date) }),
+      expect.objectContaining({ cpf: "98765432100", birthDate: expect.any(Date) }),
     );
 
     // birthDate in response formatted as YYYY-MM-DD

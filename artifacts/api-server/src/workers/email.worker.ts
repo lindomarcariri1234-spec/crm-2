@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { db, emailLogsTable, campaignSendsTable } from "@workspace/db";
+import { db, emailLogsTable, campaignSendsTable, reservationsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { sendReservationConfirmationEmail, sendReservationCancellationEmail, sendBirthdayEmail, sendNewBookingNotificationEmail, sendReferralBonusPaidEmail, sendReferralConvertedEmail, sendReferralExpiredEmail, sendReferralExpiringSoonEmail, sendReferralBonusReleasedEmail, sendReferralWelcomeEmail, sendReminderHtmlEmail, sendReferralLoyaltyPointsEmail } from "@workspace/email";
 import { getRedisConnection } from "../lib/redis";
@@ -7,6 +7,7 @@ import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
 import type { ReservationEmailJobData, CancellationEmailJobData, BirthdayEmailJobData, NewBookingNotificationEmailJobData, ReferralBonusPaidEmailJobData, ReferralConvertedEmailJobData, ReferralExpiredEmailJobData, ReferralExpiringSoonEmailJobData, ReferralBonusReleasedEmailJobData, ReferralWelcomeEmailJobData, CampaignEmailJobData, ReferralLoyaltyPointsEmailJobData } from "../queues/index";
 import type { SendEmailResult } from "@workspace/email";
+import { dispatchOutboundMessage, htmlToWhatsAppText } from "../services/outbound-delivery";
 
 type EmailJobData = ReservationEmailJobData | CancellationEmailJobData | BirthdayEmailJobData | NewBookingNotificationEmailJobData | ReferralBonusPaidEmailJobData | ReferralConvertedEmailJobData | ReferralExpiredEmailJobData | ReferralExpiringSoonEmailJobData | ReferralBonusReleasedEmailJobData | ReferralWelcomeEmailJobData | ReferralLoyaltyPointsEmailJobData | CampaignEmailJobData;
 
@@ -67,6 +68,65 @@ async function campaignSendBelongsToTenant(
     .limit(1);
 
   return Boolean(campaignSend);
+}
+
+/**
+ * Compatibility bridge for jobs written before the outbound ledger existed.
+ *
+ * Deliberately creates a WhatsApp-only outbound message. Including the legacy
+ * email in this message would enqueue it a second time (and would also make
+ * an email -> WhatsApp -> email feedback loop possible). The original sender
+ * below remains the source of truth for the email and its existing log.
+ */
+async function bridgeLegacyEmailToWhatsApp(
+  job: { id?: string; name: string; data: unknown },
+): Promise<void> {
+  const data = job.data as Record<string, unknown>;
+  const tenantId = typeof data.tenantId === "string" ? data.tenantId : null;
+  if (!tenantId || !job.id) return;
+
+  let clientId = typeof data.clientId === "string" ? data.clientId : null;
+  if (!clientId && typeof data.reservationId === "string") {
+    const [reservation] = await db
+      .select({ clientId: reservationsTable.clientId })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.id, data.reservationId),
+        eq(reservationsTable.tenantId, tenantId),
+      ))
+      .limit(1);
+    clientId = reservation?.clientId ?? null;
+  }
+
+  // A client recipient is resolved (including tenant ownership and phone)
+  // inside createOutboundMessage. Direct phone is retained for old payloads
+  // that never carried a client id.
+  const phone = typeof data.clientPhone === "string" ? data.clientPhone :
+    typeof data.phone === "string" ? data.phone : null;
+  const email = typeof data.clientEmail === "string" ? data.clientEmail :
+    typeof data.email === "string" ? data.email :
+    typeof data.to === "string" ? data.to :
+    Array.isArray(data.recipients) && typeof data.recipients[0] === "string" ? data.recipients[0] : null;
+
+  const textValue = typeof data.whatsappMessage === "string" ? data.whatsappMessage :
+    typeof data.message === "string" ? data.message :
+    typeof data.emailMessage === "string" ? data.emailMessage :
+    typeof data.html === "string" ? htmlToWhatsAppText(data.html) :
+    "Uma nova mensagem foi enviada por e-mail pela agência.";
+
+  await dispatchOutboundMessage({
+    tenantId,
+    eventType: `legacy_email_${job.name}`,
+    idempotencyKey: `legacy-email-job:${tenantId}:${job.id}`,
+    recipient: clientId ? { type: "client", id: clientId } : { type: "direct", email, whatsapp: phone },
+    whatsapp: { text: textValue },
+    origin: "legacy_email_worker",
+    originChannel: "email",
+    metadata: {
+      legacyJobId: job.id,
+      emailLogId: typeof data.emailLogId === "string" ? data.emailLogId : null,
+    },
+  });
 }
 
 export function startEmailWorker(): Worker<EmailJobData> | null {
@@ -242,6 +302,18 @@ export function startEmailWorker(): Worker<EmailJobData> | null {
 
       if (!result.success) {
         throw new Error(result.error ?? "Unknown email error");
+      }
+
+      // Do not make this part of the provider result: an accepted legacy
+      // email must not be sent again merely because ledger queueing failed.
+      // The durable outbound row remains recoverable by its deterministic key.
+      try {
+        await bridgeLegacyEmailToWhatsApp(job);
+      } catch (bridgeError) {
+        logger.error(
+          { jobId: job.id, jobName: job.name, bridgeError },
+          "[email-worker] Legacy WhatsApp compatibility bridge failed",
+        );
       }
 
       logger.info({ jobId: job.id, messageId: result.messageId }, "[email-worker] Email sent");
