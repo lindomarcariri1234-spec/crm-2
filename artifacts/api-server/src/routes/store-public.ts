@@ -1,4 +1,1061 @@
-ats as occupied so vitrine customers
+import 
+{
+ Router, type NextFunction 
+}
+ from "express"
+;
+
+import 
+{
+ logger 
+}
+ from "../lib/logger"
+;
+
+import 
+{
+ getAuth 
+}
+ from "@clerk/express"
+;
+
+import 
+{
+ db 
+}
+ from "@workspace/db"
+;
+
+import 
+{
+ tryAddSeatClient, removeSeatClient, emitSeatUpdate 
+}
+ from "../lib/seat-sse"
+;
+
+import 
+{
+ broadcastSeatUpdate 
+}
+ from "../lib/realtime"
+;
+
+import 
+{
+  RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES
+}
+ from "@workspace/permissions"
+;
+
+import 
+{
+ AppError, NotFoundError, ValidationError, ConflictError 
+}
+ from "../lib/errors"
+;
+
+import 
+{
+ normalizeOrderEmail, roundMoney 
+}
+ from "../lib/pricing"
+;
+
+import 
+{
+ localToday 
+}
+ from "@workspace/shared"
+;
+
+import 
+{
+ getTenantUser 
+}
+ from "../lib/tenant"
+;
+
+import 
+{
+
+  storesTable,
+  storeProductsTable,
+  storeCategoriesTable,
+  storeOrdersTable,
+  storeOrderItemsTable,
+  storeCouponsTable,
+  storeReviewsTable,
+  reservationsTable,
+  paymentsTable,
+  tripsTable,
+  clientsTable,
+  referralTrackingTable,
+  referralSettingsTable,
+  referralsTable,
+  tenantsTable,
+  vehicleLayoutsTable,
+  partnerProductsTable,
+  partnerAvailabilityTable,
+  partnersTable,
+  priceAlertSubscriptionsTable,
+  referralAttemptLogsTable,
+}
+ from "@workspace/db"
+;
+
+import 
+{
+ eq, and, desc, asc, ilike, or, sql, inArray, ne 
+}
+ from "drizzle-orm"
+;
+
+import 
+{
+ z 
+}
+ from "zod/v4"
+;
+
+import 
+{
+ generateId 
+}
+ from "../lib/id"
+;
+
+import 
+{
+ randomBytes, createHash 
+}
+ from "crypto"
+;
+
+import 
+{
+ getAIClientForTenant 
+}
+ from "../lib/ai-client"
+;
+
+import 
+{
+ sendPriceAlertConfirmationEmail, enqueuePixOrderAlertEmail 
+}
+ from "../queues/email-helpers"
+;
+
+import 
+{
+ decryptOrPassthrough 
+}
+ from "../lib/crypto"
+;
+
+import 
+{
+ generatePixEMV, generatePixQrCodeUrl 
+}
+ from "../lib/pix"
+;
+
+import 
+{
+ getClientIp 
+}
+ from "../lib/get-client-ip"
+;
+
+import 
+{
+ resolveCheckoutDiscounts 
+}
+ from "../services/checkout/discounts"
+;
+
+import 
+{
+ prepareCheckoutItems 
+}
+ from "../services/checkout/items"
+;
+
+import 
+{
+ persistCheckoutOrder 
+}
+ from "../services/checkout/persist-order"
+;
+
+import 
+{
+ createReservationsForOrder 
+}
+ from "../services/checkout/create-reservations"
+;
+
+import { calculateReceivedAmount } from "../lib/linked-data";
+
+import 
+{
+ ensurePortalAccount 
+}
+ from "../services/checkout/portal-account"
+;
+
+import 
+{
+ enqueueNewBookingNotificationEmail 
+}
+ from "../queues/email-helpers"
+;
+
+import 
+{
+ insertClientNotification 
+}
+ from "../lib/client-notifications"
+;
+import { recordReferralVisit } from "../services/referral-tracking";
+
+
+
+const router = Router()
+;
+
+
+async function getActiveStore(slug: string) 
+{
+
+  const [store] = await db.select().from(storesTable)
+    .where(and(
+      eq(storesTable.slug, slug),
+      eq(storesTable.isActive, true),
+    )).limit(1)
+;
+
+  return store
+;
+
+}
+
+
+async function getStoreForPublicPage(slug: string)
+{
+
+  const [store] = await db.select().from(storesTable)
+    .where(eq(storesTable.slug, slug)).limit(1)
+;
+
+  return store
+;
+
+}
+
+
+router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getStoreForPublicPage(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
+
+    const [tenant] = await db.select(
+{
+ settings: tenantsTable.settings 
+}
+)
+      .from(tenantsTable)
+      .where(eq(tenantsTable.id, store.tenantId))
+      .limit(1)
+;
+
+    const tenantSettings = (tenant?.settings ?? 
+{
+}
+) as Record<string, unknown>
+;
+
+    const couponsEnabled = tenantSettings.couponsEnabled !== false
+;
+
+    const referralsEnabled = tenantSettings.referralsEnabled !== false
+;
+
+    const seatMapEnabled = tenantSettings.seatMapEnabled !== false
+;
+
+
+    const publicData = 
+{
+
+      id: store.id,
+      name: store.name,
+      slug: store.slug,
+      tagline: store.tagline,
+      description: store.description,
+      logo: store.logo,
+      favicon: store.favicon,
+      bannerHome: store.bannerHome,
+      bannerMobile: store.bannerMobile,
+      primaryColor: store.primaryColor,
+      secondaryColor: store.secondaryColor,
+      accentColor: store.accentColor,
+      email: store.email,
+      phone: store.phone,
+      whatsapp: store.whatsapp,
+      address: store.address,
+      city: store.city,
+      state: store.state,
+      facebookUrl: store.facebookUrl,
+      instagramUrl: store.instagramUrl,
+      twitterUrl: store.twitterUrl,
+      youtubeUrl: store.youtubeUrl,
+      linkedinUrl: store.linkedinUrl,
+      tiktokUrl: store.tiktokUrl,
+      metaTitle: store.metaTitle,
+      metaDescription: store.metaDescription,
+      metaKeywords: store.metaKeywords,
+      googleAnalyticsId: store.googleAnalyticsId,
+      facebookPixelId: store.facebookPixelId,
+      googleTagManagerId: store.googleTagManagerId,
+      requireLogin: store.requireLogin,
+      guestCheckout: store.guestCheckout,
+      minInstallments: store.minInstallments,
+      maxInstallments: store.maxInstallments,
+      installmentFee: store.installmentFee,
+      minOrderValue: store.minOrderValue,
+      minDepositAmount: store.minDepositAmount,
+      paymentMethods: Array.isArray(store.paymentMethods) ? store.paymentMethods : [],
+      pixEnabled: store.pixEnabled,
+      boletoEnabled: store.boletoEnabled,
+      stripeEnabled: store.stripeEnabled,
+      stripePublicKey: store.stripePublicKey,
+      mpEnabled: store.mpEnabled,
+      termsOfService: store.termsOfService,
+      privacyPolicy: store.privacyPolicy,
+      refundPolicy: store.refundPolicy,
+      cancellationPolicy: store.cancellationPolicy,
+      termsUrl: store.termsUrl,
+      privacyUrl: store.privacyUrl,
+      isActive: store.isActive,
+      maintenanceMode: store.maintenanceMode,
+      maintenanceMessage: store.maintenanceMessage,
+      couponsEnabled,
+      referralsEnabled,
+      seatMapEnabled,
+    
+}
+;
+
+    await db.update(storesTable).set(
+{
+ totalVisits: store.totalVisits + 1 
+}
+)
+      .where(eq(storesTable.id, store.id))
+;
+
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    res.json(publicData)
+;
+
+  
+}
+ catch (err) 
+{
+
+    next(err)
+;
+
+  
+}
+
+}
+)
+;
+
+
+router.get("/public/store/:slug/categories", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getActiveStore(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
+    const categories = await db.select().from(storeCategoriesTable)
+      .where(and(
+        eq(storeCategoriesTable.storeId, store.id),
+        eq(storeCategoriesTable.isActive, true),
+      ))
+      .orderBy(asc(storeCategoriesTable.order))
+;
+
+    res.json(categories)
+;
+
+  
+}
+ catch (err) 
+{
+
+    next(err)
+;
+
+  
+}
+
+}
+)
+;
+
+
+router.get("/public/store/:slug/products", async (req, res, next: NextFunction): Promise<void> => 
+{
+
+  try 
+{
+
+    const store = await getActiveStore(req.params.slug)
+;
+
+    if (!store) 
+{
+ next(new NotFoundError("Store not found", "NOT_FOUND"))
+;
+ return
+;
+ 
+}
+
+    if (store.maintenanceMode) 
+{
+
+      next(new AppError("Store is under maintenance", 503, "STORE_MAINTENANCE", 
+{
+ maintenanceMessage: store.maintenanceMessage 
+}
+))
+;
+
+      return
+;
+
+    
+}
+
+    const 
+{
+
+      category, categoryId, type, featured, search, sort = "newest",
+      destination, minPrice, maxPrice, departureFrom, minSeats,
+      page: pageStr, limit: limitStr,
+    
+}
+ = req.query
+;
+
+    const conditions = [
+      eq(storeProductsTable.storeId, store.id),
+      eq(storeProductsTable.status, "active"),
+    ]
+;
+
+    const categoryFilter = (categoryId ?? category) as string | undefined
+;
+
+    if (categoryFilter) conditions.push(eq(storeProductsTable.categoryId, categoryFilter))
+;
+
+    if (type) conditions.push(eq(storeProductsTable.type, type as string))
+;
+
+    if (featured === "true") conditions.push(eq(storeProductsTable.isFeatured, true))
+;
+
+    if (search) 
+{
+
+      conditions.push(or(
+        ilike(storeProductsTable.name, `%${search}%`),
+        ilike(storeProductsTable.description, `%${search}%`),
+      )!)
+;
+
+    
+}
+
+    if (destination && destination !== "all") 
+{
+
+      conditions.push(eq(storeProductsTable.destination, destination as string))
+;
+
+    
+}
+
+    const minPriceNum = minPrice ? Number(minPrice) : NaN
+;
+
+    const maxPriceNum = maxPrice ? Number(maxPrice) : NaN
+;
+
+    if (!isNaN(minPriceNum) && isFinite(minPriceNum)) conditions.push(sql`CAST(${storeProductsTable.price} AS NUMERIC) >= ${minPriceNum}`)
+;
+
+    if (!isNaN(maxPriceNum) && isFinite(maxPriceNum)) conditions.push(sql`CAST(${storeProductsTable.price} AS NUMERIC) <= ${maxPriceNum}`)
+;
+
+    // Trip-linked filters (smart search). These reference the joined trips
+    // table, so the COUNT query below must also join trips. Products without a
+    // linked trip have NULL trip columns and are excluded by these filters,
+    // which is the intended behaviour (you can't filter a non-dated product by
+    // departure date or seat availability).
+    if (typeof departureFrom === "string" && /^\d{4}-\d{2}-\d{2}$/.test(departureFrom)) {
+      conditions.push(sql`${tripsTable.departureDate} >= ${departureFrom}`);
+    }
+    const minSeatsNum = minSeats ? Number(minSeats) : NaN;
+    if (!isNaN(minSeatsNum) && isFinite(minSeatsNum) && minSeatsNum > 0) {
+      conditions.push(sql`${tripsTable.availableSeats} >= ${Math.floor(minSeatsNum)}`);
+    }
+    let orderBy;
+    if (sort === "price_asc") orderBy = asc(storeProductsTable.price);
+    else if (sort === "price_desc") orderBy = desc(storeProductsTable.price);
+    else if (sort === "popular") orderBy = desc(storeProductsTable.salesCount);
+    else if (sort === "rating") orderBy = desc(storeProductsTable.ratingAverage);
+    else if (sort === "newest") orderBy = desc(storeProductsTable.publishedAt);
+    else orderBy = desc(storeProductsTable.order);
+    const selectFields = {
+      id: storeProductsTable.id,
+      type: storeProductsTable.type,
+      name: storeProductsTable.name,
+      slug: storeProductsTable.slug,
+      shortDescription: storeProductsTable.shortDescription,
+      categoryId: storeProductsTable.categoryId,
+      tripId: storeProductsTable.tripId,
+      includes: storeProductsTable.includes,
+      price: storeProductsTable.price,
+      comparePrice: storeProductsTable.comparePrice,
+      onSale: storeProductsTable.onSale,
+      salePrice: storeProductsTable.salePrice,
+      saleStartsAt: storeProductsTable.saleStartsAt,
+      saleEndsAt: storeProductsTable.saleEndsAt,
+      images: storeProductsTable.images,
+      thumbnail: storeProductsTable.thumbnail,
+      hasDates: storeProductsTable.hasDates,
+      startDate: storeProductsTable.startDate,
+      endDate: storeProductsTable.endDate,
+      destination: storeProductsTable.destination,
+      durationDays: storeProductsTable.durationDays,
+      isFeatured: storeProductsTable.isFeatured,
+      salesCount: storeProductsTable.salesCount,
+      ratingAverage: storeProductsTable.ratingAverage,
+      ratingCount: storeProductsTable.ratingCount,
+      trackInventory: storeProductsTable.trackInventory,
+      stockQuantity: storeProductsTable.stockQuantity,
+      publishedAt: storeProductsTable.publishedAt,
+      sellerName: partnersTable.name,
+      availableSeats: tripsTable.availableSeats,
+      totalCapacity: tripsTable.totalCapacity,
+      departureDate: tripsTable.departureDate,
+      returnDate: tripsTable.returnDate,
+      inclusions: tripsTable.inclusions,
+      tripType: tripsTable.type,
+      originCity: tripsTable.originCity,
+      originState: tripsTable.originState,
+      destinationCity: tripsTable.destinationCity,
+      destinationState: tripsTable.destinationState,
+      departureTime: tripsTable.departureTime,
+      returnTime: tripsTable.returnTime,
+      showSeatMap: tripsTable.showSeatMap,
+      boardingPoints: tripsTable.boardingPoints,
+    };
+    const whereClause = and(...conditions);
+    const limit = limitStr ? Math.min(Number(limitStr) || 20, 200) : undefined;
+    const page = limit ? Math.max(Number(pageStr) || 1, 1) : 1;
+    const offset = limit ? (page - 1) * limit : 0;
+    const [countResult, products] = await Promise.all([
+      db.select({ count: sql<number>`COUNT(*)` }).from(storeProductsTable)
+        .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+        .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+        .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
+        .where(whereClause),
+      limit
+        ? db.select(selectFields).from(storeProductsTable)
+            .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+            .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+            .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
+            .where(whereClause).orderBy(orderBy).limit(limit).offset(offset)
+        : db.select(selectFields).from(storeProductsTable)
+            .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+            .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+            .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
+            .where(whereClause).orderBy(orderBy),
+    ]);
+    const processedProducts = products.map(p => ({
+      ...p,
+      departureDate: p.departureDate
+        ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(p.departureDate as unknown as Date)
+        : null,
+      returnDate: p.returnDate
+        ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(p.returnDate as unknown as Date)
+        : null,
+    }));
+    res.json({ data: processedProducts, total: Number(countResult[0]?.count ?? 0), page, limit: limit ?? processedProducts.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/public/store/:slug/products/:productSlug", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const store = await getActiveStore(req.params.slug);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+    const [row] = await db.select({
+      id: storeProductsTable.id,
+      type: storeProductsTable.type,
+      name: storeProductsTable.name,
+      slug: storeProductsTable.slug,
+      shortDescription: storeProductsTable.shortDescription,
+      description: storeProductsTable.description,
+      categoryId: storeProductsTable.categoryId,
+      tripId: storeProductsTable.tripId,
+      includes: storeProductsTable.includes,
+      price: storeProductsTable.price,
+      comparePrice: storeProductsTable.comparePrice,
+      onSale: storeProductsTable.onSale,
+      salePrice: storeProductsTable.salePrice,
+      saleStartsAt: storeProductsTable.saleStartsAt,
+      saleEndsAt: storeProductsTable.saleEndsAt,
+      images: storeProductsTable.images,
+      thumbnail: storeProductsTable.thumbnail,
+      gallery: storeProductsTable.gallery,
+      features: storeProductsTable.features,
+      excludes: storeProductsTable.excludes,
+      requirements: storeProductsTable.requirements,
+      variants: storeProductsTable.variants,
+      hasDates: storeProductsTable.hasDates,
+      startDate: storeProductsTable.startDate,
+      endDate: storeProductsTable.endDate,
+      destination: storeProductsTable.destination,
+      durationDays: storeProductsTable.durationDays,
+      durationNights: storeProductsTable.durationNights,
+      productCity: storeProductsTable.productCity,
+      productState: storeProductsTable.productState,
+      country: storeProductsTable.country,
+      isFeatured: storeProductsTable.isFeatured,
+      hasVariants: storeProductsTable.hasVariants,
+      ratingAverage: storeProductsTable.ratingAverage,
+      ratingCount: storeProductsTable.ratingCount,
+      trackInventory: storeProductsTable.trackInventory,
+      stockQuantity: storeProductsTable.stockQuantity,
+      allowBackorder: storeProductsTable.allowBackorder,
+      salesCount: storeProductsTable.salesCount,
+      viewsCount: storeProductsTable.viewsCount,
+      publishedAt: storeProductsTable.publishedAt,
+      metaTitle: storeProductsTable.metaTitle,
+      metaDescription: storeProductsTable.metaDescription,
+      metaKeywords: storeProductsTable.metaKeywords,
+      status: storeProductsTable.status,
+      order: storeProductsTable.order,
+      partnerProductId: storeProductsTable.partnerProductId,
+      sellerName: partnersTable.name,
+      createdAt: storeProductsTable.createdAt,
+      updatedAt: storeProductsTable.updatedAt,
+      availableSeats: tripsTable.availableSeats,
+      totalCapacity: tripsTable.totalCapacity,
+      departureDate: tripsTable.departureDate,
+      returnDate: tripsTable.returnDate,
+      inclusions: tripsTable.inclusions,
+      tripType: tripsTable.type,
+      originCity: tripsTable.originCity,
+      originState: tripsTable.originState,
+      destinationCity: tripsTable.destinationCity,
+      destinationState: tripsTable.destinationState,
+      departureTime: tripsTable.departureTime,
+      returnTime: tripsTable.returnTime,
+      showSeatMap: tripsTable.showSeatMap,
+      boardingPoints: tripsTable.boardingPoints,
+      tripVideos: tripsTable.videos,
+    })
+      .from(storeProductsTable)
+      .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+      .leftJoin(partnerProductsTable, eq(storeProductsTable.partnerProductId, partnerProductsTable.id))
+      .leftJoin(partnersTable, eq(partnerProductsTable.partnerId, partnersTable.id))
+      .where(and(
+        eq(storeProductsTable.storeId, store.id),
+        eq(storeProductsTable.slug, req.params.productSlug),
+        eq(storeProductsTable.status, "active"),
+      )).limit(1);
+    if (!row) { next(new NotFoundError("Product not found", "NOT_FOUND")); return; }
+    await db.update(storeProductsTable)
+      .set({ viewsCount: row.viewsCount + 1 })
+      .where(eq(storeProductsTable.id, row.id));
+    const reviews = await db.select({
+      id: storeReviewsTable.id,
+      reviewerName: storeReviewsTable.reviewerName,
+      rating: storeReviewsTable.rating,
+      title: storeReviewsTable.title,
+      comment: storeReviewsTable.comment,
+      images: storeReviewsTable.images,
+      verifiedPurchase: storeReviewsTable.verifiedPurchase,
+      isFeatured: storeReviewsTable.isFeatured,
+      reply: storeReviewsTable.reply,
+      repliedAt: storeReviewsTable.repliedAt,
+      createdAt: storeReviewsTable.createdAt,
+      updatedAt: storeReviewsTable.updatedAt,
+    }).from(storeReviewsTable)
+      .where(and(
+        eq(storeReviewsTable.productId, row.id),
+        eq(storeReviewsTable.status, "approved"),
+      ))
+      .orderBy(desc(storeReviewsTable.createdAt));
+    res.json({
+      ...row,
+      departureDate: row.departureDate
+        ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(row.departureDate as unknown as Date)
+        : null,
+      returnDate: row.returnDate
+        ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(row.returnDate as unknown as Date)
+        : null,
+      reviews,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /public/store/:slug/products/:productSlug/partner-info  — public, no auth required
+router.get("/public/store/:slug/products/:productSlug/partner-info", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const store = await getActiveStore(req.params.slug);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+
+    const [product] = await db.select({
+      id: storeProductsTable.id,
+      partnerProductId: storeProductsTable.partnerProductId,
+    }).from(storeProductsTable)
+      .where(and(
+        eq(storeProductsTable.storeId, store.id),
+        eq(storeProductsTable.slug, req.params.productSlug!),
+        eq(storeProductsTable.status, "active"),
+      )).limit(1);
+
+    if (!product?.partnerProductId) { res.json({ hasPartner: false }); return; }
+
+    const [pp] = await db.select({
+      id: partnerProductsTable.id,
+      type: partnerProductsTable.type,
+      title: partnerProductsTable.title,
+      meetingPoint: partnerProductsTable.meetingPoint,
+      origin: partnerProductsTable.origin,
+      locationUrl: partnerProductsTable.locationUrl,
+      durationMinutes: partnerProductsTable.durationMinutes,
+      maxCapacity: partnerProductsTable.maxCapacity,
+      cancellationPolicy: partnerProductsTable.cancellationPolicy,
+      faq: partnerProductsTable.faq,
+      sellerName: partnersTable.name,
+      sellerSlug: partnersTable.slug,
+      sellerDescription: partnersTable.description,
+      sellerLogo: partnersTable.logo,
+    }).from(partnerProductsTable)
+      .innerJoin(partnersTable, eq(partnersTable.id, partnerProductsTable.partnerId))
+      .where(and(
+        eq(partnerProductsTable.id, product.partnerProductId),
+        eq(partnerProductsTable.status, "active"),
+        eq(partnerProductsTable.tenantId, store.tenantId),
+        eq(partnersTable.status, "active"),
+      )).limit(1);
+
+    if (!pp) { res.json({ hasPartner: false }); return; }
+
+    const today = localToday();
+    const availability = await db.select({
+      date: partnerAvailabilityTable.date,
+      spotsTotal: partnerAvailabilityTable.spotsTotal,
+      spotsUsed: partnerAvailabilityTable.spotsUsed,
+    }).from(partnerAvailabilityTable)
+      .where(and(
+        eq(partnerAvailabilityTable.productId, pp.id),
+        sql`${partnerAvailabilityTable.date} >= ${today}`,
+      ))
+      .orderBy(asc(partnerAvailabilityTable.date));
+
+    res.json({
+      hasPartner: true,
+      ...pp,
+      seller: {
+        name: pp.sellerName,
+        slug: pp.sellerSlug,
+        description: pp.sellerDescription,
+        logo: pp.sellerLogo,
+      },
+      availability: availability.filter((a) => a.spotsTotal - a.spotsUsed > 0),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── AI-assisted "Você também pode gostar" recommendations ─────────────────────
+// Best-effort: a deterministic heuristic always produces an answer; an optional
+// per-tenant AI call only *reorders* the heuristic candidates. Any AI failure or
+// timeout silently falls back to the heuristic order. Results are cached briefly
+// in memory keyed by store/product/effective-price so the AI is not hit on every
+// page view. Never blocks or fails the product page.
+const RECS_TTL_MS = 5 * 60 * 1000;
+const RECS_AI_TIMEOUT_MS = 2000;
+const recsCache = new Map<string, { at: number; orderedIds: string[] }>();
+
+function effectivePrice(p: { price: string | number | null; onSale?: boolean | null; salePrice?: string | number | null }): number {
+  const base = Number(p.price ?? 0);
+  if (p.onSale && p.salePrice != null) {
+    const sale = Number(p.salePrice);
+    if (isFinite(sale) && sale > 0) return sale;
+  }
+  return isFinite(base) ? base : 0;
+}
+
+async function rankCandidatesWithAI(
+  tenantId: string,
+  current: { name: string; destination: string | null; price: number },
+  candidates: { id: string; name: string; destination: string | null; price: number }[],
+): Promise<string[] | null> {
+  try {
+    const ai = await getAIClientForTenant(tenantId);
+    const list = candidates
+      .map((c, i) => `${i + 1}. id=${c.id} | ${c.name} | destino=${c.destination ?? "-"} | preço=${c.price}`)
+      .join("\n");
+    const prompt = `Produto atual: ${current.name} | destino=${current.destination ?? "-"} | preço=${current.price}\n\nCandidatos:\n${list}\n\nOrdene os IDs dos candidatos do mais para o menos relevante para quem está vendo o produto atual. Responda APENAS com um array JSON de strings de IDs, sem texto extra.`;
+    const completion = await ai.client.chat.completions.create(
+      {
+        model: ai.model,
+        messages: [
+          { role: "system", content: "Você recomenda viagens/produtos turísticos. Responda somente com JSON válido." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.2,
+        max_tokens: 300,
+      },
+      { timeout: RECS_AI_TIMEOUT_MS, maxRetries: 0 },
+    );
+    const raw = completion.choices?.[0]?.message?.content?.trim() ?? "";
+    const match = raw.match(/\[[\s\S]*\]/);
+    if (!match) return null;
+    const parsed: unknown = JSON.parse(match[0]);
+    if (!Array.isArray(parsed)) return null;
+    const validIds = new Set(candidates.map((c) => c.id));
+    const ordered = parsed.filter((x): x is string => typeof x === "string" && validIds.has(x));
+    return ordered.length > 0 ? ordered : null;
+  } catch {
+    return null;
+  }
+}
+
+router.get("/public/store/:slug/products/:productSlug/recommendations", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const store = await getActiveStore(req.params.slug);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+
+    const limitRaw = Number(req.query["limit"]);
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 4, 1), 8);
+
+    const [current] = await db.select({
+      id: storeProductsTable.id,
+      categoryId: storeProductsTable.categoryId,
+      destination: storeProductsTable.destination,
+      price: storeProductsTable.price,
+      onSale: storeProductsTable.onSale,
+      salePrice: storeProductsTable.salePrice,
+      name: storeProductsTable.name,
+    })
+      .from(storeProductsTable)
+      .where(and(
+        eq(storeProductsTable.storeId, store.id),
+        eq(storeProductsTable.slug, req.params.productSlug),
+        eq(storeProductsTable.status, "active"),
+      )).limit(1);
+    // Best-effort: an unknown product yields an empty list rather than a 404.
+    if (!current) { res.json({ data: [] }); return; }
+
+    const currentPrice = effectivePrice(current);
+
+    const cardFields = {
+      id: storeProductsTable.id,
+      type: storeProductsTable.type,
+      name: storeProductsTable.name,
+      slug: storeProductsTable.slug,
+      shortDescription: storeProductsTable.shortDescription,
+      categoryId: storeProductsTable.categoryId,
+      tripId: storeProductsTable.tripId,
+      includes: storeProductsTable.includes,
+      price: storeProductsTable.price,
+      comparePrice: storeProductsTable.comparePrice,
+      onSale: storeProductsTable.onSale,
+      salePrice: storeProductsTable.salePrice,
+      images: storeProductsTable.images,
+      thumbnail: storeProductsTable.thumbnail,
+      hasDates: storeProductsTable.hasDates,
+      startDate: storeProductsTable.startDate,
+      destination: storeProductsTable.destination,
+      durationDays: storeProductsTable.durationDays,
+      isFeatured: storeProductsTable.isFeatured,
+      salesCount: storeProductsTable.salesCount,
+      ratingAverage: storeProductsTable.ratingAverage,
+      ratingCount: storeProductsTable.ratingCount,
+      availableSeats: tripsTable.availableSeats,
+      totalCapacity: tripsTable.totalCapacity,
+      departureDate: tripsTable.departureDate,
+      returnDate: tripsTable.returnDate,
+    };
+
+    // Bounded candidate pool from the same store (popular first).
+    const pool = await db.select(cardFields)
+      .from(storeProductsTable)
+      .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+      .where(and(
+        eq(storeProductsTable.storeId, store.id),
+        eq(storeProductsTable.status, "active"),
+        ne(storeProductsTable.id, current.id),
+      ))
+      .orderBy(desc(storeProductsTable.salesCount))
+      .limit(24);
+
+    if (pool.length === 0) { res.json({ data: [] }); return; }
+
+    // Deterministic heuristic score: same category / destination / price band.
+    const scored = pool.map((p) => {
+      let score = 0;
+      if (current.categoryId && p.categoryId === current.categoryId) score += 3;
+      if (current.destination && p.destination && p.destination === current.destination) score += 3;
+      const pPrice = effectivePrice(p);
+      if (currentPrice > 0 && pPrice > 0) {
+        const rel = Math.abs(pPrice - currentPrice) / currentPrice;
+        score += Math.max(0, 2 - rel * 2);
+      }
+      if (p.isFeatured) score += 0.5;
+      return { p, score, pPrice };
+    });
+    scored.sort((a, b) => b.score - a.score || (b.p.salesCount ?? 0) - (a.p.salesCount ?? 0));
+
+    const heuristicTop = scored.slice(0, Math.min(12, scored.length));
+
+    // Optional AI re-ranking over the heuristic shortlist (cached, best-effort).
+    const cacheKey = `${store.id}:${current.id}:${currentPrice}`;
+    const cached = recsCache.get(cacheKey);
+    let orderedIds: string[];
+    if (cached && Date.now() - cached.at < RECS_TTL_MS) {
+      orderedIds = cached.orderedIds;
+    } else {
+      const aiOrder = await rankCandidatesWithAI(
+        store.tenantId,
+        { name: current.name, destination: current.destination, price: currentPrice },
+        heuristicTop.map((s) => ({ id: s.p.id, name: s.p.name, destination: s.p.destination, price: s.pPrice })),
+      );
+      orderedIds = aiOrder ?? heuristicTop.map((s) => s.p.id);
+      recsCache.set(cacheKey, { at: Date.now(), orderedIds });
+      if (recsCache.size > 500) {
+        const firstKey = recsCache.keys().next().value;
+        if (firstKey) recsCache.delete(firstKey);
+      }
+    }
+
+    // Materialise ordered products (AI/heuristic order first, heuristic remainder appended).
+    const byId = new Map(heuristicTop.map((s) => [s.p.id, s.p]));
+    const orderedProducts: typeof pool = [];
+    for (const id of orderedIds) {
+      const found = byId.get(id);
+      if (found) { orderedProducts.push(found); byId.delete(id); }
+    }
+    for (const s of heuristicTop) {
+      const remaining = byId.get(s.p.id);
+      if (remaining) { orderedProducts.push(remaining); byId.delete(s.p.id); }
+    }
+
+    const data = orderedProducts.slice(0, limit).map((p) => ({
+      ...p,
+      departureDate: p.departureDate
+        ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(p.departureDate as unknown as Date)
+        : null,
+      returnDate: p.returnDate
+        ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(p.returnDate as unknown as Date)
+        : null,
+    }));
+
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/public/store/:slug/trips/:tripId/seat-map", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const store = await getActiveStore(req.params.slug);
+    if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
+
+    const [trip] = await db.select({
+      id: tripsTable.id,
+      seatMap: tripsTable.seatMap,
+      seatLayout: tripsTable.seatLayout,
+      totalCapacity: tripsTable.totalCapacity,
+      tenantId: tripsTable.tenantId,
+      layoutId: tripsTable.layoutId,
+      freePassengers: tripsTable.freePassengers,
+    }).from(tripsTable)
+      .where(and(
+        eq(tripsTable.id, req.params.tripId),
+        eq(tripsTable.tenantId, store.tenantId),
+      )).limit(1);
+
+    if (!trip) { next(new NotFoundError("Trip not found", "NOT_FOUND")); return; }
+
+    let numberingType = "sequential";
+    if (trip.layoutId) {
+      const [layout] = await db.select({ numberingType: vehicleLayoutsTable.numberingType })
+        .from(vehicleLayoutsTable)
+        .where(and(eq(vehicleLayoutsTable.id, trip.layoutId), eq(vehicleLayoutsTable.tenantId, store.tenantId)))
+        .limit(1);
+      if (layout) numberingType = layout.numberingType;
+    }
+
+    const reservations = await db.select({ seats: reservationsTable.seats, status: reservationsTable.status })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.tripId, trip.id),
+        eq(reservationsTable.tenantId, store.tenantId),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+      ));
+
+    const occupiedSeats: Record<string, string> = {};
+    for (const r of reservations) {
+      const seatStatus = r.status === RESERVATION_STATUS.CONFIRMED ? "confirmed" : "reserved";
+      for (const seat of r.seats) occupiedSeats[seat] = seatStatus;
+    }
+
+    // Mark free-passenger (gratuidade) seats as occupied so vitrine customers
     // cannot select them.
     const freePassengers = Array.isArray(trip.freePassengers)
       ? (trip.freePassengers as Array<{ seatNumber?: string | null }>)

@@ -1,3 +1,1815 @@
+import { Router, type NextFunction } from "express";
+import { db } from "@workspace/db";
+import { reservationsTable, passengersTable, tripsTable, clientsTable, storeCouponsTable, storesTable, storeOrdersTable, loyaltyMembersTable, loyaltyTransactionsTable, loyaltyProgramsTable, referralsTable, referralSettingsTable, referralCampaignsTable, dealsTable, tenantsTable, emailLogsTable, paymentsTable, commissionsTable, vehicleLayoutsTable, reservationInstallmentsTable, boardingLocationsTable, usersTable } from "@workspace/db";
+import { eq, and, sql, desc, asc, inArray, notInArray, or, ilike } from "drizzle-orm";
+import { formatBRL } from "@workspace/shared";
+import { generateId, generateVoucherCode } from "../lib/id";
+import { getTenantReservationPrefix, tripTypeToCode, getYearMonth, nextReservationSequence, buildReservationNumber } from "../lib/reservation-number";
+import { requireAuth, getTenantUser } from "../lib/tenant";
+import { deriveAgeCategory, getAgeYears, resolveChildAgeCategory, syncIsChildUnder7 } from "../lib/passenger";
+import { CreateReservationBody, UpdateReservationBody, CreatePassengerBody, UpdatePassengerBody } from "@workspace/api-zod";
+import { z } from "zod/v4";
+import { CalendarSyncService } from "../lib/google-calendar/sync-service";
+import { writeClientActivity } from "../lib/activities";
+import { enqueueReservationConfirmationEmail, enqueueReservationCancellationEmail, enqueueNewBookingNotificationEmail, dispatchReferralReversedEmail } from "../queues/email-helpers";
+import { dispatchWhatsAppReservationConfirmed, dispatchWhatsAppCadastroRealizado } from "../queues/whatsapp-helpers";
+import { insertClientNotification } from "../lib/client-notifications";
+import { enqueueCommissionSync } from "../queues/commission-sync-helper";
+import { broadcastSeatUpdate } from "../lib/realtime";
+import { sendPushNotification } from "../lib/push-notifications";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { applyDiscounts, computeBalance, computeEffectiveLoyaltyPoints, roundMoney } from "../lib/pricing";
+import { applyActiveCampaignBonus, referralActivitySegment } from "../lib/referral-campaigns";
+import { calculateTier, loyaltyAwardPointsForReservation } from "../lib/loyalty-helpers";
+import { ROLES, RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, COMMISSION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type ReservationStatus } from "@workspace/permissions";
+import { parseReservationStatus } from "../lib/status-validators";
+import { moveDealToStage, cancelDealOnReservationCancellation } from "../services/pipeline-automation";
+import { syncClientDeal } from "../services/pipeline-deal-sync";
+import { recalculateClientFinancials } from "./payments.js";
+import { detectAndNotifyTripOverlap } from "../lib/trip-overlap-notify";
+import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
+import { calculateReceivedAmount, linkedDeal, linkedOrder, linkedReferral, linkedReservation } from "../lib/linked-data";
+import { convertPaidReservationReferral } from "../services/reservation-referral-conversion";
+import {
+  cancelLockedReservationAndReleaseCapacity,
+  deleteReservationAndReleaseCapacity,
+  lockReservationForCancellation,
+  moveLockedReservationCapacity,
+  type LockedReservationCapacityRow,
+} from "../services/reservation-capacity";
+
+
+const router = Router();
+
+const ASSIGNABLE_SELLER_ROLES = [ROLES.SALES, ROLES.AGENCY_ADMIN] as const;
+
+async function resolveEffectiveSellerId(
+  me: { id: string; tenantId: string; role: string },
+  requestedSellerId: string | null | undefined,
+): Promise<string | null> {
+  const sellerId = requestedSellerId?.trim() || null;
+
+  if (me.role === ROLES.SALES && sellerId && sellerId !== me.id) {
+    throw new ForbiddenError("Vendedores só podem atribuir reservas a si mesmos", "FORBIDDEN_SELLER_ASSIGNMENT");
+  }
+
+  // A seller's blank selection has an explicit, safe owner: themselves.
+  if (!sellerId) return me.role === ROLES.SALES ? me.id : null;
+
+  const [seller] = await db.select({
+    id: usersTable.id,
+    role: usersTable.role,
+  })
+    .from(usersTable)
+    .where(and(
+      eq(usersTable.id, sellerId),
+      eq(usersTable.tenantId, me.tenantId),
+      eq(usersTable.isActive, true),
+    ))
+    .limit(1);
+
+  if (!seller || !ASSIGNABLE_SELLER_ROLES.includes(seller.role as typeof ASSIGNABLE_SELLER_ROLES[number])) {
+    throw new ValidationError("Vendedor inválido, inativo ou de outra agência", "INVALID_SELLER");
+  }
+
+  return seller.id;
+}
+
+async function generateInstallments(
+  reservationId: string,
+  tenantId: string,
+  totalValue: number,
+  installmentCount: number,
+  firstDueDateStr: string,
+): Promise<void> {
+  // Preserve paid installments — only delete and regenerate unpaid ones
+  const existing = await db.select().from(reservationInstallmentsTable)
+    .where(eq(reservationInstallmentsTable.reservationId, reservationId))
+    .orderBy(asc(reservationInstallmentsTable.installmentNumber));
+
+  const paidRows = existing.filter(r => r.paidAt != null);
+  const paidAmount = paidRows.reduce((s, r) => s + Number(r.amount), 0);
+
+  // Delete only unpaid installments
+  await db.delete(reservationInstallmentsTable)
+    .where(and(
+      eq(reservationInstallmentsTable.reservationId, reservationId),
+      sql`${reservationInstallmentsTable.paidAt} IS NULL`,
+    ));
+
+  const n = Math.max(1, installmentCount);
+  const unpaidCount = Math.max(1, n - paidRows.length);
+  const remainingValue = Math.max(0, totalValue - paidAmount);
+  const base = Math.floor((remainingValue / unpaidCount) * 100) / 100;
+  const remainder = roundMoney(remainingValue - base * unpaidCount);
+  const startNumber = paidRows.length + 1;
+
+  const firstDate = new Date(`${firstDueDateStr}T12:00:00Z`);
+  const rows = [];
+  for (let i = 0; i < unpaidCount; i++) {
+    const dueDate = new Date(firstDate);
+    dueDate.setMonth(dueDate.getMonth() + i);
+    const amount = i === 0 ? base + remainder : base;
+    rows.push({
+      id: generateId(),
+      reservationId,
+      tenantId,
+      installmentNumber: startNumber + i,
+      dueDate,
+      amount: amount.toFixed(2),
+    });
+  }
+  if (rows.length > 0) {
+    await db.insert(reservationInstallmentsTable).values(rows);
+  }
+}
+
+export type ConflictingTrip = {
+  reservationId: string;
+  reservationNumber: string | null;
+  tripId: string;
+  tripName: string;
+  departureDate: string;
+  returnDate: string | null;
+};
+
+type ReservationRelations = {
+  trip?: typeof tripsTable.$inferSelect;
+  client?: typeof clientsTable.$inferSelect;
+  hasAutoRetry: boolean;
+  numberingType: string | null;
+  boardingLocationMap?: Map<string, { name: string; time?: string }>;
+  conflictingTrips?: ConflictingTrip[];
+};
+
+function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: ReservationRelations) {
+  const { trip, client, hasAutoRetry, numberingType, boardingLocationMap } = rel;
+  return {
+    id: r.id,
+    tripId: r.tripId,
+    clientId: r.clientId,
+    seats: r.seats ?? [],
+    tripType: r.tripType,
+    packageType: r.packageType,
+    hasInsurance: r.hasInsurance,
+    isGratuidade: r.isGratuidade,
+    totalValue: Number(r.totalValue),
+    paidValue: Number(r.paidValue),
+    balance: Number(r.balance),
+    depositAmount: r.depositAmount != null ? Number(r.depositAmount) : null,
+    paymentMethod: r.paymentMethod,
+    installments: r.installments,
+    commissionPercentage: r.commissionPercentage ? Number(r.commissionPercentage) : null,
+    commissionAmount: r.commissionAmount ? Number(r.commissionAmount) : null,
+    commissionSyncStatus: r.commissionSyncStatus ?? null,
+    sellerId: r.sellerId ?? null,
+    status: r.status,
+    voucherCode: r.voucherCode,
+    reservationNumber: r.reservationNumber ?? null,
+    qrCode: r.qrCode,
+    checkedInAt: r.checkedInAt?.toISOString() ?? null,
+    notes: r.notes,
+    boardingLocationId: r.boardingLocationId ?? null,
+    boardingLocation: (() => {
+      if (!r.boardingLocationId || !trip) return null;
+      const bps = (trip.boardingPoints ?? []) as Array<{ id: string; name: string; time?: string }>;
+      const bp = bps.find(p => p.id === r.boardingLocationId);
+      if (bp) return { name: bp.name, time: bp.time ?? null };
+      const bl = boardingLocationMap?.get(r.boardingLocationId);
+      if (bl) return { name: bl.name, time: bl.time ?? null };
+      return null;
+    })(),
+    storeOrderId: r.storeOrderId ?? null,
+    discountCouponCode: r.discountCouponCode ?? null,
+    discountCouponAmount: r.discountCouponAmount != null ? Number(r.discountCouponAmount) : null,
+    discountLoyaltyPoints: r.discountLoyaltyPoints ?? null,
+    discountLoyaltyAmount: r.discountLoyaltyAmount != null ? Number(r.discountLoyaltyAmount) : null,
+    discountReferralCode: r.discountReferralCode ?? null,
+    discountReferralAmount: r.discountReferralAmount != null ? Number(r.discountReferralAmount) : null,
+    discountTotal: r.discountTotal != null ? Number(r.discountTotal) : null,
+    createdAt: r.createdAt.toISOString(),
+    updatedAt: r.updatedAt.toISOString(),
+    hasAutoRetry,
+    trip: trip ? {
+      id: trip.id,
+      name: trip.name,
+      destination: trip.destination,
+      departureDate: trip.departureDate.toISOString(),
+      availableSeats: trip.availableSeats,
+      totalCapacity: trip.totalCapacity,
+      status: trip.status,
+      coverImage: trip.coverImage,
+      numberingType,
+    } : { id: r.tripId, name: "Unknown", destination: "", departureDate: new Date().toISOString(), availableSeats: 0, totalCapacity: 0, status: "unknown", numberingType: null },
+    client: client ? {
+      id: client.id,
+      name: client.name,
+      email: client.email,
+      whatsapp: client.whatsapp,
+      cpf: client.cpf ?? null,
+      birthDate: client.birthDate?.toISOString() ?? null,
+    } : { id: r.clientId, name: "Unknown", email: "", whatsapp: "", cpf: null, birthDate: null },
+    conflictingTrips: rel.conflictingTrips ?? [],
+  };
+}
+
+async function attachLinkedReservationData<T extends object>(
+  rows: T[],
+  reservations: (typeof reservationsTable.$inferSelect)[],
+  tenantId: string,
+) : Promise<Array<T & { linkedOrder: ReturnType<typeof linkedOrder>; linkedReferral: ReturnType<typeof linkedReferral>; linkedDeals: ReturnType<typeof linkedDeal>[] }>> {
+  if (!reservations.length) return rows.map(row => ({ ...row, linkedOrder: null, linkedReferral: null, linkedDeals: [] }));
+  const ids = reservations.map(r => r.id);
+  const orderNumbers = [...new Set(reservations.map(r => r.storeOrderId).filter((v): v is string => !!v))];
+  // New/manual reservations have no checkout order and cannot yet have a
+  // canonical referral/order link. Avoid unnecessary reads on write paths.
+  if (!orderNumbers.length) {
+    return rows.map(row => ({ ...row, linkedOrder: null, linkedReferral: null, linkedDeals: [] }));
+  }
+  const [orders, siblingReservations] = await Promise.all([
+    orderNumbers.length ? db.select().from(storeOrdersTable).where(and(eq(storeOrdersTable.tenantId, tenantId), inArray(storeOrdersTable.orderNumber, orderNumbers))) : Promise.resolve([] as (typeof storeOrdersTable.$inferSelect)[]),
+    db.select().from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))),
+  ]);
+  const allReservations = [...reservations, ...siblingReservations.filter(r => !ids.includes(r.id))];
+  const orderIds = orders.map(order => order.id);
+  const reservationIds = allReservations.map(reservation => reservation.id);
+  const payments = orderIds.length || reservationIds.length
+    ? await db.select({
+      orderId: paymentsTable.orderId,
+      reservationId: paymentsTable.reservationId,
+      amount: paymentsTable.amount,
+      status: paymentsTable.status,
+      type: paymentsTable.type,
+    }).from(paymentsTable).where(and(
+      eq(paymentsTable.tenantId, tenantId),
+      or(
+        ...(orderIds.length ? [inArray(paymentsTable.orderId, orderIds)] : []),
+        ...(reservationIds.length ? [inArray(paymentsTable.reservationId, reservationIds)] : []),
+      ),
+    ))
+    : [];
+  const pendingReferralIds = [...new Set(orders.flatMap((order) => {
+    const pending = order.pendingReferral as { referralId?: string | null } | null;
+    return pending?.referralId ? [pending.referralId] : [];
+  }))];
+  const [referrals, pendingReferrals, deals] = await Promise.all([
+    db.select().from(referralsTable).where(and(eq(referralsTable.tenantId, tenantId), inArray(referralsTable.reservationId, allReservations.map(r => r.id)))),
+    pendingReferralIds.length
+      ? db.select().from(referralsTable).where(and(eq(referralsTable.tenantId, tenantId), inArray(referralsTable.id, pendingReferralIds)))
+      : Promise.resolve([] as (typeof referralsTable.$inferSelect)[]),
+    db.select().from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), inArray(dealsTable.reservationId, allReservations.map(r => r.id)))),
+  ]);
+  const orderMap = new Map(orders.map(o => [o.orderNumber, o]));
+  const referralMap = new Map([...referrals, ...pendingReferrals].map(ref => [ref.reservationId, ref]));
+  const pendingReferralByOrder = new Map(
+    orders.flatMap((order) => {
+      const pending = order.pendingReferral as { referralId?: string | null } | null;
+      const referral = pending?.referralId
+        ? pendingReferrals.find((candidate) => candidate.id === pending.referralId)
+        : undefined;
+      return referral ? [[order.orderNumber, referral] as const] : [];
+    }),
+  );
+  const dealMap = new Map<string, typeof deals>();
+  for (const deal of deals) {
+    if (!deal.reservationId) continue;
+    const list = dealMap.get(deal.reservationId) ?? []; list.push(deal); dealMap.set(deal.reservationId, list);
+  }
+  return rows.map((row, i) => {
+    const reservation = reservations[i]!;
+    const linkedSiblingIds = reservation.storeOrderId
+      ? allReservations.filter(r => r.storeOrderId === reservation.storeOrderId).map(r => r.id)
+      : [];
+    const order = reservation.storeOrderId ? orderMap.get(reservation.storeOrderId) : undefined;
+    return { ...row, linkedOrder: order
+      ? linkedOrder(order, { paidAmount: calculateReceivedAmount(order.id, linkedSiblingIds, payments) })
+      : null,
+      linkedReferral: linkedReferral(referralMap.get(reservation.id) ?? pendingReferralByOrder.get(reservation.storeOrderId ?? "")),
+      linkedReservations: reservation.storeOrderId ? allReservations.filter(r => r.storeOrderId === reservation.storeOrderId).map(linkedReservation) : [linkedReservation(reservation)],
+      linkedDeals: (reservation.storeOrderId ? deals.filter(d => allReservations.some(r => r.storeOrderId === reservation.storeOrderId && r.id === d.reservationId)) : (dealMap.get(reservation.id) ?? [])).map(linkedDeal) };
+  });
+}
+
+async function formatReservation(r: typeof reservationsTable.$inferSelect, includeLinkedData = true) {
+  const [trip] = await db.select().from(tripsTable).where(and(eq(tripsTable.id, r.tripId), eq(tripsTable.tenantId, r.tenantId))).limit(1);
+  const [client] = r.clientId ? await db.select().from(clientsTable).where(and(eq(clientsTable.id, r.clientId), eq(clientsTable.tenantId, r.tenantId))).limit(1) : [];
+  const [autoRetryLog] = await db.select({ id: emailLogsTable.id })
+    .from(emailLogsTable)
+    .where(and(eq(emailLogsTable.reservationId, r.id), eq(emailLogsTable.isAutoRetry, true), eq(emailLogsTable.tenantId, r.tenantId)))
+    .limit(1);
+  const [layoutRow] = trip?.layoutId
+    ? await db.select({ numberingType: vehicleLayoutsTable.numberingType })
+        .from(vehicleLayoutsTable)
+        .where(and(eq(vehicleLayoutsTable.id, trip.layoutId), eq(vehicleLayoutsTable.tenantId, r.tenantId)))
+        .limit(1)
+    : [undefined];
+  const view = buildReservationView(r, {
+    trip,
+    client,
+    hasAutoRetry: autoRetryLog !== undefined,
+    numberingType: layoutRow?.numberingType ?? null,
+  });
+  return includeLinkedData ? (await attachLinkedReservationData([view], [r], r.tenantId))[0] : view;
+}
+
+// Batch-format a page of reservations without per-row queries (avoids N+1):
+// fetches all related trips, clients, auto-retry email logs and vehicle layouts
+// in at most four queries regardless of page size.
+export async function batchFormatReservations(
+  rows: (typeof reservationsTable.$inferSelect)[],
+  tenantId: string,
+) {
+  if (rows.length === 0) return [];
+
+  const tripIds = [...new Set(rows.map(r => r.tripId))];
+  const clientIds = [...new Set(rows.map(r => r.clientId).filter((id): id is string => id != null))];
+  const reservationIds = rows.map(r => r.id);
+
+  const [trips, clients, autoRetryLogs, boardingLocations] = await Promise.all([
+    tripIds.length
+      ? db.select().from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), inArray(tripsTable.id, tripIds)))
+      : Promise.resolve([] as (typeof tripsTable.$inferSelect)[]),
+    clientIds.length
+      ? db.select().from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), inArray(clientsTable.id, clientIds)))
+      : Promise.resolve([] as (typeof clientsTable.$inferSelect)[]),
+    db.selectDistinct({ reservationId: emailLogsTable.reservationId })
+      .from(emailLogsTable)
+      .where(and(
+        eq(emailLogsTable.tenantId, tenantId),
+        eq(emailLogsTable.isAutoRetry, true),
+        inArray(emailLogsTable.reservationId, reservationIds),
+      )),
+    db.select({ id: boardingLocationsTable.id, name: boardingLocationsTable.name, departureTime: boardingLocationsTable.departureTime })
+      .from(boardingLocationsTable)
+      .where(eq(boardingLocationsTable.tenantId, tenantId)),
+  ]);
+
+  const tripMap = new Map(trips.map(t => [t.id, t]));
+  const clientMap = new Map(clients.map(c => [c.id, c]));
+  const autoRetrySet = new Set(autoRetryLogs.map(l => l.reservationId).filter((id): id is string => id != null));
+  const boardingLocationMap = new Map(boardingLocations.map(bl => [bl.id, { name: bl.name, time: bl.departureTime ?? undefined }]));
+
+  const layoutIds = [...new Set(trips.map(t => t.layoutId).filter((id): id is string => id != null))];
+  const layouts = layoutIds.length
+    ? await db.select({ id: vehicleLayoutsTable.id, numberingType: vehicleLayoutsTable.numberingType })
+        .from(vehicleLayoutsTable)
+        .where(and(eq(vehicleLayoutsTable.tenantId, tenantId), inArray(vehicleLayoutsTable.id, layoutIds)))
+    : [];
+  const layoutMap = new Map(layouts.map(l => [l.id, l.numberingType]));
+
+  // Batch conflict detection: fetch ALL active reservations for the page's client set (with trip dates)
+  // so we can flag cross-trip date overlaps without N+1 queries.
+  const allClientActiveResRows = clientIds.length
+    ? await db.select({
+        id: reservationsTable.id,
+        clientId: reservationsTable.clientId,
+        tripId: reservationsTable.tripId,
+        reservationNumber: reservationsTable.reservationNumber,
+        tripName: tripsTable.name,
+        departureDate: tripsTable.departureDate,
+        returnDate: tripsTable.returnDate,
+      })
+      .from(reservationsTable)
+      .innerJoin(
+        tripsTable,
+        and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, reservationsTable.tenantId)),
+      )
+      .where(and(
+        eq(reservationsTable.tenantId, tenantId),
+        inArray(reservationsTable.clientId, clientIds),
+        notInArray(reservationsTable.status, [RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED]),
+      ))
+    : [];
+
+  // Index by clientId for O(1) lookup
+  const clientActiveResMap = new Map<string, Array<{
+    id: string; tripId: string; reservationNumber: string | null;
+    tripName: string; departureDate: Date; returnDate: Date | null;
+  }>>();
+  for (const cr of allClientActiveResRows) {
+    if (!cr.clientId) continue;
+    const list = clientActiveResMap.get(cr.clientId) ?? [];
+    list.push({ id: cr.id, tripId: cr.tripId, reservationNumber: cr.reservationNumber ?? null, tripName: cr.tripName, departureDate: cr.departureDate, returnDate: cr.returnDate });
+    clientActiveResMap.set(cr.clientId, list);
+  }
+
+  const formatted = rows.map(r => {
+    const trip = tripMap.get(r.tripId);
+    const client = r.clientId ? clientMap.get(r.clientId) : undefined;
+    const numberingType = trip?.layoutId ? (layoutMap.get(trip.layoutId) ?? null) : null;
+
+    // Detect conflicting trips: other active reservations for this client whose dates overlap
+    const conflictingTrips: ConflictingTrip[] = [];
+    if (trip && r.clientId) {
+      const targetEnd = trip.returnDate ?? trip.departureDate;
+      for (const cr of (clientActiveResMap.get(r.clientId) ?? [])) {
+        if (cr.tripId === r.tripId) continue;
+        const crEnd = cr.returnDate ?? cr.departureDate;
+        if (trip.departureDate <= crEnd && targetEnd >= cr.departureDate) {
+          conflictingTrips.push({
+            reservationId: cr.id,
+            reservationNumber: cr.reservationNumber,
+            tripId: cr.tripId,
+            tripName: cr.tripName,
+            departureDate: cr.departureDate.toISOString(),
+            returnDate: cr.returnDate?.toISOString() ?? null,
+          });
+        }
+      }
+    }
+
+    return buildReservationView(r, {
+      trip,
+      client,
+      hasAutoRetry: autoRetrySet.has(r.id),
+      numberingType,
+      boardingLocationMap,
+      conflictingTrips,
+    });
+  });
+  return attachLinkedReservationData(formatted, rows, tenantId);
+}
+
+function formatPassenger(p: typeof passengersTable.$inferSelect) {
+  return {
+    id: p.id, reservationId: p.reservationId, name: p.name, cpf: p.cpf, rg: p.rg,
+    birthDate: p.birthDate?.toISOString() ?? null, ageCategory: p.ageCategory,
+    seatNumber: p.seatNumber, isChildUnder7: p.isChildUnder7,
+    checkedInAt: p.checkedInAt?.toISOString() ?? null,
+  };
+}
+
+const ManifestImportRowSchema = z.object({
+  line: z.number().int().positive(),
+  reservationNumber: z.string().trim().min(1).max(120),
+  tripName: z.string().trim().min(1).max(500),
+  departureDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  name: z.string().trim().min(1).max(500),
+  cpf: z.string().trim().max(32).optional(),
+  birthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  ageCategory: z.enum(["adult", "child", "baby", "senior"]).optional(),
+  seatNumber: z.string().trim().max(80).optional(),
+  boardingPoint: z.string().trim().max(300).optional(),
+  phone: z.string().trim().max(80).optional(),
+  status: z.string().trim().max(120).optional(),
+});
+
+const ManifestImportBodySchema = z.object({
+  rows: z.array(ManifestImportRowSchema).min(1).max(2_000),
+});
+
+function normalizeManifestText(value: string): string {
+  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function brazilDateKey(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(value);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function utcDateKey(value: Date): string {
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`;
+}
+
+function tripMatchesManifestDate(value: Date, expected: string): boolean {
+  // Older records may have used UTC midnight for a date-only departure.
+  // Match that legacy representation as well as Brazil's civil calendar date.
+  return brazilDateKey(value) === expected || utcDateKey(value) === expected;
+}
+
+function manifestDate(value: string): Date {
+  // Noon UTC safely represents a date-only field without accidentally moving it
+  // to the preceding Brazil calendar date.
+  return new Date(`${value}T12:00:00.000Z`);
+}
+
+const ValidateCouponBodySchema = z.object({
+  code: z.string().min(1),
+  subtotal: z.number().positive(),
+});
+
+router.post("/reservations/validate-coupon", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const parsed = ValidateCouponBodySchema.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+
+    const { code, subtotal } = parsed.data;
+    const now = new Date();
+
+    const stores = await db.select({ id: storesTable.id })
+      .from(storesTable)
+      .where(eq(storesTable.tenantId, me.tenantId));
+
+    if (!stores.length) {
+      res.json({ valid: false, discountAmount: 0, couponCode: code, message: "Nenhuma loja encontrada para este tenant" });
+      return;
+    }
+
+    const storeIds = stores.map(s => s.id);
+    const [coupon] = await db.select().from(storeCouponsTable)
+      .where(and(
+        inArray(storeCouponsTable.storeId, storeIds),
+        eq(storeCouponsTable.code, code),
+        eq(storeCouponsTable.isActive, true),
+      )).limit(1);
+
+    if (!coupon) {
+      res.json({ valid: false, discountAmount: 0, couponCode: code, message: "Cupom inválido ou não encontrado" });
+      return;
+    }
+    if (coupon.startsAt > now) {
+      res.json({ valid: false, discountAmount: 0, couponCode: code, message: "Cupom ainda não está ativo" });
+      return;
+    }
+    if (coupon.expiresAt < now) {
+      res.json({ valid: false, discountAmount: 0, couponCode: code, message: "Cupom expirado" });
+      return;
+    }
+    if (coupon.usageLimit != null && coupon.usageCount >= coupon.usageLimit) {
+      res.json({ valid: false, discountAmount: 0, couponCode: code, message: "Limite de uso do cupom atingido" });
+      return;
+    }
+    if (coupon.minPurchaseAmount != null && subtotal < Number(coupon.minPurchaseAmount)) {
+      res.json({ valid: false, discountAmount: 0, couponCode: code, message: `Valor mínimo de compra: R$ ${Number(coupon.minPurchaseAmount).toFixed(2)}` });
+      return;
+    }
+
+    let discountAmount = 0;
+    if (coupon.type === "percentage") {
+      discountAmount = subtotal * (Number(coupon.value) / 100);
+    } else {
+      discountAmount = Number(coupon.value);
+    }
+    if (coupon.maxDiscountAmount != null) {
+      discountAmount = Math.min(discountAmount, Number(coupon.maxDiscountAmount));
+    }
+    discountAmount = Math.min(discountAmount, subtotal);
+
+    res.json({ valid: true, discountAmount: roundMoney(discountAmount), couponCode: code, message: null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/reservations/stats", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+
+    const { tripId, status, sellerId, dateFrom, dateTo, search, hasAutoRetry } = req.query as Record<string, string>;
+    const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
+    if (tripId) conditions.push(eq(reservationsTable.tripId, tripId));
+    if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
+    if (sellerId) conditions.push(eq(reservationsTable.sellerId, sellerId));
+    if (hasAutoRetry === "true") {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM ${emailLogsTable} WHERE ${emailLogsTable.reservationId} = ${reservationsTable.id} AND ${emailLogsTable.isAutoRetry} = true)` as ReturnType<typeof eq>,
+      );
+    }
+    const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+    if (dateFrom && !ISO_DATE.test(dateFrom)) { next(new ValidationError("dateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (dateTo && !ISO_DATE.test(dateTo)) { next(new ValidationError("dateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (dateFrom) conditions.push(sql`${reservationsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
+    if (dateTo) conditions.push(sql`${reservationsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
+    if (search) {
+      const term = `%${search}%`;
+      const matchingClients = await db.select({ id: clientsTable.id }).from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, me.tenantId),
+          or(
+            ilike(clientsTable.name, term),
+            ilike(clientsTable.email, term),
+            ilike(clientsTable.whatsapp, term),
+            ilike(clientsTable.cpf, term),
+          ),
+        ));
+      const voucherCondition = or(
+        ilike(reservationsTable.voucherCode, term),
+        ilike(reservationsTable.reservationNumber, term),
+      ) as ReturnType<typeof eq>;
+      conditions.push(matchingClients.length > 0
+        ? or(voucherCondition, inArray(reservationsTable.clientId, matchingClients.map(client => client.id))) as ReturnType<typeof eq>
+        : voucherCondition);
+    }
+    if (me.role === ROLES.SALES) conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+
+    const [statsRow] = await db
+      .select({
+        total: sql<number>`count(*)`,
+        confirmed: sql<number>`count(*) filter (where status = ${RESERVATION_STATUS.CONFIRMED})`,
+        pending: sql<number>`count(*) filter (where status = ${RESERVATION_STATUS.PENDING})`,
+        cancelled: sql<number>`count(*) filter (where status = ${RESERVATION_STATUS.CANCELLED})`,
+        totalOutstanding: sql<number>`coalesce(sum(balance) filter (where status not in (${RESERVATION_STATUS.CANCELLED}, ${RESERVATION_STATUS.COMPLETED})), 0)`,
+      })
+      .from(reservationsTable)
+      .where(and(...conditions));
+
+    res.json({
+      total: Number(statsRow?.total ?? 0),
+      confirmed: Number(statsRow?.confirmed ?? 0),
+      pending: Number(statsRow?.pending ?? 0),
+      cancelled: Number(statsRow?.cancelled ?? 0),
+      totalOutstanding: Number(statsRow?.totalOutstanding ?? 0),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/reservations/export", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    // Clients are not permitted to export reservation data
+    if (me.role === ROLES.CLIENT) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const { tripId, clientId, status, search, createdById, sellerId, dateFrom, dateTo, commissionSyncStatus, hasAutoRetry } = req.query as Record<string, string>;
+
+    const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+    if (dateFrom && !ISO_DATE.test(dateFrom)) { next(new ValidationError("dateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (dateTo && !ISO_DATE.test(dateTo)) { next(new ValidationError("dateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+
+    const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
+    if (tripId) conditions.push(eq(reservationsTable.tripId, tripId));
+    if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
+    if (commissionSyncStatus) conditions.push(eq(reservationsTable.commissionSyncStatus, commissionSyncStatus));
+    if (createdById) conditions.push(eq(reservationsTable.createdById, createdById));
+    if (sellerId) conditions.push(eq(reservationsTable.sellerId, sellerId));
+    if (hasAutoRetry === "true") {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM ${emailLogsTable} WHERE ${emailLogsTable.reservationId} = ${reservationsTable.id} AND ${emailLogsTable.isAutoRetry} = true)` as ReturnType<typeof eq>,
+      );
+    }
+    if (dateFrom) conditions.push(sql`${reservationsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
+    if (dateTo) conditions.push(sql`${reservationsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
+    if (search) {
+      const term = `%${search}%`;
+      const matchingClients = await db
+        .select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, me.tenantId),
+          or(
+            ilike(clientsTable.name, term),
+            ilike(clientsTable.email, term),
+            ilike(clientsTable.whatsapp, term),
+            ilike(clientsTable.cpf, term),
+          ),
+        ));
+      const matchingClientIds = matchingClients.map(c => c.id);
+      const voucherCondition = or(
+        ilike(reservationsTable.voucherCode, term),
+        ilike(reservationsTable.reservationNumber, term),
+      ) as ReturnType<typeof eq>;
+      if (matchingClientIds.length > 0) {
+        conditions.push(or(voucherCondition, inArray(reservationsTable.clientId, matchingClientIds)) as ReturnType<typeof eq>);
+      } else {
+        conditions.push(voucherCondition);
+      }
+    }
+
+    // Mirror the same row-level scoping as GET /reservations.
+    if (me.role === ROLES.SALES) {
+      conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+    }
+    if (clientId) {
+      conditions.push(eq(reservationsTable.clientId, clientId));
+    }
+
+    const rows = await db
+      .select({
+        id: reservationsTable.id,
+        reservationNumber: reservationsTable.reservationNumber,
+        voucherCode: reservationsTable.voucherCode,
+        status: reservationsTable.status,
+        totalValue: reservationsTable.totalValue,
+        paidValue: reservationsTable.paidValue,
+        balance: reservationsTable.balance,
+        paymentMethod: reservationsTable.paymentMethod,
+        seats: reservationsTable.seats,
+        storeOrderId: reservationsTable.storeOrderId,
+        createdAt: reservationsTable.createdAt,
+        clientName: clientsTable.name,
+        clientEmail: clientsTable.email,
+        clientWhatsapp: clientsTable.whatsapp,
+        clientCpf: clientsTable.cpf,
+        tripName: tripsTable.name,
+        tripDepartureDate: tripsTable.departureDate,
+      })
+      .from(reservationsTable)
+      .leftJoin(clientsTable, and(eq(reservationsTable.clientId, clientsTable.id), eq(clientsTable.tenantId, me.tenantId)))
+      .leftJoin(tripsTable, eq(reservationsTable.tripId, tripsTable.id))
+      .where(and(...conditions))
+      .orderBy(desc(reservationsTable.createdAt));
+
+    const autoRetryIds = rows.length > 0
+      ? await db
+          .select({ reservationId: emailLogsTable.reservationId })
+          .from(emailLogsTable)
+          .where(and(
+            inArray(emailLogsTable.reservationId, rows.map(r => r.id)),
+            eq(emailLogsTable.isAutoRetry, true),
+          ))
+          .groupBy(emailLogsTable.reservationId)
+          .then(results => new Set(results.map(r => r.reservationId)))
+      : new Set<string>();
+
+    const STATUS_PT: Record<string, string> = {
+      pending: "Pendente",
+      confirmed: "Confirmada",
+      completed: "Concluída",
+      cancelled: "Cancelada",
+    };
+    const METHOD_PT: Record<string, string> = {
+      pix: "PIX",
+      credit_card: "Cartão de Crédito",
+      debit_card: "Cartão de Débito",
+      cash: "Dinheiro",
+      bank_transfer: "Transferência",
+      boleto: "Boleto",
+    };
+
+    const headers = [
+      "Nº Reserva", "Cliente", "E-mail", "WhatsApp", "CPF",
+      "Viagem", "Data de Saída", "Assentos",
+      "Valor Total (R$)", "Pago (R$)", "Saldo (R$)", "Método de Pagamento",
+      "Status", "Origem", "E-mail Auto-reenviado", "Criado em",
+    ];
+
+    const escapeCell = (v: string | null | undefined) => {
+      if (v == null) return "";
+      let s = String(v);
+      // Neutralize CSV formula injection (Excel executes leading =, +, -, @, tab)
+      if (s.length > 0 && /^[=+\-@\t]/.test(s)) {
+        s = `'${s}`;
+      }
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+
+    const csvRows = rows.map(r => [
+      escapeCell(r.reservationNumber ?? r.voucherCode),
+      escapeCell(r.clientName),
+      escapeCell(r.clientEmail),
+      escapeCell(r.clientWhatsapp),
+      escapeCell(r.clientCpf),
+      escapeCell(r.tripName),
+      r.tripDepartureDate ? new Date(r.tripDepartureDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "",
+      escapeCell((r.seats as string[] | null)?.join(", ")),
+      parseFloat(String(r.totalValue)).toFixed(2),
+      parseFloat(String(r.paidValue)).toFixed(2),
+      parseFloat(String(r.balance)).toFixed(2),
+      escapeCell(METHOD_PT[r.paymentMethod ?? ""] ?? r.paymentMethod),
+      escapeCell(STATUS_PT[r.status] ?? r.status),
+      r.storeOrderId ? "Vitrine" : "Balcão",
+      autoRetryIds.has(r.id) ? "Sim" : "Não",
+      new Date(r.createdAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+    ].join(","));
+
+    const BOM = "\uFEFF";
+    const csv = BOM + [headers.join(","), ...csvRows].join("\r\n");
+
+    const date = new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="reservas-${date}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Trip date-overlap check ──────────────────────────────────────────────────
+// Must be declared BEFORE GET /reservations/:id so Express doesn't capture
+// the literal path segment "trip-overlap" as an :id parameter.
+router.get("/reservations/trip-overlap", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.CREATE)) { next(new ForbiddenError("Acesso restrito", "FORBIDDEN_ROLE")); return; }
+
+    const { clientId, tripId } = req.query as Record<string, string>;
+    if (!clientId || !tripId) { next(new ValidationError("clientId e tripId são obrigatórios", "VALIDATION_ERROR")); return; }
+    if (me.role === ROLES.SALES) {
+      const [client] = await db.select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.id, clientId),
+          eq(clientsTable.tenantId, me.tenantId),
+          // A seller must prove access to the target client before this
+          // availability helper reveals any reservation metadata.
+          clientSellerScopeCondition(me) as ReturnType<typeof eq>,
+        ))
+        .limit(1);
+      if (!client) { throw new NotFoundError("Client not found", "CLIENT_NOT_FOUND"); }
+    }
+
+    // Load the target trip dates
+    const [targetTrip] = await db.select({ departureDate: tripsTable.departureDate, returnDate: tripsTable.returnDate })
+      .from(tripsTable)
+      .where(and(eq(tripsTable.id, tripId), eq(tripsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!targetTrip) { res.json({ data: [] }); return; }
+
+    const targetEnd = targetTrip.returnDate ?? targetTrip.departureDate;
+
+    // Find active reservations for this client in OTHER trips whose dates overlap
+    const conflicts = await db.select({
+      reservationId: reservationsTable.id,
+      reservationNumber: reservationsTable.reservationNumber,
+      tripId: reservationsTable.tripId,
+      tripName: tripsTable.name,
+      departureDate: tripsTable.departureDate,
+      returnDate: tripsTable.returnDate,
+    })
+    .from(reservationsTable)
+    .innerJoin(tripsTable, and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, reservationsTable.tenantId)))
+    .where(and(
+      eq(reservationsTable.tenantId, me.tenantId),
+      eq(reservationsTable.clientId, clientId),
+      ...(me.role === ROLES.SALES ? [reservationSellerScopeCondition(me)] : []),
+      notInArray(reservationsTable.tripId, [tripId]),
+      notInArray(reservationsTable.status, [RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED]),
+      // Overlap: targetStart ≤ otherEnd  AND  targetEnd ≥ otherStart
+      sql`${targetTrip.departureDate}::timestamptz <= COALESCE(${tripsTable.returnDate}, ${tripsTable.departureDate})` as ReturnType<typeof eq>,
+      sql`${targetEnd}::timestamptz >= ${tripsTable.departureDate}` as ReturnType<typeof eq>,
+    ));
+
+    res.json({
+      data: conflicts.map(c => ({
+        reservationId: c.reservationId,
+        reservationNumber: c.reservationNumber ?? null,
+        tripId: c.tripId,
+        tripName: c.tripName,
+        departureDate: c.departureDate.toISOString(),
+        returnDate: c.returnDate?.toISOString() ?? null,
+      })),
+    });
+  } catch (err) { next(err); }
+});
+
+router.get("/reservations", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+
+    const {
+      tripId, clientId, status, search, createdById, sellerId, dateFrom, dateTo,
+      departureDateFrom, departureDateTo, commissionSyncStatus, hasAutoRetry,
+      page = "1", limit = "20",
+    } = req.query as Record<string, string>;
+    const pageNum = parseInt(page) || 1;
+    const limitNum = Math.min(parseInt(limit) || 20, 500);
+    const offset = (pageNum - 1) * limitNum;
+
+    const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+    if (dateFrom && !ISO_DATE.test(dateFrom)) { next(new ValidationError("dateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (dateTo && !ISO_DATE.test(dateTo)) { next(new ValidationError("dateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (departureDateFrom && !ISO_DATE.test(departureDateFrom)) { next(new ValidationError("departureDateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    if (departureDateTo && !ISO_DATE.test(departureDateTo)) { next(new ValidationError("departureDateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+
+    const conditions: ReturnType<typeof eq>[] = [eq(reservationsTable.tenantId, me.tenantId)];
+    if (tripId) conditions.push(eq(reservationsTable.tripId, tripId));
+    if (status) conditions.push(eq(reservationsTable.status, parseReservationStatus(status)));
+    if (commissionSyncStatus) conditions.push(eq(reservationsTable.commissionSyncStatus, commissionSyncStatus));
+    if (createdById) conditions.push(eq(reservationsTable.createdById, createdById));
+    if (sellerId) conditions.push(eq(reservationsTable.sellerId, sellerId));
+    if (hasAutoRetry === "true") {
+      conditions.push(
+        sql`EXISTS (SELECT 1 FROM ${emailLogsTable} WHERE ${emailLogsTable.reservationId} = ${reservationsTable.id} AND ${emailLogsTable.isAutoRetry} = true)` as ReturnType<typeof eq>,
+      );
+    }
+    if (dateFrom) conditions.push(sql`${reservationsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
+    if (dateTo) conditions.push(sql`${reservationsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
+    if (departureDateFrom) conditions.push(sql`${tripsTable.departureDate} >= ${departureDateFrom}::date` as ReturnType<typeof eq>);
+    if (departureDateTo) conditions.push(sql`${tripsTable.departureDate} <= (${departureDateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
+    if (search) {
+      const term = `%${search}%`;
+      const matchingClients = await db
+        .select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, me.tenantId),
+          or(
+            ilike(clientsTable.name, term),
+            ilike(clientsTable.email, term),
+            ilike(clientsTable.whatsapp, term),
+            ilike(clientsTable.cpf, term),
+          ),
+        ));
+      const matchingClientIds = matchingClients.map(c => c.id);
+      const voucherCondition = or(
+        ilike(reservationsTable.voucherCode, term),
+        ilike(reservationsTable.reservationNumber, term),
+      ) as ReturnType<typeof eq>;
+      if (matchingClientIds.length > 0) {
+        conditions.push(or(voucherCondition, inArray(reservationsTable.clientId, matchingClientIds)) as ReturnType<typeof eq>);
+      } else {
+        conditions.push(voucherCondition);
+      }
+    }
+
+    if (me.role === ROLES.CLIENT) {
+      const [clientRecord] = await db.select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.userId, me.id)))
+        .limit(1);
+      if (!clientRecord) {
+        res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
+        return;
+      }
+      conditions.push(eq(reservationsTable.clientId, clientRecord.id));
+    } else if (me.role === ROLES.SALES) {
+      conditions.push(reservationSellerScopeCondition(me) as ReturnType<typeof eq>);
+      if (clientId) conditions.push(eq(reservationsTable.clientId, clientId));
+    } else if (clientId) {
+      conditions.push(eq(reservationsTable.clientId, clientId));
+    }
+
+    const hasDepartureDateFilter = Boolean(departureDateFrom || departureDateTo);
+    let reservations: (typeof reservationsTable.$inferSelect)[];
+    if (hasDepartureDateFilter) {
+      const reservationRows = await db.select().from(reservationsTable)
+        .innerJoin(
+          tripsTable,
+          and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, reservationsTable.tenantId)),
+        )
+        .where(and(...conditions))
+        .orderBy(desc(reservationsTable.createdAt))
+        .limit(limitNum).offset(offset);
+      reservations = reservationRows.map(({ reservations: reservation }) => reservation);
+    } else {
+      reservations = await db.select().from(reservationsTable)
+        .where(and(...conditions))
+        .orderBy(desc(reservationsTable.createdAt))
+        .limit(limitNum).offset(offset);
+    }
+
+    const [countResult] = hasDepartureDateFilter
+      ? await db.select({ count: sql<number>`count(*)` })
+        .from(reservationsTable)
+        .innerJoin(
+          tripsTable,
+          and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, reservationsTable.tenantId)),
+        )
+        .where(and(...conditions))
+      : await db.select({ count: sql<number>`count(*)` })
+        .from(reservationsTable).where(and(...conditions));
+
+    const data = await batchFormatReservations(reservations, me.tenantId);
+    res.json({ data, total: Number(countResult?.count ?? 0), page: pageNum, limit: limitNum });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/reservations", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.CREATE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    // CSV migrations represent historical records; they must retain business data
+    // without sending new-booking messages to every client in the backup.
+    const isCsvImport = req.get("x-visitecrm-import") === "reservation-csv";
+    const parsed = CreateReservationBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+
+    const [client] = await db.select().from(clientsTable)
+      .where(and(eq(clientsTable.id, parsed.data.clientId), eq(clientsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!client) { next(new ValidationError("Client not found or not in tenant", "VALIDATION_ERROR")); return; }
+
+    // Duplicate reservation guard: block creation when the same client already has
+    // an active (non-cancelled, non-refunded) reservation for the same trip.
+    const [existingDup] = await db.select({
+      id: reservationsTable.id,
+      reservationNumber: reservationsTable.reservationNumber,
+      status: reservationsTable.status,
+    }).from(reservationsTable).where(and(
+      eq(reservationsTable.tenantId, me.tenantId),
+      eq(reservationsTable.clientId, parsed.data.clientId),
+      eq(reservationsTable.tripId, parsed.data.tripId),
+      notInArray(reservationsTable.status, [RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED]),
+    )).limit(1);
+    if (existingDup) {
+      res.status(409).json({
+        error: "Este cliente já possui uma reserva ativa nesta viagem. Cancele a reserva existente antes de criar uma nova.",
+        code: "DUPLICATE_RESERVATION",
+        existingReservationId: existingDup.id,
+        existingReservationNumber: existingDup.reservationNumber,
+      });
+      return;
+    }
+
+    const baseValue = parsed.data.totalValue;
+    const now = new Date();
+    const effectiveSellerId = await resolveEffectiveSellerId(me, parsed.data.sellerId);
+
+    let serverCouponId: string | null = null;
+    let serverCouponCode: string | null = null;
+    let serverCouponAmount = 0;
+
+    if (parsed.data.discountCouponCode) {
+      const stores = await db.select({ id: storesTable.id })
+        .from(storesTable).where(eq(storesTable.tenantId, me.tenantId));
+      const storeIds = stores.map(s => s.id);
+      const [coupon] = storeIds.length
+        ? await db.select().from(storeCouponsTable).where(and(
+            inArray(storeCouponsTable.storeId, storeIds),
+            eq(storeCouponsTable.code, parsed.data.discountCouponCode),
+            eq(storeCouponsTable.isActive, true),
+          )).limit(1)
+        : [];
+      if (!coupon || coupon.startsAt > now || coupon.expiresAt < now ||
+          (coupon.usageLimit != null && coupon.usageCount >= coupon.usageLimit) ||
+          (coupon.minPurchaseAmount != null && baseValue < Number(coupon.minPurchaseAmount))) {
+        next(new ValidationError("Cupom inválido ou expirado", "VALIDATION_ERROR")); return;
+      }
+      serverCouponId = coupon.id;
+      serverCouponCode = coupon.code;
+      if (coupon.type === "percentage") {
+        serverCouponAmount = baseValue * (Number(coupon.value) / 100);
+      } else {
+        serverCouponAmount = Number(coupon.value);
+      }
+      if (coupon.maxDiscountAmount != null) serverCouponAmount = Math.min(serverCouponAmount, Number(coupon.maxDiscountAmount));
+      serverCouponAmount = roundMoney(Math.min(serverCouponAmount, baseValue));
+    }
+
+    let serverLoyaltyMemberId: string | null = null;
+    let serverLoyaltyPoints = 0;
+    let serverLoyaltyAmount = 0;
+    let serverRealPerPoint = 0;
+
+    if (parsed.data.discountLoyaltyPoints && parsed.data.discountLoyaltyPoints > 0) {
+      const [member] = await db.select().from(loyaltyMembersTable)
+        .where(and(eq(loyaltyMembersTable.tenantId, me.tenantId), eq(loyaltyMembersTable.clientId, parsed.data.clientId)))
+        .limit(1);
+      if (!member) {
+        next(new ValidationError("Cliente não é membro do programa de fidelidade", "VALIDATION_ERROR")); return;
+      }
+      const [program] = await db.select().from(loyaltyProgramsTable).where(eq(loyaltyProgramsTable.id, member.programId)).limit(1);
+      if (!program) {
+        next(new ValidationError("Programa de fidelidade não encontrado", "VALIDATION_ERROR")); return;
+      }
+      const requestedPoints = parsed.data.discountLoyaltyPoints;
+      const minRedeemPoints = program.minRedeemPoints ?? 1;
+      if (requestedPoints < minRedeemPoints) {
+        next(new ValidationError(`Mínimo de ${minRedeemPoints} pontos para resgate`, "VALIDATION_ERROR")); return;
+      }
+      if ((member.availablePoints ?? 0) < requestedPoints) {
+        next(new ValidationError("Pontos de fidelidade insuficientes", "VALIDATION_ERROR")); return;
+      }
+      serverLoyaltyMemberId = member.id;
+      serverLoyaltyPoints = requestedPoints;
+      serverRealPerPoint = Number(program.realPerPoint ?? "0");
+      serverLoyaltyAmount = roundMoney(requestedPoints * serverRealPerPoint);
+    }
+
+    let serverReferralCode: string | null = null;
+    let serverReferralAmount = 0;
+    let serverReferralBonusValue = 0;
+    let serverReferralDiscountPct = 5;
+    let serverReferralReferrerId: string | null = null;
+    let serverReferralConversionAt: Date = new Date();
+    let serverReferralCampaignId: string | null = null;
+    // CRM-created reservations have no public referral cookie. Treat them as an
+    // explicitly direct channel instead of silently bypassing channel policy.
+    const serverReferralAttributionChannel = "direct";
+
+    if (parsed.data.discountReferralCode) {
+      const upperCode = parsed.data.discountReferralCode.toUpperCase();
+      // Look up referrer by permanent client referral code
+      const [referrer] = await db.select({
+        id: clientsTable.id,
+        name: clientsTable.name,
+        successfulReferrals: clientsTable.successfulReferrals,
+      })
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, me.tenantId),
+          eq(clientsTable.referralCode, upperCode),
+        )).limit(1);
+      if (!referrer) {
+        next(new ValidationError("Código de indicação inválido", "VALIDATION_ERROR")); return;
+      }
+      // Get discount/bonus from referral settings
+      const [refSettings] = await db.select({
+        discountValue: referralSettingsTable.discountValue,
+        discountType: referralSettingsTable.discountType,
+        bonusValue: referralSettingsTable.bonusValue,
+        isActive: referralSettingsTable.isEnabled,
+      }).from(referralSettingsTable)
+        .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
+      if (refSettings && refSettings.isActive === false) {
+        next(new ValidationError("Programa de indicação inativo", "VALIDATION_ERROR")); return;
+      }
+      serverReferralCode = upperCode;
+      serverReferralReferrerId = referrer.id;
+      // Discount for the referred customer (percentage of base value)
+      serverReferralDiscountPct = Number(refSettings?.discountValue ?? "5");
+      serverReferralAmount = roundMoney(baseValue * (serverReferralDiscountPct / 100));
+      // Bonus earned by the referrer
+      serverReferralBonusValue = Number(refSettings?.bonusValue ?? "10");
+
+      // Apply active campaign bonus; capture timestamp for convertedAt consistency.
+      // fixed_extra is a flat add-on; multiplier adjusts the base.
+      serverReferralConversionAt = new Date();
+      const campaignResult = await applyActiveCampaignBonus(
+        db,
+        me.tenantId,
+        serverReferralBonusValue,
+        serverReferralConversionAt,
+        {
+          activitySegment: referralActivitySegment(referrer.successfulReferrals ?? 0),
+          attributionChannel: serverReferralAttributionChannel,
+        },
+      );
+      serverReferralBonusValue = campaignResult.adjustedBase + campaignResult.fixedExtra;
+      serverReferralCampaignId = campaignResult.campaignId ?? null;
+    }
+
+    // Apply discounts in priority order: coupon → loyalty → referral
+    const {
+      appliedCoupon: appliedCouponAmount,
+      appliedLoyalty: appliedLoyaltyAmount,
+      appliedReferral: appliedReferralAmount,
+      discountTotal: serverDiscountTotal,
+      finalTotal: serverFinalTotal,
+    } = applyDiscounts(baseValue, serverCouponAmount, serverLoyaltyAmount, serverReferralAmount);
+
+    const effectiveLoyaltyPoints = computeEffectiveLoyaltyPoints(
+      serverLoyaltyPoints,
+      appliedLoyaltyAmount,
+      serverRealPerPoint,
+    );
+
+    const id = generateId();
+    const voucherCode = generateVoucherCode();
+    const seatsCount = parsed.data.seats.length;
+    const paidValueNum = Number(parsed.data.paidValue ?? 0);
+
+    const tenantPrefix = await getTenantReservationPrefix(me.tenantId);
+    const yearMonth = getYearMonth();
+
+    type TxResult = { error: string; status: number; code?: string } | { ok: true };
+
+    const txResult: TxResult = await db.transaction(async (tx) => {
+      const lockResult = await tx.execute(
+        sql`SELECT id, available_seats, type FROM trips WHERE id = ${parsed.data.tripId} AND tenant_id = ${me.tenantId} FOR UPDATE`
+      );
+      // Drizzle's tx.execute() returns the raw node-postgres QueryResult; cast to access .rows
+      const tripRow = (lockResult as unknown as { rows: Array<{ id: string; available_seats: number; type: string }> }).rows[0];
+      if (!tripRow) return { error: "Trip not found or not in tenant", status: 400 };
+
+      const availableSeats = Number(tripRow.available_seats);
+      if (availableSeats < seatsCount) {
+        return { error: "Não há vagas suficientes nesta viagem", status: 409, code: "RESERVATION_CONFLICT" };
+      }
+
+      if (serverCouponId) {
+        const couponLock = await tx.execute(
+          sql`SELECT id, usage_count, usage_limit FROM store_coupons WHERE id = ${serverCouponId} FOR UPDATE`
+        );
+        const couponRow = (couponLock as unknown as { rows: Array<{ id: string; usage_count: number; usage_limit: number | null }> }).rows[0];
+        if (!couponRow) return { error: "Cupom não encontrado", status: 400 };
+        if (couponRow.usage_limit != null && couponRow.usage_count >= couponRow.usage_limit) {
+          return { error: "Limite de uso do cupom atingido", status: 400 };
+        }
+        await tx.update(storeCouponsTable).set({ usageCount: sql`usage_count + 1` })
+          .where(eq(storeCouponsTable.id, serverCouponId));
+      }
+
+      const typeCode = tripTypeToCode(parsed.data.tripType ?? tripRow.type);
+      const seq = await nextReservationSequence(me.tenantId, yearMonth, typeCode, tx);
+      const reservationNumber = buildReservationNumber(tenantPrefix, typeCode, yearMonth, seq);
+
+      await tx.insert(reservationsTable).values({
+        id,
+        tenantId: me.tenantId,
+        tripId: parsed.data.tripId,
+        clientId: parsed.data.clientId,
+        seats: parsed.data.seats,
+        tripType: parsed.data.tripType ?? null,
+        packageType: parsed.data.packageType ?? null,
+        hasInsurance: parsed.data.hasInsurance ?? false,
+        isGratuidade: parsed.data.isGratuidade ?? false,
+        totalValue: String(serverFinalTotal),
+        paidValue: String(parsed.data.paidValue ?? 0),
+        balance: String(computeBalance(serverFinalTotal, parsed.data.paidValue ?? 0)),
+        paymentMethod: parsed.data.paymentMethod ?? null,
+        installments: parsed.data.installments ?? 1,
+        commissionPercentage: parsed.data.commissionPercentage ? String(parsed.data.commissionPercentage) : null,
+        commissionAmount: parsed.data.commissionAmount ? String(parsed.data.commissionAmount) : null,
+        sellerId: effectiveSellerId,
+        boardingLocationId: parsed.data.boardingLocationId ?? null,
+        status: paidValueNum >= serverFinalTotal ? RESERVATION_STATUS.CONFIRMED : RESERVATION_STATUS.PENDING,
+        voucherCode,
+        reservationNumber,
+        qrCode: `QR-${voucherCode}`,
+        notes: parsed.data.notes ?? null,
+        createdById: me.id,
+        discountCouponCode: appliedCouponAmount > 0 ? serverCouponCode : null,
+        discountCouponAmount: appliedCouponAmount > 0 ? String(appliedCouponAmount) : null,
+        discountLoyaltyPoints: effectiveLoyaltyPoints > 0 ? effectiveLoyaltyPoints : null,
+        discountLoyaltyAmount: appliedLoyaltyAmount > 0 ? String(appliedLoyaltyAmount) : null,
+        discountReferralCode: appliedReferralAmount > 0 ? serverReferralCode : null,
+        discountReferralAmount: appliedReferralAmount > 0 ? String(appliedReferralAmount) : null,
+        discountTotal: serverDiscountTotal > 0 ? String(serverDiscountTotal) : null,
+      });
+
+      // When a reservation is created with an upfront payment, persist a matching
+      // payment row so client financials (totalSpent / outstandingBalance) are
+      // recalculated correctly from the payments table.
+      if (paidValueNum > 0) {
+        await tx.insert(paymentsTable).values({
+          id: generateId(),
+          tenantId: me.tenantId,
+          reservationId: id,
+          clientId: parsed.data.clientId,
+          type: PAYMENT_TYPE.RECEIVABLE,
+          category: "reservation",
+          amount: String(paidValueNum),
+          paymentMethod: parsed.data.paymentMethod ?? "pix",
+          installmentNumber: 1,
+          totalInstallments: parsed.data.installments ?? 1,
+          dueDate: new Date(),
+          paidAt: new Date(),
+          status: PAYMENT_STATUS.PAID,
+          description: `Pagamento da reserva ${reservationNumber}`,
+        });
+      }
+
+      await tx.insert(passengersTable).values({
+        id: generateId(),
+        reservationId: id,
+        name: client.name,
+        cpf: client.cpf ?? null,
+        rg: client.rg ?? null,
+        birthDate: client.birthDate ?? null,
+        ...(() => {
+          // Compute ageCategory from flags, then derive isChildUnder7 atomically.
+          const seatArg = parsed.data.seats[0] ?? null;
+          const resolvedCat: string = parsed.data.isOnLap
+            ? "baby"
+            : parsed.data.isChildUnder7
+              ? resolveChildAgeCategory(seatArg)
+              : deriveAgeCategory(client.birthDate ?? null);
+          return {
+            ageCategory: resolvedCat,
+            seatNumber: parsed.data.isOnLap ? null : seatArg,
+            isChildUnder7: syncIsChildUnder7(resolvedCat),
+          };
+        })(),
+        isPrimary: true,
+      });
+
+      // Create placeholder passengers for additional seats (seats 1..N-1)
+      for (let i = 1; i < seatsCount; i++) {
+        await tx.insert(passengersTable).values({
+          id: generateId(),
+          reservationId: id,
+          name: "A preencher",
+          cpf: null,
+          rg: null,
+          birthDate: null,
+          ageCategory: "adult",
+          seatNumber: parsed.data.seats[i] ?? null,
+          isChildUnder7: false,
+          isPrimary: false,
+        });
+      }
+
+      await tx.update(tripsTable).set({
+        reservedSeats: sql`reserved_seats + ${seatsCount}`,
+        availableSeats: sql`available_seats - ${seatsCount}`,
+      }).where(and(eq(tripsTable.id, parsed.data.tripId), eq(tripsTable.tenantId, me.tenantId)));
+
+      if (serverLoyaltyMemberId && effectiveLoyaltyPoints > 0) {
+        const memberLock = await tx.execute(
+          sql`SELECT id, available_points FROM loyalty_members WHERE id = ${serverLoyaltyMemberId} FOR UPDATE`
+        );
+        const memberRow = (memberLock as unknown as { rows: Array<{ id: string; available_points: number }> }).rows[0];
+        if (!memberRow || memberRow.available_points < effectiveLoyaltyPoints) {
+          return { error: "Pontos de fidelidade insuficientes (corrida detectada)", status: 400 };
+        }
+        const loyaltyResult = await tx.execute(
+          sql`UPDATE loyalty_members SET available_points = available_points - ${effectiveLoyaltyPoints} WHERE id = ${serverLoyaltyMemberId} AND available_points >= ${effectiveLoyaltyPoints}`
+        );
+        const loyaltyAffected = (loyaltyResult as unknown as { rowCount: number }).rowCount ?? 0;
+        if (loyaltyAffected === 0) {
+          return { error: "Pontos de fidelidade insuficientes", status: 400 };
+        }
+        await tx.insert(loyaltyTransactionsTable).values({
+          id: generateId(),
+          tenantId: me.tenantId,
+          memberId: serverLoyaltyMemberId,
+          type: "redeem",
+          points: -effectiveLoyaltyPoints,
+          description: `Resgate de pontos na reserva ${voucherCode}`,
+          referenceId: id,
+          referenceType: "reservation",
+        });
+      }
+
+      if (serverReferralCode && serverReferralReferrerId && appliedReferralAmount > 0) {
+        // Referral discounts apply at booking time, but conversion/earnings are
+        // strictly payment-gated. The canonical reservation link lets the paid
+        // payment path promote this intent exactly once and lets cancellation
+        // reverse a completed referral if it was subsequently paid.
+        if (!id) throw new Error("Assertion failed: reservationId must be set before inserting a completed referral on the CRM path");
+        await tx.insert(referralsTable).values({
+          id: generateId(),
+          tenantId: me.tenantId,
+          referrerId: serverReferralReferrerId,
+          code: serverReferralCode,
+          status: REFERRAL_STATUS.PENDING,
+          source: "crm",
+          referredId: parsed.data.clientId,
+          reservationId: id,
+          discountApplied: true,
+          discountType: "percentage",
+          discountValue: serverReferralDiscountPct.toFixed(2),
+          discountAmount: appliedReferralAmount.toFixed(2),
+          bonusAmount: "0.00",
+          campaignId: serverReferralCampaignId,
+          attributionChannel: serverReferralAttributionChannel,
+        });
+        // Update referred client: set referredById if not already set
+        await tx.update(clientsTable)
+          .set({ referredById: serverReferralReferrerId })
+          .where(and(
+            eq(clientsTable.id, parsed.data.clientId),
+            sql`referred_by_id IS NULL`,
+          ));
+      }
+
+      return { ok: true };
+    });
+
+    if ("error" in txResult) {
+      next(new AppError(txResult.error, txResult.status, txResult.code ?? "RESERVATION_ERROR"));
+      return;
+    }
+
+    // Recalculate client financials if an upfront payment was recorded
+    if (paidValueNum > 0 && parsed.data.clientId) {
+      try {
+        await recalculateClientFinancials(parsed.data.clientId, me.tenantId);
+      } catch (err) {
+        req.log.error({ err }, "Error recalculating client financials after reservation creation");
+      }
+    }
+
+    const [reservation] = await db.select().from(reservationsTable)
+      .where(and(eq(reservationsTable.id, id), eq(reservationsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!reservation) { next(new AppError("Failed to create reservation", 500, "RESERVATION_CREATE_FAILED")); return; }
+    // The transaction above has committed, so the PENDING referral intent is
+    // now visible to the payment-gated converter. This also covers CRM bookings
+    // created already fully paid; all other states are a cheap no-op.
+    if (
+      reservation.discountReferralCode &&
+      Number(reservation.paidValue ?? 0) > 0 &&
+      !([RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED, RESERVATION_STATUS.FAILED] as string[]).includes(reservation.status)
+    ) {
+      await convertPaidReservationReferral(reservation.id, me.tenantId);
+    }
+    const formatted = await formatReservation(reservation, false);
+    res.status(201).json(formatted);
+    if (parsed.data.firstDueDate && (parsed.data.installments ?? 1) >= 1) {
+      generateInstallments(id, me.tenantId, Number(reservation.totalValue), parsed.data.installments ?? 1, parsed.data.firstDueDate)
+        .catch((err) => req.log.error({ err }, "Error generating installments on reservation create"));
+    }
+    broadcastSeatUpdate(reservation.tripId, me.tenantId).catch(() => {});
+    CalendarSyncService.syncTrip(reservation.tripId)
+      .catch((err) => req.log.warn({ err, context: "reservation.create", tripId: reservation.tripId, reservationId: id }, "Calendar sync falhou — continuando"));
+    enqueueCommissionSync(id, me.tenantId)
+      .catch((err) => req.log.error({ err }, "Error enqueuing commission sync after reservation creation"));
+    if (reservation.clientId) {
+      await syncClientDeal(
+        reservation.clientId,
+        me.tenantId,
+        reservation.tripId,
+        Number(reservation.totalValue),
+        effectiveSellerId ?? me.id,
+        id,
+      );
+      const totalFormatted = formatBRL(Number(reservation.totalValue));
+      writeClientActivity(reservation.clientId, "reservation_created", `Reserva ${voucherCode} criada — ${totalFormatted}`, me.id, { voucherCode, totalValue: Number(reservation.totalValue) })
+        .catch((err) => req.log.error({ err }, "Error writing reservation creation activity"));
+      detectAndNotifyTripOverlap({
+        reservationId: reservation.id,
+        clientId: reservation.clientId,
+        tripId: reservation.tripId,
+        tenantId: me.tenantId,
+        actorUserId: me.id,
+      }).catch((err) => req.log.error({ err }, "Error in trip overlap detection after reservation creation"));
+    }
+    // Fire-and-forget: enqueue confirmation email + WhatsApp (never blocks reservation creation)
+    if (!isCsvImport) (async () => {
+      try {
+        const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, me.tenantId)).limit(1);
+        if (!tenant) return;
+
+        const dDate = formatted.trip.departureDate ? new Date(formatted.trip.departureDate) : null;
+        const departureDate = dDate
+          ? dDate.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "America/Sao_Paulo" })
+          : "";
+
+        // WhatsApp cadastro — fires for all new reservations (pending status = registration)
+        if (reservation.status === RESERVATION_STATUS.PENDING) {
+          dispatchWhatsAppCadastroRealizado({
+            reservationId: reservation.id,
+            tenantId: me.tenantId,
+          }).catch((err) => req.log.warn({ err }, "[whatsapp] Cadastro realizado dispatch failed — non-fatal"));
+        }
+
+        // WhatsApp confirmation — only when reservation is already CONFIRMED at creation time;
+        // pending->confirmed transitions are handled by PATCH isBeingConfirmed to avoid duplicates
+        if (reservation.status === RESERVATION_STATUS.CONFIRMED) {
+          dispatchWhatsAppReservationConfirmed({
+            reservationId: reservation.id,
+            tenantId: me.tenantId,
+          }).catch((err) => req.log.warn({ err }, "[whatsapp] Reservation confirmed dispatch failed — non-fatal"));
+        }
+
+        // Email confirmation — only when the client has an email address
+        const clientEmail = client?.email;
+        if (!clientEmail) return;
+
+        const totalVal = Number(reservation.totalValue);
+        const paidVal = Number(reservation.paidValue);
+        const balanceVal = Number(reservation.balance);
+        const paymentStatus: typeof STORE_PAYMENT_STATUS.PAID | "partial" | typeof STORE_PAYMENT_STATUS.PENDING =
+          paidVal >= totalVal ? STORE_PAYMENT_STATUS.PAID : paidVal > 0 ? "partial" : STORE_PAYMENT_STATUS.PENDING;
+        const [tripRecord] = await db.select().from(tripsTable).where(eq(tripsTable.id, reservation.tripId)).limit(1);
+        let duration = "";
+        if (dDate && tripRecord?.returnDate) {
+          const diffMs = tripRecord.returnDate.getTime() - dDate.getTime();
+          const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+          if (diffDays > 0) duration = `${diffDays} dia${diffDays !== 1 ? "s" : ""}`;
+        }
+        const agencyPhone = tenant.whatsapp ?? tenant.phone ?? "";
+        const agencyWebsite = tenant.website ?? `https://${tenant.slug}.visitecrm.com.br`;
+        const whatsappNum = agencyPhone.replace(/\D/g, "");
+        const whatsappUrl = whatsappNum ? `https://wa.me/${whatsappNum}` : "";
+        const publicBase = agencyWebsite.replace(/\/$/, "");
+        const voucherUrl = `${publicBase}/reserva/${reservation.voucherCode}`;
+        const consultUrl = `${publicBase}/reservas`;
+        const profileUrl = `${publicBase}/perfil?tab=reservas`;
+        const subject = `Reserva Confirmada — ${reservation.reservationNumber ?? reservation.voucherCode}`;
+        await enqueueReservationConfirmationEmail({
+          tenantId: me.tenantId,
+          reservationId: reservation.id,
+          subject,
+          props: {
+            reservationNumber: reservation.reservationNumber ?? reservation.voucherCode,
+            voucherCode: reservation.voucherCode,
+            clientName: client?.name ?? "",
+            clientCpf: client?.cpf ?? "",
+            clientEmail,
+            clientPhone: client?.whatsapp ?? "",
+            tripTitle: formatted.trip.name,
+            destination: formatted.trip.destination,
+            departureDate,
+            duration,
+            seats: (reservation.seats ?? []) as string[],
+            totalAmount: totalVal,
+            amountPaid: paidVal,
+            amountPending: balanceVal,
+            paymentMethod: reservation.paymentMethod ?? "pix",
+            paymentStatus,
+            agencyName: tenant.name,
+            agencyLogo: tenant.logoUrl ?? "",
+            agencyPhone,
+            agencyPhoneVoice: tenant.phone ?? "",
+            agencyEmail: tenant.email,
+            agencyWebsite,
+            voucherUrl,
+            consultUrl,
+            profileUrl,
+            whatsappUrl,
+          },
+        });
+        req.log.info({ reservationId: reservation.id }, "Reservation confirmation email enqueued");
+      } catch (err) {
+        req.log.error({ err }, "Error enqueuing reservation confirmation email/WhatsApp");
+      }
+    })();
+  } catch (err) {
+    // Race-condition safety net: two simultaneous POST /api/reservations for the
+    // same client+trip can both pass the pre-insert duplicate check, then the
+    // second INSERT is blocked by the partial unique index (migration 0042,
+    // reservations_active_client_trip_unique).  PostgreSQL surfaces this as a
+    // UNIQUE_VIOLATION (code 23505).  Convert it to a structured 409 so callers
+    // receive the same DUPLICATE_RESERVATION contract as the pre-check path.
+    if (
+      err != null &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code: string }).code === "23505" &&
+      "constraint" in err &&
+      (err as { constraint: string }).constraint === "reservations_active_client_trip_unique"
+    ) {
+      next(new ConflictError(
+        "Este cliente já possui uma reserva ativa nesta viagem (conflito detectado durante a criação).",
+        "DUPLICATE_RESERVATION",
+      ));
+      return;
+    }
+    next(err);
+  }
+});
+
+async function requireReservationAccess(
+  me: { id: string; tenantId: string; role: string },
+  reservationId: string,
+): Promise<typeof reservationsTable.$inferSelect> {
+  const [reservation] = await db.select().from(reservationsTable)
+    .where(and(eq(reservationsTable.id, reservationId), eq(reservationsTable.tenantId, me.tenantId)))
+    .limit(1);
+  if (!reservation) throw new NotFoundError("Reservation not found", "RESERVATION_NOT_FOUND");
+  if (me.role === ROLES.CLIENT) {
+    const [clientRecord] = await db.select({ id: clientsTable.id }).from(clientsTable)
+      .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.userId, me.id))).limit(1);
+    if (!clientRecord || reservation.clientId !== clientRecord.id) {
+      throw new NotFoundError("Reservation not found", "RESERVATION_NOT_FOUND");
+    }
+  } else if (me.role === ROLES.SALES) {
+    const [scopedReservation] = await db.select({ id: reservationsTable.id })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.id, reservation.id),
+        eq(reservationsTable.tenantId, me.tenantId),
+        reservationSellerScopeCondition(me),
+      ))
+      .limit(1);
+    if (!scopedReservation) {
+      throw new NotFoundError("Reservation not found", "RESERVATION_NOT_FOUND");
+    }
+  }
+  return reservation;
+}
+
+router.get("/reservations/:id", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const reservation = await requireReservationAccess(me, req.params.id);
+    const formatted = await formatReservation(reservation);
+    res.json(formatted);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const CANCELLING_STATUSES: readonly ReservationStatus[] = [RESERVATION_STATUS.CANCELLED, RESERVATION_STATUS.REFUNDED] as const;
+const ACTIVE_STATUSES: readonly ReservationStatus[] = ACTIVE_RESERVATION_STATUSES;
+
+router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const isCsvImport = req.get("x-visitecrm-import") === "reservation-csv";
+    const existing = await requireReservationAccess(me, req.params.id);
+
+    const parsed = UpdateReservationBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+
+    const updates: Partial<typeof reservationsTable.$inferInsert> = {};
+    if (parsed.data.status != null) updates.status = parseReservationStatus(parsed.data.status);
+    if (parsed.data.paymentMethod != null) updates.paymentMethod = parsed.data.paymentMethod;
+    if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
+    if (parsed.data.seats != null) updates.seats = parsed.data.seats;
+    if (parsed.data.installments != null) updates.installments = parsed.data.installments;
+    if (parsed.data.boardingLocationId !== undefined) updates.boardingLocationId = parsed.data.boardingLocationId ?? null;
+    if (parsed.data.totalValue != null) {
+      const newTotal = String(parsed.data.totalValue);
+      const paidValue = Number(existing.paidValue);
+      updates.totalValue = newTotal;
+      updates.balance = String(computeBalance(parsed.data.totalValue, paidValue));
+    }
+    if (parsed.data.commissionAmount !== undefined) updates.commissionAmount = parsed.data.commissionAmount != null ? String(parsed.data.commissionAmount) : null;
+    if (parsed.data.sellerId !== undefined) {
+      updates.sellerId = await resolveEffectiveSellerId(me, parsed.data.sellerId);
+    }
+    if (parsed.data.discountTotal !== undefined) updates.discountTotal = parsed.data.discountTotal != null ? String(parsed.data.discountTotal) : null;
+    if (parsed.data.isGratuidade !== undefined && parsed.data.isGratuidade !== null) updates.isGratuidade = parsed.data.isGratuidade;
+
+    const newTripId = parsed.data.tripId ?? undefined;
+    const newClientId = parsed.data.clientId ?? undefined;
+    const tripChanged = newTripId != null && newTripId !== existing.tripId;
+    const clientChanged = newClientId != null && newClientId !== existing.clientId;
+
+    if (tripChanged || clientChanged) {
+      if (tripChanged) {
+        const [trip] = await db.select({ id: tripsTable.id }).from(tripsTable)
+          .where(and(eq(tripsTable.id, newTripId), eq(tripsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!trip) { next(new ValidationError("Trip not found", "TRIP_NOT_FOUND")); return; }
+        updates.tripId = newTripId;
+      }
+      if (clientChanged) {
+        const [client] = await db.select({ id: clientsTable.id }).from(clientsTable)
+          .where(and(eq(clientsTable.id, newClientId), eq(clientsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!client) { next(new ValidationError("Client not found", "CLIENT_NOT_FOUND")); return; }
+        updates.clientId = newClientId;
+      }
+    }
+
+    const isBeingCancelled = parsed.data.status != null && CANCELLING_STATUSES.includes(parsed.data.status);
+    const wasActive = ACTIVE_STATUSES.includes(existing.status);
+    const wasConfirmed = existing.status === RESERVATION_STATUS.CONFIRMED;
+    let isBeingConfirmed = parsed.data.status === RESERVATION_STATUS.CONFIRMED && existing.status === RESERVATION_STATUS.PENDING;
+    let isBeingDemoted = parsed.data.status === RESERVATION_STATUS.PENDING && wasConfirmed;
+    // These transitions all change the trip's capacity buckets. They must use
+    // the same reservation-first lock so a stale pre-transaction read cannot
+    // apply a second transition after a concurrent request has won.
+    const requiresCapacityTransitionLock = (isBeingCancelled && wasActive)
+      || isBeingConfirmed
+      || isBeingDemoted
+      || tripChanged
+      || (parsed.data.seats != null && wasActive);
+
+    let reversedReferralInfo: { referralId: string; referrerId: string; referredId: string | null; bonusAmount: string } | null = null;
+    let cancellationApplied = false;
+
+    const reservation = await db.transaction(async (tx) => {
+      let lockedReservation: LockedReservationCapacityRow | undefined;
+      if (requiresCapacityTransitionLock) {
+        lockedReservation = await lockReservationForCancellation(tx, me.tenantId, req.params.id);
+      }
+
+      if (isBeingCancelled && lockedReservation) {
+        cancellationApplied = await cancelLockedReservationAndReleaseCapacity(
+          tx,
+          me.tenantId,
+          lockedReservation,
+        );
+      }
+
+      // Moving an active reservation changes two trip counters. Do it after
+      // the reservation lock and before a status transition so confirmation or
+      // demotion below applies to the destination trip, not the old one.
+      // If cancellation won the reservation lock, its release above already
+      // handled the only capacity transition.
+      if (
+        tripChanged &&
+        !isBeingCancelled &&
+        lockedReservation &&
+        newTripId !== lockedReservation.tripId
+      ) {
+        await moveLockedReservationCapacity(
+          tx,
+          me.tenantId,
+          lockedReservation,
+          newTripId!,
+          parsed.data.seats ?? lockedReservation.seats,
+        );
+        lockedReservation = { ...lockedReservation, tripId: newTripId! };
+      }
+
+      if (isBeingConfirmed) {
+        const confirmationReservation = lockedReservation;
+        if (confirmationReservation?.status === RESERVATION_STATUS.PENDING) {
+          isBeingConfirmed = true;
+          const seatsCount = confirmationReservation.seats.length;
+          if (seatsCount > 0) {
+            await tx.update(tripsTable).set({
+              confirmedSeats: sql`confirmed_seats + ${seatsCount}`,
+              reservedSeats: sql`GREATEST(0, reserved_seats - ${seatsCount})`,
+            }).where(and(
+              eq(tripsTable.id, confirmationReservation.tripId),
+              eq(tripsTable.tenantId, me.tenantId),
+            ));
+          }
+        } else {
+          isBeingConfirmed = false;
+        }
+      }
+
+      if (isBeingDemoted) {
+        const demotionReservation = lockedReservation;
+        if (demotionReservation?.status === RESERVATION_STATUS.CONFIRMED) {
+          isBeingDemoted = true;
+          const seatsCount = demotionReservation.seats.length;
+          if (seatsCount > 0) {
+            await tx.update(tripsTable).set({
+              confirmedSeats: sql`GREATEST(0, confirmed_seats - ${seatsCount})`,
+              reservedSeats: sql`reserved_seats + ${seatsCount}`,
+            }).where(and(
+              eq(tripsTable.id, demotionReservation.tripId),
+              eq(tripsTable.tenantId, me.tenantId),
+            ));
+          }
+        } else {
+          isBeingDemoted = false;
+        }
+      }
+
+      // If another capacity-changing request won the reservation lock, do not
+      // overwrite its status with the stale value from this request. Other
+      // fields in the PATCH remain eligible for the normal update below.
+      if (requiresCapacityTransitionLock && !cancellationApplied && !isBeingConfirmed && !isBeingDemoted) {
+        delete updates.status;
+      }
+
+      if (isBeingCancelled && cancellationApplied) {
+        // --- Reversal 1: coupon usage_count ---
+        // Two-step lookup mirrors creation: find exact coupon ID by code+store,
+        // then decrement by ID — symmetric with creation's WHERE id = serverCouponId.
+        // Idempotency: if couponReversalAt is already set on the reservation, the
+        // decrement was already applied in a prior cancellation attempt (e.g. the
+        // reservation was reopened by an admin and is being cancelled again). Skip
+        // the decrement to prevent double-counting.
+        if (existing.discountCouponCode && !existing.couponReversalAt) {
+          const [store] = await tx.select({ id: storesTable.id })
+            .from(storesTable)
+            .where(eq(storesTable.tenantId, me.tenantId))
+            .limit(1);
+          if (store) {
+            const [coupon] = await tx.select({ id: storeCouponsTable.id })
+              .from(storeCouponsTable)
+              .where(and(
+                eq(storeCouponsTable.storeId, store.id),
+                eq(storeCouponsTable.code, existing.discountCouponCode),
+              ))
+              .limit(1);
+            if (coupon) {
+              await tx.update(storeCouponsTable)
+                .set({ usageCount: sql`GREATEST(0, usage_count - 1)` })
+                .where(eq(storeCouponsTable.id, coupon.id));
+              updates.couponReversalAt = new Date();
+            }
+          }
+        }
+
+        // --- Reversal 2: loyalty points used as discount ---
+        const loyaltyPointsToRestore = existing.discountLoyaltyPoints ?? 0;
+        if (loyaltyPointsToRestore > 0 && existing.clientId) {
+          await tx.execute(
+            sql`SELECT id FROM loyalty_members WHERE tenant_id = ${me.tenantId} AND client_id = ${existing.clientId} LIMIT 1 FOR UPDATE`
+          );
+          const [loyaltyMember] = await tx
+            .select({ id: loyaltyMembersTable.id, availablePoints: loyaltyMembersTable.availablePoints })
+            .from(loyaltyMembersTable)
+            .where(and(
+              eq(loyaltyMembersTable.tenantId, me.tenantId),
+              eq(loyaltyMembersTable.clientId, existing.clientId),
+            ))
+            .limit(1);
+          if (loyaltyMember) {
+            // Idempotency: skip if a "refund" transaction for this reservation already exists
+            // (prevents double-reversal on reopen → re-cancel flows)
+            const [existingRefund] = await tx
+              .select({ id: loyaltyTransactionsTable.id })
+              .from(loyaltyTransactionsTable)
+              .where(and(
+                eq(loyaltyTransactionsTable.memberId, loyaltyMember.id),
+                eq(loyaltyTransactionsTable.type, "refund"),
+                eq(loyaltyTransactionsTable.referenceId, req.params.id),
+              ))
+              .limit(1);
+            if (!existingRefund) {
+              await tx.update(loyaltyMembersTable)
+                .set({
+                  availablePoints: loyaltyMember.availablePoints + loyaltyPointsToRestore,
+                  lastActivityAt: new Date(),
+                })
+                .where(eq(loyaltyMembersTable.id, loyaltyMember.id));
+              await tx.insert(loyaltyTransactionsTable).values({
+                id: generateId(),
+                tenantId: me.tenantId,
+                memberId: loyaltyMember.id,
+                type: "refund",
+                points: loyaltyPointsToRestore,
+                description: `Estorno de pontos — cancelamento da reserva ${existing.voucherCode}`,
+                referenceId: req.params.id,
+                referenceType: "reservation",
+              });
+            }
+          }
+        }
+
+        // --- Reversal 3: referral bonus credited to referrer ---
+        // Idempotency: explicit timestamp guard (`referralReversalAt`) fires first —
+        // if already set, the entire lookup tree is skipped, preventing any DB reads
+        // and double-reversal on reopen → re-cancel flows. This mirrors the
+        // `couponReversalAt` pattern used by Reversal 1.
+        //
+        // Secondary (implicit) guard: both lookup branches filter on `status = COMPLETED`.
+        // If the referral record is already REVERSED (and `referralReversalAt` was somehow
+        // not set — e.g. legacy data), the COMPLETED-filtered queries return no rows and
+        // `referralRecord` stays undefined, so the update block is naturally skipped.
         //
         // Lookup by reservationId (set for all storefront and CRM bookings).
         if (existing.discountReferralCode && !existing.referralReversalAt) {

@@ -1,4 +1,1314 @@
-(y, m1 - 1, d, 3, 0, 0, 0));
+import { Router, type NextFunction } from "express";
+import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable } from "@workspace/db";
+import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull } from "drizzle-orm";
+import { z } from "zod/v4";
+import { generateId } from "../lib/id";
+import { requireAuth } from "../lib/tenant";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { ADMIN_ROLES, ALL_STAFF_ROLES } from '../lib/tenant';
+import { ACTIONS, hasPermission, REFERRAL_STATUS, RESOURCES } from "@workspace/permissions";
+import { enqueueReferralBonusPaidEmail, dispatchReferralExpiringSoonEmail, dispatchReferralBonusReleasedEmail } from "../queues/email-helpers";
+import { interpolateWhatsAppMessage } from "../lib/whatsapp";
+import { dispatchOutboundMessage } from "../services/outbound-delivery";
+import { DEFAULT_TIERS as DEFAULT_TIERS_CONFIG, computeReferralTier } from "../lib/referral-tiers";
+import type { ReferralTier } from "../lib/referral-tiers";
+import { formatBRL, localToday } from "@workspace/shared";
+import { calculateReferralCommercialAnalytics } from "../lib/referral-commercial-analytics";
+import { rankingMetadata } from "../lib/ranking-contract";
+import { calculateReceivedAmount, linkedOrder, linkedReservation } from "../lib/linked-data";
+import { linkedDeal } from "../lib/linked-data";
+import { reversePaidReferralBonus } from "../services/reservation-referral-conversion";
+
+const router = Router();
+const CampaignBonusType = z.enum(["multiplier", "fixed_extra", "fixed_bonus", "percentage_bonus", "reduced_bonus", "no_reward"]);
+const CampaignConfig = z.object({
+  eligibleStoreProductIds: z.array(z.string().min(1)).max(500).optional(),
+  eligibleTierLevels: z.array(z.string().min(1).max(80)).max(50).optional(),
+  conversionCap: z.number().int().positive().nullable().optional(),
+  budgetAmount: z.number().nonnegative().nullable().optional(),
+  shareMessage: z.string().max(2000).nullable().optional(),
+  materialUrl: z.string().url().max(2000).nullable().optional(),
+  publicRanking: z.boolean().optional(),
+  eligibleActivitySegments: z.array(z.enum(["active", "occasional", "inactive"])).max(3).optional(),
+  eligibleChannels: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+  commissionType: z.enum(["none", "fixed", "bonus_percentage"]).optional(),
+  commissionValue: z.number().nonnegative().optional(),
+  commissionRecipientType: z.enum(["ambassador", "partner"]).optional(),
+  eligiblePartnerIds: z.array(z.string().min(1)).max(500).optional(),
+});
+
+const CreateReferralBody = z.object({
+  referrerId: z.string(),
+  referredId: z.string().optional(),
+  referredEmail: z.string().email().optional(),
+  code: z.string(),
+  bonusAmount: z.string().optional(),
+});
+
+router.get("/referrals/validate/:code", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const { code } = req.params;
+
+    const [referral] = await db
+      .select({
+        id: referralsTable.id,
+        bonusAmount: referralsTable.bonusAmount,
+        referrerId: referralsTable.referrerId,
+        referrerCodeStatus: clientsTable.referralCodeStatus,
+      })
+      .from(referralsTable)
+      .leftJoin(clientsTable, eq(referralsTable.referrerId, clientsTable.id))
+      .where(and(
+        eq(referralsTable.tenantId, me.tenantId),
+        eq(referralsTable.code, code),
+        eq(referralsTable.status, REFERRAL_STATUS.PENDING),
+      )).limit(1);
+
+    if (!referral) {
+      res.json({ valid: false, bonusAmount: 0, message: "Código de indicação inválido ou já utilizado" });
+      return;
+    }
+
+    if (referral.referrerCodeStatus && referral.referrerCodeStatus !== "active") {
+      res.json({ valid: false, bonusAmount: 0, message: "Código do indicador bloqueado ou cancelado" });
+      return;
+    }
+
+    res.json({
+      valid: true,
+      referralId: referral.id,
+      bonusAmount: referral.bonusAmount != null ? Number(referral.bonusAmount) : 0,
+      message: null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const rows = await db.select({
+      status: referralsTable.status,
+      cnt: count(),
+    }).from(referralsTable)
+      .where(eq(referralsTable.tenantId, me.tenantId))
+      .groupBy(referralsTable.status);
+
+    const stats: Record<string, number> = { pending: 0, completed: 0, expired: 0 };
+    for (const r of rows) {
+      stats[r.status] = Number(r.cnt);
+    }
+    const total = Object.values(stats).reduce((a, b) => a + b, 0);
+
+    const [earningsRow] = await db.select({
+      total: sql<string>`COALESCE(SUM(bonus_amount),0)`,
+    }).from(referralsTable)
+      .where(and(
+        eq(referralsTable.tenantId, me.tenantId),
+        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
+      ));
+
+    const [discountRow] = await db.select({
+      total: sql<string>`COALESCE(SUM(discount_amount),0)`,
+    }).from(referralsTable)
+      .where(and(
+        eq(referralsTable.tenantId, me.tenantId),
+        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
+      ));
+
+    const conversionRate = total > 0 ? Math.round((stats.completed / total) * 100) : 0;
+
+    const [refSettings] = await db
+      .select({ tiersConfig: referralSettingsTable.tiersConfig })
+      .from(referralSettingsTable)
+      .where(eq(referralSettingsTable.tenantId, me.tenantId))
+      .limit(1);
+
+    const tiersConfig = refSettings?.tiersConfig ?? DEFAULT_TIERS_CONFIG;
+
+    const tierDistRows = await db
+      .select({
+        referrerId: referralsTable.referrerId,
+        conversions: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
+      })
+      .from(referralsTable)
+      .where(eq(referralsTable.tenantId, me.tenantId))
+      .groupBy(referralsTable.referrerId);
+
+    const tierDistribution: Record<string, number> = {};
+    let topTierLevel = tiersConfig[0]?.level ?? "bronze";
+    let topTierMinReferrals = -1;
+    for (const row of tierDistRows) {
+      const { tier } = computeReferralTier(Number(row.conversions), tiersConfig);
+      tierDistribution[tier.level] = (tierDistribution[tier.level] ?? 0) + 1;
+      if (tier.minReferrals > topTierMinReferrals) {
+        topTierLevel = tier.level;
+        topTierMinReferrals = tier.minReferrals;
+      }
+    }
+
+    const topTierConfig = tiersConfig.find((t) => t.level === topTierLevel);
+    const sortedTiers = [...tiersConfig].sort((a, b) => a.minReferrals - b.minReferrals);
+    const topTierIdx = sortedTiers.findIndex((t) => t.level === topTierLevel);
+    const nextTierForTop = sortedTiers[topTierIdx + 1] ?? null;
+    const totalReferrers = tierDistRows.length;
+    const topTierCount = tierDistribution[topTierLevel] ?? 0;
+    const tierProgress = totalReferrers > 0 ? Math.round((topTierCount / totalReferrers) * 100) : 0;
+
+    res.json({
+      total,
+      pending: stats.pending,
+      completed: stats.completed,
+      expired: stats.expired,
+      conversionRate,
+      totalBonusPaid: Number(earningsRow?.total ?? 0),
+      totalDiscountGiven: Number(discountRow?.total ?? 0),
+      tiersConfig,
+      tierDistribution,
+      currentTier: {
+        level: topTierConfig?.level ?? "bronze",
+        label: topTierConfig?.label ?? "Bronze",
+        bonusMultiplier: topTierConfig?.bonusMultiplier ?? 1,
+        minReferrals: topTierConfig?.minReferrals ?? 0,
+        nextTierLabel: nextTierForTop?.label ?? null,
+        nextTierMin: nextTierForTop?.minReferrals ?? null,
+      },
+      tierProgress,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const page = Math.max(1, parseInt((req.query.page as string) ?? "1", 10));
+    const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) ?? "20", 10)));
+    const offset = (page - 1) * limit;
+    const status = req.query.status as string | undefined;
+    const search = req.query.search as string | undefined;
+
+    const validReferralStatuses = Object.values(REFERRAL_STATUS);
+    if (status && !validReferralStatuses.includes(status as (typeof validReferralStatuses)[number])) {
+      next(new ValidationError(String(`Invalid status. Must be one of: ${validReferralStatuses.join(", ")}`), "VALIDATION_ERROR"));
+      return;
+    }
+
+    const conditions = [eq(referralsTable.tenantId, me.tenantId)];
+    if (status) conditions.push(eq(referralsTable.status, status));
+    if (search) {
+      conditions.push(or(
+        ilike(referralsTable.code, `%${search}%`),
+        ilike(referralsTable.referrerName, `%${search}%`),
+        ilike(referralsTable.referredEmail, `%${search}%`),
+        ilike(referralsTable.referredName, `%${search}%`),
+        ilike(clientsTable.name, `%${search}%`),
+        ilike(clientsTable.email, `%${search}%`),
+      )!);
+    }
+
+    const [totalRow] = await db.select({ total: count() }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions));
+    const total = Number(totalRow?.total ?? 0);
+
+    const rows = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientName: clientsTable.name,
+      referrerClientEmail: clientsTable.email,
+      referrerClientWhatsapp: clientsTable.whatsapp,
+      referrerClientPhone: clientsTable.phone,
+      referrerSuccessfulReferrals: clientsTable.successfulReferrals,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions))
+      .orderBy(desc(referralsTable.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    // Backfill lastVisit and visitsCount from referral_tracking for referrals
+    // that predate the forward-sync logic (historical data reconciliation).
+    const codes = [...new Set(rows.map((r) => r.code))];
+    const trackingMap = new Map<string, { lastVisit: Date | null; visitsCount: number }>();
+    if (codes.length > 0) {
+      const trackingAgg = await db
+        .select({
+          referralCode: referralTrackingTable.referralCode,
+          lastVisit: sql<string | null>`MAX(${referralTrackingTable.lastVisit})`,
+          visitsCount: sql<number>`SUM(${referralTrackingTable.visitsCount})`,
+        })
+        .from(referralTrackingTable)
+        .where(and(
+          eq(referralTrackingTable.tenantId, me.tenantId),
+          inArray(referralTrackingTable.referralCode, codes),
+        ))
+        .groupBy(referralTrackingTable.referralCode);
+      for (const t of trackingAgg) {
+        trackingMap.set(t.referralCode, {
+          lastVisit: t.lastVisit ? new Date(t.lastVisit) : null,
+          visitsCount: Number(t.visitsCount) || 0,
+        });
+      }
+    }
+
+    const [tenantRefSettings] = await db
+      .select({ gracePeriodDays: referralSettingsTable.gracePeriodDays })
+      .from(referralSettingsTable)
+      .where(eq(referralSettingsTable.tenantId, me.tenantId))
+      .limit(1);
+    const gracePeriodDays = tenantRefSettings?.gracePeriodDays ?? 30;
+
+    const reservationIds = rows.map(r => r.reservationId).filter((id): id is string => !!id);
+    const canonicalReservations = reservationIds.length ? await db.select().from(reservationsTable).where(and(
+      eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.id, reservationIds),
+    )) : [];
+    // A storefront referral is inserted as PENDING before payment and only gets
+    // its reservationId when the payment-gated conversion runs. Resolve the
+    // order by the persisted referralId as well, so a partially paid order is
+    // never displayed as an orphaned referral.
+    const pendingReferralIds = rows
+      .filter((r) => !r.reservationId)
+      .map((r) => r.id);
+    const pendingOrders = pendingReferralIds.length
+      ? await db.select().from(storeOrdersTable).where(and(
+        eq(storeOrdersTable.tenantId, me.tenantId),
+        inArray(sql<string>`${storeOrdersTable.pendingReferral}->>'referralId'`, pendingReferralIds),
+      ))
+      : [];
+    const orderNumbers = [...new Set([
+      ...canonicalReservations.map(r => r.storeOrderId).filter((id): id is string => !!id),
+      ...pendingOrders.map(o => o.orderNumber),
+    ])];
+    const [siblingReservations, linkedOrders] = orderNumbers.length ? await Promise.all([
+      db.select().from(reservationsTable).where(and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))),
+      db.select().from(storeOrdersTable).where(and(
+      eq(storeOrdersTable.tenantId, me.tenantId), inArray(storeOrdersTable.orderNumber, orderNumbers),
+      )),
+    ]) : [[], []] as [(typeof reservationsTable.$inferSelect)[], (typeof storeOrdersTable.$inferSelect)[]];
+    const allLinkedReservations = [...canonicalReservations, ...siblingReservations.filter(r => !canonicalReservations.some(c => c.id === r.id))];
+    const reservationMap = new Map(canonicalReservations.map(r => [r.id, r]));
+    const orderMap = new Map([...linkedOrders, ...pendingOrders].map(o => [o.orderNumber, o]));
+    const pendingOrderByReferralId = new Map(
+      pendingOrders.flatMap((order) => {
+        const pending = order.pendingReferral as { referralId?: string | null } | null;
+        return pending?.referralId ? [[pending.referralId, order] as const] : [];
+      }),
+    );
+    const orderIds = [...new Set([...linkedOrders, ...pendingOrders].map((order) => order.id))];
+    const linkedReservationIds = allLinkedReservations.map((reservation) => reservation.id);
+    const payments = orderIds.length || linkedReservationIds.length
+      ? await db.select({
+        orderId: paymentsTable.orderId,
+        reservationId: paymentsTable.reservationId,
+        amount: paymentsTable.amount,
+        status: paymentsTable.status,
+        type: paymentsTable.type,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, me.tenantId),
+        or(
+          ...(orderIds.length ? [inArray(paymentsTable.orderId, orderIds)] : []),
+          ...(linkedReservationIds.length ? [inArray(paymentsTable.reservationId, linkedReservationIds)] : []),
+        ),
+      ))
+      : [];
+    const deals = allLinkedReservations.length ? await db.select().from(dealsTable).where(and(
+      eq(dealsTable.tenantId, me.tenantId), inArray(dealsTable.reservationId, allLinkedReservations.map(r => r.id)),
+    )) : [];
+    const referrals = rows.map(({ referrerClientName, referrerClientEmail, referrerClientWhatsapp, referrerClientPhone, referrerSuccessfulReferrals, ...r }) => {
+      const tracking = trackingMap.get(r.code);
+      const bonusReleasesAt = r.convertedAt
+        ? new Date(new Date(r.convertedAt).getTime() + gracePeriodDays * 24 * 60 * 60 * 1000)
+        : null;
+      const bonusBlocked =
+        r.status === REFERRAL_STATUS.REVERSED ||
+        (bonusReleasesAt !== null && new Date() < bonusReleasesAt);
+      return {
+        ...r,
+        referrerName: referrerClientName ?? r.referrerName,
+        referrerEmail: referrerClientEmail ?? r.referrerEmail,
+        referrerPhone: referrerClientPhone ?? r.referrerPhone,
+        referrerWhatsapp: referrerClientWhatsapp ?? null,
+        referrerSuccessfulReferrals: referrerSuccessfulReferrals ?? 0,
+        lastVisit: r.lastVisit ?? tracking?.lastVisit ?? null,
+        visitsCount: Math.max(r.visitsCount ?? 0, tracking?.visitsCount ?? 0),
+        bonusReleasesAt: bonusReleasesAt?.toISOString() ?? null,
+        bonusBlocked,
+        linkedReservation: r.reservationId ? linkedReservation(reservationMap.get(r.reservationId)) : null,
+        linkedReservations: (() => {
+          const canonical = r.reservationId ? reservationMap.get(r.reservationId) : null;
+          const order = canonical?.storeOrderId
+            ? orderMap.get(canonical.storeOrderId)
+            : pendingOrderByReferralId.get(r.id);
+          return order
+            ? allLinkedReservations.filter((reservation) => reservation.storeOrderId === order.orderNumber).map(linkedReservation)
+            : [];
+        })(),
+        linkedOrder: (() => {
+          const canonical = r.reservationId ? reservationMap.get(r.reservationId) : null;
+          const order = canonical?.storeOrderId
+            ? orderMap.get(canonical.storeOrderId)
+            : pendingOrderByReferralId.get(r.id);
+          if (!order) return null;
+          const siblingIds = allLinkedReservations
+            .filter((reservation) => reservation.storeOrderId === order.orderNumber)
+            .map((reservation) => reservation.id);
+          return linkedOrder(order, {
+            paidAmount: calculateReceivedAmount(order.id, siblingIds, payments),
+          });
+        })(),
+        linkedDeals: (() => {
+          const canonical = r.reservationId ? reservationMap.get(r.reservationId) : null;
+          const order = canonical?.storeOrderId
+            ? orderMap.get(canonical.storeOrderId)
+            : pendingOrderByReferralId.get(r.id);
+          return order
+            ? deals.filter(d => allLinkedReservations.some(x => x.storeOrderId === order.orderNumber && x.id === d.reservationId)).map(linkedDeal)
+            : [];
+        })(),
+      };
+    });
+
+    res.json({
+      data: referrals,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/referrals", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = CreateReferralBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    const id = generateId();
+
+    const [refSettings] = await db
+      .select({ expirationDays: referralSettingsTable.expirationDays })
+      .from(referralSettingsTable)
+      .where(eq(referralSettingsTable.tenantId, me.tenantId))
+      .limit(1);
+    const expirationDays = refSettings?.expirationDays ?? 30;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + expirationDays);
+
+    // NOTE: This admin endpoint creates a referral invite with status='pending' (schema
+    // default). reservationId is intentionally absent at this stage — it is only set
+    // when the referral is converted (i.e. the referred person completes a purchase),
+    // which happens via the CRM reservation path (reservations.ts) or the store
+    // checkout path (referral-conversion.ts). Do NOT change this insert to set
+    // status='completed' without also supplying a reservationId.
+    await db.insert(referralsTable).values({ id, tenantId: me.tenantId, expiresAt, ...parsed.data });
+    const [referral] = await db.select().from(referralsTable).where(eq(referralsTable.id, id)).limit(1);
+    res.status(201).json(referral);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/referrals/:id", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = z.object({
+      status: z.enum([
+        REFERRAL_STATUS.PENDING,
+        REFERRAL_STATUS.COMPLETED,
+        REFERRAL_STATUS.CONVERTED,
+        REFERRAL_STATUS.EXPIRED,
+        REFERRAL_STATUS.REVERSED,
+      ]).optional(),
+      bonusPaid: z.boolean().optional(),
+      convertedAt: z.string().optional(),
+      isActive: z.boolean().optional(),
+      notes: z.string().optional(),
+      expiresAt: z.string().optional(),
+    }).safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+
+    const [existing] = await db.select({
+      status: referralsTable.status,
+      bonusPaid: referralsTable.bonusPaid,
+      convertedAt: referralsTable.convertedAt,
+      expiresAt: referralsTable.expiresAt,
+    })
+      .from(referralsTable)
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!existing) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+
+    if (parsed.data.bonusPaid !== undefined) {
+      next(new AppError(
+        "O pagamento do bônus deve ser registrado pelo endpoint de pagamento.",
+        422,
+        "REFERRAL_PAYMENT_STATE",
+      ));
+      return;
+    }
+    if (parsed.data.convertedAt !== undefined) {
+      next(new AppError(
+        "A conversão da indicação só pode ser registrada após a confirmação financeira.",
+        422,
+        "REFERRAL_CONVERSION_STATE",
+      ));
+      return;
+    }
+    if (
+      parsed.data.status !== undefined &&
+      parsed.data.status !== existing.status &&
+      !(existing.status === REFERRAL_STATUS.PENDING && parsed.data.status === REFERRAL_STATUS.EXPIRED)
+    ) {
+      next(new AppError(
+        "A transição de status solicitada não é permitida. Use o fluxo de conversão, pagamento ou reversão correspondente.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+    if (parsed.data.status === REFERRAL_STATUS.EXPIRED && existing.status !== REFERRAL_STATUS.PENDING) {
+      next(new AppError(
+        "Somente indicações pendentes podem ser expiradas manualmente.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+    if (
+      parsed.data.status === REFERRAL_STATUS.EXPIRED &&
+      parsed.data.isActive === true
+    ) {
+      next(new AppError(
+        "Uma indicação expirada deve permanecer inativa.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+    if (parsed.data.isActive === true && existing.status === REFERRAL_STATUS.EXPIRED) {
+      next(new AppError(
+        "Uma indicação expirada não pode ser reativada manualmente.",
+        422,
+        "REFERRAL_INVALID_TRANSITION",
+      ));
+      return;
+    }
+
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (parsed.data.status !== undefined && parsed.data.status !== existing.status) {
+      updates.status = parsed.data.status;
+    }
+    if (parsed.data.status === REFERRAL_STATUS.EXPIRED) {
+      updates.isActive = false;
+    }
+    if (parsed.data.isActive != null) updates.isActive = parsed.data.isActive;
+    if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes;
+    if (parsed.data.expiresAt !== undefined) {
+      const newExpiresAt = new Date(parsed.data.expiresAt);
+      updates.expiresAt = newExpiresAt;
+      const oldTime = existing.expiresAt ? new Date(existing.expiresAt).getTime() : null;
+      if (oldTime !== newExpiresAt.getTime()) {
+        updates.expiryWarning7SentAt = null;
+        updates.expiryWarning1SentAt = null;
+      }
+    }
+
+    await db.update(referralsTable).set(updates)
+      .where(and(
+        eq(referralsTable.id, req.params.id),
+        eq(referralsTable.tenantId, me.tenantId),
+        ...(existing.status === REFERRAL_STATUS.PENDING && parsed.data.status === REFERRAL_STATUS.EXPIRED
+          ? [eq(referralsTable.status, REFERRAL_STATUS.PENDING)]
+          : []),
+      ));
+    const [referral] = await db.select().from(referralsTable)
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId))).limit(1);
+    if (!referral) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+    res.json(referral);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/referrals/:id/pay-bonus", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const [row] = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientName: clientsTable.name,
+      referrerClientEmail: clientsTable.email,
+      referrerClientWhatsapp: clientsTable.whatsapp,
+      referrerClientPhone: clientsTable.phone,
+      tenantName: tenantsTable.name,
+      tenantLogo: tenantsTable.logoUrl,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .leftJoin(tenantsTable, eq(referralsTable.tenantId, tenantsTable.id))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
+    if (row.status === REFERRAL_STATUS.REVERSED) {
+      next(new AppError("Bônus revertido por cancelamento da reserva", 422, "UNPROCESSABLE"));
+      return;
+    }
+    if (row.status !== REFERRAL_STATUS.COMPLETED) {
+      next(new AppError("Bônus só pode ser pago em indicações convertidas", 422, "UNPROCESSABLE"));
+      return;
+    }
+    if (!row.convertedAt) {
+      next(new AppError(
+        "A indicação convertida não possui data de conversão confirmada.",
+        422,
+        "REFERRAL_CONVERSION_STATE",
+      ));
+      return;
+    }
+    if (row.bonusPaid) {
+      next(new AppError("Bônus já foi pago anteriormente", 422, "UNPROCESSABLE"));
+      return;
+    }
+    const [payBonusSettings] = await db
+      .select({ gracePeriodDays: referralSettingsTable.gracePeriodDays })
+      .from(referralSettingsTable)
+      .where(eq(referralSettingsTable.tenantId, me.tenantId))
+      .limit(1);
+    const payBonusGracePeriod = payBonusSettings?.gracePeriodDays ?? 30;
+    if (row.convertedAt) {
+      const lockUntil = new Date(new Date(row.convertedAt).getTime() + payBonusGracePeriod * 24 * 60 * 60 * 1000);
+      if (new Date() < lockUntil) {
+        const releaseDate = lockUntil.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+        next(new AppError(`Bônus disponível somente após o período de carência de ${payBonusGracePeriod} dias. Liberação em ${releaseDate}`, 422, "BONUS_LOCKED"));
+        return;
+      }
+    }
+
+    const now = new Date();
+    const [paidReferral] = await db.update(referralsTable)
+      .set({ bonusPaid: true, bonusPaidAt: now, updatedAt: now })
+      .where(and(
+        eq(referralsTable.id, req.params.id),
+        eq(referralsTable.tenantId, me.tenantId),
+        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
+        eq(referralsTable.bonusPaid, false),
+      ))
+      .returning({ id: referralsTable.id });
+
+    if (!paidReferral) {
+      next(new ConflictError(
+        "O pagamento não foi confirmado porque a indicação já foi paga ou mudou de estado.",
+        "REFERRAL_PAYMENT_CONFLICT",
+      ));
+      return;
+    }
+
+    const referrerEmail = row.referrerClientEmail ?? row.referrerEmail;
+    const referrerName = row.referrerClientName ?? row.referrerName ?? "Indicador";
+    const agencyName = row.tenantName ?? "Agência";
+    const bonusValue = parseFloat(String(row.bonusAmount ?? "0"));
+    const paidDateStr = now.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+
+    if (referrerEmail) {
+      try {
+        const agencyLogoUrl = row.tenantLogo ?? null;
+        await enqueueReferralBonusPaidEmail(
+          {
+            referrerName,
+            referrerEmail,
+            bonusAmount: bonusValue,
+            paidDate: paidDateStr,
+            agencyName,
+            agencyLogo: agencyLogoUrl,
+          },
+          me.tenantId,
+          row.referrerId,
+          req.params.id,
+        );
+      } catch (emailErr) {
+      }
+    }
+
+    const [updated] = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientName: clientsTable.name,
+      referrerClientEmail: clientsTable.email,
+      referrerClientWhatsapp: clientsTable.whatsapp,
+      referrerClientPhone: clientsTable.phone,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!updated) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+
+    const { referrerClientName, referrerClientEmail, referrerClientWhatsapp, referrerClientPhone, ...rest } = updated;
+    res.json({
+      ...rest,
+      referrerName: referrerClientName ?? rest.referrerName,
+      referrerEmail: referrerClientEmail ?? rest.referrerEmail,
+      referrerPhone: referrerClientPhone ?? rest.referrerPhone,
+      referrerWhatsapp: referrerClientWhatsapp ?? null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/referrals/:id/resend-expiry-warning", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const windowParam = req.query.window;
+    if (windowParam !== "7" && windowParam !== "1") {
+      next(new ValidationError("Parâmetro 'window' inválido — use '7' ou '1'", "VALIDATION_ERROR"));
+      return;
+    }
+    const windowNum = parseInt(windowParam, 10) as 7 | 1;
+
+    const [row] = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientEmail: clientsTable.email,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
+    if (!row.expiresAt) {
+      next(new ValidationError("Esta indicação não tem data de expiração", "UNPROCESSABLE"));
+      return;
+    }
+    if (!row.referrerId) {
+      next(new ValidationError("Indicação sem indicador registrado", "UNPROCESSABLE"));
+      return;
+    }
+
+    if (!row.referrerClientEmail) {
+      next(new ValidationError("O indicador não tem e-mail cadastrado — aviso não pode ser enviado", "UNPROCESSABLE"));
+      return;
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(row.expiresAt);
+    if (expiresAt <= now) {
+      next(new ValidationError("A indicação já expirou", "UNPROCESSABLE"));
+      return;
+    }
+
+    const msLeft = expiresAt.getTime() - now.getTime();
+    const windowMs = windowNum * 24 * 60 * 60 * 1000;
+    if (msLeft < windowMs) {
+      next(new AppError(`A janela D-${windowNum} já passou — restam menos de ${windowNum} dia(s) para a expiração`, 422, "WINDOW_PASSED"));
+      return;
+    }
+
+    const clearUpdate = windowNum === 7
+      ? { expiryWarning7SentAt: null, updatedAt: now }
+      : { expiryWarning1SentAt: null, updatedAt: now };
+
+    await db.update(referralsTable)
+      .set(clearUpdate)
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+
+    await dispatchReferralExpiringSoonEmail(row.referrerId, me.tenantId, row.code, expiresAt, windowNum);
+
+    const sentNow = new Date();
+    const sentUpdate = windowNum === 7
+      ? { expiryWarning7SentAt: sentNow, updatedAt: sentNow }
+      : { expiryWarning1SentAt: sentNow, updatedAt: sentNow };
+
+    await db.update(referralsTable)
+      .set(sentUpdate)
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+
+    const [updated] = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientName: clientsTable.name,
+      referrerClientEmail: clientsTable.email,
+      referrerClientWhatsapp: clientsTable.whatsapp,
+      referrerClientPhone: clientsTable.phone,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!updated) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+    const { referrerClientName, referrerClientEmail, referrerClientWhatsapp, referrerClientPhone, ...rest } = updated;
+    res.json({
+      ...rest,
+      referrerName: referrerClientName ?? rest.referrerName,
+      referrerEmail: referrerClientEmail ?? rest.referrerEmail,
+      referrerPhone: referrerClientPhone ?? rest.referrerPhone,
+      referrerWhatsapp: referrerClientWhatsapp ?? null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/referrals/:id/resend-bonus-release", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.MANAGE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const [row] = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientEmail: clientsTable.email,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!row) { next(new AppError("Indicação não encontrada", 422, "NOT_FOUND")); return; }
+    if (row.status !== REFERRAL_STATUS.COMPLETED) {
+      next(new AppError("Reenvio disponível apenas para indicações com status 'concluído'", 422, "UNPROCESSABLE"));
+      return;
+    }
+    if (!row.referrerId) {
+      next(new AppError("Indicação sem indicador registrado", 422, "UNPROCESSABLE"));
+      return;
+    }
+    if (!row.referrerClientEmail) {
+      next(new AppError("O indicador não tem e-mail cadastrado — notificação não pode ser enviada", 422, "UNPROCESSABLE"));
+      return;
+    }
+
+    const [payBonusRefSettings] = await db
+      .select({ gracePeriodDays: referralSettingsTable.gracePeriodDays })
+      .from(referralSettingsTable)
+      .where(eq(referralSettingsTable.tenantId, me.tenantId))
+      .limit(1);
+    const payBonusGracePeriodDays = payBonusRefSettings?.gracePeriodDays ?? 30;
+    const bonusReleasesAt = row.convertedAt
+      ? new Date(new Date(row.convertedAt).getTime() + payBonusGracePeriodDays * 24 * 60 * 60 * 1000)
+      : null;
+    const bonusBlocked = bonusReleasesAt !== null && new Date() < bonusReleasesAt;
+    if (bonusBlocked) {
+      next(new AppError(
+        `O bônus ainda está em período de liberação — disponível em ${bonusReleasesAt!.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`,
+        422,
+        "BONUS_STILL_BLOCKED",
+      ));
+      return;
+    }
+
+    const now = new Date();
+    await db.update(referralsTable)
+      .set({ bonusReleaseNotifiedAt: null, updatedAt: now })
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+
+    const releaseDate = bonusReleasesAt?.toISOString() ?? now.toISOString();
+    await dispatchReferralBonusReleasedEmail(
+      row.referrerId,
+      me.tenantId,
+      parseFloat(String(row.bonusAmount)) || 0,
+      releaseDate,
+      row.id,
+    );
+
+    const sentNow = new Date();
+    await db.update(referralsTable)
+      .set({ bonusReleaseNotifiedAt: sentNow, updatedAt: sentNow })
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+
+    const [updated] = await db.select({
+      ...getTableColumns(referralsTable),
+      referrerClientName: clientsTable.name,
+      referrerClientEmail: clientsTable.email,
+      referrerClientWhatsapp: clientsTable.whatsapp,
+      referrerClientPhone: clientsTable.phone,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!updated) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+    const { referrerClientName, referrerClientEmail: rEmail, referrerClientWhatsapp, referrerClientPhone, ...rest } = updated;
+    res.json({
+      ...rest,
+      referrerName: referrerClientName ?? rest.referrerName,
+      referrerEmail: rEmail ?? rest.referrerEmail,
+      referrerPhone: referrerClientPhone ?? rest.referrerPhone,
+      referrerWhatsapp: referrerClientWhatsapp ?? null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const [row] = await db.select({
+      code: referralsTable.code,
+      referrerClientEmail: clientsTable.email,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
+
+    const referrerEmail = row.referrerClientEmail;
+    if (!referrerEmail) {
+      res.json({ d7: null, d1: null });
+      return;
+    }
+
+    const logs = await db.select({
+      id: emailLogsTable.id,
+      subject: emailLogsTable.subject,
+      status: emailLogsTable.status,
+      errorMessage: emailLogsTable.errorMessage,
+      createdAt: emailLogsTable.createdAt,
+    }).from(emailLogsTable)
+      .where(and(
+        eq(emailLogsTable.tenantId, me.tenantId),
+        eq(emailLogsTable.recipient, referrerEmail),
+        ilike(emailLogsTable.subject, `%${row.code}%`),
+      ))
+      .orderBy(desc(emailLogsTable.createdAt))
+      .limit(50);
+
+    const d7Logs = logs.filter((l) => l.subject.includes("7 dias"));
+    const d1Logs = logs.filter((l) => l.subject.includes("1 dia"));
+
+    const toEntry = (log: typeof logs[0] | undefined) =>
+      log ? { status: log.status, errorMessage: log.errorMessage ?? null, sentAt: log.createdAt } : null;
+
+    res.json({ d7: toEntry(d7Logs[0]), d1: toEntry(d1Logs[0]) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const [row] = await db.select({
+      code: referralsTable.code,
+      referrerClientEmail: clientsTable.email,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
+
+    const referrerEmail = row.referrerClientEmail;
+    if (!referrerEmail) {
+      res.json({ bonusRelease: null });
+      return;
+    }
+
+    // The bonus-release email is enqueued with the referral id stamped on the
+    // email log (see enqueueReferralBonusReleasedEmail) and a distinctive
+    // subject ("…disponível para resgate…"). Filter on both so we never pick up
+    // an expiry-warning email (which also stamps referralId) for this referral.
+    const logs = await db.select({
+      id: emailLogsTable.id,
+      subject: emailLogsTable.subject,
+      status: emailLogsTable.status,
+      errorMessage: emailLogsTable.errorMessage,
+      createdAt: emailLogsTable.createdAt,
+    }).from(emailLogsTable)
+      .where(and(
+        eq(emailLogsTable.tenantId, me.tenantId),
+        eq(emailLogsTable.referralId, req.params.id),
+        ilike(emailLogsTable.subject, `%disponível para resgate%`),
+      ))
+      .orderBy(desc(emailLogsTable.createdAt))
+      .limit(50);
+
+    const toEntry = (log: typeof logs[0] | undefined) =>
+      log ? { status: log.status, errorMessage: log.errorMessage ?? null, sentAt: log.createdAt } : null;
+
+    res.json({ bonusRelease: toEntry(logs[0]) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/referrals/:id/share", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const [row] = await db
+      .select({
+        code: referralsTable.code,
+        tenantSlug: tenantsTable.slug,
+      })
+      .from(referralsTable)
+      .leftJoin(tenantsTable, eq(referralsTable.tenantId, tenantsTable.id))
+      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
+      .limit(1);
+
+    if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
+
+    const frontendBase = (process.env["FRONTEND_URL"] ?? `https://${process.env["REPLIT_DEV_DOMAIN"] ?? "localhost"}`).replace(/\/$/, "");
+    const slug = row.tenantSlug ?? me.tenantId;
+    const link = `${frontendBase}/loja/${slug}/indicacao?code=${row.code}`;
+
+    const QRCode = await import("qrcode");
+    const qrCodeDataUrl = await QRCode.default.toDataURL(link, { margin: 2, width: 256 });
+
+    res.json({ link, qrCodeDataUrl });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/referrals/analytics", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const period = parseInt((req.query.period as string) || "90", 10);
+    if (![30, 90, 180].includes(period)) {
+      next(new ValidationError("period must be 30, 90, or 180", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const now = new Date();
+    const since = new Date(now.getTime() - period * 24 * 60 * 60 * 1000);
+    const prevSince = new Date(since.getTime() - period * 24 * 60 * 60 * 1000);
+    // Use Brazil calendar month so 12m and current-month boundaries are correct at 21h-midnight BRT
+    const [_refY, _refM1] = localToday().split("-").map(Number);
+    const _brMidRef = (y: number, m1: number, d: number) => new Date(Date.UTC(y, m1 - 1, d, 3, 0, 0, 0));
+    const twelveMonthsAgo = _brMidRef(_refY, _refM1 - 11, 1);
+
+    // Current and previous calendar month boundaries (Brazil midnight)
+    const currentMonthStart = _brMidRef(_refY, _refM1, 1);
+    const prevMonthStart = _brMidRef(_refY, _refM1 - 1, 1);
+
+    const [
+      seriesRows,
+      funnelRow_,
+      prevRow_,
+      monthlyRows,
+      channelRows,
+      currentMonthRow_,
+      prevMonthRow_,
+      trackingFunnelRow_,
+      commercialRows,
+    ] = await Promise.all([
+      // Weekly series for selected period (existing behaviour)
+      db.select({
+        week: sql<string>`date_trunc('week', ${referralsTable.createdAt})::date::text`,
+        created: count(),
+        converted: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
+      }).from(referralsTable)
+        .where(and(eq(referralsTable.tenantId, me.tenantId), sql`${referralsTable.createdAt} >= ${since}`))
+        .groupBy(sql`date_trunc('week', ${referralsTable.createdAt})`)
+        .orderBy(sql`date_trunc('week', ${referralsTable.createdAt})`),
+
+      // Funnel for period
+      db.select({
+        created: count(),
+        visited: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.visitsCount} > 0)`,
+        converted: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
+        bonusPaid: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusPaid} = true)`,
+      }).from(referralsTable)
+        .where(and(eq(referralsTable.tenantId, me.tenantId), sql`${referralsTable.createdAt} >= ${since}`)),
+
+      // Previous period comparison
+      db.select({
+        created: count(),
+        converted: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
+      }).from(referralsTable)
+        .where(and(
+          eq(referralsTable.tenantId, me.tenantId),
+          sql`${referralsTable.createdAt} >= ${prevSince}`,
+          sql`${referralsTable.createdAt} < ${since}`,
+        )),
+
+      // Monthly time series — last 12 months (Brazil timezone so BRT-midnight records land in the correct month)
+      db.select({
+        month: sql<string>`to_char(${referralsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
+        created: count(),
+        converted: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
+        bonusPaid: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusPaid} = true)`,
+      }).from(referralsTable)
+        .where(and(eq(referralsTable.tenantId, me.tenantId), sql`${referralsTable.createdAt} >= ${twelveMonthsAgo}`))
+        .groupBy(sql`to_char(${referralsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
+        .orderBy(sql`to_char(${referralsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`),
+
+      // Channel breakdown from referral_tracking.utmSource for the period
+      db.select({
+        source: sql<string>`COALESCE(NULLIF(${referralTrackingTable.utmSource}, ''), 'direto')`,
+        visitors: sql<number>`COUNT(DISTINCT ${referralTrackingTable.cookieId})`,
+        converted: sql<number>`COUNT(DISTINCT CASE WHEN ${referralTrackingTable.converted} = true THEN ${referralTrackingTable.cookieId} END)`,
+      }).from(referralTrackingTable)
+        .where(and(
+          eq(referralTrackingTable.tenantId, me.tenantId),
+          sql`${referralTrackingTable.createdAt} >= ${since}`,
+        ))
+        .groupBy(sql`COALESCE(NULLIF(${referralTrackingTable.utmSource}, ''), 'direto')`)
+        .orderBy(sql`COUNT(DISTINCT ${referralTrackingTable.cookieId}) DESC`)
+        .limit(8),
+
+      // Current calendar month
+      db.select({
+        referrals: count(),
+        conversions: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
+        bonusPaid: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusPaid} = true)`,
+        bonusPaidAmount: sql<number>`COALESCE(SUM(${referralsTable.bonusAmount}) FILTER (WHERE ${referralsTable.bonusPaid} = true), 0)`,
+      }).from(referralsTable)
+        .where(and(
+          eq(referralsTable.tenantId, me.tenantId),
+          sql`${referralsTable.createdAt} >= ${currentMonthStart}`,
+        )),
+
+      // Previous calendar month
+      db.select({
+        referrals: count(),
+        conversions: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
+        bonusPaid: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusPaid} = true)`,
+        bonusPaidAmount: sql<number>`COALESCE(SUM(${referralsTable.bonusAmount}) FILTER (WHERE ${referralsTable.bonusPaid} = true), 0)`,
+      }).from(referralsTable)
+        .where(and(
+          eq(referralsTable.tenantId, me.tenantId),
+          sql`${referralsTable.createdAt} >= ${prevMonthStart}`,
+          sql`${referralsTable.createdAt} < ${currentMonthStart}`,
+        )),
+
+      // Tracking-based funnel: unique visitors, checkout starts, and conversions from referral_tracking for the period
+      db.select({
+        uniqueVisitors: sql<number>`COUNT(DISTINCT ${referralTrackingTable.cookieId})`,
+        checkoutStarts: sql<number>`COUNT(DISTINCT CASE WHEN ${referralTrackingTable.pagesVisited} IS NOT NULL AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(${referralTrackingTable.pagesVisited}::jsonb) AS elem
+          WHERE elem LIKE '%/checkout%'
+        ) THEN ${referralTrackingTable.cookieId} END)`,
+        converted: sql<number>`COUNT(DISTINCT CASE WHEN ${referralTrackingTable.converted} = true THEN ${referralTrackingTable.cookieId} END)`,
+      }).from(referralTrackingTable)
+        .where(and(
+          eq(referralTrackingTable.tenantId, me.tenantId),
+          sql`${referralTrackingTable.createdAt} >= ${since}`,
+        )),
+
+      // Commercial result uses the referral-to-reservation linkage instead of
+      // every reservation with a code. The helper additionally excludes
+      // cancelled and reversed conversions before deriving CAC and ROI.
+      db.select({
+        tenantId: referralsTable.tenantId,
+        referrerId: referralsTable.referrerId,
+        referrerName: clientsTable.name,
+        status: referralsTable.status,
+        convertedAt: referralsTable.convertedAt,
+        bonusAmount: referralsTable.bonusAmount,
+        bonusPaid: referralsTable.bonusPaid,
+        bonusPaidAt: referralsTable.bonusPaidAt,
+        bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+        discountAmount: referralsTable.discountAmount,
+        reservationStatus: reservationsTable.status,
+        reservationPaidValue: reservationsTable.paidValue,
+        commissionAmount: referralCommissionsTable.amount,
+        commissionStatus: referralCommissionsTable.status,
+      })
+        .from(referralsTable)
+        .leftJoin(
+          reservationsTable,
+          and(
+            eq(reservationsTable.id, referralsTable.reservationId),
+            eq(reservationsTable.tenantId, me.tenantId),
+          ),
+        )
+        .leftJoin(
+          clientsTable,
+          and(
+            eq(clientsTable.id, referralsTable.referrerId),
+            eq(clientsTable.tenantId, me.tenantId),
+          ),
+        )
+        .leftJoin(
+          referralCommissionsTable,
+          and(
+            eq(referralCommissionsTable.referralId, referralsTable.id),
+            eq(referralCommissionsTable.tenantId, me.tenantId),
+          ),
+        )
+        .where(and(
+          eq(referralsTable.tenantId, me.tenantId),
+          sql`${referralsTable.convertedAt} >= ${since}`,
+        )),
+    ]);
+
+    const [funnelRow] = funnelRow_;
+    const [prevRow] = prevRow_;
+    const [currentMonthRow] = currentMonthRow_;
+    const [prevMonthRow] = prevMonthRow_;
+    const [trackingFunnelRow] = trackingFunnelRow_;
+
+    const created = Number(funnelRow?.created ?? 0);
+    const converted = Number(funnelRow?.converted ?? 0);
+    const conversionRate = created > 0 ? Math.round((converted / created) * 100) : 0;
+    const prevCreated = Number(prevRow?.created ?? 0);
+    const prevConverted = Number(prevRow?.converted ?? 0);
+    const prevConversionRate = prevCreated > 0 ? Math.round((prevConverted / prevCreated) * 100) : 0;
+    const commercialAnalytics = calculateReferralCommercialAnalytics(
+      commercialRows,
+      me.tenantId,
+      since,
+      new Date(),
+    );
+
+    res.json({
+      series: seriesRows.map(r => ({ week: r.week, created: Number(r.created), converted: Number(r.converted) })),
+      monthly: monthlyRows.map(r => ({
+        month: r.month.slice(0, 7),
+        created: Number(r.created),
+        converted: Number(r.converted),
+        bonusPaid: Number(r.bonusPaid),
+      })),
+      funnel: {
+        created,
+        visited: Number(funnelRow?.visited ?? 0),
+        converted,
+        bonusPaid: Number(funnelRow?.bonusPaid ?? 0),
+      },
+      trackingFunnel: {
+        uniqueVisitors: Number(trackingFunnelRow?.uniqueVisitors ?? 0),
+        checkoutStarts: Number(trackingFunnelRow?.checkoutStarts ?? 0),
+        converted: Number(trackingFunnelRow?.converted ?? 0),
+      },
+      channels: channelRows.map(r => ({
+        source: r.source,
+        visitors: Number(r.visitors),
+        converted: Number(r.converted),
+      })),
+      roi: {
+        totalBonusPaid: commercialAnalytics.summary.rewardsPaid,
+        totalReferredRevenue: commercialAnalytics.summary.attributedRevenue,
+      },
+      summary: commercialAnalytics.summary,
+      ranking: commercialAnalytics.ranking,
+      rankingMeta: rankingMetadata("referralCommercial", "admin", {
+        key: `last-${period}-days`,
+        semantics: `rolling ${period}-day period ending at response generation time; calendar-month endpoints use America/Sao_Paulo boundaries`,
+      }),
+      currentMonth: {
+        referrals: Number(currentMonthRow?.referrals ?? 0),
+        conversions: Number(currentMonthRow?.conversions ?? 0),
+        bonusPaid: Number(currentMonthRow?.bonusPaid ?? 0),
+        bonusPaidAmount: Number(currentMonthRow?.bonusPaidAmount ?? 0),
+      },
+      prevMonth: {
+        referrals: Number(prevMonthRow?.referrals ?? 0),
+        conversions: Number(prevMonthRow?.conversions ?? 0),
+        bonusPaid: Number(prevMonthRow?.bonusPaid ?? 0),
+        bonusPaidAmount: Number(prevMonthRow?.bonusPaidAmount ?? 0),
+      },
+      conversionRate,
+      prevConversionRate,
+      discountGiven: commercialAnalytics.summary.discountGiven,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/referrals/analytics/export", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    // Full referral analytics export is an administrator-only audit surface;
+    // COMMISSIONS.VIEW governs ordinary report access below.
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+
+    const now = new Date();
+    let since: Date;
+
+    // Support either explicit startDate/endDate OR the period shortcut
+    const startDateParam = req.query.startDate as string | undefined;
+    const endDateParam = req.query.endDate as string | undefined;
+    if (startDateParam) {
+      const parsed = new Date(startDateParam);
+      if (isNaN(parsed.getTime())) {
+        next(new ValidationError("startDate must be a valid ISO date", "VALIDATION_ERROR"));
+        return;
+      }
+      since = parsed;
+    } else {
+      const period = parseInt((req.query.period as string) || "90", 10);
+      if (![30, 90, 180].includes(period)) {
+        next(new ValidationError("period must be 30, 90, or 180; or provide startDate/endDate", "VALIDATION_ERROR"));
+        return;
+      }
+      since = new Date(now.getTime() - period * 24 * 60 * 60 * 1000);
+    }
+    let until: Date = now;
+    if (endDateParam) {
+      const parsedEnd = new Date(endDateParam);
+      if (isNaN(parsedEnd.getTime())) {
+        next(new ValidationError("endDate must be a valid ISO date", "VALIDATION_ERROR"));
+        return;
+      }
+      if (parsedEnd < since) {
+        next(new ValidationError("endDate must be on or after startDate", "VALIDATION_ERROR"));
+        return;
+      }
+      until = parsedEnd;
+    }
+    const [_r2Y, _r2M1] = localToday().split("-").map(Number);
+    const _brMid2 = (y: number, m1: number, d: number) => new Date(Date.UTC(y, m1 - 1, d, 3, 0, 0, 0));
     const twelveMonthsAgo = _brMid2(_r2Y, _r2M1 - 11, 1);
 
     const [monthlyRows, channelRows, commercialRows] = await Promise.all([
