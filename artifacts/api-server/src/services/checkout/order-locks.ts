@@ -41,25 +41,36 @@ export async function lockProductsForCheckout(
     fetchedProducts: Map<string, typeof storeProductsTable.$inferSelect>;
     quantityByProductId: Map<string, number>;
   },
-): Promise<void> {
+): Promise<Set<string>> {
   const { fetchedProducts, quantityByProductId } = args;
+  const claimedProductIds = new Set<string>();
   const trackedProductIds = Array.from(fetchedProducts.values())
     .filter((p) => p.trackInventory && !p.allowBackorder)
     .map((p) => p.id)
     .sort();
   for (const productId of trackedProductIds) {
     const product = fetchedProducts.get(productId)!;
-    const lockResult = await tx.execute(
-      sql`SELECT id, stock_quantity FROM store_products WHERE id = ${product.id} FOR UPDATE`,
-    );
-    const row = (lockResult as unknown as { rows: Array<{ id: string; stock_quantity: number | null }> }).rows[0];
-    const currentStock = Number(row?.stock_quantity ?? 0);
     const totalRequested = quantityByProductId.get(product.id) ?? 0;
-    if (currentStock < totalRequested) {
+    const claimResult = await tx.execute(
+      sql`UPDATE store_products
+          SET stock_quantity = stock_quantity - ${totalRequested},
+              updated_at = NOW()
+          WHERE id = ${product.id}
+            AND COALESCE(stock_quantity, 0) >= ${totalRequested}
+          RETURNING id, stock_quantity`,
+    );
+    const row = (claimResult as unknown as { rows: Array<{ id: string; stock_quantity: number | null }> }).rows[0];
+    if (!row) {
+      const currentResult = await tx.execute(
+        sql`SELECT stock_quantity FROM store_products WHERE id = ${product.id}`,
+      );
+      const current = (currentResult as unknown as { rows: Array<{ stock_quantity: number | null }> }).rows[0];
       const stockErr = new Error("insufficient_stock");
       (stockErr as Error & Record<string, unknown>).productName = product.name;
-      (stockErr as Error & Record<string, unknown>).available = currentStock;
+      (stockErr as Error & Record<string, unknown>).available = Number(current?.stock_quantity ?? 0);
       throw stockErr;
     }
+    claimedProductIds.add(product.id);
   }
+  return claimedProductIds;
 }

@@ -42,6 +42,8 @@ import {
   createClientBenefitEntry,
   getClientBenefitBalances,
   recordOrderPaymentSettlement,
+  reinstateOrderPaymentSettlementEvent,
+  reverseOrderPaymentSettlementEvent,
   reverseOrderSettlement,
   adjustOrderSettlement,
   expireClientBenefits,
@@ -165,6 +167,83 @@ describe("financial ledger settlement invariants", () => {
     expect(state.entries.map((entry) => entry.amount)).toEqual(["5.00", "45.00"]);
     expect(new Set(state.entries.map((entry) => entry.idempotencyKey)).size).toBe(2);
     expect(state.snapshots[0].settlementStatus).toBe("available");
+  });
+
+  it("never distributes more cents than the payment received", async () => {
+    const state = {
+      snapshots: [
+        snapshot({ id: "snapshot-1", grossAmount: "50.00" }),
+        snapshot({ id: "snapshot-2", grossAmount: "50.00" }),
+      ],
+      entries: [] as Row[],
+    };
+    const tx = makeExecutor(state);
+
+    await recordOrderPaymentSettlement(tx as never, {
+      tenantId: "tenant-a",
+      orderId: "order-1",
+      gateway: "stripe",
+      transactionId: "one-cent",
+      occurredAt: new Date("2026-08-02T00:00:00Z"),
+      receivedAmount: 0.01,
+    });
+
+    expect(state.entries.reduce((sum, entry) => sum + Number(entry.amount), 0)).toBe(0.01);
+  });
+
+  it("reinstates a payment settlement after paid-to-refunded-to-paid", async () => {
+    const state = {
+      snapshots: [],
+      entries: [
+        paymentEntry({
+          id: "original",
+          amount: "100.00",
+          metadata: { gateway: "stripe", transactionId: "tx-1" },
+        }),
+        paymentEntry({
+          id: "refund",
+          amount: "100.00",
+          direction: "debit",
+          eventType: "order_refund_adjustment",
+          reversalOfEntryId: "original",
+          metadata: { originalEntryId: "original" },
+        }),
+      ] as Row[],
+    };
+    const tx = makeExecutor(state);
+
+    const reinstated = await reinstateOrderPaymentSettlementEvent(tx as never, {
+      tenantId: "tenant-a",
+      orderId: "order-1",
+      gateway: "stripe",
+      transactionId: "tx-1",
+      amount: 100,
+      eventKey: "payment-reinstated:tx-1",
+      occurredAt: new Date("2026-08-04T00:00:00Z"),
+    });
+
+    expect(reinstated).toBe(10000);
+    expect(state.entries.filter((entry) => entry.eventType === "order_payment_reinstatement"))
+      .toHaveLength(1);
+    expect(state.entries.at(-1)?.amount).toBe("100.00");
+
+    // A later refund can compensate the original claim again; the
+    // reinstatement is not mistaken for a second reversal.
+    await reverseOrderPaymentSettlementEvent(tx as never, {
+      tenantId: "tenant-a",
+      orderId: "order-1",
+      gateway: "stripe",
+      transactionId: "tx-1",
+      amount: 100,
+      eventKey: "payment-refunded-again",
+      occurredAt: new Date("2026-08-05T00:00:00Z"),
+      reason: "second refund",
+    });
+    expect(
+      state.entries
+        .filter((entry) => entry.eventType === "order_refund_adjustment")
+        .map((entry) => entry.amount),
+    ).toEqual(["100.00", "100.00"]);
   });
 
   it("books only the cumulative delta for partial refunds", async () => {

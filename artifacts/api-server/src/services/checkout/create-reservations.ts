@@ -23,11 +23,19 @@ import {
 import { loadReservationContext } from "./reservation-context";
 import { upsertCheckoutClient } from "./checkout-user";
 import { roundMoney } from "../../lib/pricing";
-import { syncReservationPaymentStatus, paymentExistsForGatewayTx, type DbExecutor } from "../../lib/reservation-payments";
+import { syncReservationPaymentStatus, type DbExecutor } from "../../lib/reservation-payments";
 import type { Tx } from "./tx";
 import { syncClientDeal, type PipelineExecutor } from "../pipeline-deal-sync";
 import { moveDealToStage } from "../pipeline-automation";
 import { getStorefrontInitialPipelineStage } from "./storefront-pipeline";
+import { recalculateClientFinancials } from "../client-financials";
+import { findTripSeatConflicts } from "../reservation-capacity";
+
+export const CHECKOUT_RESERVATION_HOLD_MINUTES = 30;
+
+function checkoutReservationExpiry(now = new Date()): Date {
+  return new Date(now.getTime() + CHECKOUT_RESERVATION_HOLD_MINUTES * 60_000);
+}
 
 export interface CreateReservationsResult {
   reservationIds: string[];
@@ -36,6 +44,7 @@ export interface CreateReservationsResult {
    *  to fire broadcastSeatUpdate after the transaction commits. Empty when the
    *  order has no trip-linked products or when reservations already existed. */
   tripIds: string[];
+  reservationExpiresAt: Date | null;
 }
 
 /**
@@ -92,6 +101,11 @@ export async function createReservationsForOrder(
       customerCpf: storeOrdersTable.customerCpf,
       customerBirthdate: storeOrdersTable.customerBirthdate,
       customerNotes: storeOrdersTable.customerNotes,
+      subtotal: storeOrdersTable.subtotal,
+      discountAmount: storeOrdersTable.discountAmount,
+      totalAmount: storeOrdersTable.totalAmount,
+      couponCode: storeOrdersTable.couponCode,
+      pendingReferral: storeOrdersTable.pendingReferral,
       // Logistics chosen by the customer during vitrine checkout
       boardingLocationId: storeOrdersTable.boardingLocationId,
       seats: storeOrdersTable.seats,
@@ -107,7 +121,7 @@ export async function createReservationsForOrder(
   // Allow clientId to be mutated below (CRM client upsert on payment confirmation).
   const order = orderRaw ? { ...orderRaw } : undefined;
 
-  if (!order) return { reservationIds: [], reservationClientId: null, tripIds: [] };
+  if (!order) return { reservationIds: [], reservationClientId: null, tripIds: [], reservationExpiresAt: null };
 
   const [store] = await exec
     .select({
@@ -119,18 +133,19 @@ export async function createReservationsForOrder(
     .where(and(eq(storesTable.id, order.storeId), eq(storesTable.tenantId, order.tenantId)))
     .limit(1);
 
-  if (!store) return { reservationIds: [], reservationClientId: null, tripIds: [] };
+  if (!store) return { reservationIds: [], reservationClientId: null, tripIds: [], reservationExpiresAt: null };
 
   const items = await exec
     .select({
       productId: storeOrderItemsTable.productId,
       quantity: storeOrderItemsTable.quantity,
       price: storeOrderItemsTable.price,
+      total: storeOrderItemsTable.total,
     })
     .from(storeOrderItemsTable)
     .where(eq(storeOrderItemsTable.orderId, orderId));
 
-  if (items.length === 0) return { reservationIds: [], reservationClientId: null, tripIds: [] };
+  if (items.length === 0) return { reservationIds: [], reservationClientId: null, tripIds: [], reservationExpiresAt: null };
 
   const productIds = [...new Set(items.map((i) => i.productId))];
   const products = await exec
@@ -150,20 +165,40 @@ export async function createReservationsForOrder(
     const product = productMap.get(item.productId);
     if (!product?.tripId) continue;
     const qty = item.quantity;
-    const price = Number(item.price);
     const existing = tripLinkedProducts.get(product.tripId);
+    const itemValue = item.total != null
+      ? Number(item.total)
+      : Number(item.price) * qty;
     if (existing) {
       existing.totalQty += qty;
-      existing.totalValue += price * qty;
+      existing.totalValue += itemValue;
     } else {
-      tripLinkedProducts.set(product.tripId, { product, totalQty: qty, totalValue: price * qty });
+      tripLinkedProducts.set(product.tripId, { product, totalQty: qty, totalValue: itemValue });
     }
   }
 
-  if (tripLinkedProducts.size === 0) return { reservationIds: [], reservationClientId: null, tripIds: [] };
+  if (tripLinkedProducts.size === 0) return { reservationIds: [], reservationClientId: null, tripIds: [], reservationExpiresAt: null };
+
+  const submittedSeats = Array.isArray(order.seats)
+    ? order.seats.map((seat) => seat.trim()).filter(Boolean)
+    : [];
+  if (submittedSeats.length > 0 && tripLinkedProducts.size !== 1) {
+    throw new AppError(
+      "A seleção de assentos deve pertencer a uma única viagem",
+      400,
+      "INVALID_SEAT_SELECTION",
+    );
+  }
+  if (new Set(submittedSeats).size !== submittedSeats.length) {
+    throw new AppError(
+      "A seleção contém assentos duplicados",
+      400,
+      "DUPLICATE_SEATS",
+    );
+  }
 
   const existingReservations = await exec
-    .select({ id: reservationsTable.id })
+    .select({ id: reservationsTable.id, expiresAt: reservationsTable.expiresAt })
     .from(reservationsTable)
     .where(and(
       eq(reservationsTable.tenantId, order.tenantId),
@@ -177,6 +212,10 @@ export async function createReservationsForOrder(
       reservationIds: existingReservations.map((r) => r.id),
       reservationClientId: order.clientId ?? null,
       tripIds: [],
+      reservationExpiresAt: existingReservations
+        .map((reservation) => reservation.expiresAt)
+        .filter((value): value is Date => value instanceof Date)
+        .sort((a, b) => a.getTime() - b.getTime())[0] ?? null,
     };
   }
 
@@ -223,25 +262,58 @@ export async function createReservationsForOrder(
   // Lock trips in a deterministic order to prevent deadlocks under concurrency.
   const sortedTripIds = [...tripLinkedProducts.keys()].sort();
 
-  // Compute total order value across all trip-linked products so we can
-  // proportionally allocate a deposit when an order contains multiple trips.
-  const orderTotalValue = sortedTripIds.reduce(
+  // Storefront discounts live on the order. Allocate them proportionally to
+  // trip-linked lines so reservation, order and Pipeline values describe the
+  // same net booking. Non-trip items keep their own share of the discount.
+  const orderSubtotal = roundMoney(Number(order.subtotal ?? 0));
+  const orderDiscount = roundMoney(Math.max(0, Number(order.discountAmount ?? 0)));
+  const tripGrossTotal = sortedTripIds.reduce(
     (sum, tid) => sum + tripLinkedProducts.get(tid)!.totalValue,
     0,
   );
+  const tripDiscountTotal = orderSubtotal > 0
+    ? roundMoney(Math.min(orderDiscount, orderSubtotal) * Math.min(tripGrossTotal / orderSubtotal, 1))
+    : 0;
+  const reservationFinancials = new Map<string, { totalValue: number; discountTotal: number }>();
+  let discountAllocated = 0;
+  for (let idx = 0; idx < sortedTripIds.length; idx++) {
+    const tripId = sortedTripIds[idx]!;
+    const grossValue = tripLinkedProducts.get(tripId)!.totalValue;
+    const isLastTrip = idx === sortedTripIds.length - 1;
+    const discountTotal = isLastTrip
+      ? roundMoney(tripDiscountTotal - discountAllocated)
+      : roundMoney(tripGrossTotal > 0 ? tripDiscountTotal * (grossValue / tripGrossTotal) : 0);
+    discountAllocated = roundMoney(discountAllocated + discountTotal);
+    reservationFinancials.set(tripId, {
+      totalValue: roundMoney(Math.max(0, grossValue - discountTotal)),
+      discountTotal,
+    });
+  }
+  const orderTotalValue = [...reservationFinancials.values()].reduce((sum, value) => sum + value.totalValue, 0);
   const depositAmount = Number(order.depositAmount ?? 0);
   let depositAllocated = 0;
+  const reservationExpiresAt = checkoutReservationExpiry();
 
   for (let idx = 0; idx < sortedTripIds.length; idx++) {
     const tripId = sortedTripIds[idx]!;
     const isLastTrip = idx === sortedTripIds.length - 1;
-    const { product, totalQty, totalValue } = tripLinkedProducts.get(tripId)!;
+    const { product, totalQty } = tripLinkedProducts.get(tripId)!;
+    const financial = reservationFinancials.get(tripId)!;
+    const totalValue = financial.totalValue;
+    const discountTotal = financial.discountTotal;
 
     // Row-level lock prevents concurrent paid orders from overselling the same trip.
     const lockResult = await exec.execute(
-      sql`SELECT id, available_seats, total_capacity, show_seat_map, type FROM trips WHERE id = ${tripId} AND tenant_id = ${order.tenantId} FOR UPDATE`,
+      sql`SELECT id, available_seats, total_capacity, show_seat_map, seat_map, type FROM trips WHERE id = ${tripId} AND tenant_id = ${order.tenantId} FOR UPDATE`,
     );
-    const tripRow = (lockResult as unknown as { rows: Array<{ id: string; available_seats: number; total_capacity: number | null; show_seat_map: boolean; type: string }> }).rows[0];
+    const tripRow = (lockResult as unknown as { rows: Array<{
+      id: string;
+      available_seats: number;
+      total_capacity: number | null;
+      show_seat_map: boolean;
+      seat_map: Record<string, { status?: string }> | null;
+      type: string;
+    }> }).rows[0];
 
     if (!tripRow) {
       throw new AppError(
@@ -273,12 +345,46 @@ export async function createReservationsForOrder(
     //
     // Priority 3 — empty (seat map shown but customer sent no seats, or qty
     //   mismatch). The agency can assign seats manually afterwards.
-    const customerSeats: string[] = Array.isArray(order.seats) ? order.seats : [];
+    const customerSeats = submittedSeats;
     let reservationSeats: string[] = [];
 
     if (customerSeats.length > 0 && tripRow.show_seat_map !== false) {
-      // The customer selected seats in the vitrine — use them directly.
-      reservationSeats = customerSeats.slice(0, totalQty);
+      if (customerSeats.length !== totalQty) {
+        throw new AppError(
+          `Selecione exatamente ${totalQty} assento(s) para "${product.name}"`,
+          400,
+          "SEAT_QUANTITY_MISMATCH",
+        );
+      }
+      const seatMap = tripRow.seat_map ?? {};
+      const invalidSeats = customerSeats.filter((seat) => {
+        const definition = seatMap[seat];
+        return !definition || ["blocked", "unavailable", "disabled"].includes(definition.status ?? "");
+      });
+      if (invalidSeats.length > 0) {
+        throw new AppError(
+          "Um ou mais assentos não pertencem ao mapa disponível desta viagem",
+          400,
+          "INVALID_SEATS",
+          { invalidSeats },
+        );
+      }
+      const conflictingSeats = await findTripSeatConflicts(exec, order.tenantId, tripId, customerSeats);
+      if (conflictingSeats.length > 0) {
+        throw new AppError(
+          "Um ou mais assentos acabaram de ser ocupados",
+          409,
+          "SEAT_CONFLICT",
+          { conflictingSeats },
+        );
+      }
+      reservationSeats = customerSeats;
+    } else if (customerSeats.length > 0) {
+      throw new AppError(
+        "Esta viagem não aceita seleção manual de assentos",
+        400,
+        "SEAT_MAP_DISABLED",
+      );
     } else if (tripRow.show_seat_map === false && tripRow.total_capacity && tripRow.total_capacity > 0) {
       // Auto-assign sequential seats for trips without a visible seat map.
       const existingRows = await exec
@@ -308,17 +414,20 @@ export async function createReservationsForOrder(
     const resSeq = await nextReservationSequence(order.tenantId, resYearMonth, resTypeCode, exec as Tx);
     const reservationNumber = buildReservationNumber(tenantResPrefix, resTypeCode, resYearMonth, resSeq);
 
-    // Proportionally allocate the order-level deposit across each reservation.
-    // The last reservation absorbs rounding remainder to guarantee the sum
-    // of all reservation paidValues equals the order depositAmount exactly.
-    const resPaid = depositAmount > 0
+    // Proportionally retain the requested deposit on each reservation. It is
+    // not a payment: only a later gateway/manual payment row may populate
+    // paidValue and confirm the reservation.
+    const resDeposit = depositAmount > 0
       ? roundMoney(isLastTrip
         ? depositAmount - depositAllocated
         : (orderTotalValue > 0 ? (totalValue / orderTotalValue) * depositAmount : 0))
       : 0;
-    depositAllocated = roundMoney(depositAllocated + resPaid);
-    const resBalance = roundMoney(totalValue - resPaid);
-    const isDepositConfirmed = depositAmount > 0;
+    depositAllocated = roundMoney(depositAllocated + resDeposit);
+    const resPaid = 0;
+    const resBalance = totalValue;
+    const pendingReferral = order.pendingReferral as { code?: string } | null;
+    const referralCode = pendingReferral?.code ?? null;
+    const couponCode = order.couponCode ?? null;
 
     await exec.insert(reservationsTable).values({
       id: reservationId,
@@ -326,12 +435,14 @@ export async function createReservationsForOrder(
       tripId,
       clientId: order.clientId ?? null,
       seats: reservationSeats,
+      capacityUnits: totalQty,
       boardingLocationId: order.boardingLocationId ?? null,
       totalValue: totalValue.toFixed(2),
       paidValue: String(resPaid),
       balance: String(resBalance),
-      status: isDepositConfirmed ? RESERVATION_STATUS.CONFIRMED : RESERVATION_STATUS.PENDING,
-      ...(isDepositConfirmed ? { confirmedAt: new Date(), depositAmount: String(resPaid) } : {}),
+      status: RESERVATION_STATUS.PENDING,
+      expiresAt: reservationExpiresAt,
+      ...(resDeposit > 0 ? { depositAmount: String(resDeposit) } : {}),
       voucherCode,
       reservationNumber,
       qrCode: `QR-${voucherCode}`,
@@ -339,6 +450,15 @@ export async function createReservationsForOrder(
       createdById: ctx.reservationCreatedById,
       paymentMethod: order.paymentMethod ?? null,
       installments: order.installments ?? 1,
+      ...(couponCode && discountTotal > 0 ? {
+        discountCouponCode: couponCode,
+        discountCouponAmount: discountTotal.toFixed(2),
+      } : {}),
+      ...(referralCode && discountTotal > 0 ? {
+        discountReferralCode: referralCode,
+        discountReferralAmount: discountTotal.toFixed(2),
+      } : {}),
+      ...(discountTotal > 0 ? { discountTotal: discountTotal.toFixed(2) } : {}),
       ...(order.customerNotes ? { notes: order.customerNotes } : {}),
     });
 
@@ -420,18 +540,24 @@ export async function createReservationsForOrder(
         {
           reservationId,
           source: "website",
-          targetStageName: getStorefrontInitialPipelineStage(isDepositConfirmed),
+          targetStageName: getStorefrontInitialPipelineStage(false),
           executor: exec as unknown as PipelineExecutor,
         },
       );
     }
   }
 
-  return { reservationIds, reservationClientId: order.clientId ?? null, tripIds: sortedTripIds };
+  return {
+    reservationIds,
+    reservationClientId: order.clientId ?? null,
+    tripIds: sortedTripIds,
+    reservationExpiresAt,
+  };
 }
 
 export interface ConfirmReservationsResult {
   reservationIds: string[];
+  allocatedAmount: number;
 }
 
 /**
@@ -464,6 +590,7 @@ export async function confirmReservationsForOrder(
   orderId: string,
   amount: number,
   tx: DbExecutor,
+  eventId = generateId(),
 ): Promise<ConfirmReservationsResult> {
   const [order] = await tx
     .select({
@@ -476,24 +603,30 @@ export async function confirmReservationsForOrder(
     .from(storeOrdersTable)
     .where(eq(storeOrdersTable.id, orderId))
     .limit(1);
-  if (!order || amount <= 0) return { reservationIds: [] };
+  if (!order || amount <= 0) return { reservationIds: [], allocatedAmount: 0 };
 
   const reservations = await tx
     .select({
       id: reservationsTable.id,
       clientId: reservationsTable.clientId,
       totalValue: reservationsTable.totalValue,
+      paidValue: reservationsTable.paidValue,
     })
     .from(reservationsTable)
     .where(and(
       eq(reservationsTable.tenantId, order.tenantId),
       eq(reservationsTable.storeOrderId, order.orderNumber),
     ));
-  if (reservations.length === 0) return { reservationIds: [] };
+  if (reservations.length === 0) return { reservationIds: [], allocatedAmount: 0 };
 
-  const totalReservationValue = reservations.reduce((acc, r) => acc + Number(r.totalValue), 0);
-  if (totalReservationValue <= 0) return { reservationIds: reservations.map((r) => r.id) };
-  const allocatable = Math.min(amount, totalReservationValue);
+  const totalReservationOutstanding = roundMoney(reservations.reduce(
+    (acc, r) => acc + Math.max(0, Number(r.totalValue) - Number(r.paidValue ?? 0)),
+    0,
+  ));
+  if (totalReservationOutstanding <= 0) {
+    return { reservationIds: reservations.map((r) => r.id), allocatedAmount: 0 };
+  }
+  const allocatable = Math.min(amount, totalReservationOutstanding);
 
   let allocated = 0;
   for (let i = 0; i < reservations.length; i++) {
@@ -501,12 +634,12 @@ export async function confirmReservationsForOrder(
     const isLast = i === reservations.length - 1;
     const share = isLast
       ? roundMoney(allocatable - allocated)
-      : roundMoney((Number(r.totalValue) / totalReservationValue) * allocatable);
+      : roundMoney(
+        (Math.max(0, Number(r.totalValue) - Number(r.paidValue ?? 0)) / totalReservationOutstanding)
+        * allocatable,
+      );
     allocated = roundMoney(allocated + share);
     if (share <= 0) continue;
-
-    const alreadyPaid = await paymentExistsForGatewayTx(order.tenantId, "manual", r.id, tx);
-    if (alreadyPaid) continue;
 
     await tx.insert(paymentsTable).values({
       id: generateId(),
@@ -524,7 +657,7 @@ export async function confirmReservationsForOrder(
       paidAt: new Date(),
       status: PAYMENT_STATUS.PAID,
       gateway: "manual",
-      transactionId: r.id,
+      transactionId: eventId,
       description: "Pagamento confirmado manualmente pela agência",
     });
 
@@ -539,5 +672,9 @@ export async function confirmReservationsForOrder(
     });
   }
 
-  return { reservationIds: reservations.map((r) => r.id) };
+  if (order.clientId) {
+    await recalculateClientFinancials(order.clientId, order.tenantId, tx);
+  }
+
+  return { reservationIds: reservations.map((r) => r.id), allocatedAmount: allocated };
 }

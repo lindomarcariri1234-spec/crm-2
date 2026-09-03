@@ -349,6 +349,15 @@ export const storeOrderItemsTable = pgTable("store_order_items", {
   partnerProductId: text("partner_product_id"),
   sellerName: text("seller_name"),
   itemStatus: text("item_status").notNull().default("pending"),
+  // Persistent ownership record for controlled stock. A checkout changes the
+  // state from null -> reserved while decrementing available stock atomically;
+  // payment converts reserved -> sold; terminal paths convert either state to
+  // released while returning only this item's claimed quantity.
+  inventoryClaimedQuantity: integer("inventory_claimed_quantity").notNull().default(0),
+  inventoryState: text("inventory_state"),
+  salesCountApplied: boolean("sales_count_applied").notNull().default(false),
+  // Exact dated partner capacity claimed by this line on payment.
+  partnerCapacityClaimedQuantity: integer("partner_capacity_claimed_quantity").notNull().default(0),
   voucherCode: text("voucher_code"),
   cancellationReason: text("cancellation_reason"),
   cancellationRequestedAt: timestamp("cancellation_requested_at", { withTimezone: true }),

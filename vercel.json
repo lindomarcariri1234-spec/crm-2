@@ -3,7 +3,7 @@
   "framework": "vite",
   "ignoreCommand": "bash scripts/vercel-ignore-build.sh",
   "installCommand": "pnpm install --frozen-lockfile --config.node-linker=hoisted",
-  "buildCommand": "pnpm --filter @workspace/visitecrm run build",
+  "buildCommand": "pnpm --filter @workspace/api-server deploy:vercel",
   "outputDirectory": "artifacts/visitecrm/dist/public",
   "functions": {
     "api/index.mjs": {
@@ -18,11 +18,11 @@
   "rewrites": [
     {
       "source": "/loja/:slug",
-      "destination": "/api"
+      "destination": "https://crm-2-lindomarcariri.replit.app/loja/:slug"
     },
     {
       "source": "/loja/:slug/:rest*",
-      "destination": "/api"
+      "destination": "https://crm-2-lindomarcariri.replit.app/loja/:slug/:rest*"
     },
     {
       "source": "/api/:path*",

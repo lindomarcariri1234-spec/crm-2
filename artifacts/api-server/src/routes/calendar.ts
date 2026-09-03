@@ -1,12 +1,13 @@
 import { Router, type NextFunction } from "express";
 import { z } from "zod";
 import { db } from "@workspace/db";
-import { usersTable, calendarEventsTable, tripsTable, paymentsTable, clientsTable } from "@workspace/db";
-import { eq, and, count, max } from "drizzle-orm";
+import { usersTable, calendarEventsTable, calendarReconciliationsTable, tripsTable, paymentsTable, clientsTable } from "@workspace/db";
+import { eq, and, count, max, desc } from "drizzle-orm";
 import { requireAuth, ALL_STAFF_ROLES } from "../lib/tenant";
 import { generateAuthUrl, consumeNonce, exchangeCodeForTokens, revokeToken } from "../lib/google-calendar/calendar-service";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
-import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { ForbiddenError, NotFoundError, ValidationError, ConflictError, AppError } from "../lib/errors";
+import { ROLES } from "@workspace/permissions";
 
 const syncBodySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("all") }),
@@ -14,6 +15,13 @@ const syncBodySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("payment"), id: z.string().min(1) }),
   z.object({ type: z.literal("birthday"), id: z.string().min(1) }),
 ]);
+
+const reconciliationScanBodySchema = z.object({
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+});
+
+const reconciliationStatusSchema = z.enum(["pending", "associated", "removed", "dismissed"]);
 
 const router = Router();
 
@@ -215,6 +223,117 @@ router.post("/calendar/sync", async (req, res, next: NextFunction): Promise<void
       const synced = await CalendarSyncService.syncAllForUser(me.id);
       res.json({ success: true, message: `${synced} evento(s) sincronizado(s) com sucesso`, synced });
     }
+  } catch (err) {
+    next(err);
+  }
+});
+
+function requireCalendarReconciliationAdmin(role: string, next: NextFunction): boolean {
+  if (role === ROLES.AGENCY_ADMIN) return true;
+  next(new ForbiddenError("Apenas administradores da agência podem revisar eventos legados", "FORBIDDEN_ROLE"));
+  return false;
+}
+
+router.post("/calendar/reconciliation/scan", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me || !requireCalendarReconciliationAdmin(me.role, next)) return;
+    const parsed = reconciliationScanBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR"));
+      return;
+    }
+    const from = parsed.data.from ? new Date(parsed.data.from) : undefined;
+    const to = parsed.data.to ? new Date(parsed.data.to) : undefined;
+    if (from && to && from >= to) {
+      next(new ValidationError("O início da busca deve ser anterior ao fim", "INVALID_DATE_RANGE"));
+      return;
+    }
+    const candidates = await CalendarSyncService.scanLegacyEvents(me.id, from, to);
+    const serialize = (candidate: Awaited<ReturnType<typeof CalendarSyncService.scanLegacyEvents>>[number]) => ({
+      ...candidate,
+      eventStartDate: candidate.eventStartDate.toISOString(),
+      eventEndDate: candidate.eventEndDate?.toISOString() ?? null,
+    });
+    res.json({
+      success: true,
+      scanned: candidates.length,
+      pending: candidates.filter((candidate) => candidate.status === "pending").map(serialize),
+      alreadyReconciled: candidates.filter((candidate) => candidate.status !== "pending").map(serialize),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/calendar/reconciliation", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me || !requireCalendarReconciliationAdmin(me.role, next)) return;
+    const rawStatus = typeof req.query.status === "string" ? req.query.status : undefined;
+    const parsedStatus = rawStatus ? reconciliationStatusSchema.safeParse(rawStatus) : null;
+    if (parsedStatus && !parsedStatus.success) {
+      next(new ValidationError("Status de reconciliação inválido", "INVALID_RECONCILIATION_STATUS"));
+      return;
+    }
+    const conditions = [
+      eq(calendarReconciliationsTable.tenantId, me.tenantId),
+      eq(calendarReconciliationsTable.userId, me.id),
+      ...(parsedStatus?.success ? [eq(calendarReconciliationsTable.status, parsedStatus.data)] : []),
+    ];
+    const rows = await db.select().from(calendarReconciliationsTable)
+      .where(and(...conditions))
+      .orderBy(desc(calendarReconciliationsTable.createdAt));
+    res.json({ success: true, reconciliations: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/calendar/reconciliation/:id/associate", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me || !requireCalendarReconciliationAdmin(me.role, next)) return;
+    const parsed = z.object({ candidateId: z.string().min(1) }).safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR"));
+      return;
+    }
+    const result = await CalendarSyncService.associateLegacyEvent(req.params.id, me.id, parsed.data.candidateId);
+    if (result === "not-found") { next(new NotFoundError("Candidato não encontrado", "RECONCILIATION_NOT_FOUND")); return; }
+    if (result === "already-resolved") { next(new ConflictError("Este candidato já foi revisado", "RECONCILIATION_ALREADY_RESOLVED")); return; }
+    if (result === "invalid-candidate") { next(new ValidationError("O candidato selecionado não pertence a este evento", "INVALID_RECONCILIATION_CANDIDATE")); return; }
+    if (result === "source-not-found") { next(new ConflictError("O registro original não existe mais; revise o candidato antes de associar", "RECONCILIATION_SOURCE_NOT_FOUND")); return; }
+    if (result === "already-associated") { next(new ConflictError("Este registro já possui um evento associado", "CALENDAR_EVENT_ALREADY_ASSOCIATED")); return; }
+    res.json({ success: true, status: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/calendar/reconciliation/:id/remove", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me || !requireCalendarReconciliationAdmin(me.role, next)) return;
+    const result = await CalendarSyncService.removeLegacyEvent(req.params.id, me.id);
+    if (result === "not-found") { next(new NotFoundError("Candidato não encontrado", "RECONCILIATION_NOT_FOUND")); return; }
+    if (result === "already-resolved") { next(new ConflictError("Este candidato já foi revisado", "RECONCILIATION_ALREADY_RESOLVED")); return; }
+    if (result === "service-unavailable") { next(new AppError("Não foi possível acessar o Google Calendar", 503, "CALENDAR_UNAVAILABLE")); return; }
+    if (result === "delete-failed") { next(new AppError("O evento não foi removido do Google Calendar", 502, "CALENDAR_DELETE_FAILED")); return; }
+    res.json({ success: true, status: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/calendar/reconciliation/:id/dismiss", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me || !requireCalendarReconciliationAdmin(me.role, next)) return;
+    const result = await CalendarSyncService.dismissLegacyEvent(req.params.id, me.id);
+    if (result === "not-found") { next(new NotFoundError("Candidato não encontrado", "RECONCILIATION_NOT_FOUND")); return; }
+    if (result === "already-resolved") { next(new ConflictError("Este candidato já foi revisado", "RECONCILIATION_ALREADY_RESOLVED")); return; }
+    res.json({ success: true, status: result });
   } catch (err) {
     next(err);
   }

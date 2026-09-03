@@ -1,15 +1,18 @@
 import { db } from "@workspace/db";
-import { reservationsTable, tripsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { reservationsTable, storeOrdersTable, tripsTable } from "@workspace/db";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { RESERVATION_STATUS } from "@workspace/permissions";
 import { broadcastSeatUpdate } from "./realtime";
+import { releaseOrderInventoryHolds } from "../services/checkout/persist-order";
 
 type CancelledRow = {
   id: string;
   trip_id: string;
   tenant_id: string;
   seats: string[] | null;
+  capacity_units: number;
+  store_order_id: string | null;
 };
 
 export async function runExpiredReservationsCron(): Promise<void> {
@@ -23,6 +26,24 @@ export async function runExpiredReservationsCron(): Promise<void> {
   // seat update fails the reservation cancellations are also rolled back,
   // keeping the database consistent and allowing the next cron run to retry.
   await db.transaction(async (tx) => {
+    // Payment confirmation locks the same order row. Taking these locks first
+    // gives expiry and payment a single winner instead of allowing seats to be
+    // returned while the order is concurrently promoted to paid.
+    await tx.execute(sql`
+      SELECT id
+      FROM store_orders
+      WHERE order_number IN (
+        SELECT DISTINCT store_order_id
+        FROM reservations
+        WHERE status = ${RESERVATION_STATUS.PENDING}
+          AND expires_at IS NOT NULL
+          AND expires_at < ${now}
+          AND store_order_id IS NOT NULL
+      )
+      ORDER BY id
+      FOR UPDATE
+    `);
+
     // Cancel all expired pending reservations atomically and get the affected rows.
     // Reservations that already have at least one associated payment are skipped so
     // that paid-but-slow reservations are never incorrectly cancelled by the TTL cron.
@@ -37,11 +58,21 @@ export async function runExpiredReservationsCron(): Promise<void> {
           status     = ${RESERVATION_STATUS.PENDING}
           AND expires_at IS NOT NULL
           AND expires_at < ${now}
+          AND (
+            store_order_id IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM store_orders
+              WHERE store_orders.order_number = reservations.store_order_id
+                AND store_orders.status = 'pending'
+                AND store_orders.payment_status <> 'paid'
+            )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM payments
             WHERE payments.reservation_id = reservations.id
           )
-        RETURNING id, trip_id, tenant_id, seats
+        RETURNING id, trip_id, tenant_id, seats, capacity_units, store_order_id
       `,
     );
 
@@ -59,9 +90,31 @@ export async function runExpiredReservationsCron(): Promise<void> {
     // these seats always live in the reserved_seats bucket — never in confirmed_seats.
     const seatsByTrip = new Map<string, number>();
     for (const row of rows) {
-      const seatsCount = Array.isArray(row.seats) ? row.seats.length : 0;
+      const seatsCount = Number(row.capacity_units) > 0
+        ? Number(row.capacity_units)
+        : (Array.isArray(row.seats) ? row.seats.length : 0);
       if (seatsCount > 0) {
         seatsByTrip.set(row.trip_id, (seatsByTrip.get(row.trip_id) ?? 0) + seatsCount);
+      }
+    }
+
+    const orderNumbers = [...new Set(rows
+      .map((row) => row.store_order_id)
+      .filter((value): value is string => Boolean(value)))];
+    if (orderNumbers.length > 0) {
+      const orders = await tx.select({
+        id: storeOrdersTable.id,
+        orderNumber: storeOrdersTable.orderNumber,
+      }).from(storeOrdersTable).where(inArray(storeOrdersTable.orderNumber, orderNumbers));
+      for (const order of orders) {
+        await releaseOrderInventoryHolds(order.id, tx);
+        await tx.update(storeOrdersTable).set({
+          status: "cancelled",
+          cancelledAt: now,
+        }).where(and(
+          eq(storeOrdersTable.id, order.id),
+          eq(storeOrdersTable.status, "pending"),
+        ));
       }
     }
 

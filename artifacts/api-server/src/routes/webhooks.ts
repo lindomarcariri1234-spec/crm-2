@@ -2,18 +2,23 @@ import { Router, type Request, type NextFunction } from "express";
 import crypto from "node:crypto";
 import { db } from "@workspace/db";
 import { storeOrdersTable, reservationsTable, paymentsTable, storesTable, tripsTable } from "@workspace/db";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { syncReservationPaymentStatus, paymentExistsForGatewayTx, type DbExecutor } from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
-import { applyOrderInventoryEffects } from "../services/checkout/persist-order";
+import { recalculateClientFinancials } from "../services/client-financials";
+import {
+  applyOrderInventoryEffects,
+  releaseOrderInventoryHolds,
+  reverseOrderInventoryEffects,
+} from "../services/checkout/persist-order";
 import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
 import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
 import { decryptOrPassthrough } from "../lib/crypto";
-import { PAYMENT_STATUS, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
 import { roundMoney } from "../lib/pricing";
 import { ValidationError, AppError } from "../lib/errors";
@@ -358,7 +363,7 @@ async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise
       }
       // Post-payment: provision the portal account and mint the referral code
       // (gated behind confirmed payment). Fire-and-forget; never blocks the webhook.
-      runPostPaymentSideEffects(result.orderId).catch((err) =>
+      runPostPaymentSideEffects(result.orderId, { allowPartialPayment: result.partialPayment === true }).catch((err) =>
         logger.warn({ err, orderId: result.orderId }, "[webhooks] Failed post-payment side effects"),
       );
     }
@@ -602,7 +607,7 @@ async function handleMpPayment(store: StoreScope, paymentId: string, payment: Mp
       }
       // Post-payment: provision the portal account and mint the referral code
       // (gated behind confirmed payment). Fire-and-forget; never blocks the webhook.
-      runPostPaymentSideEffects(result.orderId).catch((err) =>
+      runPostPaymentSideEffects(result.orderId, { allowPartialPayment: result.partialPayment === true }).catch((err) =>
         logger.warn({ err, orderId: result.orderId }, "[webhooks] Failed post-payment side effects"),
       );
     }
@@ -649,6 +654,7 @@ async function resolveOrderForMp(
         eq(storeOrdersTable.paymentIntentId, paymentId),
       ),
     )
+    .for("update")
     .limit(1);
   if (byPi) return byPi.id;
 
@@ -664,6 +670,7 @@ async function resolveOrderForMp(
         eq(storeOrdersTable.orderNumber, externalRef),
       ),
     )
+    .for("update")
     .limit(1);
   if (!byRef) return null;
 
@@ -703,6 +710,8 @@ interface ApplyResult {
   tenantId: string;
   /** Trip IDs for which reservations were created this call, for post-commit SSE broadcast. */
   tripIds: string[];
+  /** True when this event received a deposit/partial amount, not the full order. */
+  partialPayment?: boolean;
 }
 
 export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Promise<ApplyResult | null> {
@@ -720,6 +729,8 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       clientId: storeOrdersTable.clientId,
       paymentMethod: storeOrdersTable.paymentMethod,
       paymentStatus: storeOrdersTable.paymentStatus,
+      status: storeOrdersTable.status,
+       totalAmount: storeOrdersTable.totalAmount,
     })
     .from(storeOrdersTable)
     .where(
@@ -735,6 +746,10 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     logger.info({ paymentIntentId, gateway, slug: store.slug }, "[webhooks] No matching order for paymentIntentId");
     return null;
   }
+  if (order.status === STORE_ORDER_STATUS.CANCELLED) {
+    logger.warn({ orderId: order.id, gateway, transactionId }, "[webhooks] Ignoring payment for cancelled/expired order");
+    return null;
+  }
 
   // Idempotency: if we already recorded this exact gateway transaction, stop.
   if (await paymentExistsForGatewayTx(order.tenantId, gateway, transactionId, tx)) {
@@ -742,49 +757,18 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     return null;
   }
 
-  // Atomic conditional update: only matches when paymentStatus is NOT already PAID.
-  // This is the idempotency gate for inventory effects — concurrent or duplicate
-  // webhook deliveries get 0 rows returned and skip inventory effects.
-  // Also covers the manual-paid-then-webhook path: if admin already marked the order
-  // paid (which applies inventory effects once), the gateway webhook sees 0 rows
-  // here and skips effects, preventing a double-apply.
-  const updatedOrderRows = await tx
-    .update(storeOrdersTable)
-    .set({ paymentStatus: STORE_PAYMENT_STATUS.PAID, paidAt, status: STORE_ORDER_STATUS.CONFIRMED, confirmedAt: paidAt })
-    .where(and(
-      eq(storeOrdersTable.id, order.id),
-      ne(storeOrdersTable.paymentStatus, STORE_PAYMENT_STATUS.PAID),
-    ))
-    .returning({ id: storeOrdersTable.id });
-
-  const didTransitionToPaid = updatedOrderRows.length > 0;
-
-  // Create reservations now (payment confirmed): seats are only reserved after payment,
-  // not at checkout time. createReservationsForOrder is idempotent — safe on retries.
-  const createResult = await createReservationsForOrder(order.id, tx as unknown as Parameters<typeof createReservationsForOrder>[1]);
-
-  // Apply inventory effects deferred from order-creation: stock decrement, coupon
-  // usageCount increment, and totalOrders increment. Only applied on the first
-  // UNPAID → PAID transition — skipped for duplicate/retried webhook events and for
-  // orders already marked paid by the manual-payment admin path.
-  if (didTransitionToPaid) {
-    await applyOrderInventoryEffects(order.id, tx);
-    await recordOrderPaymentSettlement(tx, {
-      tenantId: order.tenantId,
-      orderId: order.id,
-      gateway,
-      transactionId,
-      occurredAt: paidAt,
-      receivedAmount: args.amount,
-    });
-  }
-
-  // Find the reservations linked to this order via storeOrderId == orderNumber
+  // Reservations are normally already pending from checkout. The call remains
+  // idempotent for legacy orders that predate checkout-time reservation holds.
+  const createResult = await createReservationsForOrder(
+    order.id,
+    tx as unknown as Parameters<typeof createReservationsForOrder>[1],
+  );
   const reservations = await tx
     .select({
       id: reservationsTable.id,
       clientId: reservationsTable.clientId,
       totalValue: reservationsTable.totalValue,
+      paidValue: reservationsTable.paidValue,
     })
     .from(reservationsTable)
     .where(
@@ -794,7 +778,92 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       ),
     );
 
+  const totalOrderAmount = roundMoney(Number(order.totalAmount ?? 0));
+  const previouslyReceivedRows = await tx
+    .select({ amount: paymentsTable.amount })
+    .from(paymentsTable)
+    .where(and(
+      eq(paymentsTable.tenantId, order.tenantId),
+      eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+      eq(paymentsTable.status, PAYMENT_STATUS.PAID),
+      reservations.length > 0
+        ? or(
+          eq(paymentsTable.orderId, order.id),
+          inArray(paymentsTable.reservationId, reservations.map((reservation) => reservation.id)),
+        )
+        : eq(paymentsTable.orderId, order.id),
+    ));
+  const previouslyReceived = roundMoney(
+    previouslyReceivedRows.reduce((sum, payment) => sum + Number(payment.amount), 0),
+  );
+  const effectiveReceivedAmount = roundMoney(Math.min(amount, Math.max(0, totalOrderAmount - previouslyReceived)));
+  if (effectiveReceivedAmount <= 0) return null;
+  const receivedAfterEvent = roundMoney(previouslyReceived + effectiveReceivedAmount);
+  const isPartialPayment = totalOrderAmount > 0 && receivedAfterEvent < totalOrderAmount;
+
+  // Atomic conditional update: only full payments transition the order to PAID.
+  // A gateway may confirm the requested deposit first; that event must remain
+  // pending at the order level while still being recorded against reservations.
+  // This is the idempotency gate for inventory effects — concurrent or duplicate
+  // webhook deliveries get 0 rows returned and skip inventory effects.
+  // Also covers the manual-paid-then-webhook path: if admin already marked the order
+  // paid (which applies inventory effects once), the gateway webhook sees 0 rows
+  // here and skips effects, preventing a double-apply.
+  const updatedOrderRows = isPartialPayment
+    ? []
+    : await tx
+      .update(storeOrdersTable)
+      .set({
+        paymentStatus: STORE_PAYMENT_STATUS.PAID,
+        paidAt,
+        status: STORE_ORDER_STATUS.CONFIRMED,
+        confirmedAt: paidAt,
+        amountRemaining: "0",
+      })
+      .where(and(
+        eq(storeOrdersTable.id, order.id),
+        ne(storeOrdersTable.paymentStatus, STORE_PAYMENT_STATUS.PAID),
+      ))
+      .returning({ id: storeOrdersTable.id });
+
+  const didTransitionToPaid = updatedOrderRows.length > 0;
+
+  // Apply inventory effects deferred from order-creation: stock decrement, coupon
+  // usageCount increment, and totalOrders increment. Only applied on the first
+  // UNPAID → PAID transition — skipped for duplicate/retried webhook events and for
+  // orders already marked paid by the manual-payment admin path.
+  if (didTransitionToPaid) {
+    await applyOrderInventoryEffects(order.id, tx);
+  }
+
   if (reservations.length === 0) {
+    await tx.insert(paymentsTable).values({
+      id: generateId(),
+      tenantId: order.tenantId,
+      reservationId: null,
+      clientId: order.clientId ?? null,
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "store_order",
+      amount: effectiveReceivedAmount.toFixed(2),
+      paymentMethod: order.paymentMethod ?? gateway,
+      installmentNumber: 1,
+      totalInstallments: 1,
+      dueDate: paidAt,
+      paidAt,
+      status: PAYMENT_STATUS.PAID,
+      gateway,
+      transactionId,
+      description: `Pagamento ${gateway} confirmado via webhook`,
+    });
+    await recordOrderPaymentSettlement(tx, {
+      tenantId: order.tenantId,
+      orderId: order.id,
+      gateway,
+      transactionId,
+      occurredAt: paidAt,
+      receivedAmount: effectiveReceivedAmount,
+    });
     // Product-only paid order: there are no reservations to allocate Payment rows
     // to, but the order IS paid. Return the orderId (with no reservationIds) so
     // the caller still runs the payment-gated post-payment side effects (deferred
@@ -809,17 +878,24 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
   // Mixed-cart orders may include non-reservation products. Cap the amount
   // allocated to reservation Payment rows at the sum of reservation totals
   // so non-reservation items don't inflate paidValue/balance.
-  const totalReservationValue = reservations.reduce((acc, r) => acc + Number(r.totalValue), 0);
-  if (totalReservationValue <= 0) return null;
-  const allocatable = Math.min(amount, totalReservationValue);
+  const totalReservationOutstanding = roundMoney(reservations.reduce(
+    (acc, r) => acc + Math.max(0, Number(r.totalValue) - Number(r.paidValue ?? 0)),
+    0,
+  ));
+  const allocatable = Math.min(effectiveReceivedAmount, totalReservationOutstanding);
 
   let allocated = 0;
   for (let i = 0; i < reservations.length; i++) {
     const r = reservations[i]!;
     const isLast = i === reservations.length - 1;
-    const share = isLast
-      ? roundMoney(allocatable - allocated)
-      : roundMoney((Number(r.totalValue) / totalReservationValue) * allocatable);
+    const share = totalReservationOutstanding <= 0
+      ? 0
+      : isLast
+        ? roundMoney(allocatable - allocated)
+        : roundMoney(
+          (Math.max(0, Number(r.totalValue) - Number(r.paidValue ?? 0)) / totalReservationOutstanding)
+          * allocatable,
+        );
     allocated = roundMoney(allocated + share);
 
     if (share <= 0) continue;
@@ -855,11 +931,62 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     });
   }
 
+  const orderOnlyAmount = roundMoney(effectiveReceivedAmount - allocated);
+  if (orderOnlyAmount > 0) {
+    await tx.insert(paymentsTable).values({
+      id: generateId(),
+      tenantId: order.tenantId,
+      reservationId: null,
+      clientId: order.clientId ?? null,
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "store_order",
+      amount: orderOnlyAmount.toFixed(2),
+      paymentMethod: order.paymentMethod ?? gateway,
+      installmentNumber: 1,
+      totalInstallments: 1,
+      dueDate: paidAt,
+      paidAt,
+      status: PAYMENT_STATUS.PAID,
+      gateway,
+      transactionId,
+      description: `Pagamento ${gateway} confirmado via webhook`,
+    });
+  }
+
+  await recordOrderPaymentSettlement(tx, {
+    tenantId: order.tenantId,
+    orderId: order.id,
+    gateway,
+    transactionId,
+    occurredAt: paidAt,
+    receivedAmount: effectiveReceivedAmount,
+  });
+
+  if (order.clientId) {
+    await recalculateClientFinancials(order.clientId, order.tenantId, tx);
+  }
+
+  if (isPartialPayment) {
+    await tx.update(storeOrdersTable).set({
+      amountRemaining: Math.max(0, totalOrderAmount - receivedAfterEvent).toFixed(2),
+    }).where(and(
+      eq(storeOrdersTable.id, order.id),
+      eq(storeOrdersTable.tenantId, order.tenantId),
+    ));
+  }
+
   logger.info(
     { orderId: order.id, gateway, transactionId, reservations: reservations.length, amount },
     "[webhooks] Gateway payment applied and reservations synced",
   );
-  return { orderId: order.id, reservationIds: reservations.map((r) => r.id), tripIds: createResult.tripIds, tenantId: order.tenantId };
+  return {
+    orderId: order.id,
+    reservationIds: reservations.map((r) => r.id),
+    tripIds: createResult.tripIds,
+    tenantId: order.tenantId,
+    ...(isPartialPayment ? { partialPayment: true } : {}),
+  };
 }
 
 async function markOrderFailed(
@@ -892,41 +1019,52 @@ async function markOrderFailed(
     );
     return;
   }
-  await tx
+  const transitioned = await tx
     .update(storeOrdersTable)
     .set({ paymentStatus: STORE_PAYMENT_STATUS.FAILED })
-    .where(eq(storeOrdersTable.id, order.id));
+    .where(and(
+      eq(storeOrdersTable.id, order.id),
+      ne(storeOrdersTable.paymentStatus, STORE_PAYMENT_STATUS.PAID),
+    ))
+    .returning({ id: storeOrdersTable.id });
+  if (transitioned.length === 0) return;
 
   // Cascade to linked reservations: a payment failure should leave them in
   // `failed` so staff/customers can see the rejection without manual review.
   // Terminal-state reservations (cancelled/completed) are left alone.
-  const reservations = await tx
-    .select({ id: reservationsTable.id, status: reservationsTable.status })
-    .from(reservationsTable)
-    .where(
-      and(
-        eq(reservationsTable.tenantId, order.tenantId),
-        eq(reservationsTable.storeOrderId, order.orderNumber),
-      ),
-    );
-
-  const failableIds = reservations
-    .filter((r) => r.status !== RESERVATION_STATUS.CANCELLED && r.status !== RESERVATION_STATUS.COMPLETED)
-    .map((r) => r.id);
-  if (failableIds.length > 0) {
-    await tx
-      .update(reservationsTable)
-      .set({ status: RESERVATION_STATUS.FAILED })
-      .where(
-        and(
-          eq(reservationsTable.tenantId, order.tenantId),
-          inArray(reservationsTable.id, failableIds),
-        ),
-      );
+  const failedResult = await tx.execute(sql`
+    UPDATE reservations
+    SET status = ${RESERVATION_STATUS.FAILED},
+        expires_at = NULL,
+        updated_at = NOW()
+    WHERE tenant_id = ${order.tenantId}
+      AND store_order_id = ${order.orderNumber}
+      AND status = ${RESERVATION_STATUS.PENDING}
+    RETURNING id, trip_id, capacity_units, seats
+  `);
+  const failedRows = (failedResult as unknown as { rows: Array<{
+    id: string;
+    trip_id: string;
+    capacity_units: number;
+    seats: string[] | null;
+  }> }).rows;
+  for (const reservation of failedRows) {
+    const units = Number(reservation.capacity_units) > 0
+      ? Number(reservation.capacity_units)
+      : (Array.isArray(reservation.seats) ? reservation.seats.length : 0);
+    if (units <= 0) continue;
+    await tx.update(tripsTable).set({
+      availableSeats: sql`LEAST(${tripsTable.totalCapacity}, GREATEST(0, ${tripsTable.availableSeats} + ${units}))`,
+      reservedSeats: sql`GREATEST(0, ${tripsTable.reservedSeats} - ${units})`,
+    }).where(and(
+      eq(tripsTable.id, reservation.trip_id),
+      eq(tripsTable.tenantId, order.tenantId),
+    ));
   }
+  await releaseOrderInventoryHolds(order.id, tx);
 
   logger.info(
-    { orderId: order.id, gateway, reservationsFailed: failableIds.length },
+    { orderId: order.id, gateway, reservationsFailed: failedRows.length },
     "[webhooks] Order marked failed and reservations cascaded",
   );
 }
@@ -946,6 +1084,8 @@ async function markOrderRefunded(
       orderNumber: storeOrdersTable.orderNumber,
       pendingReferral: storeOrdersTable.pendingReferral,
       referralEffectsAppliedAt: storeOrdersTable.referralEffectsAppliedAt,
+      paymentStatus: storeOrdersTable.paymentStatus,
+      status: storeOrdersTable.status,
     })
     .from(storeOrdersTable)
     .where(
@@ -955,10 +1095,19 @@ async function markOrderRefunded(
         eq(storeOrdersTable.paymentIntentId, paymentIntentId),
       ),
     )
+    .for("update")
     .limit(1);
   if (!order) return;
+  if (
+    order.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+    || order.status === STORE_ORDER_STATUS.CANCELLED
+  ) return;
 
   const now = new Date();
+  const wasPaid = order.paymentStatus === STORE_PAYMENT_STATUS.PAID;
+  if (wasPaid) {
+    await reverseOrderInventoryEffects(order.id, tx);
+  }
   await tx
     .update(storeOrdersTable)
     .set({ paymentStatus: STORE_PAYMENT_STATUS.REFUNDED, refundedAt: now, status: STORE_ORDER_STATUS.CANCELLED, cancelledAt: now })
@@ -968,6 +1117,7 @@ async function markOrderRefunded(
     orderId: order.id,
     tenantId: order.tenantId,
     reason,
+    skipAvailabilityRelease: false,
   });
 
   await reverseOrderSettlement(tx, {
@@ -1001,6 +1151,7 @@ async function markOrderRefunded(
       status: reservationsTable.status,
       tripId: reservationsTable.tripId,
       seats: reservationsTable.seats,
+      capacityUnits: reservationsTable.capacityUnits,
     })
     .from(reservationsTable)
     .where(
@@ -1022,7 +1173,9 @@ async function markOrderRefunded(
     const seatDeltaByTrip = new Map<string, { confirmed: number; reserved: number }>();
     for (const r of reservations) {
       if (!cancellableIds.includes(r.id)) continue;
-      const seatsCount = Array.isArray(r.seats) ? r.seats.length : 0;
+      const seatsCount = r.capacityUnits > 0
+        ? r.capacityUnits
+        : (Array.isArray(r.seats) ? r.seats.length : 0);
       if (seatsCount === 0 || !r.tripId) continue;
       const entry = seatDeltaByTrip.get(r.tripId) ?? { confirmed: 0, reserved: 0 };
       if (r.status === RESERVATION_STATUS.CONFIRMED) {

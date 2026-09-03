@@ -15,7 +15,7 @@ import { formatDate } from "@/lib/utils";
 import { ReservationPassengersTab } from "./ReservationPassengersTab";
 import { ReservationInstallmentsTab } from "./ReservationInstallmentsTab";
 import { Button } from "@/components/ui/button";
-import type { LinkedData } from "@/lib/linked-data";
+import { getReservationFinancialSummary, type ReservationWithFinancialLinks } from "./financial";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -28,11 +28,6 @@ interface EmailLog {
   isAutoRetry: boolean;
   createdAt: string;
 }
-
-type ReservationWithLinks = LinkedData & {
-  discountTotal?: number | null;
-  storeOrderId?: string | null;
-};
 
 export function ReservationDetailModal({ reservationId, open, onClose }: {
   reservationId: string;
@@ -54,6 +49,9 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
     { query: { queryKey: ["payments", reservationId], enabled: open && !!reservationId } }
   );
   const payments = paymentsData?.data ?? [];
+  const financial = data
+    ? getReservationFinancialSummary(data as ReservationWithFinancialLinks)
+    : null;
 
   const fetchEmailLogs = useCallback(async () => {
     if (!reservationId) return;
@@ -144,7 +142,9 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
 
             <TabsContent value="details" className="space-y-4 mt-4">
               {(() => {
-                const linked = data as typeof data & ReservationWithLinks;
+                const linked = data as ReservationWithFinancialLinks;
+                const summary = financial!;
+                const useOrderTotals = summary.usesOrderTotals;
                 return (
                   <>
               <div className="grid grid-cols-2 gap-4">
@@ -172,53 +172,53 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                 </div>
               </div>
               <Separator />
-              {linked.discountTotal ? (
+              {summary.discount > 0 ? (
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Base</p>
-                    <p className="font-semibold text-lg line-through text-muted-foreground">{fmt(data.totalValue + (linked.discountTotal ?? 0))}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Valor Total</p>
+                    <p className="font-semibold text-lg line-through text-muted-foreground">{fmt(summary.subtotal)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">Desconto</p>
-                    <p className="font-semibold text-lg text-destructive">− {fmt((data as { discountTotal?: number | null }).discountTotal ?? 0)}</p>
+                    <p className="font-semibold text-lg text-destructive">− {fmt(summary.discount)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Total</p>
-                    <p className="font-semibold text-lg">{fmt(data.totalValue)}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Total líquido</p>
+                    <p className="font-semibold text-lg">{fmt(summary.total)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">Pago</p>
-                    <p className="font-semibold text-lg text-green-600">{fmt(data.paidValue)}</p>
+                    <p className="font-semibold text-lg text-green-600">{fmt(summary.paid)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Saldo</p>
-                    <p className={`font-semibold text-lg ${data.balance > 0 ? "text-destructive" : "text-green-600"}`}>{fmt(data.balance)}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Saldo devedor</p>
+                    <p className={`font-semibold text-lg ${summary.balance > 0 ? "text-destructive" : "text-green-600"}`}>{fmt(summary.balance)}</p>
                   </div>
                 </div>
               ) : (
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Total</p>
-                    <p className="font-semibold text-lg">{fmt(data.totalValue)}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Total líquido</p>
+                    <p className="font-semibold text-lg">{fmt(summary.total)}</p>
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">Pago</p>
-                    <p className="font-semibold text-lg text-green-600">{fmt(data.paidValue)}</p>
+                    <p className="font-semibold text-lg text-green-600">{fmt(summary.paid)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Saldo</p>
-                    <p className={`font-semibold text-lg ${data.balance > 0 ? "text-destructive" : "text-green-600"}`}>{fmt(data.balance)}</p>
+                    <p className="text-xs text-muted-foreground mb-1">Saldo devedor</p>
+                    <p className={`font-semibold text-lg ${summary.balance > 0 ? "text-destructive" : "text-green-600"}`}>{fmt(summary.balance)}</p>
                   </div>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Forma de Pagamento</p>
-                  <p className="font-medium">{METHOD_LABELS[data.paymentMethod ?? ""] ?? data.paymentMethod ?? "—"}</p>
+                  <p className="font-medium">{METHOD_LABELS[summary.paymentMethod ?? ""] ?? summary.paymentMethod ?? "—"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Parcelas</p>
-                  <p className="font-medium">{data.installments}x</p>
+                  <p className="font-medium">{summary.installments ?? 1}x</p>
                 </div>
               </div>
               {(linked.linkedOrder || linked.linkedReferral || linked.linkedDeals?.length) && (
@@ -231,7 +231,7 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                         Base {fmt(Number(linked.linkedOrder.subtotal))} · Desconto {fmt(Number(linked.linkedOrder.discountAmount))} · Total {fmt(Number(linked.linkedOrder.totalAmount))}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Pago {fmt(Number(linked.linkedOrder.depositAmount ?? 0))} · Saldo {fmt(Number(linked.linkedOrder.amountRemaining ?? 0))}
+                        Pago {fmt(Number(linked.linkedOrder.paidAmount ?? 0))} · Saldo {fmt(Number(linked.linkedOrder.amountRemaining ?? 0))}
                       </p>
                     </div>
                   )}
@@ -241,16 +241,30 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                       <div className="space-y-1">
                         {linked.linkedReservations
                           .map((reservation) => (
+                            (() => {
+                              const useCanonicalOrderValues = useOrderTotals && reservation.id === data.id;
+                              const total = useCanonicalOrderValues
+                                ? Number(linked.linkedOrder?.totalAmount ?? reservation.totalValue)
+                                : Number(reservation.totalValue);
+                              const paid = useCanonicalOrderValues
+                                ? Number(linked.linkedOrder?.paidAmount ?? reservation.paidValue)
+                                : Number(reservation.paidValue);
+                              const balance = useCanonicalOrderValues
+                                ? Number(linked.linkedOrder?.amountRemaining ?? Math.max(0, total - paid))
+                                : Number(reservation.balance);
+                              return (
                             <p key={reservation.id} className="text-xs">
                               <Link href={`/reservations/${reservation.id}`} className="font-mono font-semibold text-primary hover:underline" data-testid={`link-reservation-sibling-${reservation.id}`}>
                                 {reservation.reservationNumber}
                               </Link>
                               {reservation.id === data.id ? " (esta reserva)" : ""}
                               {" · "}{STATUS_LABELS[reservation.status] ?? reservation.status}
-                              {" · "}Total {fmt(Number(reservation.totalValue))}
-                              {" · "}Pago {fmt(Number(reservation.paidValue))}
-                              {" · "}Saldo {fmt(Number(reservation.balance))}
+                               {" · "}Total {fmt(total)}
+                               {" · "}Pago {fmt(paid)}
+                               {" · "}Saldo {fmt(balance)}
                             </p>
+                              );
+                            })()
                           ))}
                       </div>
                     </div>
@@ -355,17 +369,17 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
                 </div>
               )}
               <div className="p-3 bg-muted/30 rounded-lg border">
-                {(data as ReservationWithLinks).discountTotal ? (
+                {financial!.discount > 0 ? (
                   <>
-                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Base:</span><span className="font-semibold line-through text-muted-foreground">{fmt(data.totalValue + ((data as ReservationWithLinks).discountTotal ?? 0))}</span></div>
-                    <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Desconto:</span><span className="font-semibold text-destructive">− {fmt((data as ReservationWithLinks).discountTotal ?? 0)}</span></div>
-                    <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Total:</span><span className="font-semibold">{fmt(data.totalValue)}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Valor Total:</span><span className="font-semibold line-through text-muted-foreground">{fmt(financial!.subtotal)}</span></div>
+                    <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Desconto:</span><span className="font-semibold text-destructive">− {fmt(financial!.discount)}</span></div>
+                    <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Total líquido:</span><span className="font-semibold">{fmt(financial!.total)}</span></div>
                   </>
                 ) : (
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Total:</span><span className="font-semibold">{fmt(data.totalValue)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Total líquido:</span><span className="font-semibold">{fmt(financial!.total)}</span></div>
                 )}
-                <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Pago:</span><span className="font-semibold text-green-600">{fmt(data.paidValue)}</span></div>
-                <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Saldo:</span><span className={`font-semibold ${data.balance > 0 ? "text-destructive" : "text-green-600"}`}>{fmt(data.balance)}</span></div>
+                <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Pago:</span><span className="font-semibold text-green-600">{fmt(financial!.paid)}</span></div>
+                <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Saldo devedor:</span><span className={`font-semibold ${financial!.balance > 0 ? "text-destructive" : "text-green-600"}`}>{fmt(financial!.balance)}</span></div>
               </div>
             </TabsContent>
 

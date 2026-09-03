@@ -519,6 +519,20 @@
       "when": 1808200000000,
       "tag": "0074_referral_bonus_reversals",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1808300000000,
+      "tag": "0075_calendar_legacy_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1808400000000,
+      "tag": "0076_checkout_capacity_claims",
+      "breakpoints": true
     }
   ]
 }

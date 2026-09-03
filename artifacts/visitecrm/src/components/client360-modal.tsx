@@ -1,339 +1,4 @@
-import { useState, useRef, useMemo, useEffect } from "react";
-import {
-  getListClientActivitiesQueryKey,
-  getGetClientReferralQueryKey,
-  getGetClientQueryKey,
-  getListReservationsQueryKey,
-  getListPaymentsQueryKey,
-  getGetClientLoyaltyQueryKey,
-  getListLoyaltyMembersQueryKey,
-  getListLoyaltyTransactionsQueryKey,
-  useGetClient,
-  useListReservations,
-  useListPayments,
-  useGetClientLoyalty,
-  useListLoyaltyMembers,
-  useListLoyaltyTransactions,
-  useListClientActivities,
-  useCreateClientActivity,
-  useGetClientReferral,
-  useGenerateClientReferralCode,
-  useGetMe,
-  useListOutboundMessages,
-} from "@workspace/api-client-react";
-import { RESERVATION_STATUS, REFERRAL_STATUS, PAYMENT_STATUS, ADMIN_ROLES, MANAGEMENT_ROLES } from "@workspace/permissions";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  Phone, Mail, MapPin, Calendar, FileText, Download, Upload, Trash2,
-  Star, TrendingUp, Gift, Award, Zap, MessageSquare, Loader2, Plus,
-  CreditCard, CheckSquare, XCircle, Globe, RefreshCw, AlertCircle, Ban, ShieldCheck, Clock, ChevronDown, Copy, X, Link, ChevronRight,
-} from "lucide-react";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel,
-} from "@/components/ui/dropdown-menu";
-import { format, parseISO } from "date-fns";
-import { ptBR } from "date-fns/locale";
-import { useToast } from "@/hooks/use-toast";
-
-import { formatCurrency } from "@/lib/utils";
-import { useUploadDocument } from "@/hooks/use-upload";
-
-const API_BASE_ADMIN = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-function ClientDreamsTab({ clientId, isOpen }: { clientId: string; isOpen: boolean }) {
-  const [items, setItems] = useState<Array<{ id: string; destinationName: string; note: string | null; createdAt: string }>>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setLoading(true);
-    fetch(`${API_BASE_ADMIN}/api/admin/clients/${clientId}/dream-destinations`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setItems(d.data ?? []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [clientId, isOpen]);
-
-  if (loading) {
-    return (
-      <div className="space-y-2 mt-4">
-        {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
-      </div>
-    );
-  }
-
-  if (items.length === 0) {
-    return (
-      <div className="text-center py-10 mt-4">
-        <Globe className="w-10 h-10 mx-auto text-muted-foreground/30 mb-2" />
-        <p className="text-sm text-muted-foreground">Nenhum destino dos sonhos registrado pelo cliente.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2 mt-4">
-      <p className="text-xs text-muted-foreground mb-3">{items.length} destino{items.length !== 1 ? "s" : ""} na lista de sonhos</p>
-      {items.map(item => (
-        <div key={item.id} className="flex items-start gap-2.5 p-3 rounded-lg border bg-card">
-          <MapPin className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">{item.destinationName}</p>
-            {item.note && <p className="text-xs text-muted-foreground mt-0.5">{item.note}</p>}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  active:    { label: "Ativo",    color: "bg-green-100 text-green-800 border-green-200" },
-  inactive:  { label: "Inativo",  color: "bg-gray-100 text-gray-800 border-gray-200" },
-  lead:      { label: "Lead",     color: "bg-blue-100 text-blue-800 border-blue-200" },
-  blocked:   { label: "Bloqueado",color: "bg-red-100 text-red-800 border-red-200" },
-};
-
-const CLASSIFICATION_LABELS: Record<string, string> = {
-  lead: "Lead", prospect: "Prospecto", client: "Cliente", vip: "VIP", inactive: "Inativo",
-};
-
-const TIER_LABELS: Record<string, { label: string; color: string }> = {
-  bronze:   { label: "Bronze",   color: "bg-amber-100 text-amber-800" },
-  silver:   { label: "Prata",    color: "bg-gray-100 text-gray-700" },
-  gold:     { label: "Ouro",     color: "bg-yellow-100 text-yellow-800" },
-  diamond:  { label: "Diamante", color: "bg-blue-100 text-blue-800" },
-};
-
-const ACTIVITY_TYPE_OPTIONS = [
-  { value: "note", label: "Nota" },
-  { value: "call", label: "Ligação" },
-  { value: "whatsapp", label: "WhatsApp" },
-  { value: "email", label: "E-mail" },
-  { value: "meeting", label: "Reunião" },
-];
-
-function activityIcon(type: string) {
-  switch (type) {
-    case "reservation_created": return { Icon: Calendar, bg: "bg-blue-100", color: "text-blue-600" };
-    case "reservation_cancelled": return { Icon: XCircle, bg: "bg-red-100", color: "text-red-600" };
-    case "checkin": return { Icon: CheckSquare, bg: "bg-green-100", color: "text-green-600" };
-    case "payment": return { Icon: CreditCard, bg: "bg-emerald-100", color: "text-emerald-600" };
-    case "call": return { Icon: Phone, bg: "bg-green-100", color: "text-green-600" };
-    case "whatsapp": return { Icon: MessageSquare, bg: "bg-green-100", color: "text-green-600" };
-    case "email": return { Icon: Mail, bg: "bg-sky-100", color: "text-sky-600" };
-    case "meeting": return { Icon: Calendar, bg: "bg-purple-100", color: "text-purple-600" };
-    case "note": return { Icon: FileText, bg: "bg-gray-100", color: "text-gray-500" };
-    default: return { Icon: Zap, bg: "bg-blue-100", color: "text-blue-600" };
-  }
-}
-
-const AUTO_TYPE_LABELS: Record<string, string> = {
-  reservation_created: "Reserva criada",
-  reservation_cancelled: "Reserva cancelada",
-  checkin: "Check-in realizado",
-  payment: "Pagamento recebido",
-};
-
-function activityTypeLabel(type: string) {
-  if (AUTO_TYPE_LABELS[type]) return AUTO_TYPE_LABELS[type];
-  const found = ACTIVITY_TYPE_OPTIONS.find(o => o.value === type);
-  return found?.label ?? type;
-}
-
-function isAutoActivity(type: string) {
-  return type in AUTO_TYPE_LABELS;
-}
-
-function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: boolean }) {
-  const { toast } = useToast();
-  const [formType, setFormType] = useState("note");
-  const [formContent, setFormContent] = useState("");
-  const [showForm, setShowForm] = useState(false);
-
-  const { data: activities, isLoading, refetch } = useListClientActivities(clientId, {
-    query: { enabled: isOpen && !!clientId, queryKey: getListClientActivitiesQueryKey(clientId) },
-  });
-  const { data: outboundMessages, isLoading: loadingOutbound } = useListOutboundMessages({ clientId, limit: 100 });
-
-  const { mutate: createActivity, isPending } = useCreateClientActivity({
-    mutation: {
-      onSuccess: () => {
-        setFormContent("");
-        setShowForm(false);
-        refetch();
-        toast({ title: "Atividade registrada com sucesso!" });
-      },
-      onError: () => {
-        toast({ title: "Erro ao registrar atividade", variant: "destructive" });
-      },
-    },
-  });
-
-  function handleSubmit() {
-    if (!formContent.trim()) return;
-    createActivity({ clientId, data: { type: formType, content: formContent.trim() } });
-  }
-
-  return (
-    <div className="space-y-3">
-      {(loadingOutbound || (outboundMessages ?? []).length > 0) && (
-        <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-          <p className="text-sm font-semibold">Mensagens multicanal</p>
-          {loadingOutbound ? <Skeleton className="h-12 w-full" /> : (outboundMessages ?? []).map((message) => (
-            <div key={message.id} className="rounded-md border bg-card p-2.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Badge variant="outline">{message.origin}</Badge>
-                <span className="text-xs text-muted-foreground">{format(parseISO(message.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span>
-                <Badge className={message.status === "partial" ? "bg-orange-100 text-orange-800" : "bg-muted"}>{message.status === "partial" ? "Falha parcial" : message.status}</Badge>
-              </div>
-              <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                {message.deliveries.map((delivery) => (
-                  <div key={delivery.id} className="text-xs flex items-center justify-between gap-2">
-                    <span>{delivery.channel === "email" ? "E-mail" : "WhatsApp"} · {delivery.recipient ?? "sem contato"}</span>
-                    <span className={delivery.status === "failed" ? "text-red-600" : delivery.status === "skipped" ? "text-amber-700" : "text-muted-foreground"}>{delivery.status}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-muted-foreground">
-          {isLoading ? "Carregando…" : `${(activities ?? []).length} atividade(s)`}
-        </p>
-        <Button variant="outline" size="sm" onClick={() => setShowForm(s => !s)}>
-          <Plus className="w-4 h-4 mr-1" />
-          Registrar
-        </Button>
-      </div>
-
-      {showForm && (
-        <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
-          <div className="flex gap-2">
-            {ACTIVITY_TYPE_OPTIONS.map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setFormType(opt.value)}
-                className={`text-xs px-2.5 py-1 rounded-full border font-medium transition-colors ${formType === opt.value ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border hover:bg-muted"}`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-          <Textarea
-            placeholder="Descreva a atividade…"
-            value={formContent}
-            onChange={e => setFormContent(e.target.value)}
-            className="min-h-[70px] resize-none text-sm"
-          />
-          <div className="flex gap-2 justify-end">
-            <Button variant="ghost" size="sm" onClick={() => { setShowForm(false); setFormContent(""); }}>Cancelar</Button>
-            <Button size="sm" onClick={handleSubmit} disabled={!formContent.trim() || isPending}>
-              {isPending && <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />}
-              Salvar
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
-        </div>
-      ) : !(activities ?? []).length ? (
-        <div className="text-center py-10 text-muted-foreground">
-          <Calendar className="w-10 h-10 mx-auto mb-2 opacity-30" />
-          <p className="text-sm font-medium">Nenhuma atividade registrada</p>
-          <p className="text-xs mt-1">O histórico é criado automaticamente conforme reservas e pagamentos acontecem.</p>
-        </div>
-      ) : (
-        <div className="relative space-y-0">
-          {(activities ?? []).map((act, idx) => {
-            const { Icon, bg, color } = activityIcon(act.type);
-            return (
-              <div key={act.id} className="flex gap-3">
-                <div className="flex flex-col items-center">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${bg}`}>
-                    <Icon className={`w-3.5 h-3.5 ${color}`} />
-                  </div>
-                  {idx < (activities ?? []).length - 1 && <div className="w-px flex-1 bg-border mt-1 mb-1" />}
-                </div>
-                <div className="pb-4 min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{activityTypeLabel(act.type)}</span>
-                    {!isAutoActivity(act.type) && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Manual</span>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">{act.content}</p>
-                  <p className="text-xs text-muted-foreground/70 mt-0.5">
-                    {format(parseISO(act.createdAt), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface ServerDocument {
-  id: string;
-  name: string;
-  url: string;
-  fileKey: string | null;
-  mimeType: string | null;
-  sizeBytes: number | null;
-  uploadedById: string;
-  createdAt: string;
-}
-
-function formatDocSize(bytes: number | null | undefined) {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function ClientDocumentsTab({ clientId }: { clientId: string }) {
-  const { toast } = useToast();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [docs, setDocs] = useState<ServerDocument[]>([]);
-  const [loadingDocs, setLoadingDocs] = useState(true);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const hasLocalData = !!localStorage.getItem(`visite-crm-docs-${clientId}`);
-
-  const { startUpload, isUploading, isRetrying, uploadProgress, cancelUpload, guardDialog } = useUploadDocument({
-    onComplete: async (result) => {
-      try {
-        const resp = await fetch(`${API_BASE_ADMIN}/api/admin/clients/${clientId}/documents`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: result.name,
-            url: result.url,
-            mimeType: result.mimeType,
-            sizeBytes: result.size,
-          }),
-        });
-        if (!resp.ok) throw new Error("Failed to save");
-        const doc: ServerDocument = await resp.json();
-        setDocs(prev => [doc, ...prev]);
-        toast({ title: "Documento enviado com sucesso!" });
+o com sucesso!" });
       } catch {
         toast({ title: "Erro ao salvar documento no servidor", variant: "destructive" });
       }
@@ -990,7 +655,12 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
             </DialogHeader>
 
             {(() => {
-              const totalReservationsValue = (reservations?.data ?? []).reduce((sum, r) => sum + (r.totalValue || 0), 0);
+              const financialSummaries = (reservations?.data ?? []).map(r =>
+                getReservationFinancialSummary(r as ReservationWithFinancialLinks)
+              );
+              const totalReservationsValue = financialSummaries.reduce((sum, summary) => sum + summary.subtotal, 0);
+              const totalReservationsPaid = financialSummaries.reduce((sum, summary) => sum + summary.paid, 0);
+              const totalReservationsBalance = financialSummaries.reduce((sum, summary) => sum + summary.balance, 0);
               return (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 py-2">
                   <Card className="p-3">
@@ -999,12 +669,12 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                   </Card>
                   <Card className="p-3">
                     <p className="text-xs text-muted-foreground">Valor Pago</p>
-                    <p className="text-lg font-bold text-green-600">{formatCurrency(client.totalSpent)}</p>
+                    <p className="text-lg font-bold text-green-600">{formatCurrency(totalReservationsPaid)}</p>
                   </Card>
                   <Card className="p-3">
                     <p className="text-xs text-muted-foreground">Saldo Devedor</p>
-                    <p className={`text-lg font-bold ${client.outstandingBalance > 0 ? "text-destructive" : "text-green-600"}`}>
-                      {formatCurrency(client.outstandingBalance)}
+                    <p className={`text-lg font-bold ${totalReservationsBalance > 0 ? "text-destructive" : "text-green-600"}`}>
+                      {formatCurrency(totalReservationsBalance)}
                     </p>
                   </Card>
                   <Card className="p-3">
@@ -1129,6 +799,7 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                 ) : (
                   <div className="space-y-2">
                     {reservations.data.map(r => {
+                      const financial = getReservationFinancialSummary(r as ReservationWithFinancialLinks);
                       const birthDate = r.client?.birthDate ? new Date(r.client.birthDate) : null;
                       const ageYears = birthDate ? Math.floor((Date.now() - birthDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : null;
                       const ageCategory = ageYears == null ? "adult" : ageYears < 12 ? "child" : ageYears >= 60 ? "senior" : "adult";
@@ -1139,9 +810,6 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                       };
                       const catInfo = ageCategoryLabel[ageCategory];
                       const firstSeat = r.seats?.[0] ?? null;
-                      const paidForReservation = (payments?.data ?? [])
-                        .filter(p => p.reservationId === r.id && p.status === PAYMENT_STATUS.PAID)
-                        .reduce((sum, p) => sum + Number(p.amount), 0);
                       return (
                         <div key={r.id} className="p-3 rounded-lg border space-y-1.5">
                           <div className="flex items-center justify-between">
@@ -1163,24 +831,27 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                               <span className="text-xs text-muted-foreground">CPF: {r.client.cpf}</span>
                             )}
                           </div>
-                          {(r as { discountTotal?: number | null }).discountTotal ? (
+                          {financial.discount > 0 ? (
                             <div className="space-y-0.5">
                               <div className="flex items-center gap-2">
                                 <p className="text-sm font-semibold line-through text-muted-foreground">
-                                  {formatCurrency(r.totalValue + ((r as { discountTotal?: number | null }).discountTotal ?? 0))}
+                                  {formatCurrency(financial.subtotal)}
                                 </p>
                                 <span className="text-xs text-destructive font-medium">
-                                  − {formatCurrency((r as { discountTotal?: number | null }).discountTotal ?? 0)}
+                                  − {formatCurrency(financial.discount)}
                                 </span>
                               </div>
-                              <p className="text-sm font-semibold">Valor Final: {formatCurrency(r.totalValue)}</p>
+                              <p className="text-sm font-semibold">Total líquido: {formatCurrency(financial.total)}</p>
                             </div>
                           ) : (
-                            <p className="text-sm font-semibold">Valor do negócio: {formatCurrency(r.totalValue)}</p>
+                            <p className="text-sm font-semibold">Total líquido: {formatCurrency(financial.total)}</p>
                           )}
-                          {paidForReservation > 0 && (
-                            <p className="text-sm text-green-600 font-medium">Pago: {formatCurrency(paidForReservation)}</p>
-                          )}
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-sm">
+                            <span className="text-green-600 font-medium">Pago: {formatCurrency(financial.paid)}</span>
+                            <span className={`font-medium ${financial.balance > 0 ? "text-destructive" : "text-green-600"}`}>
+                              Saldo devedor: {formatCurrency(financial.balance)}
+                            </span>
+                          </div>
                         </div>
                       );
                     })}
@@ -1472,7 +1143,12 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
             </Dialog>
 
             {(() => {
-              const totalReservationsValue = (reservations?.data ?? []).reduce((sum, r) => sum + (r.totalValue || 0), 0);
+              const financialSummaries = (reservations?.data ?? []).map(r =>
+                getReservationFinancialSummary(r as ReservationWithFinancialLinks)
+              );
+              const totalReservationsValue = financialSummaries.reduce((sum, summary) => sum + summary.subtotal, 0);
+              const totalReservationsPaid = financialSummaries.reduce((sum, summary) => sum + summary.paid, 0);
+              const totalReservationsBalance = financialSummaries.reduce((sum, summary) => sum + summary.balance, 0);
               return (
                 <div className="border-t pt-3 mt-2 grid grid-cols-3 gap-4">
                   <div className="flex items-center gap-1.5">
@@ -1481,12 +1157,12 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs text-muted-foreground">Valor Pago:</span>
-                    <span className="text-sm font-bold text-green-600">{formatCurrency(client.totalSpent)}</span>
+                    <span className="text-sm font-bold text-green-600">{formatCurrency(totalReservationsPaid)}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs text-muted-foreground">Saldo Devedor:</span>
-                    <span className={`text-sm font-bold ${client.outstandingBalance > 0 ? "text-destructive" : "text-green-600"}`}>
-                      {formatCurrency(client.outstandingBalance)}
+                    <span className={`text-sm font-bold ${totalReservationsBalance > 0 ? "text-destructive" : "text-green-600"}`}>
+                      {formatCurrency(totalReservationsBalance)}
                     </span>
                   </div>
                 </div>

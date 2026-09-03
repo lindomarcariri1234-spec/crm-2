@@ -558,6 +558,7 @@ export interface StoreOrder extends LinkedData {
   installments?: number | null;
   installmentAmount?: string | null;
   depositAmount?: string | null;
+  paidAmount?: number | string | null;
   amountRemaining?: string | null;
   pixQrCode?: string | null;
   pixQrCodeUrl?: string | null;

@@ -27,8 +27,13 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 vi.mock("../services/checkout/post-booking.js", () => ({
   runPostPaymentSideEffects: vi.fn(),
 }));
+vi.mock("../services/client-financials.js", () => ({
+  recalculateClientFinancials: vi.fn(),
+}));
 vi.mock("../services/checkout/persist-order.js", () => ({
   applyOrderInventoryEffects: vi.fn(),
+  releaseOrderInventoryHolds: vi.fn(),
+  reverseOrderInventoryEffects: vi.fn(),
 }));
 vi.mock("../services/checkout/cancel-partner-items.js", () => ({
   cancelPartnerOrderItems: vi.fn(),

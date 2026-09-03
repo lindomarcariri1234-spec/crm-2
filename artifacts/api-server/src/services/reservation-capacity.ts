@@ -11,7 +11,12 @@ export type LockedReservationCapacityRow = {
   tripId: string;
   status: typeof RESERVATION_STATUS.PENDING | typeof RESERVATION_STATUS.CONFIRMED;
   seats: string[];
+  capacityUnits: number;
 };
+
+function claimedCapacity(row: Pick<LockedReservationCapacityRow, "capacityUnits" | "seats">): number {
+  return row.capacityUnits > 0 ? row.capacityUnits : row.seats.length;
+}
 
 /**
  * Finds seats already occupied by active reservations or complimentary
@@ -73,7 +78,7 @@ export async function moveLockedReservationCapacity(
   newTripId: string,
   seatsForConflictCheck: string[] = reservation.seats,
 ): Promise<void> {
-  if (reservation.tripId === newTripId || reservation.seats.length === 0) return;
+  if (reservation.tripId === newTripId || claimedCapacity(reservation) === 0) return;
 
   const tripIds = [reservation.tripId, newTripId].sort();
   await tx
@@ -101,7 +106,7 @@ export async function moveLockedReservationCapacity(
     );
   }
 
-  const seatsCount = reservation.seats.length;
+  const seatsCount = claimedCapacity(reservation);
   const oldTripCapacity = {
     availableSeats: sql`LEAST(total_capacity, GREATEST(0, available_seats + ${seatsCount}))`,
     ...(reservation.status === RESERVATION_STATUS.CONFIRMED
@@ -140,6 +145,7 @@ export async function lockReservationForCancellation(
       tripId: reservationsTable.tripId,
       status: reservationsTable.status,
       seats: reservationsTable.seats,
+      capacityUnits: reservationsTable.capacityUnits,
     })
     .from(reservationsTable)
     .where(and(
@@ -187,7 +193,7 @@ export async function cancelLockedReservationAndReleaseCapacity(
   // actually changed the active row.
   if (!transitioned) return false;
 
-  const seatsCount = reservation.seats.length;
+  const seatsCount = claimedCapacity(reservation);
   if (seatsCount > 0) {
     await tx
       .update(tripsTable)
@@ -219,7 +225,7 @@ export async function deleteReservationAndReleaseCapacity(
   const reservation = await lockReservationForCancellation(tx, tenantId, reservationId);
 
   if (reservation) {
-    const seatsCount = reservation.seats.length;
+    const seatsCount = claimedCapacity(reservation);
     if (seatsCount > 0) {
       await tx
         .update(tripsTable)

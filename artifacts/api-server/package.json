@@ -7,11 +7,13 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "build:vercel": "node ./build-vercel.mjs",
+    "verify:vercel": "node ./scripts/verify-vercel-bundle.mjs",
     "deploy:vercel": "node ./scripts/run-vercel-build.mjs",
     "migrate:vercel": "node ./scripts/run-vercel-migrate.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "NODE_OPTIONS='--max-old-space-size=4096' tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
+    "test:bundle-size": "vitest run scripts/vercel-bundle-size.test.mjs",
     "test:integration": "if [ -z \"${DATABASE_URL:-}\" ]; then echo 'Skipping referral-reversal integration tests: DATABASE_URL is not set.'; else vitest run --config vitest.integration.config.ts; fi"
   },
   "dependencies": {

@@ -20,6 +20,7 @@ export async function cancelPartnerOrderItems(
     reason: string;
     itemId?: string;
     rejectSettledCommission?: boolean;
+    skipAvailabilityRelease?: boolean;
   },
 ): Promise<void> {
   const items = await tx.select({
@@ -29,6 +30,7 @@ export async function cancelPartnerOrderItems(
     quantity: storeOrderItemsTable.quantity,
     total: storeOrderItemsTable.total,
     metadata: storeOrderItemsTable.metadata,
+    partnerCapacityClaimedQuantity: storeOrderItemsTable.partnerCapacityClaimedQuantity,
   }).from(storeOrderItemsTable).where(and(
     eq(storeOrderItemsTable.orderId, args.orderId),
     ...(args.itemId ? [eq(storeOrderItemsTable.id, args.itemId)] : []),
@@ -41,6 +43,7 @@ export async function cancelPartnerOrderItems(
       itemStatus: "cancelled",
       cancellationReason: args.reason,
       cancelledAt: new Date(),
+      partnerCapacityClaimedQuantity: 0,
     }).where(and(
       eq(storeOrderItemsTable.id, item.id),
       ne(storeOrderItemsTable.itemStatus, "cancelled"),
@@ -48,9 +51,14 @@ export async function cancelPartnerOrderItems(
     if (transitioned.length === 0) continue;
 
     const partnerDate = item.metadata?.["partnerDate"];
-    if (item.partnerProductId && typeof partnerDate === "string") {
+    if (
+      !args.skipAvailabilityRelease
+      && item.partnerProductId
+      && item.partnerCapacityClaimedQuantity > 0
+      && typeof partnerDate === "string"
+    ) {
       await tx.update(partnerAvailabilityTable).set({
-        spotsUsed: sql`GREATEST(${partnerAvailabilityTable.spotsUsed} - ${item.quantity}, 0)`,
+        spotsUsed: sql`GREATEST(${partnerAvailabilityTable.spotsUsed} - ${item.partnerCapacityClaimedQuantity}, 0)`,
         updatedAt: new Date(),
       }).where(and(
         eq(partnerAvailabilityTable.productId, item.partnerProductId),

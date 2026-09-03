@@ -7,11 +7,16 @@ let appPromise;
 // UploadThing fetch patch before loading uploadthing itself.
 function traceExternalDependenciesForVercel() {
   return Promise.all([
+    import("exceljs"),
     import("googleapis"),
     import("http-proxy-middleware"),
+    import("openai"),
     import("jspdf"),
     import("jspdf-autotable"),
     import("pdfkit"),
+    import("stripe"),
+    import("stripe-replit-sync"),
+    import("uploadthing"),
   ]);
 }
 void traceExternalDependenciesForVercel;

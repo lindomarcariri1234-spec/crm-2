@@ -86,6 +86,50 @@ Não coloque chaves ou secrets no repositório. Variáveis privadas continuam no
 ambiente de produção da Vercel; apenas URLs públicas devem ser atualizadas
 para o domínio canônico.
 
+### Reparo operacional one-shot na base publicada
+
+Reparos corretivos não são endpoints da API. O build da Vercel possui um
+gancho **opt-in** que só executa quando um operador com acesso ao projeto
+Vercel define temporariamente as variáveis abaixo no ambiente **Production** e
+inicia um novo deploy. A função serverless publicada não contém uma rota para
+esse reparo.
+
+Para inspecionar uma reserva antes de alterar dados, defina no painel da
+Vercel:
+
+```text
+VISITECRM_ONE_SHOT_REPAIR=orphan-reservation
+VISITECRM_ONE_SHOT_REPAIR_APPLY=false
+VISITECRM_ONE_SHOT_REPAIR_TENANT_ID=<tenant>
+VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID=<id>
+```
+
+Em vez do ID, pode ser usado exatamente um número de reserva:
+
+```text
+VISITECRM_ONE_SHOT_REPAIR_RESERVATION_NUMBER=<numero>
+```
+
+Nunca defina os dois identificadores. O build imprime uma linha
+`REPAIR_RESULT` com o status, a quantidade de assentos liberados e a
+preservação do registro, sem imprimir `DATABASE_URL` nem qualquer outra
+credencial.
+
+Depois de conferir o dry-run nos logs do build, troque
+`VISITECRM_ONE_SHOT_REPAIR_APPLY` para `true` e inicie outro deploy
+intencionalmente. A aplicação exige o tenant e um único identificador,
+bloqueia a reserva dentro de uma transação, cancela somente uma reserva órfã
+ativa, libera seus assentos de forma atômica e grava uma entrada append-only
+em `audit_logs`; a reserva original não é apagada. Reexecuções são seguras:
+uma reserva já corrigida retorna `already-repaired` sem liberar assentos
+novamente.
+
+Assim que o resultado for confirmado, remova **todas** as variáveis
+com prefixo `VISITECRM_ONE_SHOT_REPAIR` do ambiente Production no painel da
+Vercel antes de qualquer outro deploy. Não copie a `DATABASE_URL` para o
+shell, para um arquivo versionado ou para o chat: o build herda a credencial
+privada já configurada na Vercel.
+
 ### Verificação mínima
 
 Após a validação, confira:

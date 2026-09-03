@@ -49,8 +49,9 @@ vi.mock("drizzle-orm", async () => {
 
 vi.mock("@workspace/permissions", () => ({
   PAYMENT_STATUS: { PAID: "paid" },
+  PAYMENT_TYPE: { RECEIVABLE: "receivable" },
   RESERVATION_STATUS: {},
-  STORE_ORDER_STATUS: { CONFIRMED: "confirmed" },
+  STORE_ORDER_STATUS: { CONFIRMED: "confirmed", CANCELLED: "cancelled" },
   STORE_PAYMENT_STATUS: { PAID: "paid" },
 }));
 
@@ -67,10 +68,16 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 }));
 
 vi.mock("../services/checkout/post-booking.js", () => ({ runPostPaymentSideEffects: vi.fn() }));
-vi.mock("../services/checkout/persist-order.js", () => ({ applyOrderInventoryEffects: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../services/client-financials.js", () => ({ recalculateClientFinancials: vi.fn() }));
+vi.mock("../services/checkout/persist-order.js", () => ({
+  applyOrderInventoryEffects: vi.fn().mockResolvedValue(undefined),
+  releaseOrderInventoryHolds: vi.fn().mockResolvedValue(undefined),
+  reverseOrderInventoryEffects: vi.fn().mockResolvedValue(undefined),
+}));
+const mockRecordOrderPaymentSettlement = vi.fn();
 vi.mock("../services/settlements/financial-ledger.js", () => ({
   adjustOrderSettlement: vi.fn().mockResolvedValue(undefined),
-  recordOrderPaymentSettlement: vi.fn().mockResolvedValue(undefined),
+  recordOrderPaymentSettlement: (...args: unknown[]) => mockRecordOrderPaymentSettlement(...args),
   reverseOrderSettlement: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../queues/email-helpers.js", () => ({ enqueueNewBookingNotificationEmail: vi.fn() }));
@@ -91,6 +98,7 @@ import { applyGatewayPayment } from "../routes/webhooks.js";
 let selectResults: object[][] = [];
 
 function makeTx() {
+  const insertedValues: Array<Record<string, unknown>> = [];
   return {
     select: vi.fn(() => {
       const chain: Record<string, unknown> = {};
@@ -112,7 +120,13 @@ function makeTx() {
         })),
       })),
     })),
-    insert: vi.fn(() => ({ values: vi.fn(() => Promise.resolve()) })),
+    insert: vi.fn(() => ({
+      values: vi.fn((values: Record<string, unknown>) => {
+        insertedValues.push(values);
+        return Promise.resolve();
+      }),
+    })),
+    insertedValues,
   };
 }
 
@@ -132,6 +146,7 @@ const ORDER = {
   clientId: "client-1",
   paymentMethod: "stripe",
   paymentStatus: "pending",
+  totalAmount: "100.00",
 };
 
 const BASE_ARGS = {
@@ -153,6 +168,7 @@ beforeEach(() => {
   selectResults = [];
   mockPaymentExists.mockResolvedValue(false);
   mockSyncReservationPaymentStatus.mockResolvedValue(undefined);
+  mockRecordOrderPaymentSettlement.mockResolvedValue(undefined);
   // Return the full CreateReservationsResult shape — applyGatewayPayment now
   // accesses createResult.tripIds, so returning undefined would throw.
   mockCreateReservationsForOrder.mockResolvedValue({ reservationIds: [], reservationClientId: null, tripIds: [] });
@@ -160,7 +176,7 @@ beforeEach(() => {
 
 describe("applyGatewayPayment", () => {
   it("returns a non-null result with empty reservationIds for a PAID product-only order (regression guard)", async () => {
-    selectResults = [[ORDER], []]; // order found, no linked reservations
+    selectResults = [[ORDER], [], []]; // order found, no previous payments, no linked reservations
 
     const result = await callApply();
 
@@ -170,12 +186,16 @@ describe("applyGatewayPayment", () => {
       tripIds: [],
       tenantId: "tenant-1",
     });
-    // No reservations → no Payment rows allocated for product-only orders.
+    expect((result as unknown)).toBeTruthy();
     expect(mockSyncReservationPaymentStatus).not.toHaveBeenCalled();
+    expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ orderId: "order-1", receivedAmount: 100 }),
+    );
   });
 
   it("returns reservationIds and allocates payments for a trip order", async () => {
-    selectResults = [[ORDER], [{ id: "res-1", totalValue: "100" }]];
+    selectResults = [[ORDER], [{ id: "res-1", totalValue: "100", paidValue: "0" }], []];
 
     const result = await callApply();
 
@@ -188,8 +208,83 @@ describe("applyGatewayPayment", () => {
     expect(mockSyncReservationPaymentStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the order pending when the gateway confirms only a deposit", async () => {
+    const tx = makeTx();
+    selectResults = [[{ ...ORDER, totalAmount: "100" }], [{
+      id: "res-1", totalValue: "100", paidValue: "0",
+    }], []];
+
+    const result = await applyGatewayPayment(tx as any, { ...BASE_ARGS, amount: 30 } as any);
+
+    expect(result).toEqual({
+      orderId: "order-1",
+      reservationIds: ["res-1"],
+      tripIds: [],
+      tenantId: "tenant-1",
+      partialPayment: true,
+    });
+    expect(tx.update).toHaveBeenCalledOnce();
+    expect(tx.insert).toHaveBeenCalledOnce();
+    expect(mockSyncReservationPaymentStatus).toHaveBeenCalledOnce();
+    expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ receivedAmount: 30 }),
+    );
+  });
+
+  it("allocates only the reservation share and records the product remainder on a mixed cart", async () => {
+    const tx = makeTx();
+    selectResults = [[{ ...ORDER, totalAmount: "150" }], [{
+      id: "res-1",
+      totalValue: "100",
+      paidValue: "0",
+    }], []];
+
+    await applyGatewayPayment(tx as any, { ...BASE_ARGS, amount: 150 } as any);
+
+    expect(tx.insertedValues.map((row) => ({
+      reservationId: row.reservationId,
+      category: row.category,
+      amount: row.amount,
+    }))).toEqual([
+      { reservationId: "res-1", category: "reservation", amount: "100" },
+      { reservationId: null, category: "store_order", amount: "50.00" },
+    ]);
+    expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ receivedAmount: 150 }),
+    );
+  });
+
+  it("uses only the outstanding reservation balance on a cumulative gateway payment", async () => {
+    const tx = makeTx();
+    selectResults = [[ORDER], [{
+      id: "res-1",
+      totalValue: "100",
+      paidValue: "30",
+    }], [{ amount: "30" }]];
+
+    const result = await applyGatewayPayment(tx as any, {
+      ...BASE_ARGS,
+      transactionId: "tx-2",
+      amount: 70,
+    } as any);
+
+    expect(result?.partialPayment).toBeUndefined();
+    expect(tx.insertedValues).toHaveLength(1);
+    expect(tx.insertedValues[0]).toMatchObject({
+      reservationId: "res-1",
+      amount: "70",
+      transactionId: "tx-2",
+    });
+    expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ transactionId: "tx-2", receivedAmount: 70 }),
+    );
+  });
+
   it("propagates tripIds from createReservationsForOrder into the result", async () => {
-    selectResults = [[ORDER], [{ id: "res-1", totalValue: "100" }]];
+    selectResults = [[ORDER], [{ id: "res-1", totalValue: "100", paidValue: "0" }], []];
     mockCreateReservationsForOrder.mockResolvedValueOnce({
       reservationIds: ["res-1"],
       reservationClientId: null,
@@ -206,7 +301,7 @@ describe("applyGatewayPayment", () => {
     // A product-only order that happens to include a trip product still gets
     // tripIds from createReservationsForOrder; the function returns early for
     // product-only (no existing reservations) but still after createReservations.
-    selectResults = [[ORDER], []]; // order found, no existing DB reservations
+    selectResults = [[ORDER], [], []]; // order found, no existing reservations, no previous payments
     mockCreateReservationsForOrder.mockResolvedValueOnce({
       reservationIds: ["res-new"],
       reservationClientId: null,

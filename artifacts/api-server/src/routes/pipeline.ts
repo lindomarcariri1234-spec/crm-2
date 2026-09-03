@@ -1,14 +1,14 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable, storeOrdersTable, referralsTable, linkedDataReconciliationRunsTable } from "@workspace/db";
-import { eq, and, asc, desc, inArray, count } from "drizzle-orm";
+import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable, storeOrdersTable, referralsTable, paymentsTable, linkedDataReconciliationRunsTable } from "@workspace/db";
+import { eq, and, asc, desc, inArray, count, or } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, ADMIN_ROLES } from '../lib/tenant';
 import { z } from "zod";
 import { ROLES, DEAL_STATUS, type DealStatus } from "@workspace/permissions";
 import { parseDealStatus } from "../lib/status-validators";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { linkedDeal, linkedOrder, linkedReferral, linkedReservation } from "../lib/linked-data";
+import { calculateReceivedAmount, linkedDeal, linkedOrder, linkedReferral, linkedReservation } from "../lib/linked-data";
 import { reconcileLinkedData } from "../services/linked-data-reconciliation";
 
 const router = Router();
@@ -371,6 +371,36 @@ router.get("/deals", async (req, res, next: NextFunction): Promise<void> => {
     ]) : [[], []] as [(typeof reservationsTable.$inferSelect)[], (typeof storeOrdersTable.$inferSelect)[]];
     const allLinkedReservations = [...linkedReservations, ...siblingReservations.filter(r => !linkedReservationMap.has(r.id))];
     const linkedOrderMap = new Map(linkedOrders.map(o => [o.orderNumber, o]));
+    const pendingReferralIds = [...new Set(linkedOrders.flatMap((order) => {
+      const pending = order.pendingReferral as { referralId?: string | null } | null;
+      return pending?.referralId ? [pending.referralId] : [];
+    }))];
+    const pendingReferrals = pendingReferralIds.length
+      ? await db.select().from(referralsTable).where(and(
+        eq(referralsTable.tenantId, me.tenantId),
+        inArray(referralsTable.id, pendingReferralIds),
+      ))
+      : [];
+    const pendingReferralMap = new Map(
+      pendingReferrals.map((referral) => [referral.id, referral]),
+    );
+    const orderIds = linkedOrders.map((order) => order.id);
+    const allReservationIds = allLinkedReservations.map((reservation) => reservation.id);
+    const payments = orderIds.length || allReservationIds.length
+      ? await db.select({
+        orderId: paymentsTable.orderId,
+        reservationId: paymentsTable.reservationId,
+        amount: paymentsTable.amount,
+        status: paymentsTable.status,
+        type: paymentsTable.type,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, me.tenantId),
+        or(
+          ...(orderIds.length ? [inArray(paymentsTable.orderId, orderIds)] : []),
+          ...(allReservationIds.length ? [inArray(paymentsTable.reservationId, allReservationIds)] : []),
+        ),
+      ))
+      : [];
     const linkedReferrals = allLinkedReservations.length ? await db.select().from(referralsTable).where(and(
       eq(referralsTable.tenantId, me.tenantId), inArray(referralsTable.reservationId, allLinkedReservations.map(r => r.id)),
     )) : [];
@@ -392,8 +422,24 @@ router.get("/deals", async (req, res, next: NextFunction): Promise<void> => {
         linkedDeal: linkedDeal(d),
         linkedDeals: [linkedDeal(d)],
         linkedReservation: d.reservationId ? linkedReservation(linkedReservationMap.get(d.reservationId)) : null,
-        linkedOrder: d.reservationId ? linkedOrder(linkedOrderMap.get(linkedReservationMap.get(d.reservationId)?.storeOrderId ?? "")) : null,
-        linkedReferral: d.reservationId ? linkedReferral(linkedReferrals.find(r => r.reservationId === d.reservationId)) : null,
+        linkedOrder: d.reservationId ? (() => {
+          const reservation = linkedReservationMap.get(d.reservationId!);
+          const order = reservation?.storeOrderId ? linkedOrderMap.get(reservation.storeOrderId) : undefined;
+          if (!order) return null;
+          const siblingIds = allLinkedReservations
+            .filter((item) => item.storeOrderId === order.orderNumber)
+            .map((item) => item.id);
+          return linkedOrder(order, { paidAmount: calculateReceivedAmount(order.id, siblingIds, payments) });
+        })() : null,
+        linkedReferral: d.reservationId ? (() => {
+          const reservation = linkedReservationMap.get(d.reservationId!);
+          const order = reservation?.storeOrderId ? linkedOrderMap.get(reservation.storeOrderId) : undefined;
+          const pending = order?.pendingReferral as { referralId?: string | null } | null;
+          return linkedReferral(
+            linkedReferrals.find((referral) => referral.reservationId === d.reservationId)
+              ?? (pending?.referralId ? pendingReferralMap.get(pending.referralId) : undefined),
+          );
+        })() : null,
         linkedReservations: d.reservationId ? (() => {
           const canonical = linkedReservationMap.get(d.reservationId);
           return canonical ? allLinkedReservations.filter(r => canonical.storeOrderId ? r.storeOrderId === canonical.storeOrderId : r.id === canonical.id).map(linkedReservation) : [];

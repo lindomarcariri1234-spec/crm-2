@@ -1,41 +1,7 @@
-import { Router, type NextFunction } from "express";
-import { db } from "@workspace/db";
-import {
-  storesTable,
-  storeCategoriesTable,
-  storeProductsTable,
-  storeOrdersTable,
-  storeOrderItemsTable,
-  storeCouponsTable,
-  storeReviewsTable,
-  pipelineStagesTable,
-  dealsTable,
-  reservationsTable,
-  referralsTable,
-  partnerProductsTable,
-  priceAlertSubscriptionsTable,
-} from "@workspace/db";
-import { eq, and, desc, asc, count, ilike, or, sql, ne, inArray } from "drizzle-orm";
-import { z } from "zod/v4";
-import { randomBytes, createHash } from "crypto";
-import { generateId } from "../lib/id";
-import { requireAuth } from "../lib/tenant";
-import { createReservationsForOrder, confirmReservationsForOrder } from "../services/checkout/create-reservations";
-import { broadcastSeatUpdate } from "../lib/realtime";
-import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
-import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
-import { applyOrderInventoryEffects } from "../services/checkout/persist-order";
-import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { deleteOrphanedFile, deleteOrphanedImages } from "../lib/uploadthing";
-import { ADMIN_ROLES } from '../lib/tenant';
-import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
-import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
-import { encryptCredential } from "../lib/crypto";
-import { sendPriceDropAlertEmail } from "../queues/email-helpers";
-import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
-import { linkedReferral, linkedReservation, linkedOrder } from "../lib/linked-data";
+nancial-ledger";
+import { calculateReceivedAmount, linkedReferral, linkedReservation, linkedOrder } from "../lib/linked-data";
 import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
+import { roundMoney } from "../lib/pricing";
 
 // Storefront public base for links inside price-drop alert e-mails. Product
 // links point at the Vitrine; the unsubscribe link points at the public API,
@@ -736,6 +702,21 @@ router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> 
     const orderNumbers = orders.map(o => o.orderNumber);
     const reservations = orderNumbers.length ? await db.select().from(reservationsTable)
       .where(and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))) : [];
+    const paymentRows = orders.length || reservations.length
+      ? await db.select({
+        orderId: paymentsTable.orderId,
+        reservationId: paymentsTable.reservationId,
+        amount: paymentsTable.amount,
+        status: paymentsTable.status,
+        type: paymentsTable.type,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, me.tenantId),
+        or(
+          ...(orders.length ? [inArray(paymentsTable.orderId, orders.map(order => order.id))] : []),
+          ...(reservations.length ? [inArray(paymentsTable.reservationId, reservations.map(reservation => reservation.id))] : []),
+        ),
+      ))
+      : [];
     const reservationMap = new Map<string, typeof reservations>();
     for (const reservation of reservations) {
       const list = reservationMap.get(reservation.storeOrderId ?? "") ?? [];
@@ -749,15 +730,25 @@ router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> 
         eq(dealsTable.tenantId, me.tenantId), inArray(dealsTable.reservationId, reservations.map(r => r.id)),
       )),
     ]) : [[], []] as [(typeof referralsTable.$inferSelect)[], (typeof dealsTable.$inferSelect)[]];
-    res.json({ data: orders.map(order => ({
-      ...order,
-      linkedOrder: linkedOrder(order),
-      linkedReservations: (reservationMap.get(order.orderNumber) ?? []).map(linkedReservation),
-      linkedReferral: linkedReferral(referralRows.find(r => (reservationMap.get(order.orderNumber) ?? []).some(x => x.id === r.reservationId))),
-      linkedDeals: linkedDeals.filter(d => (reservationMap.get(order.orderNumber) ?? []).some(r => r.id === d.reservationId)).map(d => ({
-        id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value),
-      })),
-    })), total, page, limit });
+    res.json({ data: orders.map(order => {
+      const orderReservations = reservationMap.get(order.orderNumber) ?? [];
+      const paidAmount = calculateReceivedAmount(
+        order.id,
+        orderReservations.map(reservation => reservation.id),
+        paymentRows,
+      );
+      return {
+        ...order,
+        paidAmount,
+        amountRemaining: Math.max(0, Number(order.totalAmount) - paidAmount).toFixed(2),
+        linkedOrder: linkedOrder(order, { paidAmount }),
+        linkedReservations: orderReservations.map(linkedReservation),
+        linkedReferral: linkedReferral(referralRows.find(r => orderReservations.some(x => x.id === r.reservationId))),
+        linkedDeals: linkedDeals.filter(d => orderReservations.some(r => r.id === d.reservationId)).map(d => ({
+          id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value),
+        })),
+      };
+    }), total, page, limit });
   } catch (err) {
     next(err);
   }
@@ -805,6 +796,21 @@ router.get("/store/orders/:id", async (req, res, next: NextFunction): Promise<vo
     const reservations = await db.select().from(reservationsTable).where(and(
       eq(reservationsTable.tenantId, me.tenantId), eq(reservationsTable.storeOrderId, order.orderNumber),
     ));
+    const paymentRows = reservations.length || order.id
+      ? await db.select({
+        orderId: paymentsTable.orderId,
+        reservationId: paymentsTable.reservationId,
+        amount: paymentsTable.amount,
+        status: paymentsTable.status,
+        type: paymentsTable.type,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, me.tenantId),
+        or(
+          eq(paymentsTable.orderId, order.id),
+          ...(reservations.length ? [inArray(paymentsTable.reservationId, reservations.map(reservation => reservation.id))] : []),
+        ),
+      ))
+      : [];
     const [referrals, linkedDeals] = reservations.length ? await Promise.all([
       db.select().from(referralsTable).where(and(
       eq(referralsTable.tenantId, me.tenantId), inArray(referralsTable.reservationId, reservations.map(r => r.id)),
@@ -815,7 +821,21 @@ router.get("/store/orders/:id", async (req, res, next: NextFunction): Promise<vo
     ]) : [[], []] as [(typeof referralsTable.$inferSelect)[], (typeof dealsTable.$inferSelect)[]];
     // pendingReferral/paymentToken are internal checkout state and must never cross this boundary.
     const safeOrder = safeAdminOrder(order);
-    res.json({ ...safeOrder, items, linkedOrder: linkedOrder(order), linkedReservations: reservations.map(linkedReservation), linkedReferral: linkedReferral(referrals[0]), linkedDeals: linkedDeals.map(d => ({ id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value) })) });
+    const paidAmount = calculateReceivedAmount(
+      order.id,
+      reservations.map(reservation => reservation.id),
+      paymentRows,
+    );
+    res.json({
+      ...safeOrder,
+      paidAmount,
+      amountRemaining: Math.max(0, Number(order.totalAmount) - paidAmount).toFixed(2),
+      items,
+      linkedOrder: linkedOrder(order, { paidAmount }),
+      linkedReservations: reservations.map(linkedReservation),
+      linkedReferral: linkedReferral(referrals[0]),
+      linkedDeals: linkedDeals.map(d => ({ id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value) })),
+    });
   } catch (err) {
     next(err);
   }
@@ -854,10 +874,14 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     const baseWhere = and(eq(storeOrdersTable.id, req.params.id), eq(storeOrdersTable.storeId, store.id));
     const updateWhere = isTransitioningToPaid
       ? and(baseWhere, ne(storeOrdersTable.paymentStatus, STORE_PAYMENT_STATUS.PAID))
-      : baseWhere;
+      : parsed.data.status === STORE_ORDER_STATUS.CANCELLED
+        ? and(baseWhere, ne(storeOrdersTable.status, STORE_ORDER_STATUS.CANCELLED))
+        : baseWhere;
 
     let didTransitionToPaid = false;
+    let didTransitionToCancelled = false;
     let order: typeof storeOrdersTable.$inferSelect | undefined;
+    let manualCreateResult: Awaited<ReturnType<typeof createReservationsForOrder>> | null = null;
     if (isTransitioningToPaid) {
       await db.transaction(async (tx) => {
         const [lockedOrder] = await tx.select().from(storeOrdersTable)
@@ -871,6 +895,70 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           throw new ConflictError("Não é possível receber pagamento de um pedido cancelado", "ORDER_CANCELLED");
         }
 
+        manualCreateResult = await createReservationsForOrder(
+          lockedOrder.id,
+          tx as unknown as Parameters<typeof createReservationsForOrder>[1],
+        );
+        const linkedReservations = await tx.select({
+          id: reservationsTable.id,
+        }).from(reservationsTable).where(and(
+          eq(reservationsTable.tenantId, lockedOrder.tenantId),
+          eq(reservationsTable.storeOrderId, lockedOrder.orderNumber),
+        ));
+        const paymentRows = await tx.select({
+          orderId: paymentsTable.orderId,
+          reservationId: paymentsTable.reservationId,
+          amount: paymentsTable.amount,
+          status: paymentsTable.status,
+          type: paymentsTable.type,
+        }).from(paymentsTable).where(and(
+          eq(paymentsTable.tenantId, lockedOrder.tenantId),
+          linkedReservations.length > 0
+            ? or(
+              eq(paymentsTable.orderId, lockedOrder.id),
+              inArray(paymentsTable.reservationId, linkedReservations.map((reservation) => reservation.id)),
+            )
+            : eq(paymentsTable.orderId, lockedOrder.id),
+        ));
+        const alreadyReceived = calculateReceivedAmount(
+          lockedOrder.id,
+          linkedReservations.map((reservation) => reservation.id),
+          paymentRows,
+        );
+        const remaining = Math.max(0, Number(lockedOrder.totalAmount) - alreadyReceived);
+        if (remaining <= 0) {
+          throw new ConflictError("O pedido já possui pagamentos suficientes; atualize a página", "ORDER_ALREADY_PAID");
+        }
+        const manualPaymentEventId = generateId();
+        const confirmation = await confirmReservationsForOrder(
+          lockedOrder.id,
+          remaining,
+          tx,
+          manualPaymentEventId,
+        );
+        const orderOnlyAmount = Math.max(0, roundMoney(remaining - confirmation.allocatedAmount));
+        if (orderOnlyAmount > 0) {
+          await tx.insert(paymentsTable).values({
+            id: generateId(),
+            tenantId: lockedOrder.tenantId,
+            reservationId: null,
+            clientId: lockedOrder.clientId ?? null,
+            orderId: lockedOrder.id,
+            type: PAYMENT_TYPE.RECEIVABLE,
+            category: "store_order",
+            amount: orderOnlyAmount.toFixed(2),
+            paymentMethod: lockedOrder.paymentMethod ?? "manual",
+            installmentNumber: 1,
+            totalInstallments: 1,
+            dueDate: new Date(),
+            paidAt: new Date(),
+            status: PAYMENT_STATUS.PAID,
+            gateway: "manual",
+            transactionId: manualPaymentEventId,
+            description: "Pagamento do pedido confirmado manualmente pela agência",
+          });
+        }
+
         // The row lock serializes competing manual confirmations. Inventory is
         // claimed first in this transaction, so a capacity failure rolls back
         // without leaving a PAID order whose effects cannot be retried.
@@ -880,15 +968,19 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           tenantId: lockedOrder.tenantId,
           orderId: lockedOrder.id,
           gateway: "manual",
-          transactionId: `manual:${lockedOrder.id}`,
+          transactionId: manualPaymentEventId,
           occurredAt: new Date(),
+          receivedAmount: remaining,
         });
         order = { ...lockedOrder, ...updates } as typeof storeOrdersTable.$inferSelect;
         didTransitionToPaid = true;
       });
     } else {
-      await db.update(storeOrdersTable).set(updates).where(updateWhere)
+      const updatedRows = await db.update(storeOrdersTable).set(updates).where(updateWhere)
         .returning({ id: storeOrdersTable.id });
+      didTransitionToCancelled =
+        parsed.data.status === STORE_ORDER_STATUS.CANCELLED
+        && updatedRows.length > 0;
       [order] = await db.select().from(storeOrdersTable)
         .where(baseWhere).limit(1);
     }
@@ -905,8 +997,11 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
       // Chain post-payment side effects (portal account + referral code) AFTER
       // reservations commit, so ensurePortalAccount sees the freshly-created
       // reservations. Both are gated behind confirmed payment.
-      createReservationsForOrder(order.id)
+      Promise.resolve(
+        manualCreateResult as Awaited<ReturnType<typeof createReservationsForOrder>> | null,
+      )
         .then(async (createResult) => {
+          if (!createResult) return;
           // Broadcast seat-map SSE events so the admin boarding panel and seat map
           // auto-refresh without requiring a page reload. Fire-and-forget per trip.
           for (const tripId of createResult.tripIds) {
@@ -941,11 +1036,6 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           // financial totals. Restricting to didTransitionToPaid ensures this
           // only ever runs once, on the actual transition.
           if (didTransitionToPaid) {
-            try {
-              await confirmReservationsForOrder(currentOrder.id, Number(currentOrder.totalAmount), db);
-            } catch (err) {
-              req.log.warn({ err, orderId: currentOrder.id }, "[store/orders] Failed to confirm reservation payment on manual payment confirmation");
-            }
             // Gated on didTransitionToPaid (not isTransitioningToPaid) so retries
             // and duplicate admin "mark as paid" actions never re-trigger portal
             // provisioning, referral code generation, client activity records, or
@@ -999,7 +1089,7 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     //   handled by reverseProductOnlyOrderReferral.
     // - Trip-based orders: reservationId was set at deferred-credit time;
     //   handled by reverseTripOrderReferrals keyed on the linked reservation(s).
-    if (parsed.data.status === STORE_ORDER_STATUS.CANCELLED && order.referralEffectsAppliedAt != null) {
+    if (didTransitionToCancelled && order.referralEffectsAppliedAt != null) {
       const ref = order.pendingReferral;
       if (ref?.code) {
         try {
@@ -1035,14 +1125,24 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     }
 
     if (
-      parsed.data.status === STORE_ORDER_STATUS.CANCELLED
+      didTransitionToCancelled
       && (order.paymentStatus === STORE_PAYMENT_STATUS.PAID || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED)
     ) {
       await db.transaction(async (tx) => {
+        const shouldReverseInventory =
+          currentOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID
+          || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED;
+        if (shouldReverseInventory) {
+          await reverseOrderInventoryEffects(
+            currentOrder.id,
+            tx as unknown as Parameters<typeof reverseOrderInventoryEffects>[1],
+          );
+        }
         await cancelPartnerOrderItems(tx as unknown as Parameters<typeof cancelPartnerOrderItems>[0], {
           orderId: currentOrder.id,
           tenantId: me.tenantId,
           reason: "Pedido cancelado pela agência",
+          skipAvailabilityRelease: false,
         });
         await reverseOrderSettlement(tx as unknown as Parameters<typeof reverseOrderSettlement>[0], {
           tenantId: me.tenantId,

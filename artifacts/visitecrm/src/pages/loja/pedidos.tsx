@@ -238,11 +238,15 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
             {order.depositAmount && Number(order.depositAmount) > 0 && (
               <>
                 <div className="flex justify-between text-sm text-blue-700 pt-1">
-                  <span>Pago</span>
+                  <span>Entrada solicitada</span>
                   <span className="font-semibold">R$ {parseFloat(order.depositAmount).toFixed(2)}</span>
                 </div>
               </>
             )}
+            <div className="flex justify-between text-sm text-green-700">
+              <span>Pagamento recebido</span>
+              <span className="font-semibold">R$ {Number(order.paidAmount ?? 0).toFixed(2)}</span>
+            </div>
             <div className="flex justify-between text-sm text-amber-700">
               <span>Saldo</span>
               <span className="font-semibold">R$ {parseFloat(order.amountRemaining ?? order.totalAmount).toFixed(2)}</span>
@@ -675,7 +679,7 @@ export default function LojaPedidos() {
                     <TableCell className="font-medium text-sm">
                       <div data-testid={`text-order-total-${order.id}`}>{money(order.totalAmount)}</div>
                       <div className="text-xs text-muted-foreground">Base {money(order.subtotal)} · Desc. {money(order.discountAmount)}</div>
-                      <div className="text-xs text-muted-foreground">Pago {money(order.depositAmount)} · Saldo {money(order.amountRemaining ?? order.totalAmount)}</div>
+                      <div className="text-xs text-muted-foreground">Pago {money(order.paidAmount)} · Saldo {money(order.amountRemaining ?? order.totalAmount)}</div>
                     </TableCell>
                     <TableCell className="text-xs">
                       {order.linkedReservations?.length ? (

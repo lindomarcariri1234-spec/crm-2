@@ -178,10 +178,10 @@ describe("createReservationsForOrder — storefront Pipeline stage", () => {
   });
 
   it.each([
-    { description: "without a deposit", depositAmount: "0", status: "pending" },
-    { description: "with a deposit", depositAmount: "25", status: "confirmed" },
-  ])("sends $description reservations to Vitrine", async ({ depositAmount, status }) => {
-    const order = { ...BASE_ORDER, depositAmount };
+    { description: "without a deposit", depositAmount: "0" },
+    { description: "with a requested deposit", depositAmount: "25" },
+  ])("sends $description reservations to Vitrine", async ({ depositAmount }) => {
+    const order = { ...BASE_ORDER, depositAmount, subtotal: "100", discountAmount: "0", totalAmount: "100", couponCode: null, pendingReferral: null };
     const tx = queueTripReservation(order);
 
     const result = await createReservationsForOrder(order.id, tx);
@@ -189,7 +189,9 @@ describe("createReservationsForOrder — storefront Pipeline stage", () => {
     expect(result.reservationIds).toEqual(["reservation-1"]);
     expect(mockInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({
-        status,
+        status: "pending",
+        paidValue: "0",
+        balance: "100",
         clientId: "client-1",
         tripId: "trip-1",
       }),
@@ -207,6 +209,48 @@ describe("createReservationsForOrder — storefront Pipeline stage", () => {
         targetStageName: "Vitrine",
         executor: tx,
       }),
+    );
+  });
+
+  it("keeps the requested deposit unpaid and propagates the order discount", async () => {
+    const order = {
+      ...BASE_ORDER,
+      depositAmount: "30",
+      subtotal: "199",
+      discountAmount: "9.95",
+      totalAmount: "189.05",
+      couponCode: null,
+      pendingReferral: { code: "25900F03" },
+    };
+    const tx = makeSelectQueueExecutor([
+      [order],
+      [{ id: "store-1", tenantId: "tenant-1", slug: "minha-loja" }],
+      [{ productId: "product-1", quantity: 1, price: "199", total: "199" }],
+      [TRIP_PRODUCT],
+      [],
+    ]);
+
+    await createReservationsForOrder(order.id, tx);
+
+    expect(mockInsertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        totalValue: "189.05",
+        paidValue: "0",
+        balance: "189.05",
+        status: "pending",
+        depositAmount: "30",
+        discountReferralCode: "25900F03",
+        discountReferralAmount: "9.95",
+        discountTotal: "9.95",
+      }),
+    );
+    expect(mockSyncClientDeal).toHaveBeenCalledWith(
+      "client-1",
+      "tenant-1",
+      "trip-1",
+      189.05,
+      "agency-user-1",
+      expect.anything(),
     );
   });
 

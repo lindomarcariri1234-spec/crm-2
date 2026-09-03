@@ -63,6 +63,7 @@
 - [Vitest mock call typing](vitest-mock-call-typing.md) — strict TypeScript infers vi.fn() calls as zero-argument tuples; type mocks or cast call arrays before inspecting arguments.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
+- [GitHub API push limits](github-api-push-limits.md) — Git Database uploads need small tree batches, paced blob requests, and a separate strategy for oversized generated artifacts
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
 - [Orval codegen workflow](orval-js-yaml-codegen.md) — generated API artifacts come from the canonical first OpenAPI document; use the drift command, never hand-edit output.
@@ -102,3 +103,5 @@
 - [Referral financial state transitions](referral-financial-state-transitions.md) — claim payment rows atomically before side effects; admin edits cannot bypass conversion or reversal effects
 - [Production one-off repair access](production-one-off-repair-access.md) — the production SQL replica is read-only; one-off mutations need a separately exposed operational runtime connection
 - [Cross-trip swap test fixtures](cross-trip-swap-fixtures.md) — reciprocal active reservation moves need distinct clients because the partial client+trip uniqueness constraint rejects direct swaps
+- [Canonical storefront runtime](canonical-storefront-runtime.md) — public storefront HTML and API must use the same runtime/database or SEO previews can serve stale settings.
+- [Vercel bundle external dependencies](vercel-bundle-externals.md) — mirror the API external policy and Vercel trace imports; UploadThing must remain external after the fetch patch.

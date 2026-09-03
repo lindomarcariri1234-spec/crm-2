@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
 import { rm, cp, readFile, readdir, access } from "node:fs/promises";
+import {
+  assertBundleFresh,
+  getBundleIntegrityBanner,
+  getBundleSourceFingerprint,
+} from "./scripts/bundle-integrity.mjs";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 const require = createRequire(import.meta.url);
@@ -13,6 +18,9 @@ const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
+  const sourceFingerprint = await getBundleSourceFingerprint(
+    path.resolve(artifactDir, "../.."),
+  );
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
@@ -136,11 +144,12 @@ async function buildAll() {
     sourcemap: "linked",
     plugins: [
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
-      esbuildPluginPino({ transports: ["pino-pretty"] })
+      esbuildPluginPino({ transports: ["pino-pretty"] }),
     ],
     // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
     banner: {
-      js: `import { createRequire as __bannerCrReq } from 'node:module';
+      js: `${getBundleIntegrityBanner(sourceFingerprint)}
+import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
 import __bannerUrl from 'node:url';
 
@@ -156,7 +165,10 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   // above sets __dirname to the bundle dir, so at runtime runMigrations() looks for
   // <dist>/migrations. Copy the package's migrations folder there so they can be applied.
   const stripeSyncEntry = require.resolve("stripe-replit-sync");
-  const stripeSyncMigrations = path.join(path.dirname(stripeSyncEntry), "migrations");
+  const stripeSyncMigrations = path.join(
+    path.dirname(stripeSyncEntry),
+    "migrations",
+  );
 
   // Preflight: verify the migrations folder exists and contains at least one .sql file.
   // If the package layout ever changes (folder moved/renamed), fail loudly at build time
@@ -166,19 +178,30 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   } catch {
     throw new Error(
       `[build] stripe-replit-sync migrations folder not found at: ${stripeSyncMigrations}\n` +
-      `Ensure stripe-replit-sync is installed and its package layout hasn't changed.`
+        `Ensure stripe-replit-sync is installed and its package layout hasn't changed.`,
     );
   }
-  const migrationFiles = (await readdir(stripeSyncMigrations)).filter((f) => f.endsWith(".sql"));
+  const migrationFiles = (await readdir(stripeSyncMigrations)).filter((f) =>
+    f.endsWith(".sql"),
+  );
   if (migrationFiles.length === 0) {
     throw new Error(
       `[build] stripe-replit-sync migrations folder exists but contains no .sql files: ${stripeSyncMigrations}\n` +
-      `The package may have changed its layout. Check the stripe-replit-sync package contents.`
+        `The package may have changed its layout. Check the stripe-replit-sync package contents.`,
     );
   }
 
-  await cp(stripeSyncMigrations, path.join(distDir, "migrations"), { recursive: true });
-  console.log(`[build] Copied ${migrationFiles.length} stripe-replit-sync migration(s) to dist/migrations`);
+  await cp(stripeSyncMigrations, path.join(distDir, "migrations"), {
+    recursive: true,
+  });
+  console.log(
+    `[build] Copied ${migrationFiles.length} stripe-replit-sync migration(s) to dist/migrations`,
+  );
+  await assertBundleFresh(
+    path.join(distDir, "index.mjs"),
+    "artifacts/api-server/dist/index.mjs",
+    sourceFingerprint,
+  );
 }
 
 async function assertFetchPatchOrder() {
@@ -195,8 +218,8 @@ async function assertFetchPatchOrder() {
   if (!source.includes('from "./lib/fetch-patch"')) {
     throw new Error(
       "[build] FATAL: fetch-patch.ts is not statically imported in src/index.ts. " +
-      "Add `import { FETCH_PATCH_APPLIED } from './lib/fetch-patch'` as a static " +
-      "import so the patch runs before any uploadthing module loads.",
+        "Add `import { FETCH_PATCH_APPLIED } from './lib/fetch-patch'` as a static " +
+        "import so the patch runs before any uploadthing module loads.",
     );
   }
 
@@ -205,8 +228,8 @@ async function assertFetchPatchOrder() {
   if (/^\s*import\s+app\s+from\s+["']\.\/app["']/m.test(source)) {
     throw new Error(
       "[build] FATAL: `import app from './app'` is a static import in src/index.ts. " +
-      "app.ts transitively loads uploadthing — change to `await import('./app')` so " +
-      "uploadthing can only load AFTER fetch-patch has already patched globalThis.fetch.",
+        "app.ts transitively loads uploadthing — change to `await import('./app')` so " +
+        "uploadthing can only load AFTER fetch-patch has already patched globalThis.fetch.",
     );
   }
 
@@ -215,8 +238,8 @@ async function assertFetchPatchOrder() {
   if (!source.includes('import("./app")')) {
     throw new Error(
       "[build] FATAL: dynamic `import('./app')` not found in src/index.ts. " +
-      "app must be loaded via `await import('./app')` so uploadthing loads after the " +
-      "globalThis.fetch patch and the _uploadthingPatched assertion have run.",
+        "app must be loaded via `await import('./app')` so uploadthing loads after the " +
+        "globalThis.fetch patch and the _uploadthingPatched assertion have run.",
     );
   }
 
@@ -229,8 +252,8 @@ async function assertFetchPatchOrder() {
   if (!bundle.includes("_uploadthingPatched")) {
     throw new Error(
       "[build] FATAL: _uploadthingPatched marker not found in dist/index.mjs. " +
-      "fetch-patch.ts may have been excluded from the bundle. " +
-      "UploadThing CDN uploads will fail with 'Invalid signature'.",
+        "fetch-patch.ts may have been excluded from the bundle. " +
+        "UploadThing CDN uploads will fail with 'Invalid signature'.",
     );
   }
 
@@ -241,9 +264,9 @@ async function assertFetchPatchOrder() {
   if (!bundle.includes('"uploadthing/')) {
     throw new Error(
       "[build] FATAL: no uploadthing require() found in dist/index.mjs. " +
-      "uploadthing must stay in the externals list in build.mjs so it is loaded " +
-      "via Node require() at runtime (inside the dynamic app import), not bundled " +
-      "inline during module graph evaluation.",
+        "uploadthing must stay in the externals list in build.mjs so it is loaded " +
+        "via Node require() at runtime (inside the dynamic app import), not bundled " +
+        "inline during module graph evaluation.",
     );
   }
 

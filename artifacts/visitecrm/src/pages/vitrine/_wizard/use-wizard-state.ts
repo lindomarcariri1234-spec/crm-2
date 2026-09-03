@@ -43,6 +43,7 @@ export type CompletedOrder = {
   createdAt: string;
   reservationExpiresAt?: string | null;
   depositAmount?: string | null;
+  paidAmount?: number | string | null;
   amountRemaining?: string | null;
   pixQrCode?: string | null;
   pixQrCodeUrl?: string | null;

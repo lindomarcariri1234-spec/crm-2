@@ -147,8 +147,13 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
   const totalAmt = parseFloat(order.totalAmount);
   const subtotalAmt = parseFloat(order.subtotal);
   const depositAmt = order.depositAmount ? parseFloat(order.depositAmount) : 0;
-  const paidAmt = depositAmt > 0 ? depositAmt : order.paidAt ? totalAmt : 0;
-  const pendingAmt = totalAmt - paidAmt;
+  const paidAmt = Number(order.paidAmount ?? 0);
+  const pendingAmt = Math.max(0, Number(order.amountRemaining ?? totalAmt - paidAmt));
+  const displayPaymentStatus = paidAmt > 0 && pendingAmt > 0
+    ? "partially_paid"
+    : order.paymentStatus === "pending"
+      ? "unpaid"
+      : order.paymentStatus;
 
   return (
     <div className="space-y-6">
@@ -160,7 +165,7 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
               {order.orderNumber}
             </p>
           </div>
-          <PaymentStatusBadge status={order.paymentStatus} />
+          <PaymentStatusBadge status={displayPaymentStatus} />
         </div>
 
         <div
@@ -237,13 +242,19 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
 
       {depositAmt > 0 && depositAmt < totalAmt && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 space-y-2">
-          <p className="text-xs font-semibold text-amber-700">Pagamento Parcial — Depósito Mínimo</p>
+          <p className="text-xs font-semibold text-amber-700">
+            {paidAmt > 0 ? "Pagamento parcial confirmado" : "Entrada mínima solicitada"}
+          </p>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Valor total do pedido</span>
             <span className="font-semibold">R$ {totalAmt.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Valor pago agora (depósito)</span>
+            <span className="text-muted-foreground">Entrada mínima solicitada</span>
+            <span className="font-semibold">R$ {depositAmt.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Pagamento recebido</span>
             <span className="font-semibold text-green-700">R$ {paidAmt.toFixed(2)}</span>
           </div>
           <div className="flex justify-between border-t border-amber-200 pt-1">
@@ -251,7 +262,9 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
             <span className="font-bold text-amber-900">R$ {Math.max(0, pendingAmt).toFixed(2)}</span>
           </div>
           <p className="text-xs text-amber-700">
-            Sua reserva está confirmada! O restante poderá ser pago posteriormente.
+            {paidAmt > 0
+              ? "O saldo considera somente pagamentos confirmados."
+              : "A entrada solicitada ainda não é um pagamento confirmado."}
           </p>
         </div>
       )}

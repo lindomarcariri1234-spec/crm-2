@@ -16,8 +16,14 @@
     }
   },
   "rewrites": [
-    { "source": "/loja/:slug", "destination": "/api" },
-    { "source": "/loja/:slug/:rest*", "destination": "/api" },
+    {
+      "source": "/loja/:slug",
+      "destination": "https://crm-2-lindomarcariri.replit.app/loja/:slug"
+    },
+    {
+      "source": "/loja/:slug/:rest*",
+      "destination": "https://crm-2-lindomarcariri.replit.app/loja/:slug/:rest*"
+    },
     {
       "source": "/api/:path*",
       "destination": "/api?__vercel_api_path=:path*"

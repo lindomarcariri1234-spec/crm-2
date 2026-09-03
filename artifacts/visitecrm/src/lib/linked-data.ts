@@ -20,6 +20,7 @@ export interface LinkedOrder {
   discountAmount: number | string;
   totalAmount: number | string;
   depositAmount: number | string | null;
+  paidAmount: number | string;
   amountRemaining: number | string | null;
   paymentMethod: string | null;
   installments: number | null;

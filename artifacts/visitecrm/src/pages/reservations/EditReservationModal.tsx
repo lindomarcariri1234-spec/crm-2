@@ -30,6 +30,7 @@ import { DollarSign, Receipt, ArrowDown, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, type ReservationStatus } from "@workspace/permissions";
 import { fmt, METHOD_LABELS } from "./constants";
+import type { LinkedData } from "@/lib/linked-data";
 
 const MANAGEMENT_ROLES = ["super_admin", "agency_admin", "agency_manager"];
 
@@ -85,6 +86,9 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
   );
   const payments = paymentsData?.data ?? [];
   const canDeletePayment = MANAGEMENT_ROLES.includes(me?.role ?? "");
+  const linkedData = data as (typeof data & LinkedData) | undefined;
+  const hasSingleLinkedReservation = linkedData?.linkedOrder != null
+    && linkedData.linkedReservations?.length === 1;
 
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
 
@@ -116,10 +120,10 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
 
   // Derived balance from current state
   const currentBalance = Math.max(0, (parseFloat(totalValue) || 0) - (parseFloat(paidValue) || 0));
-  const isDepositOnly = data?.depositAmount != null
-    && data.depositAmount > 0
-    && data.depositAmount < data.totalValue
-    && data.balance > 0;
+  const requestedDeposit = Number(linkedData?.linkedOrder?.depositAmount ?? data?.depositAmount ?? 0);
+  const isDepositOnly = requestedDeposit > 0
+    && requestedDeposit < (parseFloat(totalValue) || 0)
+    && currentBalance > 0;
 
   // Load existing data when modal opens / data refreshes
   useEffect(() => {
@@ -131,9 +135,15 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       setSelectedClientId(data.clientId ?? "");
 
       const existingQuantity = data.seats?.length ?? 1;
-      const existingTotal = Number(data.totalValue ?? 0);
-      const existingDiscount = Number(data.discountTotal ?? 0);
-      const existingPaid = Number(data.paidValue ?? 0);
+      const existingTotal = hasSingleLinkedReservation
+        ? Number(linkedData?.linkedOrder?.totalAmount ?? data.totalValue ?? 0)
+        : Number(data.totalValue ?? 0);
+      const existingDiscount = hasSingleLinkedReservation
+        ? Number(linkedData?.linkedOrder?.discountAmount ?? data.discountTotal ?? 0)
+        : Number(data.discountTotal ?? 0);
+      const existingPaid = hasSingleLinkedReservation
+        ? Number(linkedData?.linkedOrder?.paidAmount ?? data.paidValue ?? 0)
+        : Number(data.paidValue ?? 0);
       const existingCommission = data.commissionAmount ?? null;
       const existingSellerId = data.sellerId ?? "";
 
@@ -154,7 +164,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       const remaining = Math.max(0, existingTotal - existingPaid);
       setPayAmount(remaining > 0 ? remaining.toFixed(2) : "");
     }
-  }, [data]);
+  }, [data, hasSingleLinkedReservation, linkedData?.linkedOrder]);
 
   // Auto-sync totalValue from ticketPrice * quantity - discount
   useEffect(() => {

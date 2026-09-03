@@ -38,6 +38,10 @@ export interface PersistedOrderItem {
   partnerId?: string | null;
   partnerProductId?: string | null;
   sellerName?: string | null;
+  inventoryClaimedQuantity?: number;
+  inventoryState?: string | null;
+  salesCountApplied?: boolean;
+  partnerCapacityClaimedQuantity?: number;
 }
 
 export interface PersistOrderArgs {
@@ -226,7 +230,9 @@ async function writeOrderAndItems(tx: Tx, args: PersistOrderArgs, reservationCli
     totalAmount: totalAmount.toFixed(2),
     ...(data.depositAmount != null ? {
       depositAmount: data.depositAmount.toFixed(2),
-      amountRemaining: (totalAmount - data.depositAmount).toFixed(2),
+      // The configured deposit is only the requested minimum. Until a real
+      // receivable payment is recorded, the entire order remains outstanding.
+      amountRemaining: totalAmount.toFixed(2),
     } : {}),
     ...(couponId && { couponId }),
     ...(data.couponCode && { couponCode: data.couponCode }),
@@ -311,10 +317,16 @@ async function reservePartnerAvailability(
 
 export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<PersistOrderResult> {
   await db.transaction(async (tx) => {
-    await lockProductsForCheckout(tx, {
+    const claimedProductIds = await lockProductsForCheckout(tx, {
       fetchedProducts: args.fetchedProducts,
       quantityByProductId: args.quantityByProductId,
     });
+    for (const item of args.orderItemsData) {
+      if (claimedProductIds.has(item.productId)) {
+        item.inventoryClaimedQuantity = item.quantity;
+        item.inventoryState = "reserved";
+      }
+    }
     // CRM client upsert is intentionally NOT performed here. An anonymous
     // caller does not need to be authenticated to submit a checkout form, so
     // creating or updating a clientsTable row at this point would let unpaid
@@ -374,11 +386,10 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
     // (Stripe webhook or manual payment entry) to prevent anonymous users from holding
     // trip inventory without paying. See createReservationsForOrder in create-reservations.ts.
 
-    // Stock decrement, dated partner availability, coupon usageCount increment, and totalOrders increment are
-    // intentionally NOT performed here. They are deferred to applyOrderInventoryEffects,
-    // which is called from payment-confirmation paths (gateway webhook + manual payment)
-    // so that anonymous unpaid checkout submissions cannot drain inventory, exhaust
-    // coupon limits, or inflate store metrics without completing payment.
+    // Controlled stock is reserved above in the same transaction as the order
+    // item that owns the claim. Payment later converts that persisted claim to
+    // a sale; expiry/cancellation returns only the quantity owned by this item.
+    // Partner capacity, coupon usage and sales metrics remain payment-gated.
 
     // Referral bonus crediting (referrer's bonus amount, tier upgrade, loyalty points)
     // and referral-credit consumption are NOT performed here. They are applied only
@@ -422,11 +433,16 @@ export async function applyOrderInventoryEffects(orderId: string, tx: DbExecutor
 
   const items = await tx
     .select({
+      id: storeOrderItemsTable.id,
       productId: storeOrderItemsTable.productId,
       quantity: storeOrderItemsTable.quantity,
       partnerProductId: storeOrderItemsTable.partnerProductId,
       productName: storeOrderItemsTable.productName,
       metadata: storeOrderItemsTable.metadata,
+      inventoryClaimedQuantity: storeOrderItemsTable.inventoryClaimedQuantity,
+      inventoryState: storeOrderItemsTable.inventoryState,
+      salesCountApplied: storeOrderItemsTable.salesCountApplied,
+      partnerCapacityClaimedQuantity: storeOrderItemsTable.partnerCapacityClaimedQuantity,
     })
     .from(storeOrderItemsTable)
     .where(and(
@@ -435,31 +451,55 @@ export async function applyOrderInventoryEffects(orderId: string, tx: DbExecutor
     ));
   if (items.length === 0) return;
 
-  await reservePartnerAvailability(tx, items);
-
-  const quantityByProductId = new Map<string, number>();
-  for (const item of items) {
-    quantityByProductId.set(item.productId, (quantityByProductId.get(item.productId) ?? 0) + item.quantity);
-  }
-
-  const productIds = [...quantityByProductId.keys()];
+  const productIds = [...new Set(items.map((item) => item.productId))];
   const products = await tx
-    .select({ id: storeProductsTable.id, trackInventory: storeProductsTable.trackInventory })
+    .select({
+      id: storeProductsTable.id,
+      trackInventory: storeProductsTable.trackInventory,
+      allowBackorder: storeProductsTable.allowBackorder,
+    })
     .from(storeProductsTable)
     .where(inArray(storeProductsTable.id, productIds));
+  const productMap = new Map(products.map((product) => [product.id, product]));
 
-  for (const product of products) {
-    const totalQty = quantityByProductId.get(product.id) ?? 0;
-    if (product.trackInventory) {
-      await tx.update(storeProductsTable).set({
-        stockQuantity: sql`GREATEST(0, COALESCE(stock_quantity, 0) - ${totalQty})`,
-        salesCount: sql`sales_count + ${totalQty}`,
-      }).where(eq(storeProductsTable.id, product.id));
-    } else {
-      await tx.update(storeProductsTable).set({
-        salesCount: sql`sales_count + ${totalQty}`,
-      }).where(eq(storeProductsTable.id, product.id));
+  for (const item of items) {
+    if (item.salesCountApplied) continue;
+    const product = productMap.get(item.productId);
+    if (!product) continue;
+
+    if (item.partnerCapacityClaimedQuantity === 0) {
+      await reservePartnerAvailability(tx, [item]);
     }
+
+    const controlled = product.trackInventory && !product.allowBackorder;
+    if (controlled && item.inventoryState !== "reserved") {
+      const claimed = await tx.update(storeProductsTable).set({
+        stockQuantity: sql`${storeProductsTable.stockQuantity} - ${item.quantity}`,
+      }).where(and(
+        eq(storeProductsTable.id, item.productId),
+        sql`COALESCE(${storeProductsTable.stockQuantity}, 0) >= ${item.quantity}`,
+      )).returning({ id: storeProductsTable.id });
+      if (claimed.length === 0) {
+        const error = new Error("insufficient_stock") as Error & { productName?: string };
+        error.productName = item.productName;
+        throw error;
+      }
+    }
+
+    const transitioned = await tx.update(storeOrderItemsTable).set({
+      inventoryClaimedQuantity: controlled ? item.quantity : 0,
+      inventoryState: controlled ? "sold" : null,
+      salesCountApplied: true,
+      partnerCapacityClaimedQuantity: item.partnerProductId ? item.quantity : 0,
+    }).where(and(
+      eq(storeOrderItemsTable.id, item.id),
+      eq(storeOrderItemsTable.salesCountApplied, false),
+    )).returning({ id: storeOrderItemsTable.id });
+    if (transitioned.length === 0) continue;
+
+    await tx.update(storeProductsTable).set({
+      salesCount: sql`${storeProductsTable.salesCount} + ${item.quantity}`,
+    }).where(eq(storeProductsTable.id, item.productId));
   }
 
   if (order.couponId) {
@@ -471,4 +511,89 @@ export async function applyOrderInventoryEffects(orderId: string, tx: DbExecutor
   await tx.update(storesTable)
     .set({ totalOrders: sql`total_orders + 1` })
     .where(eq(storesTable.id, order.storeId));
+}
+
+/**
+ * Reverses the checkout counters claimed on a PAID transition. Callers must
+ * hold the order row lock and only invoke this on a real PAID -> non-PAID
+ * transition; that status transition is the idempotency gate.
+ */
+export async function reverseOrderInventoryEffects(orderId: string, tx: DbExecutor): Promise<void> {
+  const [order] = await tx
+    .select({ storeId: storeOrdersTable.storeId, couponId: storeOrdersTable.couponId })
+    .from(storeOrdersTable)
+    .where(eq(storeOrdersTable.id, orderId))
+    .limit(1);
+  if (!order) return;
+
+  const items = await tx
+    .select({
+      id: storeOrderItemsTable.id,
+      productId: storeOrderItemsTable.productId,
+      quantity: storeOrderItemsTable.quantity,
+      partnerProductId: storeOrderItemsTable.partnerProductId,
+      metadata: storeOrderItemsTable.metadata,
+      inventoryClaimedQuantity: storeOrderItemsTable.inventoryClaimedQuantity,
+      inventoryState: storeOrderItemsTable.inventoryState,
+      salesCountApplied: storeOrderItemsTable.salesCountApplied,
+    })
+    .from(storeOrderItemsTable)
+    .where(and(
+      eq(storeOrderItemsTable.orderId, orderId),
+      ne(storeOrderItemsTable.itemStatus, "cancelled"),
+    ));
+
+  for (const item of items) {
+    const transitioned = await tx.update(storeOrderItemsTable).set({
+      inventoryState: item.inventoryState ? "released" : null,
+      salesCountApplied: false,
+    }).where(and(
+      eq(storeOrderItemsTable.id, item.id),
+      eq(storeOrderItemsTable.salesCountApplied, true),
+    )).returning({ id: storeOrderItemsTable.id });
+    if (transitioned.length === 0) continue;
+    await tx.update(storeProductsTable).set({
+      ...(item.inventoryState === "sold" && item.inventoryClaimedQuantity > 0
+        ? { stockQuantity: sql`COALESCE(${storeProductsTable.stockQuantity}, 0) + ${item.inventoryClaimedQuantity}` }
+        : {}),
+      salesCount: sql`GREATEST(0, ${storeProductsTable.salesCount} - ${item.quantity})`,
+    }).where(eq(storeProductsTable.id, item.productId));
+  }
+
+  if (order.couponId) {
+    await tx.update(storeCouponsTable)
+      .set({ usageCount: sql`GREATEST(0, usage_count - 1)` })
+      .where(eq(storeCouponsTable.id, order.couponId));
+  }
+  await tx.update(storesTable)
+    .set({ totalOrders: sql`GREATEST(0, total_orders - 1)` })
+    .where(eq(storesTable.id, order.storeId));
+}
+
+/**
+ * Releases unpaid stock holds exactly once. The item row is the ownership
+ * record, so a retry cannot return another checkout's units.
+ */
+export async function releaseOrderInventoryHolds(orderId: string, tx: DbExecutor): Promise<void> {
+  const items = await tx.select({
+    id: storeOrderItemsTable.id,
+    productId: storeOrderItemsTable.productId,
+    inventoryClaimedQuantity: storeOrderItemsTable.inventoryClaimedQuantity,
+  }).from(storeOrderItemsTable).where(and(
+    eq(storeOrderItemsTable.orderId, orderId),
+    eq(storeOrderItemsTable.inventoryState, "reserved"),
+  ));
+
+  for (const item of items) {
+    const released = await tx.update(storeOrderItemsTable).set({
+      inventoryState: "released",
+    }).where(and(
+      eq(storeOrderItemsTable.id, item.id),
+      eq(storeOrderItemsTable.inventoryState, "reserved"),
+    )).returning({ id: storeOrderItemsTable.id });
+    if (released.length === 0 || item.inventoryClaimedQuantity <= 0) continue;
+    await tx.update(storeProductsTable).set({
+      stockQuantity: sql`COALESCE(${storeProductsTable.stockQuantity}, 0) + ${item.inventoryClaimedQuantity}`,
+    }).where(eq(storeProductsTable.id, item.productId));
+  }
 }

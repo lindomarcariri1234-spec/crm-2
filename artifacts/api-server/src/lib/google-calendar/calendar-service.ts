@@ -412,7 +412,7 @@ export class GoogleCalendarService {
     }
   }
 
-  async deleteEvent(eventId: string, ctx: Record<string, unknown> = {}): Promise<boolean> {
+  async deleteEvent(eventId: string, ctx: Record<string, unknown> = {}): Promise<boolean | "not-found"> {
     try {
       await this.calendar.events.delete({
         calendarId: "primary",
@@ -423,24 +423,73 @@ export class GoogleCalendarService {
     } catch (err) {
       // Re-throw transient errors so withCalendarRetry and BullMQ can retry them.
       if (isTransientCalendarError(err)) throw err;
+      if (isEventNotFoundError(err)) return "not-found";
       await this.handleApiError(err, "deleteEvent", { ...ctx, eventId });
       return false;
     }
   }
 
-  async listEvents(timeMin: Date, timeMax: Date): Promise<Array<{ id: string; summary: string }>> {
+  async listEvents(timeMin: Date, timeMax: Date): Promise<Array<{
+    id: string;
+    summary: string;
+    description?: string;
+    location?: string;
+    startDateTime: Date;
+    endDateTime?: Date;
+  }>> {
     try {
-      const resp = await this.calendar.events.list({
-        calendarId: "primary",
-        timeMin: timeMin.toISOString(),
-        timeMax: timeMax.toISOString(),
-        singleEvents: true,
-        orderBy: "startTime",
-        maxResults: 250,
-      });
-      return (resp.data.items ?? [])
-        .filter((e) => e.id && e.summary)
-        .map((e) => ({ id: e.id!, summary: e.summary! }));
+      const events: Array<{
+        id: string;
+        summary: string;
+        description?: string;
+        location?: string;
+        startDateTime: Date;
+        endDateTime?: Date;
+      }> = [];
+      let pageToken: string | undefined;
+
+      do {
+        const resp = await this.calendar.events.list({
+          calendarId: "primary",
+          timeMin: timeMin.toISOString(),
+          timeMax: timeMax.toISOString(),
+          singleEvents: true,
+          orderBy: "startTime",
+          maxResults: 250,
+          ...(pageToken ? { pageToken } : {}),
+        });
+        for (const event of resp.data.items ?? []) {
+          const rawEvent = event as unknown as {
+            id?: string;
+            summary?: string;
+            description?: string;
+            location?: string;
+            start?: { dateTime?: string; date?: string };
+            end?: { dateTime?: string; date?: string };
+          };
+          if (!rawEvent.id || !rawEvent.summary) continue;
+          const startValue = rawEvent.start?.dateTime ?? rawEvent.start?.date;
+          if (!startValue) continue;
+          const endValue = rawEvent.end?.dateTime ?? rawEvent.end?.date;
+          events.push({
+            id: rawEvent.id,
+            summary: rawEvent.summary,
+            ...(rawEvent.description !== undefined ? { description: rawEvent.description } : {}),
+            ...(rawEvent.location !== undefined ? { location: rawEvent.location } : {}),
+            startDateTime: rawEvent.start?.dateTime
+              ? new Date(startValue)
+              : new Date(`${startValue}T00:00:00-03:00`),
+            ...(endValue ? {
+              endDateTime: rawEvent.end?.dateTime
+                ? new Date(endValue)
+                : new Date(`${endValue}T00:00:00-03:00`),
+            } : {}),
+          });
+        }
+        pageToken = (resp.data as unknown as { nextPageToken?: string }).nextPageToken ?? undefined;
+      } while (pageToken);
+
+      return events;
     } catch (err) {
       await this.handleApiError(err, "listEvents");
       return [];

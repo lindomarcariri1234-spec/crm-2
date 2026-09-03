@@ -235,9 +235,8 @@ beforeEach(() => {
 describe("DELETE /api/payments/:id", () => {
   it.each([
     ROLES.AGENCY_ADMIN,
-    ROLES.AGENCY_MANAGER,
     ROLES.SUPER_ADMIN,
-  ])("allows management role %s to delete a payment", async (role) => {
+  ])("allows administrative role %s to delete a payment", async (role) => {
     mockRequireAuth.mockResolvedValue({
       id: "manager-1",
       tenantId: TENANT_ID,
@@ -249,6 +248,23 @@ describe("DELETE /api/payments/:id", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ success: true });
     expect(dbState.payments.map((payment) => payment.id)).toEqual(["payment-to-keep"]);
+  });
+
+  it("returns 403 for AGENCY_MANAGER because financial access is view-only", async () => {
+    mockRequireAuth.mockResolvedValue({
+      id: "manager-1",
+      tenantId: TENANT_ID,
+      role: ROLES.AGENCY_MANAGER,
+    });
+
+    const response = await request(buildApp()).delete(`/api/payments/${PAYMENT_ID}`);
+
+    expect(response.status).toBe(403);
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(dbState.payments.map((payment) => payment.id)).toEqual([
+      PAYMENT_ID,
+      "payment-to-keep",
+    ]);
   });
 
   it("recalculates the reservation paid value and balance after deleting a paid payment", async () => {

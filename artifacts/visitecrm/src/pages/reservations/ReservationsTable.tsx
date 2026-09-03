@@ -14,6 +14,7 @@ import {
 import { STATUS_COLORS, STATUS_LABELS, METHOD_LABELS } from "./constants";
 import { RESERVATION_STATUS } from "@workspace/permissions";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { getReservationFinancialSummary, type ReservationWithFinancialLinks } from "./financial";
 
 interface ReservationsTableProps {
   reservations: Reservation[];
@@ -145,7 +146,8 @@ export function ReservationsTable({
       </div>
 
       <div className="bg-card rounded-lg border overflow-hidden">
-        <Table>
+        <div className="overflow-x-auto">
+        <Table className="min-w-[1180px]">
           <TableHeader>
             <TableRow>
               <TableHead>Nº Reserva</TableHead>
@@ -154,8 +156,10 @@ export function ReservationsTable({
               <TableHead>Embarque</TableHead>
               <TableHead>Assentos</TableHead>
               <TableHead>Valor Total</TableHead>
+              <TableHead>Desconto</TableHead>
+              <TableHead>Total líquido</TableHead>
               <TableHead>Pago</TableHead>
-              <TableHead>Saldo</TableHead>
+              <TableHead>Saldo devedor</TableHead>
               <TableHead>Pagamento</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Ações</TableHead>
@@ -165,12 +169,12 @@ export function ReservationsTable({
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
-                  {Array.from({ length: 11 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}
+                  {Array.from({ length: 13 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}
                 </TableRow>
               ))
             ) : reservations.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-12 text-muted-foreground">
+                <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
                   <div className="flex flex-col items-center gap-2">
                     <CalendarCheck className="w-8 h-8 opacity-30" />
                     <p>Nenhuma reserva encontrada</p>
@@ -179,7 +183,9 @@ export function ReservationsTable({
                 </TableCell>
               </TableRow>
             ) : (
-              reservations.map(r => (
+              reservations.map(r => {
+                const financial = getReservationFinancialSummary(r as ReservationWithFinancialLinks);
+                return (
                 <TableRow key={r.id} className="cursor-pointer hover:bg-muted/50">
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
@@ -250,10 +256,12 @@ export function ReservationsTable({
                       {r.seats.length > 3 && <span className="text-xs text-muted-foreground">+{r.seats.length - 3}</span>}
                     </div>
                   </TableCell>
-                  <TableCell className="font-medium text-sm">{formatCurrency(r.totalValue)}</TableCell>
-                  <TableCell className="text-sm text-green-700">{formatCurrency(r.paidValue)}</TableCell>
-                  <TableCell className={`text-sm font-medium ${r.balance > 0 ? "text-destructive" : "text-green-700"}`}>{formatCurrency(r.balance)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{METHOD_LABELS[r.paymentMethod ?? ""] ?? r.paymentMethod ?? "—"}</TableCell>
+                  <TableCell className="font-medium text-sm whitespace-nowrap">{formatCurrency(financial.subtotal)}</TableCell>
+                  <TableCell className="text-sm text-destructive whitespace-nowrap">{financial.discount > 0 ? `− ${formatCurrency(financial.discount)}` : "—"}</TableCell>
+                  <TableCell className="font-medium text-sm whitespace-nowrap">{formatCurrency(financial.total)}</TableCell>
+                  <TableCell className="text-sm text-green-700 whitespace-nowrap">{formatCurrency(financial.paid)}</TableCell>
+                  <TableCell className={`text-sm font-medium whitespace-nowrap ${financial.balance > 0 ? "text-destructive" : "text-green-700"}`}>{formatCurrency(financial.balance)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{METHOD_LABELS[financial.paymentMethod ?? ""] ?? financial.paymentMethod ?? "—"}</TableCell>
                   <TableCell>
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${STATUS_COLORS[r.status] ?? "bg-gray-100 text-gray-800"}`}>
                       {STATUS_LABELS[r.status] ?? r.status}
@@ -274,10 +282,12 @@ export function ReservationsTable({
                     </DropdownMenu>
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
+        </div>
       </div>
 
       {totalPages > 1 && (

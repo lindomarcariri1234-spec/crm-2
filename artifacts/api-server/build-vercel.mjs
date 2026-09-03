@@ -19,7 +19,21 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
-import { rm, mkdir, cp, readFile, readdir, access, writeFile } from "node:fs/promises";
+import {
+  rm,
+  mkdir,
+  cp,
+  readFile,
+  readdir,
+  access,
+  writeFile,
+} from "node:fs/promises";
+import {
+  assertBundleFresh,
+  getBundleIntegrityBanner,
+  getBundleSourceFingerprint,
+} from "./scripts/bundle-integrity.mjs";
+import { assertBundleSize } from "./scripts/vercel-bundle-size.mjs";
 
 const require = createRequire(import.meta.url);
 globalThis.require = require;
@@ -41,11 +55,16 @@ const FUNCTION_ENTRYPOINT = `let appPromise;
 // UploadThing fetch patch before loading uploadthing itself.
 function traceExternalDependenciesForVercel() {
   return Promise.all([
+    import("exceljs"),
     import("googleapis"),
     import("http-proxy-middleware"),
+    import("openai"),
     import("jspdf"),
     import("jspdf-autotable"),
     import("pdfkit"),
+    import("stripe"),
+    import("stripe-replit-sync"),
+    import("uploadthing"),
   ]);
 }
 void traceExternalDependenciesForVercel;
@@ -100,18 +119,26 @@ export default async function handler(request, response) {
 }
 `;
 
-// Same externals list as build.mjs — see that file for the rationale behind
-// each entry (native modules, fetch-patch ordering, ESM-incompatible
-// transitive deps, etc.). Kept in sync manually; if build.mjs's list
-// changes, mirror the change here.
+// Keep this list aligned with build.mjs. The Vercel function includes
+// node_modules at runtime, so large Node-compatible packages should not be
+// copied into the single serverless bundle. In particular, externalizing
+// uploadthing preserves the fetch-patch ordering enforced by vercel-entry.ts.
 const EXTERNAL = [
   "*.node",
   "sharp",
+  "uploadthing",
+  "@uploadthing/shared",
+  "@uploadthing/mime-types",
   "http-proxy-middleware",
   "jspdf",
   "jspdf-autotable",
   "html2canvas",
   "canvg",
+  "googleapis",
+  "exceljs",
+  "openai",
+  "stripe",
+  "stripe-replit-sync",
   "better-sqlite3",
   "sqlite3",
   "canvas",
@@ -186,6 +213,7 @@ const EXTERNAL = [
 ];
 
 async function buildAll() {
+  const sourceFingerprint = await getBundleSourceFingerprint(repoRoot);
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
@@ -205,7 +233,8 @@ async function buildAll() {
     // and stripe-replit-sync's __dirname-relative migrations lookup resolves
     // to this output directory (migrations copied alongside it below).
     banner: {
-      js: `import { createRequire as __bannerCrReq } from 'node:module';
+      js: `${getBundleIntegrityBanner(sourceFingerprint)}
+import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
 import __bannerUrl from 'node:url';
 
@@ -225,16 +254,27 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   // __dirname-relative path. Copy them next to the bundle (same rationale
   // as build.mjs).
   const stripeSyncEntry = require.resolve("stripe-replit-sync");
-  const stripeSyncMigrations = path.join(path.dirname(stripeSyncEntry), "migrations");
+  const stripeSyncMigrations = path.join(
+    path.dirname(stripeSyncEntry),
+    "migrations",
+  );
   try {
     await access(stripeSyncMigrations);
-    const migrationFiles = (await readdir(stripeSyncMigrations)).filter((f) => f.endsWith(".sql"));
+    const migrationFiles = (await readdir(stripeSyncMigrations)).filter((f) =>
+      f.endsWith(".sql"),
+    );
     if (migrationFiles.length > 0) {
-      await cp(stripeSyncMigrations, path.join(outDir, "migrations"), { recursive: true });
-      console.log(`[build-vercel] Copied ${migrationFiles.length} stripe-replit-sync migration(s) to api/migrations`);
+      await cp(stripeSyncMigrations, path.join(outDir, "migrations"), {
+        recursive: true,
+      });
+      console.log(
+        `[build-vercel] Copied ${migrationFiles.length} stripe-replit-sync migration(s) to api/migrations`,
+      );
     }
   } catch {
-    console.log("[build-vercel] stripe-replit-sync migrations not found — skipping (Stripe sync may be unused).");
+    console.log(
+      "[build-vercel] stripe-replit-sync migrations not found — skipping (Stripe sync may be unused).",
+    );
   }
 
   // Keep the pre-built function entrypoint at both the repository root and the
@@ -242,7 +282,17 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   // but the mirror keeps function discovery safe while that setting migrates.
   await rm(artifactOutDir, { recursive: true, force: true });
   await cp(outDir, artifactOutDir, { recursive: true });
-  console.log(`[build-vercel] Mirrored serverless function to ${artifactOutDir}`);
+  console.log(
+    `[build-vercel] Mirrored serverless function to ${artifactOutDir}`,
+  );
+
+  await assertBundleFresh(outFile, "api/bundle.mjs", sourceFingerprint);
+  await assertBundleFresh(
+    path.join(artifactOutDir, "bundle.mjs"),
+    "artifacts/api-server/api/bundle.mjs",
+    sourceFingerprint,
+  );
+  await assertBundleSize(outFile, "api/bundle.mjs");
 }
 
 async function assertFetchPatchOrder() {
@@ -257,7 +307,7 @@ async function assertFetchPatchOrder() {
   if (/^\s*import\s+app\s+from\s+["']\.\/app["']/m.test(source)) {
     throw new Error(
       "[build-vercel] FATAL: `import app from './app'` is a static import in src/vercel-entry.ts. " +
-      "Change to `const { default: app } = await import('./app')`.",
+        "Change to `const { default: app } = await import('./app')`.",
     );
   }
   if (!source.includes('import("./app")')) {
@@ -272,13 +322,14 @@ async function assertFetchPatchOrder() {
       "[build-vercel] FATAL: _uploadthingPatched marker not found in api/bundle.mjs.",
     );
   }
-  if (!bundle.includes("UploadThingError")) {
-    throw new Error(
-      "[build-vercel] FATAL: bundled UploadThing implementation not found in api/bundle.mjs.",
-    );
-  }
 
-  console.log("[build-vercel] ✓ fetch-patch order verified for api/bundle.mjs");
+  // UploadThing is intentionally external: the patch marker proves that the
+  // fetch replacement is installed by the entrypoint before app.ts can load
+  // the external UploadThing module. Do not require UploadThing's bundled
+  // implementation here, since that would defeat the bundle-size reduction.
+  console.log(
+    "[build-vercel] ✓ fetch-patch order verified; external UploadThing is allowed",
+  );
 }
 
 buildAll()

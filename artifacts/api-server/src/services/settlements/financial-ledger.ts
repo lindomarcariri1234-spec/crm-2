@@ -70,9 +70,13 @@ export async function recordOrderPaymentSettlement(
 
   const eventKey = `order-payment:${args.gateway}:${args.transactionId}`;
   const grossTotal = snapshots.reduce((sum, snapshot) => sum + Number(snapshot.grossAmount), 0);
-  const paymentRatio = args.receivedAmount && grossTotal > 0
-    ? Math.min(args.receivedAmount / grossTotal, 1)
-    : 1;
+  const claims: Array<{
+    snapshot: typeof snapshots[number];
+    participantType: string;
+    participantId: string | null;
+    category: string;
+    baseAmount: number;
+  }> = [];
   for (const snapshot of snapshots) {
     const metadata = {
       orderId: args.orderId,
@@ -85,7 +89,7 @@ export async function recordOrderPaymentSettlement(
       participantType: string;
       participantId: string | null;
       category: string;
-      amount: string;
+      amount: string | number;
     }> = snapshot.sellerType === "partner" && snapshot.sellerId
       ? [
           {
@@ -109,26 +113,48 @@ export async function recordOrderPaymentSettlement(
         }];
 
     for (const entry of entries) {
-      const settledAmount = Number((Number(entry.amount) * paymentRatio).toFixed(2));
+      claims.push({ snapshot, ...entry, baseAmount: Number(entry.amount) });
+    }
+  }
+
+  const targetCents = Math.max(0, Math.min(
+    Math.round((args.receivedAmount ?? grossTotal) * 100),
+    Math.round(grossTotal * 100),
+  ));
+  const baseCents = claims.reduce((sum, claim) => sum + Math.round(claim.baseAmount * 100), 0);
+  let allocatedCents = 0;
+  for (let index = 0; index < claims.length; index++) {
+    const claim = claims[index]!;
+    const isLast = index === claims.length - 1;
+    const settledCents = isLast
+      ? targetCents - allocatedCents
+      : Math.floor(targetCents * Math.round(claim.baseAmount * 100) / Math.max(baseCents, 1));
+    allocatedCents += settledCents;
+    const settledAmount = settledCents / 100;
       if (settledAmount <= 0) continue;
       await tx.insert(financialLedgerEntriesTable).values({
         id: generateId(),
         tenantId: args.tenantId,
-        settlementItemId: snapshot.id,
+        settlementItemId: claim.snapshot.id,
         orderId: args.orderId,
-        participantType: entry.participantType,
-        participantId: entry.participantId,
-        category: entry.category,
+        participantType: claim.participantType,
+        participantId: claim.participantId,
+        category: claim.category,
         direction: "credit",
         amount: settledAmount.toFixed(2),
         settlementStatus: "available",
         eventType: "order_payment",
-        idempotencyKey: `${eventKey}:${snapshot.id}:${entry.category}`,
-        metadata,
+        idempotencyKey: `${eventKey}:${claim.snapshot.id}:${claim.category}`,
+        metadata: {
+          orderId: args.orderId,
+          settlementItemId: claim.snapshot.id,
+          source: claim.snapshot.source,
+          gateway: args.gateway,
+          transactionId: args.transactionId,
+        },
         occurredAt: args.occurredAt,
         availableAt: args.occurredAt,
       }).onConflictDoNothing();
-    }
   }
 
   await tx.update(settlementItemsTable)
@@ -137,6 +163,172 @@ export async function recordOrderPaymentSettlement(
       eq(settlementItemsTable.tenantId, args.tenantId),
       eq(settlementItemsTable.orderId, args.orderId),
     ));
+}
+
+export async function reverseOrderPaymentSettlementEvent(
+  tx: DbExecutor,
+  args: {
+    tenantId: string;
+    orderId: string;
+    gateway: string;
+    transactionId: string;
+    amount: number;
+    eventKey: string;
+    occurredAt: Date;
+    reason: string;
+  },
+): Promise<void> {
+  const entries = await tx.select().from(financialLedgerEntriesTable).where(and(
+    eq(financialLedgerEntriesTable.tenantId, args.tenantId),
+    eq(financialLedgerEntriesTable.orderId, args.orderId),
+  ));
+  const originals = entries.filter((entry) =>
+    entry.eventType === "order_payment"
+    && entry.reversalOfEntryId == null
+    && entry.metadata?.["gateway"] === args.gateway
+    && entry.metadata?.["transactionId"] === args.transactionId,
+  );
+  const balances = originals.map((entry) => {
+    const reversedCents = entries
+      .filter((candidate) =>
+        isSettlementReversalEntry(candidate)
+        && (
+        candidate.reversalOfEntryId === entry.id
+          || candidate.metadata?.["originalEntryId"] === entry.id
+        )
+      )
+      .reduce((sum, candidate) => sum + Math.round(Number(candidate.amount) * 100), 0);
+    const reinstatedCents = entries
+      .filter((candidate) =>
+        candidate.eventType === "order_payment_reinstatement"
+        && candidate.metadata?.["originalEntryId"] === entry.id,
+      )
+      .reduce((sum, candidate) => sum + Math.round(Number(candidate.amount) * 100), 0);
+    return {
+      entry,
+      remainingCents: Math.max(0, Math.round(Number(entry.amount) * 100) + reinstatedCents - reversedCents),
+    };
+  }).filter(({ remainingCents }) => remainingCents > 0);
+  const remainingTotalCents = balances.reduce((sum, balance) => sum + balance.remainingCents, 0);
+  const targetCents = Math.min(Math.round(args.amount * 100), remainingTotalCents);
+  let allocatedCents = 0;
+  for (let index = 0; index < balances.length; index++) {
+    const { entry, remainingCents } = balances[index]!;
+    const isLast = index === balances.length - 1;
+    const targetEntryCents = isLast
+      ? targetCents - allocatedCents
+      : Math.floor(targetCents * remainingCents / Math.max(remainingTotalCents, 1));
+    allocatedCents += targetEntryCents;
+    const reversalAmount = targetEntryCents / 100;
+    if (reversalAmount <= 0) continue;
+    await tx.insert(financialLedgerEntriesTable).values({
+      id: generateId(),
+      tenantId: args.tenantId,
+      settlementItemId: entry.settlementItemId,
+      orderId: args.orderId,
+      clientId: entry.clientId,
+      participantType: entry.participantType,
+      participantId: entry.participantId,
+      category: "settlement_reversal",
+      direction: oppositeDirection(entry.direction),
+      amount: reversalAmount.toFixed(2),
+      currency: entry.currency,
+      settlementStatus: "reversed",
+      eventType: "order_refund_adjustment",
+      idempotencyKey: `${args.eventKey}:${entry.id}`,
+      reversalOfEntryId: entry.id,
+      metadata: { reason: args.reason, originalCategory: entry.category, originalEntryId: entry.id },
+      occurredAt: args.occurredAt,
+    }).onConflictDoNothing();
+  }
+}
+
+/**
+ * Reinstates the claims previously reversed for a payment that is moved back
+ * to paid. Reinstatement is a new ledger event because the original
+ * idempotency key must remain immutable.
+ */
+export async function reinstateOrderPaymentSettlementEvent(
+  tx: DbExecutor,
+  args: {
+    tenantId: string;
+    orderId: string;
+    gateway: string;
+    transactionId: string;
+    amount: number;
+    eventKey: string;
+    occurredAt: Date;
+  },
+): Promise<number> {
+  const entries = await tx.select().from(financialLedgerEntriesTable).where(and(
+    eq(financialLedgerEntriesTable.tenantId, args.tenantId),
+    eq(financialLedgerEntriesTable.orderId, args.orderId),
+  ));
+  const originals = entries.filter((entry) =>
+    entry.eventType === "order_payment"
+    && entry.reversalOfEntryId == null
+    && entry.metadata?.["gateway"] === args.gateway
+    && entry.metadata?.["transactionId"] === args.transactionId,
+  );
+  const balances = originals.map((entry) => {
+    const reversedCents = entries
+      .filter((candidate) =>
+        isSettlementReversalEntry(candidate)
+        && (
+          candidate.reversalOfEntryId === entry.id
+          || candidate.metadata?.["originalEntryId"] === entry.id
+        ),
+      )
+      .reduce((sum, candidate) => sum + Math.round(Number(candidate.amount) * 100), 0);
+    const reinstatedCents = entries
+      .filter((candidate) =>
+        candidate.eventType === "order_payment_reinstatement"
+        && candidate.metadata?.["originalEntryId"] === entry.id,
+      )
+      .reduce((sum, candidate) => sum + Math.round(Number(candidate.amount) * 100), 0);
+    return {
+      entry,
+      remainingCents: Math.max(0, reversedCents - reinstatedCents),
+    };
+  }).filter(({ remainingCents }) => remainingCents > 0);
+  const availableCents = balances.reduce((sum, balance) => sum + balance.remainingCents, 0);
+  const targetCents = Math.min(Math.round(args.amount * 100), availableCents);
+  let allocatedCents = 0;
+  for (let index = 0; index < balances.length; index++) {
+    const { entry, remainingCents } = balances[index]!;
+    const reinstatedCents = index === balances.length - 1
+      ? targetCents - allocatedCents
+      : Math.floor(targetCents * remainingCents / Math.max(availableCents, 1));
+    allocatedCents += reinstatedCents;
+    if (reinstatedCents <= 0) continue;
+    await tx.insert(financialLedgerEntriesTable).values({
+      id: generateId(),
+      tenantId: args.tenantId,
+      settlementItemId: entry.settlementItemId,
+      orderId: args.orderId,
+      clientId: entry.clientId,
+      participantType: entry.participantType,
+      participantId: entry.participantId,
+      category: entry.category,
+      direction: "credit",
+      amount: (reinstatedCents / 100).toFixed(2),
+      currency: entry.currency,
+      settlementStatus: "available",
+      eventType: "order_payment_reinstatement",
+      idempotencyKey: `${args.eventKey}:${entry.id}`,
+      metadata: { originalEntryId: entry.id, gateway: args.gateway, transactionId: args.transactionId },
+      occurredAt: args.occurredAt,
+      availableAt: args.occurredAt,
+    }).onConflictDoNothing();
+  }
+  return targetCents;
+}
+
+function isSettlementReversalEntry(entry: { eventType?: string | null }): boolean {
+  return entry.eventType === "order_refund_adjustment"
+    || entry.eventType === "order_refunded"
+    || entry.eventType === "order_charged_back"
+    || entry.eventType === "order_cancelled";
 }
 
 /**
@@ -164,17 +356,28 @@ export async function reverseOrderSettlement(
       eq(financialLedgerEntriesTable.eventType, "order_payment"),
       isNull(financialLedgerEntriesTable.reversalOfEntryId),
     ));
-  const partialAdjustments = await tx.select().from(financialLedgerEntriesTable).where(and(
+  const reversals = await tx.select().from(financialLedgerEntriesTable).where(and(
     eq(financialLedgerEntriesTable.tenantId, args.tenantId),
     eq(financialLedgerEntriesTable.orderId, args.orderId),
-    eq(financialLedgerEntriesTable.eventType, "order_refund_adjustment"),
   ));
 
   for (const entry of entries) {
-    const alreadyAdjusted = partialAdjustments
-      .filter((adjustment) => adjustment.metadata?.["originalEntryId"] === entry.id)
+    const alreadyAdjusted = reversals
+      .filter((adjustment) =>
+        isSettlementReversalEntry(adjustment)
+        && (
+        adjustment.reversalOfEntryId === entry.id
+        || adjustment.metadata?.["originalEntryId"] === entry.id
+        )
+      )
       .reduce((sum, adjustment) => sum + Number(adjustment.amount), 0);
-    const remaining = Number((Number(entry.amount) - alreadyAdjusted).toFixed(2));
+    const reinstated = reversals
+      .filter((adjustment) =>
+        adjustment.eventType === "order_payment_reinstatement"
+        && adjustment.metadata?.["originalEntryId"] === entry.id,
+      )
+      .reduce((sum, adjustment) => sum + Number(adjustment.amount), 0);
+    const remaining = Number((Number(entry.amount) + reinstated - alreadyAdjusted).toFixed(2));
     if (remaining <= 0) continue;
     await tx.insert(financialLedgerEntriesTable).values({
       id: generateId(),

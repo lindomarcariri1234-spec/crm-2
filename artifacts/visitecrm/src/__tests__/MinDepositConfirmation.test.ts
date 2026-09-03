@@ -188,15 +188,16 @@ describe("StepConfirmation — financial summary with minimum deposit", () => {
     const text = container.textContent ?? "";
 
     // "Valor Pago" card should show 0
-    expect(text).toContain("0,00");
+    expect(text).toContain("0.00");
     // Saldo Pendente should show full 500
     expect(text).toContain("500.00");
   });
 
-  it("partial deposit: shows depositAmount paid and remaining as pending", async () => {
+  it("partial payment: shows confirmed payment and remaining balance", async () => {
     const order = makeOrder({
       totalAmount: "500.00",
       depositAmount: "90.00",
+      paidAmount: 90,
       amountRemaining: "410.00",
     });
     const { container } = await renderConfirmation(order);
@@ -206,21 +207,20 @@ describe("StepConfirmation — financial summary with minimum deposit", () => {
     expect(text).toContain("90.00");
     // Remaining pending
     expect(text).toContain("410.00");
-    // Label shows it is a deposit
-    expect(text).toContain("Depósito");
+    expect(text).toContain("Pagamento Recebido");
   });
 
-  it("full-total deposit: shows total as paid and zero as pending", async () => {
+  it("full payment: shows total as paid and zero as pending", async () => {
     const order = makeOrder({
       totalAmount: "500.00",
       depositAmount: "500.00",
+      paidAmount: 500,
       amountRemaining: "0.00",
     });
     const { container } = await renderConfirmation(order);
     const text = container.textContent ?? "";
 
-    // Deposit label is present
-    expect(text).toContain("Depósito");
+    expect(text).toContain("Pagamento Recebido");
     // Paid amount shows full total
     expect(text).toMatch(/500\.00/);
     // Remaining is 0
@@ -231,9 +231,24 @@ describe("StepConfirmation — financial summary with minimum deposit", () => {
     const order = makeOrder({
       totalAmount: "500.00",
       depositAmount: "90.00",
+      paidAmount: 90,
       amountRemaining: "410.00",
     });
     const { container } = await renderConfirmation(order);
     expect(container.textContent).toContain("Reserva Confirmada!");
+  });
+
+  it("uses the net total and confirmed payment to calculate the real balance", async () => {
+    const order = makeOrder({
+      totalAmount: "189.05",
+      depositAmount: "30.00",
+      paidAmount: 30,
+      amountRemaining: "159.05",
+    });
+    const { container } = await renderConfirmation(order);
+    const text = container.textContent ?? "";
+    expect(text).toContain("189.05");
+    expect(text).toContain("30.00");
+    expect(text).toContain("159.05");
   });
 });

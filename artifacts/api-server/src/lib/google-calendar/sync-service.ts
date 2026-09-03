@@ -7,6 +7,7 @@ import {
   reservationsTable,
   paymentsTable,
   calendarEventsTable,
+  calendarReconciliationsTable,
 } from "@workspace/db";
 import { eq, and, sql, type SQL } from "drizzle-orm";
 import { createHash } from "crypto";
@@ -55,6 +56,118 @@ function stableGoogleEventId(record: {
     .digest("hex");
 }
 
+type LegacyMatch = {
+  id: string;
+  type: "trip" | "payment" | "birthday";
+  label: string;
+};
+
+export type LegacyCalendarCandidate = {
+  reconciliationId: string;
+  status: "pending" | "associated" | "removed" | "dismissed";
+  googleEventId: string;
+  calendarId: string;
+  eventType: "trip" | "payment" | "birthday";
+  eventSummary: string;
+  eventDescription: string | null;
+  eventLocation: string | null;
+  eventStartDate: Date;
+  eventEndDate: Date | null;
+  candidateMatches: LegacyMatch[];
+};
+
+function sameInstant(left: Date | null | undefined, right: Date | null | undefined): boolean {
+  return Boolean(left && right && Math.abs(left.getTime() - right.getTime()) <= 60_000);
+}
+
+function sameBirthdayDate(left: Date | null | undefined, right: Date | null | undefined): boolean {
+  return Boolean(left && right && format(left, "MM-dd") === format(right, "MM-dd"));
+}
+
+export function legacyMatchesForEvent(
+  event: Awaited<ReturnType<GoogleCalendarService["listEvents"]>>[number],
+  trips: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    destination: string;
+    originCity: string | null;
+    departureDate: Date;
+    returnDate: Date | null;
+  }>,
+  payments: Array<{
+    id: string;
+    clientId: string | null;
+    dueDate: Date;
+  }>,
+  clients: Array<{
+    id: string;
+    name: string;
+    birthDate: Date | null;
+  }>,
+): LegacyMatch[] {
+  const matches: LegacyMatch[] = [];
+
+  // These prefixes were part of the event payload before deterministic IDs
+  // existed. Requiring one prevents ordinary user-created events with a
+  // coincidentally similar title from entering the review queue.
+  if (event.description?.startsWith("🚌 VIAGEM:")) {
+    for (const trip of trips) {
+      const location = trip.originCity ? `${trip.originCity} → ${trip.destination}` : trip.destination;
+      const expectedEnd = trip.returnDate ?? addHours(trip.departureDate, 12);
+      if (
+        event.summary === `🚌 ${trip.name}` &&
+        sameInstant(event.startDateTime, trip.departureDate) &&
+        sameInstant(event.endDateTime, expectedEnd) &&
+        event.location === location
+      ) {
+        matches.push({ id: trip.id, type: "trip", label: trip.name });
+      }
+    }
+  }
+
+  if (event.description?.startsWith("💰 PAGAMENTO PENDENTE")) {
+    for (const payment of payments) {
+      const client = clients.find((item) => item.id === payment.clientId);
+      const clientName = client?.name ?? "Cliente";
+      if (
+        event.summary === `💰 Pagamento: ${clientName}` &&
+        sameInstant(event.startDateTime, payment.dueDate) &&
+        sameInstant(event.endDateTime, payment.dueDate)
+      ) {
+        matches.push({ id: payment.id, type: "payment", label: `Pagamento de ${clientName}` });
+      }
+    }
+  }
+
+  if (event.summary.startsWith("🎂 Aniversário:")) {
+    for (const client of clients) {
+      if (
+        client.birthDate &&
+        event.summary === `🎂 Aniversário: ${client.name}` &&
+        event.description?.startsWith(`Aniversário de ${client.name}`) &&
+        sameBirthdayDate(event.startDateTime, client.birthDate)
+      ) {
+        matches.push({ id: client.id, type: "birthday", label: `Aniversário de ${client.name}` });
+      }
+    }
+  }
+
+  return matches;
+}
+
+function recordResourceId(record: {
+  tripId?: string;
+  paymentId?: string;
+  clientId?: string;
+  eventType: string;
+}): string | undefined {
+  if (record.eventType === "trip") return record.tripId;
+  if (record.eventType === "payment") return record.paymentId;
+  if (record.eventType === "birthday") return record.clientId;
+  return undefined;
+}
+
 async function upsertCalendarEventWithExecutor(
   executor: CalendarDbExecutor,
   service: GoogleCalendarService,
@@ -84,6 +197,28 @@ async function upsertCalendarEventWithExecutor(
     ...eventData,
     googleEventId: stableGoogleEventId(record),
   };
+
+  // A legacy event that is awaiting human review must not be silently
+  // associated or duplicated by a later normal sync. Once dismissed or
+  // removed, the agency has explicitly chosen how the regular sync may
+  // proceed.
+  const resourceId = recordResourceId(record);
+  if (record.userId && resourceId) {
+    const pendingLegacy = await executor.select({
+      candidateMatches: calendarReconciliationsTable.candidateMatches,
+    }).from(calendarReconciliationsTable).where(and(
+      eq(calendarReconciliationsTable.tenantId, record.tenantId),
+      eq(calendarReconciliationsTable.userId, record.userId),
+      eq(calendarReconciliationsTable.eventType, record.eventType),
+      eq(calendarReconciliationsTable.status, "pending"),
+    ));
+    if (pendingLegacy.some((row) =>
+      row.candidateMatches.some((match) => match.id === resourceId && match.type === record.eventType)
+    )) {
+      logger.info({ ...logCtx, resourceId }, "calendar-sync: legacy event pending review; skipping automatic create");
+      return;
+    }
+  }
 
   if (existing) {
     const updated = await withCalendarRetry(() => service.updateEvent(existing.googleEventId, eventData, logCtx));
@@ -191,6 +326,252 @@ async function upsertCalendarEvent(
 const ACTIVE_TRIP_STATUSES = ["published"];
 
 export class CalendarSyncService {
+  /**
+   * Finds only orphaned events carrying a known VisiteCRM marker and an exact
+   * current-record match. Candidates are persisted as pending so a manager
+   * can inspect the Google payload and explicitly associate, remove, or
+   * dismiss it. No unmarked/manual event is ever imported.
+   */
+  static async scanLegacyEvents(
+    actorUserId: string,
+    from = new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000),
+    to = new Date(Date.now() + 2 * 365 * 24 * 60 * 60 * 1000),
+  ): Promise<LegacyCalendarCandidate[]> {
+    const [actor] = await db.select({
+      tenantId: usersTable.tenantId,
+      googleCalendarEnabled: usersTable.googleCalendarEnabled,
+    }).from(usersTable).where(eq(usersTable.id, actorUserId)).limit(1);
+    if (!actor?.tenantId || !actor.googleCalendarEnabled) return [];
+
+    const service = await getCalendarService(actorUserId);
+    if (!service) return [];
+
+    const [googleEvents, trackedEvents, existingReconciliations, trips, payments, clients] = await Promise.all([
+      service.listEvents(from, to),
+      db.select({ googleEventId: calendarEventsTable.googleEventId })
+        .from(calendarEventsTable)
+        .where(and(
+          eq(calendarEventsTable.tenantId, actor.tenantId),
+          eq(calendarEventsTable.userId, actorUserId),
+        )),
+      db.select()
+        .from(calendarReconciliationsTable)
+        .where(and(
+          eq(calendarReconciliationsTable.tenantId, actor.tenantId),
+          eq(calendarReconciliationsTable.userId, actorUserId),
+        )),
+      db.select({
+        id: tripsTable.id,
+        name: tripsTable.name,
+        description: tripsTable.description,
+        destination: tripsTable.destination,
+        originCity: tripsTable.originCity,
+        departureDate: tripsTable.departureDate,
+        returnDate: tripsTable.returnDate,
+      }).from(tripsTable).where(eq(tripsTable.tenantId, actor.tenantId)),
+      db.select({
+        id: paymentsTable.id,
+        clientId: paymentsTable.clientId,
+        dueDate: paymentsTable.dueDate,
+      }).from(paymentsTable).where(eq(paymentsTable.tenantId, actor.tenantId)),
+      db.select({
+        id: clientsTable.id,
+        name: clientsTable.name,
+        birthDate: clientsTable.birthDate,
+      }).from(clientsTable).where(eq(clientsTable.tenantId, actor.tenantId)),
+    ]);
+
+    const trackedIds = new Set(trackedEvents.map((event) => event.googleEventId));
+    const reconciledByGoogleId = new Map(existingReconciliations.map((row) => [row.googleEventId, row]));
+    const candidates: LegacyCalendarCandidate[] = [];
+
+    for (const event of googleEvents) {
+      if (trackedIds.has(event.id)) continue;
+      const matches = legacyMatchesForEvent(event, trips, payments, clients);
+      if (matches.length === 0) continue;
+      // A stable ID that was created but lost locally is recoverable through
+      // the normal idempotent sync path, not a pre-deterministic legacy event.
+      if (matches.some((match) => stableGoogleEventId({
+        tenantId: actor.tenantId!,
+        userId: actorUserId,
+        eventType: match.type,
+        ...(match.type === "trip" ? { tripId: match.id } : {}),
+        ...(match.type === "payment" ? { paymentId: match.id } : {}),
+        ...(match.type === "birthday" ? { clientId: match.id } : {}),
+      }) === event.id)) {
+        continue;
+      }
+
+      const existingReconciliation = reconciledByGoogleId.get(event.id);
+      const type = matches[0].type;
+      const candidate: LegacyCalendarCandidate = {
+        reconciliationId: existingReconciliation?.id ?? generateId(),
+        status: existingReconciliation?.status ?? "pending",
+        googleEventId: event.id,
+        calendarId: "primary",
+        eventType: type,
+        eventSummary: event.summary,
+        eventDescription: event.description ?? null,
+        eventLocation: event.location ?? null,
+        eventStartDate: event.startDateTime,
+        eventEndDate: event.endDateTime ?? null,
+        candidateMatches: matches,
+      };
+      candidates.push(candidate);
+
+      const existing = existingReconciliation;
+      if (existing?.status !== "pending" && existing) continue;
+      const values = {
+        tenantId: actor.tenantId,
+        userId: actorUserId,
+        googleEventId: candidate.googleEventId,
+        calendarId: candidate.calendarId,
+        eventType: candidate.eventType,
+        status: "pending" as const,
+        eventSummary: candidate.eventSummary,
+        eventDescription: candidate.eventDescription,
+        eventLocation: candidate.eventLocation,
+        eventStartDate: candidate.eventStartDate,
+        eventEndDate: candidate.eventEndDate,
+        candidateMatches: candidate.candidateMatches,
+      };
+      if (existing) {
+        await db.update(calendarReconciliationsTable).set(values).where(eq(calendarReconciliationsTable.id, existing.id));
+      } else {
+        await db.insert(calendarReconciliationsTable).values({ id: candidate.reconciliationId, ...values }).onConflictDoNothing({
+          target: [calendarReconciliationsTable.userId, calendarReconciliationsTable.googleEventId],
+        });
+      }
+    }
+
+    return candidates;
+  }
+
+  static async associateLegacyEvent(
+    reconciliationId: string,
+    actorUserId: string,
+    candidateId: string,
+  ): Promise<"associated" | "already-resolved" | "not-found" | "invalid-candidate" | "source-not-found" | "already-associated"> {
+    const [reconciliation] = await db.select().from(calendarReconciliationsTable).where(and(
+      eq(calendarReconciliationsTable.id, reconciliationId),
+      eq(calendarReconciliationsTable.userId, actorUserId),
+    )).limit(1);
+    if (!reconciliation) return "not-found";
+    if (reconciliation.status !== "pending") return "already-resolved";
+    const match = reconciliation.candidateMatches.find((candidate) => candidate.id === candidateId);
+    if (!match) return "invalid-candidate";
+
+    const resourceCondition = match.type === "trip"
+      ? eq(calendarEventsTable.tripId, match.id)
+      : match.type === "payment"
+        ? eq(calendarEventsTable.paymentId, match.id)
+        : eq(calendarEventsTable.clientId, match.id);
+    const [existingEvent] = await db.select({ id: calendarEventsTable.id })
+      .from(calendarEventsTable).where(and(
+        eq(calendarEventsTable.tenantId, reconciliation.tenantId),
+        eq(calendarEventsTable.userId, actorUserId),
+        eq(calendarEventsTable.eventType, match.type),
+        resourceCondition,
+      )).limit(1);
+    if (existingEvent) return "already-associated";
+
+    let sourceExists = false;
+    if (match.type === "trip") {
+      const [source] = await db.select({ id: tripsTable.id }).from(tripsTable).where(and(
+        eq(tripsTable.id, match.id),
+        eq(tripsTable.tenantId, reconciliation.tenantId),
+      )).limit(1);
+      sourceExists = Boolean(source);
+    } else if (match.type === "payment") {
+      const [source] = await db.select({ id: paymentsTable.id }).from(paymentsTable).where(and(
+        eq(paymentsTable.id, match.id),
+        eq(paymentsTable.tenantId, reconciliation.tenantId),
+      )).limit(1);
+      sourceExists = Boolean(source);
+    } else {
+      const [source] = await db.select({ id: clientsTable.id }).from(clientsTable).where(and(
+        eq(clientsTable.id, match.id),
+        eq(clientsTable.tenantId, reconciliation.tenantId),
+      )).limit(1);
+      sourceExists = Boolean(source);
+    }
+    if (!sourceExists) return "source-not-found";
+
+    await db.insert(calendarEventsTable).values({
+      id: generateId(),
+      tenantId: reconciliation.tenantId,
+      userId: actorUserId,
+      ...(match.type === "trip" ? { tripId: match.id } : {}),
+      ...(match.type === "payment" ? { paymentId: match.id } : {}),
+      ...(match.type === "birthday" ? { clientId: match.id } : {}),
+      googleEventId: reconciliation.googleEventId,
+      calendarId: reconciliation.calendarId,
+      eventType: match.type,
+      title: reconciliation.eventSummary,
+      description: reconciliation.eventDescription,
+      startDate: reconciliation.eventStartDate,
+      endDate: reconciliation.eventEndDate,
+      location: reconciliation.eventLocation,
+      syncedAt: new Date(),
+    });
+    await db.update(calendarReconciliationsTable).set({
+      status: "associated",
+      selectedResourceId: match.id,
+      resolvedAt: new Date(),
+      resolvedById: actorUserId,
+    }).where(and(
+      eq(calendarReconciliationsTable.id, reconciliationId),
+      eq(calendarReconciliationsTable.status, "pending"),
+    ));
+    return "associated";
+  }
+
+  static async removeLegacyEvent(
+    reconciliationId: string,
+    actorUserId: string,
+  ): Promise<"removed" | "already-resolved" | "not-found" | "service-unavailable" | "delete-failed"> {
+    const [reconciliation] = await db.select().from(calendarReconciliationsTable).where(and(
+      eq(calendarReconciliationsTable.id, reconciliationId),
+      eq(calendarReconciliationsTable.userId, actorUserId),
+    )).limit(1);
+    if (!reconciliation) return "not-found";
+    if (reconciliation.status !== "pending") return "already-resolved";
+    const service = await getCalendarService(actorUserId);
+    if (!service) return "service-unavailable";
+    const deleted = await withCalendarRetry(() => service.deleteEvent(reconciliation.googleEventId));
+    if (deleted !== true && deleted !== "not-found") return "delete-failed";
+    await db.update(calendarReconciliationsTable).set({
+      status: "removed",
+      resolvedAt: new Date(),
+      resolvedById: actorUserId,
+    }).where(and(
+      eq(calendarReconciliationsTable.id, reconciliationId),
+      eq(calendarReconciliationsTable.status, "pending"),
+    ));
+    return "removed";
+  }
+
+  static async dismissLegacyEvent(
+    reconciliationId: string,
+    actorUserId: string,
+  ): Promise<"dismissed" | "already-resolved" | "not-found"> {
+    const [reconciliation] = await db.select().from(calendarReconciliationsTable).where(and(
+      eq(calendarReconciliationsTable.id, reconciliationId),
+      eq(calendarReconciliationsTable.userId, actorUserId),
+    )).limit(1);
+    if (!reconciliation) return "not-found";
+    if (reconciliation.status !== "pending") return "already-resolved";
+    await db.update(calendarReconciliationsTable).set({
+      status: "dismissed",
+      resolvedAt: new Date(),
+      resolvedById: actorUserId,
+    }).where(and(
+      eq(calendarReconciliationsTable.id, reconciliationId),
+      eq(calendarReconciliationsTable.status, "pending"),
+    ));
+    return "dismissed";
+  }
+
   /**
    * syncTrip — syncs a single trip to all eligible connected users.
    * Called from background hooks (trips/reservations mutations) so fan-out is appropriate.

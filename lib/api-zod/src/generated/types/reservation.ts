@@ -5,6 +5,10 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { LinkedDealSummary } from "./linkedDealSummary";
+import type { LinkedOrderSummary } from "./linkedOrderSummary";
+import type { LinkedReferralSummary } from "./linkedReferralSummary";
+import type { LinkedReservationSummary } from "./linkedReservationSummary";
 import type { ReservationBoardingLocation } from "./reservationBoardingLocation";
 import type { ReservationClient } from "./reservationClient";
 import type { ReservationStatus } from "./reservationStatus";
@@ -74,4 +78,8 @@ export interface Reservation {
   hasAutoRetry?: boolean;
   trip: TripSummary;
   client: ReservationClient;
+  linkedOrder?: LinkedOrderSummary | null;
+  linkedReservations?: LinkedReservationSummary[];
+  linkedReferral?: LinkedReferralSummary | null;
+  linkedDeals?: LinkedDealSummary[];
 }

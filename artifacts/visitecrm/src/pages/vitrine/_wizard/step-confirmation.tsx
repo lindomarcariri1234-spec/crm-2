@@ -117,12 +117,11 @@ export function StepConfirmation({
     completedOrder.depositAmount && Number(completedOrder.depositAmount) > 0
       ? Number(completedOrder.depositAmount)
       : null;
-  const remainingAmt =
-    depositAmt !== null
-      ? completedOrder.amountRemaining != null
-        ? Number(completedOrder.amountRemaining)
-        : Math.max(0, totalAmt - depositAmt)
-      : null;
+  const paidAmt = Number(completedOrder.paidAmount ?? 0);
+  const remainingAmt = Math.max(
+    0,
+    Number(completedOrder.amountRemaining ?? totalAmt - paidAmt),
+  );
   const startDate = product.departureDate ?? product.startDate;
   const boardingPoints = (product.boardingPoints ?? []).filter((bp) => bp.name);
   const selectedBoardingPoint =
@@ -154,18 +153,18 @@ export function StepConfirmation({
             </div>
           </div>
           <h2 className="text-3xl font-bold text-green-900 mb-2">
-            {completedOrder.depositAmount && Number(completedOrder.depositAmount) > 0 && Number(completedOrder.depositAmount) < totalAmt
+            {paidAmt > 0
               ? "Reserva Confirmada! 🎉"
               : form.paymentMethod === "pix"
                 ? "Pedido Realizado! 🎉"
-                : "Reserva Confirmada! 🎉"}
+                : "Pedido Realizado! 🎉"}
           </h2>
           <p className="text-lg text-green-800 mb-6">
-            {completedOrder.depositAmount && Number(completedOrder.depositAmount) > 0 && Number(completedOrder.depositAmount) < totalAmt
-              ? "Sua reserva foi confirmada com sucesso! Voucher Confirmado."
+            {paidAmt > 0
+              ? "Seu pagamento foi confirmado e a reserva está válida."
               : form.paymentMethod === "pix"
                 ? "Seu pedido foi criado! Complete o pagamento via PIX para confirmar sua reserva."
-                : "Sua reserva foi realizada com sucesso!"}
+                : "Seu pedido foi criado. Confirme o pagamento para validar a reserva."}
           </p>
           <div className="inline-flex items-center gap-2 bg-white px-6 py-3 rounded-xl shadow-sm border border-green-200">
             <Ticket className="w-5 h-5 text-green-600" />
@@ -329,11 +328,9 @@ export function StepConfirmation({
               <p className="text-2xl font-bold text-gray-900">R$ {totalAmt.toFixed(2)}</p>
             </div>
             <div className="text-center p-4 bg-green-50 rounded-xl">
-              <p className="text-xs text-muted-foreground mb-1">
-                {depositAmt !== null ? "Valor Pago (Depósito)" : "Valor Pago"}
-              </p>
+              <p className="text-xs text-muted-foreground mb-1">Pagamento Recebido</p>
               <p className="text-2xl font-bold text-green-600">
-                R$ {depositAmt !== null ? depositAmt.toFixed(2) : "0,00"}
+                R$ {paidAmt.toFixed(2)}
               </p>
             </div>
             <div className="text-center p-4 bg-orange-50 rounded-xl">
@@ -432,12 +429,11 @@ export function StepConfirmation({
           couponDiscount={couponDiscount}
           couponCode={couponResult?.code}
           isConfirmed={
-            !!completedOrder.depositAmount &&
-            Number(completedOrder.depositAmount) > 0 &&
-            Number(completedOrder.depositAmount) < totalAmt
+            paidAmt > 0
           }
           depositAmount={completedOrder.depositAmount}
-          amountRemaining={completedOrder.amountRemaining}
+          paidAmount={paidAmt}
+          amountRemaining={remainingAmt.toFixed(2)}
         />
 
         <div className="rounded-2xl p-6 text-center border-2 print:hidden"

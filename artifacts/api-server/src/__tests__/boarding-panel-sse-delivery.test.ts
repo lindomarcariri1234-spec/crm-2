@@ -137,6 +137,8 @@ vi.mock("../services/checkout/post-booking.js", () => ({
 
 vi.mock("../services/checkout/persist-order.js", () => ({
   applyOrderInventoryEffects: vi.fn().mockResolvedValue(undefined),
+  releaseOrderInventoryHolds: vi.fn().mockResolvedValue(undefined),
+  reverseOrderInventoryEffects: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../services/settlements/financial-ledger.js", () => ({
   adjustOrderSettlement: vi.fn().mockResolvedValue(undefined),

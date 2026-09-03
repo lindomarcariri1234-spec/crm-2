@@ -8,12 +8,47 @@ import { and, eq, inArray } from "drizzle-orm";
 
 const money = (value: unknown) => Number(value ?? 0);
 
-export const linkedOrder = (o: Pick<typeof storeOrdersTable.$inferSelect, "id" | "orderNumber" | "status" | "paymentStatus" | "subtotal" | "discountAmount" | "totalAmount" | "depositAmount" | "amountRemaining" | "paymentMethod" | "installments"> | null | undefined) => o ? ({
-  id: o.id, orderNumber: o.orderNumber, status: o.status, paymentStatus: o.paymentStatus,
-  subtotal: money(o.subtotal), discountAmount: money(o.discountAmount), totalAmount: money(o.totalAmount),
-  depositAmount: money(o.depositAmount), amountRemaining: money(o.amountRemaining),
-  paymentMethod: o.paymentMethod, installments: o.installments,
-}) : null;
+export type LinkedOrderPayment = {
+  orderId?: string | null;
+  reservationId?: string | null;
+  amount: unknown;
+  status?: string | null;
+  type?: string | null;
+};
+
+export function calculateReceivedAmount(
+  orderId: string,
+  reservationIds: string[],
+  payments: LinkedOrderPayment[],
+): number {
+  const reservationIdSet = new Set(reservationIds);
+  const received = payments.reduce((sum, payment) => {
+    const belongsToOrder = payment.orderId === orderId
+      || (payment.reservationId != null && reservationIdSet.has(payment.reservationId));
+    if (!belongsToOrder || payment.status !== "paid" || payment.type !== "receivable") return sum;
+    return sum + money(payment.amount);
+  }, 0);
+  return Math.round(received * 100) / 100;
+}
+
+export const linkedOrder = (
+  o: Pick<typeof storeOrdersTable.$inferSelect, "id" | "orderNumber" | "status" | "paymentStatus" | "subtotal" | "discountAmount" | "totalAmount" | "depositAmount" | "amountRemaining" | "paymentMethod" | "installments"> | null | undefined,
+  financial?: { paidAmount?: number; amountRemaining?: number },
+) => {
+  if (!o) return null;
+  const totalAmount = money(o.totalAmount);
+  const paidAmount = Math.max(
+    0,
+    financial?.paidAmount ?? (o.paymentStatus === "paid" ? totalAmount : 0),
+  );
+  return {
+    id: o.id, orderNumber: o.orderNumber, status: o.status, paymentStatus: o.paymentStatus,
+    subtotal: money(o.subtotal), discountAmount: money(o.discountAmount), totalAmount,
+    depositAmount: money(o.depositAmount), paidAmount,
+    amountRemaining: Math.max(0, financial?.amountRemaining ?? totalAmount - paidAmount),
+    paymentMethod: o.paymentMethod, installments: o.installments,
+  };
+};
 
 export const linkedReservation = (r: typeof reservationsTable.$inferSelect | null | undefined) => r ? ({
   id: r.id, reservationNumber: r.reservationNumber, tripId: r.tripId, status: r.status,

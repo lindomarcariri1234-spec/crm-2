@@ -26,7 +26,11 @@ import {
   reverseReservationReferralIfNoEligiblePaymentInTransaction,
   type ReservationReferralReversalReason,
 } from "../services/reservation-referral-conversion";
-import { syncStoreOrderFromReservationPayment } from "../services/reservation-order-payment-sync";
+import {
+  syncStoreOrderFromOrderPayment,
+  syncStoreOrderFromReservationPayment,
+} from "../services/reservation-order-payment-sync";
+import { recalculateClientFinancials as recalculateClientFinancialsFromPayments } from "../services/client-financials";
 
 const router = Router();
 
@@ -46,19 +50,7 @@ function paymentReferralReversalReason(status: string): ReservationReferralRever
 }
 
 export async function recalculateClientFinancials(clientId: string, tenantId: string): Promise<void> {
-  const result = await db.execute(sql`
-    SELECT
-      COALESCE(SUM(CASE WHEN status = ${PAYMENT_STATUS.PAID} THEN amount::numeric ELSE 0 END), 0) AS total_spent,
-      COALESCE(SUM(CASE WHEN status IN (${PAYMENT_STATUS.PENDING}, ${PAYMENT_STATUS.OVERDUE}) THEN amount::numeric ELSE 0 END), 0) AS outstanding_balance
-    FROM payments
-    WHERE client_id = ${clientId} AND tenant_id = ${tenantId}
-  `);
-  const row = (result as unknown as { rows: Array<{ total_spent: string; outstanding_balance: string }> }).rows[0];
-  if (!row) return;
-  await db.update(clientsTable).set({
-    totalSpent: row.total_spent,
-    outstandingBalance: row.outstanding_balance,
-  }).where(and(eq(clientsTable.id, clientId), eq(clientsTable.tenantId, tenantId)));
+  await recalculateClientFinancialsFromPayments(clientId, tenantId);
 }
 
 async function syncMonthlyGoalProgress(sellerId: string, tenantId: string): Promise<void> {
@@ -509,17 +501,24 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       return;
     }
 
+    const totalCents = Math.round(parsed.data.amount * 100);
+    const installmentBaseCents = Math.floor(totalCents / installments);
+    const installmentRemainderCents = totalCents - installmentBaseCents * installments;
+    const createdPaymentEvents: Array<{ id: string; amount: number }> = [];
     for (let i = 1; i <= installments; i++) {
       const dueDate = new Date(parsed.data.dueDate);
       dueDate.setMonth(dueDate.getMonth() + (i - 1));
+      const installmentCents = installmentBaseCents + (i <= installmentRemainderCents ? 1 : 0);
+      const paymentId = i === 1 ? id : generateId();
+      createdPaymentEvents.push({ id: paymentId, amount: installmentCents / 100 });
       await db.insert(paymentsTable).values({
-        id: i === 1 ? id : generateId(),
+        id: paymentId,
         tenantId: me.tenantId,
         reservationId: parsed.data.reservationId ?? null,
         clientId: parsed.data.clientId ?? null,
         type: parsePaymentType(parsed.data.type),
         category: parsed.data.category,
-        amount: String(parsed.data.amount / installments),
+        amount: (installmentCents / 100).toFixed(2),
         paymentMethod: parsed.data.paymentMethod,
         installmentNumber: i,
         totalInstallments: installments,
@@ -529,6 +528,9 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
         receiptUrl,
         ...(explicitStatus ? { status: explicitStatus } : {}),
         ...(explicitPaidAt ? { paidAt: explicitPaidAt } : {}),
+        ...(parsed.data.reservationId && parsed.data.type === PAYMENT_TYPE.RECEIVABLE
+          ? { gateway: "manual-reservation", transactionId: paymentId }
+          : {}),
       });
     }
 
@@ -546,7 +548,16 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
     if (parsed.data.reservationId) {
       await syncReservationPaymentStatus(parsed.data.reservationId, me.tenantId);
       if (payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
-        await syncStoreOrderFromReservationPayment(parsed.data.reservationId, me.tenantId);
+        for (const event of createdPaymentEvents) {
+          await syncStoreOrderFromReservationPayment(parsed.data.reservationId, me.tenantId, {
+            received: {
+              gateway: "manual-reservation",
+              transactionId: event.id,
+              amount: event.amount,
+              occurredAt: payment.paidAt ?? new Date(),
+            },
+          });
+        }
         await convertPaidReservationReferral(parsed.data.reservationId, me.tenantId);
       }
       await syncReservationCommission(parsed.data.reservationId, me.tenantId);
@@ -677,14 +688,14 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
         .for("update")
         .limit(1);
-      if (!existingPayment) return { payment: null, reversal: null };
+      if (!existingPayment) return { payment: null, reversal: null, previousStatus: null };
 
       await tx.update(paymentsTable).set(updates)
         .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)));
       const [updatedPayment] = await tx.select().from(paymentsTable)
         .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
         .limit(1);
-      if (!updatedPayment) return { payment: null, reversal: null };
+      if (!updatedPayment) return { payment: null, reversal: null, previousStatus: existingPayment.status };
 
       const reversalReason = paymentReferralReversalReason(updatedPayment.status);
       const reversal = updatedPayment.reservationId
@@ -697,7 +708,7 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         })
         : null;
 
-      return { payment: updatedPayment, reversal };
+      return { payment: updatedPayment, reversal, previousStatus: existingPayment.status };
     });
     const payment = result.payment;
     if (!payment) { next(new NotFoundError("Payment not found", "NOT_FOUND")); return; }
@@ -710,8 +721,41 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
     }
     if (payment.reservationId) {
       await syncReservationPaymentStatus(payment.reservationId, me.tenantId);
+      await syncStoreOrderFromReservationPayment(
+        payment.reservationId,
+        me.tenantId,
+        {
+          ...(payment.status === PAYMENT_STATUS.PAID
+            && payment.type === PAYMENT_TYPE.RECEIVABLE
+            && result.previousStatus !== PAYMENT_STATUS.PAID
+            ? {
+              received: {
+                gateway: payment.gateway ?? "manual-reservation",
+                transactionId: payment.transactionId ?? payment.id,
+                amount: Number(payment.amount),
+                occurredAt: result.previousStatus !== PAYMENT_STATUS.PENDING
+                  ? new Date()
+                  : payment.paidAt ?? new Date(),
+                reactivated: result.previousStatus !== PAYMENT_STATUS.PENDING,
+              },
+            }
+            : {}),
+          ...(result.previousStatus === PAYMENT_STATUS.PAID
+            && payment.status !== PAYMENT_STATUS.PAID
+            && payment.type === PAYMENT_TYPE.RECEIVABLE
+            ? {
+              reversed: {
+                gateway: payment.gateway ?? "manual-reservation",
+                transactionId: payment.transactionId ?? payment.id,
+                paymentId: payment.id,
+                amount: Number(payment.amount),
+                occurredAt: new Date(),
+              },
+            }
+            : {}),
+        },
+      );
       if (payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
-        await syncStoreOrderFromReservationPayment(payment.reservationId, me.tenantId);
         await convertPaidReservationReferral(payment.reservationId, me.tenantId);
       }
       if (result.reversal) {
@@ -726,6 +770,33 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         }).catch((err) => req.log.error({ err }, "Error enqueueing referral payment reversal notification"));
       }
       await syncReservationCommission(payment.reservationId, me.tenantId);
+    } else if (payment.orderId && payment.type === PAYMENT_TYPE.RECEIVABLE) {
+      await syncStoreOrderFromOrderPayment(payment.orderId, me.tenantId, {
+        ...(payment.status === PAYMENT_STATUS.PAID && result.previousStatus !== PAYMENT_STATUS.PAID
+          ? {
+            received: {
+              gateway: payment.gateway ?? "manual-reservation",
+              transactionId: payment.transactionId ?? payment.id,
+              amount: Number(payment.amount),
+              occurredAt: result.previousStatus !== PAYMENT_STATUS.PENDING
+                ? new Date()
+                : payment.paidAt ?? new Date(),
+              reactivated: result.previousStatus !== PAYMENT_STATUS.PENDING,
+            },
+          }
+          : {}),
+        ...(result.previousStatus === PAYMENT_STATUS.PAID && payment.status !== PAYMENT_STATUS.PAID
+          ? {
+            reversed: {
+              gateway: payment.gateway ?? "manual-reservation",
+              transactionId: payment.transactionId ?? payment.id,
+              paymentId: payment.id,
+              amount: Number(payment.amount),
+              occurredAt: new Date(),
+            },
+          }
+          : {}),
+      });
     }
     if (payment.reservationId && payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
       if (payment.reservationId) {
@@ -858,14 +929,23 @@ router.delete("/payments/:id", async (req, res, next: NextFunction): Promise<voi
     }
 
     const wasPaidReceivable = (payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED)
-      && payment.type === PAYMENT_TYPE.RECEIVABLE
-      && !!payment.clientId;
+      && payment.type === PAYMENT_TYPE.RECEIVABLE;
     const wasReferralEligiblePayment = (payment.status === PAYMENT_STATUS.PAID || payment.status === PAYMENT_STATUS.APPROVED)
       && payment.type === PAYMENT_TYPE.RECEIVABLE;
 
     if (payment.reservationId) {
       // Step 3: Sync reservation paidValue/status and commission after deletion
       await syncReservationPaymentStatus(payment.reservationId, me.tenantId);
+      const paymentReversalEvent = wasReferralEligiblePayment ? {
+        reversed: {
+          gateway: payment.gateway ?? "manual-reservation",
+          transactionId: payment.transactionId ?? payment.id,
+          paymentId: payment.id,
+          amount: Number(payment.amount),
+          occurredAt: new Date(),
+        },
+      } : undefined;
+      await syncStoreOrderFromReservationPayment(payment.reservationId, me.tenantId, paymentReversalEvent);
       await syncReservationCommission(payment.reservationId, me.tenantId);
 
       // Step 4: Reverse reservation-level loyalty points only if the reservation is
@@ -904,6 +984,17 @@ router.delete("/payments/:id", async (req, res, next: NextFunction): Promise<voi
         }).catch((err) => req.log.error({ err }, "Error enqueueing referral payment deletion reversal notification"));
       }
     } else if (wasPaidReceivable) {
+      if (payment.orderId) {
+        await syncStoreOrderFromOrderPayment(payment.orderId, me.tenantId, {
+          reversed: {
+            gateway: payment.gateway ?? "manual-reservation",
+            transactionId: payment.transactionId ?? payment.id,
+            paymentId: payment.id,
+            amount: Number(payment.amount),
+            occurredAt: new Date(),
+          },
+        });
+      }
       // Standalone (non-reservation) payment: always reverse its payment-level points
       try {
         await loyaltyReverseEarnedPoints({

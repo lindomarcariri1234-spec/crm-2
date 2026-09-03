@@ -70,6 +70,17 @@ export async function syncReservationPaymentStatus(
     if (!reservation.depositAmount) {
       updates.status = RESERVATION_STATUS.PENDING;
     }
+  } else if (
+    reservation.status === RESERVATION_STATUS.PENDING
+    && reservation.depositAmount
+    && paidValue >= roundMoney(Number(reservation.depositAmount))
+  ) {
+    // A requested deposit does not confirm a reservation by itself. Once a
+    // real receivable payment reaches the requested deposit, promote it and
+    // move its seats from reserved to confirmed.
+    updates.status = RESERVATION_STATUS.CONFIRMED;
+    if (!reservation.confirmedAt) updates.confirmedAt = new Date();
+    updates.expiresAt = null;
   }
 
   await executor
@@ -81,7 +92,9 @@ export async function syncReservationPaymentStatus(
   // Only reservations linked to a trip carry a tripId; client-only payment records don't.
   const newStatus = updates.status;
   if (newStatus && newStatus !== previousStatus && reservation.tripId) {
-    const seatsCount = Array.isArray(reservation.seats) ? reservation.seats.length : 0;
+    const seatsCount = reservation.capacityUnits > 0
+      ? reservation.capacityUnits
+      : (Array.isArray(reservation.seats) ? reservation.seats.length : 0);
     if (seatsCount > 0) {
       const isNowConfirmed = newStatus === RESERVATION_STATUS.CONFIRMED && previousStatus === RESERVATION_STATUS.PENDING;
       const isNowPending = newStatus === RESERVATION_STATUS.PENDING && previousStatus === RESERVATION_STATUS.CONFIRMED;

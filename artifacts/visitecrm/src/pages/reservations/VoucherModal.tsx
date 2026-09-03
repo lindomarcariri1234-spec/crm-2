@@ -8,10 +8,12 @@ import { Download, Printer } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { STATUS_COLORS, STATUS_LABELS, fmt } from "./constants";
 import { formatDate } from "@/lib/utils";
+import { getReservationFinancialSummary, type ReservationWithFinancialLinks } from "./financial";
 
 function VoucherContent({ r, qrDataUrl }: { r: Reservation | null | undefined; qrDataUrl: string }) {
   const trip = r?.trip;
   const client = r?.client;
+  const financial = r ? getReservationFinancialSummary(r as ReservationWithFinancialLinks) : null;
   return (
     <div className="bg-white text-gray-900 font-sans" style={{ fontFamily: "system-ui, Arial, sans-serif" }}>
       <div className="flex items-center justify-between pb-3 border-b-2 border-gray-800 mb-4">
@@ -93,18 +95,26 @@ function VoucherContent({ r, qrDataUrl }: { r: Reservation | null | undefined; q
 
       <div className="border-t border-dashed border-gray-300 pt-3 mb-4">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Resumo Financeiro</p>
-        <div className="grid grid-cols-3 gap-3 text-center">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
           <div className="bg-gray-50 rounded p-2">
-            <p className="text-xs text-gray-500 mb-0.5">Total</p>
-            <p className="font-bold text-sm text-gray-900">{fmt(r?.totalValue ?? 0)}</p>
+            <p className="text-xs text-gray-500 mb-0.5">Valor Total</p>
+            <p className="font-bold text-sm text-gray-900">{fmt(financial?.subtotal ?? 0)}</p>
+          </div>
+          <div className="bg-red-50 rounded p-2">
+            <p className="text-xs text-gray-500 mb-0.5">Desconto</p>
+            <p className="font-bold text-sm text-red-600">{financial?.discount ? `− ${fmt(financial.discount)}` : "—"}</p>
+          </div>
+          <div className="bg-gray-50 rounded p-2">
+            <p className="text-xs text-gray-500 mb-0.5">Total líquido</p>
+            <p className="font-bold text-sm text-gray-900">{fmt(financial?.total ?? 0)}</p>
           </div>
           <div className="bg-green-50 rounded p-2">
             <p className="text-xs text-gray-500 mb-0.5">Pago</p>
-            <p className="font-bold text-sm text-green-700">{fmt(r?.paidValue ?? 0)}</p>
+            <p className="font-bold text-sm text-green-700">{fmt(financial?.paid ?? 0)}</p>
           </div>
-          <div className={`rounded p-2 ${(r?.balance ?? 0) > 0 ? "bg-red-50" : "bg-green-50"}`}>
-            <p className="text-xs text-gray-500 mb-0.5">Saldo</p>
-            <p className={`font-bold text-sm ${(r?.balance ?? 0) > 0 ? "text-red-600" : "text-green-700"}`}>{fmt(r?.balance ?? 0)}</p>
+          <div className={`rounded p-2 ${(financial?.balance ?? 0) > 0 ? "bg-red-50" : "bg-green-50"}`}>
+            <p className="text-xs text-gray-500 mb-0.5">Saldo devedor</p>
+            <p className={`font-bold text-sm ${(financial?.balance ?? 0) > 0 ? "text-red-600" : "text-green-700"}`}>{fmt(financial?.balance ?? 0)}</p>
           </div>
         </div>
       </div>

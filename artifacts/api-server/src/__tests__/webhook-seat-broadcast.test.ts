@@ -105,8 +105,9 @@ vi.mock("@workspace/permissions", () => ({
     REFUNDED: "refunded",
     CHARGED_BACK: "charged_back",
   },
+  PAYMENT_TYPE: { RECEIVABLE: "receivable" },
   RESERVATION_STATUS: {},
-  STORE_ORDER_STATUS: { CONFIRMED: "confirmed" },
+  STORE_ORDER_STATUS: { CONFIRMED: "confirmed", CANCELLED: "cancelled" },
   STORE_PAYMENT_STATUS: { PAID: "paid" },
 }));
 vi.mock("../services/settlements/financial-ledger.js", () => ({
@@ -137,6 +138,8 @@ vi.mock("../services/checkout/post-booking.js", () => ({
 
 vi.mock("../services/checkout/persist-order.js", () => ({
   applyOrderInventoryEffects: vi.fn().mockResolvedValue(undefined),
+  releaseOrderInventoryHolds: vi.fn().mockResolvedValue(undefined),
+  reverseOrderInventoryEffects: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../queues/email-helpers.js", () => ({
@@ -179,8 +182,10 @@ function makeTx() {
         const rows = selectResults.shift() ?? [];
         const p = Promise.resolve(rows) as Promise<object[]> & {
           limit: (n: number) => Promise<object[]>;
+          for: (mode: string) => typeof p;
         };
         p.limit = vi.fn(() => Promise.resolve(rows));
+        p.for = vi.fn(() => p);
         return p;
       });
       return chain;
@@ -227,6 +232,7 @@ const ORDER = {
   clientId: "client-1",
   paymentMethod: "stripe",
   paymentStatus: "pending",
+  totalAmount: "100",
 };
 
 /** Minimal Express app mounting the webhooks router with rawBody support. */

@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, boolean, numeric, integer, primaryKey, index } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { pgTable, text, timestamp, boolean, numeric, integer, primaryKey, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import type { ReservationStatus } from "@workspace/permissions";
@@ -14,6 +14,11 @@ export const reservationsTable = pgTable("reservations", {
   tripId: text("trip_id").notNull().references(() => tripsTable.id),
   clientId: text("client_id").references(() => clientsTable.id),
   seats: text("seats").array().notNull().default([]),
+  // Number of trip-capacity units owned by this reservation. This is
+  // deliberately independent from `seats`: trips without numbered seating
+  // still consume capacity, and releases must return exactly what this
+  // persisted reservation claimed.
+  capacityUnits: integer("capacity_units").notNull().default(0),
   boardingLocationId: text("boarding_location_id"),
   tripType: text("trip_type"),
   packageType: text("package_type"),
@@ -58,6 +63,9 @@ export const reservationsTable = pgTable("reservations", {
   index("reservations_trip_id_idx").on(t.tripId),
   index("reservations_client_id_idx").on(t.clientId),
   index("reservations_tenant_id_status_idx").on(t.tenantId, t.status),
+  uniqueIndex("reservations_active_store_order_trip_unique")
+    .on(t.tenantId, t.storeOrderId, t.tripId)
+    .where(sql`${t.storeOrderId} IS NOT NULL AND ${t.status} IN ('pending', 'confirmed')`),
 ]);
 
 export const insertReservationSchema = createInsertSchema(reservationsTable).omit({ createdAt: true, updatedAt: true });

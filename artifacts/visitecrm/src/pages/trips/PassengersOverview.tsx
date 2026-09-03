@@ -18,6 +18,7 @@ import { formatCurrency, formatDate } from "./utils";
 import { PAYMENT_METHOD_LABELS } from "@/lib/labels";
 import type { FixedCostItem, VariableCostItem } from "./types";
 import { PassengersOverviewFinancialDialog } from "./PassengersOverviewFinancialDialog";
+import { getReservationFinancialSummary, type ReservationWithFinancialLinks } from "@/pages/reservations/financial";
 
 interface TripFinancialReport {
   reservationCount: number;
@@ -89,8 +90,14 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
       let va: string | number = "";
       let vb: string | number = "";
       if (sort.key === "name") { va = a.client.name; vb = b.client.name; }
-      else if (sort.key === "value") { va = a.totalValue; vb = b.totalValue; }
-      else if (sort.key === "balance") { va = a.balance; vb = b.balance; }
+      else if (sort.key === "value") {
+        va = getReservationFinancialSummary(a as ReservationWithFinancialLinks).subtotal;
+        vb = getReservationFinancialSummary(b as ReservationWithFinancialLinks).subtotal;
+      }
+      else if (sort.key === "balance") {
+        va = getReservationFinancialSummary(a as ReservationWithFinancialLinks).balance;
+        vb = getReservationFinancialSummary(b as ReservationWithFinancialLinks).balance;
+      }
       if (va < vb) return sort.dir === "asc" ? -1 : 1;
       if (va > vb) return sort.dir === "asc" ? 1 : -1;
       return 0;
@@ -494,8 +501,11 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
                   { key: "seats", label: "Assento(s)" },
                   { key: "status", label: "Status" },
                   { key: "payment", label: "Pagamento" },
-                  { key: "value", label: "Valor" },
-                  { key: "balance", label: "Saldo" },
+                   { key: "value", label: "Valor Total" },
+                   { key: "discount", label: "Desconto" },
+                   { key: "netValue", label: "Total líquido" },
+                   { key: "paid", label: "Pago" },
+                   { key: "balance", label: "Saldo devedor" },
                   { key: "actions", label: "" },
                 ].map(col => (
                   <th key={col.key} className={`text-left p-2 font-medium ${["name","value","balance","status"].includes(col.key) ? "cursor-pointer hover:text-primary" : ""}`}
@@ -507,6 +517,7 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
             </thead>
             <tbody>
               {filteredReservations.slice(0, 15).map(r => {
+                const financial = getReservationFinancialSummary(r as ReservationWithFinancialLinks);
                 const isEditing = editingId === r.id;
                 const isSelected = selectedIds.has(r.id);
                 return (
@@ -575,21 +586,11 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
                         <span className="text-xs text-muted-foreground">{METHOD_LABELS[r.paymentMethod ?? ""] ?? r.paymentMethod ?? "—"}</span>
                       )}
                     </td>
-                    <td className="p-2 font-medium">
-                      {(() => {
-                        const discount = (r as { discountTotal?: number | null }).discountTotal ?? 0;
-                        if (discount > 0) {
-                          return (
-                            <div className="flex flex-col gap-0.5">
-                              <span className="text-xs text-muted-foreground line-through">{formatCurrency(r.totalValue + discount)}</span>
-                              <span>{formatCurrency(r.totalValue)}</span>
-                            </div>
-                          );
-                        }
-                        return formatCurrency(r.totalValue);
-                      })()}
-                    </td>
-                    <td className={`p-2 font-medium ${r.balance > 0 ? "text-red-600" : "text-green-600"}`}>{formatCurrency(r.balance)}</td>
+                     <td className="p-2 font-medium whitespace-nowrap">{formatCurrency(financial.subtotal)}</td>
+                     <td className="p-2 text-destructive whitespace-nowrap">{financial.discount > 0 ? `− ${formatCurrency(financial.discount)}` : "—"}</td>
+                     <td className="p-2 font-medium whitespace-nowrap">{formatCurrency(financial.total)}</td>
+                     <td className="p-2 text-green-700 whitespace-nowrap">{formatCurrency(financial.paid)}</td>
+                     <td className={`p-2 font-medium whitespace-nowrap ${financial.balance > 0 ? "text-red-600" : "text-green-600"}`}>{formatCurrency(financial.balance)}</td>
                     <td className="p-2">
                       {isEditing ? (
                         <div className="flex gap-1">
@@ -608,7 +609,7 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
                   </tr>
                 );
               })}
-              {!filteredReservations.length && <tr><td colSpan={9} className="text-center py-8 text-muted-foreground">Sem reservas</td></tr>}
+              {!filteredReservations.length && <tr><td colSpan={12} className="text-center py-8 text-muted-foreground">Sem reservas</td></tr>}
             </tbody>
           </table>
         </div>

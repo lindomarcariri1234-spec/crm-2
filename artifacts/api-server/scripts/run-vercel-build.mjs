@@ -55,6 +55,67 @@ function buildFrontend() {
   }
 }
 
+function runOneShotRepairIfRequested() {
+  const repair = process.env["VISITECRM_ONE_SHOT_REPAIR"];
+  if (!repair) return;
+  if (process.env["VERCEL_ENV"] !== "production") {
+    throw new Error(
+      "[run-vercel-build] One-shot repairs are allowed only in the Vercel Production environment.",
+    );
+  }
+  if (repair !== "orphan-reservation") {
+    throw new Error(
+      "[run-vercel-build] VISITECRM_ONE_SHOT_REPAIR must be orphan-reservation when set.",
+    );
+  }
+
+  const apply = process.env["VISITECRM_ONE_SHOT_REPAIR_APPLY"];
+  if (apply !== "true" && apply !== "false") {
+    throw new Error(
+      "[run-vercel-build] VISITECRM_ONE_SHOT_REPAIR_APPLY must be explicitly true or false.",
+    );
+  }
+
+  const tenantId = process.env["VISITECRM_ONE_SHOT_REPAIR_TENANT_ID"]?.trim();
+  const reservationId = process.env["VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID"]?.trim();
+  const reservationNumber = process.env["VISITECRM_ONE_SHOT_REPAIR_RESERVATION_NUMBER"]?.trim();
+  if (!tenantId) {
+    throw new Error(
+      "[run-vercel-build] VISITECRM_ONE_SHOT_REPAIR_TENANT_ID is required.",
+    );
+  }
+  if ((reservationId && reservationNumber) || (!reservationId && !reservationNumber)) {
+    throw new Error(
+      "[run-vercel-build] Set exactly one of VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID " +
+        "or VISITECRM_ONE_SHOT_REPAIR_RESERVATION_NUMBER.",
+    );
+  }
+
+  const repairArgs = [
+    "--tenant-id=" + tenantId,
+    reservationId ? "--reservation-id=" + reservationId : "--reservation-number=" + reservationNumber,
+  ];
+  if (apply === "true") repairArgs.push("--apply");
+
+  console.log(
+    `[run-vercel-build] Running explicitly requested ${apply === "true" ? "apply" : "dry-run"} ` +
+      "one-shot repair; database credentials remain managed by Vercel.",
+  );
+  const result = spawnSync(
+    "pnpm",
+    ["--filter", "@workspace/scripts", "run", "repair:orphan-reservation", "--", ...repairArgs],
+    {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "inherit",
+    },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`One-shot repair exited with status ${result.status}`);
+  }
+}
+
 async function main() {
   buildFrontend();
   await access(path.join(frontendDist, "index.html"));
@@ -67,6 +128,7 @@ async function main() {
 
   runPnpm("migrate:vercel");
   runPnpm("build:vercel");
+  runOneShotRepairIfRequested();
 
   await access(path.join(builtApiDir, "index.mjs"));
   for (const vercelApiDir of vercelApiDirs) {
@@ -74,6 +136,8 @@ async function main() {
     await cp(builtApiDir, vercelApiDir, { recursive: true });
     console.log(`[run-vercel-build] API copied to ${vercelApiDir}`);
   }
+
+  runPnpm("verify:vercel");
 }
 
 main().catch((error) => {
