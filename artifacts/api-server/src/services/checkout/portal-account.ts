@@ -157,7 +157,7 @@ export async function ensurePortalAccount(
       loginUrl,
       agencyName,
       agencyLogo: agencyLogo || null,
-      isMagicLink: credentials !== undefined,
+      isMagicLink: setupUrl !== loginUrl,
       plainTextPassword: bootstrapPassword,
     },
     tenantId,

@@ -111,8 +111,10 @@ vi.mock("drizzle-orm", async () => {
 
 vi.mock("@workspace/permissions", () => ({
   PAYMENT_STATUS: { PAID: "paid", APPROVED: "approved" },
+  PAYMENT_TYPE: { RECEIVABLE: "receivable" },
   RESERVATION_STATUS: { CONFIRMED: "confirmed", PENDING: "pending" },
-  STORE_ORDER_STATUS: { CONFIRMED: "confirmed" },
+  ACTIVE_RESERVATION_STATUSES: ["confirmed", "pending"],
+  STORE_ORDER_STATUS: { CONFIRMED: "confirmed", CANCELLED: "cancelled" },
   STORE_PAYMENT_STATUS: { PAID: "paid" },
 }));
 
@@ -190,6 +192,8 @@ const ORDER = {
   clientId: "client-sse",
   paymentMethod: "stripe",
   paymentStatus: "pending",
+  status: "pending",
+  totalAmount: "150.00",
 };
 
 function makeStripeSignature(rawBody: string): string {
@@ -214,8 +218,10 @@ function makeTx() {
         const rows = txSelectResults.shift() ?? [];
         const p = Promise.resolve(rows) as Promise<object[]> & {
           limit: (n: number) => Promise<object[]>;
+          for: (mode: string) => typeof p;
         };
         p.limit = vi.fn(() => Promise.resolve(rows));
+        p.for = vi.fn(() => p);
         return p;
       });
       return chain;

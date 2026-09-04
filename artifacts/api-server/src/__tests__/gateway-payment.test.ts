@@ -107,8 +107,10 @@ function makeTx() {
         const rows = selectResults.shift() ?? [];
         const p = Promise.resolve(rows) as Promise<object[]> & {
           limit: (n: number) => Promise<object[]>;
+          for: (mode: string) => typeof p;
         };
         p.limit = vi.fn(() => Promise.resolve(rows));
+        p.for = vi.fn(() => p);
         return p;
       });
       return chain;
@@ -226,6 +228,25 @@ describe("applyGatewayPayment", () => {
     expect(tx.update).toHaveBeenCalledOnce();
     expect(tx.insert).toHaveBeenCalledOnce();
     expect(mockSyncReservationPaymentStatus).toHaveBeenCalledOnce();
+    expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ receivedAmount: 30 }),
+    );
+  });
+
+  it("marks a product-only gateway deposit as partial and persists the remaining balance", async () => {
+    const tx = makeTx();
+    selectResults = [[{ ...ORDER, totalAmount: "100" }], [], []];
+
+    const result = await applyGatewayPayment(tx as any, { ...BASE_ARGS, amount: 30 } as any);
+
+    expect(result?.partialPayment).toBe(true);
+    expect(tx.insertedValues[0]).toMatchObject({
+      reservationId: null,
+      amount: "30.00",
+      transactionId: "tx-1",
+    });
+    expect(tx.update).toHaveBeenCalledOnce();
     expect(mockRecordOrderPaymentSettlement).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ receivedAmount: 30 }),

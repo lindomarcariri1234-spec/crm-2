@@ -1,5 +1,10 @@
-import { db, whatsappNotificationOutboxTable, type WhatsAppOutboxType } from "@workspace/db";
-import { and, eq, inArray, isNull, lt, not, or, sql } from "drizzle-orm";
+import {
+  db,
+  platformSettingsTable,
+  whatsappNotificationOutboxTable,
+  type WhatsAppOutboxType,
+} from "@workspace/db";
+import { and, count, eq, inArray, isNull, lt, min, not, or, sql } from "drizzle-orm";
 import { generateId } from "../../lib/id";
 import { logger } from "../../lib/logger";
 import { getWhatsAppQueue } from "../../queues/index";
@@ -7,6 +12,16 @@ import { dispatchWhatsAppReservationConfirmed } from "../../queues/whatsapp-help
 
 const RESERVATION_CONFIRMED = "reservation_confirmed" as const;
 const PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
+const UNKNOWN_CONFIRMATION_ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+const UNKNOWN_CONFIRMATION_ALERT_AGE_STEP_MINUTES = 60;
+const UNKNOWN_CONFIRMATION_ALERT_KEY_PREFIX = "whatsapp_unknown_confirmation_alert:";
+const UNKNOWN_CONFIRMATION_ALERT_LABEL = "Last unknown reservation confirmation alert (JSON)";
+
+type UnknownConfirmationAlertState = {
+  lastAlertAt: number;
+  lastCount: number;
+  lastAgeMinutes: number | null;
+};
 
 export type ReservationReminderType = Extract<
   WhatsAppOutboxType,
@@ -122,6 +137,7 @@ export async function scheduleReservationConfirmedWhatsApp(
     .returning({
       id: whatsappNotificationOutboxTable.id,
       sentAt: whatsappNotificationOutboxTable.sentAt,
+      status: whatsappNotificationOutboxTable.status,
     });
 
   const [outbox] = created
@@ -130,6 +146,7 @@ export async function scheduleReservationConfirmedWhatsApp(
         .select({
           id: whatsappNotificationOutboxTable.id,
           sentAt: whatsappNotificationOutboxTable.sentAt,
+          status: whatsappNotificationOutboxTable.status,
         })
         .from(whatsappNotificationOutboxTable)
         .where(
@@ -141,7 +158,7 @@ export async function scheduleReservationConfirmedWhatsApp(
         )
         .limit(1);
 
-  if (!outbox || outbox.sentAt) return;
+  if (!outbox || outbox.sentAt || outbox.status === "unknown") return;
 
   const queue = getWhatsAppQueue();
   if (queue) {
@@ -163,8 +180,8 @@ export async function scheduleReservationConfirmedWhatsApp(
 }
 
 /**
- * Called by the WhatsApp worker. Returns false instead of throwing so its caller
- * can use the queue's retry policy while the outbox row remains recoverable.
+ * Called by the WhatsApp worker. A provider failure releases the active claim
+ * back to pending; an already-ambiguous claim is never reopened by this call.
  */
 export async function deliverReservationConfirmedWhatsApp(outboxId: string): Promise<boolean> {
   const [outbox] = await db
@@ -185,12 +202,19 @@ export async function deliverReservationConfirmedWhatsApp(outboxId: string): Pro
   // the conditional update returns 0 rows and we bail out to avoid duplicate delivery.
   const claimed = await db
     .update(whatsappNotificationOutboxTable)
-    .set({ status: "processing", updatedAt: new Date() })
+    .set({
+      status: "processing",
+      attempts: sql`${whatsappNotificationOutboxTable.attempts} + 1`,
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(whatsappNotificationOutboxTable.id, outbox.id),
         isNull(whatsappNotificationOutboxTable.sentAt),
-        not(eq(whatsappNotificationOutboxTable.status, "processing")),
+        or(
+          eq(whatsappNotificationOutboxTable.status, "pending"),
+          eq(whatsappNotificationOutboxTable.status, "enqueued"),
+        ),
       ),
     )
     .returning({ id: whatsappNotificationOutboxTable.id });
@@ -200,29 +224,50 @@ export async function deliverReservationConfirmedWhatsApp(outboxId: string): Pro
     return true;
   }
 
-  const delivered = await dispatchWhatsAppReservationConfirmed({
-    reservationId: outbox.reservationId,
-    tenantId: outbox.tenantId,
-    delivery: "direct",
-  });
+  let delivered = false;
+  try {
+    delivered = await dispatchWhatsAppReservationConfirmed({
+      reservationId: outbox.reservationId,
+      tenantId: outbox.tenantId,
+      delivery: "direct",
+    });
+  } catch (err) {
+    logger.warn({ outboxId, err }, "[whatsapp-outbox] Reservation confirmation delivery threw");
+  }
   if (!delivered) {
-    await db
+    const [released] = await db
       .update(whatsappNotificationOutboxTable)
       .set({ status: "pending", lastError: "delivery_failed" })
-      .where(eq(whatsappNotificationOutboxTable.id, outbox.id));
-    logger.warn({ outboxId }, "[whatsapp-outbox] Reservation confirmation delivery failed");
+      .where(and(
+        eq(whatsappNotificationOutboxTable.id, outbox.id),
+        eq(whatsappNotificationOutboxTable.status, "processing"),
+        isNull(whatsappNotificationOutboxTable.sentAt),
+      ))
+      .returning({ id: whatsappNotificationOutboxTable.id });
+    if (released) {
+      logger.warn({ outboxId }, "[whatsapp-outbox] Reservation confirmation delivery failed");
+    } else {
+      logger.warn({ outboxId }, "[whatsapp-outbox] Late failure left ambiguous confirmation untouched");
+    }
     return false;
   }
 
   await db
     .update(whatsappNotificationOutboxTable)
     .set({ status: "sent", sentAt: new Date(), lastError: null })
-    .where(and(eq(whatsappNotificationOutboxTable.id, outbox.id), isNull(whatsappNotificationOutboxTable.sentAt)));
+    .where(and(
+      eq(whatsappNotificationOutboxTable.id, outbox.id),
+      isNull(whatsappNotificationOutboxTable.sentAt),
+      or(
+        eq(whatsappNotificationOutboxTable.status, "processing"),
+        eq(whatsappNotificationOutboxTable.status, "unknown"),
+      ),
+    ));
   return true;
 }
 
 /**
- * Releases claims left behind by a worker that crashed during delivery.
+ * Marks claims left behind by a worker that crashed during delivery as unknown.
  * updatedAt is advanced explicitly because the claim update must start the
  * timeout window even when the ORM's $onUpdate hook is not involved.
  */
@@ -231,8 +276,8 @@ export async function resetStaleReservationConfirmedWhatsApps(): Promise<number>
   const reset = await db
     .update(whatsappNotificationOutboxTable)
     .set({
-      status: "pending",
-      lastError: "processing_timeout",
+      status: "unknown",
+      lastError: "delivery_result_unknown",
       updatedAt: new Date(),
     })
     .where(
@@ -248,15 +293,146 @@ export async function resetStaleReservationConfirmedWhatsApps(): Promise<number>
   if (reset.length > 0) {
     logger.warn(
       { count: reset.length, staleBefore },
-      "[whatsapp-outbox] Reset stale processing rows for retry",
+      "[whatsapp-outbox] Marked stale processing rows as unknown",
     );
   }
   return reset.length;
 }
 
+/**
+ * Emits one structured operational alert per agency while any reservation
+ * confirmation remains unresolved. `updatedAt` is the timestamp written when
+ * the stale processing lease becomes unknown, so the age reflects the time
+ * awaiting manual review rather than the reservation's creation date.
+ */
+export async function alertUnknownReservationConfirmations(): Promise<void> {
+  try {
+    const unknownByTenant = await db
+      .select({
+        tenantId: whatsappNotificationOutboxTable.tenantId,
+        unknownCount: count(whatsappNotificationOutboxTable.id),
+        oldestAt: min(whatsappNotificationOutboxTable.updatedAt),
+      })
+      .from(whatsappNotificationOutboxTable)
+      .where(and(
+        eq(whatsappNotificationOutboxTable.type, RESERVATION_CONFIRMED),
+        eq(whatsappNotificationOutboxTable.status, "unknown"),
+      ))
+      .groupBy(whatsappNotificationOutboxTable.tenantId);
+
+    const now = Date.now();
+    for (const row of unknownByTenant) {
+      const oldestAt = row.oldestAt instanceof Date ? row.oldestAt : null;
+      const unknownCount = Number(row.unknownCount);
+      const ageMinutes = oldestAt
+        ? Math.max(0, Math.round((now - oldestAt.getTime()) / 60_000))
+        : null;
+
+      if (!await claimUnknownConfirmationAlert({
+        tenantId: row.tenantId,
+        unknownCount,
+        ageMinutes,
+        now,
+      })) {
+        continue;
+      }
+
+      logger.warn(
+        { tenantId: row.tenantId, unknownCount, oldestAt, ageMinutes },
+        "[whatsapp-outbox] Unknown reservation confirmations require manual review",
+      );
+    }
+  } catch (err) {
+    // Alerting must never prevent the normal confirmed-failure retry sweep.
+    logger.error({ err }, "[whatsapp-outbox] Failed to evaluate unknown confirmation alerts");
+  }
+}
+
+async function claimUnknownConfirmationAlert(opts: {
+  tenantId: string;
+  unknownCount: number;
+  ageMinutes: number | null;
+  now: number;
+}): Promise<boolean> {
+  const { tenantId, unknownCount, ageMinutes, now } = opts;
+  const key = `${UNKNOWN_CONFIRMATION_ALERT_KEY_PREFIX}${tenantId}`;
+
+  const [stored] = await db
+    .select({
+      value: platformSettingsTable.value,
+      updatedAt: platformSettingsTable.updatedAt,
+    })
+    .from(platformSettingsTable)
+    .where(eq(platformSettingsTable.key, key))
+    .limit(1);
+
+  const previous = parseUnknownConfirmationAlertState(stored?.value);
+  const ageReachedNextStep =
+    ageMinutes !== null &&
+    (previous?.lastAgeMinutes === null || previous?.lastAgeMinutes === undefined
+      ? ageMinutes >= UNKNOWN_CONFIRMATION_ALERT_AGE_STEP_MINUTES
+      : ageMinutes >= previous.lastAgeMinutes + UNKNOWN_CONFIRMATION_ALERT_AGE_STEP_MINUTES);
+  const cooldownElapsed =
+    !previous || now - previous.lastAlertAt >= UNKNOWN_CONFIRMATION_ALERT_COOLDOWN_MS;
+  const countIncreased = previous !== null && unknownCount > previous.lastCount;
+
+  if (previous && !cooldownElapsed && !countIncreased && !ageReachedNextStep) {
+    return false;
+  }
+
+  const nextState: UnknownConfirmationAlertState = {
+    lastAlertAt: now,
+    lastCount: unknownCount,
+    lastAgeMinutes: ageMinutes,
+  };
+  const value = JSON.stringify(nextState);
+
+  if (stored) {
+    const [claimed] = await db
+      .update(platformSettingsTable)
+      .set({ value, updatedAt: new Date(now) })
+      .where(and(
+        eq(platformSettingsTable.key, key),
+        eq(platformSettingsTable.updatedAt, stored.updatedAt),
+      ))
+      .returning({ id: platformSettingsTable.id });
+    return Boolean(claimed);
+  }
+
+  const [claimed] = await db
+    .insert(platformSettingsTable)
+    .values({
+      id: generateId(),
+      key,
+      value,
+      label: UNKNOWN_CONFIRMATION_ALERT_LABEL,
+    })
+    .onConflictDoNothing()
+    .returning({ id: platformSettingsTable.id });
+  return Boolean(claimed);
+}
+
+function parseUnknownConfirmationAlertState(value: string | null | undefined): UnknownConfirmationAlertState | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<UnknownConfirmationAlertState>;
+    if (
+      typeof parsed.lastAlertAt !== "number" ||
+      typeof parsed.lastCount !== "number" ||
+      (parsed.lastAgeMinutes !== null && typeof parsed.lastAgeMinutes !== "number")
+    ) {
+      return null;
+    }
+    return parsed as UnknownConfirmationAlertState;
+  } catch {
+    return null;
+  }
+}
+
 /** Retries durable notifications left pending by a queue or provider failure. */
 export async function retryPendingReservationConfirmedWhatsApps(): Promise<void> {
   await resetStaleReservationConfirmedWhatsApps();
+  await alertUnknownReservationConfirmations();
 
   const pending = await db
     .select({

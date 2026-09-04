@@ -100,11 +100,11 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
                   className="accent-amber-600"
                 />
                 <div className="flex-1">
-                  <p className="font-semibold text-sm text-amber-900">Pagar valor mínimo</p>
+                  <p className="font-semibold text-sm text-amber-900">Solicitar reserva com entrada mínima</p>
                   <p className="text-xs text-amber-700">
                     R$ {Number(store.minDepositAmount).toFixed(2)}{" "}
                     <span className="text-amber-600">
-                      (Restante: R$ {(finalTotal - Number(store.minDepositAmount)).toFixed(2)})
+                      (Saldo após a entrada: R$ {(finalTotal - Number(store.minDepositAmount)).toFixed(2)})
                     </span>
                   </p>
                 </div>
@@ -114,7 +114,7 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
             {form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal && (
               <div className="space-y-1">
                 <label className="text-xs font-medium text-amber-800">
-                  Valor a pagar agora (R$)
+                   Entrada solicitada (R$)
                 </label>
                 <input
                   type="number"
@@ -128,6 +128,9 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
                 <p className="text-[11px] text-amber-700">
                   Mínimo R$ {Number(store.minDepositAmount).toFixed(2)} — máximo R$ {finalTotal.toFixed(2)}
                 </p>
+                <p className="text-[11px] text-amber-700">
+                  Este valor registra a entrada desejada. O pagamento só será contabilizado após confirmação.
+                </p>
               </div>
             )}
           </div>
@@ -137,8 +140,8 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           <div className="mt-2 p-4 bg-teal-50 border border-teal-200 rounded-xl text-sm text-teal-900">
             <p className="flex items-start gap-1.5">
               <Info className="w-4 h-4 mt-0.5 shrink-0" />
-              Após confirmar a reserva, você receberá o QR Code do PIX por email e WhatsApp para
-              efetuar o pagamento.
+               O QR Code do PIX aparecerá na confirmação do pedido para você efetuar o pagamento.
+               Depois, a agência atualizará a confirmação assim que o recebível for identificado.
             </p>
           </div>
         )}

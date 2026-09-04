@@ -2413,7 +2413,7 @@ paths:
           description: Filter messages that have a delivery with this status
           schema:
             type: string
-            enum: [pending, processing, accepted, failed, skipped]
+            enum: [pending, processing, accepted, failed, skipped, unknown]
         - name: provider
           in: query
           description: Filter messages that have a delivery handled by this provider
@@ -2502,7 +2502,7 @@ paths:
           description: Keep only messages that have a delivery with this status
           schema:
             type: string
-            enum: [pending, processing, accepted, failed, skipped]
+            enum: [pending, processing, accepted, failed, skipped, unknown]
         - name: provider
           in: query
           description: Keep only deliveries handled by this provider
@@ -2569,7 +2569,7 @@ paths:
           description: Filter exported rows by delivery status
           schema:
             type: string
-            enum: [pending, processing, accepted, failed, skipped]
+            enum: [pending, processing, accepted, failed, skipped, unknown]
         - name: provider
           in: query
           description: Filter exported rows by provider
@@ -2624,6 +2624,49 @@ paths:
       responses:
         "202":
           description: Delivery queued for retry
+
+  /outbound-messages/{deliveryId}/reconcile:
+    post:
+      operationId: reconcileOutboundDelivery
+      tags: [messages]
+      summary: Reconcile one ambiguous WhatsApp delivery with its provider
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Provider reconciliation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundReconciliationResult"
+
+  /outbound-messages/{deliveryId}/reconcile/retry:
+    post:
+      operationId: retryUnknownOutboundDelivery
+      tags: [messages]
+      summary: Re-check an ambiguous delivery and queue it only when the provider confirms it was not found
+      parameters:
+        - name: deliveryId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Delivery queued after provider-confirmed absence
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveryId: { type: string }
+                  messageId: { type: string }
+                  outcome: { type: string, const: queued }
+                required: [deliveryId, messageId, outcome]
 
   /outbound-deliveries/{deliveryId}/retry:
     post:
@@ -8585,7 +8628,7 @@ components:
         recipient: { type: ["string", "null"] }
         subject: { type: ["string", "null"] }
         content: { type: string }
-        status: { type: string, enum: [pending, processing, accepted, failed, skipped] }
+        status: { type: string, enum: [pending, processing, accepted, failed, skipped, unknown] }
         attempts: { type: integer }
         maxAttempts: { type: integer }
         provider: { type: ["string", "null"] }
@@ -8617,7 +8660,7 @@ components:
         recipientType: { type: string }
         recipientId: { type: ["string", "null"] }
         recipientName: { type: ["string", "null"] }
-        status: { type: string, enum: [pending, processing, accepted, partial, failed, skipped] }
+        status: { type: string, enum: [pending, processing, accepted, partial, failed, skipped, unknown] }
         createdAt: { type: string }
         updatedAt: { type: string }
         deliveries:
@@ -8634,6 +8677,21 @@ components:
         totalFailures: { type: integer }
         failurePercentage: { type: number }
       required: [provider, failureCount, totalFailures, failurePercentage]
+
+    OutboundReconciliationResult:
+      type: object
+      properties:
+        outcome:
+          type: string
+          enum: [accepted, not_found, unsupported, inconclusive]
+        deliveryId: { type: string }
+        messageId: { type: string }
+        provider: { type: ["string", "null"] }
+        externalId: { type: ["string", "null"] }
+        providerStatus: { type: ["string", "null"] }
+        detail: { type: ["string", "null"] }
+        canRetry: { type: boolean }
+      required: [outcome, deliveryId, messageId, provider, externalId, canRetry]
 
     CreateOutboundMessageBody:
       type: object

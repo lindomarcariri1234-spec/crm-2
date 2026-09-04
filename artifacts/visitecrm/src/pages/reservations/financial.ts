@@ -32,30 +32,56 @@ export function getReservationFinancialSummary(
   reservation: ReservationWithFinancialLinks,
 ): ReservationFinancialSummary {
   const order = reservation.linkedOrder;
-  const usesOrderTotals = order != null && reservation.linkedReservations?.length === 1;
+  const canonical = reservation.financialSummary;
+  if (canonical) {
+    return {
+      subtotal: canonical.subtotal,
+      discount: canonical.discountAmount,
+      total: canonical.totalAmount,
+      paid: canonical.paidAmount,
+      balance: canonical.amountRemaining,
+      paymentMethod: canonical.source === "order" ? order?.paymentMethod ?? null : reservation.paymentMethod ?? null,
+      installments: canonical.source === "order" ? order?.installments ?? null : reservation.installments,
+      usesOrderTotals: canonical.source === "order",
+    };
+  }
 
-  const total = usesOrderTotals
-    ? toCents(order.totalAmount)
-    : toCents(reservation.totalValue);
-  const discount = usesOrderTotals
-    ? toCents(order.discountAmount)
-    : toCents(reservation.discountTotal);
-  const subtotal = usesOrderTotals
-    ? toCents(order.subtotal)
-    : total + discount;
-  const paid = usesOrderTotals
-    ? toCents(order.paidAmount)
-    : toCents(reservation.paidValue);
-  const balance = Math.max(0, total - paid);
+  // Keep this fallback for cached/legacy API responses that predate the
+  // canonical summary. It follows the same cent-based arithmetic as the
+  // server and prevents the list from crashing while those responses expire.
+  const linkedReservations = reservation.linkedReservations ?? [];
+  if (order && linkedReservations.length <= 1) {
+    const total = fromCents(toCents(order.totalAmount));
+    const discount = fromCents(toCents(order.discountAmount));
+    const paid = fromCents(toCents(order.paidAmount));
+    const balance = order.amountRemaining == null
+      ? fromCents(Math.max(0, toCents(order.totalAmount) - toCents(order.paidAmount)))
+      : fromCents(toCents(order.amountRemaining));
+    return {
+      subtotal: fromCents(toCents(order.subtotal)),
+      discount,
+      total,
+      paid,
+      balance,
+      paymentMethod: order.paymentMethod ?? null,
+      installments: order.installments ?? null,
+      usesOrderTotals: true,
+    };
+  }
 
+  const linkedReservation = linkedReservations.find((item) => item.id === reservation.id);
+  const total = fromCents(toCents(linkedReservation?.totalValue ?? reservation.totalValue));
+  const discount = fromCents(toCents(reservation.discountTotal ?? 0));
+  const paid = fromCents(toCents(linkedReservation?.paidValue ?? reservation.paidValue));
+  const balance = fromCents(toCents(linkedReservation?.balance ?? reservation.balance));
   return {
-    subtotal: fromCents(subtotal),
-    discount: fromCents(discount),
-    total: fromCents(total),
-    paid: fromCents(paid),
-    balance: fromCents(balance),
-    paymentMethod: usesOrderTotals ? order.paymentMethod : reservation.paymentMethod ?? null,
-    installments: usesOrderTotals ? order.installments : reservation.installments,
-    usesOrderTotals,
+    subtotal: fromCents(toCents(total + discount)),
+    discount,
+    total,
+    paid,
+    balance,
+    paymentMethod: reservation.paymentMethod ?? null,
+    installments: reservation.installments,
+    usesOrderTotals: false,
   };
 }

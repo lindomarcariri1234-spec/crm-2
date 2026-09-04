@@ -6,7 +6,7 @@ export type WhatsAppOutboxType =
   | "reservation_confirmed"
   | "boarding_reminder"
   | "payment_pending";
-export type WhatsAppOutboxStatus = "pending" | "enqueued" | "processing" | "sent";
+export type WhatsAppOutboxStatus = "pending" | "enqueued" | "processing" | "sent" | "unknown";
 
 /**
  * Durable, idempotent records for transactional WhatsApp notifications.

@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable, storeOrdersTable, referralsTable, paymentsTable, linkedDataReconciliationRunsTable } from "@workspace/db";
+import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable, storeOrdersTable, referralsTable, linkedDataReconciliationRunsTable, paymentsTable } from "@workspace/db";
 import { eq, and, asc, desc, inArray, count, or } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, ADMIN_ROLES } from '../lib/tenant';
@@ -8,7 +8,16 @@ import { z } from "zod";
 import { ROLES, DEAL_STATUS, type DealStatus } from "@workspace/permissions";
 import { parseDealStatus } from "../lib/status-validators";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { calculateReceivedAmount, linkedDeal, linkedOrder, linkedReferral, linkedReservation } from "../lib/linked-data";
+import {
+  calculateReceivedAmount,
+  allocateOrderReceiptToReservation,
+  linkedDeal,
+  linkedOrder,
+  linkedReferral,
+  linkedReservation,
+  orderFinancialSummary,
+  reservationFinancialSummary,
+} from "../lib/linked-data";
 import { reconcileLinkedData } from "../services/linked-data-reconciliation";
 
 const router = Router();
@@ -371,42 +380,46 @@ router.get("/deals", async (req, res, next: NextFunction): Promise<void> => {
     ]) : [[], []] as [(typeof reservationsTable.$inferSelect)[], (typeof storeOrdersTable.$inferSelect)[]];
     const allLinkedReservations = [...linkedReservations, ...siblingReservations.filter(r => !linkedReservationMap.has(r.id))];
     const linkedOrderMap = new Map(linkedOrders.map(o => [o.orderNumber, o]));
-    const pendingReferralIds = [...new Set(linkedOrders.flatMap((order) => {
-      const pending = order.pendingReferral as { referralId?: string | null } | null;
-      return pending?.referralId ? [pending.referralId] : [];
-    }))];
-    const pendingReferrals = pendingReferralIds.length
-      ? await db.select().from(referralsTable).where(and(
-        eq(referralsTable.tenantId, me.tenantId),
-        inArray(referralsTable.id, pendingReferralIds),
-      ))
-      : [];
-    const pendingReferralMap = new Map(
-      pendingReferrals.map((referral) => [referral.id, referral]),
-    );
-    const orderIds = linkedOrders.map((order) => order.id);
-    const allReservationIds = allLinkedReservations.map((reservation) => reservation.id);
-    const payments = orderIds.length || allReservationIds.length
-      ? await db.select({
-        orderId: paymentsTable.orderId,
-        reservationId: paymentsTable.reservationId,
-        amount: paymentsTable.amount,
-        status: paymentsTable.status,
-        type: paymentsTable.type,
-      }).from(paymentsTable).where(and(
-        eq(paymentsTable.tenantId, me.tenantId),
-        or(
-          ...(orderIds.length ? [inArray(paymentsTable.orderId, orderIds)] : []),
-          ...(allReservationIds.length ? [inArray(paymentsTable.reservationId, allReservationIds)] : []),
-        ),
-      ))
-      : [];
+    const paymentRows = linkedReservations.length || linkedOrders.length ? await db.select({
+      orderId: paymentsTable.orderId,
+      reservationId: paymentsTable.reservationId,
+      amount: paymentsTable.amount,
+      status: paymentsTable.status,
+      type: paymentsTable.type,
+    }).from(paymentsTable).where(and(
+      eq(paymentsTable.tenantId, me.tenantId),
+      or(
+        ...(linkedOrders.length ? [inArray(paymentsTable.orderId, linkedOrders.map(order => order.id))] : []),
+        ...(allLinkedReservations.length ? [inArray(paymentsTable.reservationId, allLinkedReservations.map(reservation => reservation.id))] : []),
+      ),
+    )) : [];
     const linkedReferrals = allLinkedReservations.length ? await db.select().from(referralsTable).where(and(
       eq(referralsTable.tenantId, me.tenantId), inArray(referralsTable.reservationId, allLinkedReservations.map(r => r.id)),
     )) : [];
     res.json(deals.map(d => {
       const info = d.reservationId ? resInfoMap.get(d.reservationId) : undefined;
       const client = d.clientId ? clientMap.get(d.clientId) : undefined;
+      const reservation = d.reservationId ? linkedReservationMap.get(d.reservationId) : undefined;
+      const siblingRows = reservation
+        ? allLinkedReservations.filter(row => reservation.storeOrderId ? row.storeOrderId === reservation.storeOrderId : row.id === reservation.id)
+        : [];
+      const order = reservation?.storeOrderId ? linkedOrderMap.get(reservation.storeOrderId) : undefined;
+      const receivedForOrder = order
+        ? calculateReceivedAmount(order.id, siblingRows.map(row => row.id), paymentRows)
+        : 0;
+      const receivedForReservation = reservation
+        ? calculateReceivedAmount("", [reservation.id], paymentRows)
+        : 0;
+      const summary = reservation
+        ? order && siblingRows.length === 1
+          ? orderFinancialSummary(order, receivedForOrder, paymentRows, reservation, siblingRows.map(row => row.id))
+          : reservationFinancialSummary(
+            reservation,
+            order ? allocateOrderReceiptToReservation(receivedForOrder, order.totalAmount, reservation.totalValue, reservation.id, siblingRows) : receivedForReservation,
+            paymentRows,
+            order,
+          )
+        : null;
       return {
         ...formatDeal(d, info?.seats ?? [], info?.reservationNumber ?? null),
         clientName: client?.name ?? null,
@@ -421,28 +434,30 @@ router.get("/deals", async (req, res, next: NextFunction): Promise<void> => {
         customerCode: client?.customerCode ?? null,
         linkedDeal: linkedDeal(d),
         linkedDeals: [linkedDeal(d)],
-        linkedReservation: d.reservationId ? linkedReservation(linkedReservationMap.get(d.reservationId)) : null,
-        linkedOrder: d.reservationId ? (() => {
-          const reservation = linkedReservationMap.get(d.reservationId!);
-          const order = reservation?.storeOrderId ? linkedOrderMap.get(reservation.storeOrderId) : undefined;
-          if (!order) return null;
-          const siblingIds = allLinkedReservations
-            .filter((item) => item.storeOrderId === order.orderNumber)
-            .map((item) => item.id);
-          return linkedOrder(order, { paidAmount: calculateReceivedAmount(order.id, siblingIds, payments) });
-        })() : null,
-        linkedReferral: d.reservationId ? (() => {
-          const reservation = linkedReservationMap.get(d.reservationId!);
-          const order = reservation?.storeOrderId ? linkedOrderMap.get(reservation.storeOrderId) : undefined;
-          const pending = order?.pendingReferral as { referralId?: string | null } | null;
-          return linkedReferral(
-            linkedReferrals.find((referral) => referral.reservationId === d.reservationId)
-              ?? (pending?.referralId ? pendingReferralMap.get(pending.referralId) : undefined),
-          );
-        })() : null,
+        financialSummary: summary,
+        linkedReservation: reservation ? linkedReservation(reservation, summary ?? undefined) : null,
+        linkedOrder: order ? linkedOrder(order, {
+          paidAmount: receivedForOrder,
+          payments: paymentRows,
+          reservation: siblingRows.length === 1 ? reservation : null,
+          reservationIds: siblingRows.map(row => row.id),
+        }) : null,
+        linkedReferral: d.reservationId ? linkedReferral(linkedReferrals.find(r => r.reservationId === d.reservationId)) : null,
         linkedReservations: d.reservationId ? (() => {
           const canonical = linkedReservationMap.get(d.reservationId);
-          return canonical ? allLinkedReservations.filter(r => canonical.storeOrderId ? r.storeOrderId === canonical.storeOrderId : r.id === canonical.id).map(linkedReservation) : [];
+          return canonical ? allLinkedReservations
+            .filter(r => canonical.storeOrderId ? r.storeOrderId === canonical.storeOrderId : r.id === canonical.id)
+            .map(row => linkedReservation(
+              row,
+              reservationFinancialSummary(
+                row,
+                order
+                  ? allocateOrderReceiptToReservation(receivedForOrder, order.totalAmount, row.totalValue, row.id, siblingRows)
+                  : calculateReceivedAmount("", [row.id], paymentRows),
+                paymentRows,
+                order,
+              ),
+            )) : [];
         })() : [],
       };
     }));

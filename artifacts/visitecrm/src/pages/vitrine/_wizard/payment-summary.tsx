@@ -180,13 +180,17 @@ export function StepPaymentSummary({
         {form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal && (
           <>
             <div className="border-t pt-2 flex justify-between text-sm">
-              <span className="text-muted-foreground">Valor pago agora</span>
+              <span className="text-muted-foreground">Entrada solicitada</span>
               <span className="font-semibold text-amber-700">R$ {Number(form.depositAmount).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Restante a pagar</span>
+              <span className="text-muted-foreground">Saldo após a entrada</span>
               <span className="font-medium">R$ {(finalTotal - Number(form.depositAmount)).toFixed(2)}</span>
             </div>
+            <p className="text-[11px] text-amber-700">
+              A entrada solicitada não representa um pagamento confirmado. O valor pago será atualizado
+              somente após a confirmação do recebível pela agência ou pelo provedor.
+            </p>
           </>
         )}
         <div className="border-t pt-2 flex justify-between font-bold text-base">

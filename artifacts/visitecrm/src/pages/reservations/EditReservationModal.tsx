@@ -87,6 +87,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
   const payments = paymentsData?.data ?? [];
   const canDeletePayment = MANAGEMENT_ROLES.includes(me?.role ?? "");
   const linkedData = data as (typeof data & LinkedData) | undefined;
+  const financialSummary = linkedData?.financialSummary;
   const hasSingleLinkedReservation = linkedData?.linkedOrder != null
     && linkedData.linkedReservations?.length === 1;
 
@@ -120,10 +121,8 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
 
   // Derived balance from current state
   const currentBalance = Math.max(0, (parseFloat(totalValue) || 0) - (parseFloat(paidValue) || 0));
-  const requestedDeposit = Number(linkedData?.linkedOrder?.depositAmount ?? data?.depositAmount ?? 0);
-  const isDepositOnly = requestedDeposit > 0
-    && requestedDeposit < (parseFloat(totalValue) || 0)
-    && currentBalance > 0;
+  const requestedDeposit = financialSummary?.depositRequested ?? 0;
+  const isDepositOnly = financialSummary?.states.payment === "partially_paid";
 
   // Load existing data when modal opens / data refreshes
   useEffect(() => {
@@ -135,15 +134,9 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       setSelectedClientId(data.clientId ?? "");
 
       const existingQuantity = data.seats?.length ?? 1;
-      const existingTotal = hasSingleLinkedReservation
-        ? Number(linkedData?.linkedOrder?.totalAmount ?? data.totalValue ?? 0)
-        : Number(data.totalValue ?? 0);
-      const existingDiscount = hasSingleLinkedReservation
-        ? Number(linkedData?.linkedOrder?.discountAmount ?? data.discountTotal ?? 0)
-        : Number(data.discountTotal ?? 0);
-      const existingPaid = hasSingleLinkedReservation
-        ? Number(linkedData?.linkedOrder?.paidAmount ?? data.paidValue ?? 0)
-        : Number(data.paidValue ?? 0);
+      const existingTotal = financialSummary?.totalAmount ?? Number(data.totalValue ?? 0);
+      const existingDiscount = financialSummary?.discountAmount ?? Number(data.discountTotal ?? 0);
+      const existingPaid = financialSummary?.paidAmount ?? Number(data.paidValue ?? 0);
       const existingCommission = data.commissionAmount ?? null;
       const existingSellerId = data.sellerId ?? "";
 
@@ -164,7 +157,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       const remaining = Math.max(0, existingTotal - existingPaid);
       setPayAmount(remaining > 0 ? remaining.toFixed(2) : "");
     }
-  }, [data, hasSingleLinkedReservation, linkedData?.linkedOrder]);
+  }, [data, financialSummary, hasSingleLinkedReservation]);
 
   // Auto-sync totalValue from ticketPrice * quantity - discount
   useEffect(() => {
@@ -250,10 +243,6 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
         paidAt: now,
       }
     });
-    setPaidValue(previous => String(Math.min(
-      parseFloat(totalValue) || 0,
-      (parseFloat(previous) || 0) + amount,
-    ).toFixed(2)));
     setPayAmount("");
     await queryClient.invalidateQueries({ queryKey: ["reservation-edit", reservationId] });
     await queryClient.invalidateQueries({ queryKey: ["/api/reservations"] });
@@ -296,13 +285,13 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
                   </span>
                   {isDepositOnly && (
                     <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
-                      Entrada paga · saldo pendente
+                      Pagamento parcial · saldo pendente
                     </Badge>
                   )}
                 </div>
                 {isDepositOnly && (
                   <p className="mt-1.5 text-xs text-amber-800">
-                    Entrada: {fmt(data.depositAmount!)} · Restante: {fmt(data.balance)}
+                    Entrada solicitada: {fmt(requestedDeposit)} · Recebido: {fmt(financialSummary?.paidAmount ?? 0)} · Saldo: {fmt(financialSummary?.amountRemaining ?? 0)}
                   </p>
                 )}
               </div>

@@ -1,6 +1,7 @@
 import { and, desc, eq, exists, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import {
   db,
+  auditLogsTable,
   clientsTable,
   tenantsTable,
   usersTable,
@@ -19,7 +20,7 @@ import { sendReminderHtmlEmail } from "@workspace/email";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { getOutboundDeliveryQueue } from "../queues";
-import { sendTenantWhatsAppMessage } from "../lib/whatsapp";
+import { reconcileTenantWhatsAppMessage, sendTenantWhatsAppMessage } from "../lib/whatsapp";
 import { emitOutboundDeliveryUpdate } from "../lib/outbound-sse";
 
 export type OutboundRecipient =
@@ -72,6 +73,23 @@ export interface OutboundProviderFailureSummary {
   failureCount: number;
   totalFailures: number;
   failurePercentage: number;
+}
+
+export interface OutboundReconciliationContext {
+  userId: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
+export interface OutboundReconciliationResult {
+  outcome: "accepted" | "not_found" | "unsupported" | "inconclusive";
+  deliveryId: string;
+  messageId: string;
+  provider: string | null;
+  externalId: string | null;
+  providerStatus?: string;
+  detail?: string;
+  canRetry: boolean;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -229,6 +247,7 @@ async function refreshMessageStatus(tenantId: string, messageId: string): Promis
   if (!deliveries.length) return;
   const statuses = deliveries.map((d) => d.status);
   const nextStatus =
+    statuses.some((status) => status === "unknown") ? "unknown" :
     statuses.every((status) => status === "skipped") ? "skipped" :
     statuses.every((status) => status === "accepted" || status === "skipped") ? "accepted" :
     statuses.some((status) => status === "accepted") ? "partial" :
@@ -542,6 +561,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
   let provider: string | null = null;
   let externalId: string | null = null;
   let error: string | null = null;
+  let outcomeUnknown = false;
   try {
     if (!delivery.recipient) {
       error = delivery.skippedReason ?? "recipient_missing";
@@ -551,6 +571,7 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
         subject: delivery.subject ?? "",
         html: delivery.content,
         fromName: "VisiteCRM",
+        idempotencyKey: `outbound:${tenantId}:${delivery.id}`,
       });
       success = result.success;
       externalId = result.messageId ?? null;
@@ -562,22 +583,60 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
       externalId = result.externalId ?? null;
       provider = result.provider ?? "whatsapp";
       error = result.error ?? null;
+      outcomeUnknown = result.outcome === "unknown";
     }
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
+    outcomeUnknown = delivery.channel === "whatsapp";
   }
 
   if (success) {
     const [updated] = await db.update(outboundDeliveriesTable).set({
       status: "accepted", provider, externalId, lastError: null, acceptedAt: new Date(), claimedAt: null,
-    }).where(and(eq(outboundDeliveriesTable.id, deliveryId), eq(outboundDeliveriesTable.tenantId, tenantId), eq(outboundDeliveriesTable.status, "processing"))).returning();
+    }).where(and(
+      eq(outboundDeliveriesTable.id, deliveryId),
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.attempts, attemptNumber),
+      or(eq(outboundDeliveriesTable.status, "processing"), eq(outboundDeliveriesTable.status, "unknown")),
+    )).returning();
     await updateAttempt(tenantId, deliveryId, attemptNumber, { status: "accepted", provider, externalId });
     if (updated) await syncLegacyEmailLog(tenantId, updated);
+  } else if (outcomeUnknown && delivery.channel === "whatsapp") {
+    const unknownReason = "delivery_result_unknown";
+    const [updated] = await db.update(outboundDeliveriesTable).set({
+      status: "unknown",
+      lastError: unknownReason,
+      claimedAt: null,
+      failedAt: null,
+      nextAttemptAt: new Date(),
+      provider,
+      externalId,
+    }).where(and(
+      eq(outboundDeliveriesTable.id, deliveryId),
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.attempts, attemptNumber),
+      eq(outboundDeliveriesTable.status, "processing"),
+    )).returning();
+    await updateAttempt(tenantId, deliveryId, attemptNumber, {
+      status: "unknown",
+      provider,
+      externalId,
+      error: unknownReason,
+    });
   } else if (isPermanentSkip(delivery.channel, error ?? "send_failed")) {
     const [updated] = await db.update(outboundDeliveriesTable).set({
       status: "skipped", skippedReason: error ?? "provider_unavailable", lastError: error, claimedAt: null, failedAt: new Date(),
-    }).where(and(eq(outboundDeliveriesTable.id, deliveryId), eq(outboundDeliveriesTable.tenantId, tenantId), eq(outboundDeliveriesTable.status, "processing"))).returning();
-    await updateAttempt(tenantId, deliveryId, attemptNumber, { status: "skipped", provider, error });
+    }).where(and(
+      eq(outboundDeliveriesTable.id, deliveryId),
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.attempts, attemptNumber),
+      eq(outboundDeliveriesTable.status, "processing"),
+    )).returning();
+    await updateAttempt(tenantId, deliveryId, attemptNumber, {
+      status: updated ? "skipped" : "unknown",
+      provider,
+      error: updated ? error : "delivery_result_unknown",
+    });
     if (updated) await syncLegacyEmailLog(tenantId, updated);
   } else {
     const exhausted = attemptNumber >= delivery.maxAttempts;
@@ -589,8 +648,17 @@ export async function processOutboundDelivery(deliveryId: string, tenantId: stri
       claimedAt: null,
       nextAttemptAt,
       provider,
-    }).where(and(eq(outboundDeliveriesTable.id, deliveryId), eq(outboundDeliveriesTable.tenantId, tenantId), eq(outboundDeliveriesTable.status, "processing"))).returning();
-    await updateAttempt(tenantId, deliveryId, attemptNumber, { status: exhausted ? "failed" : "retrying", provider, error });
+    }).where(and(
+      eq(outboundDeliveriesTable.id, deliveryId),
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.attempts, attemptNumber),
+      eq(outboundDeliveriesTable.status, "processing"),
+    )).returning();
+    await updateAttempt(tenantId, deliveryId, attemptNumber, {
+      status: updated ? (exhausted ? "failed" : "retrying") : "unknown",
+      provider,
+      error: updated ? error : "delivery_result_unknown",
+    });
     if (exhausted && updated) await syncLegacyEmailLog(tenantId, updated);
   }
   await refreshMessageStatus(tenantId, delivery.outboundMessageId);
@@ -739,12 +807,258 @@ export async function retryOutboundDelivery(tenantId: string, deliveryId: string
   await enqueueOutboundDelivery(delivery.id, tenantId);
 }
 
+type UnknownDeliveryForReconciliation = Pick<
+  OutboundDelivery,
+  "id" | "tenantId" | "outboundMessageId" | "channel" | "status" | "provider" | "externalId" | "recipient" | "attempts" | "lastError"
+>;
+
+async function getUnknownDeliveryForReconciliation(
+  tenantId: string,
+  deliveryId: string,
+): Promise<UnknownDeliveryForReconciliation> {
+  const [delivery] = await db.select({
+    id: outboundDeliveriesTable.id,
+    tenantId: outboundDeliveriesTable.tenantId,
+    outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+    channel: outboundDeliveriesTable.channel,
+    status: outboundDeliveriesTable.status,
+    provider: outboundDeliveriesTable.provider,
+    externalId: outboundDeliveriesTable.externalId,
+    recipient: outboundDeliveriesTable.recipient,
+    attempts: outboundDeliveriesTable.attempts,
+    lastError: outboundDeliveriesTable.lastError,
+  }).from(outboundDeliveriesTable).where(and(
+    eq(outboundDeliveriesTable.id, deliveryId),
+    eq(outboundDeliveriesTable.tenantId, tenantId),
+  )).limit(1);
+  if (!delivery) throw new Error("delivery_not_found");
+  if (delivery.status !== "unknown") throw new Error("delivery_not_unknown");
+  if (delivery.channel !== "whatsapp") throw new Error("delivery_reconciliation_unsupported");
+  return delivery;
+}
+
+async function recordReconciliationAudit(
+  tenantId: string,
+  delivery: Pick<UnknownDeliveryForReconciliation, "id" | "outboundMessageId" | "status" | "attempts" | "provider" | "externalId">,
+  result: Pick<OutboundReconciliationResult, "outcome" | "providerStatus" | "detail">,
+  context: OutboundReconciliationContext,
+  nextStatus: string,
+): Promise<void> {
+  try {
+    await db.insert(auditLogsTable).values({
+      id: generateId(),
+      tenantId,
+      userId: context.userId,
+      action: "reconcile_outbound_delivery",
+      entityType: "outbound_delivery",
+      entityId: delivery.id,
+      before: {
+        status: delivery.status,
+        attempts: delivery.attempts,
+        provider: delivery.provider,
+        externalId: delivery.externalId,
+      },
+      after: {
+        status: nextStatus,
+        outcome: result.outcome,
+        providerStatus: result.providerStatus ?? null,
+        detail: result.detail ?? null,
+      },
+      ipAddress: context.ipAddress ?? null,
+      userAgent: context.userAgent ?? null,
+    });
+  } catch (error) {
+    logger.error({ tenantId, deliveryId: delivery.id, error }, "[outbound-delivery] Failed to write reconciliation audit");
+    throw new Error("delivery_reconciliation_audit_failed");
+  }
+}
+
+/**
+ * Reconciles one ambiguous WhatsApp attempt without sending anything. A
+ * provider-confirmed absence is returned as retryable, but remains `unknown`
+ * until the operator explicitly confirms the second action. This two-step
+ * flow prevents a stale or inconclusive provider lookup from causing a
+ * duplicate message.
+ */
+export async function reconcileOutboundDelivery(
+  tenantId: string,
+  deliveryId: string,
+  context: OutboundReconciliationContext,
+): Promise<OutboundReconciliationResult> {
+  const delivery = await getUnknownDeliveryForReconciliation(tenantId, deliveryId);
+  const result = delivery.provider && delivery.externalId
+    ? await reconcileTenantWhatsAppMessage(tenantId, delivery.provider, delivery.externalId, delivery.recipient)
+    : {
+      outcome: "inconclusive" as const,
+      provider: delivery.provider === "evolution" || delivery.provider === "z-api" ? delivery.provider : "whatsapp" as const,
+      externalId: delivery.externalId ?? "",
+      detail: "provider_reference_missing",
+    };
+
+  if (result.outcome === "accepted") {
+    const now = new Date();
+    const [updated] = await db.update(outboundDeliveriesTable).set({
+      status: "accepted",
+      provider: result.provider,
+      externalId: result.externalId,
+      lastError: null,
+      failedAt: null,
+      claimedAt: null,
+      acceptedAt: now,
+      nextAttemptAt: now,
+    }).where(and(
+      eq(outboundDeliveriesTable.id, delivery.id),
+      eq(outboundDeliveriesTable.tenantId, tenantId),
+      eq(outboundDeliveriesTable.status, "unknown"),
+    )).returning();
+    if (!updated) throw new Error("delivery_reconciliation_race");
+    await updateAttempt(tenantId, delivery.id, delivery.attempts, {
+      status: "accepted",
+      provider: result.provider,
+      externalId: result.externalId,
+      error: null,
+    });
+    await recordReconciliationAudit(tenantId, delivery, result, context, "accepted");
+    await refreshMessageStatus(tenantId, delivery.outboundMessageId);
+    emitOutboundDeliveryUpdate(tenantId, {
+      deliveryId: delivery.id,
+      messageId: delivery.outboundMessageId,
+      status: "accepted",
+      channel: "whatsapp",
+      provider: result.provider,
+    });
+    return {
+      ...result,
+      deliveryId: delivery.id,
+      messageId: delivery.outboundMessageId,
+      provider: result.provider,
+      externalId: result.externalId,
+      canRetry: false,
+    };
+  }
+
+  const persistedError = result.outcome === "not_found"
+    ? "provider_message_not_found"
+    : result.detail ?? "provider_reconciliation_inconclusive";
+  const [stillUnknown] = await db.update(outboundDeliveriesTable).set({
+    lastError: persistedError,
+    provider: result.provider,
+    externalId: result.externalId || delivery.externalId,
+    claimedAt: null,
+    nextAttemptAt: new Date(),
+  }).where(and(
+    eq(outboundDeliveriesTable.id, delivery.id),
+    eq(outboundDeliveriesTable.tenantId, tenantId),
+    eq(outboundDeliveriesTable.status, "unknown"),
+  )).returning({
+    id: outboundDeliveriesTable.id,
+    outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+  });
+  if (!stillUnknown) throw new Error("delivery_reconciliation_race");
+  await db.update(outboundDeliveryAttemptsTable).set({
+    provider: result.provider,
+    externalId: result.externalId || delivery.externalId,
+    error: persistedError,
+  }).where(and(
+    eq(outboundDeliveryAttemptsTable.tenantId, tenantId),
+    eq(outboundDeliveryAttemptsTable.deliveryId, delivery.id),
+    eq(outboundDeliveryAttemptsTable.attemptNumber, delivery.attempts),
+  ));
+  await recordReconciliationAudit(tenantId, delivery, result, context, "unknown");
+  return {
+    ...result,
+    deliveryId: delivery.id,
+    messageId: delivery.outboundMessageId,
+    provider: result.provider,
+    externalId: result.externalId || delivery.externalId,
+    canRetry: result.outcome === "not_found",
+  };
+}
+
+/**
+ * Re-checks the provider immediately before moving an unknown delivery back
+ * to the queue. The conditional update is the concurrency gate: only one
+ * administrator can authorize a new send for a given ambiguous attempt.
+ */
+export async function retryUnknownOutboundDelivery(
+  tenantId: string,
+  deliveryId: string,
+  context: OutboundReconciliationContext,
+): Promise<{ deliveryId: string; messageId: string; outcome: "queued" }> {
+  const reconciliation = await reconcileOutboundDelivery(tenantId, deliveryId, context);
+  if (reconciliation.outcome !== "not_found") {
+    throw new Error(
+      reconciliation.outcome === "accepted"
+        ? "delivery_already_accepted"
+        : reconciliation.outcome === "unsupported"
+          ? "delivery_reconciliation_unsupported"
+          : "delivery_reconciliation_inconclusive",
+    );
+  }
+
+  const [delivery] = await db.update(outboundDeliveriesTable).set({
+    status: "pending",
+    nextAttemptAt: new Date(),
+    lastError: null,
+    skippedReason: null,
+    failedAt: null,
+    claimedAt: null,
+  }).where(and(
+    eq(outboundDeliveriesTable.id, deliveryId),
+    eq(outboundDeliveriesTable.tenantId, tenantId),
+    eq(outboundDeliveriesTable.status, "unknown"),
+  )).returning({
+    id: outboundDeliveriesTable.id,
+    outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+  });
+  if (!delivery) throw new Error("delivery_reconciliation_race");
+
+  await db.insert(auditLogsTable).values({
+    id: generateId(),
+    tenantId,
+    userId: context.userId,
+    action: "retry_reconciled_outbound_delivery",
+    entityType: "outbound_delivery",
+    entityId: delivery.id,
+    before: { status: "unknown", outcome: "not_found" },
+    after: { status: "pending", nextAttempt: true },
+    ipAddress: context.ipAddress ?? null,
+    userAgent: context.userAgent ?? null,
+  });
+  await refreshMessageStatus(tenantId, delivery.outboundMessageId);
+  await enqueueOutboundDelivery(delivery.id, tenantId);
+  return { deliveryId: delivery.id, messageId: delivery.outboundMessageId, outcome: "queued" };
+}
+
 export async function recoverOutboundDeliveries(): Promise<{ recovered: number; enqueued: number }> {
   const staleBefore = new Date(Date.now() - STALE_CLAIM_MS);
+  const unknownAt = new Date();
+  const unknownReason = "delivery_result_unknown";
   const stale = await db.update(outboundDeliveriesTable).set({
-    status: "pending", claimedAt: null, nextAttemptAt: new Date(),
+    status: "unknown", claimedAt: null, nextAttemptAt: unknownAt, lastError: unknownReason,
   }).where(and(eq(outboundDeliveriesTable.status, "processing"), lte(outboundDeliveriesTable.claimedAt, staleBefore)))
-    .returning({ id: outboundDeliveriesTable.id, tenantId: outboundDeliveriesTable.tenantId });
+    .returning({
+      id: outboundDeliveriesTable.id,
+      tenantId: outboundDeliveriesTable.tenantId,
+      outboundMessageId: outboundDeliveriesTable.outboundMessageId,
+      attempts: outboundDeliveriesTable.attempts,
+    });
+  for (const delivery of stale) {
+    await db.update(outboundDeliveryAttemptsTable).set({
+      status: "unknown",
+      error: unknownReason,
+      completedAt: unknownAt,
+    }).where(and(
+      eq(outboundDeliveryAttemptsTable.tenantId, delivery.tenantId),
+      eq(outboundDeliveryAttemptsTable.deliveryId, delivery.id),
+      eq(outboundDeliveryAttemptsTable.attemptNumber, delivery.attempts),
+      or(
+        eq(outboundDeliveryAttemptsTable.status, "processing"),
+        eq(outboundDeliveryAttemptsTable.status, "unknown"),
+      ),
+    ));
+    await refreshMessageStatus(delivery.tenantId, delivery.outboundMessageId);
+  }
   let enqueued = 0;
   const pending = await db.select({ id: outboundDeliveriesTable.id, tenantId: outboundDeliveriesTable.tenantId })
     .from(outboundDeliveriesTable).where(and(eq(outboundDeliveriesTable.status, "pending"), lte(outboundDeliveriesTable.nextAttemptAt, new Date()))).limit(500);

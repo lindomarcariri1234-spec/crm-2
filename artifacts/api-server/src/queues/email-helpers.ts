@@ -600,13 +600,121 @@ export async function sendWelcomeEmail(
   await dispatchReferralOutbound(tenantId, "welcome_credentials", props.clientEmail, {
     name: props.clientName, email: props.clientEmail,
   }, subject,
-    `<h2>Bem-vindo(a)!</h2><p>Olá, ${escapeHtmlEmail(props.clientName)}!</p><p>Acesse sua Área do Cliente da ${escapeHtmlEmail(props.agencyName)} para acompanhar suas viagens e indicações.</p>`,
-    `Olá, ${props.clientName}! Bem-vindo(a) à Área do Cliente da ${props.agencyName}. Acesse o portal para acompanhar suas viagens e indicações.`);
+    `<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;padding:24px;">
+      <h2 style="color:#2563eb;">Bem-vindo(a), ${escapeHtmlEmail(props.clientName)}!</h2>
+      <p>Sua Área do Cliente da <strong>${escapeHtmlEmail(props.agencyName)}</strong> foi criada.</p>
+      <p>Use o botão abaixo para acessar suas viagens, vouchers e pagamentos em um navegador novo:</p>
+      <p><a href="${escapeHtmlEmail(props.setupUrl)}" style="display:inline-block;background:#2563eb;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold;">Acessar Minha Área</a></p>
+      <div style="background:#f3f4f6;border-radius:8px;padding:14px;margin:20px 0;">
+        <p style="margin:4px 0;"><strong>E-mail:</strong> ${escapeHtmlEmail(props.clientEmail)}</p>
+        ${props.plainTextPassword
+          ? `<p style="margin:4px 0;"><strong>Senha temporária:</strong> ${escapeHtmlEmail(props.plainTextPassword)}</p>
+             <p style="font-size:12px;color:#4b5563;margin:8px 0 0;">Troque a senha assim que entrar no portal.</p>`
+          : ""}
+      </div>
+      <p>Se o botão não funcionar, acesse a página de login diretamente:
+        <a href="${escapeHtmlEmail(props.loginUrl)}">${escapeHtmlEmail(props.loginUrl)}</a>
+      </p>
+    </div>`,
+    `Olá, ${props.clientName}! Sua Área do Cliente da ${props.agencyName} foi criada. Acesse: ${props.setupUrl}. E-mail: ${props.clientEmail}${props.plainTextPassword ? `; senha temporária: ${props.plainTextPassword}` : ""}.`);
 
   logger.info(
     { emailLogId, recipient: props.clientEmail, success: true },
     "[email-queue] Welcome email sent",
   );
+}
+
+export async function enqueuePixOrderQr(opts: {
+  tenantId: string;
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone?: string | null;
+  storeName: string;
+  amount: number;
+  pixQrCodeUrl: string;
+  pixCopyPaste: string;
+  deliveryMode: "email" | "whatsapp" | "all";
+}): Promise<void> {
+  const { tenantId, orderId, orderNumber, customerName, customerEmail, customerPhone, storeName,
+    amount, pixQrCodeUrl, pixCopyPaste, deliveryMode } = opts;
+  const includeEmail = deliveryMode === "email" || deliveryMode === "all";
+  const includeWhatsapp = deliveryMode === "whatsapp" || deliveryMode === "all";
+  const subject = `PIX do pedido ${orderNumber} — ${storeName}`;
+  const safeName = escapeHtmlEmail(customerName);
+  const safeStore = escapeHtmlEmail(storeName);
+  const safeOrder = escapeHtmlEmail(orderNumber);
+  const safeQrUrl = escapeHtmlEmail(pixQrCodeUrl);
+  const safeCopyPaste = escapeHtmlEmail(pixCopyPaste);
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;color:#1f2937;padding:24px;">
+      <h2 style="color:#0f766e;">Pagamento PIX do seu pedido</h2>
+      <p>Olá, <strong>${safeName}</strong>!</p>
+      <p>O pedido <strong>${safeOrder}</strong> da <strong>${safeStore}</strong> está aguardando pagamento.</p>
+      <p>Valor da cobrança: <strong>${formatBRL(amount)}</strong></p>
+      <p><img src="${safeQrUrl}" alt="QR Code PIX" width="220" height="220" style="border:1px solid #99f6e4;border-radius:8px;padding:4px;background:#fff;" /></p>
+      <p>Se preferir, use o código Pix Copia e Cola:</p>
+      <p style="word-break:break-all;background:#f0fdfa;border:1px solid #99f6e4;padding:12px;border-radius:8px;font-family:monospace;font-size:12px;">${safeCopyPaste}</p>
+      <p>Após a identificação do pagamento, a agência atualizará o status da sua reserva.</p>
+    </div>`;
+  const outbound = await dispatchOutboundMessage({
+    tenantId,
+    eventType: "pix_order_qr",
+    // The QR is one logical order event. The selected channel is payload
+    // state, not part of the event identity; including it here would let a
+    // settings change or an idempotent replay create a second email/message
+    // for the same order.
+    idempotencyKey: `order:${orderId}:pix-qr`,
+    recipient: { type: "direct", name: customerName, email: customerEmail, whatsapp: customerPhone },
+    ...(includeEmail ? { email: { subject, html, senderName: storeName } } : {}),
+    ...(includeWhatsapp ? {
+      whatsapp: {
+        text: `Olá, ${customerName}! O pedido ${orderNumber} da ${storeName} está aguardando pagamento PIX de ${formatBRL(amount)}. Pix Copia e Cola: ${pixCopyPaste}`,
+      },
+    } : {}),
+    origin: "pix-order-qr",
+    metadata: { orderId, orderNumber, deliveryMode },
+  });
+  if (includeEmail) {
+    await projectOutboundEmailLog(tenantId, null, customerEmail, subject, outbound);
+  }
+
+  // A replay returns the original idempotent message. If its first provider
+  // attempt was exhausted, reopen only the selected channels that actually
+  // failed; accepted channels must never be sent again.
+  if (!outbound.created) {
+    const persistedDeliveryMode = outbound.message.metadata?.deliveryMode;
+    const retryDeliveryMode =
+      persistedDeliveryMode === "email" ||
+      persistedDeliveryMode === "whatsapp" ||
+      persistedDeliveryMode === "all"
+        ? persistedDeliveryMode
+        : deliveryMode;
+    const selectedChannels = new Set(
+      [
+        retryDeliveryMode === "email" || retryDeliveryMode === "all" ? "email" : null,
+        retryDeliveryMode === "whatsapp" || retryDeliveryMode === "all" ? "whatsapp" : null,
+      ].filter((channel): channel is "email" | "whatsapp" => channel !== null),
+    );
+    await Promise.all(outbound.deliveries
+      .filter((delivery) =>
+        selectedChannels.has(delivery.channel) &&
+        (delivery.status === "failed" ||
+          (delivery.status === "skipped" && delivery.skippedReason === "provider_unavailable")))
+      .map(async (delivery) => {
+        try {
+          await retryOutboundDelivery(tenantId, delivery.id);
+        } catch (err) {
+          // A concurrent recovery worker may have already reopened the row.
+          // Keep the replay best-effort and let the durable recovery sweep
+          // handle the remaining pending delivery.
+          logger.warn({ err, orderId, deliveryId: delivery.id }, "[outbound] Failed to retry PIX QR delivery");
+        }
+      }));
+  }
+
+  logger.info({ tenantId, orderId, deliveryMode, status: outbound.message.status }, "[outbound] PIX QR dispatched");
 }
 
 // ── Referral: bônus pago ──────────────────────────────────────────────────────

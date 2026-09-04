@@ -5,15 +5,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   mockListOutboundMessages,
   mockListOutboundProviderFailureSummary,
+  mockReconcileOutboundDelivery,
+  mockRetryUnknownOutboundDelivery,
   mockRequireAuth,
 } = vi.hoisted(() => ({
   mockListOutboundMessages: vi.fn(),
   mockListOutboundProviderFailureSummary: vi.fn(),
+  mockReconcileOutboundDelivery: vi.fn(),
+  mockRetryUnknownOutboundDelivery: vi.fn(),
   mockRequireAuth: vi.fn(),
 }));
 
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: mockRequireAuth,
+  ADMIN_ROLES: ["agencia", "gerente"],
 }));
 
 vi.mock("../services/outbound-delivery.js", () => ({
@@ -21,6 +26,8 @@ vi.mock("../services/outbound-delivery.js", () => ({
   listOutboundProviderFailureSummary: mockListOutboundProviderFailureSummary,
   dispatchOutboundMessage: vi.fn(),
   retryOutboundDelivery: vi.fn(),
+  reconcileOutboundDelivery: mockReconcileOutboundDelivery,
+  retryUnknownOutboundDelivery: mockRetryUnknownOutboundDelivery,
 }));
 
 import outboundMessagesRouter from "../routes/outbound-messages.js";
@@ -216,6 +223,81 @@ describe("GET /outbound-messages/provider-failure-summary", () => {
         dateFrom: new Date("2026-08-01T00:00:00.000Z"),
         dateTo: new Date("2026-08-31T23:59:59.999Z"),
       }),
+    );
+  });
+});
+
+describe("POST /outbound-messages/:deliveryId/reconcile", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireAuth.mockResolvedValue({
+      id: "admin-a",
+      tenantId: "tenant-a",
+      role: "agencia",
+    });
+  });
+
+  it("passes the authenticated tenant and actor context to reconciliation", async () => {
+    mockReconcileOutboundDelivery.mockResolvedValue({
+      outcome: "not_found",
+      deliveryId: "delivery-a",
+      messageId: "message-a",
+      provider: "evolution",
+      externalId: "external-a",
+      detail: "provider_message_not_found",
+      canRetry: true,
+    });
+
+    const response = await request(makeApp())
+      .post("/outbound-messages/delivery-a/reconcile");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(expect.objectContaining({
+      outcome: "not_found",
+      canRetry: true,
+    }));
+    expect(mockReconcileOutboundDelivery).toHaveBeenCalledWith(
+      "tenant-a",
+      "delivery-a",
+      expect.objectContaining({ userId: "admin-a" }),
+    );
+  });
+
+  it("does not allow a non-administrator to review an ambiguous delivery", async () => {
+    mockRequireAuth.mockResolvedValue({
+      id: "support-a",
+      tenantId: "tenant-a",
+      role: "suporte",
+    });
+
+    const response = await request(makeApp())
+      .post("/outbound-messages/delivery-a/reconcile");
+
+    expect(response.status).toBe(403);
+    expect(response.body.message).toContain("administradores");
+    expect(mockReconcileOutboundDelivery).not.toHaveBeenCalled();
+  });
+
+  it("queues only through the explicit re-check endpoint", async () => {
+    mockRetryUnknownOutboundDelivery.mockResolvedValue({
+      outcome: "queued",
+      deliveryId: "delivery-a",
+      messageId: "message-a",
+    });
+
+    const response = await request(makeApp())
+      .post("/outbound-messages/delivery-a/reconcile/retry");
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      outcome: "queued",
+      deliveryId: "delivery-a",
+      messageId: "message-a",
+    });
+    expect(mockRetryUnknownOutboundDelivery).toHaveBeenCalledWith(
+      "tenant-a",
+      "delivery-a",
+      expect.objectContaining({ userId: "admin-a" }),
     );
   });
 });

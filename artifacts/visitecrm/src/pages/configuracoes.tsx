@@ -2821,6 +2821,8 @@ function CustomizationTab() {
   const [storeLogo, setStoreLogo] = useState("");
   const [storeLogoUploading, setStoreLogoUploading] = useState(false);
   const [storeLogoSaving, setStoreLogoSaving] = useState(false);
+  const [pixQrDeliveryMode, setPixQrDeliveryMode] = useState<"screen" | "email" | "whatsapp" | "all">("screen");
+  const [pixQrDeliverySaving, setPixQrDeliverySaving] = useState(false);
   const [hasStore, setHasStore] = useState(false);
 
   useEffect(() => {
@@ -2835,6 +2837,7 @@ function CustomizationTab() {
     storeApi.getSettings()
       .then((s) => {
         setStoreLogo(s.logo ?? "");
+        setPixQrDeliveryMode(s.pixQrDeliveryMode ?? "screen");
         setHasStore(true);
       })
       .catch(() => {
@@ -2866,6 +2869,18 @@ function CustomizationTab() {
       toast({ title: "Erro ao salvar logo da loja", variant: "destructive" });
     } finally {
       setStoreLogoSaving(false);
+    }
+  }
+
+  async function handleSavePixQrDelivery() {
+    setPixQrDeliverySaving(true);
+    try {
+      await storeApi.updateSettings({ pixQrDeliveryMode });
+      toast({ title: "Preferência de entrega do PIX salva" });
+    } catch {
+      toast({ title: "Erro ao salvar a preferência do PIX", variant: "destructive" });
+    } finally {
+      setPixQrDeliverySaving(false);
     }
   }
 
@@ -2984,6 +2999,39 @@ function CustomizationTab() {
               <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
             ) : "Salvar logo da loja"}
           </Button>
+
+          <div className="border-t pt-5 mt-5 space-y-3">
+            <div>
+              <h3 className="font-semibold text-sm">Entrega do QR Code PIX</h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                Escolha onde o cliente receberá o QR Code gerado no checkout. O código também fica
+                disponível na confirmação e na consulta do pedido quando a opção de tela estiver ativa.
+              </p>
+            </div>
+            <select
+              value={pixQrDeliveryMode}
+              onChange={(event) => setPixQrDeliveryMode(event.target.value as typeof pixQrDeliveryMode)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            >
+              <option value="screen">Somente na tela</option>
+              <option value="email">E-mail</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="all">Tela, e-mail e WhatsApp</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Para e-mail e WhatsApp, os respectivos dados de contato precisam estar preenchidos e
+              configurados para envio.
+            </p>
+            <Button
+              onClick={handleSavePixQrDelivery}
+              disabled={pixQrDeliverySaving}
+              variant="outline"
+            >
+              {pixQrDeliverySaving ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Salvando...</>
+              ) : "Salvar entrega do QR Code"}
+            </Button>
+          </div>
         </div>
       )}
     </div>

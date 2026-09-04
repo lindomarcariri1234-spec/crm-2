@@ -105,3 +105,9 @@
 - [Cross-trip swap test fixtures](cross-trip-swap-fixtures.md) — reciprocal active reservation moves need distinct clients because the partial client+trip uniqueness constraint rejects direct swaps
 - [Canonical storefront runtime](canonical-storefront-runtime.md) — public storefront HTML and API must use the same runtime/database or SEO previews can serve stale settings.
 - [Vercel bundle external dependencies](vercel-bundle-externals.md) — mirror the API external policy and Vercel trace imports; UploadThing must remain external after the fetch patch.
+- [Idempotency persistence](idempotency-persistence.md) — route-level idempotency is incomplete unless the key is verified in the actual database insert.
+- [PIX QR event identity](pix-qr-event-identity.md) — the QR delivery idempotency key is order-scoped, independent of the mutable channel setting; the first selected mode wins on replay.
+- [Outbox lease ambiguity](outbox-lease-ambiguity.md) — an expired delivery lease has an unknown provider outcome; never auto-reset it to pending and resend.
+- [Mixed-order receipt allocation](mixed-order-receipt-allocation.md) — allocate order-level receipts to child reservations proportionally in cents, with deterministic remainder assignment.
+- [Capacity integrity check](capacity-integrity-check.md) — diagnose trip, inventory, and partner-capacity drift before repair jobs; never auto-correct persisted claims.
+- [Orval 8 with Zod 3](orval8-zod3-codegen.md) — secure Orval upgrades need explicit Zod 3 output, explicit formatting, and DOM iterable types for the generated fetch client.

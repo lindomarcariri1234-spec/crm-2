@@ -38,6 +38,7 @@ const {
   mockCreateReservationsForOrder,
   mockEnsurePortalAccount,
   mockEnqueueNewBookingNotificationEmail,
+  mockEnqueuePixOrderQr,
 } = vi.hoisted(() => {
   const selectQueue: unknown[][] = [];
   const mockTransaction = vi.fn();
@@ -52,6 +53,7 @@ const {
   const mockCreateReservationsForOrder = vi.fn();
   const mockEnsurePortalAccount = vi.fn().mockResolvedValue({});
   const mockEnqueueNewBookingNotificationEmail = vi.fn().mockResolvedValue(undefined);
+  const mockEnqueuePixOrderQr = vi.fn().mockResolvedValue(undefined);
   return {
     selectQueue,
     mockTransaction,
@@ -62,6 +64,7 @@ const {
     mockCreateReservationsForOrder,
     mockEnsurePortalAccount,
     mockEnqueueNewBookingNotificationEmail,
+    mockEnqueuePixOrderQr,
   };
 });
 
@@ -114,6 +117,7 @@ vi.mock("@workspace/db", () => {
     clientsTable: {},
     usersTable: {},
     referralsTable: {},
+    paymentsTable: {},
     settlementItemsTable: {},
     referralTrackingTable: {},
     referralSettingsTable: {},
@@ -164,6 +168,7 @@ vi.mock("../queues/email-helpers.js", () => ({
   enqueueReservationCancellationEmail: vi.fn().mockResolvedValue(undefined),
   enqueueNewBookingNotificationEmail: mockEnqueueNewBookingNotificationEmail,
   sendWelcomeEmail: mockSendWelcomeEmail,
+  enqueuePixOrderQr: mockEnqueuePixOrderQr,
 }));
 
 vi.mock("../services/checkout/create-reservations.js", () => ({
@@ -586,13 +591,18 @@ describe("POST /api/public/store/:slug/orders — idempotency key dedup", () => 
     mockCreateReservationsForOrder.mockResolvedValue({ reservationIds: [], tripIds: [] });
   });
 
-  it("replays the existing order when the same idempotencyKey is submitted again, without opening a new transaction", async () => {
+  it("replays the existing order and reconciles effects when the same idempotencyKey is submitted again", async () => {
     selectQueue.length = 0;
     selectQueue.push(
       [FAKE_STORE], // 1. getActiveStore
       [EXISTING_ORDER_WITH_KEY], // 2. idempotency-key upfront lookup — found
       [], // 3. existing order's items lookup
+      [{ orderId: "order-existing-001", reservationId: null, amount: "25.00", status: "paid", type: "receivable" }], // 4. current payment rows
     );
+    mockCreateReservationsForOrder.mockResolvedValue({
+      reservationIds: ["res-001"],
+      tripIds: [],
+    });
 
     const res = await request(buildApp())
       .post("/api/public/store/minha-loja/orders")
@@ -600,8 +610,68 @@ describe("POST /api/public/store/:slug/orders — idempotency key dedup", () => 
 
     expect(res.status).toBe(200);
     expect(res.body.orderId).toBe("order-existing-001");
+    expect(res.body.paidAmount).toBe(25);
+    expect(res.body.amountRemaining).toBe("125.00");
     expect(mockCreateReservationsForOrder).toHaveBeenCalledWith("order-existing-001");
     expect(mockTransaction).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockEnqueueNewBookingNotificationEmail).toHaveBeenCalledWith("res-001", "tenant-001");
+    expect(mockEnsurePortalAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: EXISTING_ORDER_WITH_KEY.customerEmail,
+        name: EXISTING_ORDER_WITH_KEY.customerName,
+        tenantId: EXISTING_ORDER_WITH_KEY.tenantId,
+      }),
+    );
+  });
+
+  it("rebuilds and dispatches a missing PIX QR during replay", async () => {
+    const pixStore = {
+      ...FAKE_STORE,
+      name: "Minha Loja PIX",
+      city: "Fortaleza",
+      pixEnabled: true,
+      pixKey: "pix@example.com",
+    };
+    const pixOrder = {
+      ...EXISTING_ORDER_WITH_KEY,
+      paymentMethod: "pix",
+      depositAmount: "50.00",
+      pixQrCode: null,
+      pixQrCodeUrl: null,
+      pixCopyPaste: null,
+    };
+    selectQueue.length = 0;
+    selectQueue.push(
+      [pixStore], // 1. getActiveStore
+      [pixOrder], // 2. idempotency-key upfront lookup — found
+      [], // 3. existing order's items lookup
+      [], // 4. current payment rows
+      [{ settings: { pixQrDeliveryMode: "email" } }], // 5. delivery mode
+    );
+    mockCreateReservationsForOrder.mockResolvedValue({
+      reservationIds: ["res-001"],
+      tripIds: [],
+    });
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, paymentMethod: "pix", idempotencyKey: "idem-key-001" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.pixQrCode).toEqual(expect.any(String));
+    expect(res.body.pixQrCodeUrl).toEqual(expect.stringContaining("api.qrserver.com"));
+    expect(res.body.pixCopyPaste).toBe(res.body.pixQrCode);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockEnqueuePixOrderQr).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: pixStore.tenantId,
+      orderId: pixOrder.id,
+      deliveryMode: "email",
+      amount: 50,
+      pixCopyPaste: res.body.pixQrCode,
+    }));
   });
 
   it("creates a fresh order when no order with that idempotencyKey exists yet", async () => {

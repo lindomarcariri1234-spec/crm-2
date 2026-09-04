@@ -36,6 +36,7 @@ import { runGemeoAlertsCron, runGemeoOpportunitiesCron } from "./lib/gemeo-cron"
 import { runFavoriteLowAvailabilityAlertCron } from "./lib/favorite-alerts";
 import { runAbandonedOrderReferralCleanup } from "./lib/abandoned-order-referrals";
 import { runSeatReconciliationCron } from "./lib/seat-reconciliation";
+import { runCapacityIntegrityCheck } from "./services/capacity-integrity";
 import { runStripeHealthCheckCron } from "./lib/stripe-health-check";
 import { getRedisConnection, waitForEvictionPolicyCheck, fetchUpstashDailyStats, getRedisWarningThresholdPct, maybeSendDailyLimitAlert } from "./lib/redis";
 import { initSeatUpdateSubscriber, closeSeatUpdateSubscriber } from "./lib/realtime";
@@ -310,6 +311,14 @@ applyMigrations()
       scheduleDistributedCron("seat-reconciliation", "0 4 * * *", async () => {
         logger.info("[seat-reconciliation] Daily seat counter reconciliation triggered");
         await runSeatReconciliationCron();
+      }, { timezone: "America/Sao_Paulo" });
+
+      // Run the read-only integrity check shortly before the legacy seat repair.
+      // The diagnostic must observe the original drift instead of only seeing
+      // counters after the repair job has already changed them.
+      scheduleDistributedCron("capacity-integrity", "55 3 * * *", async () => {
+        logger.info("[capacity-integrity] Daily read-only check triggered");
+        await runCapacityIntegrityCheck();
       }, { timezone: "America/Sao_Paulo" });
 
       scheduleDistributedCron("stripe-health", "0 8 * * *", async () => {

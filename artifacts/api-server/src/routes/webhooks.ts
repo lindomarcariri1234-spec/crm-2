@@ -739,7 +739,8 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
         eq(storeOrdersTable.storeId, store.storeId),
         eq(storeOrdersTable.paymentIntentId, paymentIntentId),
       ),
-    )
+      )
+      .for("update")
     .limit(1);
 
   if (!order) {
@@ -864,6 +865,14 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
       occurredAt: paidAt,
       receivedAmount: effectiveReceivedAmount,
     });
+    if (isPartialPayment) {
+      await tx.update(storeOrdersTable).set({
+        amountRemaining: Math.max(0, totalOrderAmount - receivedAfterEvent).toFixed(2),
+      }).where(and(
+        eq(storeOrdersTable.id, order.id),
+        eq(storeOrdersTable.tenantId, order.tenantId),
+      ));
+    }
     // Product-only paid order: there are no reservations to allocate Payment rows
     // to, but the order IS paid. Return the orderId (with no reservationIds) so
     // the caller still runs the payment-gated post-payment side effects (deferred
@@ -872,7 +881,13 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
     // referrer or consume the customer's referral credit. runPostPaymentSideEffects
     // is fully idempotent, so re-running it on a duplicate webhook is safe.
     logger.info({ orderId: order.id, paymentIntentId }, "[webhooks] Product-only order paid — no reservations to sync");
-    return { orderId: order.id, reservationIds: [], tripIds: createResult.tripIds, tenantId: order.tenantId };
+    return {
+      orderId: order.id,
+      reservationIds: [],
+      tripIds: createResult.tripIds,
+      tenantId: order.tenantId,
+      ...(isPartialPayment ? { partialPayment: true } : {}),
+    };
   }
 
   // Mixed-cart orders may include non-reservation products. Cap the amount

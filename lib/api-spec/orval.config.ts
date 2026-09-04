@@ -4,7 +4,10 @@ import path from "path";
 const root = path.resolve(__dirname, "..", "..");
 const apiClientReactSrc = path.resolve(root, "lib", "api-client-react", "src");
 const apiZodSrc = path.resolve(root, "lib", "api-zod", "src");
-const openApiTarget = "./openapi.yaml";
+// Orval resolves relative input paths from the process working directory,
+// which is not stable when invoked through pnpm --filter. Keep the source
+// absolute so codegen cannot clean outputs and then fail to resolve its input.
+const openApiTarget = path.resolve(__dirname, "openapi.yaml");
 
 // Our exports make assumptions about the title of the API being "Api" (i.e. generated output is `api.ts`).
 const titleTransformer: InputTransformerFn = (config) => {
@@ -58,6 +61,7 @@ export default defineConfig({
       prettier: true,
       override: {
         zod: {
+          version: 3,
           coerce: {
             query: ['boolean', 'number', 'string'],
             param: ['boolean', 'number', 'string'],

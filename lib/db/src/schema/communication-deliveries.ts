@@ -5,13 +5,13 @@ import { tenantsTable } from "./tenants";
 export const OUTBOUND_DELIVERY_CHANNELS = ["email", "whatsapp"] as const;
 export type OutboundDeliveryChannel = (typeof OUTBOUND_DELIVERY_CHANNELS)[number];
 
-export const OUTBOUND_DELIVERY_STATUSES = ["pending", "processing", "accepted", "failed", "skipped"] as const;
+export const OUTBOUND_DELIVERY_STATUSES = ["pending", "processing", "accepted", "failed", "skipped", "unknown"] as const;
 export type OutboundDeliveryStatus = (typeof OUTBOUND_DELIVERY_STATUSES)[number];
 
 export const OUTBOUND_BOUNCE_TYPES = ["permanent", "temporary"] as const;
 export type OutboundBounceType = (typeof OUTBOUND_BOUNCE_TYPES)[number];
 
-export const OUTBOUND_MESSAGE_STATUSES = ["pending", "processing", "accepted", "partial", "failed", "skipped"] as const;
+export const OUTBOUND_MESSAGE_STATUSES = ["pending", "processing", "accepted", "partial", "failed", "skipped", "unknown"] as const;
 export type OutboundMessageStatus = (typeof OUTBOUND_MESSAGE_STATUSES)[number];
 
 export const outboundMessagesTable = pgTable(

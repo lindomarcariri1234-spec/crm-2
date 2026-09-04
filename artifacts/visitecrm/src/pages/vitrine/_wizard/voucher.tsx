@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { MapPin, Calendar, Clock, Armchair } from "lucide-react";
 import QRCode from "qrcode";
 import { PublicStore, StoreProduct } from "@/lib/storeApi";
+import type { FinancialSummary } from "@/lib/linked-data";
 import { calculateTripDuration } from "@/lib/tripDuration";
 import { fmtDate, PAYMENT_LABELS } from "./constants";
 
@@ -17,10 +18,7 @@ export function Voucher({
   referralDiscountPct,
   couponDiscount = 0,
   couponCode,
-  isConfirmed = false,
-  depositAmount,
-  paidAmount = 0,
-  amountRemaining,
+  financialSummary,
 }: {
   order: { orderNumber: string; totalAmount: string; createdAt: string };
   product: StoreProduct;
@@ -33,10 +31,7 @@ export function Voucher({
   referralDiscountPct?: number;
   couponDiscount?: number;
   couponCode?: string;
-  isConfirmed?: boolean;
-  depositAmount?: string | null;
-  paidAmount?: number;
-  amountRemaining?: string | null;
+  financialSummary: FinancialSummary;
 }) {
   const [qrDataUrl, setQrDataUrl] = useState("");
 
@@ -114,7 +109,9 @@ export function Voucher({
               {store.name}
             </p>
           )}
-          <p className="text-xs text-muted-foreground mt-0.5">Voucher de Reserva</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {financialSummary.reservationValid ? "Voucher de Reserva" : "Comprovante de Pedido Pendente"}
+          </p>
         </div>
         <div className="text-right">
           <p className="text-xs text-muted-foreground">Pedido</p>
@@ -182,39 +179,39 @@ export function Voucher({
           <p className="text-xs text-muted-foreground mb-0.5">Pagamento</p>
           <p className="font-semibold">{PAYMENT_LABELS[paymentMethod] ?? paymentMethod}</p>
         </div>
-        <div className={paidAmount > 0 ? "bg-blue-50 border border-blue-200 rounded-lg p-3" : "bg-green-50 border border-green-200 rounded-lg p-3"}>
+        <div className={financialSummary.paidAmount > 0 ? "bg-blue-50 border border-blue-200 rounded-lg p-3" : "bg-green-50 border border-green-200 rounded-lg p-3"}>
           <p className="text-xs text-muted-foreground mb-0.5">
-            {paidAmount > 0 ? "Pagamento recebido" : "Total"}
+            {financialSummary.paidAmount > 0 ? "Pagamento confirmado" : "Total líquido"}
           </p>
-          <p className={paidAmount > 0 ? "font-bold text-blue-700 text-base" : "font-bold text-green-700 text-base"}>
-            R$ {(paidAmount > 0 ? paidAmount : parseFloat(order.totalAmount)).toFixed(2)}
+          <p className={financialSummary.paidAmount > 0 ? "font-bold text-blue-700 text-base" : "font-bold text-green-700 text-base"}>
+            R$ {(financialSummary.paidAmount > 0 ? financialSummary.paidAmount : financialSummary.totalAmount).toFixed(2)}
           </p>
         </div>
       </div>
 
-      {depositAmount && amountRemaining && Number(amountRemaining) > 0 && (
+      {financialSummary.depositRequested > 0 && financialSummary.amountRemaining > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 space-y-1 text-sm text-amber-800">
           <p className="text-xs font-semibold text-amber-700 mb-1">
-            {isConfirmed ? "Pagamento parcial confirmado" : "Entrada mínima solicitada"}
+            {financialSummary.states.payment === "partially_paid" ? "Pagamento parcial confirmado" : "Entrada mínima solicitada"}
           </p>
           <div className="flex justify-between">
             <span>Valor total do pedido</span>
-            <span className="font-semibold">R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
+            <span className="font-semibold">R$ {financialSummary.totalAmount.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
             <span>Entrada mínima solicitada</span>
-            <span className="font-semibold">R$ {parseFloat(depositAmount!).toFixed(2)}</span>
+            <span className="font-semibold">R$ {financialSummary.depositRequested.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
             <span>Pagamento recebido</span>
-            <span className="font-semibold">R$ {paidAmount.toFixed(2)}</span>
+            <span className="font-semibold">R$ {financialSummary.paidAmount.toFixed(2)}</span>
           </div>
           <div className="flex justify-between border-t border-amber-200 pt-1">
             <span className="font-semibold">Restante a pagar</span>
-            <span className="font-bold text-amber-900">R$ {parseFloat(amountRemaining).toFixed(2)}</span>
+            <span className="font-bold text-amber-900">R$ {financialSummary.amountRemaining.toFixed(2)}</span>
           </div>
           <p className="text-xs text-amber-700 mt-1">
-            {isConfirmed
+            {financialSummary.reservationValid
               ? "O saldo considera somente pagamentos confirmados."
               : "A entrada solicitada ainda não é um pagamento confirmado."}
           </p>

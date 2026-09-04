@@ -40,6 +40,26 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelado",
 };
 
+const RESERVATION_STATUS_LABELS: Record<string, string> = {
+  pending: "Aguardando pagamento",
+  confirmed: "Confirmada",
+  checked_in: "Embarque realizado",
+  completed: "Concluída",
+  cancelled: "Cancelada",
+  expired: "Expirada",
+};
+
+function formatDateTime(value?: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
+}
+
 function PaymentStatusBadge({ status }: { status: string }) {
   const colorMap: Record<string, string> = {
     paid: "bg-green-100 text-green-800 border-green-200",
@@ -144,16 +164,13 @@ function PixQrBlock({ order }: { order: StoreOrder }) {
 
 function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }) {
   const { colors } = buildVitrineTheme(store);
-  const totalAmt = parseFloat(order.totalAmount);
-  const subtotalAmt = parseFloat(order.subtotal);
-  const depositAmt = order.depositAmount ? parseFloat(order.depositAmount) : 0;
-  const paidAmt = Number(order.paidAmount ?? 0);
-  const pendingAmt = Math.max(0, Number(order.amountRemaining ?? totalAmt - paidAmt));
-  const displayPaymentStatus = paidAmt > 0 && pendingAmt > 0
-    ? "partially_paid"
-    : order.paymentStatus === "pending"
-      ? "unpaid"
-      : order.paymentStatus;
+  const summary = order.financialSummary;
+  const totalAmt = summary.totalAmount;
+  const subtotalAmt = summary.subtotal;
+  const depositAmt = summary.depositRequested;
+  const paidAmt = summary.paidAmount;
+  const pendingAmt = summary.amountRemaining;
+  const displayPaymentStatus = summary.states.payment;
 
   return (
     <div className="space-y-6">
@@ -225,6 +242,80 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
           </div>
         )}
 
+        {order.reservations && order.reservations.length > 0 && (
+          <div className="mb-4 space-y-3">
+            <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
+              <Package className="w-3.5 h-3.5" /> Reservas vinculadas
+            </p>
+            {order.reservations.map((reservation) => {
+              const departureDate = reservation.departureDate
+                ? new Intl.DateTimeFormat("pt-BR", {
+                  timeZone: "America/Sao_Paulo",
+                  dateStyle: "medium",
+                }).format(new Date(reservation.departureDate))
+                : null;
+              const location = [
+                reservation.boardingName,
+                reservation.boardingAddress,
+                reservation.boardingCity && reservation.boardingState
+                  ? `${reservation.boardingCity}/${reservation.boardingState}`
+                  : reservation.boardingCity,
+              ].filter(Boolean).join(" — ");
+              return (
+                <div key={reservation.id} className="rounded-xl border bg-muted/20 p-4 space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold">{reservation.tripName ?? "Viagem vinculada"}</p>
+                      {reservation.destination && (
+                        <p className="text-sm text-muted-foreground">{reservation.destination}</p>
+                      )}
+                    </div>
+                    <span className="rounded-full border bg-white px-2.5 py-1 text-xs font-semibold">
+                      {RESERVATION_STATUS_LABELS[reservation.status] ?? reservation.status}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    {departureDate && (
+                      <p><span className="text-muted-foreground">Saída:</span> {departureDate}{reservation.departureTime ? ` às ${reservation.departureTime}` : ""}</p>
+                    )}
+                    {location && <p><span className="text-muted-foreground">Embarque:</span> {location}</p>}
+                    {reservation.seats?.length > 0 && (
+                      <p><span className="text-muted-foreground">Assentos:</span> {reservation.seats.join(", ")}</p>
+                    )}
+                    {reservation.voucherCode && (
+                      <p><span className="text-muted-foreground">Voucher:</span> <span className="font-mono font-semibold">{reservation.voucherCode}</span></p>
+                    )}
+                  </div>
+                  {reservation.passengers.length > 0 && (
+                    <div className="border-t pt-2">
+                      <p className="text-xs font-semibold text-muted-foreground mb-1">Passageiros</p>
+                      <ul className="text-sm space-y-1">
+                        {reservation.passengers.map((passenger) => (
+                          <li key={passenger.id} className="flex justify-between gap-3">
+                            <span>{passenger.name}{passenger.isPrimary ? " (titular)" : ""}</span>
+                            {passenger.seatNumber && <span className="text-muted-foreground">Assento {passenger.seatNumber}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {reservation.status === "pending" && reservation.expiresAt && (
+                    <p className="text-xs text-amber-700">
+                      Esta reserva expira em {formatDateTime(reservation.expiresAt)} se o pagamento não for confirmado.
+                    </p>
+                  )}
+                  {reservation.status === "expired" && reservation.expiresAt && (
+                    <p className="text-xs text-red-700">A reserva expirou em {formatDateTime(reservation.expiresAt)}.</p>
+                  )}
+                  {reservation.status === "cancelled" && reservation.cancelledAt && (
+                    <p className="text-xs text-red-700">A reserva foi cancelada em {formatDateTime(reservation.cancelledAt)}.</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="space-y-2 text-sm border-t pt-4">
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
@@ -243,14 +334,14 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
       {depositAmt > 0 && depositAmt < totalAmt && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 space-y-2">
           <p className="text-xs font-semibold text-amber-700">
-            {paidAmt > 0 ? "Pagamento parcial confirmado" : "Entrada mínima solicitada"}
+             {paidAmt > 0 ? "Pagamento parcial confirmado" : "Entrada solicitada"}
           </p>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Valor total do pedido</span>
             <span className="font-semibold">R$ {totalAmt.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Entrada mínima solicitada</span>
+             <span className="text-muted-foreground">Entrada solicitada</span>
             <span className="font-semibold">R$ {depositAmt.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">

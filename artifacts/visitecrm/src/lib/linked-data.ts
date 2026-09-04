@@ -1,4 +1,38 @@
 /** Supplemental relationships returned by tenant-scoped API responses. */
+export type CanonicalPaymentState =
+  | "pending"
+  | "partially_paid"
+  | "paid"
+  | "failed"
+  | "refunded"
+  | "cancelled";
+
+export interface FinancialSummary {
+  source: "order" | "reservation";
+  subtotal: number;
+  discountAmount: number;
+  totalAmount: number;
+  depositRequested: number;
+  paidAmount: number;
+  amountRemaining: number;
+  minimumRequired: number;
+  reservationValid: boolean;
+  states: {
+    order: string | null;
+    reservation: string | null;
+    payment: CanonicalPaymentState;
+  };
+  diagnostics: {
+    hasLegacyDivergence: boolean;
+    issues: string[];
+    legacy: {
+      totalAmount: number | null;
+      paidAmount: number | null;
+      amountRemaining: number | null;
+    } | null;
+  };
+}
+
 export interface LinkedReservation {
   id: string;
   reservationNumber: string;
@@ -9,6 +43,7 @@ export interface LinkedReservation {
   balance: number | string;
   seats: string[];
   passengerCount: number;
+  financialSummary?: FinancialSummary;
 }
 
 export interface LinkedOrder {
@@ -24,6 +59,7 @@ export interface LinkedOrder {
   amountRemaining: number | string | null;
   paymentMethod: string | null;
   installments: number | null;
+  financialSummary: FinancialSummary;
 }
 
 export interface LinkedReferral {
@@ -47,6 +83,7 @@ export interface LinkedDeal {
 }
 
 export interface LinkedData {
+  financialSummary?: FinancialSummary;
   linkedOrder?: LinkedOrder | null;
   linkedReservations?: LinkedReservation[];
   linkedReferral?: LinkedReferral | null;

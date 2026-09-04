@@ -91,7 +91,7 @@ const BASE_PRODUCT = {
 };
 
 function makeOrder(overrides: Partial<CompletedOrder>): CompletedOrder {
-  return {
+  const base = {
     orderNumber: "ORD-001",
     totalAmount: "500.00",
     createdAt: new Date().toISOString(),
@@ -103,6 +103,31 @@ function makeOrder(overrides: Partial<CompletedOrder>): CompletedOrder {
     pixCopyPaste: null,
     ...overrides,
   };
+  const totalAmount = Number(base.totalAmount);
+  const depositRequested = Number(base.depositAmount ?? 0);
+  const paidAmount = Number(base.paidAmount ?? 0);
+  const amountRemaining = Number(base.amountRemaining ?? totalAmount - paidAmount);
+  const minimumRequired = depositRequested > 0 ? depositRequested : totalAmount;
+  return {
+    ...base,
+    financialSummary: {
+      source: "order",
+      subtotal: totalAmount,
+      discountAmount: 0,
+      totalAmount,
+      depositRequested,
+      paidAmount,
+      amountRemaining,
+      minimumRequired,
+      reservationValid: paidAmount >= minimumRequired,
+      states: {
+        order: "confirmed",
+        reservation: paidAmount >= minimumRequired ? "confirmed" : "pending",
+        payment: paidAmount >= totalAmount ? "paid" : paidAmount > 0 ? "partially_paid" : "pending",
+      },
+      diagnostics: { hasLegacyDivergence: false, issues: [], legacy: null },
+    },
+  } as CompletedOrder;
 }
 
 function makeState(completedOrder: CompletedOrder): WizardState {

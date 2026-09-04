@@ -4,6 +4,7 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 type EmailPayload = Parameters<Resend["emails"]["send"]>[0];
+type EmailRequestOptions = { idempotencyKey?: string };
 type EmailSendResponse = Awaited<ReturnType<Resend["emails"]["send"]>>;
 
 type ConnectorAttachment = {
@@ -83,13 +84,16 @@ export function createConnectorResend(
 ): Resend {
   return {
     emails: {
-      send: async (payload: EmailPayload): Promise<EmailSendResponse> => {
+      send: async (payload: EmailPayload, options?: EmailRequestOptions): Promise<EmailSendResponse> => {
         try {
           // The connector's identity headers are short-lived and the SDK refreshes
           // them automatically when the platform returns a 401.
           const response = await connector.proxy("resend", "/emails", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(options?.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : {}),
+            },
             body: toConnectorPayload(payload),
           });
           const body = await response.text();
@@ -123,12 +127,13 @@ export function createApiKeyResend(
 ): Resend {
   return {
     emails: {
-      send: async (payload: EmailPayload): Promise<EmailSendResponse> => {
+      send: async (payload: EmailPayload, options?: EmailRequestOptions): Promise<EmailSendResponse> => {
         try {
-          return await client.emails.send({
+          const request = {
             ...payload,
             from: resolveFromAddress(),
-          });
+          };
+          return options ? await client.emails.send(request, options) : await client.emails.send(request);
         } catch (error) {
           return {
             data: null,

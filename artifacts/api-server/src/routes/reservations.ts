@@ -28,7 +28,17 @@ import { syncClientDeal } from "../services/pipeline-deal-sync";
 import { recalculateClientFinancials } from "./payments.js";
 import { detectAndNotifyTripOverlap } from "../lib/trip-overlap-notify";
 import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
-import { calculateReceivedAmount, linkedDeal, linkedOrder, linkedReferral, linkedReservation } from "../lib/linked-data";
+import {
+  calculateReceivedAmount,
+  allocateOrderReceiptToReservation,
+  linkedDeal,
+  linkedOrder,
+  linkedReferral,
+  linkedReservation,
+  orderFinancialSummary,
+  reservationFinancialSummary,
+  type FinancialSummary,
+} from "../lib/linked-data";
 import { convertPaidReservationReferral } from "../services/reservation-referral-conversion";
 import {
   cancelLockedReservationAndReleaseCapacity,
@@ -217,18 +227,15 @@ async function attachLinkedReservationData<T extends object>(
   rows: T[],
   reservations: (typeof reservationsTable.$inferSelect)[],
   tenantId: string,
-) : Promise<Array<T & { linkedOrder: ReturnType<typeof linkedOrder>; linkedReferral: ReturnType<typeof linkedReferral>; linkedDeals: ReturnType<typeof linkedDeal>[] }>> {
-  if (!reservations.length) return rows.map(row => ({ ...row, linkedOrder: null, linkedReferral: null, linkedDeals: [] }));
+) : Promise<Array<T & { financialSummary: FinancialSummary; linkedOrder: ReturnType<typeof linkedOrder>; linkedReferral: ReturnType<typeof linkedReferral>; linkedDeals: ReturnType<typeof linkedDeal>[] }>> {
+  if (!reservations.length) return [];
   const ids = reservations.map(r => r.id);
   const orderNumbers = [...new Set(reservations.map(r => r.storeOrderId).filter((v): v is string => !!v))];
-  // New/manual reservations have no checkout order and cannot yet have a
-  // canonical referral/order link. Avoid unnecessary reads on write paths.
-  if (!orderNumbers.length) {
-    return rows.map(row => ({ ...row, linkedOrder: null, linkedReferral: null, linkedDeals: [] }));
-  }
   const [orders, siblingReservations] = await Promise.all([
     orderNumbers.length ? db.select().from(storeOrdersTable).where(and(eq(storeOrdersTable.tenantId, tenantId), inArray(storeOrdersTable.orderNumber, orderNumbers))) : Promise.resolve([] as (typeof storeOrdersTable.$inferSelect)[]),
-    db.select().from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), inArray(reservationsTable.storeOrderId, orderNumbers))),
+    orderNumbers.length
+      ? db.select().from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), inArray(reservationsTable.storeOrderId, orderNumbers)))
+      : Promise.resolve([] as (typeof reservationsTable.$inferSelect)[]),
   ]);
   const allReservations = [...reservations, ...siblingReservations.filter(r => !ids.includes(r.id))];
   const orderIds = orders.map(order => order.id);
@@ -248,28 +255,12 @@ async function attachLinkedReservationData<T extends object>(
       ),
     ))
     : [];
-  const pendingReferralIds = [...new Set(orders.flatMap((order) => {
-    const pending = order.pendingReferral as { referralId?: string | null } | null;
-    return pending?.referralId ? [pending.referralId] : [];
-  }))];
-  const [referrals, pendingReferrals, deals] = await Promise.all([
-    db.select().from(referralsTable).where(and(eq(referralsTable.tenantId, tenantId), inArray(referralsTable.reservationId, allReservations.map(r => r.id)))),
-    pendingReferralIds.length
-      ? db.select().from(referralsTable).where(and(eq(referralsTable.tenantId, tenantId), inArray(referralsTable.id, pendingReferralIds)))
-      : Promise.resolve([] as (typeof referralsTable.$inferSelect)[]),
-    db.select().from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), inArray(dealsTable.reservationId, allReservations.map(r => r.id)))),
+  const [referrals, deals] = await Promise.all([
+    db.select().from(referralsTable).where(and(eq(referralsTable.tenantId, tenantId), inArray(referralsTable.reservationId, reservationIds))),
+    db.select().from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), inArray(dealsTable.reservationId, reservationIds))),
   ]);
   const orderMap = new Map(orders.map(o => [o.orderNumber, o]));
-  const referralMap = new Map([...referrals, ...pendingReferrals].map(ref => [ref.reservationId, ref]));
-  const pendingReferralByOrder = new Map(
-    orders.flatMap((order) => {
-      const pending = order.pendingReferral as { referralId?: string | null } | null;
-      const referral = pending?.referralId
-        ? pendingReferrals.find((candidate) => candidate.id === pending.referralId)
-        : undefined;
-      return referral ? [[order.orderNumber, referral] as const] : [];
-    }),
-  );
+  const referralMap = new Map(referrals.map(ref => [ref.reservationId, ref]));
   const dealMap = new Map<string, typeof deals>();
   for (const deal of deals) {
     if (!deal.reservationId) continue;
@@ -281,11 +272,42 @@ async function attachLinkedReservationData<T extends object>(
       ? allReservations.filter(r => r.storeOrderId === reservation.storeOrderId).map(r => r.id)
       : [];
     const order = reservation.storeOrderId ? orderMap.get(reservation.storeOrderId) : undefined;
+    const siblingRows = reservation.storeOrderId
+      ? allReservations.filter(r => r.storeOrderId === reservation.storeOrderId)
+      : [reservation];
+    const receivedForOrder = order
+      ? calculateReceivedAmount(order.id, linkedSiblingIds, payments)
+      : 0;
+    const receivedForReservation = calculateReceivedAmount("", [reservation.id], payments);
+    const summary = order && siblingRows.length === 1
+      ? orderFinancialSummary(order, receivedForOrder, payments, reservation, linkedSiblingIds)
+      : reservationFinancialSummary(
+        reservation,
+        order ? allocateOrderReceiptToReservation(receivedForOrder, order.totalAmount, reservation.totalValue, reservation.id, siblingRows) : receivedForReservation,
+        payments,
+        order,
+      );
     return { ...row, linkedOrder: order
-      ? linkedOrder(order, { paidAmount: calculateReceivedAmount(order.id, linkedSiblingIds, payments) })
+      ? linkedOrder(order, {
+        paidAmount: receivedForOrder,
+        payments,
+        reservation: siblingRows.length === 1 ? reservation : null,
+        reservationIds: linkedSiblingIds,
+      })
       : null,
-      linkedReferral: linkedReferral(referralMap.get(reservation.id) ?? pendingReferralByOrder.get(reservation.storeOrderId ?? "")),
-      linkedReservations: reservation.storeOrderId ? allReservations.filter(r => r.storeOrderId === reservation.storeOrderId).map(linkedReservation) : [linkedReservation(reservation)],
+      financialSummary: summary,
+      linkedReferral: linkedReferral(referralMap.get(reservation.id)),
+      linkedReservations: siblingRows.map(sibling => linkedReservation(
+        sibling,
+        reservationFinancialSummary(
+          sibling,
+          order
+            ? allocateOrderReceiptToReservation(receivedForOrder, order.totalAmount, sibling.totalValue, sibling.id, siblingRows)
+            : calculateReceivedAmount("", [sibling.id], payments),
+          payments,
+          order,
+        ),
+      )),
       linkedDeals: (reservation.storeOrderId ? deals.filter(d => allReservations.some(r => r.storeOrderId === reservation.storeOrderId && r.id === d.reservationId)) : (dealMap.get(reservation.id) ?? [])).map(linkedDeal) };
   });
 }

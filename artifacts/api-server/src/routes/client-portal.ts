@@ -25,8 +25,10 @@ import {
   clientAchievementsTable,
   clientDreamDestinationsTable,
   financialLedgerEntriesTable,
+  storeOrdersTable,
+  paymentsTable,
 } from "@workspace/db";
-import { eq, and, desc, asc, sql, inArray, gt, count, isNull, lt } from "drizzle-orm";
+import { eq, and, desc, asc, sql, inArray, gt, count, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod/v4";
 import { requireAuth, MANAGEMENT_ROLES } from "../lib/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
@@ -43,6 +45,12 @@ import { logger } from "../lib/logger";
 import { expireClientBenefits, getClientBenefitBalances } from "../services/settlements/financial-ledger";
 import { clerkClient } from "@clerk/express";
 import { normalizeCpfInput, reconcileClientIdentity } from "../services/client-identity";
+import {
+  calculateReceivedAmount,
+  allocateOrderReceiptToReservation,
+  orderFinancialSummary,
+  reservationFinancialSummary,
+} from "../lib/linked-data";
 
 const router = Router();
 
@@ -272,8 +280,11 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
           voucherCode: reservationsTable.voucherCode,
           totalValue: reservationsTable.totalValue,
           paidValue: reservationsTable.paidValue,
-          paymentMethod: reservationsTable.paymentMethod,
+          balance: reservationsTable.balance,
+          depositAmount: reservationsTable.depositAmount,
+          discountTotal: reservationsTable.discountTotal,
           storeOrderId: reservationsTable.storeOrderId,
+          paymentMethod: reservationsTable.paymentMethod,
           createdAt: reservationsTable.createdAt,
           seats: reservationsTable.seats,
           boardingLocationId: reservationsTable.boardingLocationId,
@@ -295,6 +306,30 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
         .orderBy(asc(tripsTable.departureDate), desc(reservationsTable.createdAt));
 
       const reservationIds = rows.map((r) => r.id);
+      const orderNumbers = [...new Set(rows.map(r => r.storeOrderId).filter((value): value is string => !!value))];
+      const orders = orderNumbers.length
+        ? await db.select().from(storeOrdersTable).where(and(
+          eq(storeOrdersTable.tenantId, me.tenantId),
+          inArray(storeOrdersTable.orderNumber, orderNumbers),
+        ))
+        : [];
+      const orderMap = new Map(orders.map(order => [order.orderNumber, order]));
+      const paymentRows = reservationIds.length || orders.length
+        ? await db.select({
+          id: paymentsTable.id,
+          orderId: paymentsTable.orderId,
+          reservationId: paymentsTable.reservationId,
+          amount: paymentsTable.amount,
+          status: paymentsTable.status,
+          type: paymentsTable.type,
+        }).from(paymentsTable).where(and(
+          eq(paymentsTable.tenantId, me.tenantId),
+          or(
+            ...(reservationIds.length ? [inArray(paymentsTable.reservationId, reservationIds)] : []),
+            ...(orders.length ? [inArray(paymentsTable.orderId, orders.map(order => order.id))] : []),
+          ),
+        ))
+        : [];
       let npsSubmittedSet = new Set<string>();
       if (reservationIds.length > 0) {
         const npsRows = await db
@@ -305,17 +340,40 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
       }
 
       reservations = rows.map((r) => {
-        const total = Number(r.totalValue);
-        const paid = Number(r.paidValue);
+        const siblingRows = r.storeOrderId ? rows.filter(row => row.storeOrderId === r.storeOrderId) : [r];
+        const order = r.storeOrderId ? orderMap.get(r.storeOrderId) : undefined;
+        const summary = order && siblingRows.length === 1
+          ? orderFinancialSummary(
+            order,
+            calculateReceivedAmount(order.id, siblingRows.map(row => row.id), paymentRows),
+            paymentRows,
+            r,
+            siblingRows.map(row => row.id),
+          )
+          : reservationFinancialSummary(
+            r,
+            order
+              ? allocateOrderReceiptToReservation(
+                calculateReceivedAmount(order.id, siblingRows.map(row => row.id), paymentRows),
+                order.totalAmount,
+                r.totalValue,
+                r.id,
+                siblingRows,
+              )
+              : calculateReceivedAmount("", [r.id], paymentRows),
+            paymentRows,
+            order,
+          );
         const boardingPoints = Array.isArray(r.tripBoardingPoints) ? r.tripBoardingPoints : [];
         const boardingPoint = r.boardingLocationId
           ? boardingPoints.find((bp: { id: string; name: string; time: string; address: string }) => bp.id === r.boardingLocationId)
           : null;
         return {
           ...r,
-          totalValue: total,
-          paidValue: paid,
-          balance: Math.max(total - paid, 0),
+          totalValue: summary.totalAmount,
+          paidValue: summary.paidAmount,
+          balance: summary.amountRemaining,
+          financialSummary: summary,
           seatsCount: Array.isArray(r.seats) ? r.seats.length : 0,
           seats: undefined,
           boardingLocationId: undefined,
@@ -333,20 +391,13 @@ router.get("/client/me", async (req, res, next: NextFunction): Promise<void> => 
         };
       });
 
-      const totalSpentRows = await db
-        .select({ total: sql<string>`COALESCE(SUM(paid_value), '0')` })
-        .from(reservationsTable)
-        .where(
-          and(
-            eq(reservationsTable.clientId, client.id),
-            eq(reservationsTable.tenantId, me.tenantId),
-            inArray(reservationsTable.status, [
-              RESERVATION_STATUS.CONFIRMED,
-              RESERVATION_STATUS.COMPLETED,
-            ]),
-          ),
-        );
-      stats = { totalSpent: Number(totalSpentRows[0]?.total ?? 0) };
+      const paidIds = new Set<string>();
+      const totalSpent = paymentRows.reduce((sum, payment) => {
+        if (paidIds.has(payment.id) || payment.type !== "receivable" || payment.status !== "paid") return sum;
+        paidIds.add(payment.id);
+        return sum + Number(payment.amount);
+      }, 0);
+      stats = { totalSpent: Math.round(totalSpent * 100) / 100 };
 
       const refRows = await db
         .select({
@@ -1125,6 +1176,10 @@ router.get("/client/reservations/:id/voucher", async (req, res, next: NextFuncti
         voucherCode: reservationsTable.voucherCode,
         totalValue: reservationsTable.totalValue,
         paidValue: reservationsTable.paidValue,
+        balance: reservationsTable.balance,
+        depositAmount: reservationsTable.depositAmount,
+        discountTotal: reservationsTable.discountTotal,
+        storeOrderId: reservationsTable.storeOrderId,
         paymentMethod: reservationsTable.paymentMethod,
         createdAt: reservationsTable.createdAt,
         seats: reservationsTable.seats,
@@ -1148,6 +1203,54 @@ router.get("/client/reservations/:id/voucher", async (req, res, next: NextFuncti
 
     if (!row) {
       next(new NotFoundError("Reserva não encontrada", "NOT_FOUND"));
+      return;
+    }
+    const [order, siblingRows] = row.storeOrderId
+      ? await Promise.all([
+        db.select().from(storeOrdersTable).where(and(
+          eq(storeOrdersTable.tenantId, me.tenantId),
+          eq(storeOrdersTable.orderNumber, row.storeOrderId),
+        )).limit(1).then(result => result[0]),
+        db.select({ id: reservationsTable.id, totalValue: reservationsTable.totalValue }).from(reservationsTable).where(and(
+          eq(reservationsTable.tenantId, me.tenantId),
+          eq(reservationsTable.storeOrderId, row.storeOrderId),
+        )),
+      ])
+      : [undefined, [{ id: row.id }]];
+    const voucherPayments = await db.select({
+      orderId: paymentsTable.orderId,
+      reservationId: paymentsTable.reservationId,
+      amount: paymentsTable.amount,
+      status: paymentsTable.status,
+      type: paymentsTable.type,
+    }).from(paymentsTable).where(and(
+      eq(paymentsTable.tenantId, me.tenantId),
+      or(
+        ...(order ? [eq(paymentsTable.orderId, order.id)] : []),
+        eq(paymentsTable.reservationId, row.id),
+      ),
+    ));
+    const summary = order && siblingRows.length === 1
+      ? orderFinancialSummary(order, calculateReceivedAmount(order.id, [row.id], voucherPayments), voucherPayments, row, [row.id])
+      : reservationFinancialSummary(
+        row,
+        order
+          ? allocateOrderReceiptToReservation(
+            calculateReceivedAmount(order.id, siblingRows.map(sibling => sibling.id), voucherPayments),
+            order.totalAmount,
+            row.totalValue,
+            row.id,
+            siblingRows,
+          )
+          : calculateReceivedAmount("", [row.id], voucherPayments),
+        voucherPayments,
+        order,
+      );
+    if (!summary.reservationValid) {
+      next(new ConflictError(
+        "O voucher estará disponível quando a reserva estiver confirmada e o pagamento mínimo tiver sido recebido.",
+        "RESERVATION_NOT_VALID",
+      ));
       return;
     }
 
@@ -1176,9 +1279,9 @@ router.get("/client/reservations/:id/voucher", async (req, res, next: NextFuncti
     const passengerName = client.name ?? user?.name ?? "Passageiro";
     const agencyName = tenant?.name ?? "Agência";
     const primaryColor = tenant?.primaryColor ?? "#3B82F6";
-    const totalValue = Number(row.totalValue);
-    const paidValue = Number(row.paidValue);
-    const balance = Math.max(totalValue - paidValue, 0);
+    const totalValue = summary.totalAmount;
+    const paidValue = summary.paidAmount;
+    const balance = summary.amountRemaining;
     const seatsCount = Array.isArray(row.seats) ? row.seats.length : 0;
     const tripDepartureDate = row.tripDepartureDate
       ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(row.tripDepartureDate as unknown as Date)

@@ -10,7 +10,9 @@ import {
   useCreateOutboundMessage,
   useListOutboundMessages,
   useListOutboundProviderFailureSummary,
+  useReconcileOutboundDelivery,
   useRetryOutboundDelivery,
+  useRetryUnknownOutboundDelivery,
 } from "@workspace/api-client-react";
 import { useListClients } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
@@ -66,6 +68,7 @@ import type {
   OutboundMessage,
   OutboundDelivery,
   OutboundProviderFailureSummary,
+  OutboundReconciliationResult,
 } from "@workspace/api-client-react";
 import { QueryErrorState } from "@/components/query-error-state";
 
@@ -151,6 +154,7 @@ const outboundStatusLabels: Record<string, string> = {
   partial: "Falha parcial",
   failed: "Falhou",
   skipped: "Ignorado",
+  unknown: "Resultado desconhecido",
 };
 
 const outboundDeliveryStatusLabels: Record<string, string> = {
@@ -159,9 +163,10 @@ const outboundDeliveryStatusLabels: Record<string, string> = {
   accepted: "Aceita pelo provedor",
   failed: "Falha confirmada",
   skipped: "Ignorada",
+  unknown: "Resultado desconhecido",
 };
 
-type OutboundDeliveryFilterStatus = "all" | "pending" | "processing" | "accepted" | "failed" | "skipped";
+type OutboundDeliveryFilterStatus = "all" | "pending" | "processing" | "accepted" | "failed" | "skipped" | "unknown";
 type BounceTypeFilter = "all" | "permanent" | "temporary";
 const UNKNOWN_PROVIDER_FILTER = "__unknown__";
 const bounceTypeLabels: Record<Exclude<BounceTypeFilter, "all">, string> = {
@@ -215,6 +220,9 @@ export default function Communication() {
   const [historyAutomationId, setHistoryAutomationId] = useState("");
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [historyExporting, setHistoryExporting] = useState<"csv" | "pdf" | null>(null);
+  const [reconciliationDelivery, setReconciliationDelivery] = useState<OutboundDelivery | null>(null);
+  const [reconciliationResult, setReconciliationResult] = useState<OutboundReconciliationResult | null>(null);
+  const [reconciliationError, setReconciliationError] = useState<string | null>(null);
 
   const REFERRAL_EMAIL_RE = /bônus de indicação|indicação foi confirmada|indicação expirou|⏰|vence em \d+ dia/i;
 
@@ -386,6 +394,8 @@ export default function Communication() {
   const sendMessage = useSendMessage();
   const createOutboundMessage = useCreateOutboundMessage();
   const retryOutboundDelivery = useRetryOutboundDelivery();
+  const reconcileOutboundDelivery = useReconcileOutboundDelivery();
+  const retryUnknownOutboundDelivery = useRetryUnknownOutboundDelivery();
   const {
     data: outboundMessages,
     isLoading: loadingOutboundMessages,
@@ -645,6 +655,55 @@ export default function Communication() {
           : "Verifique a integração responsável e tente novamente.",
         variant: "destructive",
       });
+    }
+  };
+
+  const getMutationErrorMessage = (error: unknown, fallback: string) => {
+    const apiError = error as { response?: { data?: { error?: string } } };
+    return apiError.response?.data?.error ?? (error instanceof Error ? error.message : fallback);
+  };
+
+  const openReconciliation = (delivery: OutboundDelivery) => {
+    setReconciliationDelivery(delivery);
+    setReconciliationResult(null);
+    setReconciliationError(null);
+  };
+
+  const closeReconciliation = () => {
+    if (reconcileOutboundDelivery.isPending || retryUnknownOutboundDelivery.isPending) return;
+    setReconciliationDelivery(null);
+    setReconciliationResult(null);
+    setReconciliationError(null);
+  };
+
+  const handleReconciliation = async () => {
+    if (!reconciliationDelivery) return;
+    setReconciliationError(null);
+    setReconciliationResult(null);
+    try {
+      const result = await reconcileOutboundDelivery.mutateAsync({ deliveryId: reconciliationDelivery.id });
+      setReconciliationResult(result);
+      await refetchOutboundMessages();
+    } catch (error) {
+      setReconciliationError(getMutationErrorMessage(error, "Não foi possível consultar o provedor."));
+      await refetchOutboundMessages();
+    }
+  };
+
+  const handleRetryAfterReconciliation = async () => {
+    if (!reconciliationDelivery) return;
+    setReconciliationError(null);
+    try {
+      await retryUnknownOutboundDelivery.mutateAsync({ deliveryId: reconciliationDelivery.id });
+      toast({
+        title: "Entrega reenfileirada",
+        description: "O provedor confirmou que a mensagem não foi encontrada. Uma nova tentativa foi registrada.",
+      });
+      await refetchOutboundMessages();
+      closeReconciliation();
+    } catch (error) {
+      setReconciliationError(getMutationErrorMessage(error, "O reenvio continua bloqueado até uma confirmação segura."));
+      await refetchOutboundMessages();
     }
   };
 
@@ -974,6 +1033,77 @@ export default function Communication() {
           </>
         }
       />
+
+      <Dialog open={Boolean(reconciliationDelivery)} onOpenChange={(open) => { if (!open) closeReconciliation(); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Revisar resultado desconhecido</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-sm text-purple-950">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  O provedor pode ter aceitado esta mensagem mesmo sem responder. O sistema não enviará novamente
+                  enquanto não houver uma confirmação segura.
+                </p>
+              </div>
+            </div>
+            {reconciliationDelivery && (
+              <div className="rounded-lg border bg-muted/20 p-3 text-xs space-y-1">
+                <p><strong>Canal:</strong> WhatsApp · <strong>Provedor:</strong> {reconciliationDelivery.provider ?? "não identificado"}</p>
+                <p><strong>Destinatário:</strong> {reconciliationDelivery.recipient ?? "sem contato"}</p>
+                <p><strong>ID externo:</strong> {reconciliationDelivery.externalId ?? "não disponível"}</p>
+                <p><strong>Tentativa original:</strong> {reconciliationDelivery.attempts}</p>
+              </div>
+            )}
+            {reconciliationError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                {reconciliationError}
+              </div>
+            )}
+            {reconciliationResult && (
+              <div className={`rounded-lg border p-3 text-sm ${
+                reconciliationResult.outcome === "accepted"
+                  ? "border-green-200 bg-green-50 text-green-900"
+                  : reconciliationResult.outcome === "not_found"
+                    ? "border-amber-200 bg-amber-50 text-amber-950"
+                    : "border-slate-200 bg-slate-50 text-slate-900"
+              }`}>
+                <p className="font-medium">
+                  {reconciliationResult.outcome === "accepted"
+                    ? "O provedor confirmou que a mensagem foi aceita."
+                    : reconciliationResult.outcome === "not_found"
+                      ? "O provedor não encontrou a mensagem."
+                      : reconciliationResult.outcome === "unsupported"
+                        ? "Este provedor não permite consulta por ID."
+                        : "A consulta não foi conclusiva."}
+                </p>
+                <p className="mt-1 text-xs opacity-80">
+                  {reconciliationResult.providerStatus
+                    ? `Status retornado: ${reconciliationResult.providerStatus}.`
+                    : reconciliationResult.detail ?? "Nenhum detalhe adicional foi retornado."}
+                </p>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={closeReconciliation} disabled={reconcileOutboundDelivery.isPending || retryUnknownOutboundDelivery.isPending}>
+                Fechar
+              </Button>
+              {!reconciliationResult && (
+                <Button type="button" onClick={() => { void handleReconciliation(); }} disabled={reconcileOutboundDelivery.isPending}>
+                  {reconcileOutboundDelivery.isPending ? "Consultando provedor..." : "Consultar provedor"}
+                </Button>
+              )}
+              {reconciliationResult?.canRetry && (
+                <Button type="button" variant="destructive" onClick={() => { void handleRetryAfterReconciliation(); }} disabled={retryUnknownOutboundDelivery.isPending}>
+                  {retryUnknownOutboundDelivery.isPending ? "Confirmando..." : "Confirmar e reenviar"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="w-full justify-start overflow-x-auto">
@@ -1556,7 +1686,7 @@ export default function Communication() {
                   <button className="w-full text-left p-3 hover:bg-muted/30" onClick={() => setExpandedHistoryId(expandedHistoryId === message.id ? null : message.id)}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="outline">{message.eventType}</Badge>
-                      <Badge className={message.status === "partial" ? "bg-orange-100 text-orange-800" : message.status === "failed" ? "bg-red-100 text-red-800" : "bg-green-100 text-green-800"}>{message.status === "partial" ? "Falha parcial" : message.status === "accepted" ? "Aceito" : statusLabels[message.status] ?? message.status}</Badge>
+                      <Badge className={message.status === "partial" ? "bg-orange-100 text-orange-800" : message.status === "failed" ? "bg-red-100 text-red-800" : message.status === "unknown" ? "bg-purple-100 text-purple-800" : "bg-green-100 text-green-800"}>{message.status === "partial" ? "Falha parcial" : message.status === "accepted" ? "Aceito" : message.status === "unknown" ? "Resultado desconhecido" : statusLabels[message.status] ?? message.status}</Badge>
                       <span className="text-sm font-medium">{message.recipientName ?? message.recipientId ?? "Destinatário não identificado"}</span>
                       <span className="text-xs text-muted-foreground ml-auto">{new Date(message.createdAt).toLocaleString("pt-BR")}</span>
                     </div>
@@ -1570,9 +1700,9 @@ export default function Communication() {
                             <Badge className={channelColors[delivery.channel]}>{delivery.channel === "email" ? "E-mail" : "WhatsApp"}</Badge>
                             <Badge
                               variant="outline"
-                              className={delivery.status === "failed" ? "border-red-300 bg-red-100 text-red-800" : delivery.status === "skipped" ? "border-amber-300 bg-amber-100 text-amber-800" : ""}
+                              className={delivery.status === "failed" ? "border-red-300 bg-red-100 text-red-800" : delivery.status === "skipped" ? "border-amber-300 bg-amber-100 text-amber-800" : delivery.status === "unknown" ? "border-purple-300 bg-purple-100 text-purple-800" : ""}
                             >
-                              {delivery.status === "accepted" ? "Aceito" : delivery.status === "skipped" ? "Ignorado" : delivery.status === "failed" ? "Falhou" : delivery.status === "processing" ? "Processando" : "Pendente"}
+                              {delivery.status === "accepted" ? "Aceito" : delivery.status === "skipped" ? "Ignorado" : delivery.status === "failed" ? "Falhou" : delivery.status === "unknown" ? "Resultado desconhecido" : delivery.status === "processing" ? "Processando" : "Pendente"}
                             </Badge>
                             {delivery.bounceType && (
                               <Badge
@@ -1586,6 +1716,11 @@ export default function Communication() {
                               {delivery.attempts} tentativa(s) · {delivery.recipient ?? "sem contato"}
                               {delivery.provider ? ` · ${delivery.provider}` : ""}
                             </span>
+                            {delivery.status === "unknown" && (
+                              <Button size="sm" variant="outline" className="ml-auto border-purple-300 text-purple-800 hover:bg-purple-50" onClick={() => openReconciliation(delivery)}>
+                                <AlertTriangle className="w-3.5 h-3.5 mr-1" /> Revisar com o provedor
+                              </Button>
+                            )}
                             {(delivery.status === "failed" || (delivery.status === "skipped" && delivery.skippedReason === "provider_unavailable")) && (
                               <Button size="sm" variant="outline" className="ml-auto" onClick={() => { void handleRetryDelivery(delivery); }} disabled={retryOutboundDelivery.isPending}>
                                 <RefreshCcw className="w-3.5 h-3.5 mr-1" /> Retry só deste canal

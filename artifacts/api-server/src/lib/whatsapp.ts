@@ -10,6 +10,18 @@ export interface WhatsAppSendResult {
   error?: string;
   provider?: "evolution" | "z-api";
   externalId?: string;
+  /** The provider may have accepted the message even though the response was lost. */
+  outcome?: "unknown";
+}
+
+export type WhatsAppReconciliationOutcome = "accepted" | "not_found" | "unsupported" | "inconclusive";
+
+export interface WhatsAppReconciliationResult {
+  outcome: WhatsAppReconciliationOutcome;
+  provider: "evolution" | "z-api" | "whatsapp";
+  externalId: string;
+  providerStatus?: string;
+  detail?: string;
 }
 
 /**
@@ -51,7 +63,10 @@ export async function sendWhatsAppMessage(
       return { success: false, error: `zapi_${resp.status}`, provider: "z-api" };
     }
 
-    const responseBody = await resp.json().catch(() => ({})) as Record<string, unknown>;
+    const parsedBody = await resp.json().catch(() => ({}));
+    const responseBody = parsedBody && typeof parsedBody === "object"
+      ? parsedBody as Record<string, unknown>
+      : {};
     const externalId = typeof responseBody.messageId === "string"
       ? responseBody.messageId
       : typeof responseBody.id === "string" ? responseBody.id : undefined;
@@ -60,7 +75,10 @@ export async function sendWhatsAppMessage(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn({ phone: e164, err: msg }, "[whatsapp] Network error");
-    return { success: false, error: msg, provider: "z-api" };
+    // Z-API's send-text endpoint does not document a native idempotency key.
+    // A timeout therefore cannot be retried safely: the provider may have
+    // accepted the message before the response was lost.
+    return { success: false, error: msg, provider: "z-api", outcome: "unknown" };
   }
 }
 
@@ -110,15 +128,38 @@ export async function sendTenantWhatsAppMessage(
         // This mirrors the protections applied by the save/test endpoints and
         // prevents a malicious tenant from using DNS rebinding to turn normal
         // WhatsApp sends into blind SSRF probes against internal services.
-        const result = await ssrfSafeFetchBounded(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", apikey: apiKey },
-          body: JSON.stringify({ number: e164, text: message }),
-          timeoutMs: 15_000,
-        });
+        let result;
+        try {
+          result = await ssrfSafeFetchBounded(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", apikey: apiKey },
+            body: JSON.stringify({ number: e164, text: message }),
+            timeoutMs: 15_000,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ phone: e164, tenantId, err: msg }, "[whatsapp] Evolution API network error");
+          // Evolution's sendText endpoint does not document a native
+          // idempotency key. Do not fall back to Z-API after the request may
+          // already have reached Evolution.
+          return { success: false, error: msg, provider: "evolution", outcome: "unknown" };
+        }
 
         if (result.ok) {
-          const responseBody = result.text ? JSON.parse(result.text) as Record<string, unknown> : {};
+          // A successful HTTP response is an accepted provider outcome even if
+          // the response body is empty or not JSON; never send through another
+          // provider merely because an external ID was not returned.
+          let responseBody: Record<string, unknown> = {};
+          if (result.text) {
+            try {
+              const parsedBody = JSON.parse(result.text);
+              if (parsedBody && typeof parsedBody === "object") {
+                responseBody = parsedBody as Record<string, unknown>;
+              }
+            } catch {
+              logger.warn({ phone: e164, tenantId }, "[whatsapp] Evolution API returned a non-JSON success response");
+            }
+          }
           const key = responseBody.key as Record<string, unknown> | undefined;
           const externalId = typeof key?.id === "string"
             ? key.id
@@ -132,12 +173,183 @@ export async function sendTenantWhatsAppMessage(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ phone, tenantId, err: msg }, "[whatsapp] Evolution API send failed, falling back");
+      logger.warn({ phone, tenantId, err: msg }, "[whatsapp] Evolution API configuration unavailable, falling back");
     }
   }
 
   // Fall back to global Z-API credentials
   return sendWhatsAppMessage(phone, message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function extractEvolutionRecords(body: unknown): unknown[] {
+  if (Array.isArray(body)) return body;
+  if (!isRecord(body)) return [];
+  const messages = body.messages;
+  if (Array.isArray(messages)) return messages;
+  if (isRecord(messages) && Array.isArray(messages.records)) return messages.records;
+  if (Array.isArray(body.records)) return body.records;
+  return [];
+}
+
+function recordExternalId(record: unknown): string | null {
+  if (!isRecord(record)) return null;
+  if (typeof record.id === "string") return record.id;
+  if (typeof record.messageId === "string") return record.messageId;
+  if (isRecord(record.key) && typeof record.key.id === "string") return record.key.id;
+  return null;
+}
+
+/**
+ * Checks whether a WhatsApp provider can confirm the result of a previously
+ * ambiguous send. This function never sends a message and deliberately treats
+ * provider errors as inconclusive rather than as proof that the message was
+ * not accepted.
+ */
+export async function reconcileTenantWhatsAppMessage(
+  tenantId: string,
+  provider: string,
+  externalId: string,
+  phone: string | null,
+): Promise<WhatsAppReconciliationResult> {
+  const normalizedExternalId = externalId.trim();
+  if (!normalizedExternalId) {
+    return {
+      outcome: "inconclusive",
+      provider: provider === "evolution" || provider === "z-api" ? provider : "whatsapp",
+      externalId: normalizedExternalId,
+      detail: "external_id_missing",
+    };
+  }
+
+  if (provider === "z-api") {
+    // Z-API documents delivery webhooks but not a message-history/status
+    // lookup. Its API also states that messages are not stored for querying.
+    return {
+      outcome: "unsupported",
+      provider: "z-api",
+      externalId: normalizedExternalId,
+      detail: "provider_status_lookup_unsupported",
+    };
+  }
+
+  if (provider !== "evolution") {
+    return {
+      outcome: "unsupported",
+      provider: "whatsapp",
+      externalId: normalizedExternalId,
+      detail: "provider_status_lookup_unsupported",
+    };
+  }
+
+  const [integration] = await db
+    .select()
+    .from(tenantIntegrationsTable)
+    .where(and(
+      eq(tenantIntegrationsTable.tenantId, tenantId),
+      eq(tenantIntegrationsTable.type, "whatsapp_evolution"),
+    ))
+    .limit(1);
+
+  if (!integration?.enabled || integration.status !== "connected" || !integration.secretsEncrypted) {
+    return {
+      outcome: "inconclusive",
+      provider: "evolution",
+      externalId: normalizedExternalId,
+      detail: "provider_credentials_unavailable",
+    };
+  }
+
+  try {
+    const secrets = JSON.parse(decryptCredential(integration.secretsEncrypted)) as Record<string, string>;
+    const config = (integration.config as Record<string, string>) ?? {};
+    const baseUrl = config.baseUrl?.trim();
+    const instanceName = config.instanceName?.trim();
+    const apiKey = secrets.apiKey?.trim();
+    if (!baseUrl || !instanceName || !apiKey) {
+      return {
+        outcome: "inconclusive",
+        provider: "evolution",
+        externalId: normalizedExternalId,
+        detail: "provider_configuration_incomplete",
+      };
+    }
+
+    const normalizedPhone = phone ? normalizeBrazilPhone(phone) : null;
+    const remoteJid = normalizedPhone ? `${normalizedPhone}@s.whatsapp.net` : undefined;
+    const encodedInstance = encodeURIComponent(instanceName);
+    const url = `${baseUrl.replace(/\/$/, "")}/chat/findMessages/${encodedInstance}`;
+    const result = await ssrfSafeFetchBounded(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: apiKey },
+      body: JSON.stringify({
+        where: {
+          key: {
+            id: normalizedExternalId,
+            ...(remoteJid ? { remoteJid } : {}),
+            fromMe: true,
+          },
+        },
+        limit: 10,
+      }),
+      timeoutMs: 15_000,
+    });
+
+    if (!result.ok) {
+      logger.warn({ tenantId, provider, status: result.status }, "[whatsapp] Evolution reconciliation failed");
+      return {
+        outcome: "inconclusive",
+        provider: "evolution",
+        externalId: normalizedExternalId,
+        detail: `provider_http_${result.status}`,
+      };
+    }
+
+    let body: unknown = {};
+    try {
+      body = result.text ? JSON.parse(result.text) : {};
+    } catch {
+      return {
+        outcome: "inconclusive",
+        provider: "evolution",
+        externalId: normalizedExternalId,
+        detail: "provider_invalid_response",
+      };
+    }
+
+    const matchingRecord = extractEvolutionRecords(body).find((record) => recordExternalId(record) === normalizedExternalId);
+    if (!matchingRecord) {
+      return {
+        outcome: "not_found",
+        provider: "evolution",
+        externalId: normalizedExternalId,
+        detail: "provider_message_not_found",
+      };
+    }
+
+    const status = isRecord(matchingRecord) && typeof matchingRecord.status === "string"
+      ? matchingRecord.status
+      : "message_found";
+    return {
+      outcome: "accepted",
+      provider: "evolution",
+      externalId: normalizedExternalId,
+      providerStatus: status,
+      detail: "provider_message_found",
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    logger.warn({ tenantId, provider, err: detail }, "[whatsapp] Evolution reconciliation unavailable");
+    return {
+      outcome: "inconclusive",
+      provider: "evolution",
+      externalId: normalizedExternalId,
+      detail: "provider_network_error",
+    };
+  }
 }
 
 /**

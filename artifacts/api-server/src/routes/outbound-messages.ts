@@ -5,14 +5,16 @@ import { applyPlugin } from "jspdf-autotable";
 import { db, auditLogsTable, OUTBOUND_BOUNCE_TYPES } from "@workspace/db";
 import { generateId } from "../lib/id";
 import { getClientIp } from "../lib/get-client-ip";
-import { requireAuth } from "../lib/tenant";
+import { ADMIN_ROLES, requireAuth } from "../lib/tenant";
 import { AppError, ValidationError } from "../lib/errors";
 import { MAX_EXPORT_ROWS } from "../lib/list-limits";
 import {
   dispatchOutboundMessage,
   listOutboundMessages,
   listOutboundProviderFailureSummary,
+  reconcileOutboundDelivery,
   retryOutboundDelivery,
+  retryUnknownOutboundDelivery,
 } from "../services/outbound-delivery";
 import { addOutboundClient, removeOutboundClient } from "../lib/outbound-sse";
 
@@ -111,8 +113,8 @@ function formatMessage(row: MessageForFormat) {
   };
 }
 
-const OUTBOUND_STATUSES = ["pending", "processing", "accepted", "partial", "failed", "skipped"] as const;
-const OUTBOUND_DELIVERY_STATUSES = ["pending", "processing", "accepted", "failed", "skipped"] as const;
+const OUTBOUND_STATUSES = ["pending", "processing", "accepted", "partial", "failed", "skipped", "unknown"] as const;
+const OUTBOUND_DELIVERY_STATUSES = ["pending", "processing", "accepted", "failed", "skipped", "unknown"] as const;
 const BRAZIL_TZ = "America/Sao_Paulo";
 
 type OutboundExportRow = [
@@ -176,6 +178,11 @@ function translateDeliveryDetail(value: string | null | undefined, channel: stri
     email_opted_out: "Destinatário não autorizou o recebimento de e-mails",
     whatsapp_opted_out: "Destinatário não autorizou o recebimento de WhatsApp",
     provider_unavailable: "Provedor indisponível",
+    delivery_result_unknown: "Resultado do provedor não confirmado; revisão manual necessária",
+    provider_message_not_found: "O provedor não encontrou a mensagem; revisão manual disponível para reenvio",
+    provider_reconciliation_inconclusive: "A consulta ao provedor não foi conclusiva; reenvio bloqueado",
+    provider_status_lookup_unsupported: "Este provedor não permite consulta segura por ID; reenvio bloqueado",
+    provider_reference_missing: "A referência do provedor não está disponível; reenvio bloqueado",
     provider_failed: "O provedor recusou o envio",
     send_failed: "Falha ao enviar",
     outbound_dispatch_failed: "Falha ao programar o envio",
@@ -442,6 +449,87 @@ router.get("/outbound-messages/provider-failure-summary", async (req, res, next:
     res.json(summary);
   } catch (error) {
     next(error);
+  }
+});
+
+function reconciliationError(error: unknown): AppError | null {
+  if (!(error instanceof Error)) return null;
+  const messages: Record<string, { message: string; status: number }> = {
+    delivery_not_found: {
+      message: "A entrega não foi encontrada neste espaço de trabalho.",
+      status: 404,
+    },
+    delivery_not_unknown: {
+      message: "Esta entrega já não está aguardando revisão. Atualize o histórico antes de tentar novamente.",
+      status: 409,
+    },
+    delivery_reconciliation_race: {
+      message: "Outro administrador já revisou esta entrega. Atualize o histórico para ver o resultado.",
+      status: 409,
+    },
+    delivery_reconciliation_unsupported: {
+      message: "Este provedor não oferece consulta de status por ID. Não é seguro liberar um reenvio automático.",
+      status: 422,
+    },
+    delivery_reconciliation_inconclusive: {
+      message: "O provedor não confirmou se a mensagem foi aceita. O reenvio continua bloqueado.",
+      status: 422,
+    },
+    delivery_already_accepted: {
+      message: "O provedor confirmou que a mensagem já foi aceita. Nenhum reenvio foi feito.",
+      status: 409,
+    },
+    delivery_reconciliation_audit_failed: {
+      message: "A revisão foi interrompida porque não foi possível gravar o registro de auditoria.",
+      status: 500,
+    },
+  };
+  const mapped = messages[error.message];
+  return mapped ? new AppError(mapped.message, mapped.status, error.message.toUpperCase()) : null;
+}
+
+async function requireReconciliationAdmin(req: Parameters<typeof requireAuth>[0], res: Parameters<typeof requireAuth>[1]) {
+  const me = await requireAuth(req, res);
+  if (!me) return null;
+  if (!ADMIN_ROLES.includes(me.role)) {
+    res.status(403).json({
+      error: "Forbidden: insufficient role",
+      code: "FORBIDDEN_ROLE",
+      message: "Somente administradores podem revisar entregas ambíguas.",
+      requestId: req.id ?? "unknown",
+    });
+    return null;
+  }
+  return me;
+}
+
+router.post("/outbound-messages/:deliveryId/reconcile", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireReconciliationAdmin(req, res);
+    if (!me) return;
+    const result = await reconcileOutboundDelivery(me.tenantId, req.params.deliveryId, {
+      userId: me.id,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers["user-agent"] ?? null,
+    });
+    res.json(result);
+  } catch (error) {
+    next(reconciliationError(error) ?? error);
+  }
+});
+
+router.post("/outbound-messages/:deliveryId/reconcile/retry", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireReconciliationAdmin(req, res);
+    if (!me) return;
+    const result = await retryUnknownOutboundDelivery(me.tenantId, req.params.deliveryId, {
+      userId: me.id,
+      ipAddress: getClientIp(req),
+      userAgent: req.headers["user-agent"] ?? null,
+    });
+    res.status(202).json(result);
+  } catch (error) {
+    next(reconciliationError(error) ?? error);
   }
 });
 

@@ -254,6 +254,7 @@ export interface SendReminderEmailOptions {
   subject: string;
   html: string;
   fromName: string;
+  idempotencyKey?: string;
 }
 
 export async function sendReminderHtmlEmail(opts: SendReminderEmailOptions): Promise<SendEmailResult> {
@@ -263,12 +264,15 @@ export async function sendReminderHtmlEmail(opts: SendReminderEmailOptions): Pro
       return { success: false, error: 'RESEND_API_KEY not configured' };
     }
 
-    const { data, error } = await resend.emails.send({
+    const payload = {
       from: `${opts.fromName} <reservas@resend.visitecrm.com>`,
       to: [opts.to],
       subject: opts.subject,
       html: opts.html,
-    });
+    };
+    const { data, error } = opts.idempotencyKey
+      ? await resend.emails.send(payload, { idempotencyKey: opts.idempotencyKey })
+      : await resend.emails.send(payload);
 
     if (error) {
       console.error('[email] Failed to send reminder email:', error);

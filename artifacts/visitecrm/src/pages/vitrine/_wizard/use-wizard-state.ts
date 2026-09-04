@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { useUser } from "@clerk/react";
 import { publicStoreApi, PublicStore, StoreProduct, CouponValidation, PartnerProductInfo, PublicApiError } from "@/lib/storeApi";
@@ -13,6 +13,7 @@ import {
 } from "@/lib/storefrontAttribution";
 import type { LayoutSeatMap, Step } from "./constants";
 import { CLICKABLE_SEAT_TYPES, STEP_ORDER } from "./constants";
+import type { FinancialSummary } from "@/lib/linked-data";
 
 export type WizardForm = {
   customerName: string;
@@ -41,6 +42,8 @@ export type CompletedOrder = {
   orderNumber: string;
   totalAmount: string;
   createdAt: string;
+  paymentStatus?: string | null;
+  status?: string | null;
   reservationExpiresAt?: string | null;
   depositAmount?: string | null;
   paidAmount?: number | string | null;
@@ -48,6 +51,7 @@ export type CompletedOrder = {
   pixQrCode?: string | null;
   pixQrCodeUrl?: string | null;
   pixCopyPaste?: string | null;
+  financialSummary: FinancialSummary;
 };
 
 export type WizardSelectedVariant = { variantName: string; label: string; price: number };
@@ -73,6 +77,7 @@ export function useWizardState({
   const [completedOrder, setCompletedOrder] = useState<CompletedOrder | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
   const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
+  const checkoutIdempotencyKeyRef = useRef<string | null>(null);
 
   const [form, setFormState] = useState<WizardForm>({
     customerName: "",
@@ -405,6 +410,51 @@ export function useWizardState({
     return !!form.paymentMethod;
   }
 
+  function getCheckoutIdempotencyKey(): string {
+    if (checkoutIdempotencyKeyRef.current) return checkoutIdempotencyKeyRef.current;
+
+    const storageKey = `vitrine_checkout_idempotency:${slug}:${productSlug}`;
+    const now = Date.now();
+    try {
+      const stored = sessionStorage.getItem(storageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored) as { key?: unknown; createdAt?: unknown };
+        if (
+          typeof parsed.key === "string" &&
+          parsed.key.length > 0 &&
+          typeof parsed.createdAt === "number" &&
+          now - parsed.createdAt < 45 * 60 * 1000
+        ) {
+          checkoutIdempotencyKeyRef.current = parsed.key;
+          return parsed.key;
+        }
+      }
+    } catch {
+      // Storage is optional; the in-memory key still protects normal retries.
+    }
+
+    const generated =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    checkoutIdempotencyKeyRef.current = generated;
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify({ key: generated, createdAt: now }));
+    } catch {
+      // Storage is optional.
+    }
+    return generated;
+  }
+
+  function clearCheckoutIdempotencyKey() {
+    checkoutIdempotencyKeyRef.current = null;
+    try {
+      sessionStorage.removeItem(`vitrine_checkout_idempotency:${slug}:${productSlug}`);
+    } catch {
+      // Storage is optional.
+    }
+  }
+
   async function submit() {
     if (!product) return;
     setSubmitting(true);
@@ -447,6 +497,7 @@ export function useWizardState({
         }));
 
       const order = await publicStoreApi.createOrder(slug, {
+        idempotencyKey: getCheckoutIdempotencyKey(),
         customerName: form.customerName,
         customerEmail: form.customerEmail,
         customerPhone: form.customerPhone || undefined,
@@ -481,13 +532,17 @@ export function useWizardState({
         orderNumber: order.orderNumber,
         totalAmount: order.totalAmount,
         createdAt: order.createdAt,
+        paymentStatus: order.paymentStatus ?? null,
+        status: order.status ?? null,
         reservationExpiresAt: order.reservationExpiresAt,
         depositAmount: order.depositAmount ?? null,
         amountRemaining: order.amountRemaining ?? null,
         pixQrCode: order.pixQrCode ?? null,
         pixQrCodeUrl: order.pixQrCodeUrl ?? null,
         pixCopyPaste: order.pixCopyPaste ?? null,
+        financialSummary: order.financialSummary,
       });
+      clearCheckoutIdempotencyKey();
       const tok = order.paymentToken as string | null ?? null;
       if (tok) {
         try {

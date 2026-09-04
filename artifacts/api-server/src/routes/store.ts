@@ -8,6 +8,7 @@ import {
   storeOrderItemsTable,
   storeCouponsTable,
   storeReviewsTable,
+  tenantsTable,
   paymentsTable,
   pipelineStagesTable,
   dealsTable,
@@ -35,7 +36,15 @@ import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../s
 import { encryptCredential } from "../lib/crypto";
 import { sendPriceDropAlertEmail } from "../queues/email-helpers";
 import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
-import { calculateReceivedAmount, linkedReferral, linkedReservation, linkedOrder } from "../lib/linked-data";
+import {
+  calculateReceivedAmount,
+  allocateOrderReceiptToReservation,
+  linkedReferral,
+  linkedReservation,
+  linkedOrder,
+  orderFinancialSummary,
+  reservationFinancialSummary,
+} from "../lib/linked-data";
 import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
 import { roundMoney } from "../lib/pricing";
 
@@ -185,6 +194,7 @@ const StoreSettingsBody = z.object({
   installmentFee: z.string().nullish(),
   minOrderValue: z.string().nullish(),
   minDepositAmount: z.string().nullish(),
+  pixQrDeliveryMode: z.enum(["screen", "email", "whatsapp", "all"]).optional(),
   paymentMethods: z.array(z.string()).optional(),
   stripeEnabled: z.boolean().optional(),
   stripePublicKey: z.string().nullish(),
@@ -209,6 +219,23 @@ const StoreSettingsBody = z.object({
   maintenanceMode: z.boolean().optional(),
   maintenanceMessage: z.string().nullish(),
 });
+
+const PIX_QR_DELIVERY_MODES = ["screen", "email", "whatsapp", "all"] as const;
+type PixQrDeliveryMode = typeof PIX_QR_DELIVERY_MODES[number];
+
+function normalizePixQrDeliveryMode(value: unknown): PixQrDeliveryMode {
+  return PIX_QR_DELIVERY_MODES.includes(value as PixQrDeliveryMode)
+    ? value as PixQrDeliveryMode
+    : "screen";
+}
+
+async function getPixQrDeliveryMode(tenantId: string): Promise<PixQrDeliveryMode> {
+  const [tenant] = await db.select({ settings: tenantsTable.settings })
+    .from(tenantsTable)
+    .where(eq(tenantsTable.id, tenantId))
+    .limit(1);
+  return normalizePixQrDeliveryMode((tenant?.settings as Record<string, unknown> | null | undefined)?.pixQrDeliveryMode);
+}
 
 const CategoryBody = z.object({
   name: z.string().min(1),
@@ -338,7 +365,10 @@ router.get("/store/settings", async (req, res, next: NextFunction): Promise<void
     const store = await getStoreForTenant(me.tenantId);
     if (!store) { next(new NotFoundError("Store not found", "NOT_FOUND")); return; }
     res.setHeader("Cache-Control", "no-store, max-age=0");
-    res.json(redactStore(store as unknown as Record<string, unknown>));
+    res.json({
+      ...redactStore(store as unknown as Record<string, unknown>),
+      pixQrDeliveryMode: await getPixQrDeliveryMode(me.tenantId),
+    });
   } catch (err) {
     next(err);
   }
@@ -354,7 +384,8 @@ router.put("/store/settings", async (req, res, next: NextFunction): Promise<void
     const existingStore = await getStoreForTenant(me.tenantId);
     if (!existingStore) {
       const id = generateId();
-      const data = applyCredentialEncryption(parsed.data as Record<string, unknown>);
+      const { pixQrDeliveryMode, ...storeSettings } = parsed.data;
+      const data = applyCredentialEncryption(storeSettings as Record<string, unknown>);
       await db.insert(storesTable).values({
         id,
         tenantId: me.tenantId,
@@ -363,15 +394,40 @@ router.put("/store/settings", async (req, res, next: NextFunction): Promise<void
         email: (data["email"] as string) || me.email,
         ...data,
       });
+      if (pixQrDeliveryMode !== undefined) {
+        const [tenant] = await db.select({ settings: tenantsTable.settings })
+          .from(tenantsTable)
+          .where(eq(tenantsTable.id, me.tenantId))
+          .limit(1);
+        const currentSettings = (tenant?.settings ?? {}) as Record<string, unknown>;
+        await db.update(tenantsTable)
+          .set({ settings: { ...currentSettings, pixQrDeliveryMode } })
+          .where(eq(tenantsTable.id, me.tenantId));
+      }
       const [newStore] = await db.select().from(storesTable).where(eq(storesTable.id, id)).limit(1);
       res.setHeader("Cache-Control", "no-store, max-age=0");
-      res.status(201).json(redactStore(newStore as unknown as Record<string, unknown>));
+      res.status(201).json({
+        ...redactStore(newStore as unknown as Record<string, unknown>),
+        pixQrDeliveryMode: await getPixQrDeliveryMode(me.tenantId),
+      });
       return;
     }
 
-    const updates = applyCredentialEncryption(parsed.data as Record<string, unknown>);
+    const { pixQrDeliveryMode, ...storeSettings } = parsed.data;
+    const updates = applyCredentialEncryption(storeSettings as Record<string, unknown>);
     await db.update(storesTable).set(updates)
       .where(eq(storesTable.tenantId, me.tenantId));
+
+    if (pixQrDeliveryMode !== undefined) {
+      const [tenant] = await db.select({ settings: tenantsTable.settings })
+        .from(tenantsTable)
+        .where(eq(tenantsTable.id, me.tenantId))
+        .limit(1);
+      const currentSettings = (tenant?.settings ?? {}) as Record<string, unknown>;
+      await db.update(tenantsTable)
+        .set({ settings: { ...currentSettings, pixQrDeliveryMode } })
+        .where(eq(tenantsTable.id, me.tenantId));
+    }
 
     const d = parsed.data;
     await Promise.all([
@@ -385,7 +441,10 @@ router.put("/store/settings", async (req, res, next: NextFunction): Promise<void
     const [updated] = await db.select().from(storesTable)
       .where(eq(storesTable.tenantId, me.tenantId)).limit(1);
     res.setHeader("Cache-Control", "no-store, max-age=0");
-    res.json(redactStore(updated as unknown as Record<string, unknown>));
+    res.json({
+      ...redactStore(updated as unknown as Record<string, unknown>),
+      pixQrDeliveryMode: await getPixQrDeliveryMode(me.tenantId),
+    });
   } catch (err) {
     next(err);
   }
@@ -773,12 +832,33 @@ router.get("/store/orders", async (req, res, next: NextFunction): Promise<void> 
         orderReservations.map(reservation => reservation.id),
         paymentRows,
       );
+      const summary = orderFinancialSummary(
+        order,
+        paidAmount,
+        paymentRows,
+        orderReservations.length === 1 ? orderReservations[0] : null,
+        orderReservations.map(reservation => reservation.id),
+      );
       return {
         ...order,
         paidAmount,
         amountRemaining: Math.max(0, Number(order.totalAmount) - paidAmount).toFixed(2),
-        linkedOrder: linkedOrder(order, { paidAmount }),
-        linkedReservations: orderReservations.map(linkedReservation),
+        financialSummary: summary,
+        linkedOrder: linkedOrder(order, {
+          paidAmount,
+          payments: paymentRows,
+          reservation: orderReservations.length === 1 ? orderReservations[0] : null,
+          reservationIds: orderReservations.map(reservation => reservation.id),
+        }),
+        linkedReservations: orderReservations.map(reservation => linkedReservation(
+          reservation,
+          reservationFinancialSummary(
+            reservation,
+            allocateOrderReceiptToReservation(paidAmount, order.totalAmount, reservation.totalValue, reservation.id, orderReservations),
+            paymentRows,
+            order,
+          ),
+        )),
         linkedReferral: linkedReferral(referralRows.find(r => orderReservations.some(x => x.id === r.reservationId))),
         linkedDeals: linkedDeals.filter(d => orderReservations.some(r => r.id === d.reservationId)).map(d => ({
           id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value),
@@ -862,13 +942,34 @@ router.get("/store/orders/:id", async (req, res, next: NextFunction): Promise<vo
       reservations.map(reservation => reservation.id),
       paymentRows,
     );
+    const summary = orderFinancialSummary(
+      order,
+      paidAmount,
+      paymentRows,
+      reservations.length === 1 ? reservations[0] : null,
+      reservations.map(reservation => reservation.id),
+    );
     res.json({
       ...safeOrder,
       paidAmount,
       amountRemaining: Math.max(0, Number(order.totalAmount) - paidAmount).toFixed(2),
+      financialSummary: summary,
       items,
-      linkedOrder: linkedOrder(order, { paidAmount }),
-      linkedReservations: reservations.map(linkedReservation),
+      linkedOrder: linkedOrder(order, {
+        paidAmount,
+        payments: paymentRows,
+        reservation: reservations.length === 1 ? reservations[0] : null,
+        reservationIds: reservations.map(reservation => reservation.id),
+      }),
+      linkedReservations: reservations.map(reservation => linkedReservation(
+        reservation,
+        reservationFinancialSummary(
+          reservation,
+          allocateOrderReceiptToReservation(paidAmount, order.totalAmount, reservation.totalValue, reservation.id, reservations),
+          paymentRows,
+          order,
+        ),
+      )),
       linkedReferral: linkedReferral(referrals[0]),
       linkedDeals: linkedDeals.map(d => ({ id: d.id, tripId: d.tripId, reservationId: d.reservationId, stageId: d.stageId, status: d.status, source: d.source ?? "manual", value: Number(d.value) })),
     });

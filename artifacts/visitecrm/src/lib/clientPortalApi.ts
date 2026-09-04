@@ -1,3 +1,5 @@
+import type { FinancialSummary } from "@/lib/linked-data";
+
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 export interface ClientPortalReservation {
@@ -8,6 +10,7 @@ export interface ClientPortalReservation {
   totalValue: number;
   paidValue: number;
   balance: number;
+  financialSummary: FinancialSummary;
   seatsCount: number;
   paymentMethod: string | null;
   storeOrderId: string | null;

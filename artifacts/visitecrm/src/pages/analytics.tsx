@@ -285,7 +285,7 @@ export default function Analytics() {
     <div className="space-y-6">
       <PageHeader
         title="Analíticos"
-        description="Desempenho e receita da agência"
+        description={`Vendido, recebido e a receber · período ${financialMetrics?.period.label ?? "selecionado"} · fonte: núcleo financeiro`}
         actions={
           <>
           <Link href="/analytics/revenue">
@@ -307,14 +307,14 @@ export default function Analytics() {
       />
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-        <KpiCard icon={DollarSign} label="Receita Recebida" value={fmtCompact(financialMetrics?.totals.receivedRevenue ?? 0)} sub="Caixa recebido no mês atual (BRT)" color="text-green-600" loading={isLoading || financialMetricsLoading} />
+        <KpiCard icon={DollarSign} label="Recebido no período" value={fmtCompact(financialMetrics?.totals.receivedRevenue ?? 0)} sub={`Pagamentos confirmados · ${financialMetrics?.period.label ?? "período selecionado"} (BRT)`} color="text-green-600" loading={isLoading || financialMetricsLoading} />
         <KpiCard icon={TrendingUp} label="Lucro Líquido" value={fmtCompact(financialMetrics?.totals.profit ?? 0)} sub={`Custos pagos: ${fmtCompact(financialMetrics?.totals.operatingCostsPaid ?? 0)}`} color={(financialMetrics?.totals.profit ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"} loading={isLoading || financialMetricsLoading} />
         <KpiCard icon={CalendarCheck} label="Total de Reservas" value={String(summary?.totalReservations ?? 0)} sub={`${summary?.confirmedReservations ?? 0} confirmadas`} color="text-blue-600" loading={isLoading} />
-        <KpiCard icon={Target} label="Ticket Medio" value={fmtCompact(avgTicket)} sub="por reserva" color="text-purple-600" loading={isLoading} />
+        <KpiCard icon={Target} label="Vendido no período" value={fmtCompact(financialMetrics?.totals.bookedRevenue ?? 0)} sub={`Total líquido contratado · ${financialMetrics?.period.label ?? "período selecionado"}`} color="text-purple-600" loading={isLoading || financialMetricsLoading} />
         <KpiCard icon={TrendingUp} label="Taxa de Conversao" value={`${conversionRate.toFixed(1)}%`} sub="Reservas / Negocios" color="text-orange-600" loading={isLoading} />
         <KpiCard icon={Users} label="Total de Clientes" value={String(summary?.totalClients ?? 0)} sub={`+${summary?.newClientsThisMonth ?? 0} este mes`} color="text-teal-600" loading={isLoading} />
         <KpiCard icon={MapPin} label="Viagens Ativas" value={String(summary?.activeTrips ?? 0)} sub={`${summary?.occupancyRate?.toFixed(1) ?? 0}% ocupacao media`} color="text-indigo-600" loading={isLoading} />
-        <KpiCard icon={BarChart2} label="A Receber" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Vencido: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading} />
+        <KpiCard icon={BarChart2} label="A receber no período" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Recebíveis com vencimento no período · vencido: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading} />
       </div>
 
       <FinancialMetricsOverview />
@@ -332,7 +332,7 @@ export default function Analytics() {
             <Card className="md:col-span-2">
               <CardHeader className="pb-2">
                 <CardTitle className="text-base flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4" /> Evolucao de Receita
+                  <TrendingUp className="w-4 h-4" /> Evolução de valor vendido
                 </CardTitle>
               </CardHeader>
               <CardContent>

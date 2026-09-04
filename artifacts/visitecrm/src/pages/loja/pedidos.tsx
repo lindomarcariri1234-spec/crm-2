@@ -64,6 +64,15 @@ const PAYMENT_STATUSES = [
   { value: STORE_PAYMENT_STATUS.FAILED, label: "Falhou" },
 ];
 
+const CANONICAL_PAYMENT_LABELS: Record<string, string> = {
+  pending: "Pendente",
+  partially_paid: "Parcialmente pago",
+  paid: "Pago",
+  failed: "Falhou",
+  refunded: "Estornado",
+  cancelled: "Cancelado",
+};
+
 const FULFILLMENT_STATUSES = [
   { value: "unfulfilled", label: "Não Enviado" },
   { value: "partial", label: "Parcial" },
@@ -181,6 +190,7 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
   }
 
   if (!order) return null;
+  const summary = order.financialSummary;
 
   return (
     <div className="space-y-5 max-h-[75vh] overflow-y-auto pr-1">
@@ -217,12 +227,12 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
           <CardContent className="space-y-1">
             <div className="flex justify-between text-sm">
               <span>Subtotal (base)</span>
-              <span>R$ {parseFloat(order.subtotal).toFixed(2)}</span>
+              <span>{money(summary.subtotal)}</span>
             </div>
-            {parseFloat(order.discountAmount) > 0 && (
+            {summary.discountAmount > 0 && (
               <div className="flex justify-between text-sm text-green-600">
                 <span>Desconto {order.couponCode && `(${order.couponCode})`}</span>
-                <span>- R$ {parseFloat(order.discountAmount).toFixed(2)}</span>
+                <span>- {money(summary.discountAmount)}</span>
               </div>
             )}
             {order.taxAmount && parseFloat(order.taxAmount) > 0 && (
@@ -233,24 +243,33 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
             )}
             <div className="flex justify-between font-bold border-t pt-1 mt-1">
               <span>Total</span>
-              <span>R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
+              <span>{money(summary.totalAmount)}</span>
             </div>
-            {order.depositAmount && Number(order.depositAmount) > 0 && (
+            {summary.depositRequested > 0 && (
               <>
                 <div className="flex justify-between text-sm text-blue-700 pt-1">
                   <span>Entrada solicitada</span>
-                  <span className="font-semibold">R$ {parseFloat(order.depositAmount).toFixed(2)}</span>
+                  <span className="font-semibold">{money(summary.depositRequested)}</span>
                 </div>
               </>
             )}
             <div className="flex justify-between text-sm text-green-700">
               <span>Pagamento recebido</span>
-              <span className="font-semibold">R$ {Number(order.paidAmount ?? 0).toFixed(2)}</span>
+              <span className="font-semibold">{money(summary.paidAmount)}</span>
             </div>
             <div className="flex justify-between text-sm text-amber-700">
               <span>Saldo</span>
-              <span className="font-semibold">R$ {parseFloat(order.amountRemaining ?? order.totalAmount).toFixed(2)}</span>
+              <span className="font-semibold">{money(summary.amountRemaining)}</span>
             </div>
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Estado financeiro</span>
+              <span>{CANONICAL_PAYMENT_LABELS[summary.states.payment] ?? summary.states.payment}</span>
+            </div>
+            {summary.diagnostics.hasLegacyDivergence && (
+              <p className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                Divergência legada detectada; valores acima vêm do resumo canônico.
+              </p>
+            )}
             <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
               <p>Pagamento: {PAYMENT_METHODS[order.paymentMethod ?? ""] ?? order.paymentMethod ?? "Não informado"}</p>
               {order.installments && order.installments > 1 && (
@@ -677,9 +696,9 @@ export default function LojaPedidos() {
                       </div>
                     </TableCell>
                     <TableCell className="font-medium text-sm">
-                      <div data-testid={`text-order-total-${order.id}`}>{money(order.totalAmount)}</div>
-                      <div className="text-xs text-muted-foreground">Base {money(order.subtotal)} · Desc. {money(order.discountAmount)}</div>
-                      <div className="text-xs text-muted-foreground">Pago {money(order.paidAmount)} · Saldo {money(order.amountRemaining ?? order.totalAmount)}</div>
+                      <div data-testid={`text-order-total-${order.id}`}>{money(order.financialSummary.totalAmount)}</div>
+                      <div className="text-xs text-muted-foreground">Subtotal {money(order.financialSummary.subtotal)} · Desconto {money(order.financialSummary.discountAmount)}</div>
+                      <div className="text-xs text-muted-foreground">Recebido {money(order.financialSummary.paidAmount)} · Saldo {money(order.financialSummary.amountRemaining)}</div>
                     </TableCell>
                     <TableCell className="text-xs">
                       {order.linkedReservations?.length ? (
@@ -699,7 +718,7 @@ export default function LojaPedidos() {
                     </TableCell>
                     <TableCell>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${paymentColor(order.paymentStatus, order.paymentMethod)}`}>
-                        {paymentLabel(order.paymentStatus, order.paymentMethod)}
+                        {CANONICAL_PAYMENT_LABELS[order.financialSummary.states.payment] ?? paymentLabel(order.paymentStatus, order.paymentMethod)}
                       </span>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">

@@ -110,18 +110,14 @@ export function StepConfirmation({
     selectedBoardingPointId,
   } = state;
   if (!product || !completedOrder) return null;
-  const totalAmt = parseFloat(completedOrder.totalAmount);
-  // depositAmt: any positive value returned by the server (includes the case
-  // where deposit === total, which means fully paid via the deposit path).
-  const depositAmt =
-    completedOrder.depositAmount && Number(completedOrder.depositAmount) > 0
-      ? Number(completedOrder.depositAmount)
-      : null;
-  const paidAmt = Number(completedOrder.paidAmount ?? 0);
-  const remainingAmt = Math.max(
-    0,
-    Number(completedOrder.amountRemaining ?? totalAmt - paidAmt),
-  );
+  const summary = completedOrder.financialSummary;
+  const totalAmt = summary.totalAmount;
+  const depositAmt = summary.depositRequested > 0 ? summary.depositRequested : null;
+  const paidAmt = summary.paidAmount;
+  const isFullyPaid = summary.states.payment === "paid";
+  const isPartiallyPaid = summary.states.payment === "partially_paid";
+  const reservationValid = summary.reservationValid;
+  const remainingAmt = summary.amountRemaining;
   const startDate = product.departureDate ?? product.startDate;
   const boardingPoints = (product.boardingPoints ?? []).filter((bp) => bp.name);
   const selectedBoardingPoint =
@@ -153,18 +149,20 @@ export function StepConfirmation({
             </div>
           </div>
           <h2 className="text-3xl font-bold text-green-900 mb-2">
-            {paidAmt > 0
+            {reservationValid
               ? "Reserva Confirmada! 🎉"
-              : form.paymentMethod === "pix"
-                ? "Pedido Realizado! 🎉"
+              : isPartiallyPaid
+                ? "Pagamento Parcial Recebido"
                 : "Pedido Realizado! 🎉"}
           </h2>
           <p className="text-lg text-green-800 mb-6">
-            {paidAmt > 0
+            {reservationValid
               ? "Seu pagamento foi confirmado e a reserva está válida."
-              : form.paymentMethod === "pix"
-                ? "Seu pedido foi criado! Complete o pagamento via PIX para confirmar sua reserva."
-                : "Seu pedido foi criado. Confirme o pagamento para validar a reserva."}
+              : isPartiallyPaid
+                ? "Uma parte do pagamento foi confirmada. A reserva ainda aguarda atingir o mínimo exigido e ser confirmada."
+                : form.paymentMethod === "pix"
+                  ? "Seu pedido foi criado! Complete o pagamento via PIX para confirmar sua reserva."
+                  : "Seu pedido foi criado. Confirme o pagamento para validar a reserva."}
           </p>
           <div className="inline-flex items-center gap-2 bg-white px-6 py-3 rounded-xl shadow-sm border border-green-200">
             <Ticket className="w-5 h-5 text-green-600" />
@@ -340,6 +338,12 @@ export function StepConfirmation({
               </p>
             </div>
           </div>
+          {depositAmt !== null && depositAmt < totalAmt && (
+            <div className="flex justify-between text-sm border-t pt-3 mb-4">
+              <span className="text-muted-foreground">Entrada solicitada</span>
+              <span className="font-semibold text-amber-700">R$ {depositAmt.toFixed(2)}</span>
+            </div>
+          )}
           {(referralApplied && referralDiscount > 0) || couponDiscount > 0 ? (
             <div className="space-y-1 text-sm text-green-700 border border-green-200 bg-green-50 rounded-xl px-4 py-3">
               {referralApplied && referralDiscount > 0 && (
@@ -416,7 +420,7 @@ export function StepConfirmation({
           </div>
         </div>
 
-        <Voucher
+          <Voucher
           order={completedOrder}
           product={product}
           store={store}
@@ -428,12 +432,7 @@ export function StepConfirmation({
           referralDiscountPct={referralDiscountPct}
           couponDiscount={couponDiscount}
           couponCode={couponResult?.code}
-          isConfirmed={
-            paidAmt > 0
-          }
-          depositAmount={completedOrder.depositAmount}
-          paidAmount={paidAmt}
-          amountRemaining={remainingAmt.toFixed(2)}
+          financialSummary={summary}
         />
 
         <div className="rounded-2xl p-6 text-center border-2 print:hidden"

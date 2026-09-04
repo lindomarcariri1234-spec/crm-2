@@ -42,6 +42,22 @@ describe("Replit Resend connector transport", () => {
     });
   });
 
+  it("forwards the stable idempotency key to the Resend connector", async () => {
+    mockProxy.mockResolvedValue(new Response(JSON.stringify({ id: "email_idempotent" }), { status: 200 }));
+
+    await createConnectorResend({ proxy: mockProxy }).emails.send(
+      { ...message, html: "<p>Hello</p>" },
+      { idempotencyKey: "outbound:tenant-a:delivery-1" },
+    );
+
+    expect(mockProxy).toHaveBeenCalledWith("resend", "/emails", expect.objectContaining({
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": "outbound:tenant-a:delivery-1",
+      },
+    }));
+  });
+
   it("returns the provider's error message instead of throwing", async () => {
     mockProxy.mockResolvedValue(
       new Response(JSON.stringify({ message: "The sender domain is not verified" }), { status: 403 }),

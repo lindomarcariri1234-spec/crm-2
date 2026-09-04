@@ -220,7 +220,7 @@ function ReservationCard({
                 )}
                 <div>
                   <p className="text-muted-foreground text-xs">Total</p>
-                  <p className="font-medium">{fmtCurrency(r.totalValue)}</p>
+                  <p className="font-medium">{fmtCurrency(r.financialSummary.totalAmount)}</p>
                 </div>
               </div>
             )}
@@ -233,7 +233,7 @@ function ReservationCard({
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Total</p>
-                  <p className="font-medium">{fmtCurrency(r.totalValue)}</p>
+                  <p className="font-medium">{fmtCurrency(r.financialSummary.totalAmount)}</p>
                 </div>
               </div>
             )}
@@ -264,13 +264,13 @@ function ReservationCard({
                   </span>
                 </div>
               )}
-              {r.balance > 0 && (
+              {r.financialSummary.amountRemaining > 0 && (
                 <div className="flex items-center gap-1.5 text-xs bg-orange-50 border border-orange-200 text-orange-700 rounded px-2 py-1">
                   <AlertCircle className="w-3 h-3" />
-                  <span>Saldo pendente: {fmtCurrency(r.balance)}</span>
+                  <span>Saldo pendente: {fmtCurrency(r.financialSummary.amountRemaining)}</span>
                 </div>
               )}
-              {r.balance > 0 && onRedeemClick && (
+              {r.financialSummary.amountRemaining > 0 && onRedeemClick && (
                 <button
                   onClick={onRedeemClick}
                   className="flex items-center gap-1.5 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded px-2 py-1 hover:bg-amber-100 transition-colors"
@@ -281,7 +281,7 @@ function ReservationCard({
               )}
             </div>
 
-            <div className="mt-3">
+            {r.financialSummary.reservationValid && <div className="mt-3">
               <Button
                 variant="outline"
                 size="sm"
@@ -296,7 +296,7 @@ function ReservationCard({
                 )}
                 {downloading ? "Gerando..." : "Baixar comprovante"}
               </Button>
-            </div>
+            </div>}
           </div>
         </div>
       </CardContent>
@@ -1163,7 +1163,7 @@ function InicioTab({
   const loyaltyPoints = profile.loyalty?.availablePoints ?? null;
 
   const pendingBalance = profile.reservations.filter(
-    (r) => r.balance > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
+    (r) => r.financialSummary.amountRemaining > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
   );
 
   // 30 days ago in Brazil timezone (today is already Brazil date)
@@ -1468,7 +1468,7 @@ function ReservasTab({
 
   const redeemReservation = all.find((r) => r.id === redeemReservationId);
   const maxRedeemPoints = redeemReservation && loyalty
-    ? Math.min(loyalty.availablePoints, Math.ceil(redeemReservation.balance / loyalty.realPerPoint))
+    ? Math.min(loyalty.availablePoints, Math.ceil(redeemReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
     : 0;
   const redeemPointsNum = parseInt(redeemPoints, 10) || 0;
   const estimatedDiscount = loyalty ? redeemPointsNum * loyalty.realPerPoint : 0;
@@ -1531,7 +1531,7 @@ function ReservasTab({
 
   if (filter === "com-saldo") {
     const withBalance = all.filter(
-      (r) => r.balance > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
+      (r) => r.financialSummary.amountRemaining > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
     );
     return (
       <>
@@ -1564,7 +1564,7 @@ function ReservasTab({
                 <ReservationCard
                   key={r.id}
                   r={r}
-                  onRedeemClick={canRedeem ? () => openRedeem(r.id, r.balance) : undefined}
+                  onRedeemClick={canRedeem ? () => openRedeem(r.id, r.financialSummary.amountRemaining) : undefined}
                 />
               ))}
             </div>
@@ -1587,7 +1587,7 @@ function ReservasTab({
               <ReservationCard
                 key={r.id}
                 r={r}
-                onRedeemClick={canRedeem && r.balance > 0 ? () => openRedeem(r.id, r.balance) : undefined}
+                onRedeemClick={canRedeem && r.financialSummary.amountRemaining > 0 ? () => openRedeem(r.id, r.financialSummary.amountRemaining) : undefined}
               />
             ))}
           </div>
@@ -2918,12 +2918,12 @@ function FidelidadeTab({
   const equivalentValue = formatBRL(loyalty.availablePoints * loyalty.realPerPoint);
 
   const pendingReservations = reservations.filter(
-    (r) => r.balance > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
+    (r) => r.financialSummary.amountRemaining > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
   );
 
   const selectedReservation = pendingReservations.find((r) => r.id === redeemReservationId);
   const maxRedeemPoints = selectedReservation
-    ? Math.min(loyalty.availablePoints, Math.ceil(selectedReservation.balance / loyalty.realPerPoint))
+    ? Math.min(loyalty.availablePoints, Math.ceil(selectedReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
     : loyalty.availablePoints;
   const redeemPointsNum = parseInt(redeemPoints, 10) || 0;
   const estimatedDiscount = redeemPointsNum * loyalty.realPerPoint;
@@ -3050,7 +3050,7 @@ function FidelidadeTab({
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{r.tripName}</p>
                     <p className="text-xs text-muted-foreground">
-                      Saldo pendente: {formatBRL(r.balance)}
+                      Saldo pendente: {formatBRL(r.financialSummary.amountRemaining)}
                     </p>
                   </div>
                   <Button
@@ -3059,7 +3059,7 @@ function FidelidadeTab({
                     className="shrink-0"
                     onClick={() => {
                       setRedeemReservationId(r.id);
-                      setRedeemPoints(String(Math.min(loyalty.availablePoints, Math.ceil(r.balance / loyalty.realPerPoint))));
+                      setRedeemPoints(String(Math.min(loyalty.availablePoints, Math.ceil(r.financialSummary.amountRemaining / loyalty.realPerPoint))));
                       setRedeemOpen(true);
                     }}
                   >

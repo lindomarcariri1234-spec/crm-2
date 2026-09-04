@@ -356,7 +356,7 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
             ? orderMap.get(canonical.storeOrderId)
             : pendingOrderByReferralId.get(r.id);
           return order
-            ? allLinkedReservations.filter((reservation) => reservation.storeOrderId === order.orderNumber).map(linkedReservation)
+            ? allLinkedReservations.filter((reservation) => reservation.storeOrderId === order.orderNumber).map(reservation => linkedReservation(reservation))
             : [];
         })(),
         linkedOrder: (() => {

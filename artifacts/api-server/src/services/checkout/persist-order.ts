@@ -49,6 +49,7 @@ export interface PersistOrderArgs {
   data: {
     customerName: string;
     customerEmail: string;
+    idempotencyKey?: string;
     customerPhone?: string;
     customerCpf?: string;
     customerAddress?: Record<string, unknown>;
@@ -217,6 +218,7 @@ async function writeOrderAndItems(tx: Tx, args: PersistOrderArgs, reservationCli
     storeId: store.id,
     tenantId: store.tenantId,
     orderNumber,
+    idempotencyKey: data.idempotencyKey,
     paymentToken: orderPaymentToken,
     customerName: data.customerName,
     customerEmail: data.customerEmail,

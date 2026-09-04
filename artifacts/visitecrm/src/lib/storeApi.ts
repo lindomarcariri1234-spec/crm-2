@@ -1,4 +1,4 @@
-import type { LinkedData } from "@/lib/linked-data";
+import type { FinancialSummary, LinkedData } from "@/lib/linked-data";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -360,6 +360,7 @@ export interface StoreSettings {
   installmentFee?: string;
   minOrderValue?: string | null;
   minDepositAmount?: string | null;
+  pixQrDeliveryMode?: "screen" | "email" | "whatsapp" | "all";
 
   isActive: boolean;
   maintenanceMode: boolean;
@@ -411,6 +412,7 @@ export interface PublicStore {
   installmentFee?: string;
   minOrderValue?: string | null;
   minDepositAmount?: string | null;
+  pixQrDeliveryMode?: "screen" | "email" | "whatsapp" | "all";
 }
 
 export interface StoreCategory {
@@ -534,6 +536,50 @@ export interface StoreOrderItem {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface StoreOrderPassenger {
+  id: string;
+  reservationId: string;
+  name: string;
+  cpf?: string | null;
+  birthDate?: string | null;
+  ageCategory?: string | null;
+  seatNumber?: string | null;
+  isPrimary?: boolean;
+  boardingLocationId?: string | null;
+  phone?: string | null;
+}
+
+export interface StoreOrderReservation {
+  id: string;
+  reservationNumber?: string | null;
+  tripId: string;
+  status: string;
+  seats: string[];
+  boardingLocationId?: string | null;
+  totalValue: string;
+  paidValue: string;
+  balance: string;
+  depositAmount?: string | null;
+  paymentMethod?: string | null;
+  voucherCode?: string | null;
+  expiresAt?: string | null;
+  confirmedAt?: string | null;
+  cancelledAt?: string | null;
+  tripName?: string | null;
+  destination?: string | null;
+  departureDate?: string | null;
+  endDate?: string | null;
+  departureTime?: string | null;
+  returnTime?: string | null;
+  boardingName?: string | null;
+  boardingAddress?: string | null;
+  boardingCity?: string | null;
+  boardingState?: string | null;
+  boardingReference?: string | null;
+  boardingDepartureTime?: string | null;
+  passengers: StoreOrderPassenger[];
+}
+
 export interface StoreOrder extends LinkedData {
   id: string;
   storeId: string;
@@ -560,6 +606,7 @@ export interface StoreOrder extends LinkedData {
   depositAmount?: string | null;
   paidAmount?: number | string | null;
   amountRemaining?: string | null;
+  financialSummary: FinancialSummary;
   pixQrCode?: string | null;
   pixQrCodeUrl?: string | null;
   pixCopyPaste?: string | null;
@@ -583,6 +630,7 @@ export interface StoreOrder extends LinkedData {
   referralDiscountPct?: number | null;
   referralDiscountAmount?: number | null;
   couponDiscountAmount?: number | null;
+  reservations?: StoreOrderReservation[];
 }
 
 /** Public checkout response only; administrative order responses never include this token. */

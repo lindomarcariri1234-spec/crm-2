@@ -99,6 +99,8 @@ import
   partnersTable,
   priceAlertSubscriptionsTable,
   referralAttemptLogsTable,
+  passengersTable,
+  boardingLocationsTable,
 }
  from "@workspace/db"
 ;
@@ -140,7 +142,7 @@ import
 
 import 
 {
- sendPriceAlertConfirmationEmail, enqueuePixOrderAlertEmail 
+ sendPriceAlertConfirmationEmail, enqueuePixOrderAlertEmail, enqueuePixOrderQr
 }
  from "../queues/email-helpers"
 ;
@@ -194,7 +196,7 @@ import
  from "../services/checkout/create-reservations"
 ;
 
-import { calculateReceivedAmount } from "../lib/linked-data";
+import { calculateReceivedAmount, orderFinancialSummary } from "../lib/linked-data";
 
 import 
 {
@@ -222,6 +224,125 @@ import { recordReferralVisit } from "../services/referral-tracking";
 
 const router = Router()
 ;
+
+const PIX_QR_DELIVERY_MODES = ["screen", "email", "whatsapp", "all"] as const;
+type PixQrDeliveryMode = typeof PIX_QR_DELIVERY_MODES[number];
+
+async function getPixQrDeliveryMode(tenantId: string): Promise<PixQrDeliveryMode> {
+  const [tenant] = await db.select({ settings: tenantsTable.settings })
+    .from(tenantsTable)
+    .where(eq(tenantsTable.id, tenantId))
+    .limit(1);
+  const value = (tenant?.settings as Record<string, unknown> | null | undefined)?.pixQrDeliveryMode;
+  return PIX_QR_DELIVERY_MODES.includes(value as PixQrDeliveryMode)
+    ? value as PixQrDeliveryMode
+    : "screen";
+}
+
+async function ensureOrderPixQr(
+  store: typeof storesTable.$inferSelect,
+  order: typeof storeOrdersTable.$inferSelect,
+): Promise<typeof storeOrdersTable.$inferSelect> {
+  if (order.paymentMethod !== "pix" || !store.pixEnabled || !store.pixKey) return order;
+  if (order.pixQrCode && order.pixQrCodeUrl && order.pixCopyPaste) return order;
+
+  try {
+    const decryptedPixKey = decryptOrPassthrough(store.pixKey);
+    if (!decryptedPixKey) return order;
+
+    const pixAmount = Number(order.depositAmount ?? order.totalAmount);
+    const pixCode = generatePixEMV({
+      key: decryptedPixKey,
+      name: store.name,
+      city: store.city ?? "BRASIL",
+      amount: pixAmount,
+      txid: order.id.slice(0, 25),
+      description: `Reserva ${order.orderNumber}`.slice(0, 40),
+    });
+    const pixQrCodeUrl = generatePixQrCodeUrl(pixCode);
+
+    await db.update(storeOrdersTable).set({
+      pixQrCode: pixCode,
+      pixQrCodeUrl,
+      pixCopyPaste: pixCode,
+    }).where(and(
+      eq(storeOrdersTable.id, order.id),
+      eq(storeOrdersTable.storeId, store.id),
+      eq(storeOrdersTable.tenantId, store.tenantId),
+    ));
+
+    return {
+      ...order,
+      pixQrCode: pixCode,
+      pixQrCodeUrl,
+      pixCopyPaste: pixCode,
+    };
+  } catch (pixErr) {
+    logger.warn({ pixErr, orderId: order.id }, "[store/orders] Failed to reconcile PIX QR code");
+    return order;
+  }
+}
+
+async function reconcileOrderPostCommitEffects(
+  store: typeof storesTable.$inferSelect,
+  order: typeof storeOrdersTable.$inferSelect,
+  reservationIds: string[],
+): Promise<void> {
+  const pixQrCodeUrl = order.pixQrCodeUrl;
+  const pixCopyPaste = order.pixCopyPaste ?? order.pixQrCode;
+  if (order.paymentMethod === "pix" && pixQrCodeUrl && pixCopyPaste) {
+    try {
+      const pixQrDeliveryMode = await getPixQrDeliveryMode(store.tenantId);
+      if (pixQrDeliveryMode !== "screen") {
+        await enqueuePixOrderQr({
+          tenantId: store.tenantId,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          customerName: order.customerName,
+          customerEmail: order.customerEmail,
+          customerPhone: order.customerPhone ?? null,
+          storeName: store.name,
+          amount: Number(order.depositAmount ?? order.totalAmount),
+          pixQrCodeUrl,
+          pixCopyPaste,
+          deliveryMode: pixQrDeliveryMode,
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, orderId: order.id }, "[store/orders] Failed to reconcile PIX QR delivery");
+    }
+  }
+
+  if (reservationIds.length === 0) return;
+
+  await Promise.all(reservationIds.map(async (reservationId) => {
+    try {
+      await enqueueNewBookingNotificationEmail(reservationId, store.tenantId);
+    } catch (err) {
+      logger.warn({ err, reservationId }, "[store/orders] Failed to reconcile new-booking notification");
+    }
+  }));
+
+  const storePublicBase = (process.env["STORE_PUBLIC_URL"] ?? "https://visitecrm.com").replace(/\/$/, "");
+  const storeBase = store.customDomain
+    ? `https://${store.customDomain}`
+    : `${storePublicBase}/loja/${store.slug}`;
+  const loginUrl = `${storeBase}/entrar`;
+  try {
+    await ensurePortalAccount({
+      email: order.customerEmail,
+      name: order.customerName,
+      cpf: order.customerCpf,
+      tenantId: store.tenantId,
+      storeBase,
+      loginUrl,
+      agencyName: store.name,
+      agencyLogo: store.logo ?? "",
+    });
+  } catch (err) {
+    logger.error({ err, orderId: order.id }, "[store/orders] Failed to reconcile portal account");
+  }
+}
 
 
 async function getActiveStore(slug: string) 
@@ -338,6 +459,11 @@ router.get("/public/store/:slug", async (req, res, next: NextFunction): Promise<
       installmentFee: store.installmentFee,
       minOrderValue: store.minOrderValue,
       minDepositAmount: store.minDepositAmount,
+      pixQrDeliveryMode: ["screen", "email", "whatsapp", "all"].includes(
+        (tenantSettings.pixQrDeliveryMode as string) ?? "",
+      )
+        ? tenantSettings.pixQrDeliveryMode
+        : "screen",
       paymentMethods: Array.isArray(store.paymentMethods) ? store.paymentMethods : [],
       pixEnabled: store.pixEnabled,
       boletoEnabled: store.boletoEnabled,
@@ -1199,13 +1325,16 @@ async function handleIdempotentOrderReplay(
 ;
 
 
+  let replayOrder = await ensureOrderPixQr(store, existingOrder);
   let reservationExpiresAt: Date | null = null
 ;
+  let reservationIds: string[] = [];
   try 
 {
 
     const reservationResult = await createReservationsForOrder(existingOrder.id)
 ;
+    reservationIds = reservationResult.reservationIds;
     reservationExpiresAt = reservationResult.reservationExpiresAt ?? null
 ;
 
@@ -1248,15 +1377,58 @@ async function handleIdempotentOrderReplay(
     .from(storeOrderItemsTable)
     .where(eq(storeOrderItemsTable.orderId, existingOrder.id))
 ;
+  const replayReservations = reservationIds.length
+    ? await db.select({
+      id: reservationsTable.id,
+      status: reservationsTable.status,
+      totalValue: reservationsTable.totalValue,
+      paidValue: reservationsTable.paidValue,
+      balance: reservationsTable.balance,
+    }).from(reservationsTable).where(and(
+      eq(reservationsTable.tenantId, store.tenantId),
+      inArray(reservationsTable.id, reservationIds),
+    ))
+    : [];
 
+  const paymentRows = await db.select({
+    orderId: paymentsTable.orderId,
+    reservationId: paymentsTable.reservationId,
+    amount: paymentsTable.amount,
+    status: paymentsTable.status,
+    type: paymentsTable.type,
+  }).from(paymentsTable).where(and(
+    eq(paymentsTable.tenantId, store.tenantId),
+    or(
+      eq(paymentsTable.orderId, replayOrder.id),
+      ...(reservationIds.length ? [inArray(paymentsTable.reservationId, reservationIds)] : []),
+    ),
+  ));
+  const paidAmount = calculateReceivedAmount(replayOrder.id, reservationIds, paymentRows);
+
+  // A retry may arrive after the order transaction committed but before one or
+  // more fire-and-forget effects completed. Each downstream operation is
+  // idempotent: the booking notification and PIX QR use durable outbox keys,
+  // while portal provisioning reuses the existing tenant-scoped account.
+  void reconcileOrderPostCommitEffects(store, replayOrder, reservationIds).catch((err) => {
+    logger.warn({ err, orderId: replayOrder.id }, "[store/orders] Idempotent replay effect reconciliation failed");
+  });
 
   res.status(200).json(
 {
 
-    ...existingOrder,
-    orderId: existingOrder.id,
+    ...replayOrder,
+    orderId: replayOrder.id,
     items,
-    paymentToken: existingOrder.paymentToken,
+    paymentToken: replayOrder.paymentToken,
+    paidAmount,
+    amountRemaining: Math.max(0, Number(replayOrder.totalAmount) - paidAmount).toFixed(2),
+    financialSummary: orderFinancialSummary(
+      replayOrder,
+      paidAmount,
+      paymentRows,
+      replayReservations.length === 1 ? replayReservations[0] : null,
+      reservationIds,
+    ),
     reservationExpiresAt,
   
 }
@@ -1583,6 +1755,10 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 ;
 
 
+    let generatedPixQrCodeUrl: string | null = null;
+    let generatedPixCopyPaste: string | null = null;
+    let generatedPixAmount: number | null = null;
+
     // Generate PIX QR code immediately when payment method is PIX and store
     // has a PIX key configured. The QR code is stored on the order so the
     // customer can scan it right after checkout (confirmation page + tracking).
@@ -1638,6 +1814,9 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 
           (order as Record<string, unknown>).pixCopyPaste = pixCode
 ;
+          generatedPixQrCodeUrl = pixQrCodeUrl;
+          generatedPixCopyPaste = pixCode;
+          generatedPixAmount = pixAmount;
 
         
 }
@@ -1809,6 +1988,30 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     
 }
 
+    // Deliver the customer-facing QR only after any linked reservation has
+    // been created successfully. This prevents a failed seat/capacity claim
+    // from sending a payment request for a reservation that does not exist.
+    if (generatedPixQrCodeUrl && generatedPixCopyPaste && generatedPixAmount !== null) {
+      const pixQrDeliveryMode = await getPixQrDeliveryMode(store.tenantId);
+      if (pixQrDeliveryMode !== "screen") {
+        enqueuePixOrderQr({
+          tenantId: store.tenantId,
+          orderId,
+          orderNumber,
+          customerName: data.customerName,
+          customerEmail: data.customerEmail,
+          customerPhone: data.customerPhone ?? null,
+          storeName: store.name,
+          amount: generatedPixAmount,
+          pixQrCodeUrl: generatedPixQrCodeUrl,
+          pixCopyPaste: generatedPixCopyPaste,
+          deliveryMode: pixQrDeliveryMode,
+        }).catch((err) => {
+          logger.warn({ err, orderId, pixQrDeliveryMode }, "[store/orders] Failed to dispatch PIX QR");
+        });
+      }
+    }
+
 
     res.status(200).json(
 {
@@ -1819,6 +2022,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       paymentToken: orderPaymentToken,
       paidAmount: 0,
       amountRemaining: Number(order.totalAmount).toFixed(2),
+      financialSummary: orderFinancialSummary(order, 0),
       reservationExpiresAt,
     
 }
@@ -1998,13 +2202,63 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
       next(new NotFoundError("Order not found", "NOT_FOUND"));
       return;
     }
-    const linkedReservations = await db.select({ id: reservationsTable.id })
+    const linkedReservations = await db.select({
+      id: reservationsTable.id,
+      reservationNumber: reservationsTable.reservationNumber,
+      tripId: reservationsTable.tripId,
+      status: reservationsTable.status,
+      seats: reservationsTable.seats,
+      boardingLocationId: reservationsTable.boardingLocationId,
+      totalValue: reservationsTable.totalValue,
+      paidValue: reservationsTable.paidValue,
+      balance: reservationsTable.balance,
+      depositAmount: reservationsTable.depositAmount,
+      paymentMethod: reservationsTable.paymentMethod,
+      voucherCode: reservationsTable.voucherCode,
+      expiresAt: reservationsTable.expiresAt,
+      confirmedAt: reservationsTable.confirmedAt,
+      cancelledAt: reservationsTable.cancelledAt,
+      tripName: tripsTable.name,
+      destination: tripsTable.destination,
+      departureDate: tripsTable.departureDate,
+      endDate: tripsTable.returnDate,
+      departureTime: tripsTable.departureTime,
+      returnTime: tripsTable.returnTime,
+      boardingName: boardingLocationsTable.name,
+      boardingAddress: boardingLocationsTable.address,
+      boardingCity: boardingLocationsTable.city,
+      boardingState: boardingLocationsTable.state,
+      boardingReference: boardingLocationsTable.reference,
+      boardingDepartureTime: boardingLocationsTable.departureTime,
+    })
       .from(reservationsTable)
+      .leftJoin(tripsTable, and(
+        eq(tripsTable.id, reservationsTable.tripId),
+        eq(tripsTable.tenantId, store.tenantId),
+      ))
+      .leftJoin(boardingLocationsTable, and(
+        eq(boardingLocationsTable.id, reservationsTable.boardingLocationId),
+        eq(boardingLocationsTable.tenantId, store.tenantId),
+      ))
       .where(and(
         eq(reservationsTable.tenantId, store.tenantId),
         eq(reservationsTable.storeOrderId, order.orderNumber),
       ));
     const linkedReservationIds = linkedReservations.map(reservation => reservation.id);
+    const passengerRows = linkedReservationIds.length
+      ? await db.select({
+        id: passengersTable.id,
+        reservationId: passengersTable.reservationId,
+        name: passengersTable.name,
+        cpf: passengersTable.cpf,
+        birthDate: passengersTable.birthDate,
+        ageCategory: passengersTable.ageCategory,
+        seatNumber: passengersTable.seatNumber,
+        isPrimary: passengersTable.isPrimary,
+        boardingLocationId: passengersTable.boardingLocationId,
+        phone: passengersTable.phone,
+      }).from(passengersTable).where(inArray(passengersTable.reservationId, linkedReservationIds))
+      : [];
     const paymentRows = await db.select({
       orderId: paymentsTable.orderId,
       reservationId: paymentsTable.reservationId,
@@ -2021,6 +2275,13 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
       ),
     ));
     const paidAmount = calculateReceivedAmount(order.id, linkedReservationIds, paymentRows);
+    const summary = orderFinancialSummary(
+      order,
+      paidAmount,
+      paymentRows,
+      linkedReservations.length === 1 ? linkedReservations[0] : null,
+      linkedReservationIds,
+    );
     const rawItems = await db.select({
       id: storeOrderItemsTable.id,
       productId: storeOrderItemsTable.productId,
@@ -2073,11 +2334,28 @@ router.get("/public/store/:slug/orders/:orderNumber", async (req, res, next: Nex
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { storedPaymentToken: _tok, pendingReferral: _pr, ...safeOrder } = order;
+    const publicReservations = linkedReservations.map((reservation) => ({
+      ...reservation,
+      passengers: passengerRows
+        .filter((passenger) => passenger.reservationId === reservation.id)
+        .map((passenger) => ({
+          ...passenger,
+          // The lookup is authenticated by a high-entropy token, but CPF is
+          // still unnecessary for the public tracking screen.
+          cpf: undefined,
+        })),
+    }));
     res.json({
       ...safeOrder,
       paidAmount,
       amountRemaining: Math.max(0, Number(order.totalAmount) - paidAmount).toFixed(2),
+      financialSummary: summary,
       items,
+      reservations: publicReservations,
+      reservationExpiresAt: publicReservations
+        .map((reservation) => reservation.expiresAt)
+        .filter((value): value is Date => value instanceof Date)
+        .sort((a, b) => a.getTime() - b.getTime())[0] ?? null,
       referralDiscountType,
       referralDiscountPct,
       referralDiscountAmount,
