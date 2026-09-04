@@ -51,9 +51,16 @@ describe("DATABASE_URL sslmode-stripping regression (connection.ts + stripeSync.
 
   it("is a no-op when sslmode is absent from the URL", () => {
     const url = "postgresql://user:pass@host:5432/db";
-    const result = productionConfig(url).connectionString;
-    expect(result).not.toContain("sslmode");
-    expect(result).toContain("postgresql://");
+    expect(productionConfig(url)).toEqual({
+      connectionString: url,
+    });
+  });
+
+  it("does not force TLS when sslmode=disable is explicit", () => {
+    const url = "postgresql://user:pass@host:5432/db?sslmode=disable";
+    expect(productionConfig(url)).toEqual({
+      connectionString: "postgresql://user:pass@host:5432/db",
+    });
   });
 
   it("keeps strict verification when URL parsing fails", () => {
@@ -84,7 +91,7 @@ describe("DATABASE_URL sslmode-stripping regression (connection.ts + stripeSync.
 
   it("does not relax verification for lookalike Supabase hostnames", () => {
     const result = productionConfig(
-      "postgresql://user:pass@pooler.supabase.com.evil.example:5432/postgres",
+      "postgresql://user:pass@pooler.supabase.com.evil.example:5432/postgres?sslmode=require",
     );
 
     expect(result.ssl).toEqual({ rejectUnauthorized: true });

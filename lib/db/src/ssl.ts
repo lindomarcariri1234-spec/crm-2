@@ -12,8 +12,9 @@ function isSupabasePoolerHost(hostname: string): boolean {
  *
  * Supabase's managed pooler can present a certificate chain that Node does not
  * recognize as publicly trusted. Keep TLS enabled for that official hostname,
- * but allow its managed chain; all other production hosts retain strict
- * certificate verification.
+ * but allow its managed chain. For other hosts, respect the connection URL's
+ * explicit sslmode; when it is absent, let node-postgres use its default so
+ * internal PostgreSQL services that do not expose TLS can still boot.
  */
 export function buildDatabaseConnectionConfig(
   rawUrl: string,
@@ -25,7 +26,12 @@ export function buildDatabaseConnectionConfig(
 
   try {
     const url = new URL(rawUrl);
+    const sslMode = url.searchParams.get("sslmode")?.toLowerCase();
     url.searchParams.delete("sslmode");
+
+    if (sslMode === "disable" || (!sslMode && !isSupabasePoolerHost(url.hostname))) {
+      return { connectionString: url.toString() };
+    }
 
     return {
       connectionString: url.toString(),

@@ -60,13 +60,11 @@ process.on("uncaughtException", (err: Error) => {
   process.exit(1);
 });
 
-const rawPort = process.env["PORT"];
-
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
+// Artifact deployments do not consistently inject PORT into each child
+// process. The API artifact is registered on 8080, so keep that as the
+// production-safe default while still honoring explicit workflow/runtime
+// overrides.
+const rawPort = process.env["PORT"] ?? "8080";
 
 const port = Number(rawPort);
 
@@ -160,6 +158,12 @@ async function applyMigrations() {
     logger.info("Drizzle migrations complete");
   } catch (err) {
     logger.error({ err }, "Drizzle migration failed");
+    // Never keep serving after a migration failure. Continuing here leaves
+    // the process alive but the schema may be incomplete, which makes the
+    // deployment probe and the first real requests fail with unrelated 500s.
+    // Re-throw so the startup catch below terminates the instance and lets
+    // Autoscale retry with a clean process.
+    throw err;
   }
   // Idempotently seed plan rows so a freshly-deployed/empty database does not
   // leave billing, onboarding, and plan selection broken. Insert-only — never
@@ -257,11 +261,12 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 });
 
 // ── Run migrations + backfill in the background ──
-// applyMigrations() only throws when the credential backfill fails. In that
-// case we abort: half-encrypted credentials are worse than a clean restart.
+// applyMigrations() aborts on migration or credential-backfill failure:
+// serving against a partial schema or half-encrypted credentials is worse
+// than a clean restart.
 applyMigrations()
   .catch((err) => {
-    logger.error({ err }, "Credential backfill failed — aborting boot");
+    logger.error({ err }, "Startup migration or credential backfill failed — aborting boot");
     process.exit(1);
   })
   .then(() => {
