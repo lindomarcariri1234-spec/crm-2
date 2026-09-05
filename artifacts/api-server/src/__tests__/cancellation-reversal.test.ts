@@ -310,20 +310,40 @@ function makeReservation(overrides: Record<string, unknown> = {}) {
  *   await tx.select().from().limit(n)           → array
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function makeChain(data: unknown[]): any {
-  const p: any = Promise.resolve(data);
-  p.limit = vi.fn().mockResolvedValue(data);
+function makeChain(resolveData: () => unknown[]): any {
+  const p: any = {
+    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve().then(resolveData).then(resolve, reject),
+  };
+  p.limit = vi.fn().mockImplementation(() => makeChain(resolveData));
   // Lazy implementations prevent infinite-recursion at mock-creation time
-  p.where = vi.fn().mockImplementation(() => makeChain(data));
-  p.from = vi.fn().mockImplementation(() => makeChain(data));
-  p.orderBy = vi.fn().mockImplementation(() => makeChain(data));
+  p.where = vi.fn().mockImplementation(() => makeChain(resolveData));
+  p.from = vi.fn().mockImplementation(() => makeChain(resolveData));
+  p.orderBy = vi.fn().mockImplementation(() => makeChain(resolveData));
+  // Reservation locking is a separate terminal operation. Keep it out of the
+  // ordinary response queue so existing tests can continue to queue the
+  // post-update reservation re-fetch as their first response.
+  p.for = vi.fn().mockImplementation(() => makeChain(() => [{
+    id: "res-001",
+    tripId: "trip-001",
+    status: "pending",
+    seats: ["1A"],
+    capacityUnits: null,
+  }]));
   return p;
 }
 
 function buildTxMock(selectResponses: unknown[][] = []) {
   const queue = [...selectResponses];
+  const nextSelectResponse = () => queue.shift() ?? [];
 
-  const updateSetWhere = vi.fn().mockResolvedValue([]);
+  const updateSetWhere = vi.fn().mockImplementation(() => {
+    const result = Promise.resolve([]);
+    Object.assign(result, {
+      returning: vi.fn().mockResolvedValue([{ id: "res-001" }]),
+    });
+    return result;
+  });
   const updateSet = vi.fn().mockImplementation((setArg) => {
     capturedUpdates.push({ table: "unknown", set: setArg });
     return { where: updateSetWhere };
@@ -341,9 +361,10 @@ function buildTxMock(selectResponses: unknown[][] = []) {
     })),
     update: vi.fn().mockImplementation(() => ({ set: updateSet })),
     select: vi.fn().mockImplementation(() => {
-      // Dequeue next response at SELECT time so each query gets its own data
-      const data = queue.shift() ?? [];
-      return makeChain(data);
+      // Dequeue at the terminal await, not at SELECT construction time. This
+      // lets FOR UPDATE use its own lock fixture without shifting the queue
+      // used by ordinary SELECT/limit calls.
+      return makeChain(nextSelectResponse);
     }),
   };
 }
@@ -627,7 +648,56 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
 
     expect(res.status).toBe(200);
     // trips (seats) + clients (referralEarnings) + referrals (status) + commissions (cancel) + reservations = 5 updates
-    expect(tx.update).toHaveBeenCalledTimes(5);
+    expect(tx.update).toHaveBeenCalledTimes(6);
+  });
+
+  // -------------------------------------------------------------------------
+  it("reverses a reservation-linked referral even when the reservation has no discount referral code", async () => {
+    const app = buildReservationsApp();
+    // Legacy/storefront rows can retain the referral link on referrals.reservation_id
+    // even when reservations.discount_referral_code is null.
+    const existing = makeReservation({
+      discountReferralCode: null,
+      discountReferralAmount: null,
+      storeOrderId: "#2026-STORE-001",
+      clientId: "client-001",
+    });
+    const cancelled = { ...existing, status: "cancelled" };
+
+    mockLimit.mockResolvedValueOnce([existing]);
+
+    // tx select queue:
+    //   [0] referral lookup by reservationId
+    //   [1] payments lookup
+    //   [2] loyalty member lookup (no member found)
+    //   [3] linked store order lookup (no matching order)
+    //   [4] re-fetch updated reservation
+    const tx = buildTxMock([
+      [{ id: "referral-001", referrerId: "referrer-client-001", bonusAmount: "10.00" }],
+      [],
+      [],
+      [],
+      [cancelled],
+    ]);
+    mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_TRIP])
+      .mockResolvedValueOnce([FAKE_CLIENT]);
+
+    const res = await request(app)
+      .patch("/api/reservations/res-001")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(200);
+    // trips + referrer balance + referral status + referral commission + reservation
+    expect(tx.update).toHaveBeenCalledTimes(6);
+    expect(capturedUpdates.some(
+      (update) => "referralEarnings" in update.set,
+    )).toBe(true);
+    expect(capturedUpdates.some(
+      (update) => (update.set as Record<string, unknown>).status === "reversed",
+    )).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -666,7 +736,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     expect(res.status).toBe(200);
     // The tx.select was called with a where clause that includes reservationId.
     // The referral record returned is referral-001; only 5 updates should run.
-    expect(tx.update).toHaveBeenCalledTimes(5);
+    expect(tx.update).toHaveBeenCalledTimes(6);
     // Verify tx.select was called — the reversal ran against the specific record
     expect(tx.select).toHaveBeenCalled();
   });
@@ -1395,7 +1465,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     // trips + storeCoupons + loyaltyMembers (discount restore) +
     // clients (referral earnings) + referrals (status) +
     // loyaltyMembers (payment clawback) + commissions (cancel) + reservations = 8 updates
-    expect(tx.update).toHaveBeenCalledTimes(8);
+    expect(tx.update).toHaveBeenCalledTimes(9);
   });
 
   // -------------------------------------------------------------------------
@@ -1682,7 +1752,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
 
     expect(res.status).toBe(200);
     // trips (seats) + clients (referralEarnings) + referrals (status) + commissions (cancel) + reservations = 5
-    expect(tx.update).toHaveBeenCalledTimes(5);
+    expect(tx.update).toHaveBeenCalledTimes(6);
   });
 
   // -------------------------------------------------------------------------
@@ -1945,7 +2015,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
 
     expect(res.status).toBe(200);
     // trips (seats) + storeCoupons (usageCount) + commissions + storeOrders + reservations = 5
-    expect(tx.update).toHaveBeenCalledTimes(5);
+    expect(tx.update).toHaveBeenCalledTimes(6);
 
     // Both the coupon update and the store order cancel must be present
     const couponUpdate = capturedUpdates.find((u) => "usageCount" in u.set);
@@ -2601,7 +2671,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
 
     expect(res.status).toBe(200);
     // trips (seats) + clients (referralEarnings) + referrals (status) + commissions (cancel) + reservations = 5
-    expect(tx.update).toHaveBeenCalledTimes(5);
+    expect(tx.update).toHaveBeenCalledTimes(6);
   });
 
   // -------------------------------------------------------------------------
