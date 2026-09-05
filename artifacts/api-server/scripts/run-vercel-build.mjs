@@ -1,7 +1,8 @@
 import { access, cp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { assertPublicationArtifact } from "../../../scripts/publication-marker.mjs";
 
 const artifactDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.resolve(artifactDir, "../..");
@@ -53,6 +54,17 @@ function buildFrontend() {
   if (result.status !== 0) {
     throw new Error(`Frontend build exited with status ${result.status}`);
   }
+}
+
+export async function verifyFrontendPublication(
+  publicDir,
+  sourceDescription = "Vercel storefront",
+) {
+  return assertPublicationArtifact({
+    indexPath: path.join(publicDir, "index.html"),
+    versionPath: path.join(publicDir, ".publication-version"),
+    sourceDescription,
+  });
 }
 
 function runOneShotRepairIfRequested() {
@@ -119,10 +131,21 @@ function runOneShotRepairIfRequested() {
 async function main() {
   buildFrontend();
   await access(path.join(frontendDist, "index.html"));
+  const frontendVersion = await verifyFrontendPublication(
+    frontendDist,
+    "Built Vercel storefront",
+  );
+  console.log(
+    `[run-vercel-build] Frontend publication version "${frontendVersion}" confirmed before copying.`,
+  );
 
   for (const vercelPublicDir of vercelPublicDirs) {
     await rm(vercelPublicDir, { recursive: true, force: true });
     await cp(frontendDist, vercelPublicDir, { recursive: true });
+    await verifyFrontendPublication(
+      vercelPublicDir,
+      "Copied Vercel storefront",
+    );
     console.log(`[run-vercel-build] Frontend copied to ${vercelPublicDir}`);
   }
 
@@ -140,7 +163,12 @@ async function main() {
   runPnpm("verify:vercel");
 }
 
-main().catch((error) => {
-  console.error("[run-vercel-build] FATAL:", error);
-  process.exit(1);
-});
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main().catch((error) => {
+    console.error("[run-vercel-build] FATAL:", error);
+    process.exit(1);
+  });
+}
