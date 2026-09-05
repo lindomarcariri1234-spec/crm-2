@@ -29,6 +29,10 @@
       "destination": "https://crm-2-lindomarcariri.replit.app/api/:path*"
     },
     {
+      "source": "/assets/:path*",
+      "destination": "https://crm-2-lindomarcariri.replit.app/assets/:path*"
+    },
+    {
       "source": "/:path*",
       "destination": "/index.html"
     }
