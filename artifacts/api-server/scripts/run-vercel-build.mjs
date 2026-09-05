@@ -184,7 +184,12 @@ function runOneShotRepairIfRequested() {
 async function main() {
   buildFrontend();
   await access(path.join(frontendDist, "index.html"));
-  const frontendVersion = await verifyFrontendPublication(
+  const frontendVersion = (await readFile(
+    path.join(frontendDist, ".publication-version"),
+    "utf8",
+  )).trim();
+  await ensureFrontendPublicationMarker(frontendDist, frontendVersion);
+  await verifyFrontendPublication(
     frontendDist,
     "Built Vercel storefront",
   );
