@@ -1677,6 +1677,13 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
           me.tenantId,
           lockedReservation,
         );
+        // The capacity helper already performs the guarded status transition.
+        // Do not issue a second status update below; keeping the final update
+        // for the remaining financial/audit fields preserves the lock's
+        // compare-and-set semantics.
+        if (cancellationApplied) {
+          delete updates.status;
+        }
       }
 
       // Moving an active reservation changes two trip counters. Do it after
@@ -1834,7 +1841,8 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         // `referralRecord` stays undefined, so the update block is naturally skipped.
         //
         // Lookup by reservationId (set for all storefront and CRM bookings).
-        if (existing.discountReferralCode && !existing.referralReversalAt) {
+        const hasStorefrontOrder = existing.storeOrderId?.startsWith("#") === true;
+        if ((existing.discountReferralCode || hasStorefrontOrder) && !existing.referralReversalAt) {
           let referralRecord: { id: string; referrerId: string; referredId: string | null; bonusAmount: string } | undefined;
 
           const [byReservation] = await tx
@@ -1849,7 +1857,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
 
           if (byReservation) {
             referralRecord = byReservation;
-          } else {
+          } else if (existing.discountReferralCode) {
             // Secondary lookup: find any COMPLETED referral for this code
             // (ignoring reservationId) to distinguish a data integrity gap from
             // an already-reversed idempotency case.  If a COMPLETED row exists
