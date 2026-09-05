@@ -1,4 +1,4 @@
-import { access, cp, rm } from "node:fs/promises";
+import { access, cp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -65,6 +65,23 @@ export async function verifyFrontendPublication(
     versionPath: path.join(publicDir, ".publication-version"),
     sourceDescription,
   });
+}
+
+async function ensureFrontendPublicationMarker(publicDir, publicationVersion) {
+  const indexPath = path.join(publicDir, "index.html");
+  const html = await readFile(indexPath, "utf8");
+  if (html.includes('name="visitecrm-publication"')) return;
+
+  const escapedVersion = publicationVersion.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+  const marker = `<meta name="visitecrm-publication" content="${escapedVersion}" />`;
+  const updatedHtml = html.replace(/<head(\s[^>]*)?>/i, (headTag) => `${headTag}\n    ${marker}`);
+  if (updatedHtml === html) {
+    throw new Error(
+      `[run-vercel-build] Built storefront index has no <head> element for publication marker injection: ${indexPath}`,
+    );
+  }
+  await writeFile(indexPath, updatedHtml, "utf8");
+  console.log(`[run-vercel-build] Injected missing publication marker into ${indexPath}`);
 }
 
 function runOneShotRepairIfRequested() {
