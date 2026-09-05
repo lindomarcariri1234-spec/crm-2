@@ -75,9 +75,9 @@ function runOneShotRepairIfRequested() {
       "[run-vercel-build] One-shot repairs are allowed only in the Vercel Production environment.",
     );
   }
-  if (repair !== "orphan-reservation") {
+  if (repair !== "orphan-reservation" && repair !== "referral-cancellation") {
     throw new Error(
-      "[run-vercel-build] VISITECRM_ONE_SHOT_REPAIR must be orphan-reservation when set.",
+      "[run-vercel-build] VISITECRM_ONE_SHOT_REPAIR must be orphan-reservation or referral-cancellation when set.",
     );
   }
 
@@ -89,6 +89,42 @@ function runOneShotRepairIfRequested() {
   }
 
   const tenantId = process.env["VISITECRM_ONE_SHOT_REPAIR_TENANT_ID"]?.trim();
+  if (repair === "referral-cancellation") {
+    const referralId = process.env["VISITECRM_ONE_SHOT_REPAIR_REFERRAL_ID"]?.trim();
+    const reservationId = process.env["VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID"]?.trim();
+    const reason = process.env["VISITECRM_ONE_SHOT_REPAIR_REASON"]?.trim();
+    if (!tenantId || !referralId || !reservationId || !reason) {
+      throw new Error(
+        "[run-vercel-build] Referral cancellation repair requires tenant, referral, reservation, and reason.",
+      );
+    }
+    console.log(
+      `[run-vercel-build] Running explicitly requested ${apply === "true" ? "apply" : "dry-run"} ` +
+        "referral cancellation repair; database credentials remain managed by Vercel.",
+    );
+    const result = spawnSync(
+      "pnpm",
+      [
+        "--filter",
+        "@workspace/scripts",
+        "run",
+        "repair:referral-cancellation",
+        "--",
+        `--tenant-id=${tenantId}`,
+        `--referral-id=${referralId}`,
+        `--reservation-id=${reservationId}`,
+        `--reason=${reason}`,
+        ...(apply === "true" ? ["--apply"] : []),
+      ],
+      { cwd: repoRoot, env: process.env, stdio: "inherit" },
+    );
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      throw new Error(`Referral cancellation repair exited with status ${result.status}`);
+    }
+    return;
+  }
+
   const reservationId = process.env["VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID"]?.trim();
   const reservationNumber = process.env["VISITECRM_ONE_SHOT_REPAIR_RESERVATION_NUMBER"]?.trim();
   if (!tenantId) {
