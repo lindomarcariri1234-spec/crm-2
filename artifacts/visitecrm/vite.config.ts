@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import { execFileSync } from "node:child_process";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
 const rawPort = process.env.PORT;
@@ -9,6 +10,42 @@ const port = rawPort ? Number(rawPort) : 5173;
 
 const basePath = process.env.BASE_PATH ?? "/";
 
+function getPublicationVersion(): string {
+  const configuredVersion =
+    process.env.PUBLICATION_VERSION ??
+    process.env.VERCEL_GIT_COMMIT_SHA ??
+    process.env.GITHUB_SHA ??
+    process.env.VERCEL_DEPLOYMENT_ID;
+  if (configuredVersion?.trim()) return configuredVersion.trim();
+
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: path.resolve(import.meta.dirname, "..", ".."),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    throw new Error(
+      "Unable to determine the publication version. Set PUBLICATION_VERSION before building the storefront.",
+    );
+  }
+}
+
+const publicationVersion = getPublicationVersion();
+
+const publicationIdentityPlugin = {
+  name: "visitecrm-publication-identity",
+  transformIndexHtml(html: string): string {
+    return html.replaceAll("__VISITECRM_PUBLICATION_VERSION__", publicationVersion);
+  },
+  generateBundle() {
+    this.emitFile({
+      type: "asset",
+      fileName: ".publication-version",
+      source: `${publicationVersion}\n`,
+    });
+  },
+};
 
 // Replit provisions CLERK_PUBLISHABLE_KEY for the active Clerk environment:
 // the development tenant for workspace previews and the production tenant for
@@ -37,6 +74,7 @@ export default defineConfig({
   base: basePath,
   define: clerkKeyOverride,
   plugins: [
+    publicationIdentityPlugin,
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
@@ -66,11 +104,20 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // ExcelJS is a single, on-demand third-party runtime (~937 kB minified)
+    // that cannot be meaningfully split by Rollup. It is loaded only by the
+    // spreadsheet import/download flows. The post-build bundle check enforces
+    // the 500 kB budget for the entrypoint and normal chunks while allowing
+    // ExcelJS its separate 1,000 kB budget.
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes("node_modules/jspdf") || id.includes("node_modules/html2canvas")) {
-            return "vendor-pdf";
+          if (id.includes("node_modules/jspdf")) {
+            return "vendor-jspdf";
+          }
+          if (id.includes("node_modules/html2canvas")) {
+            return "vendor-html2canvas";
           }
           if (id.includes("node_modules/@tiptap") || id.includes("node_modules/prosemirror")) {
             return "vendor-editor";
@@ -94,6 +141,15 @@ export default defineConfig({
             return "vendor-react";
           }
         },
+      },
+      // Production sourcemaps are intentionally disabled. Some shadcn/Radix
+      // wrappers still carry an incomplete transform map, which Rollup tries
+      // to use only while formatting a diagnostic. Ignore that diagnostic
+      // rather than publishing a false sourcemap warning; real build warnings
+      // continue through the default handler.
+      onwarn(warning, warn) {
+        if (warning.code === "SOURCEMAP_ERROR") return;
+        warn(warning);
       },
     },
   },
