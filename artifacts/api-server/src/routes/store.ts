@@ -25,6 +25,7 @@ import { requireAuth } from "../lib/tenant";
 import { createReservationsForOrder, confirmReservationsForOrder } from "../services/checkout/create-reservations";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
+import { releaseReservedCreditForOrder } from "../services/checkout/deferred-referral-effects";
 import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
 import { applyOrderInventoryEffects, reverseOrderInventoryEffects } from "../services/checkout/persist-order";
 import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
@@ -1290,6 +1291,10 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           reason: "Pedido cancelado pela agência",
         });
       });
+    }
+
+    if (didTransitionToCancelled && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID) {
+      await releaseReservedCreditForOrder(order.id);
     }
 
     res.json(safeAdminOrder(order));

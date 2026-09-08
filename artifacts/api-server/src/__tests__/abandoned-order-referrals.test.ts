@@ -47,6 +47,7 @@ vi.mock("@workspace/db", () => ({
     id: "id",
     tenantId: "tenant_id",
     pendingReferral: "pending_referral",
+    pendingCreditSpend: "pending_credit_spend",
     referralEffectsAppliedAt: "referral_effects_applied_at",
     paymentStatus: "payment_status",
     createdAt: "created_at",
@@ -57,6 +58,7 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn((...args: unknown[]) => ({ _and: args })),
   eq: mockEq,
   inArray: mockInArray,
+  or: vi.fn((...args: unknown[]) => ({ _or: args })),
   isNull: vi.fn((col: unknown) => ({ _isNull: col })),
   isNotNull: vi.fn((col: unknown) => ({ _isNotNull: col })),
   lt: vi.fn((col: unknown, val: unknown) => ({ _lt: [col, val] })),
@@ -92,6 +94,10 @@ vi.mock("../lib/logger.js", () => ({
 const mockDispatchOutboundMessage = vi.fn();
 vi.mock("../services/outbound-delivery", () => ({
   dispatchOutboundMessage: (opts: unknown) => mockDispatchOutboundMessage(opts),
+}));
+
+vi.mock("../services/checkout/deferred-referral-effects", () => ({
+  releaseReservedCreditForOrder: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ---------------------------------------------------------------------------

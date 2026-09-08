@@ -31,6 +31,39 @@ export interface DeferredReferralResult {
 }
 
 /**
+ * Releases credit reserved by an unpaid order. Checkout reserves the balance
+ * atomically so concurrent orders cannot spend it twice; cancellation must
+ * return that reservation before the customer retries.
+ */
+export async function releaseReservedCreditForOrder(orderId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [order] = await tx.select({
+      id: storeOrdersTable.id,
+      tenantId: storeOrdersTable.tenantId,
+      paymentStatus: storeOrdersTable.paymentStatus,
+      pendingCreditSpend: storeOrdersTable.pendingCreditSpend,
+    }).from(storeOrdersTable)
+      .where(eq(storeOrdersTable.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!order || order.paymentStatus === STORE_PAYMENT_STATUS.PAID) return;
+    const reservedSpend = (order.pendingCreditSpend ?? []).filter((item) => item.reserved);
+    if (reservedSpend.length === 0) return;
+    for (const spend of reservedSpend) {
+      await tx.update(referralsTable).set({
+        bonusCreditUsedAmount: sql`GREATEST(0, COALESCE(${referralsTable.bonusCreditUsedAmount}, 0) - ${spend.consumedAmount.toFixed(2)})`,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(referralsTable.id, spend.id),
+        eq(referralsTable.tenantId, order.tenantId),
+      ));
+    }
+    await tx.update(storeOrdersTable).set({ pendingCreditSpend: null })
+      .where(eq(storeOrdersTable.id, order.id));
+  });
+}
+
+/**
  * Applies the referral conversion + referral-credit consumption that are
  * deferred from checkout to payment time, so anonymous/unpaid storefront orders
  * can never credit a referrer's conversion or burn a customer's referral credit
@@ -112,10 +145,21 @@ export async function applyDeferredOrderCredits(
         ]),
       );
       const now = new Date();
-      for (const { id, consumedAmount } of creditSpend) {
+      for (const { id, consumedAmount, reserved } of creditSpend) {
         const locked = lockedMap.get(id);
         if (!locked) {
           logger.warn({ creditId: id, orderId: order.id }, "[checkout/deferred-credits] credit row not found; skipping");
+          continue;
+        }
+        if (reserved) {
+          await tx
+            .update(referralsTable)
+            .set({
+              bonusCreditUsedAt: now,
+              bonusCreditOrderId: order.id,
+              updatedAt: now,
+            })
+            .where(eq(referralsTable.id, id));
           continue;
         }
         const available = Math.max(0, locked.bonusAmount - locked.alreadyUsed);

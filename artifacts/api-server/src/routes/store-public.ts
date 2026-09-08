@@ -42,7 +42,7 @@ import
 
 import 
 {
-  RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES
+  RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, STORE_PAYMENT_STATUS
 }
  from "@workspace/permissions"
 ;
@@ -195,6 +195,7 @@ import
 }
  from "../services/checkout/create-reservations"
 ;
+import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
 
 import { calculateReceivedAmount, orderFinancialSummary } from "../lib/linked-data";
 
@@ -243,6 +244,7 @@ async function ensureOrderPixQr(
   store: typeof storesTable.$inferSelect,
   order: typeof storeOrdersTable.$inferSelect,
 ): Promise<typeof storeOrdersTable.$inferSelect> {
+  if (Number(order.totalAmount) <= 0) return order;
   if (order.paymentMethod !== "pix" || !store.pixEnabled || !store.pixKey) return order;
   if (order.pixQrCode && order.pixQrCodeUrl && order.pixCopyPaste) return order;
 
@@ -281,6 +283,54 @@ async function ensureOrderPixQr(
     logger.warn({ pixErr, orderId: order.id }, "[store/orders] Failed to reconcile PIX QR code");
     return order;
   }
+}
+
+async function settleZeroValueOrder(
+  store: typeof storesTable.$inferSelect,
+  order: typeof storeOrdersTable.$inferSelect,
+): Promise<typeof storeOrdersTable.$inferSelect> {
+  if (Number(order.totalAmount) > 0) return order;
+  const settledAt = new Date();
+  await db.transaction(async (tx) => {
+    const [lockedOrder] = await tx.select({
+      id: storeOrdersTable.id,
+      orderNumber: storeOrdersTable.orderNumber,
+    }).from(storeOrdersTable)
+      .where(and(
+        eq(storeOrdersTable.id, order.id),
+        eq(storeOrdersTable.storeId, store.id),
+        eq(storeOrdersTable.tenantId, store.tenantId),
+      ))
+      .for("update")
+      .limit(1);
+    if (!lockedOrder) return;
+    await tx.update(reservationsTable).set({
+      status: RESERVATION_STATUS.CONFIRMED,
+      paidValue: sql`${reservationsTable.totalValue}`,
+      balance: "0",
+      confirmedAt: settledAt,
+      expiresAt: null,
+    }).where(and(
+      eq(reservationsTable.tenantId, store.tenantId),
+      eq(reservationsTable.storeOrderId, lockedOrder.orderNumber),
+      eq(reservationsTable.status, RESERVATION_STATUS.PENDING),
+    ));
+    await tx.update(storeOrdersTable).set({
+      paymentStatus: STORE_PAYMENT_STATUS.PAID,
+      status: "confirmed",
+      amountRemaining: "0",
+      paidAt: settledAt,
+      confirmedAt: settledAt,
+    }).where(eq(storeOrdersTable.id, lockedOrder.id));
+  });
+  return {
+    ...order,
+    paymentStatus: STORE_PAYMENT_STATUS.PAID,
+    status: "confirmed",
+    amountRemaining: "0",
+    paidAt: settledAt,
+    confirmedAt: settledAt,
+  };
 }
 
 async function reconcileOrderPostCommitEffects(
@@ -1371,6 +1421,12 @@ async function handleIdempotentOrderReplay(
   
 }
 
+  if (Number(replayOrder.totalAmount) <= 0) {
+    replayOrder = await settleZeroValueOrder(store, replayOrder);
+    reservationExpiresAt = null;
+    await runPostPaymentSideEffects(replayOrder.id);
+  }
+
 
   const items = await db
     .select()
@@ -1539,6 +1595,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     // Resolve referral credit spend — requires authenticated Clerk user whose email matches the order
     let appliedCreditAmount = 0
 ;
+    let referralCreditClientId: string | undefined;
 
     let creditSpend: Array<
 {
@@ -1591,6 +1648,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         ))
         .limit(1);
       if (creditClient) {
+        referralCreditClientId = creditClient.id;
         const afterDiscount = roundMoney(Math.max(0, subtotal - discounts.discountAmount));
         // Select rows with remaining balance (including partially consumed ones)
         const creditRows = await db
@@ -1688,7 +1746,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     }
 
     try {
-      await persistCheckoutOrder({
+      const persistedOrder = await persistCheckoutOrder({
         store, data, orderId, orderNumber, orderPaymentToken,
         subtotal,
         // Combined discount stored on order record for total-amount accounting
@@ -1704,7 +1762,10 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         orderItemsData, fetchedProducts, quantityByProductId, tripLinkedProducts,
         parsedBirthDate,
         creditSpend: creditSpend.length > 0 ? creditSpend : undefined,
+        referralCreditRequested: data.referralCreditUsed,
+        referralCreditClientId,
       });
+      appliedCreditAmount = persistedOrder.appliedCreditAmount;
     } catch (txErr: unknown) {
       if (txErr instanceof Error) {
         const tagged = txErr as Error & { productName?: string; available?: number; code?: string; constraint?: string };
@@ -1762,7 +1823,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     // Generate PIX QR code immediately when payment method is PIX and store
     // has a PIX key configured. The QR code is stored on the order so the
     // customer can scan it right after checkout (confirmation page + tracking).
-    if (data.paymentMethod === "pix" && store.pixEnabled && store.pixKey) 
+    if (data.paymentMethod === "pix" && Number(order.totalAmount) > 0 && Number(order.depositAmount ?? order.totalAmount) > 0 && store.pixEnabled && store.pixKey)
 {
 
       try 
@@ -1854,7 +1915,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         customerName: data.customerName,
         customerEmail: data.customerEmail,
         customerPhone: data.customerPhone ?? undefined,
-        totalAmount,
+        totalAmount: Number(order.totalAmount),
         productName: items[0]?.productName ?? "Produto",
       
 }
@@ -1944,7 +2005,8 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 {
  constraint: unknown 
 }
-).constraint === "reservations_active_client_trip_unique"
+          ).constraint === "reservations_active_client_trip_unique"
+          || (reservationErr as { constraint?: unknown }).constraint === "reservations_active_store_order_trip_unique"
         ) 
 {
 
@@ -1988,6 +2050,29 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     
 }
 
+    // A zero-value order is already settled by the promotion/cashback ledger.
+    // It has no external payment provider and must not remain as a pending
+    // reservation waiting for a PIX that can never be generated.
+    if (Number(order.totalAmount) <= 0) {
+      Object.assign(order, await settleZeroValueOrder(store, order));
+      reservationExpiresAt = null;
+      await runPostPaymentSideEffects(orderId);
+    }
+
+    let summaryReservation: Pick<typeof reservationsTable.$inferSelect, "status" | "totalValue" | "paidValue" | "balance"> | null = null;
+    if (Number(order.totalAmount) <= 0 && checkoutReservationIds.length > 0) {
+      const [settledReservation] = await db.select({
+        status: reservationsTable.status,
+        totalValue: reservationsTable.totalValue,
+        paidValue: reservationsTable.paidValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(and(
+        eq(reservationsTable.tenantId, store.tenantId),
+        eq(reservationsTable.storeOrderId, order.orderNumber),
+      )).limit(1);
+      summaryReservation = settledReservation ?? null;
+    }
+
     // Deliver the customer-facing QR only after any linked reservation has
     // been created successfully. This prevents a failed seat/capacity claim
     // from sending a payment request for a reservation that does not exist.
@@ -2022,7 +2107,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       paymentToken: orderPaymentToken,
       paidAmount: 0,
       amountRemaining: Number(order.totalAmount).toFixed(2),
-      financialSummary: orderFinancialSummary(order, 0),
+       financialSummary: orderFinancialSummary(order, 0, [], summaryReservation, checkoutReservationIds),
       reservationExpiresAt,
     
 }

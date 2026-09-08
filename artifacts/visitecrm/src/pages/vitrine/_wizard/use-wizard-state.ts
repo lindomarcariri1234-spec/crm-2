@@ -558,13 +558,31 @@ export function useWizardState({
       setTimeout(() => setShowConfetti(false), 5000);
       setStep("confirmado");
     } catch (err: unknown) {
-      if (err instanceof PublicApiError && err.code === "DUPLICATE_RESERVATION") {
-        setSubmitError(
-          "Este cliente já possui uma reserva ativa para esta viagem. Por favor, entre em contato com a agência.",
-        );
-      } else {
-        alert(err instanceof Error ? err.message : "Erro ao finalizar reserva. Tente novamente.");
-      }
+      const code = err instanceof PublicApiError ? err.code : undefined;
+      const messages: Record<string, string> = {
+        DUPLICATE_RESERVATION:
+          "Este cliente já possui uma reserva ativa para esta viagem. Revise os dados ou entre em contato com a agência.",
+        INSUFFICIENT_SEATS:
+          "As vagas selecionadas acabaram de ser ocupadas. Volte à etapa de assentos e escolha novamente.",
+        SEAT_CONFLICT:
+          "Um dos assentos acabou de ser ocupado. Volte à etapa de assentos e escolha novamente.",
+        DEPOSIT_BELOW_MINIMUM:
+          "A entrada informada está abaixo do mínimo exigido pela agência.",
+        DEPOSIT_ABOVE_TOTAL:
+          "A entrada informada é maior que o total atualizado do pedido. Revise o resumo.",
+        UNAUTHENTICATED_CREDIT:
+          "Entre na sua conta para usar o cashback de indicação.",
+        CREDIT_EMAIL_MISMATCH:
+          "O e-mail da conta precisa ser o mesmo informado no pedido para usar o cashback.",
+        RESERVATION_NO_AGENCY_USER:
+          "A agência ainda não está pronta para receber reservas online. Entre em contato para concluir o atendimento.",
+        RESERVATION_SYNC_FAILED:
+          "Não foi possível criar a reserva agora. Nenhum pagamento foi confirmado; tente novamente.",
+      };
+      setSubmitError(
+        (code && messages[code]) ||
+        (err instanceof Error ? err.message : "Erro ao finalizar reserva. Tente novamente."),
+      );
     } finally {
       setSubmitting(false);
     }

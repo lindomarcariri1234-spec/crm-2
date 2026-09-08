@@ -276,6 +276,22 @@ describe("applyDeferredOrderCredits", () => {
     expect(updateSetCalls[0]).toMatchObject({ bonusCreditOrderId: "order-1" });
   });
 
+  it("confirms a checkout reservation without consuming the credit a second time", async () => {
+    installTx([
+      [{ ...PAID_ORDER, pendingCreditSpend: [{ id: "refrow-1", consumedAmount: 15, reserved: true }] }],
+      [{ id: "refrow-1", bonusAmount: "30.00", bonusCreditUsedAmount: "15.00" }],
+    ]);
+
+    await applyDeferredOrderCredits("order-1");
+
+    expect(updateSetCalls).toHaveLength(2);
+    expect(updateSetCalls[0]).toMatchObject({
+      bonusCreditUsedAt: expect.any(Date),
+      bonusCreditOrderId: "order-1",
+    });
+    expect(updateSetCalls[0].bonusCreditUsedAmount).toBeUndefined();
+  });
+
   it("warns and skips when a planned credit row is missing, still marking applied", async () => {
     installTx([
       [{ ...PAID_ORDER, pendingCreditSpend: [{ id: "ghost", consumedAmount: 10 }] }],

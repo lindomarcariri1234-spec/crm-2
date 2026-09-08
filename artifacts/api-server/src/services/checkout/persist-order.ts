@@ -13,7 +13,7 @@ import {
   referralsTable,
   settlementItemsTable,
 } from "@workspace/db";
-import { and, eq, ne, sql, inArray } from "drizzle-orm";
+import { and, asc, eq, ne, sql, inArray } from "drizzle-orm";
 import type { DbExecutor } from "../../lib/reservation-payments";
 import { generateId } from "../../lib/id";
 import { roundMoney } from "../../lib/pricing";
@@ -87,11 +87,17 @@ export interface PersistOrderArgs {
   tripLinkedProducts: Map<string, { product: typeof storeProductsTable.$inferSelect; totalQty: number; totalValue: number }>;
   parsedBirthDate: Date | null;
   /** Referral rows to mark as (partially) consumed for credit spend — processed inside the transaction */
-  creditSpend?: Array<{ id: string; consumedAmount: number }>;
+  creditSpend?: Array<{ id: string; consumedAmount: number; reserved?: boolean }>;
+  /** Requested cashback amount. The rows are selected again under FOR UPDATE
+   * inside this transaction; creditSpend is kept only for older callers. */
+  referralCreditRequested?: number;
+  referralCreditClientId?: string;
 }
 
 export interface PersistOrderResult {
   reservationClientId: string | null;
+  appliedCreditAmount: number;
+  totalAmount: number;
 }
 
 async function writePartnerCommissions(
@@ -318,6 +324,8 @@ async function reservePartnerAvailability(
 
 
 export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<PersistOrderResult> {
+  let appliedCreditAmount = 0;
+  let persistedTotalAmount = args.totalAmount;
   await db.transaction(async (tx) => {
     const claimedProductIds = await lockProductsForCheckout(tx, {
       fetchedProducts: args.fetchedProducts,
@@ -329,6 +337,62 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
         item.inventoryState = "reserved";
       }
     }
+    // Re-read and lock the cashback rows in the same transaction that creates
+    // the order. The earlier route-level read is only a UX estimate and is not
+    // safe as an accounting decision under concurrent checkouts.
+    let effectiveCreditSpend = args.creditSpend;
+    let effectiveDiscountAmount = args.discountAmount;
+    let effectiveTotalAmount = args.totalAmount;
+    if (
+      args.referralCreditRequested != null
+      && args.referralCreditRequested > 0
+      && args.referralCreditClientId
+    ) {
+      const afterPromoDiscount = roundMoney(Math.max(0, args.subtotal - args.promoDiscountAmount));
+      const creditRows = await tx
+        .select({
+          id: referralsTable.id,
+          bonusAmount: referralsTable.bonusAmount,
+          bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+        })
+        .from(referralsTable)
+        .where(and(
+          eq(referralsTable.tenantId, args.store.tenantId),
+          eq(referralsTable.referrerId, args.referralCreditClientId),
+          inArray(referralsTable.status, ["completed", "converted"]),
+          eq(referralsTable.bonusPaid, false),
+          sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
+        ))
+        .orderBy(asc(referralsTable.createdAt))
+        .for("update");
+      const totalAvailable = creditRows.reduce(
+        (sum, row) => sum + Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0)),
+        0,
+      );
+      appliedCreditAmount = roundMoney(Math.min(
+        args.referralCreditRequested,
+        totalAvailable,
+        afterPromoDiscount,
+      ));
+      effectiveDiscountAmount = roundMoney(args.promoDiscountAmount + appliedCreditAmount);
+      effectiveTotalAmount = roundMoney(Math.max(0, args.subtotal - effectiveDiscountAmount));
+      const spend: Array<{ id: string; consumedAmount: number; reserved: boolean }> = [];
+      let remaining = appliedCreditAmount;
+      for (const row of creditRows) {
+        if (remaining <= 0) break;
+        const available = Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0));
+        const consume = roundMoney(Math.min(available, remaining));
+        if (consume > 0) {
+          spend.push({ id: row.id, consumedAmount: consume, reserved: true });
+          remaining = roundMoney(remaining - consume);
+        }
+      }
+      effectiveCreditSpend = spend;
+    } else {
+      appliedCreditAmount = roundMoney(args.creditSpend?.reduce((sum, row) => sum + row.consumedAmount, 0) ?? 0);
+    }
+    persistedTotalAmount = effectiveTotalAmount;
+
     // CRM client upsert is intentionally NOT performed here. An anonymous
     // caller does not need to be authenticated to submit a checkout form, so
     // creating or updating a clientsTable row at this point would let unpaid
@@ -365,7 +429,26 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
       });
     }
 
-    await writeOrderAndItems(tx, args, null, pendingReferralId);
+    const effectiveArgs: PersistOrderArgs = {
+      ...args,
+      discountAmount: effectiveDiscountAmount,
+      totalAmount: effectiveTotalAmount,
+      creditSpend: effectiveCreditSpend,
+    };
+    await writeOrderAndItems(tx, effectiveArgs, null, pendingReferralId);
+    if (effectiveCreditSpend && effectiveCreditSpend.length > 0) {
+      const reservedAt = new Date();
+      for (const spend of effectiveCreditSpend) {
+        if (!spend.reserved) continue;
+        await tx.update(referralsTable).set({
+          bonusCreditUsedAmount: sql`COALESCE(${referralsTable.bonusCreditUsedAmount}, 0) + ${spend.consumedAmount.toFixed(2)}`,
+          updatedAt: reservedAt,
+        }).where(and(
+          eq(referralsTable.id, spend.id),
+          eq(referralsTable.tenantId, args.store.tenantId),
+        ));
+      }
+    }
     const eligibleReferralPartnerIds = await writePartnerCommissions(
       tx, args.store.tenantId, args.orderId, args.orderItemsData, args.fetchedProducts,
     );
@@ -407,7 +490,7 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
   // They are deferred to runPostPaymentSideEffects so they only fire after the
   // order's payment is confirmed.
 
-  return { reservationClientId: null };
+  return { reservationClientId: null, appliedCreditAmount, totalAmount: persistedTotalAmount };
 }
 
 /**

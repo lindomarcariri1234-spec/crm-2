@@ -1,8 +1,9 @@
 import { db, referralsTable, storeOrdersTable } from "@workspace/db";
-import { and, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { REFERRAL_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { logger } from "./logger";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
+import { releaseReservedCreditForOrder } from "../services/checkout/deferred-referral-effects";
 
 /**
  * How old a store order must be (in hours) before its PENDING referral row is
@@ -100,7 +101,10 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
         // that can happen temporarily due to transient retry lag and sweeping
         // would incorrectly reverse a legitimate referral conversion.
         inArray(storeOrdersTable.paymentStatus, UNPAID_STATUSES),
-        isNotNull(storeOrdersTable.pendingReferral),
+        or(
+          isNotNull(storeOrdersTable.pendingReferral),
+          isNotNull(storeOrdersTable.pendingCreditSpend),
+        ),
         isNull(storeOrdersTable.referralEffectsAppliedAt),
         lt(storeOrdersTable.createdAt, cutoff),
       ),
@@ -121,6 +125,7 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
   const reversalNow = new Date();
 
   for (const order of orders) {
+    await releaseReservedCreditForOrder(order.id);
     const ref = order.pendingReferral as {
       code: string;
       referrerId: string;

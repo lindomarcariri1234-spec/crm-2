@@ -256,7 +256,11 @@ export const storeOrdersTable = pgTable("store_orders", {
     /** Store product IDs captured at checkout for campaign product eligibility. */
     storeProductIds?: string[];
   }>(),
-  pendingCreditSpend: json("pending_credit_spend").$type<Array<{ id: string; consumedAmount: number }>>(),
+  pendingCreditSpend: json("pending_credit_spend").$type<Array<{
+    id: string;
+    consumedAmount: number;
+    reserved?: boolean;
+  }>>(),
   referralEffectsAppliedAt: timestamp("referral_effects_applied_at", { withTimezone: true }),
 
   paymentMethod: text("payment_method").notNull(),

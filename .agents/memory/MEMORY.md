@@ -114,3 +114,4 @@
 - [Publication smoke checks](publication-smoke-check.md) — Replit has no postDeploy hook; verify the public storefront and API from the production entrypoint after local readiness.
 - [Vercel external storefront assets](vercel-external-storefront-assets.md) — when storefront HTML is rewritten from Replit, forward hashed `/assets/*` before the SPA fallback so JS is not returned as HTML.
 - [Published chunk verification](published-chunk-verification.md) — recursively fetch same-origin Vite JS imports per public/protected route; pass short-lived auth only through environment headers.
+- [Referral credit reservation](referral-credit-reservation.md) — reserve cashback atomically at checkout; payment confirms it and unpaid orders release it.

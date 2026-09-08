@@ -474,6 +474,7 @@ export default function VitrineCheckout({
 
   async function submit() {
     setLoading(true);
+    setSubmitError(null);
     if (!idempotencyKeyRef.current) {
       idempotencyKeyRef.current = crypto.randomUUID();
     }
@@ -553,8 +554,22 @@ export default function VitrineCheckout({
           );
           return;
         }
+        const actionableMessages: Record<string, string> = {
+          INSUFFICIENT_SEATS: "Não há lugares suficientes para esta viagem. Reduza a quantidade ou escolha outra opção.",
+          SEAT_CONFLICT: "A disponibilidade mudou enquanto você finalizava. Revise os lugares e tente novamente.",
+          DEPOSIT_BELOW_MINIMUM: "O valor de entrada está abaixo do mínimo permitido para este pedido.",
+          DEPOSIT_ABOVE_TOTAL: "O valor de entrada não pode ser maior que o total atualizado do pedido.",
+          UNAUTHENTICATED_CREDIT: "Entre na sua conta para usar o cashback de indicação.",
+          CREDIT_EMAIL_MISMATCH: "O e-mail do checkout precisa ser o mesmo da conta que possui o cashback.",
+          RESERVATION_NO_AGENCY_USER: "A agência ainda não está pronta para confirmar reservas. Tente novamente mais tarde.",
+          RESERVATION_SYNC_FAILED: "Não foi possível confirmar a reserva agora. Tente novamente ou contate a agência.",
+        };
+        if (code && actionableMessages[code]) {
+          setSubmitError(actionableMessages[code]);
+          return;
+        }
       }
-      alert(err instanceof Error ? err.message : "Erro ao finalizar pedido");
+      setSubmitError(err instanceof Error ? err.message : "Erro ao finalizar pedido");
     } finally {
       setLoading(false);
     }
