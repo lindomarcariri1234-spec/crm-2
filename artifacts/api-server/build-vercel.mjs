@@ -44,6 +44,8 @@ const outDir = path.resolve(repoRoot, "api");
 const outFile = path.join(outDir, "bundle.mjs");
 const indexFile = path.join(outDir, "index.mjs");
 const catchAllFile = path.join(outDir, "[...path].mjs");
+const storefrontFile = path.join(outDir, "storefront.mjs");
+const storefrontSourceFile = path.join(repoRoot, "api", "storefront.mjs");
 const artifactOutDir = path.resolve(artifactDir, "api");
 
 const FUNCTION_ENTRYPOINT = `let appPromise;
@@ -215,6 +217,7 @@ const EXTERNAL = [
 
 async function buildAll() {
   const sourceFingerprint = await getBundleSourceFingerprint(repoRoot);
+  const storefrontSource = await readFile(storefrontSourceFile, "utf8");
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
@@ -249,6 +252,7 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   await Promise.all([
     writeFile(indexFile, FUNCTION_ENTRYPOINT, "utf8"),
     writeFile(catchAllFile, FUNCTION_ENTRYPOINT, "utf8"),
+    writeFile(storefrontFile, storefrontSource, "utf8"),
   ]);
 
   // stripe-replit-sync reads its SQL migrations at runtime via a

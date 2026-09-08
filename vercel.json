@@ -6,6 +6,10 @@
   "buildCommand": "pnpm --filter @workspace/api-server deploy:vercel",
   "outputDirectory": "artifacts/visitecrm/dist/public",
   "functions": {
+    "api/storefront.mjs": {
+      "includeFiles": "{artifacts/visitecrm/dist/public/**,artifacts/visitecrm/public/**,public/**}",
+      "maxDuration": 15
+    },
     "api/index.mjs": {
       "includeFiles": "{artifacts/visitecrm/dist/public/**,api/bundle.mjs,api/migrations/**}",
       "maxDuration": 60
@@ -18,11 +22,11 @@
   "rewrites": [
     {
       "source": "/loja/:slug",
-      "destination": "/api?__vercel_api_path=loja/:slug"
+      "destination": "/api/storefront?store_slug=:slug"
     },
     {
       "source": "/loja/:slug/:rest*",
-      "destination": "/api?__vercel_api_path=loja/:slug/:rest*"
+      "destination": "/api/storefront?store_slug=:slug&store_path=:rest*"
     },
     {
       "source": "/api/:path*",
