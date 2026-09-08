@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,76 +32,6 @@ let shuttingDown = false;
 let apiProcess;
 let apiExit;
 let apiExited = Promise.resolve();
-
-function runProductionOneShotRepair() {
-  const repair = process.env["VISITECRM_ONE_SHOT_REPAIR"]?.trim();
-  if (!repair) return;
-  if (repair !== "referral-cancellation") {
-    throw new Error(
-      "[publication-smoke] VISITECRM_ONE_SHOT_REPAIR must be referral-cancellation when set.",
-    );
-  }
-  if (process.env["NODE_ENV"] !== "production") {
-    throw new Error(
-      "[publication-smoke] One-shot repairs are allowed only in the production runtime.",
-    );
-  }
-
-  const apply = process.env["VISITECRM_ONE_SHOT_REPAIR_APPLY"];
-  if (apply !== "true" && apply !== "false") {
-    throw new Error(
-      "[publication-smoke] VISITECRM_ONE_SHOT_REPAIR_APPLY must be explicitly true or false.",
-    );
-  }
-
-  const required = [
-    "VISITECRM_ONE_SHOT_REPAIR_TENANT_ID",
-    "VISITECRM_ONE_SHOT_REPAIR_REFERRAL_ID",
-    "VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID",
-    "VISITECRM_ONE_SHOT_REPAIR_REASON",
-  ];
-  const missing = required.filter((key) => !process.env[key]?.trim());
-  if (missing.length > 0) {
-    throw new Error(
-      `[publication-smoke] Referral cancellation repair is missing: ${missing.join(", ")}.`,
-    );
-  }
-
-  const args = [
-    "--tenant-id=" + process.env["VISITECRM_ONE_SHOT_REPAIR_TENANT_ID"].trim(),
-    "--referral-id=" + process.env["VISITECRM_ONE_SHOT_REPAIR_REFERRAL_ID"].trim(),
-    "--reservation-id=" + process.env["VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID"].trim(),
-    "--reason=" + process.env["VISITECRM_ONE_SHOT_REPAIR_REASON"].trim(),
-  ];
-  if (apply === "true") args.push("--apply");
-
-  console.log(
-    `[publication-smoke] Running production referral cancellation ${apply === "true" ? "apply" : "dry-run"} ` +
-      "inside the same runtime as the published API.",
-  );
-  const result = spawnSync(
-    "pnpm",
-    [
-      "--filter",
-      "@workspace/scripts",
-      "run",
-      "repair:referral-cancellation",
-      "--",
-      ...args,
-    ],
-    {
-      cwd: path.resolve("."),
-      env: process.env,
-      stdio: "inherit",
-    },
-  );
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(
-      `[publication-smoke] Production referral repair exited with status ${result.status}.`,
-    );
-  }
-}
 
 async function stopApi(signal = "SIGTERM") {
   if (!apiProcess) return;
@@ -209,7 +139,6 @@ async function run() {
       configuredExpectedVersion ??
       (await getBuiltPublicationVersion(publicationVersionPath));
     await getLocalPublicationVersion(storefrontIndexPath, expectedVersion);
-    runProductionOneShotRepair();
     apiProcess = spawn(
       process.execPath,
       ["--enable-source-maps", apiEntrypoint],
