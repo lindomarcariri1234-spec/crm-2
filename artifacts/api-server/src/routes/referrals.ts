@@ -1,5 +1,5 @@
 import { Router, type NextFunction } from "express";
-import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable } from "@workspace/db";
+import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable, auditLogsTable } from "@workspace/db";
 import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
@@ -2455,9 +2455,16 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
       const bonusAmountStr = String(lockedRow.bonus_amount ?? existing.bonusAmount ?? "0");
 
       // Lock the referrer's client row before modifying their balance.
-      await tx.execute(
-        sql`SELECT id FROM clients WHERE id = ${referrerId} AND tenant_id = ${me.tenantId} FOR UPDATE`
+      const lockedClient = await tx.execute(
+        sql`SELECT id, successful_referrals, referral_earnings
+            FROM clients
+            WHERE id = ${referrerId} AND tenant_id = ${me.tenantId}
+            FOR UPDATE`
       );
+      const clientBefore = (lockedClient.rows as Array<Record<string, unknown>>)[0];
+      if (!clientBefore) {
+        throw new AppError("Indicador não encontrado para receber o estorno.", 422, "REFERRAL_REFERRER_NOT_FOUND");
+      }
       await tx.update(clientsTable)
         .set({
           successfulReferrals: sql`GREATEST(0, COALESCE(successful_referrals, 0) - 1)`,
@@ -2487,6 +2494,39 @@ router.patch("/referrals/:id/reverse", async (req, res, next: NextFunction): Pro
           eq(referralCommissionsTable.referralId, existing.id),
           inArray(referralCommissionsTable.status, ["pending", "approved"]),
         ));
+
+      if (existing.reservationId) {
+        await tx.update(reservationsTable)
+          .set({ referralReversalAt: reversalNow })
+          .where(and(
+            eq(reservationsTable.id, existing.reservationId),
+            eq(reservationsTable.tenantId, me.tenantId),
+            isNull(reservationsTable.referralReversalAt),
+          ));
+      }
+
+      await tx.insert(auditLogsTable).values({
+        id: generateId(),
+        tenantId: me.tenantId,
+        userId: me.id,
+        action: "reverse_referral",
+        entityType: "referral",
+        entityId: existing.id,
+        before: {
+          status: lockedRow.status,
+          bonusPaid: lockedRow.bonus_paid,
+          bonusAmount: bonusAmountStr,
+          reservationId: existing.reservationId,
+          successfulReferrals: clientBefore.successful_referrals,
+          referralEarnings: clientBefore.referral_earnings,
+        },
+        after: {
+          status: REFERRAL_STATUS.REVERSED,
+          reversalReason: parsed.data.reason,
+          reversalAt: reversalNow.toISOString(),
+          reservationReferralReversalAt: existing.reservationId ? reversalNow.toISOString() : null,
+        },
+      });
 
       return { referrerId, referredId, bonusAmountStr };
     });
