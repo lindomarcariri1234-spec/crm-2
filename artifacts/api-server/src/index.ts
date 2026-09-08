@@ -4,6 +4,7 @@
 // This must be set before any network calls (including UploadThing metadata
 // registration and other SDK initializations).
 import dns from "node:dns";
+import { spawnSync } from "node:child_process";
 dns.setDefaultResultOrder("ipv4first");
 
 // Patch globalThis.fetch for UploadThing CDN uploads — must be the first
@@ -70,6 +71,74 @@ const port = Number(rawPort);
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
+}
+
+function runProductionOneShotRepair(): void {
+  const repair = process.env["VISITECRM_ONE_SHOT_REPAIR"]?.trim();
+  if (!repair) return;
+  if (repair !== "referral-cancellation") {
+    throw new Error(
+      "VISITECRM_ONE_SHOT_REPAIR must be referral-cancellation when set in the API artifact.",
+    );
+  }
+  if (process.env["NODE_ENV"] !== "production") {
+    throw new Error("One-shot repairs are allowed only in the production API artifact.");
+  }
+
+  const apply = process.env["VISITECRM_ONE_SHOT_REPAIR_APPLY"];
+  if (apply !== "true" && apply !== "false") {
+    throw new Error(
+      "VISITECRM_ONE_SHOT_REPAIR_APPLY must be explicitly true or false.",
+    );
+  }
+
+  const required = [
+    "VISITECRM_ONE_SHOT_REPAIR_TENANT_ID",
+    "VISITECRM_ONE_SHOT_REPAIR_REFERRAL_ID",
+    "VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID",
+    "VISITECRM_ONE_SHOT_REPAIR_REASON",
+  ] as const;
+  const missing = required.filter((key) => !process.env[key]?.trim());
+  if (missing.length > 0) {
+    throw new Error(
+      `Referral cancellation repair is missing: ${missing.join(", ")}.`,
+    );
+  }
+
+  const args = [
+    "--tenant-id=" + process.env["VISITECRM_ONE_SHOT_REPAIR_TENANT_ID"]!.trim(),
+    "--referral-id=" + process.env["VISITECRM_ONE_SHOT_REPAIR_REFERRAL_ID"]!.trim(),
+    "--reservation-id=" + process.env["VISITECRM_ONE_SHOT_REPAIR_RESERVATION_ID"]!.trim(),
+    "--reason=" + process.env["VISITECRM_ONE_SHOT_REPAIR_REASON"]!.trim(),
+  ];
+  if (apply === "true") args.push("--apply");
+
+  logger.info(
+    { apply: apply === "true" },
+    "[one-shot-repair] Running referral cancellation repair inside the production API artifact",
+  );
+  const result = spawnSync(
+    "pnpm",
+    [
+      "--filter",
+      "@workspace/scripts",
+      "run",
+      "repair:referral-cancellation",
+      "--",
+      ...args,
+    ],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "inherit",
+    },
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      `Production referral repair exited with status ${result.status}.`,
+    );
+  }
 }
 
 // CREDENTIAL_ENCRYPTION_KEY is mandatory in every environment because gateway
@@ -268,6 +337,9 @@ applyMigrations()
   .catch((err) => {
     logger.error({ err }, "Startup migration or credential backfill failed — aborting boot");
     process.exit(1);
+  })
+  .then(() => {
+    runProductionOneShotRepair();
   })
   .then(() => {
     // Initialize Stripe sync engine (non-fatal — warns if STRIPE_SECRET_KEY not set)
