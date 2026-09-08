@@ -18,11 +18,11 @@
   "rewrites": [
     {
       "source": "/loja/:slug",
-      "destination": "https://crm-2-lindomarcariri.replit.app/loja/:slug"
+      "destination": "/api?__vercel_api_path=loja/:slug"
     },
     {
       "source": "/loja/:slug/:rest*",
-      "destination": "https://crm-2-lindomarcariri.replit.app/loja/:slug/:rest*"
+      "destination": "/api?__vercel_api_path=loja/:slug/:rest*"
     },
     {
       "source": "/api/:path*",

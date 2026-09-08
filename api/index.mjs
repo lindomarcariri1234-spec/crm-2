@@ -39,7 +39,8 @@ function restoreRewrittenApiPath(request) {
   if (path === null) return;
   url.searchParams.delete("__vercel_api_path");
   const search = url.searchParams.toString();
-  request.url = `/api/${path}${search ? `?${search}` : ""}`;
+  const isStorefrontPath = path === "loja" || path.startsWith("loja/");
+  request.url = `${isStorefrontPath ? "" : "/api/"}${path}${search ? `?${search}` : ""}`;
 }
 
 async function getApp() {
