@@ -122,7 +122,10 @@ vi.mock("../services/checkout/reservation-confirmation-outbox.js", () => ({
 }));
 
 import { db } from "@workspace/db";
-import { runPostPaymentSideEffects } from "../services/checkout/post-booking.js";
+import {
+  runDeferredOrderAccounting,
+  runPostPaymentSideEffects,
+} from "../services/checkout/post-booking.js";
 
 // Each db.select() call pops the next result set off this queue. where() returns
 // a thenable (for terminal `await … .where()`) that also exposes .limit() (for
@@ -184,6 +187,27 @@ beforeEach(() => {
 });
 
 describe("runPostPaymentSideEffects", () => {
+  it("retries only deferred accounting without reading the order or writing duplicate CRM effects", async () => {
+    mockApplyDeferredOrderCredits.mockResolvedValueOnce({ conversionApplied: false });
+
+    await runDeferredOrderAccounting("order-1", { throwOnDeferredError: true });
+
+    expect(mockApplyDeferredOrderCredits).toHaveBeenCalledWith(
+      "order-1",
+      expect.objectContaining({ throwOnDeferredError: true }),
+    );
+    expect(db.select).not.toHaveBeenCalled();
+    expect(mockWriteClientActivity).not.toHaveBeenCalled();
+  });
+
+  it("propagates deferred accounting failures when the caller requests provider retry", async () => {
+    mockApplyDeferredOrderCredits.mockRejectedValueOnce(new Error("temporary database failure"));
+
+    await expect(runPostPaymentSideEffects("order-1", {
+      throwOnDeferredError: true,
+    })).rejects.toThrow("temporary database failure");
+  });
+
   it("mints a referral code AND provisions a portal account for a paid trip order", async () => {
     installSelectQueue([
       [ORDER], // order lookup
