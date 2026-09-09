@@ -66,6 +66,19 @@ async function healthHandler(_req: Request, res: Response): Promise<void> {
   const degraded =
     !dbConnected || (redisConfigured && (!redisConnected || !bullmqActive));
 
+  if (degraded) {
+    logger.warn(
+      {
+        databaseConnected: dbConnected,
+        redisConfigured,
+        redisConnected,
+        bullmqActive,
+        workers,
+      },
+      "[health] Health check degraded",
+    );
+  }
+
   const data = HealthCheckResponse.parse({
     status: degraded ? "degraded" : "ok",
     database: {
