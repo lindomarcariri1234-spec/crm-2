@@ -7,12 +7,18 @@ modules = ["web", "bash", "nodejs-24", "python-base-3.13", "postgresql-16"]
   id = "artifacts/api-server"
 
   [[artifacts]]
+  id = "artifacts/cliente-app"
+
+  [[artifacts]]
+  id = "artifacts/guide-app"
+
+  [[artifacts]]
   id = "artifacts/mockup-sandbox"
 
   [deployment]
   router = "application"
 deploymentTarget = "autoscale"
-run = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+run = ["sh", "-c", "set -eu; expected_version=\"${PUBLICATION_EXPECTED_VERSION:-$(node --input-type=module -e 'import { getBuiltPublicationVersion } from \"./scripts/start-production.mjs\"; process.stdout.write(await getBuiltPublicationVersion());')}\"; if [ -z \"$expected_version\" ]; then echo 'PUBLICATION_EXPECTED_VERSION could not be determined from the built storefront.' >&2; exit 1; fi; exec env PUBLICATION_EXPECTED_VERSION=\"$expected_version\" node --enable-source-maps scripts/start-production.mjs"]
 
   [deployment.postBuild]
   args = ["pnpm", "store", "prune"]
@@ -190,6 +196,7 @@ RESEND_FROM_EMAIL = "VisiteCRM <reservas@resend.visitecrm.com>"
 SUPERADMIN_CLERK_ID = "user_3HaDzC14MwYlHVrzWU6jTFtsZGi"
 FRONTEND_URL = "https://visitecrm.com"
 VITE_APP_URL = "https://visitecrm.com/"
+PUBLICATION_SMOKE_URL = "https://crm-2-lindomarcariri.replit.app"
 VITE_STRIPE_PUBLIC_KEY = "pk_live_51TSu3dKLGMGrnwqHxjXo5fRdJdAyFQHsuFoWG6BaJKx6GGza4pjg2PPMQzFch9OMDVeLOHU07SxYp3J4v27FL5lT00yZoKCeXr"
 
   [userenv.development]
