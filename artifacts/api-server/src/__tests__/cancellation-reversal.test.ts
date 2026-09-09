@@ -11,6 +11,16 @@
  * Uses supertest + vi.mock to isolate the DB layer.
  */
 
+import {
+  clientsTable,
+  commissionsTable,
+  loyaltyMembersTable,
+  referralsTable,
+  reservationsTable,
+  storeCouponsTable,
+  storeOrdersTable,
+  tripsTable,
+} from "@workspace/db";
 import { ROLES } from "@workspace/permissions";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
@@ -36,7 +46,7 @@ const {
   mockSyncTrip,
   mockSyncTripGeneral,
 } = vi.hoisted(() => {
-  const capturedUpdates: Array<{ table: string; set: Record<string, unknown> }> = [];
+  const capturedUpdates: Array<{ table: unknown; set: Record<string, unknown> }> = [];
   const capturedInserts: Record<string, unknown>[] = [];
 
   const mockTxLimit = vi.fn();
@@ -310,30 +320,42 @@ function makeReservation(overrides: Record<string, unknown> = {}) {
  *   await tx.select().from().limit(n)           → array
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function makeChain(resolveData: () => unknown[]): any {
-  const p: any = {
-    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve().then(resolveData).then(resolve, reject),
-  };
-  p.limit = vi.fn().mockImplementation(() => makeChain(resolveData));
-  // Lazy implementations prevent infinite-recursion at mock-creation time
-  p.where = vi.fn().mockImplementation(() => makeChain(resolveData));
-  p.from = vi.fn().mockImplementation(() => makeChain(resolveData));
-  p.orderBy = vi.fn().mockImplementation(() => makeChain(resolveData));
-  // Reservation locking is a separate terminal operation. Keep it out of the
-  // ordinary response queue so existing tests can continue to queue the
-  // post-update reservation re-fetch as their first response.
-  p.for = vi.fn().mockImplementation(() => makeChain(() => [{
+function makeChain(
+  resolveData: () => unknown[],
+  forResponse: () => unknown[] = () => [{
     id: "res-001",
     tripId: "trip-001",
     status: "pending",
     seats: ["1A"],
     capacityUnits: null,
-  }]));
+  }],
+): any {
+  const p: any = {
+    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve().then(resolveData).then(resolve, reject),
+  };
+  p.limit = vi.fn().mockImplementation(() => makeChain(resolveData, forResponse));
+  // Lazy implementations prevent infinite-recursion at mock-creation time
+  p.where = vi.fn().mockImplementation(() => makeChain(resolveData, forResponse));
+  p.from = vi.fn().mockImplementation(() => makeChain(resolveData, forResponse));
+  p.orderBy = vi.fn().mockImplementation(() => makeChain(resolveData, forResponse));
+  // Reservation locking is a separate terminal operation. Keep it out of the
+  // ordinary response queue so existing tests can continue to queue the
+  // post-update reservation re-fetch as their first response.
+  p.for = vi.fn().mockImplementation(() => makeChain(forResponse));
   return p;
 }
 
-function buildTxMock(selectResponses: unknown[][] = []) {
+function buildTxMock(
+  selectResponses: unknown[][] = [],
+  lockReservation: Record<string, unknown> = {
+    id: "res-001",
+    tripId: "trip-001",
+    status: "pending",
+    seats: ["1A"],
+    capacityUnits: null,
+  },
+) {
   const queue = [...selectResponses];
   const nextSelectResponse = () => queue.shift() ?? [];
 
@@ -344,11 +366,6 @@ function buildTxMock(selectResponses: unknown[][] = []) {
     });
     return result;
   });
-  const updateSet = vi.fn().mockImplementation((setArg) => {
-    capturedUpdates.push({ table: "unknown", set: setArg });
-    return { where: updateSetWhere };
-  });
-
   return {
     execute: vi.fn().mockResolvedValue({
       rows: [{ id: "trip-001", available_seats: 10, type: "excursao" }],
@@ -359,12 +376,17 @@ function buildTxMock(selectResponses: unknown[][] = []) {
         return Promise.resolve([]);
       }),
     })),
-    update: vi.fn().mockImplementation(() => ({ set: updateSet })),
+    update: vi.fn().mockImplementation((table: unknown) => ({
+      set: vi.fn().mockImplementation((setArg) => {
+        capturedUpdates.push({ table, set: setArg });
+        return { where: updateSetWhere };
+      }),
+    })),
     select: vi.fn().mockImplementation(() => {
       // Dequeue at the terminal await, not at SELECT construction time. This
       // lets FOR UPDATE use its own lock fixture without shifting the queue
       // used by ordinary SELECT/limit calls.
-      return makeChain(nextSelectResponse);
+      return makeChain(nextSelectResponse, () => [lockReservation]);
     }),
   };
 }
@@ -465,8 +487,13 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
       .send({ status: "cancelled" });
 
     expect(res.status).toBe(200);
-    // trips (seats) + storeCoupons (usageCount) + commissions (cancel) + reservations (status)
-    expect(tx.update).toHaveBeenCalledTimes(4);
+    // protected reservation transition + trips (seats) + storeCoupons
+    // (usageCount) + commissions (cancel) + final reservation audit update
+    expect(tx.update).toHaveBeenCalledTimes(5);
+    expect(capturedUpdates.filter((u) => u.table === reservationsTable)).toHaveLength(2);
+    expect(capturedUpdates.some((u) => u.table === storeCouponsTable && "usageCount" in u.set)).toBe(true);
+    expect(capturedUpdates.some((u) => u.table === tripsTable && "availableSeats" in u.set)).toBe(true);
+    expect(capturedUpdates.some((u) => u.table === commissionsTable && u.set.status === "cancelled")).toBe(true);
   });
 
   // -------------------------------------------------------------------------
@@ -508,8 +535,9 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
       .send({ status: "cancelled" });
 
     expect(res.status).toBe(200);
-    // trips (seats) + storeCoupons (usageCount) + commissions (cancel) + reservations (status) = 4
-    expect(tx.update).toHaveBeenCalledTimes(4);
+    // protected reservation transition + trips (seats) + storeCoupons
+    // (usageCount) + commissions (cancel) + final reservation audit update = 5
+    expect(tx.update).toHaveBeenCalledTimes(5);
 
     // The coupon update must have been captured with the usageCount field present
     const couponUpdate = capturedUpdates.find(
@@ -1769,7 +1797,10 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
 
     // tx select queue: only the re-fetch after UPDATE
     // No reversal selects run (no discounts, no clientId)
-    const tx = buildTxMock([[cancelled]]);
+    const tx = buildTxMock([[cancelled]], {
+      ...existing,
+      capacityUnits: null,
+    });
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
 
     mockLimit
@@ -1781,9 +1812,12 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
       .send({ status: "cancelled" });
 
     expect(res.status).toBe(200);
-    // commissions cancel + reservations status update = 2 updates
+    // protected reservation transition + commissions cancel = 2 updates
     // trips is NOT updated because seatsCount === 0
     expect(tx.update).toHaveBeenCalledTimes(2);
+    expect(capturedUpdates.filter((u) => u.table === tripsTable)).toHaveLength(0);
+    expect(capturedUpdates.filter((u) => u.table === reservationsTable)).toHaveLength(1);
+    expect(capturedUpdates.filter((u) => u.table === commissionsTable)).toHaveLength(1);
 
     // Verify that none of the captured updates targeted tripsTable seat columns.
     // We detect a seat-restore update by the presence of `availableSeats` in its set.
@@ -1871,9 +1905,11 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     // trips (seats) + commissions (cancel) + storeOrders (cancel) + reservations = 4 updates
     expect(tx.update).toHaveBeenCalledTimes(4);
 
-    // The store order update must set { status: "cancelled", cancelledAt: <Date> }
+    // The store order update must set { status: "cancelled", cancelledAt: <Date> }.
+    // The protected reservation transition also has cancelledAt, so identify
+    // the order by its table.
     const storeOrderUpdate = capturedUpdates.find(
-      (u) => u.set.status === "cancelled" && "cancelledAt" in u.set,
+      (u) => u.table === storeOrdersTable && u.set.status === "cancelled" && "cancelledAt" in u.set,
     );
     expect(storeOrderUpdate).toBeDefined();
   });
@@ -1908,9 +1944,10 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     // trips (seats) + commissions (cancel) + reservations = 3 — NO store order update
     expect(tx.update).toHaveBeenCalledTimes(3);
 
-    // Confirm no update with cancelledAt was issued
+    // The protected reservation transition still has cancelledAt; the
+    // store-order table must remain untouched.
     const storeOrderUpdate = capturedUpdates.find(
-      (u) => "cancelledAt" in u.set,
+      (u) => u.table === storeOrdersTable,
     );
     expect(storeOrderUpdate).toBeUndefined();
   });
@@ -2022,7 +2059,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     expect(couponUpdate).toBeDefined();
 
     const storeOrderUpdate = capturedUpdates.find(
-      (u) => u.set.status === "cancelled" && "cancelledAt" in u.set,
+      (u) => u.table === storeOrdersTable && u.set.status === "cancelled" && "cancelledAt" in u.set,
     );
     expect(storeOrderUpdate).toBeDefined();
   });
@@ -2050,8 +2087,9 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
 
     expect(res.status).toBe(200);
 
-    // No cancelledAt update should appear (store order path never executed)
-    const storeOrderUpdate = capturedUpdates.find((u) => "cancelledAt" in u.set);
+    // The protected reservation transition has cancelledAt, but the
+    // store-order table must remain untouched.
+    const storeOrderUpdate = capturedUpdates.find((u) => u.table === storeOrdersTable);
     expect(storeOrderUpdate).toBeUndefined();
   });
 
@@ -2096,7 +2134,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
 
     // The store order update must set { status: "cancelled", cancelledAt: <Date> }
     const storeOrderUpdate = capturedUpdates.find(
-      (u) => u.set.status === "cancelled" && "cancelledAt" in u.set,
+      (u) => u.table === storeOrdersTable && u.set.status === "cancelled" && "cancelledAt" in u.set,
     );
     expect(storeOrderUpdate).toBeDefined();
   });
@@ -2131,7 +2169,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     // trips (seats) + commissions (cancel) + reservations = 3 — NO store order update
     expect(tx.update).toHaveBeenCalledTimes(3);
 
-    const storeOrderUpdate = capturedUpdates.find((u) => "cancelledAt" in u.set);
+    const storeOrderUpdate = capturedUpdates.find((u) => u.table === storeOrdersTable);
     expect(storeOrderUpdate).toBeUndefined();
   });
 
@@ -2196,7 +2234,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     // trips (seats) + commissions (cancel) + reservations = 3 — NO store order update
     expect(tx.update).toHaveBeenCalledTimes(3);
 
-    const storeOrderUpdate = capturedUpdates.find((u) => "cancelledAt" in u.set);
+    const storeOrderUpdate = capturedUpdates.find((u) => u.table === storeOrdersTable);
     expect(storeOrderUpdate).toBeUndefined();
   });
 
@@ -2435,10 +2473,19 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     let releaseTx2: () => void;
     const tx2Gate = new Promise<void>(r => { releaseTx2 = r; });
 
+    const protectedTransitionResult = () => {
+      const result = Promise.resolve([]);
+      Object.assign(result, {
+        returning: vi.fn().mockResolvedValue([{ id: "res-001" }]),
+      });
+      return result;
+    };
+
     // tx1 — first to acquire the FOR UPDATE lock, runs the full clawback.
     // insert.values() pauses (max 10 ms) waiting for tx2 to reach execute(),
     // ensuring both transactions overlap before tx1 finally commits.
     let tx1Idx = 0;
+    let tx1SelectCalls = 0;
     const tx1SelectQueue: unknown[][] = [
       [],                                                            // [0] payments
       [{ id: "member-001", availablePoints: 50, totalPoints: 50 }], // [1] loyaltyMember
@@ -2457,12 +2504,18 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
       update: vi.fn().mockImplementation(() => ({
         set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
           capturedUpdates.push({ table: "unknown", set: setArg });
-          return { where: vi.fn().mockResolvedValue([]) };
+          return { where: vi.fn().mockImplementation(protectedTransitionResult) };
         }),
       })),
       select: vi.fn().mockImplementation(() => {
+        if (tx1SelectCalls++ === 0) {
+          return makeChain(
+            () => [],
+            () => [{ ...existing, capacityUnits: null }],
+          );
+        }
         const idx = tx1Idx++;
-        return makeChain(idx < tx1SelectQueue.length ? tx1SelectQueue[idx] as unknown[] : [cancelled]);
+        return makeChain(() => idx < tx1SelectQueue.length ? tx1SelectQueue[idx] as unknown[] : [cancelled]);
       }),
     };
 
@@ -2471,6 +2524,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     //   WITH lock: returns [existing tx] (tx1 has committed)
     //   WITHOUT lock: returns [] (tx1 still mid-commit → double-insert!)
     let tx2Idx = 0;
+    let tx2SelectCalls = 0;
     const tx2 = {
       execute: vi.fn().mockImplementation(async () => {
         releaseTx1();   // unblock tx1's insert.values() gate
@@ -2485,24 +2539,30 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
       update: vi.fn().mockImplementation(() => ({
         set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
           capturedUpdates.push({ table: "unknown", set: setArg });
-          return { where: vi.fn().mockResolvedValue([]) };
+          return { where: vi.fn().mockImplementation(protectedTransitionResult) };
         }),
       })),
       select: vi.fn().mockImplementation(() => {
+        if (tx2SelectCalls++ === 0) {
+          return makeChain(
+            () => [],
+            () => [{ ...existing, capacityUnits: null }],
+          );
+        }
         const idx = tx2Idx++;
-        if (idx === 0) return makeChain([]);
-        if (idx === 1) return makeChain([{ id: "member-001", availablePoints: 50, totalPoints: 50 }]);
+          if (idx === 0) return makeChain(() => []);
+          if (idx === 1) return makeChain(() => [{ id: "member-001", availablePoints: 50, totalPoints: 50 }]);
         if (idx === 2) {
           // Idempotency: dynamic based on whether tx1 has committed.
           // tx2.execute() blocked until tx1 committed → tx1HasCommitted=true here (WITH lock).
           // Without the execute() call tx2 reaches this immediately → tx1HasCommitted=false.
-          return makeChain(tx1HasCommitted ? [{ id: "cancel-tx-001" }] : []);
+          return makeChain(() => tx1HasCommitted ? [{ id: "cancel-tx-001" }] : []);
         }
         // idx=3: refetch (WITH lock, idempotency skipped earnTxs)
         //        OR earnTxs (WITHOUT lock, idempotency returned [] → would insert)
-        if (idx === 3) return makeChain(tx1HasCommitted ? [cancelled] : [{ points: 50 }]);
+        if (idx === 3) return makeChain(() => tx1HasCommitted ? [cancelled] : [{ points: 50 }]);
         // idx=4: refetch (only WITHOUT lock — after earnTxs was at idx=3)
-        return makeChain([cancelled]);
+        return makeChain(() => [cancelled]);
       }),
     };
 
@@ -2588,8 +2648,9 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
       .send({ status: "refunded" });
 
     expect(res.status).toBe(200);
-    // trips (seats) + storeCoupons (usageCount) + commissions (cancel) + reservations (status)
-    expect(tx.update).toHaveBeenCalledTimes(4);
+    // protected reservation transition + trips (seats) + storeCoupons
+    // (usageCount) + commissions (cancel) + final reservation audit update = 5
+    expect(tx.update).toHaveBeenCalledTimes(5);
   });
 
   // -------------------------------------------------------------------------
@@ -2759,15 +2820,16 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
       .send({ status: "refunded" });
 
     expect(res.status).toBe(200);
-    // trips (seats) + storeCoupons (usageCount) + commissions + storeOrders + reservations = 5
-    expect(tx.update).toHaveBeenCalledTimes(5);
+    // protected reservation transition + trips + storeCoupons + commissions +
+    // storeOrders + final reservation audit update = 6
+    expect(tx.update).toHaveBeenCalledTimes(6);
 
     // Both the coupon update and the store order cancel must be present together
     const couponUpdate = capturedUpdates.find((u) => "usageCount" in u.set);
     expect(couponUpdate).toBeDefined();
 
     const storeOrderUpdate = capturedUpdates.find(
-      (u) => u.set.status === "cancelled" && "cancelledAt" in u.set,
+      (u) => u.table === storeOrdersTable && u.set.status === "cancelled" && "cancelledAt" in u.set,
     );
     expect(storeOrderUpdate).toBeDefined();
   });
