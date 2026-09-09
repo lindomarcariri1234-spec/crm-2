@@ -15,15 +15,32 @@ import request from "supertest";
 // vi.hoisted: shared mock factories must exist before any vi.mock factory runs
 // ---------------------------------------------------------------------------
 
-const { mockLimit, mockWhere, mockFrom, mockSelect, mockTransaction, mockEnqueueConfirmation } = vi.hoisted(() => {
+const {
+  mockLimit,
+  mockWhere,
+  mockFrom,
+  mockSelect,
+  mockTransaction,
+  mockOrderBy,
+  mockEnqueueConfirmation,
+} = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere: ReturnType<typeof vi.fn> = vi.fn(() => ({ limit: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
   const mockTransaction = vi.fn();
+  const mockOrderBy = vi.fn();
   const mockEnqueueConfirmation = vi.fn().mockResolvedValue(undefined);
 
-  return { mockLimit, mockWhere, mockFrom, mockSelect, mockTransaction, mockEnqueueConfirmation };
+  return {
+    mockLimit,
+    mockWhere,
+    mockFrom,
+    mockSelect,
+    mockTransaction,
+    mockOrderBy,
+    mockEnqueueConfirmation,
+  };
 });
 
 // ---------------------------------------------------------------------------
@@ -174,6 +191,7 @@ import {
   resolveClerkPublishableKey,
   shouldBypassClerkForPath,
 } from "../lib/clerk-request.js";
+import { getTenantUser } from "../lib/tenant.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Express app
@@ -287,6 +305,15 @@ function buildTxMock() {
   };
 }
 
+function orderedResult<T>(rows: T[]) {
+  const result = Object.assign(Promise.resolve(rows), {
+    limit: mockLimit,
+    for: vi.fn(),
+  });
+  result.for.mockReturnValue(result);
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Tests: POST /api/public/store/:slug/orders
 // ---------------------------------------------------------------------------
@@ -294,6 +321,7 @@ function buildTxMock() {
 describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getTenantUser).mockReset();
 
     // Default `where()` is a thenable that ALSO exposes `.limit` so both
     // patterns work without extra setup:
@@ -302,10 +330,15 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     // mockWhere must expose both .limit() and .orderBy().limit() so queries
     // like `.where(...).orderBy(desc(...)).limit(1)` (used in referral-campaigns
     // and referral-conversion) chain correctly through mockLimit.
-    const mockOrderBy = vi.fn().mockReturnValue({ limit: mockLimit });
-    mockWhere.mockReturnValue(
-      Object.assign(Promise.resolve([]), { limit: mockLimit, orderBy: mockOrderBy }),
-    );
+    mockOrderBy.mockReset();
+    mockOrderBy.mockReturnValue(Object.assign(Promise.resolve([]), { limit: mockLimit }));
+    const whereResult = Object.assign(Promise.resolve([]), {
+      limit: mockLimit,
+      orderBy: mockOrderBy,
+      for: vi.fn(),
+    });
+    whereResult.for.mockReturnValue(whereResult);
+    mockWhere.mockReturnValue(whereResult);
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy } as unknown as { where: typeof mockWhere; limit: typeof mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
 
@@ -776,6 +809,116 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty("orderId");
     expect(parseFloat(res.body.totalAmount)).toBeLessThan(150);
+  });
+
+  // ── 7. Referral credit authorization and bounds ────────────────────────────
+
+  it("rejects referral credit usage when the request has no authenticated session", async () => {
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([FAKE_PRODUCT]);
+    vi.mocked(getTenantUser).mockResolvedValue(null);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, referralCreditUsed: 25 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("UNAUTHENTICATED_CREDIT");
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects referral credit usage when the account email differs from the order email", async () => {
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([FAKE_PRODUCT]);
+    vi.mocked(getTenantUser).mockResolvedValue({
+      email: "outra-conta@example.com",
+    } as never);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, referralCreditUsed: 25 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("CREDIT_EMAIL_MISMATCH");
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("clamps requested referral credit to the available balance before persisting the order", async () => {
+    const creditRow = {
+      id: "referral-credit-001",
+      bonusAmount: "40.00",
+      bonusCreditUsedAmount: "0.00",
+    };
+    const creditOrder = {
+      ...FAKE_ORDER,
+      discountAmount: "40.00",
+      totalAmount: "110.00",
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])       // getActiveStore
+      .mockResolvedValueOnce([FAKE_PRODUCT])     // product fetch
+      .mockResolvedValueOnce([{ id: "client-001" }]) // credit client lookup
+      .mockResolvedValueOnce([creditOrder]);     // post-tx order re-fetch
+    mockOrderBy
+      .mockReturnValueOnce(orderedResult([creditRow])) // route estimate
+      .mockReturnValueOnce(orderedResult([creditRow])); // transaction lock/re-read
+    vi.mocked(getTenantUser).mockResolvedValue({
+      email: VALID_BODY.customerEmail,
+    } as never);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, referralCreditUsed: 999 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.discountAmount).toBe("40.00");
+    expect(res.body.totalAmount).toBe("110.00");
+    expect(mockOrderBy).toHaveBeenCalledTimes(2);
+  });
+
+  it("clamps referral credit to the order total when the balance is larger", async () => {
+    const creditRow = {
+      id: "referral-credit-002",
+      bonusAmount: "500.00",
+      bonusCreditUsedAmount: "0.00",
+    };
+    const zeroValueOrder = {
+      ...FAKE_ORDER,
+      discountAmount: "150.00",
+      totalAmount: "0.00",
+      amountRemaining: "0.00",
+    };
+    const lockedOrder = {
+      id: "gen-id",
+      orderNumber: zeroValueOrder.orderNumber,
+      status: "pending",
+      paymentStatus: "pending",
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])       // getActiveStore
+      .mockResolvedValueOnce([FAKE_PRODUCT])     // product fetch
+      .mockResolvedValueOnce([{ id: "client-001" }]) // credit client lookup
+      .mockResolvedValueOnce([zeroValueOrder])   // post-tx order re-fetch
+      .mockResolvedValueOnce([lockedOrder]);     // settleZeroValueOrder lock
+    mockOrderBy
+      .mockReturnValueOnce(orderedResult([creditRow])) // route estimate
+      .mockReturnValueOnce(orderedResult([creditRow])); // transaction lock/re-read
+    vi.mocked(getTenantUser).mockResolvedValue({
+      email: VALID_BODY.customerEmail,
+    } as never);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, referralCreditUsed: 999 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.discountAmount).toBe("150.00");
+    expect(res.body.totalAmount).toBe("0.00");
+    expect(res.body.amountRemaining).toBe("0.00");
   });
 
   // ── 7. Feature-flag gates (referralsEnabled / couponsEnabled) ───────────
