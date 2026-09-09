@@ -97,7 +97,7 @@ vi.mock("../services/outbound-delivery", () => ({
 }));
 
 vi.mock("../services/checkout/deferred-referral-effects", () => ({
-  releaseReservedCreditForOrder: vi.fn().mockResolvedValue(undefined),
+  invalidateOrderAfterReservationFailure: vi.fn().mockResolvedValue(true),
 }));
 
 // ---------------------------------------------------------------------------
