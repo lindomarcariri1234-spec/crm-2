@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStorefrontHandler } from "./storefront.mjs";
+import { createStorefrontHandler } from "../../../api/storefront.mjs";
 
 const store = {
   name: "Agência Sol & Mar",
@@ -12,8 +12,6 @@ const store = {
 
 const sourceIndex = `<!doctype html>
 <html><head>
-  <title>VisiteCRM padrão</title>
-  <meta name="description" content="Descrição padrão do VisiteCRM">
   <!-- VITRINE_METADATA_START -->
   <title id="page-title">VisiteCRM padrão</title>
   <meta id="page-og-title" property="og:title" content="VisiteCRM padrão">
