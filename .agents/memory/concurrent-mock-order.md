@@ -18,6 +18,19 @@ And so on, with subsequent calls interleaving at each `await` boundary.
 
 **How to apply:** Always use `mockImplementationOnce` in the exact call order, never `callCount % N`. Document the expected order with comments. For N concurrent runs with K selects each, provide N*K `mockImplementationOnce` calls following the actual microtask interleaving trace.
 
+For transaction fixtures that model `select(...).for("update")`, keep the lock result
+outside the ordinary FIFO queue. The lock query is a separate terminal operation; if
+the fixture consumes the first queue item for it, later payment/member/idempotency
+responses shift and the race test can deadlock or exercise the wrong branch.
+
+**Why:** The cancellation route acquires a reservation lock before its financial
+reversal queries. Treating that lock as an ordinary select made the concurrent fixture
+consume the payment response and wait forever at the second transaction gate.
+
+**How to apply:** Let the mock chain carry a dedicated `for` response while ordinary
+`select` calls consume their own queue. Also pass resolver functions to the thenable
+chain; passing an array as the resolver silently resolves to `undefined`.
+
 ## Example (2 concurrent runs, 2 selects each)
 
 ```js
