@@ -1,8 +1,8 @@
 import { logger } from "../../lib/logger";
 import { db } from "@workspace/db";
-import { storeOrdersTable, referralsTable, reservationsTable } from "@workspace/db";
+import { storeOrdersTable, referralsTable, reservationsTable, paymentsTable } from "@workspace/db";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
-import { STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { PAYMENT_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { recordReferralConversion, type ReferralConversionResult } from "./referral-conversion";
 import type { Tx } from "./tx";
 
@@ -35,8 +35,11 @@ export interface DeferredReferralResult {
  * atomically so concurrent orders cannot spend it twice; cancellation must
  * return that reservation before the customer retries.
  */
-export async function releaseReservedCreditForOrder(orderId: string): Promise<void> {
-  await db.transaction(async (tx) => {
+async function releaseCreditSpend(
+  tx: Tx,
+  orderId: string,
+  options: { requireUnpaid: boolean },
+): Promise<boolean> {
     const [order] = await tx.select({
       id: storeOrdersTable.id,
       tenantId: storeOrdersTable.tenantId,
@@ -46,10 +49,10 @@ export async function releaseReservedCreditForOrder(orderId: string): Promise<vo
       .where(eq(storeOrdersTable.id, orderId))
       .for("update")
       .limit(1);
-    if (!order || order.paymentStatus === STORE_PAYMENT_STATUS.PAID) return;
-    const reservedSpend = (order.pendingCreditSpend ?? []).filter((item) => item.reserved);
-    if (reservedSpend.length === 0) return;
-    for (const spend of reservedSpend) {
+    if (!order || (options.requireUnpaid && order.paymentStatus === STORE_PAYMENT_STATUS.PAID)) return false;
+    const creditSpend = (order.pendingCreditSpend ?? []).filter((item) => item.reserved);
+    if (creditSpend.length === 0) return false;
+    for (const spend of creditSpend) {
       await tx.update(referralsTable).set({
         bonusCreditUsedAmount: sql`GREATEST(0, COALESCE(${referralsTable.bonusCreditUsedAmount}, 0) - ${spend.consumedAmount.toFixed(2)})`,
         updatedAt: new Date(),
@@ -60,7 +63,74 @@ export async function releaseReservedCreditForOrder(orderId: string): Promise<vo
     }
     await tx.update(storeOrdersTable).set({ pendingCreditSpend: null })
       .where(eq(storeOrdersTable.id, order.id));
+    return true;
+}
+
+export async function releaseReservedCreditForOrder(orderId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await releaseCreditSpend(tx as unknown as Tx, orderId, { requireUnpaid: true });
   });
+}
+
+/**
+ * Invalidates a checkout whose synchronous reservation creation failed. The
+ * idempotency key is released so a retry creates a fresh order and re-prices
+ * cashback from the authoritative wallet instead of replaying a discounted
+ * order whose credit hold was returned.
+ */
+export async function invalidateOrderAfterReservationFailure(orderId: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [order] = await tx.select({
+      id: storeOrdersTable.id,
+      paymentStatus: storeOrdersTable.paymentStatus,
+      status: storeOrdersTable.status,
+      referralEffectsAppliedAt: storeOrdersTable.referralEffectsAppliedAt,
+    }).from(storeOrdersTable)
+      .where(eq(storeOrdersTable.id, orderId))
+      .for("update")
+      .limit(1);
+    if (
+      !order
+      || order.paymentStatus === STORE_PAYMENT_STATUS.PAID
+      || order.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+      || order.referralEffectsAppliedAt != null
+    ) {
+      return false;
+    }
+    const [paidReceipt] = await tx.select({ id: paymentsTable.id })
+      .from(paymentsTable)
+      .where(and(
+        eq(paymentsTable.orderId, orderId),
+        eq(paymentsTable.status, PAYMENT_STATUS.PAID),
+      ))
+      .limit(1);
+    if (paidReceipt) return false;
+    // A prior cleanup/manual cancellation may already have terminalized the
+    // order before its pending referral row was reversed. Returning true lets
+    // the retry finish that idempotent reversal without reviving the order.
+    if (order.status === STORE_ORDER_STATUS.CANCELLED) return true;
+
+    await releaseCreditSpend(tx as unknown as Tx, orderId, { requireUnpaid: true });
+    const now = new Date();
+    await tx.update(storeOrdersTable).set({
+      status: STORE_ORDER_STATUS.CANCELLED,
+      cancelledAt: now,
+      idempotencyKey: null,
+    }).where(and(
+      eq(storeOrdersTable.id, orderId),
+      sql`${storeOrdersTable.paymentStatus} <> ${STORE_PAYMENT_STATUS.PAID}`,
+    ));
+    return true;
+  });
+}
+
+/**
+ * Restores cashback consumed by a paid order when that order is cancelled or
+ * refunded. Clearing pendingCreditSpend in the same transaction makes retries
+ * a no-op.
+ */
+export async function restoreSpentCreditForOrder(tx: Tx, orderId: string): Promise<boolean> {
+  return releaseCreditSpend(tx, orderId, { requireUnpaid: false });
 }
 
 /**
@@ -106,6 +176,7 @@ export async function applyDeferredOrderCredits(
         pendingReferral: storeOrdersTable.pendingReferral,
         pendingCreditSpend: storeOrdersTable.pendingCreditSpend,
         referralEffectsAppliedAt: storeOrdersTable.referralEffectsAppliedAt,
+        status: storeOrdersTable.status,
       })
       .from(storeOrdersTable)
       .where(eq(storeOrdersTable.id, orderId))
@@ -115,6 +186,15 @@ export async function applyDeferredOrderCredits(
     if (!order) return { conversionApplied: false };
     // Idempotency: effects already applied for this order.
     if (order.referralEffectsAppliedAt != null) return { conversionApplied: false };
+    // Cancellation/refund shares this row lock. Whichever transaction wins
+    // determines the valid terminal outcome: cancelled orders can never apply
+    // a delayed conversion or confirm a cashback spend.
+    if (
+      order.status === STORE_ORDER_STATUS.CANCELLED
+      || order.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+    ) {
+      return { conversionApplied: false };
+    }
     // Gateway/manual order confirmation uses PAID. Reservation payments may
     // leave the storefront order pending until every sibling reservation is
     // settled; in that path a positive received payment is still enough to
@@ -127,6 +207,7 @@ export async function applyDeferredOrderCredits(
     // 1) Consume referral credit (best-effort — money is already captured, so a
     //    shortfall is logged and capped, never thrown).
     const creditSpend = order.pendingCreditSpend;
+    const confirmedCreditSpend: Array<{ id: string; consumedAmount: number; reserved: true }> = [];
     if (Array.isArray(creditSpend) && creditSpend.length > 0) {
       const ids = creditSpend.map((r) => r.id);
       const lockedRows = await tx
@@ -152,6 +233,7 @@ export async function applyDeferredOrderCredits(
           continue;
         }
         if (reserved) {
+          confirmedCreditSpend.push({ id, consumedAmount, reserved: true });
           await tx
             .update(referralsTable)
             .set({
@@ -180,6 +262,7 @@ export async function applyDeferredOrderCredits(
             updatedAt: now,
           })
           .where(eq(referralsTable.id, id));
+        confirmedCreditSpend.push({ id, consumedAmount: consume, reserved: true });
       }
     }
 
@@ -238,7 +321,10 @@ export async function applyDeferredOrderCredits(
     // and the call remains retryable on the next payment event.
     await tx
       .update(storeOrdersTable)
-      .set({ referralEffectsAppliedAt: new Date() })
+      .set({
+        referralEffectsAppliedAt: new Date(),
+        pendingCreditSpend: confirmedCreditSpend.length > 0 ? confirmedCreditSpend : null,
+      })
       .where(eq(storeOrdersTable.id, order.id));
 
     return result;
