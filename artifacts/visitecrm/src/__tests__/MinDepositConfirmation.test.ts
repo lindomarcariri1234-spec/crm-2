@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { createElement } from "react";
-import { renderComponent, cleanupRoots } from "./eventSourceHarness.js";
+import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js";
 
 // ---------------------------------------------------------------------------
 // Mock heavy sub-components that would pull in canvas / animation APIs
@@ -130,7 +130,10 @@ function makeOrder(overrides: Partial<CompletedOrder>): CompletedOrder {
   } as CompletedOrder;
 }
 
-function makeState(completedOrder: CompletedOrder): WizardState {
+function makeState(
+  completedOrder: CompletedOrder,
+  overrides: Partial<WizardState> = {},
+): WizardState {
   return {
     product: BASE_PRODUCT as WizardState["product"],
     completedOrder,
@@ -178,6 +181,7 @@ function makeState(completedOrder: CompletedOrder): WizardState {
     setUseReferralCredit: vi.fn(),
     submitError: null,
     setSubmitError: vi.fn(),
+    ...overrides,
   } as unknown as WizardState;
 }
 
@@ -193,6 +197,19 @@ async function renderConfirmation(completedOrder: CompletedOrder) {
   const state = makeState(completedOrder);
   const el = createElement(StepConfirmation, { state, store, slug: "loja-teste" });
   return renderComponent(el);
+}
+
+async function renderPaymentSummary(state: WizardState) {
+  const { StepPaymentSummary } = await import(
+    "../pages/vitrine/_wizard/payment-summary.js"
+  );
+  return renderComponent(
+    createElement(StepPaymentSummary, {
+      state,
+      store: makeStore(),
+      variant: "review",
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -275,5 +292,57 @@ describe("StepConfirmation — financial summary with minimum deposit", () => {
     expect(text).toContain("189.05");
     expect(text).toContain("30.00");
     expect(text).toContain("159.05");
+  });
+
+  it("shows and toggles referral cashback in the reservation review summary", async () => {
+    const setUseReferralCredit = vi.fn();
+    const state = makeState(
+      makeOrder({}),
+      {
+        referralCreditBalance: 75,
+        referralCreditApplied: 75,
+        finalTotal: 425,
+        useReferralCredit: true,
+        setUseReferralCredit,
+      },
+    );
+
+    const { container } = await renderPaymentSummary(state);
+    const text = container.textContent ?? "";
+    const toggle = container.querySelector('[role="switch"]') as HTMLButtonElement | null;
+
+    expect(text).toContain("Cashback disponível: R$ 75.00");
+    expect(text).toContain("− R$ 75.00 serão descontados no total");
+    expect(text).toContain("R$ 425.00");
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+
+    await flushAct(() => toggle!.click());
+
+    expect(setUseReferralCredit).toHaveBeenCalledWith(false);
+  });
+
+  it("does not show the referral cashback option when the balance is empty", async () => {
+    const { container } = await renderPaymentSummary(makeState(makeOrder({})));
+
+    expect(container.querySelector('[role="switch"]')).toBeNull();
+    expect(container.textContent).not.toContain("Cashback disponível");
+  });
+
+  it("explains when the server applies less cashback than the checkout estimate", async () => {
+    const order = makeOrder({
+      totalAmount: "460.00",
+      referralCreditRequested: 100,
+      referralCreditApplied: 40,
+      referralCreditBalanceAfter: 60,
+    });
+
+    const { container } = await renderConfirmation(order);
+    const text = container.textContent ?? "";
+
+    expect(text).toContain("Seu saldo de cashback mudou durante o checkout.");
+    expect(text).toContain("Aplicamos R$ 40.00 de cashback.");
+    expect(text).toContain("O novo total do pedido é R$ 460.00.");
+    expect(text).toContain("Saldo atual de cashback: R$ 60.00.");
   });
 });

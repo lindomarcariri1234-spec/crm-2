@@ -636,6 +636,8 @@ export interface StoreOrder extends LinkedData {
 /** Public checkout response only; administrative order responses never include this token. */
 export interface StoreCheckoutOrder extends StoreOrder {
   paymentToken?: string | null;
+  /** Cashback de indicação efetivamente aplicado pelo servidor no checkout. */
+  referralCreditApplied?: number | null;
 }
 
 export interface StoreCoupon {

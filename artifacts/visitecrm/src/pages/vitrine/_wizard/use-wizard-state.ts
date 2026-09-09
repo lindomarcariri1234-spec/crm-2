@@ -51,6 +51,9 @@ export type CompletedOrder = {
   pixQrCode?: string | null;
   pixQrCodeUrl?: string | null;
   pixCopyPaste?: string | null;
+  referralCreditRequested?: number | null;
+  referralCreditApplied?: number | null;
+  referralCreditBalanceAfter?: number | null;
   financialSummary: FinancialSummary;
 };
 
@@ -526,8 +529,31 @@ export function useWizardState({
         seats: effectiveSeats.length > 0 ? effectiveSeats : undefined,
         boardingLocationId: selectedBoardingPointId || undefined,
         coPassengers: filledCoPassengers.length > 0 ? filledCoPassengers : undefined,
-        depositAmount: form.depositAmount ? Number(form.depositAmount) : undefined,
+        depositAmount:
+          form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal
+            ? Number(form.depositAmount)
+            : undefined,
       });
+
+      const requestedReferralCredit = referralCreditApplied;
+      const appliedReferralCredit =
+        order.referralCreditApplied != null && Number.isFinite(Number(order.referralCreditApplied))
+        ? Number(order.referralCreditApplied)
+        : requestedReferralCredit;
+      let refreshedReferralCreditBalance: number | null = null;
+      if (isSignedIn && requestedReferralCredit > 0) {
+        try {
+          const profile = await clientPortalApi.getProfile();
+          const nextBalance = Number(profile.referral?.creditBalance ?? 0);
+          if (Number.isFinite(nextBalance)) {
+            refreshedReferralCreditBalance = nextBalance;
+            setReferralCreditBalance(nextBalance);
+          }
+        } catch {
+          // The order succeeded even if the optional balance refresh fails.
+        }
+      }
+
       setCompletedOrder({
         orderNumber: order.orderNumber,
         totalAmount: order.totalAmount,
@@ -540,6 +566,9 @@ export function useWizardState({
         pixQrCode: order.pixQrCode ?? null,
         pixQrCodeUrl: order.pixQrCodeUrl ?? null,
         pixCopyPaste: order.pixCopyPaste ?? null,
+        referralCreditRequested: requestedReferralCredit > 0 ? requestedReferralCredit : null,
+        referralCreditApplied: requestedReferralCredit > 0 ? appliedReferralCredit : null,
+        referralCreditBalanceAfter: refreshedReferralCreditBalance,
         financialSummary: order.financialSummary,
       });
       clearCheckoutIdempotencyKey();

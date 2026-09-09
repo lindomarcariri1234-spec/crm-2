@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
-    "build": "vite build --config vite.config.ts",
+    "build": "vite build --config vite.config.ts && pnpm run check:bundle-size",
+    "check:bundle-size": "node ../../scripts/frontend-bundle-size.mjs dist/public",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"

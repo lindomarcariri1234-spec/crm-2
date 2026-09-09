@@ -5,7 +5,25 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, 'dist', 'public');
+const INDEX_FILE = path.join(ROOT, 'index.html');
 const PORT = parseInt(process.env.PORT || '19951', 10);
+const EXPECTED_STOREFRONT_TITLE = 'VisiteCRM — CRM para Agências de Viagem';
+
+function assertStorefrontBuild() {
+  let html;
+  try {
+    html = fs.readFileSync(INDEX_FILE, 'utf8');
+  } catch (error) {
+    throw new Error(`[storefront] Published index.html is unavailable at ${INDEX_FILE}: ${error.message}`);
+  }
+  if (!html.includes(EXPECTED_STOREFRONT_TITLE)) {
+    throw new Error(
+      `[storefront] Published index.html is missing the expected title marker: "${EXPECTED_STOREFRONT_TITLE}"`,
+    );
+  }
+}
+
+assertStorefrontBuild();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

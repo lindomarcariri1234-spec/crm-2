@@ -118,6 +118,10 @@ export function StepConfirmation({
   const isPartiallyPaid = summary.states.payment === "partially_paid";
   const reservationValid = summary.reservationValid;
   const remainingAmt = summary.amountRemaining;
+  const referralCreditWasAdjusted =
+    completedOrder.referralCreditRequested != null &&
+    completedOrder.referralCreditApplied != null &&
+    completedOrder.referralCreditRequested - completedOrder.referralCreditApplied > 0.005;
   const startDate = product.departureDate ?? product.startDate;
   const boardingPoints = (product.boardingPoints ?? []).filter((bp) => bp.name);
   const selectedBoardingPoint =
@@ -342,6 +346,20 @@ export function StepConfirmation({
             <div className="flex justify-between text-sm border-t pt-3 mb-4">
               <span className="text-muted-foreground">Entrada solicitada</span>
               <span className="font-semibold text-amber-700">R$ {depositAmt.toFixed(2)}</span>
+            </div>
+          )}
+          {referralCreditWasAdjusted && (
+            <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded-xl px-4 py-3 text-sm space-y-1.5">
+              <p className="font-semibold">Seu saldo de cashback mudou durante o checkout.</p>
+              <p>
+                Aplicamos R$ {completedOrder.referralCreditApplied!.toFixed(2)} de cashback.
+                O novo total do pedido é R$ {totalAmt.toFixed(2)}.
+              </p>
+              {completedOrder.referralCreditBalanceAfter != null && (
+                <p className="font-medium">
+                  Saldo atual de cashback: R$ {completedOrder.referralCreditBalanceAfter.toFixed(2)}.
+                </p>
+              )}
             </div>
           )}
           {(referralApplied && referralDiscount > 0) || couponDiscount > 0 ? (

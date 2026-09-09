@@ -4,6 +4,57 @@ import { PAYMENT_LABELS } from "./constants";
 import type { WizardState } from "./use-wizard-state";
 import { Gift } from "lucide-react";
 
+function ReferralCreditToggle({
+  balance,
+  applied,
+  enabled,
+  onToggle,
+}: {
+  balance: number;
+  applied: number;
+  enabled: boolean;
+  onToggle: () => void;
+}) {
+  if (balance <= 0) return null;
+
+  return (
+    <div className="border rounded-xl p-3 bg-purple-50 border-purple-200 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Gift className="w-4 h-4 text-purple-600 shrink-0" />
+          <div>
+            <p className="text-xs font-semibold text-purple-800">
+              Cashback disponível: R$ {balance.toFixed(2)}
+            </p>
+            <p className="text-[11px] text-purple-600">Seus bônus de indicação acumulados</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+            enabled ? "bg-purple-600" : "bg-gray-200"
+          }`}
+          role="switch"
+          aria-label="Usar cashback de indicação"
+          aria-checked={enabled}
+        >
+          <span
+            className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-lg transform transition-transform ${
+              enabled ? "translate-x-4" : "translate-x-0"
+            }`}
+          />
+        </button>
+      </div>
+      {enabled && applied > 0 && (
+        <p className="text-xs text-purple-700 font-medium">
+          − R$ {applied.toFixed(2)} serão descontados no total
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function StepPaymentSummary({
   state,
   store,
@@ -64,6 +115,12 @@ export function StepPaymentSummary({
               <span>− R$ {couponDiscount.toFixed(2)}</span>
             </div>
           )}
+          <ReferralCreditToggle
+            balance={referralCreditBalance}
+            applied={referralCreditApplied}
+            enabled={useReferralCredit}
+            onToggle={() => setUseReferralCredit(!useReferralCredit)}
+          />
           {referralCreditApplied > 0 && (
             <div className="flex justify-between text-purple-600">
               <span>Cashback de indicação</span>
@@ -133,42 +190,12 @@ export function StepPaymentSummary({
           </div>
         )}
 
-        {/* Referral credit toggle */}
-        {referralCreditBalance > 0 && (
-          <div className="border rounded-xl p-3 bg-purple-50 border-purple-200 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Gift className="w-4 h-4 text-purple-600 shrink-0" />
-                <div>
-                  <p className="text-xs font-semibold text-purple-800">
-                    Cashback disponível: R$ {referralCreditBalance.toFixed(2)}
-                  </p>
-                  <p className="text-[11px] text-purple-600">Seus bônus de indicação acumulados</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setUseReferralCredit(!useReferralCredit)}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
-                  useReferralCredit ? "bg-purple-600" : "bg-gray-200"
-                }`}
-                role="switch"
-                aria-checked={useReferralCredit}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-lg transform transition-transform ${
-                    useReferralCredit ? "translate-x-4" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </div>
-            {useReferralCredit && referralCreditApplied > 0 && (
-              <p className="text-xs text-purple-700 font-medium">
-                − R$ {referralCreditApplied.toFixed(2)} serão descontados no total
-              </p>
-            )}
-          </div>
-        )}
+        <ReferralCreditToggle
+          balance={referralCreditBalance}
+          applied={referralCreditApplied}
+          enabled={useReferralCredit}
+          onToggle={() => setUseReferralCredit(!useReferralCredit)}
+        />
 
         {referralCreditApplied > 0 && (
           <div className="flex justify-between text-purple-600">

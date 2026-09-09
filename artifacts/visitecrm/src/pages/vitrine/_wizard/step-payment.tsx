@@ -6,6 +6,8 @@ import type { WizardState } from "./use-wizard-state";
 
 export function StepPayment({ state, store }: { state: WizardState; store: PublicStore }) {
   const { form, set, finalTotal, submitError, setSubmitError } = state;
+  const minDeposit = Number(store.minDepositAmount ?? 0);
+  const canRequestPartialPayment = minDeposit > 0 && finalTotal > minDeposit;
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2 space-y-5">
@@ -52,7 +54,7 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           )}
         </div>
 
-        {store.minDepositAmount && Number(store.minDepositAmount) > 0 && (
+        {store.minDepositAmount && minDeposit > 0 && (
           <div className="mt-2 p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-4">
             <div className="flex items-start gap-2">
               <Info className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
@@ -85,33 +87,35 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
                 </div>
               </label>
 
-              <label
-                className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                  form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal
-                    ? "border-amber-500 bg-amber-100"
-                    : "border-amber-200 bg-white hover:border-amber-300"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="deposit_option"
-                  checked={!!(form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal)}
-                  onChange={() => set("depositAmount", store.minDepositAmount ?? "")}
-                  className="accent-amber-600"
-                />
-                <div className="flex-1">
-                  <p className="font-semibold text-sm text-amber-900">Solicitar reserva com entrada mínima</p>
-                  <p className="text-xs text-amber-700">
-                    R$ {Number(store.minDepositAmount).toFixed(2)}{" "}
-                    <span className="text-amber-600">
-                      (Saldo após a entrada: R$ {(finalTotal - Number(store.minDepositAmount)).toFixed(2)})
-                    </span>
-                  </p>
-                </div>
-              </label>
+              {canRequestPartialPayment && (
+                <label
+                  className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                    form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal
+                      ? "border-amber-500 bg-amber-100"
+                      : "border-amber-200 bg-white hover:border-amber-300"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="deposit_option"
+                    checked={!!(form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal)}
+                    onChange={() => set("depositAmount", minDeposit.toFixed(2))}
+                    className="accent-amber-600"
+                  />
+                  <div className="flex-1">
+                    <p className="font-semibold text-sm text-amber-900">Solicitar reserva com entrada mínima</p>
+                    <p className="text-xs text-amber-700">
+                      R$ {minDeposit.toFixed(2)}{" "}
+                      <span className="text-amber-600">
+                        (Saldo após a entrada: R$ {(finalTotal - minDeposit).toFixed(2)})
+                      </span>
+                    </p>
+                  </div>
+                </label>
+              )}
             </div>
 
-            {form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal && (
+            {canRequestPartialPayment && form.depositAmount && Number(form.depositAmount) > 0 && Number(form.depositAmount) < finalTotal && (
               <div className="space-y-1">
                 <label className="text-xs font-medium text-amber-800">
                    Entrada solicitada (R$)
@@ -119,14 +123,14 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
                 <input
                   type="number"
                   step="0.01"
-                  min={Number(store.minDepositAmount)}
+                  min={minDeposit}
                   max={finalTotal}
                   value={form.depositAmount}
                   onChange={(e) => set("depositAmount", e.target.value)}
                   className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                 />
                 <p className="text-[11px] text-amber-700">
-                  Mínimo R$ {Number(store.minDepositAmount).toFixed(2)} — máximo R$ {finalTotal.toFixed(2)}
+                   Mínimo R$ {minDeposit.toFixed(2)} — máximo R$ {finalTotal.toFixed(2)}
                 </p>
                 <p className="text-[11px] text-amber-700">
                   Este valor registra a entrada desejada. O pagamento só será contabilizado após confirmação.

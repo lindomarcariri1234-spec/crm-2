@@ -19,6 +19,9 @@ const mockRefetchReservations = vi.hoisted(() => vi.fn());
 const mockRefetchCommissions = vi.hoisted(() => vi.fn());
 const mockRefetchExpenses = vi.hoisted(() => vi.fn());
 const mockRefetchFinancialMetrics = vi.hoisted(() => vi.fn());
+const selectRegistry = vi.hoisted(() => ({
+  handlers: [] as Array<((value: string) => void) | undefined>,
+}));
 
 vi.mock("@workspace/api-client-react", () => ({
   useGetDashboardSummary: mockUseGetDashboardSummary,
@@ -35,6 +38,43 @@ vi.mock("wouter", () => ({
     createElement("a", { href }, children as never),
 }));
 
+vi.mock("@/components/ui/select", () => ({
+  Select: ({
+    onValueChange,
+    children,
+  }: {
+    onValueChange?: (value: string) => void;
+    children?: unknown;
+  }) => {
+    selectRegistry.handlers.push(onValueChange);
+    return createElement("div", null, children as never);
+  },
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: unknown }) =>
+    createElement("div", null, children as never),
+  SelectItem: ({
+    value,
+    children,
+  }: {
+    value: string;
+    children: unknown;
+  }) =>
+    createElement(
+      "button",
+      {
+        type: "button",
+        "data-period": value,
+        onClick: () => {
+          const handler =
+            selectRegistry.handlers[selectRegistry.handlers.length - 1];
+          handler?.(value);
+        },
+      },
+      children as never,
+    ),
+}));
+
 vi.mock("../lib/financial-metrics-api", () => ({
   useFinancialMetrics: mockUseFinancialMetrics,
 }));
@@ -44,7 +84,9 @@ import Analytics from "../pages/analytics.js";
 afterEach(async () => {
   await cleanupRoots();
   vi.clearAllMocks();
+  selectRegistry.handlers.length = 0;
 });
+
 
 function successfulQuery(refetch: ReturnType<typeof vi.fn>, data: unknown = undefined) {
   return {
@@ -128,5 +170,69 @@ describe("Analytics", () => {
     expect(mockRefetchCommissions).toHaveBeenCalledTimes(1);
     expect(mockRefetchExpenses).toHaveBeenCalledTimes(1);
     expect(mockRefetchFinancialMetrics).toHaveBeenCalledTimes(1);
+  });
+
+  it("consulta novamente o gráfico quando o período é alterado", async () => {
+    const requestedPeriods: string[] = [];
+
+    mockUseGetDashboardSummary.mockReturnValue(
+      successfulQuery(mockRefetchSummary, {
+        totalReservations: 2,
+        confirmedReservations: 1,
+        openDeals: 1,
+        totalClients: 2,
+        newClientsThisMonth: 1,
+        activeTrips: 1,
+        revenueThisMonth: 120,
+        occupancyRate: 50,
+      }),
+    );
+    mockUseGetDashboardRevenueChart.mockImplementation(
+      ({ period }: { period: string }) => {
+        requestedPeriods.push(period);
+        return successfulQuery(mockRefetchChart, [
+          { label: period, revenue: period === "12m" ? 120 : 30, expenses: 10 },
+        ]);
+      },
+    );
+    mockUseGetPaymentsSummary.mockReturnValue(
+      successfulQuery(mockRefetchPayments, {
+        totalReceivable: 0,
+        overdueReceivable: 0,
+      }),
+    );
+    mockUseListTrips.mockReturnValue(successfulQuery(mockRefetchTrips, { data: [] }));
+    mockUseListReservations.mockReturnValue(
+      successfulQuery(mockRefetchReservations, { data: [] }),
+    );
+    mockUseListCommissions.mockReturnValue(successfulQuery(mockRefetchCommissions, []));
+    mockUseListExpenses.mockReturnValue(
+      successfulQuery(mockRefetchExpenses, { data: [] }),
+    );
+    mockUseFinancialMetrics.mockReturnValue(
+      successfulQuery(mockRefetchFinancialMetrics, {
+        period: { start: "", end: "", label: "12 meses", asOf: "" },
+        timezone: "America/Sao_Paulo",
+        contracts: {},
+        totals: {},
+        byTrip: [],
+        byUser: [],
+        diagnostics: {},
+      }),
+    );
+
+    const handle = await renderComponent(createElement(Analytics));
+
+    expect(requestedPeriods).toEqual(["12m"]);
+    expect(handle.container.textContent).toContain("12m");
+
+    const thirtyDayOption = handle.container.querySelector(
+      '[data-period="30d"]',
+    ) as HTMLButtonElement | null;
+    expect(thirtyDayOption).not.toBeNull();
+
+    await flushAct(() => thirtyDayOption!.click());
+
+    expect(requestedPeriods).toEqual(["12m", "30d"]);
   });
 });

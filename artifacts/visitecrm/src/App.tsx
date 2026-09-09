@@ -15,74 +15,74 @@ import { getRoleRedirectPath } from "@/lib/role-redirect";
 
 import Layout from "@/components/layout";
 import AdminLayout from "@/components/admin-layout";
-import PortalLayout from "@/pages/perfil/layout";
-import PerfilPage from "@/pages/perfil/index";
-import Landing from "@/pages/landing";
-import SignInPage from "@/pages/sign-in";
-import SignUpPage from "@/pages/sign-up";
-import OnboardingPage from "@/pages/onboarding";
-import Dashboard from "@/pages/dashboard";
-import Pipeline from "@/pages/pipeline";
-import Clients from "@/pages/clients";
-import Trips from "@/pages/trips";
-import Reservations from "@/pages/reservations";
-import Financial from "@/pages/financial";
-import Communication from "@/pages/communication";
-import Campaigns from "@/pages/campaigns";
-import Automations from "@/pages/automations";
-import Marketing from "@/pages/marketing";
-import Loyalty from "@/pages/loyalty";
-import Nps from "@/pages/nps";
-import Registrations from "@/pages/registrations";
-import Analytics from "@/pages/analytics";
-import Insights from "@/pages/insights";
-import GemeoDigital from "@/pages/gemeo";
-import Commissions from "@/pages/commissions";
-import Expenses from "@/pages/expenses";
-import Revenue from "@/pages/revenue";
+const PortalLayout = lazy(() => import("@/pages/perfil/layout"));
+const PerfilPage = lazy(() => import("@/pages/perfil/index"));
+const Landing = lazy(() => import("@/pages/landing"));
+const SignInPage = lazy(() => import("@/pages/sign-in"));
+const SignUpPage = lazy(() => import("@/pages/sign-up"));
+const OnboardingPage = lazy(() => import("@/pages/onboarding"));
+const Dashboard = lazy(() => import("@/pages/dashboard"));
+const Pipeline = lazy(() => import("@/pages/pipeline"));
+const Clients = lazy(() => import("@/pages/clients"));
+const Trips = lazy(() => import("@/pages/trips"));
+const Reservations = lazy(() => import("@/pages/reservations"));
+const Financial = lazy(() => import("@/pages/financial"));
+const Communication = lazy(() => import("@/pages/communication"));
+const Campaigns = lazy(() => import("@/pages/campaigns"));
+const Automations = lazy(() => import("@/pages/automations"));
+const Marketing = lazy(() => import("@/pages/marketing"));
+const Loyalty = lazy(() => import("@/pages/loyalty"));
+const Nps = lazy(() => import("@/pages/nps"));
+const Registrations = lazy(() => import("@/pages/registrations"));
+const Analytics = lazy(() => import("@/pages/analytics"));
+const Insights = lazy(() => import("@/pages/insights"));
+const GemeoDigital = lazy(() => import("@/pages/gemeo"));
+const Commissions = lazy(() => import("@/pages/commissions"));
+const Expenses = lazy(() => import("@/pages/expenses"));
+const Revenue = lazy(() => import("@/pages/revenue"));
 const HistoricoComparativo = lazy(() => import("@/pages/historico-comparativo"));
 
 // Task 6 pages
-import Fornecedores from "@/pages/cadastros/fornecedores";
-import Veiculos from "@/pages/cadastros/veiculos";
-import Layouts from "@/pages/cadastros/layouts";
-import Hospedagens from "@/pages/cadastros/hospedagens";
-import Destinos from "@/pages/cadastros/destinos";
-import Produtos from "@/pages/cadastros/produtos";
-import LocaisEmbarque from "@/pages/cadastros/locais-embarque";
-import Vendedores from "@/pages/vendedores";
-import MeuPainel from "@/pages/meu-painel";
-import Vouchers from "@/pages/vouchers";
-import Indicacoes from "@/pages/indicacoes";
-import Embaixadores from "@/pages/embaixadores";
-import Configuracoes from "@/pages/configuracoes";
-import Downloads from "@/pages/downloads";
-import AdminDashboard from "@/pages/admin/index";
-import AdminTenants from "@/pages/admin/tenants";
-import AdminTenantDetail from "@/pages/admin/tenant-detail";
-import AdminPlans from "@/pages/admin/plans";
-import AdminBilling from "@/pages/admin/billing";
-import AdminMetrics from "@/pages/admin/metrics";
-import AdminUsers from "@/pages/admin/users";
-import AdminLogs from "@/pages/admin/logs";
-import AdminSettings from "@/pages/admin/admin-settings";
-import AdminMaintenance from "@/pages/admin/maintenance";
-import AdminSystemHealth from "@/pages/admin/system-health";
+const Fornecedores = lazy(() => import("@/pages/cadastros/fornecedores"));
+const Veiculos = lazy(() => import("@/pages/cadastros/veiculos"));
+const Layouts = lazy(() => import("@/pages/cadastros/layouts"));
+const Hospedagens = lazy(() => import("@/pages/cadastros/hospedagens"));
+const Destinos = lazy(() => import("@/pages/cadastros/destinos"));
+const Produtos = lazy(() => import("@/pages/cadastros/produtos"));
+const LocaisEmbarque = lazy(() => import("@/pages/cadastros/locais-embarque"));
+const Vendedores = lazy(() => import("@/pages/vendedores"));
+const MeuPainel = lazy(() => import("@/pages/meu-painel"));
+const Vouchers = lazy(() => import("@/pages/vouchers"));
+const Indicacoes = lazy(() => import("@/pages/indicacoes"));
+const Embaixadores = lazy(() => import("@/pages/embaixadores"));
+const Configuracoes = lazy(() => import("@/pages/configuracoes"));
+const Downloads = lazy(() => import("@/pages/downloads"));
+const AdminDashboard = lazy(() => import("@/pages/admin/index"));
+const AdminTenants = lazy(() => import("@/pages/admin/tenants"));
+const AdminTenantDetail = lazy(() => import("@/pages/admin/tenant-detail"));
+const AdminPlans = lazy(() => import("@/pages/admin/plans"));
+const AdminBilling = lazy(() => import("@/pages/admin/billing"));
+const AdminMetrics = lazy(() => import("@/pages/admin/metrics"));
+const AdminUsers = lazy(() => import("@/pages/admin/users"));
+const AdminLogs = lazy(() => import("@/pages/admin/logs"));
+const AdminSettings = lazy(() => import("@/pages/admin/admin-settings"));
+const AdminMaintenance = lazy(() => import("@/pages/admin/maintenance"));
+const AdminSystemHealth = lazy(() => import("@/pages/admin/system-health"));
 
 // Store admin pages
-import LojaConfiguracoes from "@/pages/loja/configuracoes";
-import LojaProdutos from "@/pages/loja/produtos";
-import LojaCategorias from "@/pages/loja/categorias";
-import LojaPedidos from "@/pages/loja/pedidos";
-import LojaCupons from "@/pages/loja/cupons";
-import LojaAvaliacoes from "@/pages/loja/avaliacoes";
-import LojaParceiros from "@/pages/loja/parceiros";
+const LojaConfiguracoes = lazy(() => import("@/pages/loja/configuracoes"));
+const LojaProdutos = lazy(() => import("@/pages/loja/produtos"));
+const LojaCategorias = lazy(() => import("@/pages/loja/categorias"));
+const LojaPedidos = lazy(() => import("@/pages/loja/pedidos"));
+const LojaCupons = lazy(() => import("@/pages/loja/cupons"));
+const LojaAvaliacoes = lazy(() => import("@/pages/loja/avaliacoes"));
+const LojaParceiros = lazy(() => import("@/pages/loja/parceiros"));
 
 // Public vitrine
-import Vitrine from "@/pages/vitrine";
+const Vitrine = lazy(() => import("@/pages/vitrine"));
 
 // Partner portal (public — JWT auth inside)
-import ParceirosPortal from "@/pages/parceiros/index";
+const ParceirosPortal = lazy(() => import("@/pages/parceiros/index"));
 import { ROLES, ADMIN_ROLES } from "@workspace/permissions";
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -663,7 +663,9 @@ function ClerkProviderWithRoutes() {
     >
       <QueryClientProvider client={queryClient}>
         <ClerkQueryClientCacheInvalidator />
-        <Router />
+        <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Carregando...</div>}>
+          <Router />
+        </Suspense>
       </QueryClientProvider>
     </ClerkProvider>
   );

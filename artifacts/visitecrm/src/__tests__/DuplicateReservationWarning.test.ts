@@ -155,7 +155,7 @@ describe("use-wizard-state — DUPLICATE_RESERVATION handling", () => {
     });
 
     expect(result.current.submitError).toBe(
-      "Este cliente já possui uma reserva ativa para esta viagem. Por favor, entre em contato com a agência.",
+      "Este cliente já possui uma reserva ativa para esta viagem. Revise os dados ou entre em contato com a agência.",
     );
   });
 
@@ -370,7 +370,7 @@ describe("StepPayment — submitError amber banner", () => {
     const store = makeStore();
     const state = makeMinimalState({
       submitError:
-        "Este cliente já possui uma reserva ativa para esta viagem. Por favor, entre em contato com a agência.",
+        "Este cliente já possui uma reserva ativa para esta viagem. Revise os dados ou entre em contato com a agência.",
     });
 
     const { container } = await renderComponent(
