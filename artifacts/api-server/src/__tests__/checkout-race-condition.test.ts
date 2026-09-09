@@ -336,7 +336,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
     mockResolveDiscounts.mockResolvedValueOnce(NO_DISCOUNT);
-    mockPersistOrder.mockResolvedValueOnce(undefined);
+    mockPersistOrder.mockResolvedValueOnce({ appliedCreditAmount: 0, totalAmount: 150 });
 
     const pgErr = Object.assign(new Error("duplicate key value violates unique constraint"), {
       code: "23505",
@@ -356,7 +356,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
     mockResolveDiscounts.mockResolvedValueOnce(NO_DISCOUNT);
-    mockPersistOrder.mockResolvedValueOnce(undefined);
+    mockPersistOrder.mockResolvedValueOnce({ appliedCreditAmount: 0, totalAmount: 150 });
 
     const pgErr = Object.assign(new Error("duplicate key value violates unique constraint"), {
       code: "23505",
@@ -376,7 +376,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
     mockResolveDiscounts.mockResolvedValueOnce(NO_DISCOUNT);
-    mockPersistOrder.mockResolvedValueOnce(undefined);
+    mockPersistOrder.mockResolvedValueOnce({ appliedCreditAmount: 0, totalAmount: 150 });
 
     mockCreateReservations.mockRejectedValueOnce(new Error("Connection timeout"));
 
@@ -392,7 +392,7 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
     mockResolveDiscounts.mockResolvedValueOnce(NO_DISCOUNT);
-    mockPersistOrder.mockResolvedValueOnce(undefined);
+    mockPersistOrder.mockResolvedValueOnce({ appliedCreditAmount: 0, totalAmount: 150 });
 
     const pgErr = Object.assign(new Error("duplicate key value violates unique constraint"), {
       code: "23505",
@@ -460,8 +460,8 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
       .mockResolvedValueOnce(NO_DISCOUNT)
       .mockResolvedValueOnce(NO_DISCOUNT);
     mockPersistOrder
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ appliedCreditAmount: 0, totalAmount: 150 })
+      .mockResolvedValueOnce({ appliedCreditAmount: 0, totalAmount: 150 });
 
     // First createReservations call wins; second hits the PG unique-constraint
     // violation — simulating the real race between two concurrent transactions.
