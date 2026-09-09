@@ -41,12 +41,16 @@ vi.mock("@workspace/db", () => {
   // Each call returns a chainable object whose .where() is also directly
   // thenable (for the reservations select which has no .limit()) as well as
   // having a .limit() for the store/order selects.
-  const makeWhereResult = (rows: unknown[]) => ({
-    limit: vi.fn((_n: number) => Promise.resolve(rows)),
-    then: (resolve: (v: unknown[]) => unknown, reject?: (e: unknown) => unknown) =>
-      Promise.resolve(rows).then(resolve, reject),
-    catch: (reject: (e: unknown) => unknown) => Promise.resolve(rows).catch(reject),
-  });
+  const makeWhereResult = (rows: unknown[]) => {
+    const result = {
+      limit: vi.fn((_n: number) => Promise.resolve(rows)),
+      for: vi.fn(() => result),
+      then: (resolve: (v: unknown[]) => unknown, reject?: (e: unknown) => unknown) =>
+        Promise.resolve(rows).then(resolve, reject),
+      catch: (reject: (e: unknown) => unknown) => Promise.resolve(rows).catch(reject),
+    };
+    return result;
+  };
 
   const mockSelect = vi.fn(() => {
     const rows = selectQueue.shift() ?? [];
@@ -66,12 +70,15 @@ vi.mock("@workspace/db", () => {
     })),
   }));
 
+  const dbMock = {
+    select: mockSelect,
+    update: mockUpdate,
+    transaction: vi.fn(),
+  };
+  dbMock.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback(dbMock));
+
   return {
-    db: {
-      select: mockSelect,
-      update: mockUpdate,
-      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({})),
-    },
+    db: dbMock,
     storesTable: {},
     storeOrdersTable: {},
     storeOrderItemsTable: {},
@@ -160,6 +167,10 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 
 vi.mock("../services/checkout/post-booking.js", () => ({
   runPostPaymentSideEffects: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../services/checkout/deferred-referral-effects.js", () => ({
+  restoreSpentCreditForOrder: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("../services/checkout/persist-order.js", () => ({
