@@ -119,7 +119,10 @@ export default defineConfig({
           if (id.includes("node_modules/html2canvas")) {
             return "vendor-html2canvas";
           }
-          if (id.includes("node_modules/@tiptap") || id.includes("node_modules/prosemirror")) {
+          if (id.includes("node_modules/prosemirror")) {
+            return "vendor-editor-core";
+          }
+          if (id.includes("node_modules/@tiptap")) {
             return "vendor-editor";
           }
           if (id.includes("node_modules/recharts") || id.includes("node_modules/d3-") || id.includes("node_modules/victory")) {
