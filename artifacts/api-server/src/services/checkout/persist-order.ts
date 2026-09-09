@@ -363,7 +363,7 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
           eq(referralsTable.bonusPaid, false),
           sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
         ))
-        .orderBy(asc(referralsTable.createdAt))
+        .orderBy(asc(referralsTable.createdAt), asc(referralsTable.id))
         .for("update");
       const totalAvailable = creditRows.reduce(
         (sum, row) => sum + Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0)),
@@ -392,6 +392,17 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
       appliedCreditAmount = roundMoney(args.creditSpend?.reduce((sum, row) => sum + row.consumedAmount, 0) ?? 0);
     }
     persistedTotalAmount = effectiveTotalAmount;
+    if (
+      args.data.depositAmount != null
+      && roundMoney(args.data.depositAmount) > effectiveTotalAmount
+    ) {
+      const error = new Error(
+        `Valor de reserva não pode ser maior que o total atualizado do pedido (${effectiveTotalAmount.toFixed(2)})`,
+      ) as Error & { code?: string; totalAmount?: number };
+      error.code = "DEPOSIT_ABOVE_TOTAL";
+      error.totalAmount = effectiveTotalAmount;
+      throw error;
+    }
 
     // CRM client upsert is intentionally NOT performed here. An anonymous
     // caller does not need to be authenticated to submit a checkout form, so
