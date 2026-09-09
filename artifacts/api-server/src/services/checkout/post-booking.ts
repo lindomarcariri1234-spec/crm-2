@@ -41,9 +41,9 @@ import { RESERVATION_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions
  * @param options.allowPartialPayment - Run only referral/credit effects when a
  * positive reservation payment was received but the order is not fully paid.
  */
-export async function runPostPaymentSideEffects(
+export async function runDeferredOrderAccounting(
   orderId: string,
-  options: { allowPartialPayment?: boolean } = {},
+  options: { allowPartialPayment?: boolean; throwOnDeferredError?: boolean } = {},
 ): Promise<void> {
   // Deferred referral conversion + referral-credit consumption. Runs first, in
   // its own transaction, gated behind confirmed payment and idempotent. Wrapped
@@ -97,7 +97,15 @@ export async function runPostPaymentSideEffects(
     }
   } catch (err) {
     logger.error({ err }, "[checkout/post-payment] Failed to apply deferred referral/credit effects");
+    if (options.throwOnDeferredError) throw err;
   }
+}
+
+export async function runPostPaymentSideEffects(
+  orderId: string,
+  options: { allowPartialPayment?: boolean; throwOnDeferredError?: boolean } = {},
+): Promise<void> {
+  await runDeferredOrderAccounting(orderId, options);
 
   const [order] = await db
     .select({
