@@ -42,7 +42,7 @@ import
 
 import 
 {
-  RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, STORE_PAYMENT_STATUS
+  RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS
 }
  from "@workspace/permissions"
 ;
@@ -196,6 +196,7 @@ import
  from "../services/checkout/create-reservations"
 ;
 import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
+import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 
 import { calculateReceivedAmount, orderFinancialSummary } from "../lib/linked-data";
 
@@ -291,10 +292,13 @@ async function settleZeroValueOrder(
 ): Promise<typeof storeOrdersTable.$inferSelect> {
   if (Number(order.totalAmount) > 0) return order;
   const settledAt = new Date();
+  let didSettle = false;
   await db.transaction(async (tx) => {
     const [lockedOrder] = await tx.select({
       id: storeOrdersTable.id,
       orderNumber: storeOrdersTable.orderNumber,
+      status: storeOrdersTable.status,
+      paymentStatus: storeOrdersTable.paymentStatus,
     }).from(storeOrdersTable)
       .where(and(
         eq(storeOrdersTable.id, order.id),
@@ -304,6 +308,10 @@ async function settleZeroValueOrder(
       .for("update")
       .limit(1);
     if (!lockedOrder) return;
+    if (
+      lockedOrder.status === STORE_ORDER_STATUS.CANCELLED
+      || lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+    ) return;
     await tx.update(reservationsTable).set({
       status: RESERVATION_STATUS.CONFIRMED,
       paidValue: sql`${reservationsTable.totalValue}`,
@@ -322,7 +330,9 @@ async function settleZeroValueOrder(
       paidAt: settledAt,
       confirmedAt: settledAt,
     }).where(eq(storeOrdersTable.id, lockedOrder.id));
+    didSettle = true;
   });
+  if (!didSettle) return order;
   return {
     ...order,
     paymentStatus: STORE_PAYMENT_STATUS.PAID,
@@ -1374,6 +1384,17 @@ async function handleIdempotentOrderReplay(
   if (!existingOrder) return false
 ;
 
+  if (
+    existingOrder.status === STORE_ORDER_STATUS.CANCELLED
+    || existingOrder.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED
+  ) {
+    next(new ConflictError(
+      "Este pedido foi cancelado ou reembolsado e não pode ser reutilizado. Inicie um novo pedido.",
+      "ORDER_TERMINAL",
+    ));
+    return true;
+  }
+
 
   let replayOrder = await ensureOrderPixQr(store, existingOrder);
   let reservationExpiresAt: Date | null = null
@@ -1473,6 +1494,12 @@ async function handleIdempotentOrderReplay(
 {
 
     ...replayOrder,
+     referralCreditApplied: Array.isArray(replayOrder.pendingCreditSpend)
+       ? roundMoney(replayOrder.pendingCreditSpend.reduce(
+         (sum, spend) => sum + Math.max(0, Number(spend.consumedAmount) || 0),
+         0,
+       ))
+       : null,
     orderId: replayOrder.id,
     items,
     paymentToken: replayOrder.paymentToken,
@@ -1694,7 +1721,12 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     // Validate minimum deposit amount if configured.
     // Reject depositAmount entirely when the store has no minDepositAmount set.
     let depositAmount: number | undefined;
-    if (data.depositAmount != null) {
+    if (data.depositAmount != null && totalAmount <= 0 && data.depositAmount <= 0) {
+      // A fully discounted order is settled by the checkout ledger itself.
+      // Treat an explicit zero from older clients as full payment instead of
+      // applying the store's positive minimum-deposit rule.
+      depositAmount = undefined;
+    } else if (data.depositAmount != null) {
       if (store.minDepositAmount == null) {
         next(new ValidationError(
           "Esta loja não aceita pagamento parcial",
@@ -1768,7 +1800,20 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       appliedCreditAmount = persistedOrder.appliedCreditAmount;
     } catch (txErr: unknown) {
       if (txErr instanceof Error) {
-        const tagged = txErr as Error & { productName?: string; available?: number; code?: string; constraint?: string };
+        const tagged = txErr as Error & {
+          productName?: string;
+          available?: number;
+          code?: string;
+          constraint?: string;
+          totalAmount?: number;
+        };
+        if (tagged.code === "DEPOSIT_ABOVE_TOTAL") {
+          next(new ValidationError(
+            tagged.message,
+            "DEPOSIT_ABOVE_TOTAL",
+          ));
+          return;
+        }
         if (txErr.message === "insufficient_stock") {
           next(new ConflictError(`Estoque insuficiente para "${tagged.productName}". Disponível: ${tagged.available ?? 0}`, "INSUFFICIENT_STOCK")); return;
         }
@@ -1835,7 +1880,9 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         if (decryptedPixKey) 
 {
 
-          const pixAmount = depositAmount ?? totalAmount
+          const pixAmount = order.depositAmount != null
+            ? Number(order.depositAmount)
+            : Number(order.totalAmount);
 ;
 
           const pixCode = generatePixEMV(
@@ -1988,6 +2035,17 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
  catch (reservationErr) 
 {
 
+        // persistCheckoutOrder reserves cashback before the reservation hold.
+        // Release it immediately when capacity/client setup rejects checkout;
+        // otherwise a failed retry would temporarily consume the balance until
+        // the abandoned-order sweep runs.
+        await invalidateOrderAfterReservationFailure(orderId).catch((releaseErr) => {
+          logger.warn(
+            { releaseErr, orderId },
+            "[store/orders] Failed to invalidate order after reservation failure",
+          );
+        });
+
         // Race condition: two simultaneous checkouts for the same client+trip
         // both passed the order-creation step and raced to insert the reservation.
         // The unique index fires a 23505 — return 409 instead of a generic 500/502.
@@ -2102,6 +2160,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 {
 
       ...order,
+      referralCreditApplied: appliedCreditAmount,
       orderId: order.id,
       items,
       paymentToken: orderPaymentToken,
