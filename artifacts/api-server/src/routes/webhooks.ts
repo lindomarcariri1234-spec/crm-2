@@ -8,7 +8,7 @@ import { logger } from "../lib/logger";
 import { syncReservationPaymentStatus, paymentExistsForGatewayTx, type DbExecutor } from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { broadcastSeatUpdate } from "../lib/realtime";
-import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
+import { runDeferredOrderAccounting, runPostPaymentSideEffects } from "../services/checkout/post-booking";
 import { recalculateClientFinancials } from "../services/client-financials";
 import {
   applyOrderInventoryEffects,
@@ -20,6 +20,7 @@ import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
 import { decryptOrPassthrough } from "../lib/crypto";
 import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
+import { restoreSpentCreditForOrder } from "../services/checkout/deferred-referral-effects";
 import { roundMoney } from "../lib/pricing";
 import { ValidationError, AppError } from "../lib/errors";
 import { adjustOrderSettlement, recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
@@ -363,9 +364,15 @@ async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise
       }
       // Post-payment: provision the portal account and mint the referral code
       // (gated behind confirmed payment). Fire-and-forget; never blocks the webhook.
-      runPostPaymentSideEffects(result.orderId, { allowPartialPayment: result.partialPayment === true }).catch((err) =>
-        logger.warn({ err, orderId: result.orderId }, "[webhooks] Failed post-payment side effects"),
-      );
+      const accountingOptions = {
+        allowPartialPayment: result.partialPayment === true,
+        throwOnDeferredError: true,
+      };
+      if (result.retryDeferredOnly) {
+        await runDeferredOrderAccounting(result.orderId, accountingOptions);
+      } else {
+        await runPostPaymentSideEffects(result.orderId, accountingOptions);
+      }
     }
     return;
   }
@@ -607,9 +614,15 @@ async function handleMpPayment(store: StoreScope, paymentId: string, payment: Mp
       }
       // Post-payment: provision the portal account and mint the referral code
       // (gated behind confirmed payment). Fire-and-forget; never blocks the webhook.
-      runPostPaymentSideEffects(result.orderId, { allowPartialPayment: result.partialPayment === true }).catch((err) =>
-        logger.warn({ err, orderId: result.orderId }, "[webhooks] Failed post-payment side effects"),
-      );
+      const accountingOptions = {
+        allowPartialPayment: result.partialPayment === true,
+        throwOnDeferredError: true,
+      };
+      if (result.retryDeferredOnly) {
+        await runDeferredOrderAccounting(result.orderId, accountingOptions);
+      } else {
+        await runPostPaymentSideEffects(result.orderId, accountingOptions);
+      }
     }
   } else if (payment.status === "rejected") {
     await db.transaction(async (tx) => {
@@ -712,6 +725,8 @@ interface ApplyResult {
   tripIds: string[];
   /** True when this event received a deposit/partial amount, not the full order. */
   partialPayment?: boolean;
+  /** Duplicate payment: retry accounting only, never repeat CRM/notification effects. */
+  retryDeferredOnly?: boolean;
 }
 
 export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Promise<ApplyResult | null> {
@@ -755,7 +770,14 @@ export async function applyGatewayPayment(tx: DbExecutor, args: ApplyArgs): Prom
   // Idempotency: if we already recorded this exact gateway transaction, stop.
   if (await paymentExistsForGatewayTx(order.tenantId, gateway, transactionId, tx)) {
     logger.info({ paymentIntentId, gateway, transactionId }, "[webhooks] Duplicate event ignored");
-    return null;
+    return {
+      orderId: order.id,
+      reservationIds: [],
+      tripIds: [],
+      tenantId: order.tenantId,
+      retryDeferredOnly: true,
+      ...(order.paymentStatus !== STORE_PAYMENT_STATUS.PAID ? { partialPayment: true } : {}),
+    };
   }
 
   // Reservations are normally already pending from checkout. The call remains
@@ -1143,6 +1165,10 @@ async function markOrderRefunded(
     occurredAt: now,
     reason,
   });
+  await restoreSpentCreditForOrder(
+    tx as unknown as Parameters<typeof restoreSpentCreditForOrder>[0],
+    order.id,
+  );
 
   // Demote previously-paid Payment rows to refunded so any subsequent
   // recomputation of reservation balances reflects the reversal.
