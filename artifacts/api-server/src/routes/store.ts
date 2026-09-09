@@ -24,8 +24,8 @@ import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { createReservationsForOrder, confirmReservationsForOrder } from "../services/checkout/create-reservations";
 import { broadcastSeatUpdate } from "../lib/realtime";
-import { runPostPaymentSideEffects } from "../services/checkout/post-booking";
-import { releaseReservedCreditForOrder } from "../services/checkout/deferred-referral-effects";
+import { runDeferredOrderAccounting, runPostPaymentSideEffects } from "../services/checkout/post-booking";
+import { restoreSpentCreditForOrder } from "../services/checkout/deferred-referral-effects";
 import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
 import { applyOrderInventoryEffects, reverseOrderInventoryEffects } from "../services/checkout/persist-order";
 import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
@@ -1113,6 +1113,77 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
         order = { ...lockedOrder, ...updates } as typeof storeOrdersTable.$inferSelect;
         didTransitionToPaid = true;
       });
+    } else if (parsed.data.status === STORE_ORDER_STATUS.CANCELLED) {
+      await db.transaction(async (tx) => {
+        const [lockedOrder] = await tx.select().from(storeOrdersTable)
+          .where(baseWhere)
+          .for("update")
+          .limit(1);
+        if (!lockedOrder) throw new NotFoundError("Order not found", "NOT_FOUND");
+        order = lockedOrder;
+        if (lockedOrder.status === STORE_ORDER_STATUS.CANCELLED) return;
+
+        const linkedReservations = await tx
+          .select({ id: reservationsTable.id })
+          .from(reservationsTable)
+          .where(and(
+            eq(reservationsTable.tenantId, me.tenantId),
+            eq(reservationsTable.storeOrderId, lockedOrder.orderNumber),
+          ));
+
+        const ref = lockedOrder.pendingReferral;
+        if (lockedOrder.referralEffectsAppliedAt != null && ref?.code) {
+          if (linkedReservations.length === 0) {
+            await reverseProductOnlyOrderReferral(tx, {
+              tenantId: me.tenantId,
+              orderId: lockedOrder.id,
+              referralCode: ref.code,
+              referralId: ref.referralId,
+              reversalReason: "order_cancelled",
+            });
+          } else {
+            await reverseTripOrderReferrals(tx, {
+              tenantId: me.tenantId,
+              orderId: lockedOrder.id,
+              cancellableReservationIds: linkedReservations.map((reservation) => reservation.id),
+              reversalReason: "order_cancelled",
+            });
+          }
+        }
+
+        const shouldReverseFinancials =
+          lockedOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID
+          || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED;
+        if (shouldReverseFinancials) {
+          await reverseOrderInventoryEffects(
+            lockedOrder.id,
+            tx as unknown as Parameters<typeof reverseOrderInventoryEffects>[1],
+          );
+          await cancelPartnerOrderItems(tx, {
+            orderId: lockedOrder.id,
+            tenantId: me.tenantId,
+            reason: "Pedido cancelado pela agência",
+            skipAvailabilityRelease: false,
+          });
+          await reverseOrderSettlement(tx, {
+            tenantId: me.tenantId,
+            orderId: lockedOrder.id,
+            eventType: "order_cancelled",
+            eventKey: `manual-cancellation:${lockedOrder.id}`,
+            occurredAt: new Date(),
+            reason: "Pedido cancelado pela agência",
+          });
+        }
+
+        await restoreSpentCreditForOrder(
+          tx as unknown as Parameters<typeof restoreSpentCreditForOrder>[0],
+          lockedOrder.id,
+        );
+        await tx.update(storeOrdersTable).set(updates)
+          .where(eq(storeOrdersTable.id, lockedOrder.id));
+        order = { ...lockedOrder, ...updates } as typeof storeOrdersTable.$inferSelect;
+        didTransitionToCancelled = true;
+      });
     } else {
       const updatedRows = await db.update(storeOrdersTable).set(updates).where(updateWhere)
         .returning({ id: storeOrdersTable.id });
@@ -1132,6 +1203,15 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
     // behavior existed). confirmReservationsForOrder then records the manual
     // payment against those reservations and syncs status to "confirmed".
     if (isTransitioningToPaid) {
+      // Accounting is idempotent and must be retryable even when the order was
+      // already marked paid by a previous request. A failure returns 500 so the
+      // agency can repeat the action without recording a second payment.
+      if (didTransitionToPaid) {
+        await runPostPaymentSideEffects(currentOrder.id, { throwOnDeferredError: true });
+      } else {
+        await runDeferredOrderAccounting(currentOrder.id, { throwOnDeferredError: true });
+      }
+
       // Chain post-payment side effects (portal account + referral code) AFTER
       // reservations commit, so ensurePortalAccount sees the freshly-created
       // reservations. Both are gated behind confirmed payment.
@@ -1173,14 +1253,6 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           // duplicate "manual" payment for the full order amount — corrupting
           // financial totals. Restricting to didTransitionToPaid ensures this
           // only ever runs once, on the actual transition.
-          if (didTransitionToPaid) {
-            // Gated on didTransitionToPaid (not isTransitioningToPaid) so retries
-            // and duplicate admin "mark as paid" actions never re-trigger portal
-            // provisioning, referral code generation, client activity records, or
-            // WhatsApp notifications for a payment that was already confirmed.
-            await runPostPaymentSideEffects(currentOrder.id);
-          }
-
           // Product-only orders have no reservation to drive the travel
           // lifecycle, but remain visible in CRM as a paid Vitrine order.
           if (createResult.reservationIds.length === 0 && currentOrder.clientId) {
@@ -1219,82 +1291,6 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
           totalValue: currentOrder.totalAmount,
         });
       }
-    }
-
-    // When an admin manually cancels a paid order (referralEffectsAppliedAt set),
-    // reverse any COMPLETED referral row.
-    // - Product-only orders: reservationId is null on the referral row;
-    //   handled by reverseProductOnlyOrderReferral.
-    // - Trip-based orders: reservationId was set at deferred-credit time;
-    //   handled by reverseTripOrderReferrals keyed on the linked reservation(s).
-    if (didTransitionToCancelled && order.referralEffectsAppliedAt != null) {
-      const ref = order.pendingReferral;
-      if (ref?.code) {
-        try {
-          const linkedReservations = await db
-            .select({ id: reservationsTable.id })
-            .from(reservationsTable)
-            .where(
-              and(
-                eq(reservationsTable.tenantId, me.tenantId),
-                eq(reservationsTable.storeOrderId, order.orderNumber),
-              ),
-            );
-          if (linkedReservations.length === 0) {
-            await reverseProductOnlyOrderReferral(db, {
-              tenantId: me.tenantId,
-              orderId: order.id,
-              referralCode: ref.code,
-              referralId: ref.referralId,
-              reversalReason: "order_cancelled",
-            });
-          } else {
-            await reverseTripOrderReferrals(db, {
-              tenantId: me.tenantId,
-              orderId: order.id,
-              cancellableReservationIds: linkedReservations.map((r) => r.id),
-              reversalReason: "order_cancelled",
-            });
-          }
-        } catch (err) {
-          req.log.warn({ err, orderId: order.id }, "[store/orders] Failed to reverse referral on manual cancellation");
-        }
-      }
-    }
-
-    if (
-      didTransitionToCancelled
-      && (order.paymentStatus === STORE_PAYMENT_STATUS.PAID || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED)
-    ) {
-      await db.transaction(async (tx) => {
-        const shouldReverseInventory =
-          currentOrder.paymentStatus === STORE_PAYMENT_STATUS.PAID
-          || parsed.data.paymentStatus === STORE_PAYMENT_STATUS.REFUNDED;
-        if (shouldReverseInventory) {
-          await reverseOrderInventoryEffects(
-            currentOrder.id,
-            tx as unknown as Parameters<typeof reverseOrderInventoryEffects>[1],
-          );
-        }
-        await cancelPartnerOrderItems(tx as unknown as Parameters<typeof cancelPartnerOrderItems>[0], {
-          orderId: currentOrder.id,
-          tenantId: me.tenantId,
-          reason: "Pedido cancelado pela agência",
-          skipAvailabilityRelease: false,
-        });
-        await reverseOrderSettlement(tx as unknown as Parameters<typeof reverseOrderSettlement>[0], {
-          tenantId: me.tenantId,
-          orderId: currentOrder.id,
-          eventType: "order_cancelled",
-          eventKey: `manual-cancellation:${currentOrder.id}`,
-          occurredAt: new Date(),
-          reason: "Pedido cancelado pela agência",
-        });
-      });
-    }
-
-    if (didTransitionToCancelled && order.paymentStatus !== STORE_PAYMENT_STATUS.PAID) {
-      await releaseReservedCreditForOrder(order.id);
     }
 
     res.json(safeAdminOrder(order));
