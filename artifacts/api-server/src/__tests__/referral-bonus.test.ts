@@ -78,6 +78,9 @@ vi.mock("@workspace/db", () => ({
   referralCampaignsTable: {},
   emailLogsTable: {},
   reservationsTable: {},
+  storeOrdersTable: {},
+  paymentsTable: {},
+  dealsTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -659,7 +662,8 @@ describe("GET /api/referrals — clientsTable JOIN enrichment", () => {
       .mockImplementationOnce(() => makeChain([{ total: "1" }]))
       .mockImplementationOnce(() => makeChain([row]))
       .mockImplementationOnce(() => makeChain([]))     // tracking backfill query
-      .mockImplementationOnce(() => makeChain([]));    // referralSettings (gracePeriodDays)
+      .mockImplementationOnce(() => makeChain([]))     // referralSettings (gracePeriodDays)
+      .mockImplementationOnce(() => makeChain([]));    // pending store-order lookup
 
     const res = await request(buildApp()).get("/api/referrals").send();
 
@@ -679,7 +683,8 @@ describe("GET /api/referrals — clientsTable JOIN enrichment", () => {
       .mockImplementationOnce(() => makeChain([{ total: "1" }]))
       .mockImplementationOnce(() => makeChain([row]))
       .mockImplementationOnce(() => makeChain([]))     // tracking backfill query
-      .mockImplementationOnce(() => makeChain([]));    // referralSettings (gracePeriodDays)
+      .mockImplementationOnce(() => makeChain([]))     // referralSettings (gracePeriodDays)
+      .mockImplementationOnce(() => makeChain([]));    // pending store-order lookup
 
     const res = await request(buildApp()).get("/api/referrals").send();
 
@@ -696,7 +701,8 @@ describe("GET /api/referrals — clientsTable JOIN enrichment", () => {
       .mockImplementationOnce(() => makeChain([{ total: "1" }]))
       .mockImplementationOnce(() => makeChain([row]))
       .mockImplementationOnce(() => makeChain([]))     // tracking backfill query
-      .mockImplementationOnce(() => makeChain([]));    // referralSettings (gracePeriodDays)
+      .mockImplementationOnce(() => makeChain([]))     // referralSettings (gracePeriodDays)
+      .mockImplementationOnce(() => makeChain([]));    // pending store-order lookup
 
     const res = await request(buildApp()).get("/api/referrals").send();
 
