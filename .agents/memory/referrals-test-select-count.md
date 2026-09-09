@@ -21,14 +21,16 @@ Every `db.select` call in the handler must have a corresponding `mockImplementat
 ```
 Mock order: `[joinedRow, [], refetchRow]` (empty `[]` for settings → gracePeriodDays defaults to 30)
 
-### GET /api/referrals (3 or 4 selects)
+### GET /api/referrals (3 to 5 selects)
 ```
 1. COUNT select (with LEFT JOIN clientsTable)
 2. rows select (with LEFT JOIN clientsTable)
 3. referralTrackingTable aggregation — CONDITIONAL on codes.length > 0
 4. referralSettingsTable (gracePeriodDays for bonusReleasesAt computation) — ALWAYS
+5. pending store-order lookup — CONDITIONAL when a returned row has no reservationId
 ```
 Mock order: `[count, rows, tracking, settings]`
-When rows is empty: tracking select is skipped → `[count, empty, settings]` (3 total)
+When rows is empty: tracking and pending-order selects are skipped → `[count, empty, settings]` (3 total).
+When non-empty rows have no reservationId, add an empty pending-order response after settings (5 total).
 
 **How to apply:** When adding a new `db.select` call to a referral handler, immediately add the corresponding `mockImplementationOnce(() => makeChain([]))` to ALL affected tests. Check both `referral-bonus.test.ts` and any other file that tests the same endpoint.
