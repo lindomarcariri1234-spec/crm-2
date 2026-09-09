@@ -34,6 +34,9 @@ vi.mock("@workspace/db", () => ({
     pendingReferral: "pending_referral",
     pendingCreditSpend: "pending_credit_spend",
     referralEffectsAppliedAt: "referral_effects_applied_at",
+    status: "status",
+    cancelledAt: "cancelled_at",
+    idempotencyKey: "idempotency_key",
   },
   referralsTable: {
     id: "id",
@@ -50,6 +53,11 @@ vi.mock("@workspace/db", () => ({
     storeOrderId: "store_order_id",
     createdAt: "created_at",
   },
+  paymentsTable: {
+    id: "id",
+    orderId: "order_id",
+    status: "status",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -62,6 +70,8 @@ vi.mock("drizzle-orm", () => ({
 
 vi.mock("@workspace/permissions", () => ({
   STORE_PAYMENT_STATUS: { PAID: "paid", PENDING: "pending" },
+  STORE_ORDER_STATUS: { CANCELLED: "cancelled" },
+  PAYMENT_STATUS: { PAID: "paid" },
 }));
 
 const mockRecordReferralConversion = vi.fn();
@@ -85,7 +95,11 @@ vi.mock("../lib/logger.js", () => ({
 }));
 
 import { db } from "@workspace/db";
-import { applyDeferredOrderCredits } from "../services/checkout/deferred-referral-effects.js";
+import {
+  applyDeferredOrderCredits,
+  invalidateOrderAfterReservationFailure,
+  restoreSpentCreditForOrder,
+} from "../services/checkout/deferred-referral-effects.js";
 
 // db.transaction(cb) → cb(tx). Each tx.select() pops the next result set off this
 // queue (in call order: order-lock, then credit-rows, then reservation lookup).
@@ -366,5 +380,74 @@ describe("applyDeferredOrderCredits", () => {
     expect(mockRecordReferralConversion.mock.calls[0][1]).toMatchObject({
       existingReferralId: null,
     });
+  });
+});
+
+describe("cashback reversal helpers", () => {
+  it("invalidates a failed checkout, releases its credit and frees the idempotency key", async () => {
+    installTx([
+      [{
+        id: "order-1",
+        paymentStatus: "pending",
+        status: "pending",
+        referralEffectsAppliedAt: null,
+      }],
+      [],
+      [{
+        id: "order-1",
+        tenantId: "tenant-1",
+        paymentStatus: "pending",
+        pendingCreditSpend: [{ id: "credit-1", consumedAmount: 25, reserved: true }],
+      }],
+    ]);
+
+    await invalidateOrderAfterReservationFailure("order-1");
+
+    expect(updateSetCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pendingCreditSpend: null }),
+      expect.objectContaining({
+        status: "cancelled",
+        cancelledAt: expect.any(Date),
+        idempotencyKey: null,
+      }),
+    ]));
+  });
+
+  it("allows cleanup to finish a pending-referral reversal for an already-cancelled unpaid order", async () => {
+    installTx([
+      [{
+        id: "order-1",
+        paymentStatus: "pending",
+        status: "cancelled",
+        referralEffectsAppliedAt: null,
+      }],
+      [],
+    ]);
+
+    await expect(invalidateOrderAfterReservationFailure("order-1")).resolves.toBe(true);
+    expect(updateSetCalls).toHaveLength(0);
+  });
+
+  it("restores spent cashback once and clears the order linkage for idempotency", async () => {
+    selectQueue = [[{
+      id: "order-1",
+      tenantId: "tenant-1",
+      paymentStatus: "paid",
+      pendingCreditSpend: [{ id: "credit-1", consumedAmount: 25, reserved: true }],
+    }]];
+    const tx = makeTx();
+
+    await expect(restoreSpentCreditForOrder(tx as never, "order-1")).resolves.toBe(true);
+    expect(updateSetCalls).toHaveLength(2);
+    expect(updateSetCalls[1]).toEqual({ pendingCreditSpend: null });
+
+    selectQueue = [[{
+      id: "order-1",
+      tenantId: "tenant-1",
+      paymentStatus: "refunded",
+      pendingCreditSpend: null,
+    }]];
+    await expect(restoreSpentCreditForOrder(tx as never, "order-1")).resolves.toBe(false);
+    expect(updateSetCalls).toHaveLength(2);
   });
 });
