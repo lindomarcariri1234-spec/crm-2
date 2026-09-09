@@ -39,6 +39,7 @@ const {
   mockEnsurePortalAccount,
   mockEnqueueNewBookingNotificationEmail,
   mockEnqueuePixOrderQr,
+  mockReleaseReservedCreditForOrder,
 } = vi.hoisted(() => {
   const selectQueue: unknown[][] = [];
   const mockTransaction = vi.fn();
@@ -54,6 +55,7 @@ const {
   const mockEnsurePortalAccount = vi.fn().mockResolvedValue({});
   const mockEnqueueNewBookingNotificationEmail = vi.fn().mockResolvedValue(undefined);
   const mockEnqueuePixOrderQr = vi.fn().mockResolvedValue(undefined);
+  const mockReleaseReservedCreditForOrder = vi.fn().mockResolvedValue(undefined);
   return {
     selectQueue,
     mockTransaction,
@@ -65,6 +67,7 @@ const {
     mockEnsurePortalAccount,
     mockEnqueueNewBookingNotificationEmail,
     mockEnqueuePixOrderQr,
+    mockReleaseReservedCreditForOrder,
   };
 });
 
@@ -179,6 +182,17 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 vi.mock("../services/checkout/portal-account.js", () => ({
   ensurePortalAccount: mockEnsurePortalAccount,
 }));
+
+vi.mock("../services/checkout/deferred-referral-effects.js", async () => {
+  const actual = await vi.importActual<typeof import("../services/checkout/deferred-referral-effects.js")>(
+    "../services/checkout/deferred-referral-effects.js",
+  );
+  return {
+    ...actual,
+    releaseReservedCreditForOrder: mockReleaseReservedCreditForOrder,
+    invalidateOrderAfterReservationFailure: mockReleaseReservedCreditForOrder,
+  };
+});
 
 vi.mock("../lib/reservation-number.js", () => ({
   getTenantReservationPrefix: vi.fn().mockResolvedValue("AG"),
@@ -374,6 +388,7 @@ describe("POST /api/public/store/:slug/orders — checkout sync", () => {
       tripIds: ["trip-001"],
     });
     mockEnsurePortalAccount.mockResolvedValue({});
+    mockReleaseReservedCreditForOrder.mockResolvedValue(undefined);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
       cb(buildTxMock()),
     );
@@ -433,6 +448,7 @@ describe("POST /api/public/store/:slug/orders — checkout sync", () => {
 
     expect(res.status).toBeGreaterThanOrEqual(500);
     expect(res.status).toBeLessThan(600);
+    expect(mockReleaseReservedCreditForOrder).toHaveBeenCalledWith("gen-id");
     expect(mockEnsurePortalAccount).not.toHaveBeenCalled();
     expect(mockEnqueueNewBookingNotificationEmail).not.toHaveBeenCalled();
   });
@@ -597,7 +613,8 @@ describe("POST /api/public/store/:slug/orders — idempotency key dedup", () => 
       [FAKE_STORE], // 1. getActiveStore
       [EXISTING_ORDER_WITH_KEY], // 2. idempotency-key upfront lookup — found
       [], // 3. existing order's items lookup
-      [{ orderId: "order-existing-001", reservationId: null, amount: "25.00", status: "paid", type: "receivable" }], // 4. current payment rows
+      [{ id: "res-001", status: "pending", totalValue: "150.00", paidValue: "0", balance: "150.00" }], // 4. replay reservations lookup
+      [{ orderId: "order-existing-001", reservationId: null, amount: "25.00", status: "paid", type: "receivable" }], // 5. current payment rows
     );
     mockCreateReservationsForOrder.mockResolvedValue({
       reservationIds: ["res-001"],
@@ -647,8 +664,9 @@ describe("POST /api/public/store/:slug/orders — idempotency key dedup", () => 
       [pixStore], // 1. getActiveStore
       [pixOrder], // 2. idempotency-key upfront lookup — found
       [], // 3. existing order's items lookup
-      [], // 4. current payment rows
-      [{ settings: { pixQrDeliveryMode: "email" } }], // 5. delivery mode
+      [], // 4. replay reservations lookup
+      [], // 5. current payment rows
+      [{ settings: { pixQrDeliveryMode: "email" } }], // 6. delivery mode
     );
     mockCreateReservationsForOrder.mockResolvedValue({
       reservationIds: ["res-001"],
