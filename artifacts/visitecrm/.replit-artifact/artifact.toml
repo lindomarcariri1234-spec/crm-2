@@ -21,6 +21,9 @@ run = "pnpm --filter @workspace/visitecrm run dev"
 build = [ "pnpm", "--filter", "@workspace/visitecrm", "run", "build" ]
 run = "node artifacts/visitecrm/serve-static.mjs"
 
+[services.production.health.startup]
+path = "/"
+
 [services.env]
 PORT = "19951"
 BASE_PATH = "/"
