@@ -10,6 +10,7 @@ kind = "mobile"
   version = "1.0.0"
 
   [[services]]
+  ensurePreviewReachable = "/status"
   name = "expo"
   paths = [ "/cliente/" ]
   localPort = 19000
