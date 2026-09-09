@@ -3,7 +3,7 @@ import { and, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm";
 import { REFERRAL_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { logger } from "./logger";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
-import { releaseReservedCreditForOrder } from "../services/checkout/deferred-referral-effects";
+import { invalidateOrderAfterReservationFailure } from "../services/checkout/deferred-referral-effects";
 
 /**
  * How old a store order must be (in hours) before its PENDING referral row is
@@ -125,7 +125,11 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
   const reversalNow = new Date();
 
   for (const order of orders) {
-    await releaseReservedCreditForOrder(order.id);
+    const invalidated = await invalidateOrderAfterReservationFailure(order.id);
+    if (!invalidated) {
+      skipped++;
+      continue;
+    }
     const ref = order.pendingReferral as {
       code: string;
       referrerId: string;
