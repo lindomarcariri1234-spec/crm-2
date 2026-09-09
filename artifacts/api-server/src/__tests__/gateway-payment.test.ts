@@ -335,13 +335,19 @@ describe("applyGatewayPayment", () => {
     expect(result?.tripIds).toEqual(["trip-C"]);
   });
 
-  it("returns null on a duplicate gateway transaction (idempotency)", async () => {
+  it("returns the order on a duplicate gateway transaction so deferred effects can retry", async () => {
     selectResults = [[ORDER]];
     mockPaymentExists.mockResolvedValue(true);
 
     const result = await callApply();
 
-    expect(result).toBeNull();
+    expect(result).toEqual(expect.objectContaining({
+      orderId: "order-1",
+      reservationIds: [],
+      tripIds: [],
+      tenantId: "tenant-1",
+      retryDeferredOnly: true,
+    }));
     expect(mockCreateReservationsForOrder).not.toHaveBeenCalled();
   });
 
