@@ -115,3 +115,4 @@
 - [Vercel external storefront assets](vercel-external-storefront-assets.md) — when storefront HTML is rewritten from Replit, forward hashed `/assets/*` before the SPA fallback so JS is not returned as HTML.
 - [Published chunk verification](published-chunk-verification.md) — recursively fetch same-origin Vite JS imports per public/protected route; pass short-lived auth only through environment headers.
 - [Referral credit reservation](referral-credit-reservation.md) — reserve cashback atomically at checkout; payment confirms it and unpaid orders release it.
+- [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
