@@ -94,6 +94,64 @@ function getSafeRequestHost(req) {
   }
 }
 
+function assertProductionBuildReady() {
+  const missing = [];
+
+  for (const platform of Object.keys(MANIFEST_PATHS)) {
+    const manifestPath = MANIFEST_PATHS[platform];
+    let manifest;
+
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    } catch (error) {
+      missing.push(
+        `${platform} manifest (${error instanceof Error ? error.message : String(error)})`,
+      );
+      continue;
+    }
+
+    const launchAssetUrl = manifest.launchAsset?.url;
+    if (typeof launchAssetUrl !== "string" || launchAssetUrl.length === 0) {
+      missing.push(`${platform} launch asset URL`);
+      continue;
+    }
+
+    let bundlePath;
+    try {
+      const bundleUrl = new URL(launchAssetUrl);
+      let bundleUrlPath = bundleUrl.pathname;
+      if (basePath && bundleUrlPath.startsWith(basePath)) {
+        bundleUrlPath = bundleUrlPath.slice(basePath.length) || "/";
+      }
+      bundlePath = resolveStaticFile(bundleUrlPath);
+    } catch {
+      bundlePath = null;
+    }
+
+    if (!bundlePath || !fs.existsSync(bundlePath)) {
+      missing.push(`${platform} bundle referenced by manifest`);
+      continue;
+    }
+
+    try {
+      if (!fs.statSync(bundlePath).isFile() || fs.statSync(bundlePath).size === 0) {
+        missing.push(`${platform} bundle is empty`);
+      }
+    } catch (error) {
+      missing.push(
+        `${platform} bundle (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `[expo] Production build is not ready: ${missing.join("; ")}. ` +
+        'Run "pnpm --filter @workspace/guide-app run build" before "serve".',
+    );
+  }
+}
+
 function resolveStaticFile(urlPath) {
   let decodedPath;
   try {
@@ -131,6 +189,7 @@ function serveStaticFile(urlPath, res) {
 
 const landingPageTemplate = fs.readFileSync(TEMPLATE_PATH, "utf-8");
 const appName = getAppName();
+assertProductionBuildReady();
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
@@ -138,6 +197,14 @@ const server = http.createServer((req, res) => {
 
   if (basePath && pathname.startsWith(basePath)) {
     pathname = pathname.slice(basePath.length) || "/";
+  }
+
+  if (pathname === "/status") {
+    res.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    return res.end(JSON.stringify({ status: "ok" }));
   }
 
   if (pathname === "/" || pathname === "/manifest") {
