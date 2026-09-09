@@ -103,44 +103,51 @@ function storefrontPath(url) {
   return `/loja/${encodeURIComponent(slug)}${rest ? `/${rest}` : ""}`;
 }
 
-export default async function handler(request, response) {
-  try {
-    const requestUrl = new URL(request.url || "/", "https://vercel.internal");
-    const pathname = storefrontPath(requestUrl);
-    const slug = requestUrl.searchParams.get("store_slug")?.trim();
-    if (!pathname || !slug) {
-      response.statusCode = 400;
+export function createStorefrontHandler({
+  fetchImpl = fetch,
+  readIndex = readStorefrontIndex,
+} = {}) {
+  return async function storefrontHandler(request, response) {
+    try {
+      const requestUrl = new URL(request.url || "/", "https://vercel.internal");
+      const pathname = storefrontPath(requestUrl);
+      const slug = requestUrl.searchParams.get("store_slug")?.trim();
+      if (!pathname || !slug) {
+        response.statusCode = 400;
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.end(JSON.stringify({ error: "STORE_SLUG_REQUIRED" }));
+        return;
+      }
+
+      const apiUrl = `${PUBLIC_API_ORIGIN.replace(/\/$/, "")}/api/public/store/${encodeURIComponent(slug)}`;
+      const storeResponse = await fetchImpl(apiUrl, {
+        headers: { accept: "application/json", "user-agent": "VisiteCRM storefront metadata" },
+      });
+      if (!storeResponse.ok) {
+        response.statusCode = storeResponse.status === 404 ? 404 : 502;
+        response.setHeader("content-type", "application/json; charset=utf-8");
+        response.end(JSON.stringify({ error: "STORE_METADATA_UNAVAILABLE" }));
+        return;
+      }
+
+      const store = await storeResponse.json();
+      const html = await readIndex();
+      const rendered = html.replace(
+        /<!-- VITRINE_METADATA_START -->[\s\S]*?<!-- VITRINE_METADATA_END -->/,
+        renderMetadata(store, pathname),
+      );
+
+      response.statusCode = 200;
+      response.setHeader("cache-control", "no-store, max-age=0");
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.end(rendered);
+    } catch (error) {
+      console.error("[storefront] metadata handler failed", error);
+      response.statusCode = 500;
       response.setHeader("content-type", "application/json; charset=utf-8");
-      response.end(JSON.stringify({ error: "STORE_SLUG_REQUIRED" }));
-      return;
+      response.end(JSON.stringify({ error: "STOREFRONT_METADATA_FAILED" }));
     }
-
-    const apiUrl = `${PUBLIC_API_ORIGIN.replace(/\/$/, "")}/api/public/store/${encodeURIComponent(slug)}`;
-    const storeResponse = await fetch(apiUrl, {
-      headers: { accept: "application/json", "user-agent": "VisiteCRM storefront metadata" },
-    });
-    if (!storeResponse.ok) {
-      response.statusCode = storeResponse.status === 404 ? 404 : 502;
-      response.setHeader("content-type", "application/json; charset=utf-8");
-      response.end(JSON.stringify({ error: "STORE_METADATA_UNAVAILABLE" }));
-      return;
-    }
-
-    const store = await storeResponse.json();
-    const html = await readStorefrontIndex();
-    const rendered = html.replace(
-      /<!-- VITRINE_METADATA_START -->[\s\S]*?<!-- VITRINE_METADATA_END -->/,
-      renderMetadata(store, pathname),
-    );
-
-    response.statusCode = 200;
-    response.setHeader("cache-control", "no-store, max-age=0");
-    response.setHeader("content-type", "text/html; charset=utf-8");
-    response.end(rendered);
-  } catch (error) {
-    console.error("[storefront] metadata handler failed", error);
-    response.statusCode = 500;
-    response.setHeader("content-type", "application/json; charset=utf-8");
-    response.end(JSON.stringify({ error: "STOREFRONT_METADATA_FAILED" }));
-  }
+  };
 }
+
+export default createStorefrontHandler();
