@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
-import { useUser } from "@clerk/react";
+import { SignInButton, useUser } from "@clerk/react";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { publicStoreApi, PublicApiError, PublicStore, CouponValidation, ReferralValidation } from "@/lib/storeApi";
@@ -386,7 +386,8 @@ export default function VitrineCheckout({
   store: PublicStore;
 }) {
   const [, navigate] = useLocation();
-  const { isSignedIn } = useUser();
+  const { isLoaded: clerkIsLoaded, isSignedIn } = useUser();
+  const isAuthLoaded = clerkIsLoaded ?? true;
   const { items, total, clearCart } = useCart();
   const stripeReturnRecovery = useMemo(() => getStripeReturnRecovery(slug), [slug]);
   const stripeReturnStatus = useMemo(() => getStripeReturnStatus(), []);
@@ -428,6 +429,8 @@ export default function VitrineCheckout({
 
   const [referralCreditBalance, setReferralCreditBalance] = useState(0);
   const [useReferralCredit, setUseReferralCredit] = useState(false);
+  const [loadingReferralCreditBalance, setLoadingReferralCreditBalance] = useState(false);
+  const [referralCreditBalanceError, setReferralCreditBalanceError] = useState<string | null>(null);
   const checkoutMountedRef = useRef(true);
 
   useEffect(() => {
@@ -519,12 +522,53 @@ export default function VitrineCheckout({
 
   // Fetch referral credit balance for logged-in users
   useEffect(() => {
-    if (!isSignedIn || stripeReturnRecovery) return;
+    if (stripeReturnRecovery) return;
+    if (!isAuthLoaded) {
+      setLoadingReferralCreditBalance(true);
+      return;
+    }
+    if (!isSignedIn) {
+      setReferralCreditBalance(0);
+      setUseReferralCredit(false);
+      setLoadingReferralCreditBalance(false);
+      setReferralCreditBalanceError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingReferralCreditBalance(true);
+    setReferralCreditBalanceError(null);
     clientPortalApi.getProfile().then((p) => {
+      if (cancelled) return;
       const balance = Number(p.referral?.creditBalance ?? 0);
+      if (!Number.isFinite(balance)) throw new Error("Saldo de cashback inválido");
       setReferralCreditBalance(balance);
-    }).catch(() => {});
-  }, [isSignedIn, stripeReturnRecovery]);
+    }).catch(() => {
+      if (!cancelled) setReferralCreditBalanceError("Não foi possível consultar seu cashback.");
+    }).finally(() => {
+      if (!cancelled) setLoadingReferralCreditBalance(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthLoaded, isSignedIn, stripeReturnRecovery]);
+
+  async function retryReferralCreditBalance(): Promise<void> {
+    if (!isSignedIn || loadingReferralCreditBalance) return;
+    setLoadingReferralCreditBalance(true);
+    setReferralCreditBalanceError(null);
+    try {
+      const profile = await clientPortalApi.getProfile();
+      const balance = Number(profile.referral?.creditBalance ?? 0);
+      if (!Number.isFinite(balance)) throw new Error("Saldo de cashback inválido");
+      setReferralCreditBalance(balance);
+    } catch {
+      setReferralCreditBalanceError("Não foi possível consultar seu cashback.");
+    } finally {
+      setLoadingReferralCreditBalance(false);
+    }
+  }
 
   // Auto-validate referral code from localStorage on mount
   useEffect(() => {
@@ -1217,9 +1261,53 @@ export default function VitrineCheckout({
           </div>
         </div>
 
-        {referralCreditBalance > 0 && (
+        {!stripeReturnRecovery && (
           <div className="border rounded-xl p-3 bg-purple-50 border-purple-200 space-y-2">
-            <div className="flex items-center justify-between gap-2">
+            {!isAuthLoaded || loadingReferralCreditBalance ? (
+              <div className="flex items-center gap-2 text-xs font-medium text-purple-800">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Consultando seu cashback...
+              </div>
+            ) : !isSignedIn ? (
+              <>
+                <div className="flex items-start gap-2">
+                  <Gift className="w-4 h-4 mt-0.5 text-purple-600 shrink-0" />
+                  <div>
+                    <p className="text-xs font-semibold text-purple-800">Use seu cashback de indicação</p>
+                    <p className="text-[11px] text-purple-600">Entre na sua conta de viajante para consultar e aplicar o saldo.</p>
+                  </div>
+                </div>
+                <SignInButton mode="modal">
+                  <button
+                    type="button"
+                    className="w-full rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-700"
+                  >
+                    Entrar para consultar cashback
+                  </button>
+                </SignInButton>
+              </>
+            ) : referralCreditBalanceError ? (
+              <>
+                <p className="text-xs font-semibold text-purple-800">{referralCreditBalanceError}</p>
+                <button
+                  type="button"
+                  onClick={() => void retryReferralCreditBalance()}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-700 hover:text-purple-900"
+                >
+                  Tentar novamente
+                </button>
+              </>
+            ) : referralCreditBalance <= 0 ? (
+              <div className="flex items-start gap-2">
+                <Gift className="w-4 h-4 mt-0.5 text-purple-600 shrink-0" />
+                <div>
+                  <p className="text-xs font-semibold text-purple-800">Cashback de indicação</p>
+                  <p className="text-[11px] text-purple-600">Você ainda não possui saldo disponível para esta compra.</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Gift className="w-4 h-4 text-purple-600 shrink-0" />
                 <div>
@@ -1249,6 +1337,8 @@ export default function VitrineCheckout({
               <p className="text-xs text-purple-700 font-medium">
                 − R$ {checkoutReferralCreditApplied.toFixed(2)} aplicados no total
               </p>
+            )}
+              </>
             )}
           </div>
         )}

@@ -164,9 +164,12 @@ export function useWizardState({
   const [referralDiscountValue, setReferralDiscountValue] = useState(5);
 
   // Referral credit (logged-in referrers spending their earned bonus balance)
-  const { isSignedIn } = useUser();
+  const { isLoaded: clerkIsLoaded, isSignedIn } = useUser();
+  const isAuthLoaded = clerkIsLoaded ?? true;
   const [referralCreditBalance, setReferralCreditBalance] = useState(0);
   const [useReferralCredit, setUseReferralCredit] = useState(false);
+  const [loadingReferralCreditBalance, setLoadingReferralCreditBalance] = useState(false);
+  const [referralCreditBalanceError, setReferralCreditBalanceError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoadingProduct(true);
@@ -178,12 +181,54 @@ export function useWizardState({
   }, [slug, productSlug]);
 
   useEffect(() => {
-    if (!isSignedIn) return;
+    if (!isAuthLoaded) {
+      setLoadingReferralCreditBalance(true);
+      return;
+    }
+    if (!isSignedIn) {
+      setReferralCreditBalance(0);
+      setUseReferralCredit(false);
+      setLoadingReferralCreditBalance(false);
+      setReferralCreditBalanceError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingReferralCreditBalance(true);
+    setReferralCreditBalanceError(null);
     clientPortalApi.getProfile().then((p) => {
+      if (cancelled) return;
       const balance = Number(p.referral?.creditBalance ?? 0);
+      if (!Number.isFinite(balance)) throw new Error("Saldo de cashback inválido");
       setReferralCreditBalance(balance);
-    }).catch(() => {});
-  }, [isSignedIn]);
+    }).catch(() => {
+      if (!cancelled) {
+        setReferralCreditBalanceError("Não foi possível consultar seu cashback.");
+      }
+    }).finally(() => {
+      if (!cancelled) setLoadingReferralCreditBalance(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthLoaded, isSignedIn]);
+
+  async function retryReferralCreditBalance(): Promise<void> {
+    if (!isSignedIn || loadingReferralCreditBalance) return;
+    setLoadingReferralCreditBalance(true);
+    setReferralCreditBalanceError(null);
+    try {
+      const profile = await clientPortalApi.getProfile();
+      const balance = Number(profile.referral?.creditBalance ?? 0);
+      if (!Number.isFinite(balance)) throw new Error("Saldo de cashback inválido");
+      setReferralCreditBalance(balance);
+    } catch {
+      setReferralCreditBalanceError("Não foi possível consultar seu cashback.");
+    } finally {
+      setLoadingReferralCreditBalance(false);
+    }
+  }
 
   useEffect(() => {
     if (!product?.partnerProductId) { setPartnerInfo(null); return; }
@@ -757,7 +802,12 @@ export function useWizardState({
     subtotal,
     couponDiscount,
     referralDiscount,
+    isAuthLoaded,
+    isSignedIn,
     referralCreditBalance,
+    loadingReferralCreditBalance,
+    referralCreditBalanceError,
+    retryReferralCreditBalance,
     referralCreditApplied,
     useReferralCredit,
     setUseReferralCredit,
