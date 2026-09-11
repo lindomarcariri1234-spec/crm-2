@@ -1131,45 +1131,52 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
   });
 
   /**
-   * Queues all four mockLimit slots plus the four mockWhere slots.
-   * The caller supplies the passengers array that will be returned by the
-   * fifth mockWhere call (the passengersTable query, awaited directly).
+   * Queues the voucher lookup results in route order. Store-order reservations
+   * add order and sibling-reservation queries before the payment query.
    */
   function setupVoucherMocks(
     passengers: { ageCategory: string; seatNumber: string | null }[],
     paymentStatus = "paid",
     reservationStatus = "confirmed",
+    storeOrderId: string | null = null,
   ) {
-    // mockLimit slots: client, reservation (via mockInnerJoinWhere→limit), tenant, user
-    mockLimit
-      .mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])  // #1 findClientRecord userId hit
-      .mockResolvedValueOnce([{ ...FAKE_RESERVATION_ROW, status: reservationStatus }]) // #2 reservation innerJoin where limit
-      .mockResolvedValueOnce([FAKE_TENANT_ROW_VOUCHER])   // #3 tenant (Promise.all)
-      .mockResolvedValueOnce([FAKE_USER_ROW_VOUCHER]);    // #4 user  (Promise.all)
+    const order = storeOrderId ? {
+      id: "store-order-001",
+      orderNumber: storeOrderId,
+      status: "confirmed",
+      paymentStatus: "paid",
+      subtotal: "1200.00",
+      discountAmount: "0.00",
+      totalAmount: "1200.00",
+      depositAmount: "600.00",
+      amountRemaining: "600.00",
+    } : null;
+    const payment = {
+      orderId: storeOrderId ? "store-order-001" : null,
+      reservationId: storeOrderId ? null : "res-001",
+      amount: "600.00",
+      status: paymentStatus,
+      type: "receivable",
+    };
 
-    // mockWhere slots: client, canonical payments, tenant, and user consume #1-#4;
-    // slot #5 is the passengers query — awaited directly, so return a plain Promise.
-    // All five mockWhere once-values use the same shape (Object.assign keeps TypeScript happy).
-    // The 5th slot resolves to `passengers` — the passengersTable query is awaited directly
-    // (no .limit/.orderBy chained after it), so its resolved value is what the route sees.
-    mockWhere
-      .mockReturnValueOnce(buildWhereMock())                                                    // #1 findClientRecord .where().limit()
-      .mockReturnValueOnce(buildWhereMock([{
-        orderId: null,
-        reservationId: "res-001",
-        amount: "600.00",
-        status: paymentStatus,
-        type: "receivable",
-      }]))                                                                                      // #2 paymentsTable .where()
-      .mockReturnValueOnce(buildWhereMock())                                                    // #3 tenant .where().limit()
-      .mockReturnValueOnce(buildWhereMock())                                                    // #4 user   .where().limit()
-      .mockReturnValueOnce(                                                                     // #5 passengersTable .where() (awaited directly)
-        Object.assign(Promise.resolve(passengers), {
-          limit: mockLimit,
-          groupBy: mockGroupBy,
-          orderBy: mockOrderBy,
-        }),
-      );
+    const limitResults = [
+      [FAKE_CLIENT_WITH_USERID],
+      [{ ...FAKE_RESERVATION_ROW, status: reservationStatus, storeOrderId }],
+      ...(order ? [[order]] : []),
+      [FAKE_TENANT_ROW_VOUCHER],
+      [FAKE_USER_ROW_VOUCHER],
+    ];
+    for (const rows of limitResults) mockLimit.mockResolvedValueOnce(rows);
+
+    const whereResults = [
+      [],
+      ...(order ? [[order], [{ id: "res-001", totalValue: "1200.00" }]] : []),
+      [payment],
+      [],
+      [],
+      passengers,
+    ];
+    for (const rows of whereResults) mockWhere.mockReturnValueOnce(buildWhereMock(rows));
   }
 
   it("calls generateVoucherPdf with lapChildCount:1 when one baby passenger has no seat", async () => {
@@ -1290,5 +1297,21 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
     expect(generateVoucherPdfMock).toHaveBeenCalledWith(
       expect.objectContaining({ lapChildCount: undefined }),
     );
+  });
+
+  it("generates a voucher when a completed reservation is paid through its store order", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+    setupVoucherMocks(
+      [{ ageCategory: "adult", seatNumber: "1A" }],
+      "paid",
+      "completed",
+      "order-001",
+    );
+
+    const app = buildClientPortalApp();
+    const res = await request(app).get("/api/client/reservations/res-001/voucher");
+
+    expect(res.status).toBe(200);
+    expect(generateVoucherPdfMock).toHaveBeenCalledOnce();
   });
 });
