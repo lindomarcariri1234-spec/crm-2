@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { buildFinancialMetricFilters, calculateFinancialMetrics, saoPauloMonthPeriod, type FinancialMetricSources } from "../services/financial-metrics";
+import {
+  buildFinancialMetricFilters,
+  calculateFinancialMetrics,
+  rollingFinancialPeriod,
+  saoPauloMonthPeriod,
+  type FinancialMetricSources,
+} from "../services/financial-metrics";
 
 const period = saoPauloMonthPeriod("2025-02");
 const date = (s: string) => new Date(s);
@@ -10,6 +16,21 @@ const sources = (overrides: Partial<FinancialMetricSources> = {}): FinancialMetr
 });
 
 describe("canonical financial metrics", () => {
+  it("builds rolling periods that match the dashboard period options", () => {
+    const now = date("2026-09-10T15:00:00.000Z");
+
+    expect(rollingFinancialPeriod("7d", now)).toMatchObject({
+      start: date("2026-09-03T15:00:00.000Z"),
+      end: now,
+      label: "Últimos 7 dias",
+    });
+    expect(rollingFinancialPeriod("12m", now)).toMatchObject({
+      start: date("2025-09-10T15:00:00.000Z"),
+      end: now,
+      label: "Últimos 12 meses",
+    });
+  });
+
   it("uses BRT month boundaries, payment cash, and open payment receivables", () => {
     const result = calculateFinancialMetrics(sources({
       reservations: [{ id: "r", tripId: "t", status: "confirmed", totalValue: "100.00", discountTotal: "10.00", createdAt: date("2025-02-01T03:00:00Z") }],

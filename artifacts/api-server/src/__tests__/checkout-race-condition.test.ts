@@ -209,6 +209,7 @@ vi.mock("../services/checkout/portal-account.js", () => ({
 
 import storePublicRouter from "../routes/store-public.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
+import { getTenantUser } from "../lib/tenant.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Express app
@@ -498,5 +499,83 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
 
     // Guard fired exactly twice — once per tab
     expect(createCallCount).toBe(2);
+  });
+
+  it("forwards cashback from two simultaneous checkout requests to transactional persistence", async () => {
+    const nonTripItemsResult = {
+      subtotal: 50,
+      orderItemsData: [{ productId: "prod-001", quantity: 1, unitPrice: 50, productName: "Produto" }],
+      fetchedProducts: new Map([["prod-001", { id: "prod-001", name: "Produto" }]]),
+      quantityByProductId: new Map([["prod-001", 1]]),
+      tripLinkedProducts: new Map(),
+    };
+    const orders = [
+      { ...FAKE_ORDER_ROW, totalAmount: "20.00" },
+      { ...FAKE_ORDER_ROW, totalAmount: "40.00" },
+    ];
+
+    const mockOrderBy = vi.fn(() => {
+      const creditRows = [{
+        id: "credit-001",
+        bonusAmount: "40.00",
+        bonusCreditUsedAmount: "0.00",
+      }];
+      return Object.assign(Promise.resolve(creditRows), { limit: mockLimit });
+    });
+    mockWhere.mockReturnValue(
+      Object.assign(Promise.resolve([]), { limit: mockLimit, orderBy: mockOrderBy }),
+    );
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy } as unknown as {
+      where: typeof mockWhere;
+      limit: typeof mockLimit;
+    });
+    mockSelect.mockReturnValue({ from: mockFrom });
+    mockLimit.mockReset();
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE]) // request A — store lookup
+      .mockResolvedValueOnce([FAKE_STORE]) // request B — store lookup
+      .mockResolvedValueOnce([{ id: "client-001" }]) // request A — cashback owner
+      .mockResolvedValueOnce([{ id: "client-001" }]) // request B — cashback owner
+      .mockResolvedValueOnce([orders[0]]) // request A — persisted order
+      .mockResolvedValueOnce([orders[1]]); // request B — persisted order
+
+    vi.mocked(getTenantUser).mockResolvedValue({
+      id: "user-001",
+      email: "maria@example.com",
+    } as any);
+    mockPrepareItems.mockReset();
+    mockPrepareItems
+      .mockResolvedValueOnce(nonTripItemsResult)
+      .mockResolvedValueOnce(nonTripItemsResult);
+    mockResolveDiscounts.mockReset();
+    mockResolveDiscounts
+      .mockResolvedValueOnce(NO_DISCOUNT)
+      .mockResolvedValueOnce(NO_DISCOUNT);
+
+    const persistenceCalls: Array<{ referralCreditRequested?: number; referralCreditClientId?: string }> = [];
+    mockPersistOrder.mockReset();
+    mockPersistOrder.mockImplementation(async (args: {
+      referralCreditRequested?: number;
+      referralCreditClientId?: string;
+    }) => {
+      persistenceCalls.push(args);
+      const appliedCreditAmount = persistenceCalls.length === 1 ? 30 : 10;
+      return { appliedCreditAmount, totalAmount: 50 - appliedCreditAmount };
+    });
+
+    const [resA, resB] = await Promise.all([
+      request(buildApp())
+        .post("/api/public/store/minha-loja/orders")
+        .send({ ...VALID_BODY, referralCreditUsed: 30 }),
+      request(buildApp())
+        .post("/api/public/store/minha-loja/orders")
+        .send({ ...VALID_BODY, referralCreditUsed: 30 }),
+    ]);
+
+    expect([resA.status, resB.status]).toEqual([200, 200]);
+    expect([resA.body.referralCreditApplied, resB.body.referralCreditApplied].sort((a, b) => a - b)).toEqual([10, 30]);
+    expect(persistenceCalls).toHaveLength(2);
+    expect(persistenceCalls.map((call) => call.referralCreditRequested)).toEqual([30, 30]);
+    expect(persistenceCalls.every((call) => typeof call.referralCreditClientId === "string" && call.referralCreditClientId.length > 0)).toBe(true);
   });
 });

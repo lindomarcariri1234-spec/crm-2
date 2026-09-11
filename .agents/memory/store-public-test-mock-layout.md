@@ -31,6 +31,20 @@ For a standard trip-linked product checkout:
 
 The per-order cap check fires BETWEEN slots 3 and 4 (no DB calls).
 
+## Rule: terminal orderBy chains must be awaitable
+
+When a route query ends at `.orderBy()` without a following `.limit()`, the shared
+mock chain must return a thenable that resolves to the row array while still
+exposing `.limit()` for queries that continue. Returning only `{ limit }` makes
+`await query` produce an object and causes failures such as `rows.reduce is not a function`.
+
+**Why:** Storefront checkout reads cashback rows with a terminal orderBy, while
+other reads use orderBy followed by limit; the same chain fixture must model both
+forms.
+
+**How to apply:** In a focused test, return `Object.assign(Promise.resolve(rows), { limit: mockLimit })`
+from the orderBy mock and keep limit responses in the normal FIFO queue.
+
 ## Pre-existing failures (do not fix)
 
 - `"does not apply discount when referral code is expired"` → 500 from `buildTxMock().insert` lacking `.returning()`

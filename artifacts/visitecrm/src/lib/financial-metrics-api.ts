@@ -45,11 +45,20 @@ export interface FinancialMetricsResponse {
   };
 }
 
-export const getFinancialMetricsQueryKey = (month?: string) =>
-  ["/api/admin/financial-metrics", month ?? "current"] as const;
+export type FinancialMetricsPeriod = "7d" | "30d" | "90d" | "12m";
 
-export async function getFinancialMetrics(month?: string): Promise<FinancialMetricsResponse> {
-  const params = month ? `?month=${encodeURIComponent(month)}` : "";
+export const FINANCIAL_METRICS_PERIOD_LABELS: Record<FinancialMetricsPeriod, string> = {
+  "7d": "Últimos 7 dias",
+  "30d": "Últimos 30 dias",
+  "90d": "Últimos 90 dias",
+  "12m": "Últimos 12 meses",
+};
+
+export const getFinancialMetricsQueryKey = (period?: FinancialMetricsPeriod) =>
+  ["/api/admin/financial-metrics", period ?? "current"] as const;
+
+export async function getFinancialMetrics(period?: FinancialMetricsPeriod): Promise<FinancialMetricsResponse> {
+  const params = period ? `?period=${encodeURIComponent(period)}` : "";
   const response = await fetch(`${BASE}/api/admin/financial-metrics${params}`, { credentials: "include" });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { message?: string; error?: string } | null;
@@ -58,9 +67,9 @@ export async function getFinancialMetrics(month?: string): Promise<FinancialMetr
   return response.json() as Promise<FinancialMetricsResponse>;
 }
 
-export function useFinancialMetrics(month?: string) {
+export function useFinancialMetrics(period?: FinancialMetricsPeriod) {
   return useQuery({
-    queryKey: getFinancialMetricsQueryKey(month),
-    queryFn: () => getFinancialMetrics(month),
+    queryKey: getFinancialMetricsQueryKey(period),
+    queryFn: () => getFinancialMetrics(period),
   });
 }

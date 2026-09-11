@@ -29,6 +29,7 @@ import {
   Copy,
   Check,
   Gift,
+  XCircle,
 } from "lucide-react";
 import { PAYMENT_METHOD_LABELS as PAYMENT_LABELS } from "@/lib/labels";
 import {
@@ -37,9 +38,69 @@ import {
   getStorefrontReferralCookie,
   setStorefrontReferralCode,
 } from "@/lib/storefrontAttribution";
-import { removeStoredValue, setStoredValue } from "./utils/storage";
+import {
+  getOrderLookupFromStorage,
+  removeStoredValue,
+  saveOrderLookupToStorage,
+  setStoredValue,
+} from "./utils/storage";
+import { trackReferralCreditReduction } from "@/lib/analytics";
 
 type Step = "dados" | "revisao" | "pagamento" | "confirmado";
+
+type StripeReturnRecovery = {
+  lookup: NonNullable<ReturnType<typeof getOrderLookupFromStorage>>;
+  redirectStatus: string;
+};
+
+type RecoveredReferralCreditRefreshContext = {
+  lookup: StripeReturnRecovery["lookup"];
+  orderNumber: string;
+  requestedReferralCredit: number | null;
+  appliedReferralCredit: number | null;
+  isCancelled?: () => boolean;
+};
+
+type StripePaymentState = "processing" | "confirmed" | "timeout" | "failed" | null;
+
+function getPaymentIntentIdFromClientSecret(clientSecret: string): string | null {
+  const match = clientSecret.match(/^(pi_[^_]+)_secret_/);
+  return match?.[1] ?? null;
+}
+
+function getStripeReturnStatus(): string | null {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("redirect_status");
+}
+
+function isFailedStripeReturnStatus(status: string | null): boolean {
+  return status === "failed" || status === "canceled";
+}
+
+function clearStripeReturnQuery(): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("payment_intent");
+  url.searchParams.delete("payment_intent_client_secret");
+  url.searchParams.delete("redirect_status");
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${url.pathname}${url.search}${url.hash}`,
+  );
+}
+
+function getStripeReturnRecovery(slug: string): StripeReturnRecovery | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const paymentIntent = params.get("payment_intent");
+  const redirectStatus = params.get("redirect_status");
+  if (!paymentIntent || !redirectStatus) return null;
+
+  const lookup = getOrderLookupFromStorage(paymentIntent);
+  if (!lookup || lookup.storeSlug !== slug) return null;
+  return { lookup, redirectStatus };
+}
 
 const STEPS: { key: Step; label: string; icon: React.ReactNode }[] = [
   { key: "dados", label: "Dados", icon: <User className="w-4 h-4" /> },
@@ -327,24 +388,102 @@ export default function VitrineCheckout({
   const [, navigate] = useLocation();
   const { isSignedIn } = useUser();
   const { items, total, clearCart } = useCart();
-  const [step, setStep] = useState<Step>("dados");
+  const stripeReturnRecovery = useMemo(() => getStripeReturnRecovery(slug), [slug]);
+  const stripeReturnStatus = useMemo(() => getStripeReturnStatus(), []);
+  const failedStripeReturn = isFailedStripeReturnStatus(stripeReturnStatus);
+  const [step, setStep] = useState<Step>(() =>
+    stripeReturnRecovery || failedStripeReturn ? "confirmado" : "dados",
+  );
   const [loading, setLoading] = useState(false);
   // One key per checkout attempt: generated lazily on first submit(), reused
   // across retries of that same attempt (e.g. a network hiccup causing the
   // customer to click "Finalizar" again) so the backend can dedupe instead of
   // creating a second order and double-reserving seats. Cleared after a
-  // successful order so a genuinely new purchase gets a fresh key.
+  // successful payment setup so a genuinely new purchase gets a fresh key.
   const idempotencyKeyRef = useRef<string | null>(null);
-  const [orderNumber, setOrderNumber] = useState<string | null>(null);
+  const [orderNumber, setOrderNumber] = useState<string | null>(
+    stripeReturnRecovery?.lookup.orderNumber ?? null,
+  );
   const [confirmedOrderTotal, setConfirmedOrderTotal] = useState<string | null>(null);
   const [confirmedDepositAmount, setConfirmedDepositAmount] = useState<string | null>(null);
+  const [confirmedReferralCreditRequested, setConfirmedReferralCreditRequested] = useState<number | null>(
+    () => stripeReturnRecovery?.lookup.referralCreditRequested ?? null,
+  );
+  const [confirmedReferralCreditApplied, setConfirmedReferralCreditApplied] = useState<number | null>(
+    () => stripeReturnRecovery?.lookup.referralCreditApplied ?? null,
+  );
+  const [confirmedReferralCreditBalanceAfter, setConfirmedReferralCreditBalanceAfter] = useState<number | null>(
+    () => stripeReturnRecovery?.lookup.referralCreditBalanceAfter ?? null,
+  );
+  const trackedReferralCreditReductionOrderRef = useRef<string | null>(null);
+  const [refreshingRecoveredReferralCredit, setRefreshingRecoveredReferralCredit] = useState(false);
   const [reservationExpiresAt, setReservationExpiresAt] = useState<string | null>(null);
   const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
   const [reservationExpired, setReservationExpired] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [stripeRecoveryLoading, setStripeRecoveryLoading] = useState(
+    () => stripeReturnRecovery !== null,
+  );
+  const [stripeRecoveryError, setStripeRecoveryError] = useState<string | null>(null);
 
   const [referralCreditBalance, setReferralCreditBalance] = useState(0);
   const [useReferralCredit, setUseReferralCredit] = useState(false);
+  const checkoutMountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      checkoutMountedRef.current = false;
+    };
+  }, []);
+
+  async function refreshRecoveredReferralCreditBalance(
+    context: RecoveredReferralCreditRefreshContext,
+  ) {
+    const {
+      lookup,
+      orderNumber: refreshOrderNumber,
+      requestedReferralCredit,
+      appliedReferralCredit,
+      isCancelled,
+    } = context;
+    if (!lookup || appliedReferralCredit == null || appliedReferralCredit <= 0) return;
+
+    setRefreshingRecoveredReferralCredit(true);
+    try {
+      const profile = await clientPortalApi.getProfile();
+      const refreshedBalance = Number(profile.referral?.creditBalance ?? 0);
+      if (!Number.isFinite(refreshedBalance) || isCancelled?.()) return;
+      setConfirmedReferralCreditBalanceAfter(refreshedBalance);
+      setReferralCreditBalance(refreshedBalance);
+      saveOrderLookupToStorage(
+        refreshOrderNumber,
+        lookup.token,
+        slug,
+        {
+          requested: requestedReferralCredit ?? undefined,
+          applied: appliedReferralCredit,
+          balanceAfter: refreshedBalance,
+          paymentIntentId: lookup.paymentIntentId,
+        },
+      );
+    } catch {
+      // Keep the confirmed order usable when the optional refresh fails.
+    } finally {
+      if (!isCancelled?.()) setRefreshingRecoveredReferralCredit(false);
+    }
+  }
+
+  function retryRecoveredReferralCreditBalance() {
+    const lookup = stripeReturnRecovery?.lookup;
+    if (!lookup || !orderNumber) return;
+    void refreshRecoveredReferralCreditBalance({
+      lookup,
+      orderNumber,
+      requestedReferralCredit: confirmedReferralCreditRequested,
+      appliedReferralCredit: confirmedReferralCreditApplied,
+      isCancelled: () => !checkoutMountedRef.current,
+    });
+  }
 
   const [form, setFormState] = useState(() => {
     const savedCode = getStorefrontReferralCode(slug) ?? "";
@@ -371,17 +510,21 @@ export default function VitrineCheckout({
   const [referralResult, setReferralResult] = useState<ReferralValidation | null>(null);
   const [validatingReferral, setValidatingReferral] = useState(false);
   const [stripeState, setStripeState] = useState<{ clientSecret: string; publishableKey: string } | null>(null);
-  const [paymentToken, setPaymentToken] = useState<string | null>(null);
-  const [stripePaymentConfirmed, setStripePaymentConfirmed] = useState<"processing" | "confirmed" | "timeout" | null>(null);
+  const [paymentToken, setPaymentToken] = useState<string | null>(
+    stripeReturnRecovery?.lookup.token ?? null,
+  );
+  const [stripePaymentConfirmed, setStripePaymentConfirmed] = useState<StripePaymentState>(
+    () => failedStripeReturn ? "failed" : null,
+  );
 
   // Fetch referral credit balance for logged-in users
   useEffect(() => {
-    if (!isSignedIn) return;
+    if (!isSignedIn || stripeReturnRecovery) return;
     clientPortalApi.getProfile().then((p) => {
       const balance = Number(p.referral?.creditBalance ?? 0);
       setReferralCreditBalance(balance);
     }).catch(() => {});
-  }, [isSignedIn]);
+  }, [isSignedIn, stripeReturnRecovery]);
 
   // Auto-validate referral code from localStorage on mount
   useEffect(() => {
@@ -397,6 +540,106 @@ export default function VitrineCheckout({
   // referral code from localStorage. Omitting referralResult prevents an infinite loop (validate → set →
   // revalidate); omitting slug/publicStoreApi avoids spurious re-runs on stable references.
   }, []);
+
+  // Stripe may return to this checkout URL after 3DS with an empty cart and
+  // only the payment-intent query parameters. Rehydrate the order from the
+  // one-shot lookup token before the empty-cart guard runs.
+  useEffect(() => {
+    const recovery = stripeReturnRecovery;
+    if (!recovery) return;
+    const { lookup, redirectStatus } = recovery;
+    let cancelled = false;
+
+    async function recoverStripeReturn() {
+      try {
+        const order = await publicStoreApi.getOrder(slug, lookup.orderNumber, lookup.token);
+        if (cancelled) return;
+
+        const appliedFromOrder = Number(order.referralCreditApplied);
+        const appliedReferralCredit = Number.isFinite(appliedFromOrder)
+          ? appliedFromOrder
+          : lookup.referralCreditApplied ?? null;
+        const requestedValue = lookup.referralCreditRequested;
+        const requestedReferralCredit =
+          typeof requestedValue === "number" && Number.isFinite(requestedValue)
+            ? requestedValue
+          : null;
+        const balanceAfter = lookup.referralCreditBalanceAfter ?? null;
+        const shouldRefreshReferralCreditBalance =
+          isSignedIn &&
+          appliedReferralCredit != null &&
+          appliedReferralCredit > 0 &&
+          balanceAfter == null;
+
+        setOrderNumber(order.orderNumber);
+        setPaymentToken(lookup.token);
+        setFormState((previous) => ({
+          ...previous,
+          customerName: order.customerName ?? previous.customerName,
+          customerEmail: order.customerEmail ?? previous.customerEmail,
+        }));
+        setConfirmedOrderTotal(order.totalAmount);
+        setConfirmedDepositAmount(order.depositAmount ?? null);
+        setConfirmedReferralCreditRequested(requestedReferralCredit);
+        setConfirmedReferralCreditApplied(
+          appliedReferralCredit != null && Number.isFinite(appliedReferralCredit)
+            ? appliedReferralCredit
+            : null,
+        );
+        setConfirmedReferralCreditBalanceAfter(
+          balanceAfter != null && Number.isFinite(balanceAfter) ? balanceAfter : null,
+        );
+        if (balanceAfter != null && Number.isFinite(balanceAfter)) {
+          setReferralCreditBalance(balanceAfter);
+        }
+        if (order.reservationExpiresAt) {
+          setReservationExpiresAt(order.reservationExpiresAt);
+        }
+        setStripePaymentConfirmed(
+          isFailedStripeReturnStatus(redirectStatus)
+            ? "failed"
+            : order.paymentStatus === "paid"
+              ? "confirmed"
+              : redirectStatus === "succeeded"
+                ? "processing"
+                : "timeout",
+        );
+        setStripeRecoveryLoading(false);
+
+        clearStripeReturnQuery();
+
+        if (shouldRefreshReferralCreditBalance) {
+          await refreshRecoveredReferralCreditBalance({
+            lookup,
+            orderNumber: order.orderNumber,
+            requestedReferralCredit,
+            appliedReferralCredit,
+            isCancelled: () => cancelled,
+          });
+        }
+      } catch {
+        if (cancelled) return;
+        clearStripeReturnQuery();
+        setStripeRecoveryError(
+          "Não foi possível recuperar seu pedido após a autenticação do cartão. Consulte o pedido pelo código de acesso.",
+        );
+        setStripeRecoveryLoading(false);
+      }
+    }
+
+    void recoverStripeReturn();
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, stripeReturnRecovery]);
+
+  // Even without the one-shot lookup, a failed Stripe return must not fall
+  // through to the empty-cart screen. Remove sensitive Stripe query values
+  // after rendering the actionable failure state.
+  useEffect(() => {
+    if (!failedStripeReturn || stripeReturnRecovery) return;
+    clearStripeReturnQuery();
+  }, [failedStripeReturn, stripeReturnRecovery]);
 
   function set(field: string, value: string) {
     setFormState((p) => ({ ...p, [field]: value }));
@@ -417,6 +660,43 @@ export default function VitrineCheckout({
     : 0;
   const discount = couponDiscount + referralDiscount + referralCreditApplied;
   const finalTotal = Math.max(0, total - discount);
+  const checkoutReferralCreditApplied =
+    confirmedReferralCreditApplied ?? referralCreditApplied;
+  const checkoutFinalTotal =
+    confirmedOrderTotal != null ? Number(confirmedOrderTotal) : finalTotal;
+  const confirmedReferralCreditWasAdjusted =
+    confirmedReferralCreditRequested != null &&
+    confirmedReferralCreditApplied != null &&
+    confirmedReferralCreditRequested - confirmedReferralCreditApplied > 0.005;
+  const recoveredReferralCreditBalanceUnavailable =
+    confirmedReferralCreditApplied != null &&
+    confirmedReferralCreditApplied > 0 &&
+    confirmedReferralCreditBalanceAfter == null;
+
+  useEffect(() => {
+    if (
+      !orderNumber ||
+      confirmedReferralCreditRequested == null ||
+      confirmedReferralCreditApplied == null ||
+      trackedReferralCreditReductionOrderRef.current === orderNumber
+    ) {
+      return;
+    }
+
+    if (
+      trackReferralCreditReduction(
+        "cart_checkout",
+        confirmedReferralCreditRequested,
+        confirmedReferralCreditApplied,
+      )
+    ) {
+      trackedReferralCreditReductionOrderRef.current = orderNumber;
+    }
+  }, [
+    orderNumber,
+    confirmedReferralCreditRequested,
+    confirmedReferralCreditApplied,
+  ]);
 
   async function validateCoupon() {
     if (!form.couponCode) return;
@@ -502,21 +782,48 @@ export default function VitrineCheckout({
         depositAmount: form.depositAmount ? Number(form.depositAmount) : undefined,
         idempotencyKey: idempotencyKeyRef.current,
       });
-      // Order succeeded — the next submit() (a genuinely new purchase) should
-      // mint a fresh key rather than colliding with this completed order.
-      idempotencyKeyRef.current = null;
+      const requestedReferralCredit = referralCreditApplied;
+      const appliedReferralCredit =
+        order.referralCreditApplied != null && Number.isFinite(Number(order.referralCreditApplied))
+          ? Number(order.referralCreditApplied)
+          : requestedReferralCredit;
+      let refreshedReferralCreditBalance: number | null = null;
+      if (isSignedIn && requestedReferralCredit > 0) {
+        try {
+          const profile = await clientPortalApi.getProfile();
+          const nextBalance = Number(profile.referral?.creditBalance ?? 0);
+          if (Number.isFinite(nextBalance)) {
+            refreshedReferralCreditBalance = nextBalance;
+            setReferralCreditBalance(nextBalance);
+          }
+        } catch {
+          // The order succeeded even if the optional balance refresh fails.
+        }
+      }
       setOrderNumber(order.orderNumber);
       setConfirmedOrderTotal(order.totalAmount);
       setConfirmedDepositAmount(order.depositAmount ?? null);
+      setConfirmedReferralCreditRequested(
+        requestedReferralCredit > 0 ? requestedReferralCredit : null,
+      );
+      setConfirmedReferralCreditApplied(
+        requestedReferralCredit > 0 ? appliedReferralCredit : null,
+      );
+      setConfirmedReferralCreditBalanceAfter(refreshedReferralCreditBalance);
       const tok = order.paymentToken as string ?? null;
       setPaymentToken(tok);
       if (tok) {
         try {
-          localStorage.setItem("pending_order_lookup", JSON.stringify({
-            orderNumber: order.orderNumber,
-            token: tok,
-            storeSlug: slug,
-          }));
+          saveOrderLookupToStorage(
+            order.orderNumber,
+            tok,
+            slug,
+            {
+              requested: requestedReferralCredit > 0 ? requestedReferralCredit : undefined,
+              applied: requestedReferralCredit > 0 ? appliedReferralCredit : undefined,
+              balanceAfter: refreshedReferralCreditBalance,
+            },
+          );
         } catch { /* ignore quota errors */ }
       }
       if (order.reservationExpiresAt) {
@@ -527,12 +834,31 @@ export default function VitrineCheckout({
           storeSlug: slug,
         }));
       }
-      clearCart();
-
       if (isStripeCardPayment) {
         const pi = await publicStoreApi.createPaymentIntent(slug, order.orderNumber, order.paymentToken as string);
         setStripeState({ clientSecret: pi.clientSecret, publishableKey: pi.publishableKey });
+        const paymentIntentId = getPaymentIntentIdFromClientSecret(pi.clientSecret);
+        if (tok && paymentIntentId) {
+          saveOrderLookupToStorage(
+            order.orderNumber,
+            tok,
+            slug,
+            {
+              paymentIntentId,
+              requested: requestedReferralCredit > 0 ? requestedReferralCredit : undefined,
+              applied: requestedReferralCredit > 0 ? appliedReferralCredit : undefined,
+              balanceAfter: refreshedReferralCreditBalance,
+            },
+          );
+        }
+        // Keep the cart and idempotency key until PaymentIntent creation
+        // succeeds. If it fails, the next click replays this order and retries
+        // only the payment setup instead of reserving or creating a new order.
+        idempotencyKeyRef.current = null;
+        clearCart();
       } else {
+        idempotencyKeyRef.current = null;
+        clearCart();
         setStep("confirmado");
       }
     } catch (err: unknown) {
@@ -637,6 +963,84 @@ export default function VitrineCheckout({
     );
   }
 
+  if (stripeRecoveryLoading) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-20 text-center">
+        <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-muted-foreground" />
+        <p className="text-muted-foreground">Recuperando seu pedido após a autenticação...</p>
+      </div>
+    );
+  }
+
+  if (stripePaymentConfirmed === "failed") {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-20 text-center">
+        <StepIndicator current="pagamento" />
+        <div className="w-20 h-20 rounded-full bg-red-100 flex items-center justify-center mx-auto mb-6">
+          <XCircle className="w-12 h-12 text-red-500" />
+        </div>
+        <h1 className="text-3xl font-bold mb-2">Pagamento não concluído</h1>
+        <p className="text-muted-foreground mb-2">
+          A autenticação ou o pagamento do cartão falhou. Seu pedido não foi confirmado.
+        </p>
+        {orderNumber ? (
+          <p className="text-muted-foreground mb-4">
+            O pedido{" "}
+            <strong className="font-mono text-foreground">{orderNumber}</strong>{" "}
+            continua disponível para consulta.
+          </p>
+        ) : (
+          <p className="text-muted-foreground mb-4">
+            Não foi possível recuperar o código do pedido nesta sessão.
+          </p>
+        )}
+        {confirmedReferralCreditApplied != null && confirmedReferralCreditApplied > 0 && (
+          <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded-xl px-4 py-3 text-sm space-y-1.5 mb-6">
+            <p className="font-semibold">
+              Cashback registrado neste pedido: R$ {confirmedReferralCreditApplied.toFixed(2)}.
+            </p>
+            <p>
+              Esse valor permanece associado ao pedido e não será reaplicado automaticamente em uma nova tentativa.
+            </p>
+          </div>
+        )}
+        <div className="flex gap-3 justify-center flex-wrap">
+          <Button
+            variant="outline"
+            onClick={() =>
+              navigate(
+                orderNumber
+                  ? `/loja/${slug}/pedido/${encodeURIComponent(orderNumber)}`
+                  : `/loja/${slug}/consultar-pedido`,
+              )
+            }
+          >
+            Consultar pedido
+          </Button>
+          <Button
+            onClick={() => navigate(`/loja/${slug}/produtos`)}
+            style={{ backgroundColor: store.primaryColor }}
+            className="text-white"
+          >
+            Tentar novamente
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (stripeRecoveryError) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-20 text-center">
+        <p className="text-lg font-semibold mb-2">Não foi possível concluir a recuperação</p>
+        <p className="text-muted-foreground mb-6">{stripeRecoveryError}</p>
+        <Button onClick={() => navigate(`/loja/${slug}/consultar-pedido`)}>
+          Consultar pedido
+        </Button>
+      </div>
+    );
+  }
+
   if (step === "confirmado") {
     return (
       <div className="max-w-2xl mx-auto px-4 py-20 text-center">
@@ -662,6 +1066,40 @@ export default function VitrineCheckout({
               <p>Depósito pago: <strong>R$ {Number(confirmedDepositAmount).toFixed(2)}</strong></p>
               <p>Restante a pagar: <strong>R$ {(Number(confirmedOrderTotal ?? 0) - Number(confirmedDepositAmount)).toFixed(2)}</strong></p>
             </div>
+          </div>
+        )}
+        {(confirmedReferralCreditWasAdjusted || recoveredReferralCreditBalanceUnavailable) && (
+          <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded-xl px-4 py-3 text-sm space-y-1.5 mb-4">
+            {confirmedReferralCreditWasAdjusted && (
+              <p className="font-semibold">Seu saldo de cashback mudou durante o checkout.</p>
+            )}
+            <p>
+              Aplicamos R$ {confirmedReferralCreditApplied!.toFixed(2)} de cashback.
+              O novo total do pedido é R$ {Number(confirmedOrderTotal ?? 0).toFixed(2)}.
+            </p>
+            {confirmedReferralCreditBalanceAfter != null && (
+              <p className="font-medium">
+                Saldo atual de cashback: R$ {confirmedReferralCreditBalanceAfter.toFixed(2)}.
+              </p>
+            )}
+            {recoveredReferralCreditBalanceUnavailable && (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium">
+                  {refreshingRecoveredReferralCredit
+                    ? "Atualizando seu saldo de cashback..."
+                    : "O pedido foi confirmado, mas não foi possível atualizar seu saldo de cashback agora."}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={retryRecoveredReferralCreditBalance}
+                  disabled={refreshingRecoveredReferralCredit}
+                >
+                  {refreshingRecoveredReferralCredit ? "Atualizando..." : "Atualizar saldo"}
+                </Button>
+              </div>
+            )}
           </div>
         )}
         <p className="text-sm text-muted-foreground mb-4">
@@ -767,15 +1205,15 @@ export default function VitrineCheckout({
               <span>- R$ {referralDiscount.toFixed(2)}</span>
             </div>
           )}
-          {referralCreditApplied > 0 && (
+          {checkoutReferralCreditApplied > 0 && (
             <div className="flex justify-between text-sm text-purple-600">
               <span>Cashback de indicação</span>
-              <span>- R$ {referralCreditApplied.toFixed(2)}</span>
+              <span>- R$ {checkoutReferralCreditApplied.toFixed(2)}</span>
             </div>
           )}
           <div className="flex justify-between font-bold text-lg border-t pt-2 mt-1">
             <span>Total</span>
-            <span style={{ color: store.primaryColor }}>R$ {finalTotal.toFixed(2)}</span>
+            <span style={{ color: store.primaryColor }}>R$ {checkoutFinalTotal.toFixed(2)}</span>
           </div>
         </div>
 
@@ -807,9 +1245,9 @@ export default function VitrineCheckout({
                 />
               </button>
             </div>
-            {useReferralCredit && referralCreditApplied > 0 && (
+            {useReferralCredit && checkoutReferralCreditApplied > 0 && (
               <p className="text-xs text-purple-700 font-medium">
-                − R$ {referralCreditApplied.toFixed(2)} aplicados no total
+                − R$ {checkoutReferralCreditApplied.toFixed(2)} aplicados no total
               </p>
             )}
           </div>

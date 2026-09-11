@@ -24,6 +24,7 @@ const {
   mockSelectDistinct,
   mockInsert,
   mockUpdate,
+  mockUpdateSet,
   mockTransaction,
   queueDbResult,
   clearResultQueue,
@@ -94,6 +95,7 @@ const {
     mockSelectDistinct,
     mockInsert,
     mockUpdate,
+    mockUpdateSet,
     mockTransaction,
     queueDbResult,
     clearResultQueue,
@@ -605,5 +607,89 @@ describe("POST /api/clients — CPF upsert / deduplication", () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("CLIENT_REQUIRED_DATA");
     expect(mockTransaction).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/clients/:id — partial contact updates
+// ---------------------------------------------------------------------------
+
+describe("PATCH /api/clients/:id — preserves omitted contact fields", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearResultQueue();
+    requireAuthMock.mockResolvedValue(FAKE_USER as never);
+  });
+
+  function queuePatch(existingClient: Record<string, unknown>, updatedClient = existingClient) {
+    queueDbResult([existingClient], [updatedClient]);
+    mockTransaction.mockImplementationOnce(
+      async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb({ update: mockUpdate }),
+    );
+  }
+
+  it("keeps the existing email when a partial edit omits email", async () => {
+    const existingClient = makeFakeClient({
+      email: "existing@example.com",
+      whatsapp: "11999999999",
+    });
+    const updatedClient = makeFakeClient({
+      name: "Maria Atualizada",
+      email: "existing@example.com",
+      whatsapp: "11999999999",
+    });
+    queuePatch(existingClient, updatedClient);
+
+    const res = await request(app)
+      .patch("/api/clients/client-001")
+      .send({ name: "Maria Atualizada" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.email).toBe("existing@example.com");
+    expect(res.body.whatsapp).toBe("11999999999");
+    const updatePayload = (mockUpdateSet.mock.calls as unknown[][])[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload).toEqual({ name: "Maria Atualizada" });
+    expect(updatePayload).not.toHaveProperty("email");
+    expect(updatePayload).not.toHaveProperty("whatsapp");
+  });
+
+  it("keeps the existing WhatsApp when a partial edit omits WhatsApp", async () => {
+    const existingClient = makeFakeClient({
+      email: "existing@example.com",
+      whatsapp: "11999999999",
+    });
+    const updatedClient = makeFakeClient({
+      name: "Maria Atualizada",
+      email: "existing@example.com",
+      whatsapp: "11999999999",
+    });
+    queuePatch(existingClient, updatedClient);
+
+    const res = await request(app)
+      .patch("/api/clients/client-001")
+      .send({ name: "Maria Atualizada" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.email).toBe("existing@example.com");
+    expect(res.body.whatsapp).toBe("11999999999");
+    const updatePayload = (mockUpdateSet.mock.calls as unknown[][])[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload).toEqual({ name: "Maria Atualizada" });
+    expect(updatePayload).not.toHaveProperty("email");
+    expect(updatePayload).not.toHaveProperty("whatsapp");
+  });
+
+  it("does not update a client from another agency", async () => {
+    queueDbResult([]);
+
+    const res = await request(app)
+      .patch("/api/clients/client-from-another-tenant")
+      .send({ name: "Tentativa cross-tenant" });
+
+    expect(res.status).toBe(404);
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });

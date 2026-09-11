@@ -1021,7 +1021,7 @@ export async function retryUnknownOutboundDelivery(
     entityType: "outbound_delivery",
     entityId: delivery.id,
     before: { status: "unknown", outcome: "not_found" },
-    after: { status: "pending", nextAttempt: true },
+    after: { status: "pending", nextAttempt: true, provider: reconciliation.provider },
     ipAddress: context.ipAddress ?? null,
     userAgent: context.userAgent ?? null,
   });

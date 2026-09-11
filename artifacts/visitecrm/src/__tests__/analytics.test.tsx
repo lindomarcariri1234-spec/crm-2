@@ -77,6 +77,12 @@ vi.mock("@/components/ui/select", () => ({
 
 vi.mock("../lib/financial-metrics-api", () => ({
   useFinancialMetrics: mockUseFinancialMetrics,
+  FINANCIAL_METRICS_PERIOD_LABELS: {
+    "7d": "Últimos 7 dias",
+    "30d": "Últimos 30 dias",
+    "90d": "Últimos 90 dias",
+    "12m": "Últimos 12 meses",
+  },
 }));
 
 import Analytics from "../pages/analytics.js";
@@ -174,6 +180,9 @@ describe("Analytics", () => {
 
   it("consulta novamente o gráfico quando o período é alterado", async () => {
     const requestedPeriods: string[] = [];
+    const requestedFinancialPeriods: Array<string | undefined> = [];
+    let chartPending = false;
+    let financialPending = false;
 
     mockUseGetDashboardSummary.mockReturnValue(
       successfulQuery(mockRefetchSummary, {
@@ -190,9 +199,17 @@ describe("Analytics", () => {
     mockUseGetDashboardRevenueChart.mockImplementation(
       ({ period }: { period: string }) => {
         requestedPeriods.push(period);
-        return successfulQuery(mockRefetchChart, [
-          { label: period, revenue: period === "12m" ? 120 : 30, expenses: 10 },
-        ]);
+        const isPendingNewPeriod = period === "30d" && chartPending;
+        return {
+          ...successfulQuery(mockRefetchChart, [
+            {
+              label: isPendingNewPeriod ? "12m anterior" : `${period} atual`,
+              revenue: period === "12m" || isPendingNewPeriod ? 120 : 30,
+              expenses: 10,
+            },
+          ]),
+          isFetching: isPendingNewPeriod,
+        };
       },
     );
     mockUseGetPaymentsSummary.mockReturnValue(
@@ -209,21 +226,56 @@ describe("Analytics", () => {
     mockUseListExpenses.mockReturnValue(
       successfulQuery(mockRefetchExpenses, { data: [] }),
     );
-    mockUseFinancialMetrics.mockReturnValue(
-      successfulQuery(mockRefetchFinancialMetrics, {
-        period: { start: "", end: "", label: "12 meses", asOf: "" },
-        timezone: "America/Sao_Paulo",
-        contracts: {},
-        totals: {},
-        byTrip: [],
-        byUser: [],
-        diagnostics: {},
-      }),
-    );
+    mockUseFinancialMetrics.mockImplementation((requestedPeriod?: string) => {
+      requestedFinancialPeriods.push(requestedPeriod);
+      const isPendingNewPeriod = requestedPeriod === "30d" && financialPending;
+      return {
+        ...successfulQuery(mockRefetchFinancialMetrics, {
+          period: {
+            start: "",
+            end: "",
+            label: isPendingNewPeriod ? "Últimos 12 meses" : requestedPeriod === "30d" ? "Últimos 30 dias" : "Últimos 12 meses",
+            asOf: "",
+          },
+          timezone: "America/Sao_Paulo",
+          contracts: {},
+          totals: {
+            grossBookedRevenue: 0,
+            bookedRevenue: isPendingNewPeriod ? 200 : 75,
+            receivedRevenue: isPendingNewPeriod ? 120 : 30,
+            receivable: 0,
+            overdueReceivable: 0,
+            payable: 0,
+            overduePayable: 0,
+            discounts: 0,
+            clientReferralBonuses: 0,
+            clientReferralCredits: 0,
+            sellerCommissions: 0,
+            sellerCommissionsPaid: 0,
+            referralCommissions: 0,
+            referralCommissionsPaid: 0,
+            expenses: 0,
+            expensesPaid: 0,
+            tripCosts: 0,
+            tripCostsPaid: 0,
+            userReferralBalance: 0,
+            userDebt: 0,
+            operatingCostsPaid: 0,
+            profit: 0,
+            margin: 0,
+          },
+          byTrip: [],
+          byUser: [],
+          diagnostics: {},
+        }),
+        isFetching: isPendingNewPeriod,
+      };
+    });
 
     const handle = await renderComponent(createElement(Analytics));
 
     expect(requestedPeriods).toEqual(["12m"]);
+    expect(requestedFinancialPeriods).toEqual(["12m", "12m"]);
     expect(handle.container.textContent).toContain("12m");
 
     const thirtyDayOption = handle.container.querySelector(
@@ -231,8 +283,29 @@ describe("Analytics", () => {
     ) as HTMLButtonElement | null;
     expect(thirtyDayOption).not.toBeNull();
 
+    chartPending = true;
+    financialPending = true;
     await flushAct(() => thirtyDayOption!.click());
 
     expect(requestedPeriods).toEqual(["12m", "30d"]);
+    expect(requestedFinancialPeriods).toEqual(["12m", "12m", "30d", "30d"]);
+    expect(handle.container.querySelector('[data-testid="revenue-line-chart-loading"]')).not.toBeNull();
+    expect(handle.container.querySelector('[data-testid="revenue-line-chart"]')).toBeNull();
+    expect(handle.container.textContent).toContain("Atualizando gráfico...");
+    expect(handle.container.textContent).not.toContain("30d atual");
+    expect(handle.container.querySelector('[data-testid="status-financial-metrics-loading"]')).not.toBeNull();
+    expect(handle.container.textContent).toContain("Últimos 30 dias");
+    expect(handle.container.textContent).not.toContain("Receita recebida");
+
+    chartPending = false;
+    financialPending = false;
+    await handle.rerender(createElement(Analytics));
+
+    expect(handle.container.querySelector('[data-testid="revenue-line-chart-loading"]')).toBeNull();
+    expect(handle.container.querySelector('[data-testid="revenue-line-chart"]')).not.toBeNull();
+    expect(handle.container.textContent).toContain("30d atual");
+    expect(handle.container.querySelector('[data-testid="text-financial-metrics-period"]')?.textContent).toContain("Últimos 30 dias");
+    expect(handle.container.querySelector('[data-testid="text-financial-metric-received"]')?.textContent).toContain("R$");
+    expect(handle.container.textContent).toContain("30d");
   });
 });

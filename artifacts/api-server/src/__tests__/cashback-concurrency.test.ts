@@ -300,7 +300,7 @@ beforeEach(() => {
 });
 
 describe("cashback reservation across concurrent checkouts", () => {
-  it("caps the second checkout, confirms paid credit once, and releases abandoned credit", async () => {
+  it("caps the second checkout, keeps total consumption within the balance, confirms paid credit once, and releases abandoned credit", async () => {
     const [first, second] = await Promise.all([
       persistCheckoutOrder(checkoutArgs("order-1", "ORDER-1")),
       persistCheckoutOrder(checkoutArgs("order-2", "ORDER-2")),
@@ -308,6 +308,8 @@ describe("cashback reservation across concurrent checkouts", () => {
 
     expect(state.transactions).toBe(2);
     expect([first.appliedCreditAmount, second.appliedCreditAmount].sort((a, b) => a - b)).toEqual([10, 30]);
+    expect(first.appliedCreditAmount + second.appliedCreditAmount).toBe(credit.bonusAmount);
+    expect(first.appliedCreditAmount + second.appliedCreditAmount).toBeLessThanOrEqual(credit.bonusAmount);
     expect([first.totalAmount, second.totalAmount].sort((a, b) => a - b)).toEqual([20, 40]);
     expect(credit.bonusCreditUsedAmount).toBe(40);
     expect(credit.bonusCreditUsedAmount).toBeLessThanOrEqual(credit.bonusAmount);

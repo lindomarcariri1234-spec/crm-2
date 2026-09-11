@@ -41,6 +41,7 @@ export const FINANCIAL_METRIC_CONTRACTS = {
 } as const;
 
 export type FinancialPeriod = { start: Date; end: Date; label: string; asOf?: Date };
+export type FinancialMetricsPeriod = "7d" | "30d" | "90d" | "12m";
 type Money = number;
 type AnyRow = Record<string, unknown>;
 
@@ -96,6 +97,21 @@ export function currentSaoPauloMonth(now = new Date()): FinancialPeriod {
   const year = parts.find(p => p.type === "year")!.value;
   const month = parts.find(p => p.type === "month")!.value;
   return saoPauloMonthPeriod(`${year}-${month}`);
+}
+
+export function rollingFinancialPeriod(period: FinancialMetricsPeriod, now = new Date()): FinancialPeriod {
+  const days = period === "7d" ? 7 : period === "90d" ? 90 : period === "12m" ? 365 : 30;
+  const labels: Record<FinancialMetricsPeriod, string> = {
+    "7d": "Últimos 7 dias",
+    "30d": "Últimos 30 dias",
+    "90d": "Últimos 90 dias",
+    "12m": "Últimos 12 meses",
+  };
+  return {
+    start: new Date(now.getTime() - days * 86_400_000),
+    end: now,
+    label: labels[period],
+  };
 }
 
 export type FinancialMetricSources = {

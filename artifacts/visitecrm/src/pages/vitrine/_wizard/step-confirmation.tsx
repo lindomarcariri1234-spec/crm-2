@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   CheckCircle2,
@@ -7,6 +7,7 @@ import {
   Users,
   CreditCard,
   Info,
+  Loader2,
   Printer,
   MessageSquare,
   Search,
@@ -23,6 +24,7 @@ import { ConfettiAnimation } from "./confetti";
 import { Voucher } from "./voucher";
 import { fmtDateLong, PAYMENT_LABELS } from "./constants";
 import type { WizardState } from "./use-wizard-state";
+import { trackReferralCreditReduction } from "@/lib/analytics";
 
 function PixPaymentBlock({
   pixQrCodeUrl,
@@ -101,6 +103,8 @@ export function StepConfirmation({
     effectiveSeats,
     form,
     navigate,
+    refreshingReferralCreditBalance,
+    refreshReferralCreditBalance,
     referralDiscount,
     referralApplied,
     referralDiscountType,
@@ -109,6 +113,24 @@ export function StepConfirmation({
     couponResult,
     selectedBoardingPointId,
   } = state;
+  const trackedReferralCreditReductionOrderRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!completedOrder || trackedReferralCreditReductionOrderRef.current === completedOrder.orderNumber) {
+      return;
+    }
+
+    if (
+      trackReferralCreditReduction(
+        "reservation_wizard",
+        completedOrder.referralCreditRequested ?? Number.NaN,
+        completedOrder.referralCreditApplied ?? Number.NaN,
+      )
+    ) {
+      trackedReferralCreditReductionOrderRef.current = completedOrder.orderNumber;
+    }
+  }, [completedOrder]);
+
   if (!product || !completedOrder) return null;
   const summary = completedOrder.financialSummary;
   const totalAmt = summary.totalAmount;
@@ -122,6 +144,11 @@ export function StepConfirmation({
     completedOrder.referralCreditRequested != null &&
     completedOrder.referralCreditApplied != null &&
     completedOrder.referralCreditRequested - completedOrder.referralCreditApplied > 0.005;
+  const referralCreditBalanceUnavailable =
+    completedOrder.referralCreditApplied != null &&
+    completedOrder.referralCreditApplied > 0 &&
+    completedOrder.referralCreditBalanceRefreshFailed === true &&
+    completedOrder.referralCreditBalanceAfter == null;
   const startDate = product.departureDate ?? product.startDate;
   const boardingPoints = (product.boardingPoints ?? []).filter((bp) => bp.name);
   const selectedBoardingPoint =
@@ -348,17 +375,40 @@ export function StepConfirmation({
               <span className="font-semibold text-amber-700">R$ {depositAmt.toFixed(2)}</span>
             </div>
           )}
-          {referralCreditWasAdjusted && (
+          {(referralCreditWasAdjusted || referralCreditBalanceUnavailable) && (
             <div className="border border-amber-200 bg-amber-50 text-amber-900 rounded-xl px-4 py-3 text-sm space-y-1.5">
-              <p className="font-semibold">Seu saldo de cashback mudou durante o checkout.</p>
-              <p>
-                Aplicamos R$ {completedOrder.referralCreditApplied!.toFixed(2)} de cashback.
-                O novo total do pedido é R$ {totalAmt.toFixed(2)}.
-              </p>
+              {referralCreditWasAdjusted && (
+                <>
+                  <p className="font-semibold">Seu saldo de cashback mudou durante o checkout.</p>
+                  <p>
+                    Aplicamos R$ {completedOrder.referralCreditApplied!.toFixed(2)} de cashback.
+                    O novo total do pedido é R$ {totalAmt.toFixed(2)}.
+                  </p>
+                </>
+              )}
               {completedOrder.referralCreditBalanceAfter != null && (
                 <p className="font-medium">
                   Saldo atual de cashback: R$ {completedOrder.referralCreditBalanceAfter.toFixed(2)}.
                 </p>
+              )}
+              {referralCreditBalanceUnavailable && (
+                <>
+                  <p className="font-medium">
+                    Aplicamos R$ {completedOrder.referralCreditApplied!.toFixed(2)} de cashback e o novo total é R$ {totalAmt.toFixed(2)}.
+                    Não foi possível atualizar seu saldo agora; consulte seu perfil mais tarde.
+                  </p>
+                  <Button
+                    variant="outline"
+                    className="mt-2 border-amber-300 bg-white text-amber-900 hover:bg-amber-100"
+                    onClick={() => void refreshReferralCreditBalance()}
+                    disabled={refreshingReferralCreditBalance}
+                  >
+                    {refreshingReferralCreditBalance && (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    )}
+                    {refreshingReferralCreditBalance ? "Atualizando saldo..." : "Atualizar saldo"}
+                  </Button>
+                </>
               )}
             </div>
           )}

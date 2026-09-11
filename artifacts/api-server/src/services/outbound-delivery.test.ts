@@ -3,21 +3,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   mockDbSelect,
   mockDbInsert,
+  mockAuditValues,
   mockDbUpdate,
   mockUpdateSets,
   mockSendReminderHtmlEmail,
   mockSendTenantWhatsAppMessage,
   mockReconcileTenantWhatsAppMessage,
+  mockGetOutboundDeliveryQueue,
   mockAnd,
   mockEq,
 } = vi.hoisted(() => ({
   mockDbSelect: vi.fn(),
   mockDbInsert: vi.fn(),
+  mockAuditValues: vi.fn(),
   mockDbUpdate: vi.fn(),
   mockUpdateSets: [] as unknown[],
   mockSendReminderHtmlEmail: vi.fn(),
   mockSendTenantWhatsAppMessage: vi.fn(),
   mockReconcileTenantWhatsAppMessage: vi.fn(),
+  mockGetOutboundDeliveryQueue: vi.fn(() => null),
   mockAnd: vi.fn((...conditions: unknown[]) => ({ conditions })),
   mockEq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
 }));
@@ -79,7 +83,7 @@ vi.mock("@workspace/email", () => ({
 }));
 
 vi.mock("../queues", () => ({
-  getOutboundDeliveryQueue: vi.fn(() => null),
+  getOutboundDeliveryQueue: mockGetOutboundDeliveryQueue,
 }));
 
 vi.mock("../lib/whatsapp", () => ({
@@ -165,12 +169,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockDbSelect.mockReset();
   mockDbInsert.mockReset();
+  mockAuditValues.mockReset();
   mockDbUpdate.mockReset();
   mockSendReminderHtmlEmail.mockReset();
   mockSendTenantWhatsAppMessage.mockReset();
   mockReconcileTenantWhatsAppMessage.mockReset();
+  mockGetOutboundDeliveryQueue.mockReset();
+  mockGetOutboundDeliveryQueue.mockReturnValue(null);
   mockUpdateSets.length = 0;
-  mockDbInsert.mockReturnValue({ values: vi.fn().mockResolvedValue([]) });
+  mockAuditValues.mockResolvedValue([]);
+  mockDbInsert.mockReturnValue({ values: mockAuditValues });
 });
 
 describe("multichannel rendering", () => {
@@ -291,6 +299,48 @@ describe("ambiguous WhatsApp reconciliation", () => {
       lastError: "provider_message_not_found",
     }));
     expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the provider in the audit record when a retry is authorized", async () => {
+    const unknownDelivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "unknown",
+      attempts: 1,
+      provider: "evolution",
+      externalId: "missing-message-3",
+      lastError: "delivery_result_unknown",
+    });
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([unknownDelivery]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "pending" }]))
+      .mockReturnValueOnce(makeSelectQuery([{ id: "delivery-1", status: "pending" }]));
+    mockDbUpdate
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "delivery-1", outboundMessageId: "message-1" }]))
+      .mockReturnValueOnce(makeUpdateQuery())
+      .mockReturnValueOnce(makeUpdateQuery([{ id: "delivery-1", outboundMessageId: "message-1" }]))
+      .mockReturnValueOnce(makeUpdateQuery());
+    mockReconcileTenantWhatsAppMessage.mockResolvedValue({
+      outcome: "not_found",
+      provider: "evolution",
+      externalId: "missing-message-3",
+      detail: "provider_message_not_found",
+    });
+    mockGetOutboundDeliveryQueue.mockReturnValue({
+      add: vi.fn().mockResolvedValue(undefined),
+    } as never);
+
+    await expect(retryUnknownOutboundDelivery("tenant-a", "delivery-1", context)).resolves.toEqual({
+      deliveryId: "delivery-1",
+      messageId: "message-1",
+      outcome: "queued",
+    });
+
+    expect(mockAuditValues).toHaveBeenCalledTimes(2);
+    expect(mockAuditValues.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      action: "retry_reconciled_outbound_delivery",
+      after: expect.objectContaining({ provider: "evolution" }),
+    }));
   });
 
   it("rejects the second authorization when another reviewer wins the conditional update", async () => {

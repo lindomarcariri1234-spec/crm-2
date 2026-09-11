@@ -54,6 +54,7 @@ export type CompletedOrder = {
   referralCreditRequested?: number | null;
   referralCreditApplied?: number | null;
   referralCreditBalanceAfter?: number | null;
+  referralCreditBalanceRefreshFailed?: boolean;
   financialSummary: FinancialSummary;
 };
 
@@ -78,6 +79,7 @@ export function useWizardState({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [completedOrder, setCompletedOrder] = useState<CompletedOrder | null>(null);
+  const [refreshingReferralCreditBalance, setRefreshingReferralCreditBalance] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
   const checkoutIdempotencyKeyRef = useRef<string | null>(null);
@@ -541,6 +543,7 @@ export function useWizardState({
         ? Number(order.referralCreditApplied)
         : requestedReferralCredit;
       let refreshedReferralCreditBalance: number | null = null;
+      let referralCreditBalanceRefreshFailed = false;
       if (isSignedIn && requestedReferralCredit > 0) {
         try {
           const profile = await clientPortalApi.getProfile();
@@ -548,9 +551,12 @@ export function useWizardState({
           if (Number.isFinite(nextBalance)) {
             refreshedReferralCreditBalance = nextBalance;
             setReferralCreditBalance(nextBalance);
+          } else {
+            referralCreditBalanceRefreshFailed = true;
           }
         } catch {
           // The order succeeded even if the optional balance refresh fails.
+          referralCreditBalanceRefreshFailed = true;
         }
       }
 
@@ -569,6 +575,7 @@ export function useWizardState({
         referralCreditRequested: requestedReferralCredit > 0 ? requestedReferralCredit : null,
         referralCreditApplied: requestedReferralCredit > 0 ? appliedReferralCredit : null,
         referralCreditBalanceAfter: refreshedReferralCreditBalance,
+        referralCreditBalanceRefreshFailed,
         financialSummary: order.financialSummary,
       });
       clearCheckoutIdempotencyKey();
@@ -614,6 +621,49 @@ export function useWizardState({
       );
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function refreshReferralCreditBalance(): Promise<void> {
+    if (
+      !isSignedIn ||
+      refreshingReferralCreditBalance ||
+      !completedOrder ||
+      completedOrder.referralCreditApplied == null ||
+      completedOrder.referralCreditApplied <= 0
+    ) {
+      return;
+    }
+
+    setRefreshingReferralCreditBalance(true);
+    try {
+      const profile = await clientPortalApi.getProfile();
+      const nextBalance = Number(profile.referral?.creditBalance ?? 0);
+      if (!Number.isFinite(nextBalance)) {
+        throw new Error("Invalid referral credit balance");
+      }
+      setReferralCreditBalance(nextBalance);
+      setCompletedOrder((previous) =>
+        previous
+          ? {
+              ...previous,
+              referralCreditBalanceAfter: nextBalance,
+              referralCreditBalanceRefreshFailed: false,
+            }
+          : previous,
+      );
+    } catch {
+      setCompletedOrder((previous) =>
+        previous
+          ? {
+              ...previous,
+              referralCreditBalanceAfter: null,
+              referralCreditBalanceRefreshFailed: true,
+            }
+          : previous,
+      );
+    } finally {
+      setRefreshingReferralCreditBalance(false);
     }
   }
 
@@ -670,6 +720,7 @@ export function useWizardState({
     step,
     setStep,
     submitting,
+    refreshingReferralCreditBalance,
     submitError,
     setSubmitError,
     completedOrder,
@@ -722,6 +773,7 @@ export function useWizardState({
     canProceedFromAssento,
     canProceedFromPagamento,
     submit,
+    refreshReferralCreditBalance,
     goNext,
     goBack,
     toggleSeat,

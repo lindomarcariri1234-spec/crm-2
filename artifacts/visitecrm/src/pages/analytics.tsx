@@ -27,7 +27,10 @@ import { ACTIVE_RESERVATION_STATUSES, COMMISSION_STATUS, EXPENSE_STATUS, TRIP_ST
 import { PageHeader } from "@/components/page-header";
 import { QueryErrorState } from "@/components/query-error-state";
 import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
-import { useFinancialMetrics } from "@/lib/financial-metrics-api";
+import {
+  FINANCIAL_METRICS_PERIOD_LABELS,
+  useFinancialMetrics,
+} from "@/lib/financial-metrics-api";
 
 const fmt = (v: number) => formatCurrency(v);
 const fmtCompact = (v: number) => {
@@ -69,7 +72,7 @@ function RevenueLineChart({ data }: { data: Array<{ label: string; revenue: numb
   }).join(" ");
 
   return (
-    <div className="w-full">
+    <div className="w-full" data-testid="revenue-line-chart">
       <svg viewBox="0 0 100 110" className="w-full h-48" preserveAspectRatio="none">
         <defs>
           <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
@@ -170,16 +173,24 @@ const EXPENSE_CATEGORY_COLORS: Record<string, string> = {
 };
 
 export default function Analytics() {
+  const [period, setPeriod] = useState<GetDashboardRevenueChartPeriod>("12m");
   const {
     data: financialMetrics,
     isLoading: financialMetricsLoading,
+    isFetching: financialMetricsFetching,
     isError: financialMetricsError,
     error: financialMetricsQueryError,
     refetch: refetchFinancialMetrics,
-  } = useFinancialMetrics();
-  const [period, setPeriod] = useState<GetDashboardRevenueChartPeriod>("12m");
+  } = useFinancialMetrics(period);
   const { data: summary, isLoading, isError: summaryError, error: summaryQueryError, refetch: refetchSummary } = useGetDashboardSummary();
-  const { data: chartData, isError: chartError, error: chartQueryError, refetch: refetchChart } = useGetDashboardRevenueChart({ period });
+  const {
+    data: chartData,
+    isLoading: chartLoading,
+    isFetching: chartFetching,
+    isError: chartError,
+    error: chartQueryError,
+    refetch: refetchChart,
+  } = useGetDashboardRevenueChart({ period });
   const { data: paymentSummary, isError: paymentError, error: paymentQueryError, refetch: refetchPayments } = useGetPaymentsSummary();
   const { data: tripsData, isError: tripsError, error: tripsQueryError, refetch: refetchTrips } = useListTrips({ limit: 20, status: TRIP_STATUS.PUBLISHED });
   const { data: reservationsData, isError: reservationsError, error: reservationsQueryError, refetch: refetchReservations } = useListReservations({ limit: 100 });
@@ -280,12 +291,13 @@ export default function Analytics() {
     { label: "Reservas", count: summary?.totalReservations ?? 0, color: "#F59E0B" },
     { label: "Confirmadas", count: summary?.confirmedReservations ?? 0, color: "#10B981" },
   ];
+  const selectedPeriodLabel = FINANCIAL_METRICS_PERIOD_LABELS[period];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Analíticos"
-        description={`Vendido, recebido e a receber · período ${financialMetrics?.period.label ?? "selecionado"} · fonte: núcleo financeiro`}
+        description={`Vendido, recebido e a receber · período ${selectedPeriodLabel} · fonte: núcleo financeiro`}
         actions={
           <>
           <Link href="/analytics/revenue">
@@ -307,17 +319,17 @@ export default function Analytics() {
       />
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-        <KpiCard icon={DollarSign} label="Recebido no período" value={fmtCompact(financialMetrics?.totals.receivedRevenue ?? 0)} sub={`Pagamentos confirmados · ${financialMetrics?.period.label ?? "período selecionado"} (BRT)`} color="text-green-600" loading={isLoading || financialMetricsLoading} />
-        <KpiCard icon={TrendingUp} label="Lucro Líquido" value={fmtCompact(financialMetrics?.totals.profit ?? 0)} sub={`Custos pagos: ${fmtCompact(financialMetrics?.totals.operatingCostsPaid ?? 0)}`} color={(financialMetrics?.totals.profit ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"} loading={isLoading || financialMetricsLoading} />
+        <KpiCard icon={DollarSign} label="Recebido no período" value={fmtCompact(financialMetrics?.totals.receivedRevenue ?? 0)} sub={`Pagamentos confirmados · ${selectedPeriodLabel} (BRT)`} color="text-green-600" loading={isLoading || financialMetricsLoading || financialMetricsFetching} />
+        <KpiCard icon={TrendingUp} label="Lucro Líquido" value={fmtCompact(financialMetrics?.totals.profit ?? 0)} sub={`Custos pagos: ${fmtCompact(financialMetrics?.totals.operatingCostsPaid ?? 0)}`} color={(financialMetrics?.totals.profit ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"} loading={isLoading || financialMetricsLoading || financialMetricsFetching} />
         <KpiCard icon={CalendarCheck} label="Total de Reservas" value={String(summary?.totalReservations ?? 0)} sub={`${summary?.confirmedReservations ?? 0} confirmadas`} color="text-blue-600" loading={isLoading} />
-        <KpiCard icon={Target} label="Vendido no período" value={fmtCompact(financialMetrics?.totals.bookedRevenue ?? 0)} sub={`Total líquido contratado · ${financialMetrics?.period.label ?? "período selecionado"}`} color="text-purple-600" loading={isLoading || financialMetricsLoading} />
+        <KpiCard icon={Target} label="Vendido no período" value={fmtCompact(financialMetrics?.totals.bookedRevenue ?? 0)} sub={`Total líquido contratado · ${selectedPeriodLabel}`} color="text-purple-600" loading={isLoading || financialMetricsLoading || financialMetricsFetching} />
         <KpiCard icon={TrendingUp} label="Taxa de Conversao" value={`${conversionRate.toFixed(1)}%`} sub="Reservas / Negocios" color="text-orange-600" loading={isLoading} />
         <KpiCard icon={Users} label="Total de Clientes" value={String(summary?.totalClients ?? 0)} sub={`+${summary?.newClientsThisMonth ?? 0} este mes`} color="text-teal-600" loading={isLoading} />
         <KpiCard icon={MapPin} label="Viagens Ativas" value={String(summary?.activeTrips ?? 0)} sub={`${summary?.occupancyRate?.toFixed(1) ?? 0}% ocupacao media`} color="text-indigo-600" loading={isLoading} />
-        <KpiCard icon={BarChart2} label="A receber no período" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Recebíveis com vencimento no período · vencido: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading} />
+        <KpiCard icon={BarChart2} label="A receber no período" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Recebíveis com vencimento no período · vencido: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading || financialMetricsFetching} />
       </div>
 
-      <FinancialMetricsOverview />
+      <FinancialMetricsOverview period={period} />
 
       <Tabs defaultValue="overview">
         <TabsList className="w-full justify-start overflow-x-auto">
@@ -336,7 +348,19 @@ export default function Analytics() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {!chartData?.length ? (
+                {chartLoading || chartFetching ? (
+                  <div
+                    className="h-48 relative flex items-center justify-center"
+                    role="status"
+                    aria-live="polite"
+                    data-testid="revenue-line-chart-loading"
+                  >
+                    <Skeleton className="absolute inset-0 h-full w-full" />
+                    <span className="relative text-sm text-muted-foreground">
+                      Atualizando gráfico...
+                    </span>
+                  </div>
+                ) : !chartData?.length ? (
                   <div className="h-48 flex items-center justify-center text-muted-foreground text-sm">Sem dados disponíveis</div>
                 ) : (
                   <RevenueLineChart data={chartData} />

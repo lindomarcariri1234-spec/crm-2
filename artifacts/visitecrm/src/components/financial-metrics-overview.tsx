@@ -2,7 +2,12 @@ import { AlertCircle, ArrowUpRight, Info, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/utils";
-import { type FinancialMetricTotals, useFinancialMetrics } from "@/lib/financial-metrics-api";
+import {
+  FINANCIAL_METRICS_PERIOD_LABELS,
+  type FinancialMetricTotals,
+  type FinancialMetricsPeriod,
+  useFinancialMetrics,
+} from "@/lib/financial-metrics-api";
 
 type MetricCard = {
   key: string;
@@ -37,22 +42,25 @@ function displayMetric(card: MetricCard, totals: FinancialMetricTotals): string 
   return card.suffix ? `${value.toFixed(2)}${card.suffix}` : formatCurrency(value);
 }
 
-export function FinancialMetricsOverview() {
-  const { data, isLoading, isError, error } = useFinancialMetrics();
+export function FinancialMetricsOverview({ period }: { period?: FinancialMetricsPeriod } = {}) {
+  const { data, isLoading, isFetching, isError, error } = useFinancialMetrics(period);
+  const periodLabel = period
+    ? FINANCIAL_METRICS_PERIOD_LABELS[period]
+    : data?.period.label;
 
   return (
     <section className="rounded-lg border bg-card p-4" data-testid="section-financial-metrics-overview">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-base font-semibold">Visão financeira consolidada</h2>
-          {data && <p className="mt-1 text-xs text-muted-foreground" data-testid="text-financial-metrics-period">Período: {data.period.label} · Fuso: {data.timezone}</p>}
+          {periodLabel && <p className="mt-1 text-xs text-muted-foreground" data-testid="text-financial-metrics-period">Período: {periodLabel} · Fuso: {data?.timezone ?? "America/Sao_Paulo"}</p>}
         </div>
         <Link href="/financeiro" className="inline-flex items-center text-xs font-medium text-primary hover:underline" data-testid="link-financial-metrics-financial">
           Ver financeiro <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
         </Link>
       </div>
 
-      {isLoading ? (
+      {isLoading || isFetching ? (
         <div className="flex min-h-24 items-center gap-2 text-sm text-muted-foreground" data-testid="status-financial-metrics-loading">
           <Loader2 className="h-4 w-4 animate-spin" /> Carregando indicadores financeiros…
         </div>
