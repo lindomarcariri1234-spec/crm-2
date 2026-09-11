@@ -2,20 +2,92 @@ import { PublicStore } from "@/lib/storeApi";
 import { TRIP_TYPE_LABELS } from "@/lib/labels";
 import { PAYMENT_LABELS } from "./constants";
 import type { WizardState } from "./use-wizard-state";
-import { Gift } from "lucide-react";
+import { SignInButton } from "@clerk/react";
+import { Gift, Loader2, RefreshCw } from "lucide-react";
 
 function ReferralCreditToggle({
   balance,
   applied,
   enabled,
   onToggle,
+  isAuthLoaded,
+  isSignedIn,
+  loading,
+  error,
+  onRetry,
 }: {
   balance: number;
   applied: number;
   enabled: boolean;
   onToggle: () => void;
+  isAuthLoaded: boolean;
+  isSignedIn: boolean;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
 }) {
-  if (balance <= 0) return null;
+  if (!isAuthLoaded || loading) {
+    return (
+      <div className="border rounded-xl p-3 bg-purple-50 border-purple-200">
+        <div className="flex items-center gap-2 text-xs font-medium text-purple-800">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Consultando seu cashback...
+        </div>
+      </div>
+    );
+  }
+
+  if (!isSignedIn) {
+    return (
+      <div className="border rounded-xl p-3 bg-purple-50 border-purple-200 space-y-2">
+        <div className="flex items-start gap-2">
+          <Gift className="w-4 h-4 mt-0.5 text-purple-600 shrink-0" />
+          <div>
+            <p className="text-xs font-semibold text-purple-800">Use seu cashback de indicação</p>
+            <p className="text-[11px] text-purple-600">Entre na sua conta de viajante para consultar e aplicar o saldo.</p>
+          </div>
+        </div>
+        <SignInButton mode="modal">
+          <button
+            type="button"
+            className="w-full rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white hover:bg-purple-700"
+          >
+            Entrar para consultar cashback
+          </button>
+        </SignInButton>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="border rounded-xl p-3 bg-purple-50 border-purple-200 space-y-2">
+        <p className="text-xs font-semibold text-purple-800">{error}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-700 hover:text-purple-900"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
+
+  if (balance <= 0) {
+    return (
+      <div className="border rounded-xl p-3 bg-purple-50 border-purple-200">
+        <div className="flex items-start gap-2">
+          <Gift className="w-4 h-4 mt-0.5 text-purple-600 shrink-0" />
+          <div>
+            <p className="text-xs font-semibold text-purple-800">Cashback de indicação</p>
+            <p className="text-[11px] text-purple-600">Você ainda não possui saldo disponível para esta compra.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="border rounded-xl p-3 bg-purple-50 border-purple-200 space-y-2">
@@ -73,7 +145,12 @@ export function StepPaymentSummary({
     referralDiscountPct,
     referralDiscountType,
     couponDiscount,
+    isAuthLoaded = true,
+    isSignedIn = true,
     referralCreditBalance,
+    loadingReferralCreditBalance = false,
+    referralCreditBalanceError = null,
+    retryReferralCreditBalance = () => {},
     referralCreditApplied,
     useReferralCredit,
     setUseReferralCredit,
@@ -120,6 +197,11 @@ export function StepPaymentSummary({
             applied={referralCreditApplied}
             enabled={useReferralCredit}
             onToggle={() => setUseReferralCredit(!useReferralCredit)}
+            isAuthLoaded={Boolean(isAuthLoaded)}
+            isSignedIn={Boolean(isSignedIn)}
+            loading={loadingReferralCreditBalance}
+            error={referralCreditBalanceError}
+            onRetry={() => void retryReferralCreditBalance()}
           />
           {referralCreditApplied > 0 && (
             <div className="flex justify-between text-purple-600">
@@ -195,6 +277,11 @@ export function StepPaymentSummary({
           applied={referralCreditApplied}
           enabled={useReferralCredit}
           onToggle={() => setUseReferralCredit(!useReferralCredit)}
+          isAuthLoaded={Boolean(isAuthLoaded)}
+          isSignedIn={Boolean(isSignedIn)}
+          loading={loadingReferralCreditBalance}
+          error={referralCreditBalanceError}
+          onRetry={() => void retryReferralCreditBalance()}
         />
 
         {referralCreditApplied > 0 && (

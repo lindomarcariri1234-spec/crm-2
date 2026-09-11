@@ -3,10 +3,11 @@ import { createElement } from "react";
 import { flushAct, renderComponent, renderHook, cleanupRoots } from "./eventSourceHarness.js";
 import type { PublicStore } from "../lib/storeApi.js";
 
-const { getProductFn, createOrderSpy, getProfileSpy } = vi.hoisted(() => ({
+const { getProductFn, createOrderSpy, getProfileSpy, clerkAuth } = vi.hoisted(() => ({
   getProductFn: vi.fn(),
   createOrderSpy: vi.fn(),
   getProfileSpy: vi.fn(),
+  clerkAuth: { isLoaded: true, isSignedIn: true },
 }));
 
 vi.mock("wouter", () => ({
@@ -14,7 +15,8 @@ vi.mock("wouter", () => ({
 }));
 
 vi.mock("@clerk/react", () => ({
-  useUser: () => ({ isSignedIn: true }),
+  useUser: () => clerkAuth,
+  SignInButton: ({ children }: { children: unknown }) => children,
 }));
 
 vi.mock("@/hooks/useSeatStream", () => ({
@@ -139,6 +141,8 @@ function callOnClick(el: HTMLElement): void {
 }
 
 beforeEach(() => {
+  clerkAuth.isLoaded = true;
+  clerkAuth.isSignedIn = true;
   getProductFn.mockResolvedValue(PRODUCT_FIXTURE);
   getProfileSpy
     .mockReset()
@@ -164,6 +168,36 @@ afterEach(async () => {
 });
 
 describe("Referral credit refresh after checkout", () => {
+  it("shows the cashback sign-in option when the traveler has no active session", async () => {
+    clerkAuth.isSignedIn = false;
+    const { useWizardState } = await import(
+      "../pages/vitrine/_wizard/use-wizard-state.js"
+    );
+    const { StepPaymentSummary } = await import(
+      "../pages/vitrine/_wizard/payment-summary.js"
+    );
+    const { result } = await renderHook(() =>
+      useWizardState({ slug: "loja-teste", productSlug: "produto-1", store: makeStore() }),
+    );
+
+    await flushAct(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const { container } = await renderComponent(
+      createElement(StepPaymentSummary, {
+        state: result.current,
+        store: makeStore(),
+        variant: "payment",
+      }),
+    );
+
+    expect(container.textContent).toContain("Use seu cashback de indicação");
+    expect(container.textContent).toContain("Entrar para consultar cashback");
+    expect(getProfileSpy).not.toHaveBeenCalled();
+  });
+
   it("stores the server-applied amount and refreshes the portal balance", async () => {
     const { useWizardState } = await import(
       "../pages/vitrine/_wizard/use-wizard-state.js"
