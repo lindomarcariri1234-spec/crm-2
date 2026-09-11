@@ -1138,11 +1138,12 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
   function setupVoucherMocks(
     passengers: { ageCategory: string; seatNumber: string | null }[],
     paymentStatus = "paid",
+    reservationStatus = "confirmed",
   ) {
     // mockLimit slots: client, reservation (via mockInnerJoinWhere→limit), tenant, user
     mockLimit
       .mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])  // #1 findClientRecord userId hit
-      .mockResolvedValueOnce([FAKE_RESERVATION_ROW])      // #2 reservation innerJoin where limit
+      .mockResolvedValueOnce([{ ...FAKE_RESERVATION_ROW, status: reservationStatus }]) // #2 reservation innerJoin where limit
       .mockResolvedValueOnce([FAKE_TENANT_ROW_VOUCHER])   // #3 tenant (Promise.all)
       .mockResolvedValueOnce([FAKE_USER_ROW_VOUCHER]);    // #4 user  (Promise.all)
 
@@ -1240,4 +1241,20 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
       expect(generateVoucherPdfMock).not.toHaveBeenCalled();
     },
   );
+
+  it("does not generate a voucher for a cancelled reservation with a paid payment", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+    setupVoucherMocks(
+      [{ ageCategory: "adult", seatNumber: "1A" }],
+      "paid",
+      "cancelled",
+    );
+
+    const app = buildClientPortalApp();
+    const res = await request(app).get("/api/client/reservations/res-001/voucher");
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("RESERVATION_NOT_VALID");
+    expect(generateVoucherPdfMock).not.toHaveBeenCalled();
+  });
 });
