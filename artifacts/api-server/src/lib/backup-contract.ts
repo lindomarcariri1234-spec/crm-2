@@ -1,5 +1,6 @@
 export const BACKUP_FORMAT = "visitecrm-agency-backup";
-export const BACKUP_VERSION = 5;
+export const BACKUP_VERSION = 6;
+export const PREVIOUS_CANONICAL_BACKUP_VERSION = 5;
 export const LEGACY_FLAT_BACKUP_MIN_VERSION = 1;
 export const LEGACY_FLAT_BACKUP_MAX_VERSION = 6;
 
@@ -33,6 +34,35 @@ export class BackupContractError extends Error {
   ) {
     super(message);
   }
+}
+
+export function sanitizeLinkedDataReconciliationSummary(
+  value: unknown,
+): Record<string, { checked: number; repaired: number; issues: number; reasons: Record<string, number> }> {
+  const source = record(value);
+  if (!source) return {};
+
+  const summary: Record<string, { checked: number; repaired: number; issues: number; reasons: Record<string, number> }> = {};
+  for (const [category, rawCategory] of Object.entries(source)) {
+    const categoryData = record(rawCategory);
+    if (!categoryData) continue;
+    const rawReasons = record(categoryData.reasons);
+    const reasons: Record<string, number> = {};
+    for (const [reason, count] of Object.entries(rawReasons ?? {})) {
+      if (typeof count === "number" && Number.isFinite(count) && count >= 0) {
+        reasons[reason] = Math.trunc(count);
+      }
+    }
+    const safeCount = (count: unknown) =>
+      typeof count === "number" && Number.isFinite(count) && count >= 0 ? Math.trunc(count) : 0;
+    summary[category] = {
+      checked: safeCount(categoryData.checked),
+      repaired: safeCount(categoryData.repaired),
+      issues: safeCount(categoryData.issues),
+      reasons,
+    };
+  }
+  return summary;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -219,6 +249,7 @@ function normalizeLegacyFlatBackup(root: Record<string, unknown>): CanonicalBack
       parceiros: { partners: array(root.partners), products: [], availability: [], commissions: [] },
       distribuicao: { offers: [], operations: [], bookings: [] },
       auditoria: [],
+      linkedDataReconciliationRuns: [],
       calendario: array(root.calendarEvents),
       documentos: array(root.documents),
       cadastrosAuxiliares: {
@@ -247,7 +278,7 @@ export function normalizeBackupPayload(value: unknown): CanonicalBackup {
       "BACKUP_IMPORT_UNKNOWN_FORMAT",
     );
   }
-  if (root.version !== BACKUP_VERSION) {
+  if (root.version !== BACKUP_VERSION && root.version !== PREVIOUS_CANONICAL_BACKUP_VERSION) {
     throw new BackupContractError(
       `Versão do backup (${String(root.version)}) incompatível com a versão suportada (${BACKUP_VERSION}).`,
       "BACKUP_IMPORT_VERSION_MISMATCH",
@@ -269,7 +300,9 @@ export function normalizeBackupPayload(value: unknown): CanonicalBackup {
       email: optionalIdentityString(tenant, "email"),
       cnpj: optionalIdentityString(tenant, "cnpj"),
     },
-    data,
+    data: root.version === PREVIOUS_CANONICAL_BACKUP_VERSION
+      ? { linkedDataReconciliationRuns: [], ...data }
+      : data,
   } as CanonicalBackup;
 }
 

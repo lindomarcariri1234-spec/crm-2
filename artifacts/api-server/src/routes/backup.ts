@@ -101,10 +101,11 @@ import {
   gemeoAlertsTable,
   gemeoOpportunitiesTable,
   insightsChatHistoryTable,
-  auditLogsTable,
   outboundMessagesTable,
   outboundDeliveriesTable,
   outboundDeliveryAttemptsTable,
+  linkedDataReconciliationRunsTable,
+  auditLogsTable,
 } from "@workspace/db";
 import { requireAuth, ROLES } from "../lib/tenant.js";
 import { ForbiddenError, NotFoundError, ValidationError, AppError } from "../lib/errors.js";
@@ -161,11 +162,13 @@ import {
   importDistribuicaoOfertas,
   importDistribuicaoOperacoes,
   importDistribuicaoReservas,
+  importLinkedDataReconciliationRuns,
 } from "../lib/backup-import.js";
 import { logger } from "../lib/logger.js";
 import {
   BACKUP_FORMAT,
   BACKUP_VERSION,
+  sanitizeLinkedDataReconciliationSummary,
   BackupContractError,
   isSameLogicalAgency,
   normalizeBackupPayload,
@@ -256,6 +259,20 @@ function sanitizeAiIntegrationRow(row: Record<string, unknown>): Record<string, 
 function sanitizePartnerRow(row: Record<string, unknown>): Record<string, unknown> {
   const { passwordHash, ...rest } = row;
   return rest;
+}
+
+/** Integrity history is aggregate-only; never export tenant or any row payload. */
+function formatLinkedDataReconciliationRun(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: row.id,
+    mode: row.mode,
+    executedAt: row.executedAt,
+    checkedCount: row.checkedCount,
+    repairedCount: row.repairedCount,
+    issueCount: row.issueCount,
+    summary: sanitizeLinkedDataReconciliationSummary(row.summary),
+    createdAt: row.createdAt,
+  };
 }
 
 type AnyTable = { id: unknown; [column: string]: unknown };
@@ -416,7 +433,7 @@ async function writeSmallTable(
  * templates, chatbot, birthday messages, email/WhatsApp logs), third-party
  * integration configuration (non-secret fields only) and logs, AI
  * insights/alerts history, marketplace partners and distribution ledger,
- * and the audit trail. Restricted to agency admins of their own tenant —
+ * and the audit trail plus aggregate integrity-reconciliation history. Restricted to agency admins of their own tenant —
  * every query below is scoped by `me.tenantId`. Never includes login/OAuth
  * credentials, payment-gateway secrets, device push tokens, encrypted
  * integration secrets, or anonymous-action bearer tokens.
@@ -1067,6 +1084,16 @@ router.get("/backup/export", async (req: Request, res: Response, next: NextFunct
     // Auditoria (histórico de alterações).
     await streamDirectTable(writer, "auditoria", auditLogsTable as unknown as AnyTable, eq(auditLogsTable.tenantId, tenantId), counts);
 
+    // Histórico agregado de reconciliação de integridade.
+    await streamDirectTable(
+      writer,
+      "linkedDataReconciliationRuns",
+      linkedDataReconciliationRunsTable as unknown as AnyTable,
+      eq(linkedDataReconciliationRunsTable.tenantId, tenantId),
+      counts,
+      formatLinkedDataReconciliationRun,
+    );
+
     // Calendário (eventos sincronizados).
     await streamDirectTable(
       writer,
@@ -1312,6 +1339,13 @@ router.post("/backup/import", async (req: Request, res: Response, next: NextFunc
         await importDistribuicaoOfertas(tx, ledger, me.tenantId, distribuicao?.offers, report.distribuicaoOfertas);
         await importDistribuicaoOperacoes(tx, ledger, me.tenantId, distribuicao?.operations, report.distribuicaoOperacoes);
         await importDistribuicaoReservas(tx, ledger, me.tenantId, distribuicao?.bookings, report.distribuicaoReservas);
+        await importLinkedDataReconciliationRuns(
+          tx,
+          ledger,
+          me.tenantId,
+          data.linkedDataReconciliationRuns,
+          report.linkedDataReconciliationRuns,
+        );
 
         const batchId = generateId();
         await tx.insert(backupImportBatchesTable).values({

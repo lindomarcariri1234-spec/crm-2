@@ -64,6 +64,7 @@ export interface BackupImportReport {
   distribuicaoOfertas: BackupImportGroupResult;
   distribuicaoOperacoes: BackupImportGroupResult;
   distribuicaoReservas: BackupImportGroupResult;
+  linkedDataReconciliationRuns: BackupImportGroupResult;
   comunicacaoEventos: BackupImportGroupResult;
   comunicacaoEntregas: BackupImportGroupResult;
   comunicacaoTentativas: BackupImportGroupResult;

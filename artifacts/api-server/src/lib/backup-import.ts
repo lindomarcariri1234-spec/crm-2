@@ -51,12 +51,14 @@ import {
   distributionOffersTable,
   distributionOperationsTable,
   distributionBookingsTable,
+  linkedDataReconciliationRunsTable,
   type BackupImportGroupResult,
   type BackupImportReport,
   type BackupImportUserMatch,
 } from "@workspace/db";
 import { generateId, generateVoucherCode, generateReferralCode, generateReferralCodeSuffix } from "./id.js";
 import { getTenantReservationPrefix, tripTypeToCode, getYearMonth, nextReservationSequence, buildReservationNumber } from "./reservation-number.js";
+import { sanitizeLinkedDataReconciliationSummary } from "./backup-contract.js";
 
 /** The db.transaction callback argument shape used throughout this module (drizzle's `tx`). */
 export type ImportTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -116,6 +118,7 @@ export function emptyReport(): BackupImportReport {
     distribuicaoOfertas: emptyGroupResult(),
     distribuicaoOperacoes: emptyGroupResult(),
     distribuicaoReservas: emptyGroupResult(),
+    linkedDataReconciliationRuns: emptyGroupResult(),
     comunicacaoEventos: emptyGroupResult(),
     comunicacaoEntregas: emptyGroupResult(),
     comunicacaoTentativas: emptyGroupResult(),
@@ -1642,6 +1645,31 @@ export async function importDistribuicaoReservas(
     }
     const values = { ...cleanRow(row, ["id", "tenantId", "offerId"]), id: newId, tenantId, offerId };
     await insertRow(rtx, distributionBookingsTable, values);
+    return { status: "created" };
+  });
+}
+
+// ── Integrity reconciliation history (aggregate-only) ───────────────────
+export async function importLinkedDataReconciliationRuns(
+  tx: ImportTx,
+  ledger: Ledger,
+  tenantId: string,
+  runs: unknown,
+  result: BackupImportGroupResult,
+): Promise<void> {
+  await importRows(tx, ledger, tenantId, "linkedDataReconciliationRun", runs, result, async (rtx, row, newId) => {
+    const values = {
+      id: newId,
+      tenantId,
+      mode: row.mode,
+      executedAt: row.executedAt,
+      checkedCount: row.checkedCount,
+      repairedCount: row.repairedCount,
+      issueCount: row.issueCount,
+      summary: sanitizeLinkedDataReconciliationSummary(row.summary),
+      createdAt: row.createdAt,
+    };
+    await insertRow(rtx, linkedDataReconciliationRunsTable, values);
     return { status: "created" };
   });
 }

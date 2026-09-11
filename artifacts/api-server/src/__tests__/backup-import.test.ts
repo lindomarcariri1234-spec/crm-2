@@ -66,6 +66,7 @@ import {
   distributionOffersTable,
   distributionOperationsTable,
   distributionBookingsTable,
+  linkedDataReconciliationRunsTable,
 } from "@workspace/db";
 import { ROLES } from "@workspace/permissions";
 
@@ -77,6 +78,7 @@ vi.mock("../lib/tenant.js", () => ({
 import { requireAuth } from "../lib/tenant.js";
 import backupRouter from "../routes/backup.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
+import { normalizeBackupPayload } from "../lib/backup-contract.js";
 
 function buildApp() {
   const app = express();
@@ -104,7 +106,7 @@ function pastDate(days: number) {
 function buildValidBackup(tenantId: string) {
   return {
     format: "visitecrm-agency-backup",
-    version: 5,
+    version: 6,
     exportedAt: new Date().toISOString(),
     exportedByUserId: IMPORTER_ID,
     tenant: { id: tenantId, name: "Old Name", slug: "old-slug" },
@@ -501,6 +503,29 @@ function buildValidBackup(tenantId: string) {
           },
         ],
       },
+      linkedDataReconciliationRuns: [
+        {
+          id: "src-reconciliation-run-1",
+          tenantId: "foreign-source-tenant",
+          mode: "repair",
+          executedAt: "2026-01-02T03:04:05.000Z",
+          checkedCount: 12,
+          repairedCount: 3,
+          issueCount: 1,
+          summary: {
+            clients: {
+              checked: 12,
+              repaired: 3,
+              issues: 1,
+              reasons: { mismatch: 1 },
+              clientId: "source-client-id",
+              amount: 999,
+            },
+            paymentId: "source-payment-id",
+          },
+          createdAt: "2026-01-02T03:04:06.000Z",
+        },
+      ],
     },
   };
 }
@@ -611,6 +636,7 @@ afterAll(async () => {
   await db.delete(boardingLocationsTable).where(eq(boardingLocationsTable.tenantId, TENANT_ID));
   await db.delete(backupImportRecordsTable).where(eq(backupImportRecordsTable.tenantId, TENANT_ID));
   await db.delete(backupImportBatchesTable).where(eq(backupImportBatchesTable.tenantId, TENANT_ID));
+  await db.delete(linkedDataReconciliationRunsTable).where(eq(linkedDataReconciliationRunsTable.tenantId, TENANT_ID));
 
   // Tenant cascade removes users/store.
   await db.delete(tenantsTable).where(eq(tenantsTable.id, TENANT_ID));
@@ -629,6 +655,17 @@ function mockAuthedAs(role: string, userId = IMPORTER_ID, tenantId = TENANT_ID) 
 }
 
 describe("POST /api/backup/import", () => {
+  it("normalizes a previous canonical backup without integrity history", () => {
+    const backup = buildValidBackup(TENANT_ID);
+    backup.version = 5;
+    delete (backup.data as Record<string, unknown>).linkedDataReconciliationRuns;
+
+    const normalized = normalizeBackupPayload(backup);
+
+    expect(normalized.version).toBe(6);
+    expect(normalized.data.linkedDataReconciliationRuns).toEqual([]);
+  });
+
   it("rejects non-admin users", async () => {
     mockAuthedAs(ROLES.SALES);
     const res = await request(buildApp())
@@ -651,7 +688,7 @@ describe("POST /api/backup/import", () => {
     mockAuthedAs(ROLES.AGENCY_ADMIN, IMPORTER_ID, OTHER_TENANT_ID);
     const backup = {
       format: "visitecrm-agency-backup",
-      version: 5,
+      version: 6,
       tenant: {
         id: "source-installation-tenant-id",
         name: "BI Other Agency",
@@ -829,7 +866,22 @@ describe("POST /api/backup/import", () => {
     expect(report.distribuicaoOfertas.created).toBe(1);
     expect(report.distribuicaoOperacoes.created).toBe(1);
     expect(report.distribuicaoReservas.created).toBe(1);
+    expect(report.linkedDataReconciliationRuns.created).toBe(1);
     expect(report.naoRestaurado).toEqual(expect.arrayContaining(["configuracoes", "auditoria"]));
+
+    const [reconciliationRun] = await db.select().from(linkedDataReconciliationRunsTable)
+      .where(eq(linkedDataReconciliationRunsTable.tenantId, TENANT_ID));
+    expect(reconciliationRun).toMatchObject({
+      tenantId: TENANT_ID,
+      mode: "repair",
+      checkedCount: 12,
+      repairedCount: 3,
+      issueCount: 1,
+    });
+    expect(reconciliationRun?.executedAt.toISOString()).toBe("2026-01-02T03:04:05.000Z");
+    expect(reconciliationRun?.summary).toEqual({ clients: { checked: 12, repaired: 3, issues: 1, reasons: { mismatch: 1 } } });
+    expect((await db.select().from(linkedDataReconciliationRunsTable)
+      .where(eq(linkedDataReconciliationRunsTable.tenantId, OTHER_TENANT_ID))).length).toBe(0);
 
     // -- Agência updated in place, billing/identity fields untouched --
     const [tenantRow] = await db.select().from(tenantsTable).where(eq(tenantsTable.id, TENANT_ID)).limit(1);
@@ -1054,6 +1106,10 @@ describe("POST /api/backup/import", () => {
     expect(report2.distribuicaoOfertas.duplicate).toBe(1);
     expect(report2.distribuicaoReservas.created).toBe(0);
     expect(report2.distribuicaoReservas.duplicate).toBe(1);
+    expect(report2.linkedDataReconciliationRuns.created).toBe(0);
+    expect(report2.linkedDataReconciliationRuns.duplicate).toBe(1);
+    expect((await db.select().from(linkedDataReconciliationRunsTable)
+      .where(eq(linkedDataReconciliationRunsTable.tenantId, TENANT_ID))).length).toBe(1);
 
     const clientsAfter = await db.select().from(clientsTable).where(eq(clientsTable.tenantId, TENANT_ID));
     expect(clientsAfter.length).toBe(2); // no duplicates created
@@ -1121,6 +1177,7 @@ describe("POST /api/backup/import", () => {
     expect(naturalKeyReport.distribuicaoReservas.created).toBe(0);
     expect(naturalKeyReport.distribuicaoReservas.skipped).toBe(1);
     expect(naturalKeyReport.distribuicaoReservas.errors).toEqual([]);
+    expect(naturalKeyReport.linkedDataReconciliationRuns.errors).toEqual([]);
 
     const offersAfterNaturalKeyImport = await db.select().from(distributionOffersTable)
       .where(eq(distributionOffersTable.tenantId, TENANT_ID));
