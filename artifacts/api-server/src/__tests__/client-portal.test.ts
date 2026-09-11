@@ -353,6 +353,14 @@ function setupDefaultDbMocks() {
   });
 }
 
+function buildWhereResult(rows: unknown[] = []) {
+  return Object.assign(Promise.resolve(rows), {
+    limit: mockLimit,
+    groupBy: mockGroupBy,
+    orderBy: mockOrderBy,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Tests: GET /api/client/me
 // ---------------------------------------------------------------------------
@@ -620,6 +628,19 @@ describe("GET /api/client/me", () => {
       .mockResolvedValueOnce([FAKE_USER_ROW])           // #1 user
       .mockResolvedValueOnce([FAKE_TENANT_ROW])          // #2 tenant
       .mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID]); // #3 userId hit
+
+    mockWhere
+      .mockReturnValueOnce(buildWhereResult()) // #1 user
+      .mockReturnValueOnce(buildWhereResult()) // #2 tenant
+      .mockReturnValueOnce(buildWhereResult()) // #3 client
+      .mockReturnValueOnce(buildWhereResult([{
+        id: "payment-001",
+        orderId: null,
+        reservationId: "res-001",
+        amount: "600.00",
+        status: "paid",
+        type: "receivable",
+      }])); // #4 canonical reservation payment
 
     // reservations: innerJoin(...).where(...).orderBy(...)
     mockOrderBy.mockResolvedValueOnce([fakeReservationRow]);
@@ -1059,6 +1080,9 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
     voucherCode: "VCHR-0001",
     totalValue: "1200.00",
     paidValue: "600.00",
+    balance: "600.00",
+    depositAmount: "600.00",
+    discountTotal: "0.00",
     paymentMethod: "pix",
     createdAt: new Date("2025-07-01T10:00:00Z"),
     seats: ["1A"],
@@ -1081,9 +1105,9 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
 
   // Helper: shared thenable compatible with the .where() mock default behaviour.
   // Calls to mockWhere that are followed by .limit() need to expose .limit on the returned value.
-  // The passengers query awaits mockWhere directly — we control that via the 4th once-value.
-  function buildWhereMock() {
-    return Object.assign(Promise.resolve([]), {
+  // The passengers query awaits mockWhere directly — we control that via the 5th once-value.
+  function buildWhereMock(rows: unknown[] = []) {
+    return Object.assign(Promise.resolve(rows), {
       limit: mockLimit,
       groupBy: mockGroupBy,
       orderBy: mockOrderBy,
@@ -1119,16 +1143,23 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
       .mockResolvedValueOnce([FAKE_TENANT_ROW_VOUCHER])   // #3 tenant (Promise.all)
       .mockResolvedValueOnce([FAKE_USER_ROW_VOUCHER]);    // #4 user  (Promise.all)
 
-    // mockWhere slots: client, tenant, user chains consume once-values #1-#3;
-    // slot #4 is the passengers query — awaited directly, so return a plain Promise.
-    // All four mockWhere once-values use the same shape (Object.assign keeps TypeScript happy).
-    // The 4th slot resolves to `passengers` — the passengersTable query is awaited directly
+    // mockWhere slots: client, canonical payments, tenant, and user consume #1-#4;
+    // slot #5 is the passengers query — awaited directly, so return a plain Promise.
+    // All five mockWhere once-values use the same shape (Object.assign keeps TypeScript happy).
+    // The 5th slot resolves to `passengers` — the passengersTable query is awaited directly
     // (no .limit/.orderBy chained after it), so its resolved value is what the route sees.
     mockWhere
       .mockReturnValueOnce(buildWhereMock())                                                    // #1 findClientRecord .where().limit()
-      .mockReturnValueOnce(buildWhereMock())                                                    // #2 tenant .where().limit()
-      .mockReturnValueOnce(buildWhereMock())                                                    // #3 user   .where().limit()
-      .mockReturnValueOnce(                                                                     // #4 passengersTable .where() (awaited directly)
+      .mockReturnValueOnce(buildWhereMock([{
+        orderId: null,
+        reservationId: "res-001",
+        amount: "600.00",
+        status: "paid",
+        type: "receivable",
+      }]))                                                                                      // #2 paymentsTable .where()
+      .mockReturnValueOnce(buildWhereMock())                                                    // #3 tenant .where().limit()
+      .mockReturnValueOnce(buildWhereMock())                                                    // #4 user   .where().limit()
+      .mockReturnValueOnce(                                                                     // #5 passengersTable .where() (awaited directly)
         Object.assign(Promise.resolve(passengers), {
           limit: mockLimit,
           groupBy: mockGroupBy,
