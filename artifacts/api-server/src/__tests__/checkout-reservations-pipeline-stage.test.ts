@@ -49,6 +49,7 @@ vi.mock("drizzle-orm", () => ({
 
 vi.mock("@workspace/permissions", () => ({
   RESERVATION_STATUS: { CONFIRMED: "confirmed", PENDING: "pending" },
+  ACTIVE_RESERVATION_STATUSES: ["pending", "confirmed"],
   PAYMENT_STATUS: { PAID: "paid" },
 }));
 
@@ -156,6 +157,7 @@ function queueTripReservation(order: typeof BASE_ORDER) {
 describe("createReservationsForOrder — storefront Pipeline stage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockExecute.mockReset();
     mockLoadReservationContext.mockResolvedValue({
       reservationCreatedById: "agency-user-1",
       vitrineStageId: "stage-vitrine",
@@ -171,6 +173,7 @@ describe("createReservationsForOrder — storefront Pipeline stage", () => {
           available_seats: 10,
           total_capacity: 10,
           show_seat_map: true,
+           seat_map: { "1": { status: "available" } },
           type: "excursao",
         }],
       })
@@ -268,6 +271,7 @@ describe("createReservationsForOrder — storefront Pipeline stage", () => {
       reservationIds: [],
       reservationClientId: null,
       tripIds: [],
+      reservationExpiresAt: null,
     });
     expect(mockInsert).not.toHaveBeenCalled();
     expect(mockExecute).not.toHaveBeenCalled();
