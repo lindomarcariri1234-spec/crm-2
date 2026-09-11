@@ -49,6 +49,7 @@ const { rowsByTable, rejectedTable, mockRequireAuth, mockLogError, tables, makeC
     "partnersTable", "partnerProductsTable", "partnerAvailabilityTable", "partnerCommissionsTable",
     "distributionOffersTable", "distributionOperationsTable", "distributionBookingsTable",
     "gemeoAlertsTable", "gemeoOpportunitiesTable", "insightsChatHistoryTable", "auditLogsTable",
+    "linkedDataReconciliationRunsTable",
   ] as const;
 
   const tables: Record<string, unknown> = {};
@@ -543,6 +544,44 @@ function seedFullTenantFixture() {
     { id: "audit-a1", tenantId: TENANT_A },
     { id: "audit-b1", tenantId: TENANT_B },
   ]);
+  rowsByTable.set(tables.linkedDataReconciliationRunsTable, [
+    {
+      id: "reconciliation-a1",
+      tenantId: TENANT_A,
+      mode: "repair",
+      executedAt: "2026-09-01T10:00:00.000Z",
+      checkedCount: 12,
+      repairedCount: 3,
+      issueCount: 1,
+      summary: {
+        clients: {
+          checked: 12,
+          repaired: 3,
+          issues: 1,
+          reasons: { mismatch: 1 },
+          clientId: "client-a1",
+          amount: 999,
+        },
+        clientId: "client-a1",
+      },
+      createdAt: "2026-09-01T10:00:01.000Z",
+      clientId: "client-a1",
+      paymentId: "payment-a1",
+      amount: 999,
+      providerSecret: "reconciliation-secret-a",
+    },
+    {
+      id: "reconciliation-b1",
+      tenantId: TENANT_B,
+      mode: "repair",
+      executedAt: "2026-09-02T10:00:00.000Z",
+      checkedCount: 5,
+      repairedCount: 0,
+      issueCount: 0,
+      summary: {},
+      createdAt: "2026-09-02T10:00:01.000Z",
+    },
+  ]);
 }
 
 beforeEach(() => {
@@ -573,7 +612,7 @@ describe("GET /api/backup/export", () => {
 
     // Envelope identifies format/version/source tenant for a future importer.
     expect(body.format).toBe("visitecrm-agency-backup");
-    expect(body.version).toBe(5);
+    expect(body.version).toBe(6);
     expect(body.tenant).toMatchObject({
       id: TENANT_A,
       name: "Agência A",
@@ -590,6 +629,7 @@ describe("GET /api/backup/export", () => {
         "automacoes", "indicacoes", "loja", "cuponsCrm", "financeiro", "metasVendas", "comissoes",
         "pipeline", "fidelidade", "clube", "marketing", "comunicacao", "integracoes",
         "inteligenciaArtificial", "catalogoLegado", "parceiros", "distribuicao", "auditoria",
+        "linkedDataReconciliationRuns",
         "calendario", "documentos", "cadastrosAuxiliares",
       ].sort(),
     );
@@ -640,11 +680,29 @@ describe("GET /api/backup/export", () => {
     expect((data.parceiros as { availability: unknown[] }).availability).toHaveLength(1);
     expect((data.distribuicao as { offers: unknown[]; operations: unknown[]; bookings: unknown[] }).bookings).toHaveLength(1);
     expect(data.auditoria).toHaveLength(1);
+    expect(data.linkedDataReconciliationRuns).toEqual([{
+      id: "reconciliation-a1",
+      mode: "repair",
+      executedAt: "2026-09-01T10:00:00.000Z",
+      checkedCount: 12,
+      repairedCount: 3,
+      issueCount: 1,
+      summary: {
+        clients: {
+          checked: 12,
+          repaired: 3,
+          issues: 1,
+          reasons: { mismatch: 1 },
+        },
+      },
+      createdAt: "2026-09-01T10:00:01.000Z",
+    }]);
     expect(body.counts.cuponsCrm).toBe(1);
     expect(body.counts.calendario).toBe(1);
     expect(body.counts.documentos).toBe(1);
     expect(body.counts.metasVendas).toBe(1);
     expect(body.counts.auditoria).toBe(1);
+    expect(body.counts.linkedDataReconciliationRuns).toBe(1);
 
     // Original IDs and cross-references are preserved for a future importer.
     const client = (data.clientes as { clients: Array<Record<string, unknown>> }).clients[0]!;
@@ -671,6 +729,8 @@ describe("GET /api/backup/export", () => {
     expect(rawText).not.toContain("secret-ai-key-a");
     expect(rawText).not.toContain("secret-ai-token-a");
     expect(rawText).not.toContain("secret-partner-hash-a");
+    expect(rawText).not.toContain("reconciliation-secret-a");
+    expect(rawText).not.toContain("reconciliation-b1");
 
     // Never leaks another tenant's data.
     expect(rawText).not.toContain(TENANT_B);
