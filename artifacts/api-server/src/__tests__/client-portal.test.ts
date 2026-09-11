@@ -1133,9 +1133,12 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
   /**
    * Queues all four mockLimit slots plus the four mockWhere slots.
    * The caller supplies the passengers array that will be returned by the
-   * fourth mockWhere call (the passengersTable query, awaited directly).
+   * fifth mockWhere call (the passengersTable query, awaited directly).
    */
-  function setupVoucherMocks(passengers: { ageCategory: string; seatNumber: string | null }[]) {
+  function setupVoucherMocks(
+    passengers: { ageCategory: string; seatNumber: string | null }[],
+    paymentStatus = "paid",
+  ) {
     // mockLimit slots: client, reservation (via mockInnerJoinWhere→limit), tenant, user
     mockLimit
       .mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])  // #1 findClientRecord userId hit
@@ -1154,7 +1157,7 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
         orderId: null,
         reservationId: "res-001",
         amount: "600.00",
-        status: "paid",
+        status: paymentStatus,
         type: "receivable",
       }]))                                                                                      // #2 paymentsTable .where()
       .mockReturnValueOnce(buildWhereMock())                                                    // #3 tenant .where().limit()
@@ -1219,4 +1222,22 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
       expect.objectContaining({ lapChildCount: undefined }),
     );
   });
+
+  it.each(["refunded", "charged_back"])(
+    "does not generate a voucher when the payment is %s",
+    async (paymentStatus) => {
+      requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+      setupVoucherMocks(
+        [{ ageCategory: "adult", seatNumber: "1A" }],
+        paymentStatus,
+      );
+
+      const app = buildClientPortalApp();
+      const res = await request(app).get("/api/client/reservations/res-001/voucher");
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe("RESERVATION_NOT_VALID");
+      expect(generateVoucherPdfMock).not.toHaveBeenCalled();
+    },
+  );
 });
