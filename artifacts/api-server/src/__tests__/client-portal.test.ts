@@ -1273,4 +1273,22 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
     expect(res.body.code).toBe("RESERVATION_NOT_VALID");
     expect(generateVoucherPdfMock).not.toHaveBeenCalled();
   });
+
+  it("generates a voucher for a completed reservation with a paid payment", async () => {
+    requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+    setupVoucherMocks(
+      [{ ageCategory: "adult", seatNumber: "1A" }],
+      "paid",
+      "completed",
+    );
+
+    const app = buildClientPortalApp();
+    const res = await request(app).get("/api/client/reservations/res-001/voucher");
+
+    expect(res.status).toBe(200);
+    expect(generateVoucherPdfMock).toHaveBeenCalledOnce();
+    expect(generateVoucherPdfMock).toHaveBeenCalledWith(
+      expect.objectContaining({ lapChildCount: undefined }),
+    );
+  });
 });
