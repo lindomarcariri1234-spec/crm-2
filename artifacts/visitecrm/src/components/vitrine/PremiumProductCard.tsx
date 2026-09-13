@@ -57,7 +57,6 @@ export function PremiumProductCard({
     hasDiscount && priceNum > 0
       ? Math.round((1 - displayPriceNum / priceNum) * 100)
       : 0;
-  const showInstallments = displayPriceNum >= 100;
 
   const isStockOut = product.trackInventory && (product.stockQuantity ?? 0) <= 0;
   const availableSeats = product.availableSeats ?? null;
@@ -481,11 +480,6 @@ export function PremiumProductCard({
             >
               {formatCurrency(displayPriceNum)}
             </div>
-            {showInstallments && (
-              <span className="text-[10px] text-muted-foreground">
-                em até 10x de {formatCurrency(displayPriceNum / 10)}
-              </span>
-            )}
           </div>
           <div className="flex shrink-0 gap-1.5">
             {whatsapp && (
