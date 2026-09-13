@@ -3,7 +3,6 @@ import { useLocation } from "wouter";
 import { StoreProduct } from "@/lib/storeApi";
 import { calculateTripDuration } from "@/lib/tripDuration";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { useCart } from "@/contexts/CartContext";
 import { useFavorites } from "@/contexts/FavoritesContext";
 import { useComparison } from "@/contexts/ComparisonContext";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
@@ -13,7 +12,6 @@ import {
   MapPin,
   Calendar,
   Clock,
-  ShoppingCart,
   Star,
   Check,
   MessageCircle,
@@ -42,7 +40,6 @@ export function PremiumProductCard({
   onQuickView?: (p: StoreProduct) => void;
 }) {
   const [, navigate] = useLocation();
-  const { addItem, openCart } = useCart();
   const { isFavorited, toggleFavorite } = useFavorites();
   const { isComparing, toggle: toggleCompare, isFull: compareFull } = useComparison();
   const { colors } = useVitrineTheme();
@@ -60,7 +57,6 @@ export function PremiumProductCard({
     hasDiscount && priceNum > 0
       ? Math.round((1 - displayPriceNum / priceNum) * 100)
       : 0;
-  const showInstallments = displayPriceNum >= 100;
 
   const isStockOut = product.trackInventory && (product.stockQuantity ?? 0) <= 0;
   const availableSeats = product.availableSeats ?? null;
@@ -187,13 +183,7 @@ export function PremiumProductCard({
 
   function handleAdd() {
     if (isOutOfStock) return;
-    addItem({
-      productId: product.id,
-      productName: product.name,
-      unitPrice: displayPriceNum,
-      image: product.images?.[0],
-    });
-    openCart();
+    navigate(`/loja/${slug}/reservar/${product.slug}`);
   }
 
   function handleWhatsApp() {
@@ -490,11 +480,6 @@ export function PremiumProductCard({
             >
               {formatCurrency(displayPriceNum)}
             </div>
-            {showInstallments && (
-              <span className="text-[10px] text-muted-foreground">
-                em até 10x de {formatCurrency(displayPriceNum / 10)}
-              </span>
-            )}
           </div>
           <div className="flex shrink-0 gap-1.5">
             {whatsapp && (
@@ -526,11 +511,16 @@ export function PremiumProductCard({
               className={`h-9 px-3.5 ${
                 isOutOfStock ? "cursor-not-allowed bg-gray-200 text-gray-400" : ""
               }`}
+              aria-label={isOutOfStock ? "Viagem esgotada" : "Reservar agora"}
+              title={isOutOfStock ? "Viagem esgotada" : "Reservar agora"}
             >
               {isOutOfStock ? (
                 <span className="text-xs">Esgotado</span>
               ) : (
-                <ShoppingCart className="h-4 w-4" />
+                <i
+                  className="hgi hgi-stroke hgi-rounded hgi-shopping-basket-01"
+                  aria-hidden="true"
+                />
               )}
             </Button>
           </div>
