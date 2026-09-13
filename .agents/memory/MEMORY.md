@@ -117,3 +117,4 @@
 - [Referral credit reservation](referral-credit-reservation.md) — reserve cashback atomically at checkout; payment confirms it and unpaid orders release it.
 - [Stripe 3DS checkout recovery](stripe-3ds-checkout-recovery.md) — redirected card returns have an empty cart; restore by token and retain the server-applied cashback snapshot.
 - [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
+- [Vercel CLI firewall fallback](vercel-cli-firewall-fallback.md) — if pnpm dlx is blocked on a transitive download, reuse an already extracted CLI from the pnpm cache
