@@ -13,7 +13,6 @@ import {
   MapPin,
   Calendar,
   Clock,
-  ShoppingCart,
   Star,
   Check,
   MessageCircle,
@@ -530,7 +529,10 @@ export function PremiumProductCard({
               {isOutOfStock ? (
                 <span className="text-xs">Esgotado</span>
               ) : (
-                <ShoppingCart className="h-4 w-4" />
+                <i
+                  className="hgi hgi-stroke hgi-rounded hgi-shopping-basket-01"
+                  aria-hidden="true"
+                />
               )}
             </Button>
           </div>
