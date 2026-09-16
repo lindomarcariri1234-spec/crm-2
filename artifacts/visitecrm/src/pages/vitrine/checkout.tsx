@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { SignInButton, useUser } from "@clerk/react";
-import { loadStripe } from "@stripe/stripe-js";
+import { loadStripe, type PaymentIntent } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { publicStoreApi, PublicApiError, PublicStore, CouponValidation, ReferralValidation } from "@/lib/storeApi";
 import { clientPortalApi } from "@/lib/clientPortalApi";
@@ -62,6 +62,37 @@ type RecoveredReferralCreditRefreshContext = {
 };
 
 type StripePaymentState = "processing" | "confirmed" | "timeout" | "failed" | null;
+
+type StripePaymentInstructions = {
+  pixQrCodeUrl?: string | null;
+  pixCopyPaste?: string | null;
+  boletoUrl?: string | null;
+  boletoBarcode?: string | null;
+};
+
+function getStripePaymentInstructions(paymentIntent: PaymentIntent | null): StripePaymentInstructions {
+  const nextAction = paymentIntent?.next_action as unknown as Record<string, unknown> | null | undefined;
+  if (!nextAction) return {};
+
+  const instructions: StripePaymentInstructions = {};
+  if (nextAction.type === "display_qr_code" && nextAction.display_qr_code && typeof nextAction.display_qr_code === "object") {
+    const qr = nextAction.display_qr_code as Record<string, unknown>;
+    instructions.pixCopyPaste = typeof qr.data === "string" ? qr.data : null;
+    instructions.pixQrCodeUrl = typeof qr.image_url_png === "string"
+      ? qr.image_url_png
+      : typeof qr.image_url_svg === "string"
+        ? qr.image_url_svg
+        : null;
+  }
+  if (nextAction.type === "display_boleto" && nextAction.display_boleto && typeof nextAction.display_boleto === "object") {
+    const boleto = nextAction.display_boleto as Record<string, unknown>;
+    instructions.boletoUrl = typeof boleto.hosted_voucher_url === "string"
+      ? boleto.hosted_voucher_url
+      : null;
+    instructions.boletoBarcode = typeof boleto.number === "string" ? boleto.number : null;
+  }
+  return instructions;
+}
 
 function getPaymentIntentIdFromClientSecret(clientSecret: string): string | null {
   const match = clientSecret.match(/^(pi_[^_]+)_secret_/);
@@ -212,7 +243,13 @@ function BoletoPayment() {
   );
 }
 
-function StripePaymentForm({ onSuccess }: { onSuccess: () => void }) {
+function StripePaymentForm({
+  paymentMethod,
+  onSuccess,
+}: {
+  paymentMethod: string;
+  onSuccess: (paymentIntent: PaymentIntent | null) => void;
+}) {
   const stripe = useStripe();
   const elements = useElements();
   const [paying, setPaying] = useState(false);
@@ -223,7 +260,7 @@ function StripePaymentForm({ onSuccess }: { onSuccess: () => void }) {
     setPaying(true);
     setStripeError(null);
     try {
-      const { error } = await stripe.confirmPayment({
+      const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: { return_url: window.location.href },
         redirect: "if_required",
@@ -231,7 +268,7 @@ function StripePaymentForm({ onSuccess }: { onSuccess: () => void }) {
       if (error) {
         setStripeError(error.message ?? "Pagamento falhou. Verifique os dados e tente novamente.");
       } else {
-        onSuccess();
+        onSuccess(paymentIntent ?? null);
       }
     } finally {
       setPaying(false);
@@ -253,15 +290,44 @@ function StripePaymentForm({ onSuccess }: { onSuccess: () => void }) {
         Pagar agora
       </Button>
       <p className="text-xs text-muted-foreground text-center">
-        Seus dados são processados com segurança pelo Stripe.
+        {paymentMethod === "pix"
+          ? "O QR Code e o código Pix serão gerados com segurança pela Stripe."
+          : paymentMethod === "boleto"
+            ? "O boleto será gerado com segurança pela Stripe."
+            : "Seus dados são processados com segurança pelo Stripe."}
       </p>
     </div>
+  );
+}
+
+function StripePaymentFrame({
+  stripeState,
+  paymentMethod,
+  onSuccess,
+}: {
+  stripeState: { clientSecret: string; publishableKey: string };
+  paymentMethod: string;
+  onSuccess: (paymentIntent: PaymentIntent | null) => void;
+}) {
+  const stripePromise = useMemo(
+    () => loadStripe(stripeState.publishableKey),
+    [stripeState.publishableKey],
+  );
+
+  return (
+    <Elements
+      stripe={stripePromise}
+      options={{ clientSecret: stripeState.clientSecret, locale: "pt-BR" }}
+    >
+      <StripePaymentForm paymentMethod={paymentMethod} onSuccess={onSuccess} />
+    </Elements>
   );
 }
 
 function CardPayment({
   form,
   set,
+  paymentMethod,
   stripeState,
   onStripeSuccess,
 }: {
@@ -273,9 +339,10 @@ function CardPayment({
     installments: string;
     depositAmount: string;
   };
+  paymentMethod: string;
   set: (field: string, value: string) => void;
   stripeState?: { clientSecret: string; publishableKey: string } | null;
-  onStripeSuccess?: () => void;
+  onStripeSuccess?: (paymentIntent: PaymentIntent | null) => void;
 }) {
   const stripePromise = useMemo(
     () => (stripeState ? loadStripe(stripeState.publishableKey) : null),
@@ -288,7 +355,10 @@ function CardPayment({
         stripe={stripePromise}
         options={{ clientSecret: stripeState.clientSecret, locale: "pt-BR" }}
       >
-        <StripePaymentForm onSuccess={onStripeSuccess ?? (() => {})} />
+        <StripePaymentForm
+          paymentMethod={paymentMethod}
+          onSuccess={onStripeSuccess ?? (() => {})}
+        />
       </Elements>
     );
   }
@@ -513,6 +583,8 @@ export default function VitrineCheckout({
   const [referralResult, setReferralResult] = useState<ReferralValidation | null>(null);
   const [validatingReferral, setValidatingReferral] = useState(false);
   const [stripeState, setStripeState] = useState<{ clientSecret: string; publishableKey: string } | null>(null);
+  const [stripePaymentInstructions, setStripePaymentInstructions] = useState<StripePaymentInstructions>({});
+  const [copiedStripePix, setCopiedStripePix] = useState(false);
   const [paymentToken, setPaymentToken] = useState<string | null>(
     stripeReturnRecovery?.lookup.token ?? null,
   );
@@ -633,6 +705,12 @@ export default function VitrineCheckout({
         setConfirmedReferralCreditBalanceAfter(
           balanceAfter != null && Number.isFinite(balanceAfter) ? balanceAfter : null,
         );
+        setStripePaymentInstructions({
+          pixQrCodeUrl: order.pixQrCodeUrl,
+          pixCopyPaste: order.pixCopyPaste ?? order.pixQrCode,
+          boletoUrl: order.boletoUrl,
+          boletoBarcode: order.boletoBarcode,
+        });
         if (balanceAfter != null && Number.isFinite(balanceAfter)) {
           setReferralCreditBalance(balanceAfter);
         }
@@ -791,8 +869,11 @@ export default function VitrineCheckout({
     return !!form.customerName && !!form.customerEmail;
   }
 
-  const isStripeCardPayment =
-    (form.paymentMethod === "credit_card" || form.paymentMethod === "debit_card") &&
+  const isStripePayment =
+    (form.paymentMethod === "credit_card"
+      || form.paymentMethod === "debit_card"
+      || form.paymentMethod === "pix"
+      || form.paymentMethod === "boleto") &&
     store.stripeEnabled &&
     !!store.stripePublicKey;
 
@@ -878,8 +959,11 @@ export default function VitrineCheckout({
           storeSlug: slug,
         }));
       }
-      if (isStripeCardPayment) {
+      if (isStripePayment) {
         const pi = await publicStoreApi.createPaymentIntent(slug, order.orderNumber, order.paymentToken as string);
+        if (!pi.clientSecret) {
+          throw new Error("Não foi possível preparar o pagamento Stripe.");
+        }
         setStripeState({ clientSecret: pi.clientSecret, publishableKey: pi.publishableKey });
         const paymentIntentId = getPaymentIntentIdFromClientSecret(pi.clientSecret);
         if (tok && paymentIntentId) {
@@ -980,6 +1064,12 @@ export default function VitrineCheckout({
       if (stopped) return;
       try {
         const order = await publicStoreApi.getOrder(slug, orderNumber!, paymentToken!);
+        setStripePaymentInstructions({
+          pixQrCodeUrl: order.pixQrCodeUrl,
+          pixCopyPaste: order.pixCopyPaste ?? order.pixQrCode,
+          boletoUrl: order.boletoUrl,
+          boletoBarcode: order.boletoBarcode,
+        });
         if (order.paymentStatus === "paid") {
           setStripePaymentConfirmed("confirmed");
           return;
@@ -1150,6 +1240,65 @@ export default function VitrineCheckout({
           Você receberá uma confirmação no e-mail <strong>{form.customerEmail}</strong>.
           Nossa equipe entrará em contato em breve.
         </p>
+        {(stripePaymentInstructions.pixQrCodeUrl
+          || stripePaymentInstructions.pixCopyPaste
+          || stripePaymentInstructions.boletoUrl
+          || stripePaymentInstructions.boletoBarcode) && (
+          <div className="text-left rounded-xl border border-blue-200 bg-blue-50 p-4 mb-6 space-y-3">
+            <p className="font-semibold text-blue-900">
+              {stripePaymentInstructions.pixCopyPaste ? "Pagamento via Pix" : "Pagamento via boleto"}
+            </p>
+            {stripePaymentInstructions.pixQrCodeUrl && (
+              <img
+                src={stripePaymentInstructions.pixQrCodeUrl}
+                alt="QR Code para pagamento via Pix"
+                className="w-48 h-48 object-contain bg-white rounded-lg mx-auto"
+              />
+            )}
+            {stripePaymentInstructions.pixCopyPaste && (
+              <div className="space-y-2">
+                <p className="text-xs text-blue-800">Copie o código Pix para pagar no aplicativo do seu banco.</p>
+                <div className="flex items-center gap-2 bg-white rounded-lg border border-blue-200 px-3 py-2">
+                  <code className="flex-1 text-xs font-mono truncate">{stripePaymentInstructions.pixCopyPaste}</code>
+                  <button
+                    type="button"
+                    className="text-blue-700 hover:text-blue-900 shrink-0"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(stripePaymentInstructions.pixCopyPaste!).then(() => {
+                        setCopiedStripePix(true);
+                        window.setTimeout(() => setCopiedStripePix(false), 2000);
+                      });
+                    }}
+                    aria-label="Copiar código Pix"
+                  >
+                    {copiedStripePix ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            )}
+            {stripePaymentInstructions.boletoBarcode && (
+              <div>
+                <p className="text-xs text-blue-800 mb-1">Código de barras</p>
+                <code className="block bg-white rounded-lg border border-blue-200 px-3 py-2 text-xs font-mono break-all">
+                  {stripePaymentInstructions.boletoBarcode}
+                </code>
+              </div>
+            )}
+            {stripePaymentInstructions.boletoUrl && (
+              <a
+                href={stripePaymentInstructions.boletoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex w-full justify-center rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800"
+              >
+                Abrir boleto Stripe
+              </a>
+            )}
+            <p className="text-xs text-blue-800">
+              A confirmação do pagamento será atualizada automaticamente após a compensação pela Stripe.
+            </p>
+          </div>
+        )}
 
         {stripePaymentConfirmed === "processing" && (
           <div className="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-800 rounded-xl px-5 py-3 mb-6">
@@ -1618,8 +1767,40 @@ export default function VitrineCheckout({
                     </div>
 
                     <div className="mt-4 pt-4 border-t">
-                      {form.paymentMethod === "pix" && <PixPayment store={store} />}
-                      {form.paymentMethod === "boleto" && <BoletoPayment />}
+                      {form.paymentMethod === "pix" && (
+                        isStripePayment
+                          ? stripeState
+                            ? (
+                              <StripePaymentFrame
+                                stripeState={stripeState}
+                                paymentMethod={form.paymentMethod}
+                                onSuccess={(paymentIntent) => {
+                                  setStripePaymentInstructions(getStripePaymentInstructions(paymentIntent));
+                                  setStripePaymentConfirmed("processing");
+                                  setStep("confirmado");
+                                }}
+                              />
+                            )
+                            : <p className="text-sm text-muted-foreground">Ao continuar, a Stripe exibirá o QR Code e o código Pix para pagamento.</p>
+                          : <PixPayment store={store} />
+                      )}
+                      {form.paymentMethod === "boleto" && (
+                        isStripePayment
+                          ? stripeState
+                            ? (
+                              <StripePaymentFrame
+                                stripeState={stripeState}
+                                paymentMethod={form.paymentMethod}
+                                onSuccess={(paymentIntent) => {
+                                  setStripePaymentInstructions(getStripePaymentInstructions(paymentIntent));
+                                  setStripePaymentConfirmed("processing");
+                                  setStep("confirmado");
+                                }}
+                              />
+                            )
+                            : <p className="text-sm text-muted-foreground">Ao continuar, a Stripe gerará o boleto para pagamento.</p>
+                          : <BoletoPayment />
+                      )}
                       {(form.paymentMethod === "credit_card" ||
                         form.paymentMethod === "debit_card") && (
                         <CardPayment
@@ -1632,8 +1813,10 @@ export default function VitrineCheckout({
                             depositAmount: form.depositAmount,
                           }}
                           set={set}
+                          paymentMethod={form.paymentMethod}
                           stripeState={stripeState}
-                          onStripeSuccess={() => {
+                          onStripeSuccess={(paymentIntent) => {
+                            setStripePaymentInstructions(getStripePaymentInstructions(paymentIntent));
                             setStripePaymentConfirmed("processing");
                             setStep("confirmado");
                           }}
@@ -1678,7 +1861,7 @@ export default function VitrineCheckout({
                     disabled={loading}
                   >
                     {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                    {isStripeCardPayment ? "Continuar para Pagamento" : "Confirmar Pedido"}
+                    {isStripePayment ? "Continuar para Pagamento" : "Confirmar Pedido"}
                   </Button>
                   <p className="text-xs text-center text-muted-foreground">
                     Ao confirmar, você concorda com os termos da loja.

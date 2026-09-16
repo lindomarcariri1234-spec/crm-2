@@ -246,6 +246,7 @@ async function ensureOrderPixQr(
   order: typeof storeOrdersTable.$inferSelect,
 ): Promise<typeof storeOrdersTable.$inferSelect> {
   if (Number(order.totalAmount) <= 0) return order;
+  if (store.stripeEnabled && store.stripePublicKey && decryptOrPassthrough(store.stripeSecretKey)) return order;
   if (order.paymentMethod !== "pix" || !store.pixEnabled || !store.pixKey) return order;
   if (order.pixQrCode && order.pixQrCodeUrl && order.pixCopyPaste) return order;
 
@@ -1869,7 +1870,14 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     // Generate PIX QR code immediately when payment method is PIX and store
     // has a PIX key configured. The QR code is stored on the order so the
     // customer can scan it right after checkout (confirmation page + tracking).
-    if (data.paymentMethod === "pix" && Number(order.totalAmount) > 0 && Number(order.depositAmount ?? order.totalAmount) > 0 && store.pixEnabled && store.pixKey)
+    if (
+      data.paymentMethod === "pix"
+      && !(store.stripeEnabled && store.stripePublicKey && decryptOrPassthrough(store.stripeSecretKey))
+      && Number(order.totalAmount) > 0
+      && Number(order.depositAmount ?? order.totalAmount) > 0
+      && store.pixEnabled
+      && store.pixKey
+    )
 {
 
       try 
@@ -1951,7 +1959,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 
     // Notify agency users whenever a PIX order is placed — regardless of whether
     // the store has a PIX key configured — so they know to confirm the payment.
-    if (data.paymentMethod === "pix") 
+    if (data.paymentMethod === "pix" && !(store.stripeEnabled && store.stripePublicKey && decryptOrPassthrough(store.stripeSecretKey)))
 {
 
       enqueuePixOrderAlertEmail(
@@ -3102,6 +3110,8 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
         id: storeOrdersTable.id,
         orderNumber: storeOrdersTable.orderNumber,
         totalAmount: storeOrdersTable.totalAmount,
+        paymentMethod: storeOrdersTable.paymentMethod,
+        customerEmail: storeOrdersTable.customerEmail,
         storedPaymentToken: storeOrdersTable.paymentToken,
         existingPaymentIntentId: storeOrdersTable.paymentIntentId,
       })
@@ -3123,22 +3133,51 @@ router.post("/public/store/:slug/create-payment-intent", async (req, res, next: 
       next(new ValidationError("Token de pagamento inválido", "INVALID_TOKEN")); return;
     }
 
-    if (order.existingPaymentIntentId) {
-      res.json({ clientSecret: null, paymentIntentId: order.existingPaymentIntentId, publishableKey: store.stripePublicKey, reused: true });
+    const stripePaymentMethod =
+      order.paymentMethod === "pix"
+        ? "pix"
+        : order.paymentMethod === "boleto"
+          ? "boleto"
+          : order.paymentMethod === "credit_card" || order.paymentMethod === "debit_card"
+            ? "card"
+            : null;
+    if (!stripePaymentMethod) {
+      next(new ValidationError("Forma de pagamento não suportada pela Stripe", "STRIPE_PAYMENT_METHOD_UNSUPPORTED"));
       return;
     }
 
     const Stripe = (await import("stripe")).default;
     const stripe = new Stripe(stripeSecretKey);
+
+    if (order.existingPaymentIntentId) {
+      const existingIntent = await stripe.paymentIntents.retrieve(order.existingPaymentIntentId);
+      if (existingIntent.payment_method_types.length > 0 && !existingIntent.payment_method_types.includes(stripePaymentMethod)) {
+        next(new ValidationError("O pedido já possui uma cobrança Stripe para outra forma de pagamento", "ALREADY_SET"));
+        return;
+      }
+      res.json({
+        clientSecret: existingIntent.client_secret,
+        paymentIntentId: existingIntent.id,
+        publishableKey: store.stripePublicKey,
+        reused: true,
+      });
+      return;
+    }
+
     const amountInCents = Math.round(Number(order.totalAmount) * 100);
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
       currency: "brl",
+      payment_method_types: [stripePaymentMethod],
+      ...(order.customerEmail ? { receipt_email: order.customerEmail } : {}),
       metadata: {
+        orderId: order.id,
         orderNumber: order.orderNumber,
         storeId: store.id,
         storeName: store.name,
       },
+    }, {
+      idempotencyKey: `store-order-${store.id}-${order.id}`,
     });
 
     await db

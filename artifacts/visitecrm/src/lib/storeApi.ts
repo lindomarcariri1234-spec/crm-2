@@ -258,7 +258,12 @@ export const publicStoreApi = {
       }>;
     }>("GET", `/public/store/${slug}/trips/${tripId}/seat-map`),
   createPaymentIntent: (slug: string, orderNumber: string, paymentToken: string) =>
-    publicReq<{ clientSecret: string; publishableKey: string }>(
+    publicReq<{
+      clientSecret: string | null;
+      paymentIntentId?: string;
+      publishableKey: string;
+      reused?: boolean;
+    }>(
       "POST",
       `/public/store/${slug}/create-payment-intent`,
       { orderNumber, paymentToken }
