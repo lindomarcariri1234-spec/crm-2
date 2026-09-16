@@ -40,6 +40,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ListLoadErrorRow } from "@/components/list-load-error";
 import { Plus, Pencil, Trash2, Search, Hotel, Star, Images, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { GalleryUpload } from "@/components/gallery-upload";
+import { AccommodationHelp } from "@/components/accommodation-help";
 import { formatCurrencyBRL as formatCurrency } from "@/lib/utils";
 
 const ACCOMMODATION_TYPES = ["Hotel", "Pousada", "Resort", "Hostel", "Chácara", "Chalé", "Outro"];
@@ -177,15 +178,18 @@ export default function Hospedagens() {
             {accommodations.length} hospedagem(ns) cadastrada(s)
           </p>
         </div>
-        <Button onClick={openCreate}>
+        <Button data-testid="button-new-hospedagem" onClick={openCreate}>
           <Plus className="w-4 h-4 mr-2" />
           Nova Hospedagem
         </Button>
       </div>
 
+      <AccommodationHelp />
+
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
+          data-testid="input-search-hospedagens"
           className="pl-9"
           placeholder="Buscar por nome, cidade, tipo..."
           value={search}
@@ -254,6 +258,7 @@ export default function Hospedagens() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={`Ver fotos de ${a.name}`}
                           title={`Ver fotos (${(a.gallery?.length ?? 0) + (a.coverImage ? 1 : 0)})`}
                           onClick={() => {
                             const urls = [
@@ -266,13 +271,14 @@ export default function Hospedagens() {
                           <Images className="w-4 h-4" />
                         </Button>
                       )}
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(a)}>
+                      <Button variant="ghost" size="icon" aria-label={`Editar ${a.name}`} onClick={() => openEdit(a)}>
                         <Pencil className="w-4 h-4" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
                         className="text-destructive hover:text-destructive"
+                        aria-label={`Excluir ${a.name}`}
                         onClick={() => setDeleteId(a.id)}
                       >
                         <Trash2 className="w-4 h-4" />
