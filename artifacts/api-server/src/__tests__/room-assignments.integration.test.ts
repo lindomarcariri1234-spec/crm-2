@@ -320,6 +320,52 @@ describe("room assignments", () => {
     }
   });
 
+  it("keeps activation changes rolled back and records the matching audit operation", async () => {
+    const deactivateResponse = await withAuditInsertFailure(() => request(app)
+      .patch(`/api/accommodation-rooms/${roomA}`)
+      .send({ status: "inactive" }));
+    expect(deactivateResponse.status).toBe(500);
+
+    const [stillActive] = await db.select().from(accommodationRoomsTable)
+      .where(eq(accommodationRoomsTable.id, roomA));
+    expect(stillActive).toMatchObject({ id: roomA, status: "active" });
+    expect(mockAuditWriteFailure).toHaveBeenCalledTimes(1);
+    expect(mockAuditWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "room_deactivated",
+        tenantId: tenantA,
+        entityType: "accommodation_room",
+        entityId: roomA,
+      }),
+      expect.any(Error),
+    );
+    expect(mockAuditWriteFailure.mock.calls[0][0]).not.toHaveProperty("before");
+    expect(mockAuditWriteFailure.mock.calls[0][0]).not.toHaveProperty("after");
+  });
+
+  it("keeps deactivation changes rolled back and records the matching audit operation", async () => {
+    const activateResponse = await withAuditInsertFailure(() => request(app)
+      .patch(`/api/accommodation-rooms/${roomInactive}`)
+      .send({ status: "active" }));
+    expect(activateResponse.status).toBe(500);
+
+    const [stillInactive] = await db.select().from(accommodationRoomsTable)
+      .where(eq(accommodationRoomsTable.id, roomInactive));
+    expect(stillInactive).toMatchObject({ id: roomInactive, status: "inactive" });
+    expect(mockAuditWriteFailure).toHaveBeenCalledTimes(1);
+    expect(mockAuditWriteFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "room_activated",
+        tenantId: tenantA,
+        entityType: "accommodation_room",
+        entityId: roomInactive,
+      }),
+      expect.any(Error),
+    );
+    expect(mockAuditWriteFailure.mock.calls[0][0]).not.toHaveProperty("before");
+    expect(mockAuditWriteFailure.mock.calls[0][0]).not.toHaveProperty("after");
+  });
+
   it("records room administration changes and filters them by accommodation and period", async () => {
     const createResponse = await request(app)
       .post(`/api/accommodations/${accommodationA}/rooms`)
