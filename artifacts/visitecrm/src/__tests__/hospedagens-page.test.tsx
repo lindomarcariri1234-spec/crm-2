@@ -13,6 +13,11 @@ const mockRoomQuery = vi.hoisted(() => ({
   refetch: vi.fn(),
   isLoading: false,
 }));
+const mockAuditQuery = vi.hoisted(() => ({
+  data: [],
+  isLoading: false,
+  isError: false,
+}));
 
 vi.mock("@workspace/api-client-react", () => ({
   useListAccommodations: mockUseListAccommodations,
@@ -20,6 +25,7 @@ vi.mock("@workspace/api-client-react", () => ({
   useCreateAccommodationRoom: vi.fn(() => mockMutation),
   useUpdateAccommodationRoom: vi.fn(() => mockMutation),
   useDeleteAccommodationRoom: vi.fn(() => mockMutation),
+  useListAuditLogs: vi.fn(() => mockAuditQuery),
   useCreateAccommodation: vi.fn(() => mockMutation),
   useUpdateAccommodation: vi.fn(() => mockMutation),
   useDeleteAccommodation: vi.fn(() => mockMutation),

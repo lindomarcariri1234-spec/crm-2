@@ -22,6 +22,8 @@ import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js
 // Downloads page component mocks
 // --------------------------------------------------------------------------
 const downloadsApiMocks = vi.hoisted(() => ({
+  useGetMe: vi.fn(() => ({ data: null })),
+  useListAuditLogs: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
   useListReferrals: vi.fn(() => ({ data: { data: [] } })),
   useListCommissions: vi.fn(() => ({ data: [] })),
   useListDeals: vi.fn(() => ({ data: [] })),

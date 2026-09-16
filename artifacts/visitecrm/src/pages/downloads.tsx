@@ -95,7 +95,7 @@ export default function Downloads() {
     isError: auditLogsError,
     error: auditLogsQueryError,
     refetch: refetchAuditLogs,
-  } = useListAuditLogs({
+  } = useListAuditLogs(undefined, {
     query: {
       queryKey: ["/api/audit-logs"],
       enabled: isAdmin,

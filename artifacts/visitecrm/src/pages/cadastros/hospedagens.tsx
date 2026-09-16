@@ -8,10 +8,12 @@ import {
   useCreateAccommodationRoom,
   useUpdateAccommodationRoom,
   useDeleteAccommodationRoom,
+  useListAuditLogs,
 } from "@workspace/api-client-react";
 import type {
   Accommodation,
   AccommodationRoom,
+  AuditLog,
   CreateAccommodationRoomBody,
   CreateAccommodationBody,
   UpdateAccommodationBody,
@@ -62,6 +64,20 @@ const AMENITY_OPTIONS = [
 ];
 const STATUS_OPTIONS = ["active", "inactive"];
 const statusLabel: Record<string, string> = { active: "Ativo", inactive: "Inativo" };
+const roomAuditActionLabel: Record<string, string> = {
+  room_created: "Criado",
+  room_updated: "Editado",
+  room_activated: "Ativado",
+  room_deactivated: "Desativado",
+  room_deleted: "Excluído",
+};
+
+function roomAuditDetails(log: AuditLog) {
+  const value = (log.after ?? log.before);
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
 
 
 export default function Hospedagens() {
@@ -73,9 +89,30 @@ export default function Hospedagens() {
   const [roomsFor, setRoomsFor] = useState<Accommodation | null>(null);
   const [roomForm, setRoomForm] = useState<CreateAccommodationRoomBody>({ name: "", category: "standard", capacity: 2 });
   const [editingRoom, setEditingRoom] = useState<AccommodationRoom | null>(null);
+  const [auditFrom, setAuditFrom] = useState("");
+  const [auditTo, setAuditTo] = useState("");
   const { data: rooms = [], refetch: refetchRooms } = useListAccommodationRooms(roomsFor?.id ?? "", {
     query: { enabled: !!roomsFor?.id, queryKey: ["accommodation-rooms", roomsFor?.id] },
   });
+  const {
+    data: roomAuditLogs = [],
+    isLoading: roomAuditLoading,
+    isError: roomAuditError,
+  } = useListAuditLogs(
+    roomsFor
+      ? {
+          accommodationId: roomsFor.id,
+          from: auditFrom || undefined,
+          to: auditTo || undefined,
+        }
+      : undefined,
+    {
+      query: {
+        enabled: !!roomsFor?.id,
+        queryKey: ["accommodation-room-audit", roomsFor?.id, auditFrom, auditTo],
+      },
+    },
+  );
   const createRoom = useCreateAccommodationRoom();
   const updateRoom = useUpdateAccommodationRoom();
   const deleteRoom = useDeleteAccommodationRoom();
@@ -187,6 +224,8 @@ export default function Hospedagens() {
   function openRooms(a: Accommodation) {
     setRoomsFor(a);
     setEditingRoom(null);
+    setAuditFrom("");
+    setAuditTo("");
     setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null, standardOccupancy: 2, currency: "BRL" });
   }
 
@@ -597,6 +636,88 @@ export default function Hospedagens() {
                 </Table>
               </div>
             )}
+            <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+              <div>
+                <h3 className="text-sm font-semibold">Histórico de alterações</h3>
+                <p className="text-xs text-muted-foreground">
+                  Registro de criação, edição, ativação, desativação e exclusão dos quartos desta hospedagem.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">De</Label>
+                  <Input
+                    type="date"
+                    className="h-8 w-[140px] text-sm"
+                    value={auditFrom}
+                    onChange={e => setAuditFrom(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Até</Label>
+                  <Input
+                    type="date"
+                    className="h-8 w-[140px] text-sm"
+                    value={auditTo}
+                    onChange={e => setAuditTo(e.target.value)}
+                  />
+                </div>
+                {(auditFrom || auditTo) && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => { setAuditFrom(""); setAuditTo(""); }}
+                  >
+                    Limpar período
+                  </Button>
+                )}
+              </div>
+              {roomAuditError ? (
+                <p className="text-sm text-destructive">Não foi possível carregar o histórico.</p>
+              ) : roomAuditLoading ? (
+                <p className="text-sm text-muted-foreground">Carregando histórico...</p>
+              ) : roomAuditLogs.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nenhuma alteração registrada no período.</p>
+              ) : (
+                <div className="overflow-x-auto rounded-md border bg-background">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Data</TableHead>
+                        <TableHead>Operação</TableHead>
+                        <TableHead>Quarto</TableHead>
+                        <TableHead>Valores</TableHead>
+                        <TableHead>Usuário</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {roomAuditLogs.map(log => {
+                        const details = roomAuditDetails(log);
+                        const roomName = typeof details.name === "string" ? details.name : "Quarto removido";
+                        const capacity = typeof details.capacity === "number" ? `${details.capacity} vaga(s)` : null;
+                        const status = typeof details.status === "string" ? statusLabel[details.status] ?? details.status : null;
+                        const values = [capacity, status].filter(Boolean).join(" · ");
+                        return (
+                          <TableRow key={log.id}>
+                            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                              {new Date(log.createdAt).toLocaleString("pt-BR")}
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              {roomAuditActionLabel[log.action] ?? log.action}
+                            </TableCell>
+                            <TableCell className="text-xs font-medium">{roomName}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{values || "—"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{log.userId ?? "—"}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>

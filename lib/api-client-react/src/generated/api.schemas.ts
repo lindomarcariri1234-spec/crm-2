@@ -1881,13 +1881,18 @@ export interface AccommodationRoom {
   name: string;
   category: string;
   capacity: number;
-  description: string | null;
-  standardOccupancy: number | null;
-  bedConfiguration: string | null;
-  bathroomType: string | null;
-  floor: string | null;
-  currency: string;
-  isActive: boolean;
+  /** @nullable */
+  description?: string | null;
+  /** @nullable */
+  standardOccupancy?: number | null;
+  /** @nullable */
+  bedConfiguration?: string | null;
+  /** @nullable */
+  bathroomType?: string | null;
+  /** @nullable */
+  floor?: string | null;
+  currency?: string;
+  isActive?: boolean;
   pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;
@@ -2896,12 +2901,6 @@ export interface Vehicle {
   type: string;
   plate: string;
   capacity: number;
-  description?: string | null;
-  standardOccupancy?: number | null;
-  bedConfiguration?: string | null;
-  bathroomType?: string | null;
-  floor?: string | null;
-  currency?: string;
   /** @nullable */
   model?: string | null;
   /** @nullable */
@@ -3009,6 +3008,7 @@ export interface CreateAccommodationRoomBody {
   /** @minimum 1 */
   capacity: number;
   description?: string | null;
+  /** @minimum 1 */
   standardOccupancy?: number | null;
   bedConfiguration?: string | null;
   bathroomType?: string | null;
@@ -3032,6 +3032,7 @@ export interface UpdateAccommodationRoomBody {
   /** @minimum 1 */
   capacity?: number;
   description?: string | null;
+  /** @minimum 1 */
   standardOccupancy?: number | null;
   bedConfiguration?: string | null;
   bathroomType?: string | null;
@@ -3040,6 +3041,7 @@ export interface UpdateAccommodationRoomBody {
   /** @minimum 0 */
   pricePerNight?: number | null;
   status?: UpdateAccommodationRoomBodyStatus;
+  isActive?: boolean;
 }
 
 export interface UpdateTripAccommodationBody {
@@ -5505,6 +5507,21 @@ export type MarkBirthdayConvertedBody = {
 
 export type MarkBirthdayConverted200 = {
   success: boolean;
+};
+
+export type ListAuditLogsParams = {
+  /**
+   * Filter room audit events by accommodation
+   */
+  accommodationId?: string;
+  /**
+   * Inclusive start date in YYYY-MM-DD
+   */
+  from?: string;
+  /**
+   * Inclusive end date in YYYY-MM-DD
+   */
+  to?: string;
 };
 
 export type ListCalendarReconciliationsParams = {

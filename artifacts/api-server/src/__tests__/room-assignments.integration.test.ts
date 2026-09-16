@@ -13,6 +13,7 @@ import {
   reservationsTable,
   passengersTable,
   reservationRoomAssignmentsTable,
+  auditLogsTable,
 } from "@workspace/db";
 import { ROLES, RESERVATION_STATUS } from "@workspace/permissions";
 
@@ -89,6 +90,7 @@ import { requireAuth } from "../lib/tenant.js";
 import reservationsRouter from "../routes/reservations.js";
 import registrationsRouter from "../routes/registrations.js";
 import tripsRouter from "../routes/trips.js";
+import auditRouter from "../routes/audit.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
 const run = randomUUID().replace(/-/g, "").slice(0, 10);
@@ -116,6 +118,7 @@ function buildApp() {
   app.use("/api", reservationsRouter);
   app.use("/api", registrationsRouter);
   app.use("/api", tripsRouter);
+  app.use("/api", auditRouter);
   app.use(errorHandler);
   return app;
 }
@@ -208,6 +211,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  await db.delete(auditLogsTable).where(inArray(auditLogsTable.tenantId, [tenantA, tenantB]));
   await db.delete(reservationRoomAssignmentsTable).where(inArray(reservationRoomAssignmentsTable.tenantId, [tenantA, tenantB]));
   await db.delete(reservationsTable).where(inArray(reservationsTable.tenantId, [tenantA, tenantB]));
   await db.delete(tripsTable).where(inArray(tripsTable.tenantId, [tenantA, tenantB]));
@@ -218,6 +222,69 @@ afterAll(async () => {
 });
 
 describe("room assignments", () => {
+  it("records room administration changes and filters them by accommodation and period", async () => {
+    const createResponse = await request(app)
+      .post(`/api/accommodations/${accommodationA}/rooms`)
+      .send({
+        name: "A-4",
+        category: "suite",
+        capacity: 3,
+        pricePerNight: 320,
+        description: "Quarto para auditoria",
+      });
+    expect(createResponse.status).toBe(201);
+    const auditedRoomId = createResponse.body.id as string;
+
+    const updateResponse = await request(app)
+      .patch(`/api/accommodation-rooms/${auditedRoomId}`)
+      .send({ name: "A-4 atualizado", capacity: 4 });
+    expect(updateResponse.status).toBe(200);
+
+    const deactivateResponse = await request(app)
+      .patch(`/api/accommodation-rooms/${auditedRoomId}`)
+      .send({ status: "inactive" });
+    expect(deactivateResponse.status).toBe(200);
+
+    const activateResponse = await request(app)
+      .patch(`/api/accommodation-rooms/${auditedRoomId}`)
+      .send({ status: "active" });
+    expect(activateResponse.status).toBe(200);
+
+    const deleteResponse = await request(app)
+      .delete(`/api/accommodation-rooms/${auditedRoomId}`);
+    expect(deleteResponse.status).toBe(200);
+
+    const filteredResponse = await request(app)
+      .get("/api/audit-logs")
+      .query({
+        accommodationId: accommodationA,
+        from: "2000-01-01",
+        to: "2100-12-31",
+      });
+    expect(filteredResponse.status).toBe(200);
+    const roomLogs = filteredResponse.body.filter((log: { entityId: string }) => log.entityId === auditedRoomId);
+    expect(roomLogs.map((log: { action: string }) => log.action)).toEqual(expect.arrayContaining([
+      "room_created",
+      "room_updated",
+      "room_deactivated",
+      "room_activated",
+      "room_deleted",
+    ]));
+    const deletionLog = roomLogs.find((log: { action: string }) => log.action === "room_deleted");
+    expect(deletionLog).toMatchObject({
+      entityType: "accommodation_room",
+      before: expect.objectContaining({ accommodationId: accommodationA, name: "A-4 atualizado" }),
+      after: null,
+      userId: userA,
+    });
+
+    const otherAccommodationResponse = await request(app)
+      .get("/api/audit-logs")
+      .query({ accommodationId: accommodationB, from: "2000-01-01", to: "2100-12-31" });
+    expect(otherAccommodationResponse.status).toBe(200);
+    expect(otherAccommodationResponse.body).toEqual([]);
+  });
+
   it("serializes concurrent assignments and rejects the one that exceeds capacity", async () => {
     const results = await Promise.all([
       assign(reservationIds[0], roomA),

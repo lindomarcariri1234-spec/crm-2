@@ -3820,6 +3820,13 @@ export const GetReservationRoomAssignmentsResponse = zod.object({
       name: zod.string(),
       category: zod.string(),
       capacity: zod.number().int(),
+      description: zod.string().nullish(),
+      standardOccupancy: zod.number().int().nullish(),
+      bedConfiguration: zod.string().nullish(),
+      bathroomType: zod.string().nullish(),
+      floor: zod.string().nullish(),
+      currency: zod.string().optional(),
+      isActive: zod.boolean().optional(),
       pricePerNight: zod.number().nullable(),
       status: zod.enum(["active", "inactive"]),
       occupied: zod.number().int(),
@@ -3903,6 +3910,13 @@ export const UpdateReservationRoomAssignmentsResponse = zod.object({
       name: zod.string(),
       category: zod.string(),
       capacity: zod.number().int(),
+      description: zod.string().nullish(),
+      standardOccupancy: zod.number().int().nullish(),
+      bedConfiguration: zod.string().nullish(),
+      bathroomType: zod.string().nullish(),
+      floor: zod.string().nullish(),
+      currency: zod.string().optional(),
+      isActive: zod.boolean().optional(),
       pricePerNight: zod.number().nullable(),
       status: zod.enum(["active", "inactive"]),
       occupied: zod.number().int(),
@@ -5678,6 +5692,13 @@ export const ListAccommodationRoomsResponseItem = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
+  description: zod.string().nullish(),
+  standardOccupancy: zod.number().int().nullish(),
+  bedConfiguration: zod.string().nullish(),
+  bathroomType: zod.string().nullish(),
+  floor: zod.string().nullish(),
+  currency: zod.string().optional(),
+  isActive: zod.boolean().optional(),
   pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),
@@ -5707,7 +5728,7 @@ export const CreateAccommodationRoomBody = zod.object({
   bedConfiguration: zod.string().nullish(),
   bathroomType: zod.string().nullish(),
   floor: zod.string().nullish(),
-  currency: zod.string().length(3).optional(),
+  currency: zod.string().optional(),
   pricePerNight: zod
     .number()
     .min(createAccommodationRoomBodyPricePerNightMin)
@@ -5721,13 +5742,13 @@ export const CreateAccommodationRoomResponse = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
-  description: zod.string().nullable(),
-  standardOccupancy: zod.number().int().nullable(),
-  bedConfiguration: zod.string().nullable(),
-  bathroomType: zod.string().nullable(),
-  floor: zod.string().nullable(),
-  currency: zod.string(),
-  isActive: zod.boolean(),
+  description: zod.string().nullish(),
+  standardOccupancy: zod.number().int().nullish(),
+  bedConfiguration: zod.string().nullish(),
+  bathroomType: zod.string().nullish(),
+  floor: zod.string().nullish(),
+  currency: zod.string().optional(),
+  isActive: zod.boolean().optional(),
   pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),
@@ -5754,12 +5775,13 @@ export const UpdateAccommodationRoomBody = zod.object({
   bedConfiguration: zod.string().nullish(),
   bathroomType: zod.string().nullish(),
   floor: zod.string().nullish(),
-  currency: zod.string().length(3).optional(),
+  currency: zod.string().optional(),
   pricePerNight: zod
     .number()
     .min(updateAccommodationRoomBodyPricePerNightMin)
     .nullish(),
   status: zod.enum(["active", "inactive"]).optional(),
+  isActive: zod.boolean().optional(),
 });
 
 export const UpdateAccommodationRoomResponse = zod.object({
@@ -5769,13 +5791,13 @@ export const UpdateAccommodationRoomResponse = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
-  description: zod.string().nullable(),
-  standardOccupancy: zod.number().int().nullable(),
-  bedConfiguration: zod.string().nullable(),
-  bathroomType: zod.string().nullable(),
-  floor: zod.string().nullable(),
-  currency: zod.string(),
-  isActive: zod.boolean(),
+  description: zod.string().nullish(),
+  standardOccupancy: zod.number().int().nullish(),
+  bedConfiguration: zod.string().nullish(),
+  bathroomType: zod.string().nullish(),
+  floor: zod.string().nullish(),
+  currency: zod.string().optional(),
+  isActive: zod.boolean().optional(),
   pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),
@@ -8365,6 +8387,15 @@ export const ListAutomationLogsResponse = zod.array(
 /**
  * @summary List audit logs
  */
+export const ListAuditLogsQueryParams = zod.object({
+  accommodationId: zod.coerce
+    .string()
+    .optional()
+    .describe("Filter room audit events by accommodation"),
+  from: zod.date().optional().describe("Inclusive start date in YYYY-MM-DD"),
+  to: zod.date().optional().describe("Inclusive end date in YYYY-MM-DD"),
+});
+
 export const ListAuditLogsResponseItem = zod.object({
   id: zod.string(),
   tenantId: zod.string(),

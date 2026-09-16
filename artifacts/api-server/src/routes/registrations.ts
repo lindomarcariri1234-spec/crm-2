@@ -1,6 +1,6 @@
-import { Router, type NextFunction } from "express";
+import { Router, type NextFunction, type Request } from "express";
 import { db } from "@workspace/db";
-import { suppliersTable, vehiclesTable, accommodationsTable, accommodationRoomsTable, destinationsTable, tripsTable, reservationRoomAssignmentsTable, reservationsTable, passengersTable, tripAccommodationsTable } from "@workspace/db";
+import { suppliersTable, vehiclesTable, accommodationsTable, accommodationRoomsTable, destinationsTable, tripsTable, reservationRoomAssignmentsTable, reservationsTable, passengersTable, tripAccommodationsTable, auditLogsTable } from "@workspace/db";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
@@ -213,6 +213,46 @@ function formatAccommodationRoom(room: typeof accommodationRoomsTable.$inferSele
     createdAt: room.createdAt.toISOString(),
     updatedAt: room.updatedAt.toISOString(),
   };
+}
+
+function roomAuditSnapshot(room: typeof accommodationRoomsTable.$inferSelect) {
+  return {
+    accommodationId: room.accommodationId,
+    name: room.name,
+    category: room.category,
+    capacity: room.capacity,
+    pricePerNight: room.pricePerNight == null ? null : Number(room.pricePerNight),
+    status: room.status,
+    isActive: room.isActive,
+    description: room.description,
+    standardOccupancy: room.standardOccupancy,
+    bedConfiguration: room.bedConfiguration,
+    bathroomType: room.bathroomType,
+    floor: room.floor,
+    currency: room.currency,
+  };
+}
+
+async function recordRoomAudit(
+  req: Request,
+  me: { id: string; tenantId: string },
+  action: string,
+  roomId: string,
+  before: ReturnType<typeof roomAuditSnapshot> | null,
+  after: ReturnType<typeof roomAuditSnapshot> | null,
+) {
+  await db.insert(auditLogsTable).values({
+    id: generateId(),
+    tenantId: me.tenantId,
+    userId: me.id,
+    action,
+    entityType: "accommodation_room",
+    entityId: roomId,
+    before,
+    after,
+    ipAddress: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+  });
 }
 
 function formatDestination(d: typeof destinationsTable.$inferSelect) {
@@ -543,8 +583,11 @@ router.post("/accommodations/:id/rooms", async (req, res, next: NextFunction): P
       currency: parsed.data.currency ?? "BRL",
       createdBy: me.id,
     });
-    const [room] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, id)).limit(1);
+    const [room] = await db.select().from(accommodationRoomsTable)
+      .where(and(eq(accommodationRoomsTable.id, id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+      .limit(1);
     if (!room) { next(new AppError("Failed to create room", 500, "ROOM_CREATE_FAILED")); return; }
+    await recordRoomAudit(req, me, "room_created", room.id, null, roomAuditSnapshot(room));
     res.status(201).json(formatAccommodationRoom(room));
   } catch (err) {
     next(err);
@@ -581,8 +624,17 @@ router.patch("/accommodation-rooms/:id", async (req, res, next: NextFunction): P
       updatedBy: me.id,
     };
     await db.update(accommodationRoomsTable).set(roomUpdates).where(eq(accommodationRoomsTable.id, room.id));
-    const [updated] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id)).limit(1);
-    res.json(formatAccommodationRoom(updated ?? room));
+    const [updated] = await db.select().from(accommodationRoomsTable)
+      .where(and(eq(accommodationRoomsTable.id, room.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+      .limit(1);
+    const savedRoom = updated ?? room;
+    const action = parsed.data.status === "active" || parsed.data.isActive === true
+      ? "room_activated"
+      : parsed.data.status === "inactive" || parsed.data.isActive === false
+        ? "room_deactivated"
+        : "room_updated";
+    await recordRoomAudit(req, me, action, room.id, roomAuditSnapshot(room), roomAuditSnapshot(savedRoom));
+    res.json(formatAccommodationRoom(savedRoom));
   } catch (err) {
     next(err);
   }
@@ -609,6 +661,7 @@ router.delete("/accommodation-rooms/:id", async (req, res, next: NextFunction): 
       next(new ValidationError("Não é possível excluir um quarto ocupado", "ROOM_OCCUPIED")); return;
     }
     await db.delete(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id));
+    await recordRoomAudit(req, me, "room_deleted", room.id, roomAuditSnapshot(room), null);
     res.json({ success: true });
   } catch (err) {
     next(err);

@@ -5139,6 +5139,24 @@ paths:
       operationId: listAuditLogs
       summary: List audit logs
       tags: [Audit]
+      parameters:
+        - name: accommodationId
+          in: query
+          description: Filter room audit events by accommodation
+          schema:
+            type: string
+        - name: from
+          in: query
+          description: Inclusive start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          description: Inclusive end date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
       responses:
         "200":
           description: List of audit logs
@@ -9412,6 +9430,13 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer }
+        description: { type: ["string", "null"] }
+        standardOccupancy: { type: ["integer", "null"] }
+        bedConfiguration: { type: ["string", "null"] }
+        bathroomType: { type: ["string", "null"] }
+        floor: { type: ["string", "null"] }
+        currency: { type: string }
+        isActive: { type: boolean }
         pricePerNight: { type: number, nullable: true }
         status: { type: string, enum: [active, inactive] }
         occupied: { type: integer }
@@ -9426,6 +9451,12 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer, minimum: 1 }
+        description: { type: string, nullable: true }
+        standardOccupancy: { type: integer, minimum: 1, nullable: true }
+        bedConfiguration: { type: string, nullable: true }
+        bathroomType: { type: string, nullable: true }
+        floor: { type: string, nullable: true }
+        currency: { type: string }
         pricePerNight: { type: number, minimum: 0, nullable: true }
       required: [name, capacity]
 
@@ -9435,8 +9466,15 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer, minimum: 1 }
+        description: { type: string, nullable: true }
+        standardOccupancy: { type: integer, minimum: 1, nullable: true }
+        bedConfiguration: { type: string, nullable: true }
+        bathroomType: { type: string, nullable: true }
+        floor: { type: string, nullable: true }
+        currency: { type: string }
         pricePerNight: { type: number, minimum: 0, nullable: true }
         status: { type: string, enum: [active, inactive] }
+        isActive: { type: boolean }
 
     UpdateTripAccommodationBody:
       type: object

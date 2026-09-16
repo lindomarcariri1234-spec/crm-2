@@ -216,6 +216,7 @@ export * from "./linkedReservationSummary";
 export * from "./listAdminAuditLogsParams";
 export * from "./listAdminInvoicesParams";
 export * from "./listAdminUsersParams";
+export * from "./listAuditLogsParams";
 export * from "./listCalendarReconciliationsParams";
 export * from "./listCalendarReconciliationsStatus";
 export * from "./listClientsParams";
