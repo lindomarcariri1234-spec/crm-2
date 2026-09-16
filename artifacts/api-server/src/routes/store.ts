@@ -1,4 +1,127 @@
-orm without retyping a
+import { Router, type NextFunction } from "express";
+import { db } from "@workspace/db";
+import {
+  storesTable,
+  storeCategoriesTable,
+  storeProductsTable,
+  storeOrdersTable,
+  storeOrderItemsTable,
+  storeCouponsTable,
+  storeReviewsTable,
+  tenantsTable,
+  paymentsTable,
+  pipelineStagesTable,
+  dealsTable,
+  reservationsTable,
+  referralsTable,
+  partnerProductsTable,
+  priceAlertSubscriptionsTable,
+} from "@workspace/db";
+import { eq, and, desc, asc, count, ilike, or, sql, ne, inArray } from "drizzle-orm";
+import { z } from "zod/v4";
+import { randomBytes, createHash } from "crypto";
+import { generateId } from "../lib/id";
+import { requireAuth } from "../lib/tenant";
+import { createReservationsForOrder, confirmReservationsForOrder } from "../services/checkout/create-reservations";
+import { broadcastSeatUpdate } from "../lib/realtime";
+import { runDeferredOrderAccounting, runPostPaymentSideEffects } from "../services/checkout/post-booking";
+import { restoreSpentCreditForOrder } from "../services/checkout/deferred-referral-effects";
+import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
+import { applyOrderInventoryEffects, reverseOrderInventoryEffects } from "../services/checkout/persist-order";
+import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { deleteOrphanedFile, deleteOrphanedImages } from "../lib/uploadthing";
+import { ADMIN_ROLES } from '../lib/tenant';
+import { PAYMENT_STATUS, PAYMENT_TYPE, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
+import { reverseProductOnlyOrderReferral, reverseTripOrderReferrals } from "../services/checkout/order-referral-reversal";
+import { encryptCredential } from "../lib/crypto";
+import { sendPriceDropAlertEmail } from "../queues/email-helpers";
+import { recordOrderPaymentSettlement, reverseOrderSettlement } from "../services/settlements/financial-ledger";
+import {
+  calculateReceivedAmount,
+  allocateOrderReceiptToReservation,
+  linkedReferral,
+  linkedReservation,
+  linkedOrder,
+  orderFinancialSummary,
+  reservationFinancialSummary,
+} from "../lib/linked-data";
+import { syncPaidProductOrderDeal } from "../services/pipeline-deal-sync";
+import { roundMoney } from "../lib/pricing";
+
+// Storefront public base for links inside price-drop alert e-mails. Product
+// links point at the Vitrine; the unsubscribe link points at the public API,
+// which is served from the same origin in production.
+const STORE_PUBLIC_BASE = (process.env["STORE_PUBLIC_URL"] ?? `https://${process.env["REPLIT_DEV_DOMAIN"] ?? "visitecrm.com"}`).replace(/\/$/, "");
+
+/** Admin APIs must not leak checkout authorization or deferred-referral state. */
+export function safeAdminOrder<T extends { pendingReferral?: unknown; paymentToken?: unknown }>(order: T) {
+  const { pendingReferral: _pendingReferral, paymentToken: _paymentToken, ...safe } = order;
+  return safe;
+}
+
+function productEffectivePrice(p: { price: unknown; onSale: unknown; salePrice: unknown }): number {
+  const base = Number(p.price ?? 0);
+  if (p.onSale && p.salePrice != null) {
+    const sale = Number(p.salePrice);
+    if (isFinite(sale) && sale > 0) return sale;
+  }
+  return isFinite(base) ? base : 0;
+}
+
+// Best-effort, fail-safe notifier for confirmed price-drop subscribers. Never
+// throws — any DB/email failure is logged and swallowed so a product update is
+// never blocked. Each e-mail rotates the recipient's unsubscribe token (kept
+// hashed at rest) and advances priceAtSubscribe so they are only re-alerted on
+// a further drop.
+async function notifyPriceDropSubscribers(args: {
+  store: { id: string; tenantId: string; name: string; slug: string };
+  product: { id: string; name: string; slug: string };
+  oldPrice: number;
+  newPrice: number;
+  log: { info: (obj: unknown, msg?: string) => void; warn: (obj: unknown, msg?: string) => void };
+}): Promise<void> {
+  const { store, product, oldPrice, newPrice, log } = args;
+  try {
+    const subs = await db.select({
+      id: priceAlertSubscriptionsTable.id,
+      email: priceAlertSubscriptionsTable.email,
+    })
+      .from(priceAlertSubscriptionsTable)
+      .where(and(
+        eq(priceAlertSubscriptionsTable.productId, product.id),
+        eq(priceAlertSubscriptionsTable.status, "active"),
+        sql`CAST(${priceAlertSubscriptionsTable.priceAtSubscribe} AS NUMERIC) > ${newPrice}`,
+      ));
+    if (subs.length === 0) return;
+    const productUrl = `${STORE_PUBLIC_BASE}/loja/${encodeURIComponent(store.slug)}/produtos/${encodeURIComponent(product.slug)}`;
+    for (const sub of subs) {
+      const unsubToken = randomBytes(32).toString("hex");
+      const unsubHash = createHash("sha256").update(unsubToken).digest("hex");
+      await db.update(priceAlertSubscriptionsTable)
+        .set({ unsubscribeTokenHash: unsubHash, lastNotifiedAt: new Date(), priceAtSubscribe: newPrice.toFixed(2) })
+        .where(eq(priceAlertSubscriptionsTable.id, sub.id));
+      const unsubscribeUrl = `${STORE_PUBLIC_BASE}/api/public/store/${encodeURIComponent(store.slug)}/price-alerts/unsubscribe?token=${unsubToken}`;
+      await sendPriceDropAlertEmail({
+        tenantId: store.tenantId,
+        to: sub.email,
+        storeName: store.name,
+        productName: product.name,
+        oldPrice,
+        newPrice,
+        productUrl,
+        unsubscribeUrl,
+      });
+    }
+    log.info({ productId: product.id, count: subs.length }, "[price-alert] Price-drop notifications dispatched");
+  } catch (err) {
+    log.warn({ productId: product.id, err }, "[price-alert] Failed to dispatch price-drop notifications");
+  }
+}
+
+// Fields that hold gateway secrets. They are encrypted at rest, never
+// returned by GET endpoints, and only updated when the request body
+// supplies a non-empty value (so saving the form without retyping a
 // credential leaves the stored value intact).
 const SENSITIVE_CREDENTIAL_FIELDS = ["stripeSecretKey", "stripeWebhookSecret", "mpAccessToken", "pixKey"] as const;
 type SensitiveField = typeof SENSITIVE_CREDENTIAL_FIELDS[number];
