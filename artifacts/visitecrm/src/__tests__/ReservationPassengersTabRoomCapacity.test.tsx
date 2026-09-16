@@ -4,6 +4,7 @@ import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js
 
 const mockToast = vi.hoisted(() => vi.fn());
 const mockUpdateAssignments = vi.hoisted(() => vi.fn());
+const mockGetRoomAssignments = vi.hoisted(() => vi.fn());
 const mockRoomData = vi.hoisted(() => ({
   accommodation: { name: "Pousada do Cariri" },
   rooms: [
@@ -24,7 +25,7 @@ vi.mock("@workspace/api-client-react", () => ({
   useDeletePassenger: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCheckInPassenger: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUndoCheckInPassenger: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useGetReservationRoomAssignments: () => ({ data: mockRoomData, isLoading: false }),
+  useGetReservationRoomAssignments: mockGetRoomAssignments,
   useUpdateReservationRoomAssignments: () => ({ mutateAsync: mockUpdateAssignments, isPending: false }),
 }));
 
@@ -54,6 +55,8 @@ import { ReservationPassengersTab } from "../pages/reservations/ReservationPasse
 beforeEach(() => {
   mockToast.mockReset();
   mockUpdateAssignments.mockReset();
+  mockGetRoomAssignments.mockReset();
+  mockGetRoomAssignments.mockReturnValue({ data: mockRoomData, isLoading: false, isFetching: false });
   mockUpdateAssignments.mockRejectedValue({
     data: {
       code: "ROOM_CAPACITY_EXCEEDED",
@@ -96,5 +99,42 @@ describe("ReservationPassengersTab room capacity feedback", () => {
 
     expect((select as HTMLSelectElement).value).toBe("room-other");
     expect(handle.container.querySelector('[data-testid="room-capacity-error"]')).toBeNull();
+  });
+
+  it("refreshes availability without replacing a pending room choice", async () => {
+    const handle = await renderComponent(createElement(ReservationPassengersTab, { reservationId: "reservation-1" }));
+    const select = handle.container.querySelector("select") as HTMLSelectElement;
+
+    expect(handle.container.querySelector('[data-testid="room-availability-auto-refresh"]')?.textContent)
+      .toContain("a cada 15 segundos");
+    expect(mockGetRoomAssignments).toHaveBeenCalledWith(
+      "reservation-1",
+      expect.objectContaining({
+        query: expect.objectContaining({
+          refetchInterval: 15_000,
+          refetchOnWindowFocus: true,
+        }),
+      }),
+    );
+
+    await flushAct(() => {
+      select.value = "room-other";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    mockGetRoomAssignments.mockReturnValue({
+      data: {
+        ...mockRoomData,
+        assignments: [{ passengerId: "passenger-1", roomId: "room-full" }],
+        rooms: mockRoomData.rooms.map(room => room.id === "room-other" ? { ...room, occupied: 1, available: 2 } : room),
+      },
+      isLoading: false,
+      isFetching: true,
+    });
+    await handle.rerender(createElement(ReservationPassengersTab, { reservationId: "reservation-1" }));
+
+    expect(select.value).toBe("room-other");
+    expect(handle.container.querySelector('[data-testid="room-availability-auto-refresh"]')?.textContent)
+      .toContain("(atualizando...)");
   });
 });

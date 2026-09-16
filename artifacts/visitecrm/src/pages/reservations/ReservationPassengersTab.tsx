@@ -23,6 +23,7 @@ import { formatDate } from "@/lib/utils";
 import { RoomAllocationSummaryTable } from "./RoomAllocationSummaryTable";
 
 const PLACEHOLDER_NAME = "A preencher";
+const ROOM_AVAILABILITY_REFRESH_INTERVAL_MS = 15_000;
 
 type RoomCapacityError = {
   roomId: string;
@@ -72,17 +73,22 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
   const deletePassenger = useDeletePassenger();
   const checkInPassenger = useCheckInPassenger();
   const undoCheckInPassenger = useUndoCheckInPassenger();
-  const { data: roomData, isLoading: roomsLoading } = useGetReservationRoomAssignments(reservationId, {
-    query: { queryKey: ["reservation-room-assignments", reservationId] },
+  const { data: roomData, isLoading: roomsLoading, isFetching: roomsFetching } = useGetReservationRoomAssignments(reservationId, {
+    query: {
+      queryKey: ["reservation-room-assignments", reservationId],
+      refetchInterval: ROOM_AVAILABILITY_REFRESH_INTERVAL_MS,
+      refetchOnWindowFocus: true,
+    },
   });
   const updateRoomAssignments = useUpdateReservationRoomAssignments();
   const [roomSelections, setRoomSelections] = useState<Record<string, string>>({});
   const [roomCapacityError, setRoomCapacityError] = useState<RoomCapacityError | null>(null);
+  const [hasPendingRoomChanges, setHasPendingRoomChanges] = useState(false);
 
   useEffect(() => {
-    if (!roomData) return;
+    if (!roomData || hasPendingRoomChanges) return;
     setRoomSelections(Object.fromEntries(roomData.assignments.map(assignment => [assignment.passengerId, assignment.roomId])));
-  }, [roomData]);
+  }, [hasPendingRoomChanges, roomData]);
 
   const handleAdd = async (fd: FormData, ageCategory: string) => {
     await createPassenger.mutateAsync({
@@ -184,14 +190,19 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
               <BedDouble className="w-4 h-4 mt-0.5 text-indigo-600" />
               <div>
                 <p className="text-sm font-semibold">Hospedagem: {roomData.accommodation.name}</p>
-                <p className="text-xs text-muted-foreground">Escolha um quarto por passageiro. A capacidade é validada no servidor.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Escolha um quarto por passageiro. A capacidade é validada no servidor.
+                    <span data-testid="room-availability-auto-refresh">
+                      {" "}Disponibilidade atualizada automaticamente a cada 15 segundos{roomsFetching ? " (atualizando...)" : ""}; suas escolhas pendentes não são substituídas.
+                    </span>
+                  </p>
               </div>
             </div>
             <Button
               size="sm"
               onClick={async () => {
                 try {
-                  await updateRoomAssignments.mutateAsync({
+                  const updatedRoomData = await updateRoomAssignments.mutateAsync({
                     reservationId,
                     data: {
                       assignments: list.map(passenger => ({
@@ -200,7 +211,9 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
                       })),
                     },
                   });
-                   setRoomCapacityError(null);
+                  setRoomSelections(Object.fromEntries(updatedRoomData.assignments.map(assignment => [assignment.passengerId, assignment.roomId])));
+                  setHasPendingRoomChanges(false);
+                  setRoomCapacityError(null);
                   toast({ title: "Quartos atualizados" });
                 } catch (err: unknown) {
                    const capacityError = getRoomCapacityError(err);
@@ -248,6 +261,7 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
                     value={selectedRoom}
                     onValueChange={value => {
                       setRoomCapacityError(null);
+                      setHasPendingRoomChanges(true);
                       setRoomSelections(current => ({ ...current, [passenger.id]: value === "none" ? "" : value }));
                     }}
                   >
