@@ -100,5 +100,7 @@ export interface UpdateTripBody {
   layoutId?: string | null;
   /** @nullable */
   showSeatMap?: boolean | null;
+  /** @nullable */
+  accommodationId?: string | null;
   freePassengers?: FreePassenger[];
 }

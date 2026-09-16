@@ -4,9 +4,15 @@ import {
   useCreateAccommodation,
   useUpdateAccommodation,
   useDeleteAccommodation,
+  useListAccommodationRooms,
+  useCreateAccommodationRoom,
+  useUpdateAccommodationRoom,
+  useDeleteAccommodationRoom,
 } from "@workspace/api-client-react";
 import type {
   Accommodation,
+  AccommodationRoom,
+  CreateAccommodationRoomBody,
   CreateAccommodationBody,
   UpdateAccommodationBody,
 } from "@workspace/api-client-react";
@@ -38,8 +44,9 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { ListLoadErrorRow } from "@/components/list-load-error";
-import { Plus, Pencil, Trash2, Search, Hotel, Star, Images, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Hotel, Star, Images, ChevronLeft, ChevronRight, X, BedDouble } from "lucide-react";
 import { GalleryUpload } from "@/components/gallery-upload";
+import { AccommodationHelp } from "@/components/accommodation-help";
 import { formatCurrencyBRL as formatCurrency } from "@/lib/utils";
 
 const ACCOMMODATION_TYPES = ["Hotel", "Pousada", "Resort", "Hostel", "Chácara", "Chalé", "Outro"];
@@ -63,6 +70,15 @@ export default function Hospedagens() {
   const createAcc = useCreateAccommodation();
   const updateAcc = useUpdateAccommodation();
   const deleteAcc = useDeleteAccommodation();
+  const [roomsFor, setRoomsFor] = useState<Accommodation | null>(null);
+  const [roomForm, setRoomForm] = useState<CreateAccommodationRoomBody>({ name: "", category: "standard", capacity: 2 });
+  const [editingRoom, setEditingRoom] = useState<AccommodationRoom | null>(null);
+  const { data: rooms = [], refetch: refetchRooms } = useListAccommodationRooms(roomsFor?.id ?? "", {
+    query: { enabled: !!roomsFor?.id, queryKey: ["accommodation-rooms", roomsFor?.id] },
+  });
+  const createRoom = useCreateAccommodationRoom();
+  const updateRoom = useUpdateAccommodationRoom();
+  const deleteRoom = useDeleteAccommodationRoom();
 
   const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
@@ -168,6 +184,43 @@ export default function Hospedagens() {
     }
   }
 
+  function openRooms(a: Accommodation) {
+    setRoomsFor(a);
+    setEditingRoom(null);
+    setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
+  }
+
+  async function handleRoomSave() {
+    if (!roomsFor || !roomForm.name.trim()) return;
+    try {
+      if (editingRoom) {
+        await updateRoom.mutateAsync({ id: editingRoom.id, data: roomForm });
+      } else {
+        await createRoom.mutateAsync({ id: roomsFor.id, data: roomForm });
+      }
+      setEditingRoom(null);
+      setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
+      await refetchRooms();
+      toast({ title: editingRoom ? "Quarto atualizado" : "Quarto criado" });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
+        || (err as { message?: string })?.message || "Não foi possível salvar o quarto";
+      toast({ title: msg, variant: "destructive" });
+    }
+  }
+
+  async function handleRoomDelete(room: AccommodationRoom) {
+    try {
+      await deleteRoom.mutateAsync({ id: room.id });
+      await refetchRooms();
+      toast({ title: "Quarto excluído" });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
+        || (err as { message?: string })?.message || "Não foi possível excluir o quarto";
+      toast({ title: msg, variant: "destructive" });
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -177,15 +230,18 @@ export default function Hospedagens() {
             {accommodations.length} hospedagem(ns) cadastrada(s)
           </p>
         </div>
-        <Button onClick={openCreate}>
+        <Button data-testid="button-new-hospedagem" onClick={openCreate}>
           <Plus className="w-4 h-4 mr-2" />
           Nova Hospedagem
         </Button>
       </div>
 
+      <AccommodationHelp />
+
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
+          data-testid="input-search-hospedagens"
           className="pl-9"
           placeholder="Buscar por nome, cidade, tipo..."
           value={search}
@@ -254,6 +310,7 @@ export default function Hospedagens() {
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={`Ver fotos de ${a.name}`}
                           title={`Ver fotos (${(a.gallery?.length ?? 0) + (a.coverImage ? 1 : 0)})`}
                           onClick={() => {
                             const urls = [
@@ -266,13 +323,17 @@ export default function Hospedagens() {
                           <Images className="w-4 h-4" />
                         </Button>
                       )}
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(a)}>
+                      <Button variant="ghost" size="icon" aria-label={`Gerenciar quartos de ${a.name}`} title="Gerenciar quartos" onClick={() => openRooms(a)}>
+                        <BedDouble className="w-4 h-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" aria-label={`Editar ${a.name}`} onClick={() => openEdit(a)}>
                         <Pencil className="w-4 h-4" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
                         className="text-destructive hover:text-destructive"
+                        aria-label={`Excluir ${a.name}`}
                         onClick={() => setDeleteId(a.id)}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -457,6 +518,66 @@ export default function Hospedagens() {
               {editing ? "Salvar" : "Criar"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!roomsFor} onOpenChange={(open) => { if (!open) setRoomsFor(null); }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Quartos — {roomsFor?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-[1fr_1fr_90px_110px_auto] items-end gap-2 rounded-lg border bg-muted/30 p-3">
+              <div className="space-y-1">
+                <Label>Nome do quarto</Label>
+                <Input value={roomForm.name} placeholder="Ex.: 101 ou Suíte 1" onChange={e => setRoomForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Categoria</Label>
+                <Input value={roomForm.category ?? ""} placeholder="Standard" onChange={e => setRoomForm(f => ({ ...f, category: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Vagas</Label>
+                <Input type="number" min={1} max={50} value={roomForm.capacity} onChange={e => setRoomForm(f => ({ ...f, capacity: Number(e.target.value) || 1 }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Diária</Label>
+                <Input type="number" min={0} step={0.01} placeholder="R$" value={roomForm.pricePerNight ?? ""} onChange={e => setRoomForm(f => ({ ...f, pricePerNight: e.target.value === "" ? null : Number(e.target.value) }))} />
+              </div>
+              <Button onClick={handleRoomSave} disabled={createRoom.isPending || updateRoom.isPending || !roomForm.name.trim()}>
+                {editingRoom ? "Salvar" : "Adicionar"}
+              </Button>
+            </div>
+            {rooms.length === 0 ? (
+              <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+                Nenhum quarto cadastrado. Cadastre cada quarto individualmente para controlar a ocupação por viagem.
+              </div>
+            ) : (
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader><TableRow><TableHead>Quarto</TableHead><TableHead>Categoria</TableHead><TableHead>Vagas</TableHead><TableHead>Diária</TableHead><TableHead>Ocupação</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader>
+                  <TableBody>
+                    {rooms.map(room => (
+                      <TableRow key={room.id}>
+                        <TableCell className="font-medium">{room.name}</TableCell>
+                        <TableCell>{room.category}</TableCell>
+                        <TableCell>{room.capacity}</TableCell>
+                        <TableCell>{room.pricePerNight == null ? "—" : formatCurrency(room.pricePerNight)}</TableCell>
+                        <TableCell>{room.occupied} / {room.capacity}</TableCell>
+                        <TableCell><Badge variant={room.status === "active" ? "default" : "secondary"}>{room.status === "active" ? "Ativo" : "Inativo"}</Badge></TableCell>
+                        <TableCell>
+                          <div className="flex gap-1 justify-end">
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight }); }}><Pencil className="w-4 h-4" /></Button>
+                            <Button size="icon" variant="ghost" className="text-destructive" onClick={() => handleRoomDelete(room)} disabled={deleteRoom.isPending}><Trash2 className="w-4 h-4" /></Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 

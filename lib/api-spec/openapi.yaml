@@ -1330,6 +1330,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
 
+  /trips/{id}/room-allocation-summary:
+    get:
+      operationId: getTripRoomAllocationSummary
+      tags: [trips]
+      summary: Get the accommodation room allocation summary for a trip
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Accommodation room allocation summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripRoomAllocationSummaryResponse"
+
   /trips/{id}/seat-map:
     get:
       operationId: getTripSeatMap
@@ -1756,6 +1775,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Reservation"
+
+  /reservations/{reservationId}/room-assignments:
+    get:
+      operationId: getReservationRoomAssignments
+      tags: [reservations]
+      summary: Get room availability and assignments for a reservation
+      parameters:
+        - name: reservationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Room assignments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomAssignmentsResponse"
+    put:
+      operationId: updateReservationRoomAssignments
+      tags: [reservations]
+      summary: Replace room assignments for a reservation
+      parameters:
+        - name: reservationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateReservationRoomAssignmentsBody"
+      responses:
+        "200":
+          description: Updated assignments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomAssignmentsResponse"
 
   # ─── PASSENGERS ───────────────────────────────────────────────────
   /reservations/{reservationId}/passengers:
@@ -3076,6 +3137,117 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
+
+  /accommodations/{id}/rooms:
+    get:
+      operationId: listAccommodationRooms
+      tags: [accommodations]
+      summary: List rooms for an accommodation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rooms
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccommodationRoom"
+    post:
+      operationId: createAccommodationRoom
+      tags: [accommodations]
+      summary: Create a room
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccommodationRoomBody"
+      responses:
+        "201":
+          description: Created room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccommodationRoom"
+
+  /accommodation-rooms/{id}:
+    patch:
+      operationId: updateAccommodationRoom
+      tags: [accommodations]
+      summary: Update a room
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAccommodationRoomBody"
+      responses:
+        "200":
+          description: Updated room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccommodationRoom"
+    delete:
+      operationId: deleteAccommodationRoom
+      tags: [accommodations]
+      summary: Delete a room
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /trips/{id}/accommodation:
+    patch:
+      operationId: updateTripAccommodation
+      tags: [trips]
+      summary: Link an accommodation to a trip
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTripAccommodationBody"
+      responses:
+        "200":
+          description: Updated trip
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
 
   # ─── DESTINATIONS ─────────────────────────────────────────────────
   /destinations:
@@ -6884,6 +7056,8 @@ components:
           type: ["string", "null"]
         showSeatMap:
           type: ["boolean", "null"]
+        accommodationId:
+          type: ["string", "null"]
         createdAt:
           type: string
         updatedAt:
@@ -7292,6 +7466,8 @@ components:
           type: ["string", "null"]
         showSeatMap:
           type: ["boolean", "null"]
+        accommodationId:
+          type: ["string", "null"]
       required:
         - name
         - destination
@@ -7418,6 +7594,8 @@ components:
           type: ["string", "null"]
         showSeatMap:
           type: ["boolean", "null"]
+        accommodationId:
+          type: ["string", "null"]
         freePassengers:
           type: array
           items:
@@ -7551,6 +7729,8 @@ components:
           type: ["number", "null"]
         discountTotal:
           type: ["number", "null"]
+        accommodationId:
+          type: ["string", "null"]
         createdAt:
           type: string
         updatedAt:
@@ -7783,6 +7963,90 @@ components:
           type: boolean
           description: Criança menor de 7 anos que ocupa poltrona — força ageCategory=child
       required: [tripId, clientId, seats, totalValue]
+
+    RoomAssignment:
+      type: object
+      properties:
+        id: { type: string }
+        passengerId: { type: string }
+        passengerName: { type: string }
+        roomId: { type: string }
+        roomName: { type: string }
+        roomCategory: { type: string }
+      required: [id, passengerId, passengerName, roomId, roomName, roomCategory]
+
+    RoomAllocationSummary:
+      type: object
+      properties:
+        nights: { type: integer }
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              category: { type: string }
+              roomCount: { type: integer }
+              guestsPerRoom: { type: integer }
+              totalGuests: { type: integer }
+              pricePerNight: { type: number, nullable: true }
+              packageValue: { type: number, nullable: true }
+              subtotal: { type: number, nullable: true }
+            required: [category, roomCount, guestsPerRoom, totalGuests, pricePerNight, packageValue, subtotal]
+        totalRooms: { type: integer }
+        totalGuests: { type: integer }
+        totalValue: { type: number, nullable: true }
+      required: [nights, rows, totalRooms, totalGuests, totalValue]
+
+    TripRoomAllocationSummaryResponse:
+      type: object
+      properties:
+        accommodation:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            name: { type: string }
+            type: { type: string }
+          required: [id, name, type]
+        allocationSummary:
+          $ref: "#/components/schemas/RoomAllocationSummary"
+      required: [accommodation, allocationSummary]
+
+    RoomAvailability:
+      allOf:
+        - $ref: "#/components/schemas/AccommodationRoom"
+
+    RoomAssignmentsResponse:
+      type: object
+      properties:
+        accommodation:
+          allOf:
+            - $ref: "#/components/schemas/Accommodation"
+          nullable: true
+        rooms:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccommodationRoom"
+        assignments:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoomAssignment"
+        allocationSummary:
+          $ref: "#/components/schemas/RoomAllocationSummary"
+      required: [rooms, assignments, allocationSummary]
+
+    UpdateReservationRoomAssignmentsBody:
+      type: object
+      properties:
+        assignments:
+          type: array
+          items:
+            type: object
+            properties:
+              passengerId: { type: string }
+              roomId: { type: ["string", "null"] }
+            required: [passengerId, roomId]
+      required: [assignments]
 
     ValidateCouponBody:
       type: object
@@ -9138,6 +9402,48 @@ components:
           type: array
           items:
             type: string
+
+    AccommodationRoom:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        accommodationId: { type: string }
+        name: { type: string }
+        category: { type: string }
+        capacity: { type: integer }
+        pricePerNight: { type: number, nullable: true }
+        status: { type: string, enum: [active, inactive] }
+        occupied: { type: integer }
+        available: { type: integer }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      required: [id, tenantId, accommodationId, name, category, capacity, pricePerNight, status, occupied, available, createdAt, updatedAt]
+
+    CreateAccommodationRoomBody:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        capacity: { type: integer, minimum: 1 }
+        pricePerNight: { type: number, minimum: 0, nullable: true }
+      required: [name, capacity]
+
+    UpdateAccommodationRoomBody:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        capacity: { type: integer, minimum: 1 }
+        pricePerNight: { type: number, minimum: 0, nullable: true }
+        status: { type: string, enum: [active, inactive] }
+
+    UpdateTripAccommodationBody:
+      type: object
+      properties:
+        accommodationId:
+          type: ["string", "null"]
+      required: [accommodationId]
 
     # ─── DESTINATION ───────────────────────────────────────────────
     Destination:

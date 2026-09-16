@@ -1,0 +1,3 @@
+-- The schema changes represented by this snapshot are applied by the
+-- idempotent incremental migrations 0074 through 0078.
+-- This entry only records the consolidated snapshot for live-schema checks.

@@ -73,6 +73,7 @@ vi.mock("@workspace/db", () => ({
   tripCheckinsTable: { _: "tripCheckins" },
   tripGuideLocationsTable: { _: "tripGuideLocations" },
   boardingLocationsTable: { _: "boardingLocations" },
+  reservationRoomAssignmentsTable: { _: "reservationRoomAssignments" },
 }));
 
 vi.mock("drizzle-orm", async () => {
@@ -329,8 +330,9 @@ beforeEach(() => {
       capturedTxUpdates.push({ table, set: null });
       return { set: txUpdateSet };
     });
+    const txDelete = vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) }));
     const txExecute = vi.fn().mockResolvedValue([]);
-    await cb({ update: txUpdate, execute: txExecute });
+    await cb({ update: txUpdate, delete: txDelete, execute: txExecute });
   });
 });
 

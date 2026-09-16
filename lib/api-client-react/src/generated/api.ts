@@ -18,6 +18,7 @@ import type {
 
 import type {
   Accommodation,
+  AccommodationRoom,
   ActivityItem,
   AdminStats,
   AdminUserItem,
@@ -60,6 +61,7 @@ import type {
   Coupon,
   CouponValidationResult,
   CreateAccommodationBody,
+  CreateAccommodationRoomBody,
   CreateAutomationActionBody,
   CreateAutomationBody,
   CreateBoardingLocationBody,
@@ -197,6 +199,7 @@ import type {
   ReversePaidReferralBonusBody,
   ReversePaidReferralBonusResponse,
   ReverseReferralBonusBody,
+  RoomAssignmentsResponse,
   SalesCycleData,
   SalesGoal,
   SeatMap,
@@ -219,8 +222,10 @@ import type {
   Trip,
   TripCost,
   TripListResponse,
+  TripRoomAllocationSummaryResponse,
   TripSummary,
   UpdateAccommodationBody,
+  UpdateAccommodationRoomBody,
   UpdateAutomationBody,
   UpdateCampaignBody,
   UpdateChatbotConversationBody,
@@ -245,9 +250,11 @@ import type {
   UpdateReferralBody,
   UpdateReferralSettingsBody,
   UpdateReservationBody,
+  UpdateReservationRoomAssignmentsBody,
   UpdateSalesGoalBody,
   UpdateSupplierBody,
   UpdateTenantBody,
+  UpdateTripAccommodationBody,
   UpdateTripBody,
   UpdateTripCostBody,
   UpdateUserBody,
@@ -5744,6 +5751,98 @@ export const useDeleteTrip = <
   return useMutation(getDeleteTripMutationOptions(options));
 };
 
+export const getGetTripRoomAllocationSummaryUrl = (id: string) => {
+  return `/api/trips/${id}/room-allocation-summary`;
+};
+
+/**
+ * @summary Get the accommodation room allocation summary for a trip
+ */
+export const getTripRoomAllocationSummary = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<TripRoomAllocationSummaryResponse> => {
+  return customFetch<TripRoomAllocationSummaryResponse>(
+    getGetTripRoomAllocationSummaryUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetTripRoomAllocationSummaryQueryKey = (id: string) => {
+  return [`/api/trips/${id}/room-allocation-summary`] as const;
+};
+
+export const getGetTripRoomAllocationSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetTripRoomAllocationSummaryQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTripRoomAllocationSummary>>
+  > = ({ signal }) =>
+    getTripRoomAllocationSummary(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTripRoomAllocationSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTripRoomAllocationSummary>>
+>;
+export type GetTripRoomAllocationSummaryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the accommodation room allocation summary for a trip
+ */
+
+export function useGetTripRoomAllocationSummary<
+  TData = Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTripRoomAllocationSummaryQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export const getGetTripSeatMapUrl = (id: string) => {
   return `/api/trips/${id}/seat-map`;
 };
@@ -7279,6 +7378,221 @@ export const useCheckInReservation = <
   TContext
 > => {
   return useMutation(getCheckInReservationMutationOptions(options));
+};
+
+export const getGetReservationRoomAssignmentsUrl = (reservationId: string) => {
+  return `/api/reservations/${reservationId}/room-assignments`;
+};
+
+/**
+ * @summary Get room availability and assignments for a reservation
+ */
+export const getReservationRoomAssignments = async (
+  reservationId: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<RoomAssignmentsResponse> => {
+  return customFetch<RoomAssignmentsResponse>(
+    getGetReservationRoomAssignmentsUrl(reservationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetReservationRoomAssignmentsQueryKey = (
+  reservationId: string,
+) => {
+  return [`/api/reservations/${reservationId}/room-assignments`] as const;
+};
+
+export const getGetReservationRoomAssignmentsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getReservationRoomAssignments>>,
+  TError = ErrorType<unknown>,
+>(
+  reservationId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getReservationRoomAssignments>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetReservationRoomAssignmentsQueryKey(reservationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getReservationRoomAssignments>>
+  > = ({ signal }) =>
+    getReservationRoomAssignments(reservationId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: reservationId !== null && reservationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getReservationRoomAssignments>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetReservationRoomAssignmentsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getReservationRoomAssignments>>
+>;
+export type GetReservationRoomAssignmentsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get room availability and assignments for a reservation
+ */
+
+export function useGetReservationRoomAssignments<
+  TData = Awaited<ReturnType<typeof getReservationRoomAssignments>>,
+  TError = ErrorType<unknown>,
+>(
+  reservationId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getReservationRoomAssignments>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetReservationRoomAssignmentsQueryOptions(
+    reservationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getUpdateReservationRoomAssignmentsUrl = (
+  reservationId: string,
+) => {
+  return `/api/reservations/${reservationId}/room-assignments`;
+};
+
+/**
+ * @summary Replace room assignments for a reservation
+ */
+export const updateReservationRoomAssignments = async (
+  reservationId: string,
+  updateReservationRoomAssignmentsBody: UpdateReservationRoomAssignmentsBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<RoomAssignmentsResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<RoomAssignmentsResponse>(
+    getUpdateReservationRoomAssignmentsUrl(reservationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(updateReservationRoomAssignmentsBody),
+    },
+  );
+};
+
+export const getUpdateReservationRoomAssignmentsMutationKey = () =>
+  ["updateReservationRoomAssignments"] as const;
+
+export const getUpdateReservationRoomAssignmentsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateReservationRoomAssignments>>,
+    TError,
+    UpdateReservationRoomAssignmentsMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateReservationRoomAssignments>>,
+  TError,
+  UpdateReservationRoomAssignmentsMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUpdateReservationRoomAssignmentsMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateReservationRoomAssignments>>,
+    UpdateReservationRoomAssignmentsMutationVariables
+  > = (props) => {
+    const { reservationId, data } = props ?? {};
+
+    return updateReservationRoomAssignments(
+      reservationId,
+      data,
+      requestOptions,
+    );
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateReservationRoomAssignmentsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateReservationRoomAssignments>>
+>;
+export type UpdateReservationRoomAssignmentsMutationBody =
+  BodyType<UpdateReservationRoomAssignmentsBody>;
+export type UpdateReservationRoomAssignmentsMutationError = ErrorType<unknown>;
+export type UpdateReservationRoomAssignmentsMutationVariables = {
+  reservationId: string;
+  data: BodyType<UpdateReservationRoomAssignmentsBody>;
+};
+
+/**
+ * @summary Replace room assignments for a reservation
+ */
+export const useUpdateReservationRoomAssignments = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateReservationRoomAssignments>>,
+    TError,
+    UpdateReservationRoomAssignmentsMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateReservationRoomAssignments>>,
+  TError,
+  UpdateReservationRoomAssignmentsMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getUpdateReservationRoomAssignmentsMutationOptions(options),
+  );
 };
 
 export const getListPassengersUrl = (reservationId: string) => {
@@ -12628,6 +12942,500 @@ export const useDeleteAccommodation = <
   TContext
 > => {
   return useMutation(getDeleteAccommodationMutationOptions(options));
+};
+
+export const getListAccommodationRoomsUrl = (id: string) => {
+  return `/api/accommodations/${id}/rooms`;
+};
+
+/**
+ * @summary List rooms for an accommodation
+ */
+export const listAccommodationRooms = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<AccommodationRoom[]> => {
+  return customFetch<AccommodationRoom[]>(getListAccommodationRoomsUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListAccommodationRoomsQueryKey = (id: string) => {
+  return [`/api/accommodations/${id}/rooms`] as const;
+};
+
+export const getListAccommodationRoomsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAccommodationRooms>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAccommodationRooms>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAccommodationRoomsQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAccommodationRooms>>
+  > = ({ signal }) => listAccommodationRooms(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAccommodationRooms>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListAccommodationRoomsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAccommodationRooms>>
+>;
+export type ListAccommodationRoomsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List rooms for an accommodation
+ */
+
+export function useListAccommodationRooms<
+  TData = Awaited<ReturnType<typeof listAccommodationRooms>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listAccommodationRooms>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListAccommodationRoomsQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getCreateAccommodationRoomUrl = (id: string) => {
+  return `/api/accommodations/${id}/rooms`;
+};
+
+/**
+ * @summary Create a room
+ */
+export const createAccommodationRoom = async (
+  id: string,
+  createAccommodationRoomBody: CreateAccommodationRoomBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<AccommodationRoom> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<AccommodationRoom>(getCreateAccommodationRoomUrl(id), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(createAccommodationRoomBody),
+  });
+};
+
+export const getCreateAccommodationRoomMutationKey = () =>
+  ["createAccommodationRoom"] as const;
+
+export const getCreateAccommodationRoomMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createAccommodationRoom>>,
+    TError,
+    CreateAccommodationRoomMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createAccommodationRoom>>,
+  TError,
+  CreateAccommodationRoomMutationVariables,
+  TContext
+> => {
+  const mutationKey = getCreateAccommodationRoomMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createAccommodationRoom>>,
+    CreateAccommodationRoomMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return createAccommodationRoom(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateAccommodationRoomMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createAccommodationRoom>>
+>;
+export type CreateAccommodationRoomMutationBody =
+  BodyType<CreateAccommodationRoomBody>;
+export type CreateAccommodationRoomMutationError = ErrorType<unknown>;
+export type CreateAccommodationRoomMutationVariables = {
+  id: string;
+  data: BodyType<CreateAccommodationRoomBody>;
+};
+
+/**
+ * @summary Create a room
+ */
+export const useCreateAccommodationRoom = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createAccommodationRoom>>,
+    TError,
+    CreateAccommodationRoomMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createAccommodationRoom>>,
+  TError,
+  CreateAccommodationRoomMutationVariables,
+  TContext
+> => {
+  return useMutation(getCreateAccommodationRoomMutationOptions(options));
+};
+
+export const getUpdateAccommodationRoomUrl = (id: string) => {
+  return `/api/accommodation-rooms/${id}`;
+};
+
+/**
+ * @summary Update a room
+ */
+export const updateAccommodationRoom = async (
+  id: string,
+  updateAccommodationRoomBody: UpdateAccommodationRoomBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<AccommodationRoom> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<AccommodationRoom>(getUpdateAccommodationRoomUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(updateAccommodationRoomBody),
+  });
+};
+
+export const getUpdateAccommodationRoomMutationKey = () =>
+  ["updateAccommodationRoom"] as const;
+
+export const getUpdateAccommodationRoomMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateAccommodationRoom>>,
+    TError,
+    UpdateAccommodationRoomMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateAccommodationRoom>>,
+  TError,
+  UpdateAccommodationRoomMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUpdateAccommodationRoomMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateAccommodationRoom>>,
+    UpdateAccommodationRoomMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateAccommodationRoom(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateAccommodationRoomMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateAccommodationRoom>>
+>;
+export type UpdateAccommodationRoomMutationBody =
+  BodyType<UpdateAccommodationRoomBody>;
+export type UpdateAccommodationRoomMutationError = ErrorType<unknown>;
+export type UpdateAccommodationRoomMutationVariables = {
+  id: string;
+  data: BodyType<UpdateAccommodationRoomBody>;
+};
+
+/**
+ * @summary Update a room
+ */
+export const useUpdateAccommodationRoom = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateAccommodationRoom>>,
+    TError,
+    UpdateAccommodationRoomMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateAccommodationRoom>>,
+  TError,
+  UpdateAccommodationRoomMutationVariables,
+  TContext
+> => {
+  return useMutation(getUpdateAccommodationRoomMutationOptions(options));
+};
+
+export const getDeleteAccommodationRoomUrl = (id: string) => {
+  return `/api/accommodation-rooms/${id}`;
+};
+
+/**
+ * @summary Delete a room
+ */
+export const deleteAccommodationRoom = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(getDeleteAccommodationRoomUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteAccommodationRoomMutationKey = () =>
+  ["deleteAccommodationRoom"] as const;
+
+export const getDeleteAccommodationRoomMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteAccommodationRoom>>,
+    TError,
+    DeleteAccommodationRoomMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteAccommodationRoom>>,
+  TError,
+  DeleteAccommodationRoomMutationVariables,
+  TContext
+> => {
+  const mutationKey = getDeleteAccommodationRoomMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteAccommodationRoom>>,
+    DeleteAccommodationRoomMutationVariables
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteAccommodationRoom(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteAccommodationRoomMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteAccommodationRoom>>
+>;
+
+export type DeleteAccommodationRoomMutationError = ErrorType<unknown>;
+export type DeleteAccommodationRoomMutationVariables = { id: string };
+
+/**
+ * @summary Delete a room
+ */
+export const useDeleteAccommodationRoom = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteAccommodationRoom>>,
+    TError,
+    DeleteAccommodationRoomMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteAccommodationRoom>>,
+  TError,
+  DeleteAccommodationRoomMutationVariables,
+  TContext
+> => {
+  return useMutation(getDeleteAccommodationRoomMutationOptions(options));
+};
+
+export const getUpdateTripAccommodationUrl = (id: string) => {
+  return `/api/trips/${id}/accommodation`;
+};
+
+/**
+ * @summary Link an accommodation to a trip
+ */
+export const updateTripAccommodation = async (
+  id: string,
+  updateTripAccommodationBody: UpdateTripAccommodationBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<Trip> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<Trip>(getUpdateTripAccommodationUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(updateTripAccommodationBody),
+  });
+};
+
+export const getUpdateTripAccommodationMutationKey = () =>
+  ["updateTripAccommodation"] as const;
+
+export const getUpdateTripAccommodationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTripAccommodation>>,
+    TError,
+    UpdateTripAccommodationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateTripAccommodation>>,
+  TError,
+  UpdateTripAccommodationMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUpdateTripAccommodationMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateTripAccommodation>>,
+    UpdateTripAccommodationMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateTripAccommodation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateTripAccommodationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateTripAccommodation>>
+>;
+export type UpdateTripAccommodationMutationBody =
+  BodyType<UpdateTripAccommodationBody>;
+export type UpdateTripAccommodationMutationError = ErrorType<unknown>;
+export type UpdateTripAccommodationMutationVariables = {
+  id: string;
+  data: BodyType<UpdateTripAccommodationBody>;
+};
+
+/**
+ * @summary Link an accommodation to a trip
+ */
+export const useUpdateTripAccommodation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateTripAccommodation>>,
+    TError,
+    UpdateTripAccommodationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateTripAccommodation>>,
+  TError,
+  UpdateTripAccommodationMutationVariables,
+  TContext
+> => {
+  return useMutation(getUpdateTripAccommodationMutationOptions(options));
 };
 
 export const getListDestinationsUrl = () => {

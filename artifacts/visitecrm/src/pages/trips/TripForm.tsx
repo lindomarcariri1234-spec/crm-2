@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { useGetTrip, useCreateTrip, useUpdateTrip, useListLayouts, useListBoardingLocations, useGetCurrentSubscription, useGetMe } from "@workspace/api-client-react";
+import { useGetTrip, useCreateTrip, useUpdateTrip, useListLayouts, useListBoardingLocations, useListAccommodations, useGetCurrentSubscription, useGetMe } from "@workspace/api-client-react";
 import { PlanLimitWall, usePlanLimitError } from "@/components/plan-limit-wall";
 import { CoverImageUpload } from "@/components/cover-image-upload";
 import { GalleryUpload } from "@/components/gallery-upload";
@@ -109,6 +109,7 @@ export function TripForm({ tripId }: { tripId?: string }) {
 
   const selectedLayout = layouts.find(l => l.id === form.layoutId) ?? null;
   const { data: boardingLocationsCatalog = [] } = useListBoardingLocations({ query: { queryKey: ["boarding-locations"] } });
+  const { data: accommodations = [] } = useListAccommodations({ query: { queryKey: ["accommodations"] } });
 
   const layoutSeatLabels = useMemo(() => {
     if (!selectedLayout) return undefined;
@@ -228,6 +229,7 @@ export function TripForm({ tripId }: { tripId?: string }) {
             coverImage: form.coverImage || undefined,
             seatLayout: form.layoutId ? undefined : form.seatLayout,
             layoutId: form.layoutId || null,
+            accommodationId: form.accommodationId || null,
             vehicleType: form.vehicleType || undefined, vehiclePlate: form.vehiclePlate || undefined, driverName: form.driverName || undefined, tourGuide: form.tourGuide || undefined, tripOrganizer: form.tripOrganizer || undefined,
             driver1Cpf: form.driver1Cpf || null, driver1Cnh: form.driver1Cnh || null, driver1CnhCategory: form.driver1CnhCategory || null, driver1CnhExpiry: form.driver1CnhExpiry || null,
             driver2Name: form.driver2Name || null, driver2Cpf: form.driver2Cpf || null, driver2Cnh: form.driver2Cnh || null, driver2CnhCategory: form.driver2CnhCategory || null, driver2CnhExpiry: form.driver2CnhExpiry || null,
@@ -260,6 +262,7 @@ export function TripForm({ tripId }: { tripId?: string }) {
             coverImage: form.coverImage || undefined,
             seatLayout: form.layoutId ? undefined : form.seatLayout,
             layoutId: form.layoutId || null,
+            accommodationId: form.accommodationId || null,
             vehicleType: form.vehicleType || undefined, vehiclePlate: form.vehiclePlate || undefined, driverName: form.driverName || undefined, tourGuide: form.tourGuide || undefined, tripOrganizer: form.tripOrganizer || undefined,
             driver1Cpf: form.driver1Cpf || null, driver1Cnh: form.driver1Cnh || null, driver1CnhCategory: form.driver1CnhCategory || null, driver1CnhExpiry: form.driver1CnhExpiry || null,
             driver2Name: form.driver2Name || null, driver2Cpf: form.driver2Cpf || null, driver2Cnh: form.driver2Cnh || null, driver2CnhCategory: form.driver2CnhCategory || null, driver2CnhExpiry: form.driver2CnhExpiry || null,
@@ -564,6 +567,28 @@ export function TripForm({ tripId }: { tripId?: string }) {
                   </div>
                 </div>
               )}
+              <div className="col-span-2 space-y-2">
+                <Label>Hospedagem da viagem</Label>
+                <Select
+                  value={form.accommodationId || "none"}
+                  onValueChange={value => setForm(prev => ({ ...prev, accommodationId: value === "none" ? "" : value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecionar hospedagem..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Sem hospedagem vinculada</SelectItem>
+                    {accommodations.filter(a => a.status === "active").map(accommodation => (
+                      <SelectItem key={accommodation.id} value={accommodation.id}>
+                        {accommodation.name}{accommodation.city ? ` — ${accommodation.city}/${accommodation.state ?? ""}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  A hospedagem define os quartos disponíveis para atribuição aos passageiros desta viagem.
+                </p>
+              </div>
             </div>
           </div>
         </TabsContent>

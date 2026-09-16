@@ -73,6 +73,8 @@ export interface Reservation {
   discountReferralAmount?: number | null;
   /** @nullable */
   discountTotal?: number | null;
+  /** @nullable */
+  accommodationId?: string | null;
   createdAt: string;
   updatedAt: string;
   hasAutoRetry?: boolean;
