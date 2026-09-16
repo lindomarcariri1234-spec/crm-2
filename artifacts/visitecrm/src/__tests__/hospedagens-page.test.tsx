@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
-import { cleanupRoots, renderComponent } from "./eventSourceHarness.js";
+import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js";
 
 const mockUseListAccommodations = vi.hoisted(() => vi.fn());
 const mockRefetch = vi.hoisted(() => vi.fn());
@@ -18,6 +18,7 @@ const mockAuditQuery = vi.hoisted(() => ({
   isLoading: false,
   isError: false,
 }));
+const mockToast = vi.hoisted(() => vi.fn());
 
 vi.mock("@workspace/api-client-react", () => ({
   useListAccommodations: mockUseListAccommodations,
@@ -36,12 +37,16 @@ vi.mock("@/components/gallery-upload", () => ({
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => ({ toast: mockToast }),
 }));
 
 import Hospedagens from "../pages/cadastros/hospedagens.js";
 
 beforeEach(() => {
+  mockRoomQuery.data = [];
+  mockRoomQuery.refetch.mockReset();
+  mockMutation.mutateAsync.mockReset();
+  mockMutation.mutateAsync.mockResolvedValue(undefined);
   mockUseListAccommodations.mockReturnValue({
     data: [{
       id: "accommodation-1",
@@ -80,5 +85,77 @@ describe("Hospedagens page", () => {
     expect(handle.container.querySelector('button[aria-label="Excluir Pousada do Cariri"]')).not.toBeNull();
     expect(handle.container.querySelector('button[aria-label="Gerenciar quartos de Pousada do Cariri"]')).not.toBeNull();
     expect(handle.container.querySelector('button[aria-label="Ver fotos de Pousada do Cariri"]')).not.toBeNull();
+  });
+
+  it("keeps the room visible and hides database details when deleting fails", async () => {
+    mockRoomQuery.data = [{
+      id: "room-1",
+      name: "101",
+      category: "standard",
+      capacity: 2,
+      pricePerNight: null,
+      occupied: 0,
+      status: "active",
+    }];
+    mockMutation.mutateAsync.mockRejectedValue(new Error("connection string and SQL details"));
+
+    const handle = await renderComponent(createElement(Hospedagens));
+    await flushAct(() => {
+      handle.container.querySelector('button[aria-label="Gerenciar quartos de Pousada do Cariri"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      document.body.querySelector('button[aria-label="Excluir quarto 101"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    expect(document.body.textContent).toContain("101");
+    expect(mockRoomQuery.refetch).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Não foi possível excluir o quarto. A exclusão não foi aplicada. Tente novamente.",
+      variant: "destructive",
+    }));
+    expect(mockToast.mock.calls.flat().join(" ")).not.toContain("connection string");
+  });
+
+  it("keeps the room form state and gives a safe save error when editing fails", async () => {
+    mockRoomQuery.data = [{
+      id: "room-1",
+      name: "101",
+      category: "standard",
+      capacity: 2,
+      pricePerNight: null,
+      occupied: 0,
+      status: "active",
+    }];
+    mockMutation.mutateAsync.mockRejectedValue(new Error("database host unavailable"));
+
+    const handle = await renderComponent(createElement(Hospedagens));
+    await flushAct(() => {
+      handle.container.querySelector('button[aria-label="Gerenciar quartos de Pousada do Cariri"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      document.body.querySelector('button[aria-label="Editar quarto 101"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      Array.from(document.body.querySelectorAll("button"))
+        .find(button => button.textContent === "Salvar")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(document.body.querySelector('input[placeholder="Ex.: 101 ou Suíte 1"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("101");
+    expect(mockRoomQuery.refetch).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Não foi possível salvar o quarto. A alteração não foi aplicada. Tente novamente.",
+      variant: "destructive",
+    }));
+    expect(mockToast.mock.calls.flat().join(" ")).not.toContain("database host unavailable");
   });
 });

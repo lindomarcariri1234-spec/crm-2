@@ -79,6 +79,28 @@ function roomAuditDetails(log: AuditLog) {
     : {};
 }
 
+type RoomMutationOperation = "save" | "delete";
+
+function roomMutationErrorMessage(error: unknown, operation: RoomMutationOperation) {
+  const responseData = (error as { response?: { data?: { code?: string } } })?.response?.data;
+  const code = responseData?.code;
+  if (code === "ROOM_CAPACITY_CONFLICT") {
+    return "A capacidade não pode ser menor que a ocupação atual.";
+  }
+  if (code === "ROOM_OCCUPIED") {
+    return "Não é possível excluir um quarto ocupado.";
+  }
+  if (code === "NOT_FOUND" || code === "ROOM_NOT_FOUND") {
+    return "Este quarto não está mais disponível. Atualize a lista e tente novamente.";
+  }
+  if (code === "FORBIDDEN" || code === "FORBIDDEN_ROLE") {
+    return "Você não tem permissão para alterar este quarto.";
+  }
+  return operation === "delete"
+    ? "Não foi possível excluir o quarto. A exclusão não foi aplicada. Tente novamente."
+    : "Não foi possível salvar o quarto. A alteração não foi aplicada. Tente novamente.";
+}
+
 
 export default function Hospedagens() {
   const { toast } = useToast();
@@ -242,9 +264,7 @@ export default function Hospedagens() {
       await refetchRooms();
       toast({ title: editingRoom ? "Quarto atualizado" : "Quarto criado" });
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message || "Não foi possível salvar o quarto";
-      toast({ title: msg, variant: "destructive" });
+      toast({ title: roomMutationErrorMessage(err, "save"), variant: "destructive" });
     }
   }
 
@@ -254,9 +274,7 @@ export default function Hospedagens() {
       await refetchRooms();
       toast({ title: "Quarto excluído" });
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message || "Não foi possível excluir o quarto";
-      toast({ title: msg, variant: "destructive" });
+      toast({ title: roomMutationErrorMessage(err, "delete"), variant: "destructive" });
     }
   }
 
@@ -626,8 +644,8 @@ export default function Hospedagens() {
                         <TableCell><Badge variant={room.status === "active" ? "default" : "secondary"}>{room.status === "active" ? "Ativo" : "Inativo"}</Badge></TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
-                            <Button size="icon" variant="ghost" onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight, description: room.description, standardOccupancy: room.standardOccupancy, bedConfiguration: room.bedConfiguration, bathroomType: room.bathroomType, floor: room.floor, currency: room.currency }); }}><Pencil className="w-4 h-4" /></Button>
-                            <Button size="icon" variant="ghost" className="text-destructive" onClick={() => handleRoomDelete(room)} disabled={deleteRoom.isPending}><Trash2 className="w-4 h-4" /></Button>
+                            <Button size="icon" variant="ghost" aria-label={`Editar quarto ${room.name}`} onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight, description: room.description, standardOccupancy: room.standardOccupancy, bedConfiguration: room.bedConfiguration, bathroomType: room.bathroomType, floor: room.floor, currency: room.currency }); }}><Pencil className="w-4 h-4" /></Button>
+                            <Button size="icon" variant="ghost" className="text-destructive" aria-label={`Excluir quarto ${room.name}`} onClick={() => handleRoomDelete(room)} disabled={deleteRoom.isPending}><Trash2 className="w-4 h-4" /></Button>
                           </div>
                         </TableCell>
                       </TableRow>
