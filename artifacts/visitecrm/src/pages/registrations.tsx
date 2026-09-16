@@ -21,7 +21,7 @@ const SECTIONS = [
   },
   {
     title: "Hospedagens",
-    description: "Hotéis, pousadas e acomodações parceiras da agência",
+    description: "Base de referência de hotéis, pousadas e acomodações parceiras",
     icon: Hotel,
     href: "/cadastros/hospedagens",
     color: "text-purple-500",

@@ -187,7 +187,7 @@ export default function Hospedagens() {
   function openRooms(a: Accommodation) {
     setRoomsFor(a);
     setEditingRoom(null);
-    setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
+    setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null, standardOccupancy: 2, currency: "BRL" });
   }
 
   async function handleRoomSave() {
@@ -199,7 +199,7 @@ export default function Hospedagens() {
         await createRoom.mutateAsync({ id: roomsFor.id, data: roomForm });
       }
       setEditingRoom(null);
-      setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
+      setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null, standardOccupancy: 2, currency: "BRL" });
       await refetchRooms();
       toast({ title: editingRoom ? "Quarto atualizado" : "Quarto criado" });
     } catch (err: unknown) {
@@ -227,7 +227,7 @@ export default function Hospedagens() {
         <div>
           <h1 className="text-2xl font-bold">Hospedagens</h1>
           <p className="text-sm text-muted-foreground">
-            {accommodations.length} hospedagem(ns) cadastrada(s)
+            Base de referência com {accommodations.length} parceiro(s) para consulta comercial e operacional
           </p>
         </div>
         <Button data-testid="button-new-hospedagem" onClick={openCreate}>
@@ -527,8 +527,8 @@ export default function Hospedagens() {
             <DialogTitle>Quartos — {roomsFor?.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-[1fr_1fr_90px_110px_auto] items-end gap-2 rounded-lg border bg-muted/30 p-3">
-              <div className="space-y-1">
+            <div className="grid grid-cols-2 md:grid-cols-4 items-end gap-2 rounded-lg border bg-muted/30 p-3">
+              <div className="space-y-1 md:col-span-2">
                 <Label>Nome do quarto</Label>
                 <Input value={roomForm.name} placeholder="Ex.: 101 ou Suíte 1" onChange={e => setRoomForm(f => ({ ...f, name: e.target.value }))} />
               </div>
@@ -544,7 +544,27 @@ export default function Hospedagens() {
                 <Label>Diária</Label>
                 <Input type="number" min={0} step={0.01} placeholder="R$" value={roomForm.pricePerNight ?? ""} onChange={e => setRoomForm(f => ({ ...f, pricePerNight: e.target.value === "" ? null : Number(e.target.value) }))} />
               </div>
-              <Button onClick={handleRoomSave} disabled={createRoom.isPending || updateRoom.isPending || !roomForm.name.trim()}>
+              <div className="space-y-1">
+                <Label>Ocupação padrão</Label>
+                <Input type="number" min={1} max={50} value={roomForm.standardOccupancy ?? ""} onChange={e => setRoomForm(f => ({ ...f, standardOccupancy: e.target.value === "" ? null : Number(e.target.value) }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Configuração de camas</Label>
+                <Input placeholder="Ex.: 1 cama casal" value={roomForm.bedConfiguration ?? ""} onChange={e => setRoomForm(f => ({ ...f, bedConfiguration: e.target.value || null }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Banheiro</Label>
+                <Input placeholder="Privativo" value={roomForm.bathroomType ?? ""} onChange={e => setRoomForm(f => ({ ...f, bathroomType: e.target.value || null }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Andar</Label>
+                <Input placeholder="Térreo" value={roomForm.floor ?? ""} onChange={e => setRoomForm(f => ({ ...f, floor: e.target.value || null }))} />
+              </div>
+              <div className="space-y-1 md:col-span-3">
+                <Label>Descrição</Label>
+                <Input placeholder="Observações para a operação" value={roomForm.description ?? ""} onChange={e => setRoomForm(f => ({ ...f, description: e.target.value || null }))} />
+              </div>
+              <Button className="w-full" onClick={handleRoomSave} disabled={createRoom.isPending || updateRoom.isPending || !roomForm.name.trim()}>
                 {editingRoom ? "Salvar" : "Adicionar"}
               </Button>
             </div>
@@ -567,7 +587,7 @@ export default function Hospedagens() {
                         <TableCell><Badge variant={room.status === "active" ? "default" : "secondary"}>{room.status === "active" ? "Ativo" : "Inativo"}</Badge></TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
-                            <Button size="icon" variant="ghost" onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight }); }}><Pencil className="w-4 h-4" /></Button>
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight, description: room.description, standardOccupancy: room.standardOccupancy, bedConfiguration: room.bedConfiguration, bathroomType: room.bathroomType, floor: room.floor, currency: room.currency }); }}><Pencil className="w-4 h-4" /></Button>
                             <Button size="icon" variant="ghost" className="text-destructive" onClick={() => handleRoomDelete(room)} disabled={deleteRoom.isPending}><Trash2 className="w-4 h-4" /></Button>
                           </div>
                         </TableCell>

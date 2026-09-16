@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { suppliersTable, vehiclesTable, accommodationsTable, accommodationRoomsTable, destinationsTable, tripsTable, reservationRoomAssignmentsTable, reservationsTable, passengersTable } from "@workspace/db";
+import { suppliersTable, vehiclesTable, accommodationsTable, accommodationRoomsTable, destinationsTable, tripsTable, reservationRoomAssignmentsTable, reservationsTable, passengersTable, tripAccommodationsTable } from "@workspace/db";
 import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
@@ -102,6 +102,12 @@ const CreateAccommodationRoomBody = z.object({
   category: z.string().trim().min(1).default("standard"),
   capacity: z.number().int().min(1).max(50),
   pricePerNight: z.number().nonnegative().optional().nullable(),
+  description: z.string().optional().nullable(),
+  standardOccupancy: z.number().int().min(1).max(50).optional().nullable(),
+  bedConfiguration: z.string().optional().nullable(),
+  bathroomType: z.string().optional().nullable(),
+  floor: z.string().optional().nullable(),
+  currency: z.string().length(3).optional(),
 });
 
 const UpdateAccommodationRoomBody = z.object({
@@ -110,6 +116,13 @@ const UpdateAccommodationRoomBody = z.object({
   capacity: z.number().int().min(1).max(50).optional(),
   pricePerNight: z.number().nonnegative().optional().nullable(),
   status: z.enum(["active", "inactive"]).optional(),
+  description: z.string().optional().nullable(),
+  standardOccupancy: z.number().int().min(1).max(50).optional().nullable(),
+  bedConfiguration: z.string().optional().nullable(),
+  bathroomType: z.string().optional().nullable(),
+  floor: z.string().optional().nullable(),
+  currency: z.string().length(3).optional(),
+  isActive: z.boolean().optional(),
 });
 
 const UpdateTripAccommodationBody = z.object({
@@ -186,6 +199,13 @@ function formatAccommodationRoom(room: typeof accommodationRoomsTable.$inferSele
     name: room.name,
     category: room.category,
     capacity: room.capacity,
+    description: room.description,
+    standardOccupancy: room.standardOccupancy,
+    bedConfiguration: room.bedConfiguration,
+    bathroomType: room.bathroomType,
+    floor: room.floor,
+    currency: room.currency,
+    isActive: room.isActive,
     pricePerNight: room.pricePerNight == null ? null : Number(room.pricePerNight),
     status: room.status,
     occupied,
@@ -515,6 +535,13 @@ router.post("/accommodations/:id/rooms", async (req, res, next: NextFunction): P
       id, tenantId: me.tenantId, accommodationId: req.params.id,
       name: parsed.data.name, category: parsed.data.category, capacity: parsed.data.capacity,
       pricePerNight: parsed.data.pricePerNight == null ? null : String(parsed.data.pricePerNight),
+      description: parsed.data.description ?? null,
+      standardOccupancy: parsed.data.standardOccupancy ?? null,
+      bedConfiguration: parsed.data.bedConfiguration ?? null,
+      bathroomType: parsed.data.bathroomType ?? null,
+      floor: parsed.data.floor ?? null,
+      currency: parsed.data.currency ?? "BRL",
+      createdBy: me.id,
     });
     const [room] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, id)).limit(1);
     if (!room) { next(new AppError("Failed to create room", 500, "ROOM_CREATE_FAILED")); return; }
@@ -551,6 +578,7 @@ router.patch("/accommodation-rooms/:id", async (req, res, next: NextFunction): P
     const roomUpdates: Partial<typeof accommodationRoomsTable.$inferInsert> = {
       ...parsed.data,
       pricePerNight: parsed.data.pricePerNight == null ? parsed.data.pricePerNight : String(parsed.data.pricePerNight),
+      updatedBy: me.id,
     };
     await db.update(accommodationRoomsTable).set(roomUpdates).where(eq(accommodationRoomsTable.id, room.id));
     const [updated] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id)).limit(1);
@@ -605,13 +633,38 @@ router.patch("/trips/:id/accommodation", async (req, res, next: NextFunction): P
     const [updated] = await db.transaction(async (tx) => {
       const [saved] = await tx.update(tripsTable).set({ accommodationId: parsed.data.accommodationId })
         .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).returning();
-      if (saved && saved.accommodationId !== trip.accommodationId) {
-        await tx.delete(reservationRoomAssignmentsTable)
-          .where(and(
-            eq(reservationRoomAssignmentsTable.tripId, trip.id),
-            eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
-          ));
-      }
+       if (saved && parsed.data.accommodationId) {
+         const checkIn = trip.departureDate.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+         const checkOutDate = trip.returnDate ?? new Date(trip.departureDate.getTime() + 86_400_000);
+         const checkOut = checkOutDate.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+         const nights = Math.max(1, Math.round((new Date(`${checkOut}T12:00:00Z`).getTime() - new Date(`${checkIn}T12:00:00Z`).getTime()) / 86_400_000));
+         const [primary] = await tx.select({ id: tripAccommodationsTable.id }).from(tripAccommodationsTable).where(and(
+           eq(tripAccommodationsTable.tenantId, me.tenantId),
+           eq(tripAccommodationsTable.tripId, trip.id),
+           eq(tripAccommodationsTable.isPrimary, true),
+         )).limit(1);
+         if (primary) {
+           await tx.update(tripAccommodationsTable).set({
+             accommodationId: parsed.data.accommodationId,
+             checkIn,
+             checkOut,
+             nights,
+             status: "active",
+           }).where(eq(tripAccommodationsTable.id, primary.id));
+         } else {
+           await tx.insert(tripAccommodationsTable).values({
+             id: generateId(), tenantId: me.tenantId, tripId: trip.id,
+             accommodationId: parsed.data.accommodationId, checkIn, checkOut, nights,
+             status: "active", isPrimary: true,
+           });
+         }
+       } else if (saved) {
+         await tx.update(tripAccommodationsTable).set({ status: "inactive", isPrimary: false }).where(and(
+           eq(tripAccommodationsTable.tenantId, me.tenantId),
+           eq(tripAccommodationsTable.tripId, trip.id),
+           eq(tripAccommodationsTable.isPrimary, true),
+         ));
+       }
       return [saved];
     });
     res.json(updated);
