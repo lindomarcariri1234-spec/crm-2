@@ -11,6 +11,7 @@ import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib
 import { LIST_SAFETY_CAP } from "../lib/list-limits";
 
 const router = Router();
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 const CreateSupplierBody = z.object({
   name: z.string(),
@@ -234,6 +235,7 @@ function roomAuditSnapshot(room: typeof accommodationRoomsTable.$inferSelect) {
 }
 
 async function recordRoomAudit(
+  tx: DbTransaction,
   req: Request,
   me: { id: string; tenantId: string },
   action: string,
@@ -241,7 +243,7 @@ async function recordRoomAudit(
   before: ReturnType<typeof roomAuditSnapshot> | null,
   after: ReturnType<typeof roomAuditSnapshot> | null,
 ) {
-  await db.insert(auditLogsTable).values({
+  await tx.insert(auditLogsTable).values({
     id: generateId(),
     tenantId: me.tenantId,
     userId: me.id,
@@ -566,28 +568,31 @@ router.post("/accommodations/:id/rooms", async (req, res, next: NextFunction): P
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateAccommodationRoomBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
-    const [accommodation] = await db.select({ id: accommodationsTable.id }).from(accommodationsTable)
-      .where(and(eq(accommodationsTable.id, req.params.id), eq(accommodationsTable.tenantId, me.tenantId)))
-      .limit(1);
-    if (!accommodation) { next(new NotFoundError("Accommodation not found", "NOT_FOUND")); return; }
     const id = generateId();
-    await db.insert(accommodationRoomsTable).values({
-      id, tenantId: me.tenantId, accommodationId: req.params.id,
-      name: parsed.data.name, category: parsed.data.category, capacity: parsed.data.capacity,
-      pricePerNight: parsed.data.pricePerNight == null ? null : String(parsed.data.pricePerNight),
-      description: parsed.data.description ?? null,
-      standardOccupancy: parsed.data.standardOccupancy ?? null,
-      bedConfiguration: parsed.data.bedConfiguration ?? null,
-      bathroomType: parsed.data.bathroomType ?? null,
-      floor: parsed.data.floor ?? null,
-      currency: parsed.data.currency ?? "BRL",
-      createdBy: me.id,
+    const room = await db.transaction(async (tx) => {
+      const [accommodation] = await tx.select({ id: accommodationsTable.id }).from(accommodationsTable)
+        .where(and(eq(accommodationsTable.id, req.params.id), eq(accommodationsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!accommodation) throw new NotFoundError("Accommodation not found", "NOT_FOUND");
+      await tx.insert(accommodationRoomsTable).values({
+        id, tenantId: me.tenantId, accommodationId: req.params.id,
+        name: parsed.data.name, category: parsed.data.category, capacity: parsed.data.capacity,
+        pricePerNight: parsed.data.pricePerNight == null ? null : String(parsed.data.pricePerNight),
+        description: parsed.data.description ?? null,
+        standardOccupancy: parsed.data.standardOccupancy ?? null,
+        bedConfiguration: parsed.data.bedConfiguration ?? null,
+        bathroomType: parsed.data.bathroomType ?? null,
+        floor: parsed.data.floor ?? null,
+        currency: parsed.data.currency ?? "BRL",
+        createdBy: me.id,
+      });
+      const [created] = await tx.select().from(accommodationRoomsTable)
+        .where(and(eq(accommodationRoomsTable.id, id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!created) throw new AppError("Failed to create room", 500, "ROOM_CREATE_FAILED");
+      await recordRoomAudit(tx, req, me, "room_created", created.id, null, roomAuditSnapshot(created));
+      return created;
     });
-    const [room] = await db.select().from(accommodationRoomsTable)
-      .where(and(eq(accommodationRoomsTable.id, id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
-      .limit(1);
-    if (!room) { next(new AppError("Failed to create room", 500, "ROOM_CREATE_FAILED")); return; }
-    await recordRoomAudit(req, me, "room_created", room.id, null, roomAuditSnapshot(room));
     res.status(201).json(formatAccommodationRoom(room));
   } catch (err) {
     next(err);
@@ -601,39 +606,42 @@ router.patch("/accommodation-rooms/:id", async (req, res, next: NextFunction): P
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdateAccommodationRoomBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
-    const [room] = await db.select().from(accommodationRoomsTable)
-      .where(and(eq(accommodationRoomsTable.id, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
-      .limit(1);
-    if (!room) { next(new NotFoundError("Room not found", "NOT_FOUND")); return; }
-    if (parsed.data.capacity != null) {
-      const [occupancy] = await db.select({ count: sql<number>`count(*)` })
-        .from(reservationRoomAssignmentsTable)
-        .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
-        .where(and(
-          eq(reservationRoomAssignmentsTable.roomId, room.id),
-          eq(reservationsTable.tenantId, me.tenantId),
-          inArray(reservationsTable.status, ["pending", "confirmed"]),
-        ));
-      if (parsed.data.capacity < Number(occupancy?.count ?? 0)) {
-        next(new ValidationError("A capacidade não pode ser menor que a ocupação atual", "ROOM_CAPACITY_CONFLICT")); return;
+    const savedRoom = await db.transaction(async (tx) => {
+      const [room] = await tx.select().from(accommodationRoomsTable)
+        .where(and(eq(accommodationRoomsTable.id, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!room) throw new NotFoundError("Room not found", "NOT_FOUND");
+      if (parsed.data.capacity != null) {
+        const [occupancy] = await tx.select({ count: sql<number>`count(*)` })
+          .from(reservationRoomAssignmentsTable)
+          .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+          .where(and(
+            eq(reservationRoomAssignmentsTable.roomId, room.id),
+            eq(reservationsTable.tenantId, me.tenantId),
+            inArray(reservationsTable.status, ["pending", "confirmed"]),
+          ));
+        if (parsed.data.capacity < Number(occupancy?.count ?? 0)) {
+          throw new ValidationError("A capacidade não pode ser menor que a ocupação atual", "ROOM_CAPACITY_CONFLICT");
+        }
       }
-    }
-    const roomUpdates: Partial<typeof accommodationRoomsTable.$inferInsert> = {
-      ...parsed.data,
-      pricePerNight: parsed.data.pricePerNight == null ? parsed.data.pricePerNight : String(parsed.data.pricePerNight),
-      updatedBy: me.id,
-    };
-    await db.update(accommodationRoomsTable).set(roomUpdates).where(eq(accommodationRoomsTable.id, room.id));
-    const [updated] = await db.select().from(accommodationRoomsTable)
-      .where(and(eq(accommodationRoomsTable.id, room.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
-      .limit(1);
-    const savedRoom = updated ?? room;
-    const action = parsed.data.status === "active" || parsed.data.isActive === true
-      ? "room_activated"
-      : parsed.data.status === "inactive" || parsed.data.isActive === false
-        ? "room_deactivated"
-        : "room_updated";
-    await recordRoomAudit(req, me, action, room.id, roomAuditSnapshot(room), roomAuditSnapshot(savedRoom));
+      const roomUpdates: Partial<typeof accommodationRoomsTable.$inferInsert> = {
+        ...parsed.data,
+        pricePerNight: parsed.data.pricePerNight == null ? parsed.data.pricePerNight : String(parsed.data.pricePerNight),
+        updatedBy: me.id,
+      };
+      await tx.update(accommodationRoomsTable).set(roomUpdates).where(eq(accommodationRoomsTable.id, room.id));
+      const [updated] = await tx.select().from(accommodationRoomsTable)
+        .where(and(eq(accommodationRoomsTable.id, room.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+        .limit(1);
+      const saved = updated ?? room;
+      const action = parsed.data.status === "active" || parsed.data.isActive === true
+        ? "room_activated"
+        : parsed.data.status === "inactive" || parsed.data.isActive === false
+          ? "room_deactivated"
+          : "room_updated";
+      await recordRoomAudit(tx, req, me, action, room.id, roomAuditSnapshot(room), roomAuditSnapshot(saved));
+      return saved;
+    });
     res.json(formatAccommodationRoom(savedRoom));
   } catch (err) {
     next(err);
@@ -645,23 +653,25 @@ router.delete("/accommodation-rooms/:id", async (req, res, next: NextFunction): 
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-    const [room] = await db.select().from(accommodationRoomsTable)
-      .where(and(eq(accommodationRoomsTable.id, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
-      .limit(1);
-    if (!room) { next(new NotFoundError("Room not found", "NOT_FOUND")); return; }
-    const [occupancy] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationRoomAssignmentsTable)
-      .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
-      .where(and(
-        eq(reservationRoomAssignmentsTable.roomId, room.id),
-        eq(reservationsTable.tenantId, me.tenantId),
-        inArray(reservationsTable.status, ["pending", "confirmed"]),
-      ));
-    if (Number(occupancy?.count ?? 0) > 0) {
-      next(new ValidationError("Não é possível excluir um quarto ocupado", "ROOM_OCCUPIED")); return;
-    }
-    await db.delete(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id));
-    await recordRoomAudit(req, me, "room_deleted", room.id, roomAuditSnapshot(room), null);
+    await db.transaction(async (tx) => {
+      const [room] = await tx.select().from(accommodationRoomsTable)
+        .where(and(eq(accommodationRoomsTable.id, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!room) throw new NotFoundError("Room not found", "NOT_FOUND");
+      const [occupancy] = await tx.select({ count: sql<number>`count(*)` })
+        .from(reservationRoomAssignmentsTable)
+        .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+        .where(and(
+          eq(reservationRoomAssignmentsTable.roomId, room.id),
+          eq(reservationsTable.tenantId, me.tenantId),
+          inArray(reservationsTable.status, ["pending", "confirmed"]),
+        ));
+      if (Number(occupancy?.count ?? 0) > 0) {
+        throw new ValidationError("Não é possível excluir um quarto ocupado", "ROOM_OCCUPIED");
+      }
+      await tx.delete(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id));
+      await recordRoomAudit(tx, req, me, "room_deleted", room.id, roomAuditSnapshot(room), null);
+    });
     res.json({ success: true });
   } catch (err) {
     next(err);

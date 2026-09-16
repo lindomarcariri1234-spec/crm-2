@@ -131,6 +131,31 @@ async function assign(reservationId: string, roomId: string | null) {
     .send({ assignments: [{ passengerId: passengerIds[reservationIds.indexOf(reservationId)] ?? passengerB, roomId }] });
 }
 
+async function withAuditInsertFailure<T>(operation: () => Promise<T>): Promise<T> {
+  const runTransaction = db.transaction.bind(db);
+  const transactionSpy = vi.spyOn(db, "transaction").mockImplementationOnce((callback) =>
+    runTransaction(async (tx) => {
+      const originalInsert = tx.insert.bind(tx);
+      const failingTx = new Proxy(tx, {
+        get(target, property, receiver) {
+          if (property === "insert") {
+            return (table: unknown) => table === auditLogsTable
+              ? { values: vi.fn().mockRejectedValue(new Error("audit insert failed")) }
+              : originalInsert(table as never);
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      return callback(failingTx);
+    }),
+  );
+  try {
+    return await operation();
+  } finally {
+    transactionSpy.mockRestore();
+  }
+}
+
 async function clearAssignments() {
   await db.delete(reservationRoomAssignmentsTable).where(
     inArray(reservationRoomAssignmentsTable.tenantId, [tenantA, tenantB]),
@@ -222,6 +247,31 @@ afterAll(async () => {
 });
 
 describe("room assignments", () => {
+  it("rolls back room changes when writing the audit event fails", async () => {
+    const createResponse = await withAuditInsertFailure(() => request(app)
+      .post(`/api/accommodations/${accommodationA}/rooms`)
+      .send({ name: "A-rollback", category: "standard", capacity: 2 }));
+    expect(createResponse.status).toBe(500);
+    expect(await db.select().from(accommodationRoomsTable)
+      .where(and(eq(accommodationRoomsTable.tenantId, tenantA), eq(accommodationRoomsTable.name, "A-rollback"))))
+      .toEqual([]);
+
+    const updateResponse = await withAuditInsertFailure(() => request(app)
+      .patch(`/api/accommodation-rooms/${roomA}`)
+      .send({ name: "A-1 não persistido", capacity: 4 }));
+    expect(updateResponse.status).toBe(500);
+    const [unchangedRoom] = await db.select().from(accommodationRoomsTable)
+      .where(eq(accommodationRoomsTable.id, roomA));
+    expect(unchangedRoom).toMatchObject({ name: "A-1", capacity: 1, status: "active" });
+
+    const deleteResponse = await withAuditInsertFailure(() => request(app)
+      .delete(`/api/accommodation-rooms/${roomA}`));
+    expect(deleteResponse.status).toBe(500);
+    const [undeletedRoom] = await db.select().from(accommodationRoomsTable)
+      .where(eq(accommodationRoomsTable.id, roomA));
+    expect(undeletedRoom).toMatchObject({ id: roomA, name: "A-1" });
+  });
+
   it("records room administration changes and filters them by accommodation and period", async () => {
     const createResponse = await request(app)
       .post(`/api/accommodations/${accommodationA}/rooms`)
