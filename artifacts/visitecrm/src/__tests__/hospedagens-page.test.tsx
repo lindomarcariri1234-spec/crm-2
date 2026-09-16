@@ -15,6 +15,7 @@ const mockRoomQuery = vi.hoisted(() => ({
 }));
 const mockAuditQuery = vi.hoisted(() => ({
   data: [],
+  refetch: vi.fn(),
   isLoading: false,
   isError: false,
 }));
@@ -45,6 +46,7 @@ import Hospedagens from "../pages/cadastros/hospedagens.js";
 beforeEach(() => {
   mockRoomQuery.data = [];
   mockRoomQuery.refetch.mockReset();
+  mockAuditQuery.refetch.mockReset();
   mockMutation.mutateAsync.mockReset();
   mockMutation.mutateAsync.mockResolvedValue(undefined);
   mockUseListAccommodations.mockReturnValue({
@@ -154,6 +156,77 @@ describe("Hospedagens page", () => {
     expect(mockRoomQuery.refetch).not.toHaveBeenCalled();
     expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
       title: "Não foi possível salvar o quarto. A alteração não foi aplicada. Tente novamente.",
+      variant: "destructive",
+    }));
+    expect(mockToast.mock.calls.flat().join(" ")).not.toContain("database host unavailable");
+  });
+
+  it("activates an inactive room through the status action and refreshes the list", async () => {
+    mockRoomQuery.data = [{
+      id: "room-1",
+      name: "101",
+      category: "standard",
+      capacity: 2,
+      pricePerNight: null,
+      occupied: 0,
+      status: "inactive",
+    }];
+    mockMutation.mutateAsync.mockImplementation(async ({ data }: { data: { status?: string } }) => {
+      mockRoomQuery.data = [{ ...mockRoomQuery.data[0], status: data.status }];
+    });
+
+    const handle = await renderComponent(createElement(Hospedagens));
+    await flushAct(() => {
+      handle.container.querySelector('button[aria-label="Gerenciar quartos de Pousada do Cariri"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      document.body.querySelector('button[aria-label="Ativar quarto 101"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    expect(mockMutation.mutateAsync).toHaveBeenCalledWith({
+      id: "room-1",
+      data: { status: "active" },
+    });
+    expect(mockRoomQuery.refetch).toHaveBeenCalledTimes(1);
+    expect(mockAuditQuery.refetch).toHaveBeenCalledTimes(1);
+    await handle.rerender(createElement(Hospedagens));
+    expect(document.body.textContent).toContain("Ativo");
+    expect(document.body.querySelector('button[aria-label="Inativar quarto 101"]')).not.toBeNull();
+    expect(mockToast).toHaveBeenCalledWith({ title: "Quarto ativado" });
+  });
+
+  it("keeps an active room active and gives a safe error when deactivation fails", async () => {
+    mockRoomQuery.data = [{
+      id: "room-1",
+      name: "101",
+      category: "standard",
+      capacity: 2,
+      pricePerNight: null,
+      occupied: 0,
+      status: "active",
+    }];
+    mockMutation.mutateAsync.mockRejectedValue(new Error("database host unavailable"));
+
+    const handle = await renderComponent(createElement(Hospedagens));
+    await flushAct(() => {
+      handle.container.querySelector('button[aria-label="Gerenciar quartos de Pousada do Cariri"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      document.body.querySelector('button[aria-label="Inativar quarto 101"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+
+    expect(document.body.textContent).toContain("Ativo");
+    expect(mockRoomQuery.refetch).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Não foi possível inativar o quarto. O status não foi alterado. Tente novamente.",
       variant: "destructive",
     }));
     expect(mockToast.mock.calls.flat().join(" ")).not.toContain("database host unavailable");
