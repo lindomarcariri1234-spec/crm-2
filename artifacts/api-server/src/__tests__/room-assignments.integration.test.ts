@@ -225,7 +225,14 @@ describe("room assignments", () => {
     ]);
 
     expect(results.map(result => result.status).sort()).toEqual([200, 409]);
-    expect(results.find(result => result.status === 409)?.body.code).toBe("ROOM_CAPACITY_EXCEEDED");
+    expect(results.find(result => result.status === 409)?.body).toMatchObject({
+      code: "ROOM_CAPACITY_EXCEEDED",
+      roomId: roomA,
+      capacity: 1,
+      currentOccupied: 1,
+      occupied: 2,
+      requestedCount: 1,
+    });
     const assignments = await db.select().from(reservationRoomAssignmentsTable)
       .where(and(eq(reservationRoomAssignmentsTable.tenantId, tenantA), eq(reservationRoomAssignmentsTable.roomId, roomA)));
     expect(assignments).toHaveLength(1);

@@ -3118,13 +3118,20 @@ router.put("/reservations/:reservationId/room-assignments", async (req, res, nex
         }
         for (const [roomId, requestedCount] of requestedByRoom) {
           const room = roomsById.get(roomId)!;
-          const occupied = (occupiedByRoom.get(roomId) ?? 0) + requestedCount;
+          const currentOccupied = occupiedByRoom.get(roomId) ?? 0;
+          const occupied = currentOccupied + requestedCount;
           if (occupied > room.capacity) {
             throw new AppError(
               `O quarto ${room.name} não possui vagas suficientes`,
               409,
               "ROOM_CAPACITY_EXCEEDED",
-              { roomId, capacity: room.capacity, occupied },
+              {
+                roomId,
+                capacity: room.capacity,
+                occupied,
+                currentOccupied,
+                requestedCount,
+              },
             );
           }
         }

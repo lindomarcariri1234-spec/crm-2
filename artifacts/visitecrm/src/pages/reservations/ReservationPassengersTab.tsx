@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { AlertCircle, BedDouble, CheckCircle, LogIn, Pencil, RotateCcw, Trash2, UserPlus, Users } from "lucide-react";
 import { AGE_CATEGORY_LABELS } from "./constants";
@@ -22,6 +23,40 @@ import { formatDate } from "@/lib/utils";
 import { RoomAllocationSummaryTable } from "./RoomAllocationSummaryTable";
 
 const PLACEHOLDER_NAME = "A preencher";
+
+type RoomCapacityError = {
+  roomId: string;
+  capacity: number;
+  occupied: number;
+  currentOccupied: number;
+  requestedCount?: number;
+};
+
+function getRoomCapacityError(error: unknown): RoomCapacityError | null {
+  if (!error || typeof error !== "object") return null;
+  const candidate = error as {
+    data?: unknown;
+    response?: { data?: unknown };
+  };
+  const data = candidate.data ?? candidate.response?.data;
+  if (!data || typeof data !== "object") return null;
+  const details = data as Record<string, unknown>;
+  if (
+    details.code !== "ROOM_CAPACITY_EXCEEDED" ||
+    typeof details.roomId !== "string" ||
+    typeof details.capacity !== "number" ||
+    typeof details.occupied !== "number"
+  ) {
+    return null;
+  }
+  return {
+    roomId: details.roomId,
+    capacity: details.capacity,
+    occupied: details.occupied,
+    currentOccupied: typeof details.currentOccupied === "number" ? details.currentOccupied : details.occupied,
+    requestedCount: typeof details.requestedCount === "number" ? details.requestedCount : undefined,
+  };
+}
 
 export function ReservationPassengersTab({ reservationId }: { reservationId: string }) {
   const [addOpen, setAddOpen] = useState(false);
@@ -42,6 +77,7 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
   });
   const updateRoomAssignments = useUpdateReservationRoomAssignments();
   const [roomSelections, setRoomSelections] = useState<Record<string, string>>({});
+  const [roomCapacityError, setRoomCapacityError] = useState<RoomCapacityError | null>(null);
 
   useEffect(() => {
     if (!roomData) return;
@@ -164,8 +200,21 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
                       })),
                     },
                   });
+                   setRoomCapacityError(null);
                   toast({ title: "Quartos atualizados" });
                 } catch (err: unknown) {
+                   const capacityError = getRoomCapacityError(err);
+                   if (capacityError) {
+                     setRoomCapacityError(capacityError);
+                     const roomName = roomData.rooms.find(room => room.id === capacityError.roomId)?.name ?? "selecionado";
+                     const currentAvailable = Math.max(0, capacityError.capacity - capacityError.currentOccupied);
+                     toast({
+                       title: `Quarto ${roomName} sem vagas`,
+                       description: `Capacidade: ${capacityError.capacity}. Ocupação atual: ${capacityError.currentOccupied}. Vagas disponíveis antes desta tentativa: ${currentAvailable}. Suas alterações foram mantidas; escolha outro quarto e tente salvar novamente.`,
+                       variant: "destructive",
+                     });
+                     return;
+                   }
                   const message = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
                     || (err as { message?: string })?.message || "Não foi possível atualizar os quartos";
                   toast({ title: message, variant: "destructive" });
@@ -176,13 +225,32 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
               {updateRoomAssignments.isPending ? "Salvando..." : "Salvar quartos"}
             </Button>
           </div>
+          {roomCapacityError && (
+            <Alert data-testid="room-capacity-error" variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>
+                Quarto {roomData.rooms.find(room => room.id === roomCapacityError.roomId)?.name ?? "selecionado"} sem vagas
+              </AlertTitle>
+              <AlertDescription>
+                Capacidade: {roomCapacityError.capacity} pessoa(s). Ocupação atual: {roomCapacityError.currentOccupied}.
+                Vagas disponíveis antes desta tentativa: {Math.max(0, roomCapacityError.capacity - roomCapacityError.currentOccupied)}.
+                Suas alterações foram mantidas. Escolha outro quarto e tente salvar novamente.
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="space-y-2">
             {list.map(passenger => {
               const selectedRoom = roomSelections[passenger.id] || "none";
               return (
                 <div key={passenger.id} className="grid grid-cols-[1fr_220px] items-center gap-3 rounded-md border bg-background px-3 py-2">
                   <span className="text-sm font-medium truncate">{passenger.name}</span>
-                  <Select value={selectedRoom} onValueChange={value => setRoomSelections(current => ({ ...current, [passenger.id]: value === "none" ? "" : value }))}>
+                  <Select
+                    value={selectedRoom}
+                    onValueChange={value => {
+                      setRoomCapacityError(null);
+                      setRoomSelections(current => ({ ...current, [passenger.id]: value === "none" ? "" : value }));
+                    }}
+                  >
                     <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sem quarto" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Sem quarto</SelectItem>
