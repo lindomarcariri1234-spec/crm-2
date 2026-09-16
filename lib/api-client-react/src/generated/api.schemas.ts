@@ -1837,6 +1837,35 @@ export interface RoomAssignment {
   roomCategory: string;
 }
 
+export type RoomAllocationSummaryRowsItem = {
+  category: string;
+  roomCount: number;
+  guestsPerRoom: number;
+  totalGuests: number;
+  pricePerNight: number | null;
+  packageValue: number | null;
+  subtotal: number | null;
+};
+
+export interface RoomAllocationSummary {
+  nights: number;
+  rows: RoomAllocationSummaryRowsItem[];
+  totalRooms: number;
+  totalGuests: number;
+  totalValue: number | null;
+}
+
+export type TripRoomAllocationSummaryResponseAccommodation = {
+  id: string;
+  name: string;
+  type: string;
+} | null;
+
+export interface TripRoomAllocationSummaryResponse {
+  accommodation: TripRoomAllocationSummaryResponseAccommodation;
+  allocationSummary: RoomAllocationSummary;
+}
+
 export type AccommodationRoomStatus =
   (typeof AccommodationRoomStatus)[keyof typeof AccommodationRoomStatus];
 
@@ -1852,6 +1881,7 @@ export interface AccommodationRoom {
   name: string;
   category: string;
   capacity: number;
+  pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;
   available: number;
@@ -1895,6 +1925,7 @@ export interface RoomAssignmentsResponse {
   accommodation?: Accommodation | null;
   rooms: AccommodationRoom[];
   assignments: RoomAssignment[];
+  allocationSummary: RoomAllocationSummary;
 }
 
 export type UpdateReservationRoomAssignmentsBodyAssignmentsItem = {
@@ -2964,6 +2995,8 @@ export interface CreateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity: number;
+  /** @minimum 0 */
+  pricePerNight?: number | null;
 }
 
 export type UpdateAccommodationRoomBodyStatus =
@@ -2979,6 +3012,8 @@ export interface UpdateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity?: number;
+  /** @minimum 0 */
+  pricePerNight?: number | null;
   status?: UpdateAccommodationRoomBodyStatus;
 }
 

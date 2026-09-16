@@ -40,6 +40,7 @@ import {
   type FinancialSummary,
 } from "../lib/linked-data";
 import { convertPaidReservationReferral } from "../services/reservation-referral-conversion";
+import { buildRoomAllocationSummary, getTripNights } from "../lib/room-allocation-summary";
 import {
   cancelLockedReservationAndReleaseCapacity,
   deleteReservationAndReleaseCapacity,
@@ -142,6 +143,7 @@ function formatRoom(room: typeof accommodationRoomsTable.$inferSelect, occupied:
     name: room.name,
     category: room.category,
     capacity: room.capacity,
+    pricePerNight: room.pricePerNight == null ? null : Number(room.pricePerNight),
     status: room.status,
     occupied,
     available: Math.max(0, room.capacity - occupied),
@@ -156,6 +158,8 @@ async function getRoomAssignmentsPayload(reservationId: string, tenantId: string
       id: reservationsTable.id,
       tripId: reservationsTable.tripId,
       accommodationId: tripsTable.accommodationId,
+      departureDate: tripsTable.departureDate,
+      returnDate: tripsTable.returnDate,
     })
     .from(reservationsTable)
     .innerJoin(tripsTable, eq(tripsTable.id, reservationsTable.tripId))
@@ -165,8 +169,25 @@ async function getRoomAssignmentsPayload(reservationId: string, tenantId: string
     ))
     .limit(1);
 
-  if (!reservation || !reservation.accommodationId) {
-    return { accommodation: null, rooms: [], assignments: [] };
+  if (!reservation) {
+    return {
+      accommodation: null,
+      rooms: [],
+      assignments: [],
+      allocationSummary: buildRoomAllocationSummary([], [], 1),
+    };
+  }
+  if (!reservation.accommodationId) {
+    return {
+      accommodation: null,
+      rooms: [],
+      assignments: [],
+      allocationSummary: buildRoomAllocationSummary(
+        [],
+        [],
+        getTripNights(reservation.departureDate, reservation.returnDate),
+      ),
+    };
   }
 
   const [accommodation] = await db
@@ -219,12 +240,19 @@ async function getRoomAssignmentsPayload(reservationId: string, tenantId: string
     ))
     .orderBy(asc(passengersTable.name));
 
+  const allocationSummary = buildRoomAllocationSummary(
+    rooms,
+    assignments.map(assignment => assignment.roomId),
+    getTripNights(reservation.departureDate, reservation.returnDate),
+  );
+
   return {
     accommodation: accommodation
       ? { ...accommodation, createdAt: accommodation.createdAt.toISOString(), updatedAt: accommodation.updatedAt.toISOString() }
       : null,
     rooms: rooms.map(room => formatRoom(room, occupiedByRoom.get(room.id) ?? 0)),
     assignments,
+    allocationSummary,
   };
 }
 

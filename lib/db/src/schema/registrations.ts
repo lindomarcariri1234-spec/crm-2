@@ -88,6 +88,7 @@ export const accommodationRoomsTable = pgTable("accommodation_rooms", {
   name: text("name").notNull(),
   category: text("category").notNull().default("standard"),
   capacity: integer("capacity").notNull(),
+  pricePerNight: numeric("price_per_night", { precision: 10, scale: 2 }),
   status: text("status").notNull().default("active"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

@@ -2562,6 +2562,40 @@ export const DeleteTripResponse = zod.object({
 });
 
 /**
+ * @summary Get the accommodation room allocation summary for a trip
+ */
+export const GetTripRoomAllocationSummaryParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetTripRoomAllocationSummaryResponse = zod.object({
+  accommodation: zod
+    .object({
+      id: zod.string(),
+      name: zod.string(),
+      type: zod.string(),
+    })
+    .nullable(),
+  allocationSummary: zod.object({
+    nights: zod.number().int(),
+    rows: zod.array(
+      zod.object({
+        category: zod.string(),
+        roomCount: zod.number().int(),
+        guestsPerRoom: zod.number().int(),
+        totalGuests: zod.number().int(),
+        pricePerNight: zod.number().nullable(),
+        packageValue: zod.number().nullable(),
+        subtotal: zod.number().nullable(),
+      }),
+    ),
+    totalRooms: zod.number().int(),
+    totalGuests: zod.number().int(),
+    totalValue: zod.number().nullable(),
+  }),
+});
+
+/**
  * @summary Get trip seat map with occupation
  */
 export const GetTripSeatMapParams = zod.object({
@@ -3786,6 +3820,7 @@ export const GetReservationRoomAssignmentsResponse = zod.object({
       name: zod.string(),
       category: zod.string(),
       capacity: zod.number().int(),
+      pricePerNight: zod.number().nullable(),
       status: zod.enum(["active", "inactive"]),
       occupied: zod.number().int(),
       available: zod.number().int(),
@@ -3803,6 +3838,23 @@ export const GetReservationRoomAssignmentsResponse = zod.object({
       roomCategory: zod.string(),
     }),
   ),
+  allocationSummary: zod.object({
+    nights: zod.number().int(),
+    rows: zod.array(
+      zod.object({
+        category: zod.string(),
+        roomCount: zod.number().int(),
+        guestsPerRoom: zod.number().int(),
+        totalGuests: zod.number().int(),
+        pricePerNight: zod.number().nullable(),
+        packageValue: zod.number().nullable(),
+        subtotal: zod.number().nullable(),
+      }),
+    ),
+    totalRooms: zod.number().int(),
+    totalGuests: zod.number().int(),
+    totalValue: zod.number().nullable(),
+  }),
 });
 
 /**
@@ -3851,6 +3903,7 @@ export const UpdateReservationRoomAssignmentsResponse = zod.object({
       name: zod.string(),
       category: zod.string(),
       capacity: zod.number().int(),
+      pricePerNight: zod.number().nullable(),
       status: zod.enum(["active", "inactive"]),
       occupied: zod.number().int(),
       available: zod.number().int(),
@@ -3868,6 +3921,23 @@ export const UpdateReservationRoomAssignmentsResponse = zod.object({
       roomCategory: zod.string(),
     }),
   ),
+  allocationSummary: zod.object({
+    nights: zod.number().int(),
+    rows: zod.array(
+      zod.object({
+        category: zod.string(),
+        roomCount: zod.number().int(),
+        guestsPerRoom: zod.number().int(),
+        totalGuests: zod.number().int(),
+        pricePerNight: zod.number().nullable(),
+        packageValue: zod.number().nullable(),
+        subtotal: zod.number().nullable(),
+      }),
+    ),
+    totalRooms: zod.number().int(),
+    totalGuests: zod.number().int(),
+    totalValue: zod.number().nullable(),
+  }),
 });
 
 /**
@@ -5608,6 +5678,7 @@ export const ListAccommodationRoomsResponseItem = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
+  pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),
   available: zod.number().int(),
@@ -5625,10 +5696,16 @@ export const CreateAccommodationRoomParams = zod.object({
   id: zod.coerce.string(),
 });
 
+export const createAccommodationRoomBodyPricePerNightMin = 0;
+
 export const CreateAccommodationRoomBody = zod.object({
   name: zod.string(),
   category: zod.string().optional(),
   capacity: zod.number().int().min(1),
+  pricePerNight: zod
+    .number()
+    .min(createAccommodationRoomBodyPricePerNightMin)
+    .nullish(),
 });
 
 export const CreateAccommodationRoomResponse = zod.object({
@@ -5638,6 +5715,7 @@ export const CreateAccommodationRoomResponse = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
+  pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),
   available: zod.number().int(),
@@ -5652,10 +5730,16 @@ export const UpdateAccommodationRoomParams = zod.object({
   id: zod.coerce.string(),
 });
 
+export const updateAccommodationRoomBodyPricePerNightMin = 0;
+
 export const UpdateAccommodationRoomBody = zod.object({
   name: zod.string().optional(),
   category: zod.string().optional(),
   capacity: zod.number().int().min(1).optional(),
+  pricePerNight: zod
+    .number()
+    .min(updateAccommodationRoomBodyPricePerNightMin)
+    .nullish(),
   status: zod.enum(["active", "inactive"]).optional(),
 });
 
@@ -5666,6 +5750,7 @@ export const UpdateAccommodationRoomResponse = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
+  pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),
   available: zod.number().int(),

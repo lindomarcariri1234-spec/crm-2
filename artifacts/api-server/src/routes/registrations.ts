@@ -101,12 +101,14 @@ const CreateAccommodationRoomBody = z.object({
   name: z.string().trim().min(1),
   category: z.string().trim().min(1).default("standard"),
   capacity: z.number().int().min(1).max(50),
+  pricePerNight: z.number().nonnegative().optional().nullable(),
 });
 
 const UpdateAccommodationRoomBody = z.object({
   name: z.string().trim().min(1).optional(),
   category: z.string().trim().min(1).optional(),
   capacity: z.number().int().min(1).max(50).optional(),
+  pricePerNight: z.number().nonnegative().optional().nullable(),
   status: z.enum(["active", "inactive"]).optional(),
 });
 
@@ -184,6 +186,7 @@ function formatAccommodationRoom(room: typeof accommodationRoomsTable.$inferSele
     name: room.name,
     category: room.category,
     capacity: room.capacity,
+    pricePerNight: room.pricePerNight == null ? null : Number(room.pricePerNight),
     status: room.status,
     occupied,
     available: Math.max(0, room.capacity - occupied),
@@ -511,6 +514,7 @@ router.post("/accommodations/:id/rooms", async (req, res, next: NextFunction): P
     await db.insert(accommodationRoomsTable).values({
       id, tenantId: me.tenantId, accommodationId: req.params.id,
       name: parsed.data.name, category: parsed.data.category, capacity: parsed.data.capacity,
+      pricePerNight: parsed.data.pricePerNight == null ? null : String(parsed.data.pricePerNight),
     });
     const [room] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, id)).limit(1);
     if (!room) { next(new AppError("Failed to create room", 500, "ROOM_CREATE_FAILED")); return; }
@@ -544,7 +548,11 @@ router.patch("/accommodation-rooms/:id", async (req, res, next: NextFunction): P
         next(new ValidationError("A capacidade não pode ser menor que a ocupação atual", "ROOM_CAPACITY_CONFLICT")); return;
       }
     }
-    await db.update(accommodationRoomsTable).set(parsed.data).where(eq(accommodationRoomsTable.id, room.id));
+    const roomUpdates: Partial<typeof accommodationRoomsTable.$inferInsert> = {
+      ...parsed.data,
+      pricePerNight: parsed.data.pricePerNight == null ? parsed.data.pricePerNight : String(parsed.data.pricePerNight),
+    };
+    await db.update(accommodationRoomsTable).set(roomUpdates).where(eq(accommodationRoomsTable.id, room.id));
     const [updated] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id)).limit(1);
     res.json(formatAccommodationRoom(updated ?? room));
   } catch (err) {

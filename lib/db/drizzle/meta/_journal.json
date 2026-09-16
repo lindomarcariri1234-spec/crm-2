@@ -540,6 +540,20 @@
       "when": 1808500000000,
       "tag": "0077_accommodation_rooms",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1808600000000,
+      "tag": "0078_accommodation_room_rates",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1808700000000,
+      "tag": "0079_schema_snapshot_sync",
+      "breakpoints": true
     }
   ]
 }

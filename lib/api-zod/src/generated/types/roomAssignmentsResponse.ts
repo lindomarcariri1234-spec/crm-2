@@ -7,10 +7,12 @@
  */
 import type { Accommodation } from "./accommodation";
 import type { AccommodationRoom } from "./accommodationRoom";
+import type { RoomAllocationSummary } from "./roomAllocationSummary";
 import type { RoomAssignment } from "./roomAssignment";
 
 export interface RoomAssignmentsResponse {
   accommodation?: Accommodation | null;
   rooms: AccommodationRoom[];
   assignments: RoomAssignment[];
+  allocationSummary: RoomAllocationSummary;
 }

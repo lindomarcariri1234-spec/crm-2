@@ -1330,6 +1330,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
 
+  /trips/{id}/room-allocation-summary:
+    get:
+      operationId: getTripRoomAllocationSummary
+      tags: [trips]
+      summary: Get the accommodation room allocation summary for a trip
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Accommodation room allocation summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripRoomAllocationSummaryResponse"
+
   /trips/{id}/seat-map:
     get:
       operationId: getTripSeatMap
@@ -7956,6 +7975,43 @@ components:
         roomCategory: { type: string }
       required: [id, passengerId, passengerName, roomId, roomName, roomCategory]
 
+    RoomAllocationSummary:
+      type: object
+      properties:
+        nights: { type: integer }
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              category: { type: string }
+              roomCount: { type: integer }
+              guestsPerRoom: { type: integer }
+              totalGuests: { type: integer }
+              pricePerNight: { type: number, nullable: true }
+              packageValue: { type: number, nullable: true }
+              subtotal: { type: number, nullable: true }
+            required: [category, roomCount, guestsPerRoom, totalGuests, pricePerNight, packageValue, subtotal]
+        totalRooms: { type: integer }
+        totalGuests: { type: integer }
+        totalValue: { type: number, nullable: true }
+      required: [nights, rows, totalRooms, totalGuests, totalValue]
+
+    TripRoomAllocationSummaryResponse:
+      type: object
+      properties:
+        accommodation:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            name: { type: string }
+            type: { type: string }
+          required: [id, name, type]
+        allocationSummary:
+          $ref: "#/components/schemas/RoomAllocationSummary"
+      required: [accommodation, allocationSummary]
+
     RoomAvailability:
       allOf:
         - $ref: "#/components/schemas/AccommodationRoom"
@@ -7975,7 +8031,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RoomAssignment"
-      required: [rooms, assignments]
+        allocationSummary:
+          $ref: "#/components/schemas/RoomAllocationSummary"
+      required: [rooms, assignments, allocationSummary]
 
     UpdateReservationRoomAssignmentsBody:
       type: object
@@ -9354,12 +9412,13 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer }
+        pricePerNight: { type: number, nullable: true }
         status: { type: string, enum: [active, inactive] }
         occupied: { type: integer }
         available: { type: integer }
         createdAt: { type: string }
         updatedAt: { type: string }
-      required: [id, tenantId, accommodationId, name, category, capacity, status, occupied, available, createdAt, updatedAt]
+      required: [id, tenantId, accommodationId, name, category, capacity, pricePerNight, status, occupied, available, createdAt, updatedAt]
 
     CreateAccommodationRoomBody:
       type: object
@@ -9367,6 +9426,7 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer, minimum: 1 }
+        pricePerNight: { type: number, minimum: 0, nullable: true }
       required: [name, capacity]
 
     UpdateAccommodationRoomBody:
@@ -9375,6 +9435,7 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer, minimum: 1 }
+        pricePerNight: { type: number, minimum: 0, nullable: true }
         status: { type: string, enum: [active, inactive] }
 
     UpdateTripAccommodationBody:

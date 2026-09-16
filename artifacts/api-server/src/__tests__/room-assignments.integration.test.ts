@@ -88,6 +88,7 @@ vi.mock("../lib/uploadthing.js", () => ({
 import { requireAuth } from "../lib/tenant.js";
 import reservationsRouter from "../routes/reservations.js";
 import registrationsRouter from "../routes/registrations.js";
+import tripsRouter from "../routes/trips.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
 const run = randomUUID().replace(/-/g, "").slice(0, 10);
@@ -114,6 +115,7 @@ function buildApp() {
   app.use(express.json());
   app.use("/api", reservationsRouter);
   app.use("/api", registrationsRouter);
+  app.use("/api", tripsRouter);
   app.use(errorHandler);
   return app;
 }
@@ -148,8 +150,8 @@ beforeAll(async () => {
     { id: accommodationB, tenantId: tenantB, name: "Hotel B", type: "hotel" },
   ]);
   await db.insert(accommodationRoomsTable).values([
-    { id: roomA, tenantId: tenantA, accommodationId: accommodationA, name: "A-1", category: "standard", capacity: 1 },
-    { id: roomLarge, tenantId: tenantA, accommodationId: accommodationA, name: "A-2", category: "standard", capacity: 2 },
+    { id: roomA, tenantId: tenantA, accommodationId: accommodationA, name: "A-1", category: "standard", capacity: 1, pricePerNight: "150" },
+    { id: roomLarge, tenantId: tenantA, accommodationId: accommodationA, name: "A-2", category: "standard", capacity: 2, pricePerNight: "220" },
     { id: roomInactive, tenantId: tenantA, accommodationId: accommodationA, name: "A-3", category: "standard", capacity: 2, status: "inactive" },
     { id: roomB, tenantId: tenantB, accommodationId: accommodationB, name: "B-1", category: "standard", capacity: 1 },
   ]);
@@ -157,7 +159,7 @@ beforeAll(async () => {
     {
       id: tripA, tenantId: tenantA, name: "Trip A", slug: `room-trip-a-${run}`,
       destination: "A", destinationCity: "A", destinationState: "CE", type: "excursao", category: "standard",
-      departureDate: new Date("2030-01-01"), totalCapacity: 20, availableSeats: 20, priceAdult: "100", createdById: userA,
+      departureDate: new Date("2030-01-01"), returnDate: new Date("2030-01-03"), totalCapacity: 20, availableSeats: 20, priceAdult: "100", createdById: userA,
       accommodationId: accommodationA,
     },
     {
@@ -227,6 +229,35 @@ describe("room assignments", () => {
     const assignments = await db.select().from(reservationRoomAssignmentsTable)
       .where(and(eq(reservationRoomAssignmentsTable.tenantId, tenantA), eq(reservationRoomAssignmentsTable.roomId, roomA)));
     expect(assignments).toHaveLength(1);
+  });
+
+  it("keeps the reservation and trip allocation summaries consistent", async () => {
+    expect((await assign(reservationIds[0], roomA)).status).toBe(200);
+
+    const tripResponse = await request(app).get(`/api/trips/${tripA}/room-allocation-summary`);
+    expect(tripResponse.status).toBe(200);
+    expect(tripResponse.body.allocationSummary).toMatchObject({
+      nights: 2,
+      totalRooms: 1,
+      totalGuests: 1,
+      totalValue: 300,
+      rows: [{
+        category: "standard",
+        roomCount: 1,
+        guestsPerRoom: 1,
+        totalGuests: 1,
+        pricePerNight: 150,
+        packageValue: 300,
+        subtotal: 300,
+      }],
+    });
+
+    const reservationResponse = await request(app)
+      .get(`/api/reservations/${reservationIds[0]}/room-assignments`);
+    expect(reservationResponse.status).toBe(200);
+    expect(reservationResponse.body.allocationSummary).toEqual(
+      tripResponse.body.allocationSummary,
+    );
   });
 
   it("does not expose or mutate another agency's reservation or room", async () => {

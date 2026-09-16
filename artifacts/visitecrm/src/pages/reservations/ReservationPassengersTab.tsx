@@ -19,6 +19,7 @@ import { AlertCircle, BedDouble, CheckCircle, LogIn, Pencil, RotateCcw, Trash2, 
 import { AGE_CATEGORY_LABELS } from "./constants";
 import { PassengerForm } from "./PassengerForm";
 import { formatDate } from "@/lib/utils";
+import { RoomAllocationSummaryTable } from "./RoomAllocationSummaryTable";
 
 const PLACEHOLDER_NAME = "A preencher";
 
@@ -197,6 +198,13 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
             })}
           </div>
         </div>
+      )}
+      {roomData?.accommodation && roomData.allocationSummary && (
+        <RoomAllocationSummaryTable
+          summary={roomData.allocationSummary}
+          accommodationName={roomData.accommodation.name}
+          compact
+        />
       )}
       {roomsLoading && (
         <p className="text-xs text-muted-foreground flex items-center gap-2"><BedDouble className="w-3.5 h-3.5" /> Carregando quartos...</p>

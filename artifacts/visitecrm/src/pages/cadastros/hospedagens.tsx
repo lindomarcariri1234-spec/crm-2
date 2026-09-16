@@ -187,7 +187,7 @@ export default function Hospedagens() {
   function openRooms(a: Accommodation) {
     setRoomsFor(a);
     setEditingRoom(null);
-    setRoomForm({ name: "", category: "standard", capacity: 2 });
+    setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
   }
 
   async function handleRoomSave() {
@@ -199,7 +199,7 @@ export default function Hospedagens() {
         await createRoom.mutateAsync({ id: roomsFor.id, data: roomForm });
       }
       setEditingRoom(null);
-      setRoomForm({ name: "", category: "standard", capacity: 2 });
+      setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
       await refetchRooms();
       toast({ title: editingRoom ? "Quarto atualizado" : "Quarto criado" });
     } catch (err: unknown) {
@@ -527,7 +527,7 @@ export default function Hospedagens() {
             <DialogTitle>Quartos — {roomsFor?.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-[1fr_1fr_110px_auto] items-end gap-2 rounded-lg border bg-muted/30 p-3">
+            <div className="grid grid-cols-[1fr_1fr_90px_110px_auto] items-end gap-2 rounded-lg border bg-muted/30 p-3">
               <div className="space-y-1">
                 <Label>Nome do quarto</Label>
                 <Input value={roomForm.name} placeholder="Ex.: 101 ou Suíte 1" onChange={e => setRoomForm(f => ({ ...f, name: e.target.value }))} />
@@ -540,6 +540,10 @@ export default function Hospedagens() {
                 <Label>Vagas</Label>
                 <Input type="number" min={1} max={50} value={roomForm.capacity} onChange={e => setRoomForm(f => ({ ...f, capacity: Number(e.target.value) || 1 }))} />
               </div>
+              <div className="space-y-1">
+                <Label>Diária</Label>
+                <Input type="number" min={0} step={0.01} placeholder="R$" value={roomForm.pricePerNight ?? ""} onChange={e => setRoomForm(f => ({ ...f, pricePerNight: e.target.value === "" ? null : Number(e.target.value) }))} />
+              </div>
               <Button onClick={handleRoomSave} disabled={createRoom.isPending || updateRoom.isPending || !roomForm.name.trim()}>
                 {editingRoom ? "Salvar" : "Adicionar"}
               </Button>
@@ -551,18 +555,19 @@ export default function Hospedagens() {
             ) : (
               <div className="rounded-md border">
                 <Table>
-                  <TableHeader><TableRow><TableHead>Quarto</TableHead><TableHead>Categoria</TableHead><TableHead>Vagas</TableHead><TableHead>Ocupação</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader>
+                  <TableHeader><TableRow><TableHead>Quarto</TableHead><TableHead>Categoria</TableHead><TableHead>Vagas</TableHead><TableHead>Diária</TableHead><TableHead>Ocupação</TableHead><TableHead>Status</TableHead><TableHead /></TableRow></TableHeader>
                   <TableBody>
                     {rooms.map(room => (
                       <TableRow key={room.id}>
                         <TableCell className="font-medium">{room.name}</TableCell>
                         <TableCell>{room.category}</TableCell>
                         <TableCell>{room.capacity}</TableCell>
+                        <TableCell>{room.pricePerNight == null ? "—" : formatCurrency(room.pricePerNight)}</TableCell>
                         <TableCell>{room.occupied} / {room.capacity}</TableCell>
                         <TableCell><Badge variant={room.status === "active" ? "default" : "secondary"}>{room.status === "active" ? "Ativo" : "Inativo"}</Badge></TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
-                            <Button size="icon" variant="ghost" onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity }); }}><Pencil className="w-4 h-4" /></Button>
+                            <Button size="icon" variant="ghost" onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight }); }}><Pencil className="w-4 h-4" /></Button>
                             <Button size="icon" variant="ghost" className="text-destructive" onClick={() => handleRoomDelete(room)} disabled={deleteRoom.isPending}><Trash2 className="w-4 h-4" /></Button>
                           </div>
                         </TableCell>

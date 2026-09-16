@@ -6,11 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface CreateAccommodationRoomBody {
+export type TripRoomAllocationSummaryResponseAccommodation = {
+  id: string;
   name: string;
-  category?: string;
-  /** @minimum 1 */
-  capacity: number;
-  /** @minimum 0 */
-  pricePerNight?: number | null;
-}
+  type: string;
+} | null;

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { useListTrips, useGetTrip, useListReservations, useUpdateReservation, useGetMe, useGetTenant } from "@workspace/api-client-react";
+import { useListTrips, useGetTrip, useListReservations, useUpdateReservation, useGetMe, useGetTenant, useGetTripRoomAllocationSummary } from "@workspace/api-client-react";
 import { useSeatStream } from "@/hooks/useSeatStream";
 import { RESERVATION_STATUS, TRIP_STATUS, hasPermission, RESOURCES, ACTIONS, type ReservationStatus } from "@workspace/permissions";
 import { Client360Modal } from "@/components/client360-modal";
@@ -19,6 +19,7 @@ import { PAYMENT_METHOD_LABELS } from "@/lib/labels";
 import type { FixedCostItem, VariableCostItem } from "./types";
 import { PassengersOverviewFinancialDialog } from "./PassengersOverviewFinancialDialog";
 import { getReservationFinancialSummary, type ReservationWithFinancialLinks } from "@/pages/reservations/financial";
+import { RoomAllocationSummaryTable } from "@/pages/reservations/RoomAllocationSummaryTable";
 
 interface TripFinancialReport {
   reservationCount: number;
@@ -59,6 +60,9 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
   const { data: allTripsData } = useListTrips({ limit: 100 });
   const { data: trip } = useGetTrip(tripId, { query: { queryKey: ["/api/trips", tripId] } });
   const { data: reservations, refetch: refetchReservations } = useListReservations({ tripId, limit: 200 });
+  const { data: roomAllocation } = useGetTripRoomAllocationSummary(tripId, {
+    query: { queryKey: ["trip-room-allocation-summary", tripId] },
+  });
   const { eventCount: seatEventCount } = useSeatStream({ tripId, isPublic: false, enabled: !!tripId });
   useEffect(() => {
     if (seatEventCount === 0) return;
@@ -407,6 +411,13 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
             </div>
           )}
         </div>
+      )}
+
+      {roomAllocation?.accommodation && (
+        <RoomAllocationSummaryTable
+          summary={roomAllocation.allocationSummary}
+          accommodationName={roomAllocation.accommodation.name}
+        />
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

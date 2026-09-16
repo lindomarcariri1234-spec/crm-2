@@ -14,6 +14,7 @@ export interface AccommodationRoom {
   name: string;
   category: string;
   capacity: number;
+  pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;
   available: number;

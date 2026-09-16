@@ -222,6 +222,7 @@ import type {
   Trip,
   TripCost,
   TripListResponse,
+  TripRoomAllocationSummaryResponse,
   TripSummary,
   UpdateAccommodationBody,
   UpdateAccommodationRoomBody,
@@ -5749,6 +5750,98 @@ export const useDeleteTrip = <
 > => {
   return useMutation(getDeleteTripMutationOptions(options));
 };
+
+export const getGetTripRoomAllocationSummaryUrl = (id: string) => {
+  return `/api/trips/${id}/room-allocation-summary`;
+};
+
+/**
+ * @summary Get the accommodation room allocation summary for a trip
+ */
+export const getTripRoomAllocationSummary = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<TripRoomAllocationSummaryResponse> => {
+  return customFetch<TripRoomAllocationSummaryResponse>(
+    getGetTripRoomAllocationSummaryUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetTripRoomAllocationSummaryQueryKey = (id: string) => {
+  return [`/api/trips/${id}/room-allocation-summary`] as const;
+};
+
+export const getGetTripRoomAllocationSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetTripRoomAllocationSummaryQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getTripRoomAllocationSummary>>
+  > = ({ signal }) =>
+    getTripRoomAllocationSummary(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetTripRoomAllocationSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getTripRoomAllocationSummary>>
+>;
+export type GetTripRoomAllocationSummaryQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get the accommodation room allocation summary for a trip
+ */
+
+export function useGetTripRoomAllocationSummary<
+  TData = Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getTripRoomAllocationSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetTripRoomAllocationSummaryQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
 
 export const getGetTripSeatMapUrl = (id: string) => {
   return `/api/trips/${id}/seat-map`;
