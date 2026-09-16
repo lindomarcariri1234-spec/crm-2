@@ -9,6 +9,7 @@ import { deleteOrphanedImages } from "../lib/uploadthing";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { LIST_SAFETY_CAP } from "../lib/list-limits";
+import { logAuditWriteFailure } from "../lib/logger";
 
 const router = Router();
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -243,18 +244,29 @@ async function recordRoomAudit(
   before: ReturnType<typeof roomAuditSnapshot> | null,
   after: ReturnType<typeof roomAuditSnapshot> | null,
 ) {
-  await tx.insert(auditLogsTable).values({
-    id: generateId(),
-    tenantId: me.tenantId,
-    userId: me.id,
-    action,
-    entityType: "accommodation_room",
-    entityId: roomId,
-    before,
-    after,
-    ipAddress: req.ip ?? null,
-    userAgent: req.headers["user-agent"] ?? null,
-  });
+  try {
+    await tx.insert(auditLogsTable).values({
+      id: generateId(),
+      tenantId: me.tenantId,
+      userId: me.id,
+      action,
+      entityType: "accommodation_room",
+      entityId: roomId,
+      before,
+      after,
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers["user-agent"] ?? null,
+    });
+  } catch (error) {
+    logAuditWriteFailure({
+      operation: action,
+      tenantId: me.tenantId,
+      entityType: "accommodation_room",
+      entityId: roomId,
+      requestId: req.id == null ? "unknown" : String(req.id),
+    }, error);
+    throw error;
+  }
 }
 
 function formatDestination(d: typeof destinationsTable.$inferSelect) {

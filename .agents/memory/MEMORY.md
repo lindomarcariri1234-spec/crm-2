@@ -120,3 +120,4 @@
 - [Vercel CLI firewall fallback](vercel-cli-firewall-fallback.md) — if pnpm dlx is blocked on a transitive download, reuse an already extracted CLI from the pnpm cache
 - [Manual table migration snapshots](manual-table-snapshot-sync.md) — hand-written table migrations need a later consolidated snapshot for live schema verification
 - [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
+- [Audit failure log hygiene](audit-failure-logging.md) — audit-write failures log only operational identifiers and error type; never snapshots or raw exception details

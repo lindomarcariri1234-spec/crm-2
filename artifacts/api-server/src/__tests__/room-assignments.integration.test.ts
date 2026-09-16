@@ -18,6 +18,13 @@ import {
 import { ROLES, RESERVATION_STATUS } from "@workspace/permissions";
 
 const authTenant = vi.hoisted(() => ({ id: "", tenantId: "", role: "agencia" }));
+const mockAuditWriteFailure = vi.hoisted(() => vi.fn());
+const mockLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
 
 vi.mock("@clerk/express", () => ({
   clerkClient: vi.fn(),
@@ -84,6 +91,10 @@ vi.mock("../routes/payments.js", () => ({
 vi.mock("../lib/uploadthing.js", () => ({
   deleteOrphanedImages: vi.fn().mockResolvedValue(undefined),
   deleteOrphanedFile: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../lib/logger.js", () => ({
+  logger: mockLogger,
+  logAuditWriteFailure: mockAuditWriteFailure,
 }));
 
 import { requireAuth } from "../lib/tenant.js";
@@ -222,6 +233,8 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  mockAuditWriteFailure.mockClear();
+  mockLogger.error.mockClear();
   await clearAssignments();
   authTenant.id = userA;
   authTenant.tenantId = tenantA;
@@ -270,6 +283,41 @@ describe("room assignments", () => {
     const [undeletedRoom] = await db.select().from(accommodationRoomsTable)
       .where(eq(accommodationRoomsTable.id, roomA));
     expect(undeletedRoom).toMatchObject({ id: roomA, name: "A-1" });
+
+    expect(mockAuditWriteFailure).toHaveBeenCalledTimes(3);
+    expect(mockAuditWriteFailure).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        operation: "room_created",
+        tenantId: tenantA,
+        entityType: "accommodation_room",
+      }),
+      expect.any(Error),
+    );
+    expect(mockAuditWriteFailure).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        operation: "room_updated",
+        tenantId: tenantA,
+        entityType: "accommodation_room",
+        entityId: roomA,
+      }),
+      expect.any(Error),
+    );
+    expect(mockAuditWriteFailure).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        operation: "room_deleted",
+        tenantId: tenantA,
+        entityType: "accommodation_room",
+        entityId: roomA,
+      }),
+      expect.any(Error),
+    );
+    for (const [context] of mockAuditWriteFailure.mock.calls) {
+      expect(context).not.toHaveProperty("before");
+      expect(context).not.toHaveProperty("after");
+    }
   });
 
   it("records room administration changes and filters them by accommodation and period", async () => {
