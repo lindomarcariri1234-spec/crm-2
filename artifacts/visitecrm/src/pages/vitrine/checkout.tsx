@@ -75,8 +75,13 @@ function getStripePaymentInstructions(paymentIntent: PaymentIntent | null): Stri
   if (!nextAction) return {};
 
   const instructions: StripePaymentInstructions = {};
-  if (nextAction.type === "display_qr_code" && nextAction.display_qr_code && typeof nextAction.display_qr_code === "object") {
-    const qr = nextAction.display_qr_code as Record<string, unknown>;
+  const pixAction = nextAction.pix_display_qr_code ?? nextAction.display_qr_code;
+  if (
+    (nextAction.type === "pix_display_qr_code" || nextAction.type === "display_qr_code")
+    && pixAction
+    && typeof pixAction === "object"
+  ) {
+    const qr = pixAction as Record<string, unknown>;
     instructions.pixCopyPaste = typeof qr.data === "string" ? qr.data : null;
     instructions.pixQrCodeUrl = typeof qr.image_url_png === "string"
       ? qr.image_url_png
@@ -84,8 +89,13 @@ function getStripePaymentInstructions(paymentIntent: PaymentIntent | null): Stri
         ? qr.image_url_svg
         : null;
   }
-  if (nextAction.type === "display_boleto" && nextAction.display_boleto && typeof nextAction.display_boleto === "object") {
-    const boleto = nextAction.display_boleto as Record<string, unknown>;
+  const boletoAction = nextAction.boleto_display_details ?? nextAction.display_boleto;
+  if (
+    (nextAction.type === "boleto_display_details" || nextAction.type === "display_boleto")
+    && boletoAction
+    && typeof boletoAction === "object"
+  ) {
+    const boleto = boletoAction as Record<string, unknown>;
     instructions.boletoUrl = typeof boleto.hosted_voucher_url === "string"
       ? boleto.hosted_voucher_url
       : null;

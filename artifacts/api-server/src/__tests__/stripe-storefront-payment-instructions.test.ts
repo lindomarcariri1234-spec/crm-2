@@ -116,7 +116,7 @@ describe("Stripe storefront payment instructions", () => {
   it("persists Pix copy-paste data and the Stripe QR image URL", async () => {
     await handleStripeEvent({
       id: "evt_pix_processing",
-      type: "payment_intent.processing",
+      type: "payment_intent.requires_action",
       data: {
         object: {
           id: "pi_pix",
@@ -139,6 +139,31 @@ describe("Stripe storefront payment instructions", () => {
     expect(h.mockWhere).toHaveBeenCalled();
   });
 
+  it("persists Pix instructions from Stripe's current pix_display_qr_code shape", async () => {
+    await handleStripeEvent({
+      id: "evt_pix_current_processing",
+      type: "payment_intent.requires_action",
+      data: {
+        object: {
+          id: "pi_pix_current",
+          next_action: {
+            type: "pix_display_qr_code",
+            pix_display_qr_code: {
+              data: "000201010212PIX-CURRENT-COPY-PASTE",
+              image_url_png: "https://qr.stripe.com/pix-current.png",
+            },
+          },
+        },
+      },
+    }, STORE);
+
+    expect(h.mockSet).toHaveBeenCalledWith({
+      pixQrCode: "000201010212PIX-CURRENT-COPY-PASTE",
+      pixCopyPaste: "000201010212PIX-CURRENT-COPY-PASTE",
+      pixQrCodeUrl: "https://qr.stripe.com/pix-current.png",
+    });
+  });
+
   it("persists the hosted boleto URL and barcode", async () => {
     await handleStripeEvent({
       id: "evt_boleto_processing",
@@ -159,6 +184,30 @@ describe("Stripe storefront payment instructions", () => {
 
     expect(h.mockSet).toHaveBeenCalledWith({
       boletoUrl: "https://stripe.example/boleto.pdf",
+      boletoBarcode: "34191790010104351004791020150008291070026000",
+    });
+  });
+
+  it("persists Boleto instructions from Stripe's current boleto_display_details shape", async () => {
+    await handleStripeEvent({
+      id: "evt_boleto_current_processing",
+      type: "payment_intent.processing",
+      data: {
+        object: {
+          id: "pi_boleto_current",
+          next_action: {
+            type: "boleto_display_details",
+            boleto_display_details: {
+              hosted_voucher_url: "https://stripe.example/boleto-current.pdf",
+              number: "34191790010104351004791020150008291070026000",
+            },
+          },
+        },
+      },
+    }, STORE);
+
+    expect(h.mockSet).toHaveBeenCalledWith({
+      boletoUrl: "https://stripe.example/boleto-current.pdf",
       boletoBarcode: "34191790010104351004791020150008291070026000",
     });
   });

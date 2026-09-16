@@ -279,8 +279,13 @@ async function persistStripePaymentInstructions(
     boletoBarcode?: string;
   } = {};
 
-  if (action["type"] === "display_qr_code" && action["display_qr_code"] && typeof action["display_qr_code"] === "object") {
-    const qr = action["display_qr_code"] as Record<string, unknown>;
+  const pixAction = action["pix_display_qr_code"] ?? action["display_qr_code"];
+  if (
+    (action["type"] === "pix_display_qr_code" || action["type"] === "display_qr_code")
+    && pixAction
+    && typeof pixAction === "object"
+  ) {
+    const qr = pixAction as Record<string, unknown>;
     const copyPaste = typeof qr["data"] === "string" ? qr["data"] : undefined;
     const imageUrl = typeof qr["image_url_png"] === "string"
       ? qr["image_url_png"]
@@ -294,8 +299,13 @@ async function persistStripePaymentInstructions(
     if (imageUrl) patch.pixQrCodeUrl = imageUrl;
   }
 
-  if (action["type"] === "display_boleto" && action["display_boleto"] && typeof action["display_boleto"] === "object") {
-    const boleto = action["display_boleto"] as Record<string, unknown>;
+  const boletoAction = action["boleto_display_details"] ?? action["display_boleto"];
+  if (
+    (action["type"] === "boleto_display_details" || action["type"] === "display_boleto")
+    && boletoAction
+    && typeof boletoAction === "object"
+  ) {
+    const boleto = boletoAction as Record<string, unknown>;
     const hostedVoucherUrl = typeof boleto["hosted_voucher_url"] === "string"
       ? boleto["hosted_voucher_url"]
       : undefined;
@@ -428,7 +438,7 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
     return;
   }
 
-  if (event.type === "payment_intent.processing") {
+  if (event.type === "payment_intent.processing" || event.type === "payment_intent.requires_action") {
     const paymentIntentId = String(obj["id"] ?? "");
     if (!paymentIntentId) return;
     await db.transaction(async (tx) => {
