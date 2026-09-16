@@ -246,6 +246,27 @@ describe("room assignments", () => {
     expect(leaked).toHaveLength(0);
   });
 
+  it("does not expose, edit, or delete another agency's accommodation rooms", async () => {
+    authTenant.id = userB;
+    authTenant.tenantId = tenantB;
+
+    const listResponse = await request(app).get(`/api/accommodations/${accommodationA}/rooms`);
+    expect(listResponse.status).toBe(404);
+
+    const patchResponse = await request(app)
+      .patch(`/api/accommodation-rooms/${roomA}`)
+      .send({ capacity: 9, status: "inactive" });
+    expect(patchResponse.status).toBe(404);
+
+    const deleteResponse = await request(app)
+      .delete(`/api/accommodation-rooms/${roomA}`);
+    expect(deleteResponse.status).toBe(404);
+
+    const [room] = await db.select().from(accommodationRoomsTable)
+      .where(eq(accommodationRoomsTable.id, roomA));
+    expect(room).toMatchObject({ tenantId: tenantA, capacity: 1, status: "active" });
+  });
+
   it("rejects inactive rooms and refuses to lower capacity below active occupancy", async () => {
     const inactive = await assign(reservationIds[0], roomInactive);
     expect(inactive.status).toBe(400);
