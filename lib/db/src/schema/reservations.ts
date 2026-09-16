@@ -7,6 +7,7 @@ import { tenantsTable } from "./tenants";
 import { tripsTable } from "./trips";
 import { clientsTable } from "./clients";
 import { usersTable } from "./users";
+import { accommodationRoomsTable } from "./registrations";
 
 export const reservationsTable = pgTable("reservations", {
   id: text("id").primaryKey(),
@@ -108,6 +109,22 @@ export type Passenger = typeof passengersTable.$inferSelect;
 export const passengersRelations = relations(passengersTable, ({ one }) => ({
   reservation: one(reservationsTable, { fields: [passengersTable.reservationId], references: [reservationsTable.id] }),
 }));
+
+export const reservationRoomAssignmentsTable = pgTable("reservation_room_assignments", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
+  tripId: text("trip_id").notNull().references(() => tripsTable.id, { onDelete: "cascade" }),
+  reservationId: text("reservation_id").notNull().references(() => reservationsTable.id, { onDelete: "cascade" }),
+  passengerId: text("passenger_id").notNull().references(() => passengersTable.id, { onDelete: "cascade" }),
+  roomId: text("room_id").notNull().references(() => accommodationRoomsTable.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+}, (t) => [
+  uniqueIndex("reservation_room_assignments_trip_passenger_unique").on(t.tripId, t.passengerId),
+  index("reservation_room_assignments_trip_room_idx").on(t.tripId, t.roomId),
+]);
+
+export type ReservationRoomAssignment = typeof reservationRoomAssignmentsTable.$inferSelect;
 
 export const reservationSequencesTable = pgTable("reservation_sequences", {
   tenantId: text("tenant_id").notNull(),

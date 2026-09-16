@@ -1,7 +1,7 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { suppliersTable, vehiclesTable, accommodationsTable, destinationsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { suppliersTable, vehiclesTable, accommodationsTable, accommodationRoomsTable, destinationsTable, tripsTable, reservationRoomAssignmentsTable, reservationsTable, passengersTable } from "@workspace/db";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
 import { z } from "zod";
@@ -97,6 +97,23 @@ const UpdateAccommodationBody = z.object({
   galleryUrls: z.array(z.string()).optional(),
 });
 
+const CreateAccommodationRoomBody = z.object({
+  name: z.string().trim().min(1),
+  category: z.string().trim().min(1).default("standard"),
+  capacity: z.number().int().min(1).max(50),
+});
+
+const UpdateAccommodationRoomBody = z.object({
+  name: z.string().trim().min(1).optional(),
+  category: z.string().trim().min(1).optional(),
+  capacity: z.number().int().min(1).max(50).optional(),
+  status: z.enum(["active", "inactive"]).optional(),
+});
+
+const UpdateTripAccommodationBody = z.object({
+  accommodationId: z.string().nullable(),
+});
+
 const CreateDestinationBody = z.object({
   name: z.string(),
   city: z.string(),
@@ -156,6 +173,22 @@ function formatAccommodation(a: typeof accommodationsTable.$inferSelect) {
     coverImage: a.coverImage,
     gallery: a.gallery ?? [],
     createdAt: a.createdAt.toISOString(), updatedAt: a.updatedAt.toISOString(),
+  };
+}
+
+function formatAccommodationRoom(room: typeof accommodationRoomsTable.$inferSelect, occupied = 0) {
+  return {
+    id: room.id,
+    tenantId: room.tenantId,
+    accommodationId: room.accommodationId,
+    name: room.name,
+    category: room.category,
+    capacity: room.capacity,
+    status: room.status,
+    occupied,
+    available: Math.max(0, room.capacity - occupied),
+    createdAt: room.createdAt.toISOString(),
+    updatedAt: room.updatedAt.toISOString(),
   };
 }
 
@@ -441,6 +474,139 @@ router.delete("/accommodations/:id", async (req, res, next: NextFunction): Promi
       .where(and(eq(accommodationsTable.id, req.params.id), eq(accommodationsTable.tenantId, me.tenantId)));
     await deleteOrphanedImages(existing.gallery ?? [], [], req.log, me.tenantId);
     res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/accommodations/:id/rooms", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const [accommodation] = await db.select().from(accommodationsTable)
+      .where(and(eq(accommodationsTable.id, req.params.id), eq(accommodationsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!accommodation) { next(new NotFoundError("Accommodation not found", "NOT_FOUND")); return; }
+    const rooms = await db.select().from(accommodationRoomsTable)
+      .where(and(eq(accommodationRoomsTable.accommodationId, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+      .orderBy(accommodationRoomsTable.name);
+    res.json(rooms.map(room => formatAccommodationRoom(room)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/accommodations/:id/rooms", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = CreateAccommodationRoomBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
+    const [accommodation] = await db.select({ id: accommodationsTable.id }).from(accommodationsTable)
+      .where(and(eq(accommodationsTable.id, req.params.id), eq(accommodationsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!accommodation) { next(new NotFoundError("Accommodation not found", "NOT_FOUND")); return; }
+    const id = generateId();
+    await db.insert(accommodationRoomsTable).values({
+      id, tenantId: me.tenantId, accommodationId: req.params.id,
+      name: parsed.data.name, category: parsed.data.category, capacity: parsed.data.capacity,
+    });
+    const [room] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, id)).limit(1);
+    if (!room) { next(new AppError("Failed to create room", 500, "ROOM_CREATE_FAILED")); return; }
+    res.status(201).json(formatAccommodationRoom(room));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/accommodation-rooms/:id", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = UpdateAccommodationRoomBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
+    const [room] = await db.select().from(accommodationRoomsTable)
+      .where(and(eq(accommodationRoomsTable.id, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!room) { next(new NotFoundError("Room not found", "NOT_FOUND")); return; }
+    if (parsed.data.capacity != null) {
+      const [occupancy] = await db.select({ count: sql<number>`count(*)` })
+        .from(reservationRoomAssignmentsTable)
+        .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+        .where(and(
+          eq(reservationRoomAssignmentsTable.roomId, room.id),
+          eq(reservationsTable.tenantId, me.tenantId),
+          inArray(reservationsTable.status, ["pending", "confirmed"]),
+        ));
+      if (parsed.data.capacity < Number(occupancy?.count ?? 0)) {
+        next(new ValidationError("A capacidade não pode ser menor que a ocupação atual", "ROOM_CAPACITY_CONFLICT")); return;
+      }
+    }
+    await db.update(accommodationRoomsTable).set(parsed.data).where(eq(accommodationRoomsTable.id, room.id));
+    const [updated] = await db.select().from(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id)).limit(1);
+    res.json(formatAccommodationRoom(updated ?? room));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/accommodation-rooms/:id", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const [room] = await db.select().from(accommodationRoomsTable)
+      .where(and(eq(accommodationRoomsTable.id, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!room) { next(new NotFoundError("Room not found", "NOT_FOUND")); return; }
+    const [occupancy] = await db.select({ count: sql<number>`count(*)` })
+      .from(reservationRoomAssignmentsTable)
+      .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+      .where(and(
+        eq(reservationRoomAssignmentsTable.roomId, room.id),
+        eq(reservationsTable.tenantId, me.tenantId),
+        inArray(reservationsTable.status, ["pending", "confirmed"]),
+      ));
+    if (Number(occupancy?.count ?? 0) > 0) {
+      next(new ValidationError("Não é possível excluir um quarto ocupado", "ROOM_OCCUPIED")); return;
+    }
+    await db.delete(accommodationRoomsTable).where(eq(accommodationRoomsTable.id, room.id));
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/trips/:id/accommodation", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = UpdateTripAccommodationBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
+    const [trip] = await db.select().from(tripsTable)
+      .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).limit(1);
+    if (!trip) { next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND")); return; }
+    if (parsed.data.accommodationId) {
+      const [accommodation] = await db.select({ id: accommodationsTable.id }).from(accommodationsTable)
+        .where(and(eq(accommodationsTable.id, parsed.data.accommodationId), eq(accommodationsTable.tenantId, me.tenantId))).limit(1);
+      if (!accommodation) { next(new ValidationError("Accommodation not found", "ACCOMMODATION_NOT_FOUND")); return; }
+    }
+    const [updated] = await db.transaction(async (tx) => {
+      const [saved] = await tx.update(tripsTable).set({ accommodationId: parsed.data.accommodationId })
+        .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).returning();
+      if (saved && saved.accommodationId !== trip.accommodationId) {
+        await tx.delete(reservationRoomAssignmentsTable)
+          .where(and(
+            eq(reservationRoomAssignmentsTable.tripId, trip.id),
+            eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+          ));
+      }
+      return [saved];
+    });
+    res.json(updated);
   } catch (err) {
     next(err);
   }

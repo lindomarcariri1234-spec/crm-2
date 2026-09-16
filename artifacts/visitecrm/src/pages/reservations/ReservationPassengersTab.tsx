@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useListPassengers,
   useCreatePassenger,
@@ -6,13 +6,16 @@ import {
   useDeletePassenger,
   useCheckInPassenger,
   useUndoCheckInPassenger,
+  useGetReservationRoomAssignments,
+  useUpdateReservationRoomAssignments,
 } from "@workspace/api-client-react";
 import type { Passenger } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { AlertCircle, CheckCircle, LogIn, Pencil, RotateCcw, Trash2, UserPlus, Users } from "lucide-react";
+import { AlertCircle, BedDouble, CheckCircle, LogIn, Pencil, RotateCcw, Trash2, UserPlus, Users } from "lucide-react";
 import { AGE_CATEGORY_LABELS } from "./constants";
 import { PassengerForm } from "./PassengerForm";
 import { formatDate } from "@/lib/utils";
@@ -33,6 +36,16 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
   const deletePassenger = useDeletePassenger();
   const checkInPassenger = useCheckInPassenger();
   const undoCheckInPassenger = useUndoCheckInPassenger();
+  const { data: roomData, isLoading: roomsLoading } = useGetReservationRoomAssignments(reservationId, {
+    query: { queryKey: ["reservation-room-assignments", reservationId] },
+  });
+  const updateRoomAssignments = useUpdateReservationRoomAssignments();
+  const [roomSelections, setRoomSelections] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!roomData) return;
+    setRoomSelections(Object.fromEntries(roomData.assignments.map(assignment => [assignment.passengerId, assignment.roomId])));
+  }, [roomData]);
 
   const handleAdd = async (fd: FormData, ageCategory: string) => {
     await createPassenger.mutateAsync({
@@ -126,6 +139,68 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
           <UserPlus className="w-4 h-4 mr-1.5" /> Adicionar Passageiro
         </Button>
       </div>
+
+      {roomData?.accommodation && roomData.rooms.length > 0 && (
+        <div className="rounded-lg border bg-indigo-50/60 dark:bg-indigo-950/20 p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <BedDouble className="w-4 h-4 mt-0.5 text-indigo-600" />
+              <div>
+                <p className="text-sm font-semibold">Hospedagem: {roomData.accommodation.name}</p>
+                <p className="text-xs text-muted-foreground">Escolha um quarto por passageiro. A capacidade é validada no servidor.</p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={async () => {
+                try {
+                  await updateRoomAssignments.mutateAsync({
+                    reservationId,
+                    data: {
+                      assignments: list.map(passenger => ({
+                        passengerId: passenger.id,
+                        roomId: roomSelections[passenger.id] || null,
+                      })),
+                    },
+                  });
+                  toast({ title: "Quartos atualizados" });
+                } catch (err: unknown) {
+                  const message = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
+                    || (err as { message?: string })?.message || "Não foi possível atualizar os quartos";
+                  toast({ title: message, variant: "destructive" });
+                }
+              }}
+              disabled={roomsLoading || updateRoomAssignments.isPending}
+            >
+              {updateRoomAssignments.isPending ? "Salvando..." : "Salvar quartos"}
+            </Button>
+          </div>
+          <div className="space-y-2">
+            {list.map(passenger => {
+              const selectedRoom = roomSelections[passenger.id] || "none";
+              return (
+                <div key={passenger.id} className="grid grid-cols-[1fr_220px] items-center gap-3 rounded-md border bg-background px-3 py-2">
+                  <span className="text-sm font-medium truncate">{passenger.name}</span>
+                  <Select value={selectedRoom} onValueChange={value => setRoomSelections(current => ({ ...current, [passenger.id]: value === "none" ? "" : value }))}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sem quarto" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Sem quarto</SelectItem>
+                      {roomData.rooms.map(room => (
+                        <SelectItem key={room.id} value={room.id} disabled={room.status !== "active" || (room.available <= 0 && selectedRoom !== room.id)}>
+                          {room.name} · {room.category} ({room.available} vaga{room.available === 1 ? "" : "s"})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {roomsLoading && (
+        <p className="text-xs text-muted-foreground flex items-center gap-2"><BedDouble className="w-3.5 h-3.5" /> Carregando quartos...</p>
+      )}
 
       {list.length === 0 ? (
         <div className="text-center py-10 text-muted-foreground">

@@ -533,6 +533,13 @@
       "when": 1808400000000,
       "tag": "0076_checkout_capacity_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1808500000000,
+      "tag": "0077_accommodation_rooms",
+      "breakpoints": true
     }
   ]
 }

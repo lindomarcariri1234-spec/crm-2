@@ -4,6 +4,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import type { TripStatus } from "@workspace/permissions";
 import { tenantsTable } from "./tenants";
+import { accommodationsTable } from "./registrations";
 
 export interface FixedCostItem { id: string; category: string; description: string; value: number; }
 export interface VariableCostItem { id: string; category: string; description: string; valuePax: number; }
@@ -81,6 +82,7 @@ export const tripsTable = pgTable("trips", {
   metaTitle: text("meta_title"),
   metaDescription: text("meta_description"),
   layoutId: text("layout_id"),
+  accommodationId: text("accommodation_id").references(() => accommodationsTable.id, { onDelete: "set null" }),
   showSeatMap: boolean("show_seat_map").notNull().default(true),
   createdById: text("created_by_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

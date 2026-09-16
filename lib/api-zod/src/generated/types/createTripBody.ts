@@ -121,4 +121,6 @@ export interface CreateTripBody {
   layoutId?: string | null;
   /** @nullable */
   showSeatMap?: boolean | null;
+  /** @nullable */
+  accommodationId?: string | null;
 }

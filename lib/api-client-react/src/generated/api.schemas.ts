@@ -1168,6 +1168,8 @@ export interface Trip {
   layoutId?: string | null;
   /** @nullable */
   showSeatMap?: boolean | null;
+  /** @nullable */
+  accommodationId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1482,6 +1484,8 @@ export interface CreateTripBody {
   layoutId?: string | null;
   /** @nullable */
   showSeatMap?: boolean | null;
+  /** @nullable */
+  accommodationId?: string | null;
 }
 
 export interface UpdateTripBody {
@@ -1576,6 +1580,8 @@ export interface UpdateTripBody {
   layoutId?: string | null;
   /** @nullable */
   showSeatMap?: boolean | null;
+  /** @nullable */
+  accommodationId?: string | null;
   freePassengers?: FreePassenger[];
 }
 
@@ -1741,6 +1747,8 @@ export interface Reservation {
   discountReferralAmount?: number | null;
   /** @nullable */
   discountTotal?: number | null;
+  /** @nullable */
+  accommodationId?: string | null;
   createdAt: string;
   updatedAt: string;
   hasAutoRetry?: boolean;
@@ -1818,6 +1826,85 @@ export interface CreateReservationBody {
   isOnLap?: boolean;
   /** Criança menor de 7 anos que ocupa poltrona — força ageCategory=child */
   isChildUnder7?: boolean;
+}
+
+export interface RoomAssignment {
+  id: string;
+  passengerId: string;
+  passengerName: string;
+  roomId: string;
+  roomName: string;
+  roomCategory: string;
+}
+
+export type AccommodationRoomStatus =
+  (typeof AccommodationRoomStatus)[keyof typeof AccommodationRoomStatus];
+
+export const AccommodationRoomStatus = {
+  active: "active",
+  inactive: "inactive",
+} as const;
+
+export interface AccommodationRoom {
+  id: string;
+  tenantId: string;
+  accommodationId: string;
+  name: string;
+  category: string;
+  capacity: number;
+  status: AccommodationRoomStatus;
+  occupied: number;
+  available: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type RoomAvailability = AccommodationRoom;
+
+export interface Accommodation {
+  id: string;
+  name: string;
+  type: string;
+  /** @nullable */
+  address?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  state?: string | null;
+  /** @nullable */
+  contactName?: string | null;
+  /** @nullable */
+  phone?: string | null;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  totalRooms?: number | null;
+  amenities: string[];
+  /** @nullable */
+  pricePerNight?: number | null;
+  /** @nullable */
+  coverImage?: string | null;
+  /** @nullable */
+  rating?: number | null;
+  gallery?: string[] | null;
+  status: string;
+  createdAt: string;
+}
+
+export interface RoomAssignmentsResponse {
+  accommodation?: Accommodation | null;
+  rooms: AccommodationRoom[];
+  assignments: RoomAssignment[];
+}
+
+export type UpdateReservationRoomAssignmentsBodyAssignmentsItem = {
+  passengerId: string;
+  /** @nullable */
+  roomId: string | null;
+};
+
+export interface UpdateReservationRoomAssignmentsBody {
+  assignments: UpdateReservationRoomAssignmentsBodyAssignmentsItem[];
 }
 
 export interface ValidateCouponBody {
@@ -2836,36 +2923,6 @@ export interface UpdateVehicleBody {
   notes?: string | null;
 }
 
-export interface Accommodation {
-  id: string;
-  name: string;
-  type: string;
-  /** @nullable */
-  address?: string | null;
-  /** @nullable */
-  city?: string | null;
-  /** @nullable */
-  state?: string | null;
-  /** @nullable */
-  contactName?: string | null;
-  /** @nullable */
-  phone?: string | null;
-  /** @nullable */
-  email?: string | null;
-  /** @nullable */
-  totalRooms?: number | null;
-  amenities: string[];
-  /** @nullable */
-  pricePerNight?: number | null;
-  /** @nullable */
-  coverImage?: string | null;
-  /** @nullable */
-  rating?: number | null;
-  gallery?: string[] | null;
-  status: string;
-  createdAt: string;
-}
-
 export interface CreateAccommodationBody {
   name: string;
   type: string;
@@ -2900,6 +2957,34 @@ export interface UpdateAccommodationBody {
   totalRooms?: number | null;
   amenities?: string[];
   galleryUrls?: string[];
+}
+
+export interface CreateAccommodationRoomBody {
+  name: string;
+  category?: string;
+  /** @minimum 1 */
+  capacity: number;
+}
+
+export type UpdateAccommodationRoomBodyStatus =
+  (typeof UpdateAccommodationRoomBodyStatus)[keyof typeof UpdateAccommodationRoomBodyStatus];
+
+export const UpdateAccommodationRoomBodyStatus = {
+  active: "active",
+  inactive: "inactive",
+} as const;
+
+export interface UpdateAccommodationRoomBody {
+  name?: string;
+  category?: string;
+  /** @minimum 1 */
+  capacity?: number;
+  status?: UpdateAccommodationRoomBodyStatus;
+}
+
+export interface UpdateTripAccommodationBody {
+  /** @nullable */
+  accommodationId: string | null;
 }
 
 export interface Destination {

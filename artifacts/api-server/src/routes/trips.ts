@@ -6,7 +6,7 @@ import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { tryAddBoardingClient, removeBoardingClient, emitBoardingUpdate } from "../lib/boarding-sse";
 import { getClientIp } from "../lib/get-client-ip";
-import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, type TripImportResult } from "@workspace/db";
+import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, type TripImportResult } from "@workspace/db";
 import { checkPlanLimit } from "../lib/planLimits";
 import type { LayoutCell, FixedCostItem, VariableCostItem, FreePassenger } from "@workspace/db";
 import { eq, and, ilike, sql, desc, asc, inArray, or, gt, isNotNull } from "drizzle-orm";
@@ -141,6 +141,7 @@ async function buildTripInsertValues(
     registrationDeadline: parsedData.registrationDeadline ? parseBrazilDate(parsedData.registrationDeadline) : null,
     totalCapacity,
     availableSeats: totalCapacity,
+    accommodationId: parsedData.accommodationId ?? null,
     priceAdult: String(parsedData.priceAdult),
     priceChild: parsedData.priceChild != null ? String(parsedData.priceChild) : null,
     priceInfant: parsedData.priceInfant != null ? String(parsedData.priceInfant) : null,
@@ -436,6 +437,7 @@ export function formatTrip(t: typeof tripsTable.$inferSelect) {
     layoutId: t.layoutId ?? null,
     vehicleId: t.vehicleId ?? null,
     showSeatMap: t.showSeatMap,
+    accommodationId: t.accommodationId ?? null,
     fixedCosts: Array.isArray(t.fixedCosts) ? t.fixedCosts as FixedCostItem[] : [],
     variableCosts: Array.isArray(t.variableCosts) ? t.variableCosts as VariableCostItem[] : [],
     freeOrganizers: t.freeOrganizers ?? null,
@@ -893,6 +895,7 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
       registrationDeadline: parsed.data.registrationDeadline ? parseBrazilDate(parsed.data.registrationDeadline) : null,
       totalCapacity,
       availableSeats: totalCapacity,
+      accommodationId: parsed.data.accommodationId ?? null,
       priceAdult: String(parsed.data.priceAdult),
       priceChild: parsed.data.priceChild != null ? String(parsed.data.priceChild) : null,
       priceInfant: parsed.data.priceInfant != null ? String(parsed.data.priceInfant) : null,
@@ -1068,6 +1071,15 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
     if (parsed.data.coverImage !== undefined) updates.coverImage = parsed.data.coverImage ?? null;
     if (parsed.data.seatLayout !== undefined) updates.seatLayout = parsed.data.seatLayout ?? null;
     if (parsed.data.layoutId !== undefined) updates.layoutId = parsed.data.layoutId ?? null;
+    if (parsed.data.accommodationId !== undefined) {
+      if (parsed.data.accommodationId) {
+        const [accommodation] = await db.select({ id: accommodationsTable.id }).from(accommodationsTable)
+          .where(and(eq(accommodationsTable.id, parsed.data.accommodationId), eq(accommodationsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!accommodation) { next(new ValidationError("Hospedagem não encontrada", "ACCOMMODATION_NOT_FOUND")); return; }
+      }
+      updates.accommodationId = parsed.data.accommodationId ?? null;
+    }
 
     // Cancelling a trip also cancels its reservations. Restoring the trip must
     // not silently make those reservations active again: keep them cancelled
@@ -1322,6 +1334,11 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
               inArray(reservationsTable.id, allActiveReservationIds),
               eq(reservationsTable.tenantId, me.tenantId),
             ));
+          await tx.delete(reservationRoomAssignmentsTable)
+            .where(and(
+              inArray(reservationRoomAssignmentsTable.reservationId, allActiveReservationIds),
+              eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+            ));
         }
         for (const ref of referralsToReverse) {
           const bonusToReverse = Number(ref.bonusAmount);
@@ -1375,6 +1392,13 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
     } else {
       await db.update(tripsTable).set(updates)
         .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)));
+      if (parsed.data.accommodationId !== undefined) {
+        await db.delete(reservationRoomAssignmentsTable)
+          .where(and(
+            eq(reservationRoomAssignmentsTable.tripId, req.params.id),
+            eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+          ));
+      }
     }
 
     const [trip] = await db.select().from(tripsTable)

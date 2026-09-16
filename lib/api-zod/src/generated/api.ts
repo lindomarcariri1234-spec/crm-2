@@ -2050,6 +2050,7 @@ export const ListTripsResponse = zod.object({
         .nullish(),
       layoutId: zod.string().nullish(),
       showSeatMap: zod.boolean().nullish(),
+      accommodationId: zod.string().nullish(),
       createdAt: zod.string(),
       updatedAt: zod.string(),
     }),
@@ -2157,6 +2158,7 @@ export const CreateTripBody = zod.object({
   metaDescription: zod.string().nullish(),
   layoutId: zod.string().nullish(),
   showSeatMap: zod.boolean().nullish(),
+  accommodationId: zod.string().nullish(),
 });
 
 export const createTripResponseFreeOrganizersMin = 0;
@@ -2253,6 +2255,7 @@ export const CreateTripResponse = zod.object({
     .nullish(),
   layoutId: zod.string().nullish(),
   showSeatMap: zod.boolean().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });
@@ -2358,6 +2361,7 @@ export const GetTripResponse = zod.object({
     .nullish(),
   layoutId: zod.string().nullish(),
   showSeatMap: zod.boolean().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });
@@ -2431,6 +2435,7 @@ export const UpdateTripBody = zod.object({
   variableCosts: zod.array(zod.unknown()).optional(),
   layoutId: zod.string().nullish(),
   showSeatMap: zod.boolean().nullish(),
+  accommodationId: zod.string().nullish(),
   freePassengers: zod
     .array(
       zod.object({
@@ -2540,6 +2545,7 @@ export const UpdateTripResponse = zod.object({
     .nullish(),
   layoutId: zod.string().nullish(),
   showSeatMap: zod.boolean().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });
@@ -2973,6 +2979,7 @@ export const ListReservationsResponse = zod.object({
       discountReferralCode: zod.string().nullish(),
       discountReferralAmount: zod.number().nullish(),
       discountTotal: zod.number().nullish(),
+      accommodationId: zod.string().nullish(),
       createdAt: zod.string(),
       updatedAt: zod.string(),
       hasAutoRetry: zod.boolean().optional(),
@@ -3170,6 +3177,7 @@ export const CreateReservationResponse = zod.object({
   discountReferralCode: zod.string().nullish(),
   discountReferralAmount: zod.number().nullish(),
   discountTotal: zod.number().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
   hasAutoRetry: zod.boolean().optional(),
@@ -3322,6 +3330,7 @@ export const GetReservationResponse = zod.object({
   discountReferralCode: zod.string().nullish(),
   discountReferralAmount: zod.number().nullish(),
   discountTotal: zod.number().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
   hasAutoRetry: zod.boolean().optional(),
@@ -3511,6 +3520,7 @@ export const UpdateReservationResponse = zod.object({
   discountReferralCode: zod.string().nullish(),
   discountReferralAmount: zod.number().nullish(),
   discountTotal: zod.number().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
   hasAutoRetry: zod.boolean().optional(),
@@ -3659,6 +3669,7 @@ export const CheckInReservationResponse = zod.object({
   discountReferralCode: zod.string().nullish(),
   discountReferralAmount: zod.number().nullish(),
   discountTotal: zod.number().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
   hasAutoRetry: zod.boolean().optional(),
@@ -3736,6 +3747,127 @@ export const CheckInReservationResponse = zod.object({
       }),
     )
     .optional(),
+});
+
+/**
+ * @summary Get room availability and assignments for a reservation
+ */
+export const GetReservationRoomAssignmentsParams = zod.object({
+  reservationId: zod.coerce.string(),
+});
+
+export const GetReservationRoomAssignmentsResponse = zod.object({
+  accommodation: zod
+    .object({
+      id: zod.string(),
+      name: zod.string(),
+      type: zod.string(),
+      address: zod.string().nullish(),
+      city: zod.string().nullish(),
+      state: zod.string().nullish(),
+      contactName: zod.string().nullish(),
+      phone: zod.string().nullish(),
+      email: zod.string().nullish(),
+      totalRooms: zod.number().int().nullish(),
+      amenities: zod.array(zod.string()),
+      pricePerNight: zod.number().nullish(),
+      coverImage: zod.string().nullish(),
+      rating: zod.number().nullish(),
+      gallery: zod.array(zod.string()).nullish(),
+      status: zod.string(),
+      createdAt: zod.string(),
+    })
+    .nullish(),
+  rooms: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      accommodationId: zod.string(),
+      name: zod.string(),
+      category: zod.string(),
+      capacity: zod.number().int(),
+      status: zod.enum(["active", "inactive"]),
+      occupied: zod.number().int(),
+      available: zod.number().int(),
+      createdAt: zod.string(),
+      updatedAt: zod.string(),
+    }),
+  ),
+  assignments: zod.array(
+    zod.object({
+      id: zod.string(),
+      passengerId: zod.string(),
+      passengerName: zod.string(),
+      roomId: zod.string(),
+      roomName: zod.string(),
+      roomCategory: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Replace room assignments for a reservation
+ */
+export const UpdateReservationRoomAssignmentsParams = zod.object({
+  reservationId: zod.coerce.string(),
+});
+
+export const UpdateReservationRoomAssignmentsBody = zod.object({
+  assignments: zod.array(
+    zod.object({
+      passengerId: zod.string(),
+      roomId: zod.string().nullable(),
+    }),
+  ),
+});
+
+export const UpdateReservationRoomAssignmentsResponse = zod.object({
+  accommodation: zod
+    .object({
+      id: zod.string(),
+      name: zod.string(),
+      type: zod.string(),
+      address: zod.string().nullish(),
+      city: zod.string().nullish(),
+      state: zod.string().nullish(),
+      contactName: zod.string().nullish(),
+      phone: zod.string().nullish(),
+      email: zod.string().nullish(),
+      totalRooms: zod.number().int().nullish(),
+      amenities: zod.array(zod.string()),
+      pricePerNight: zod.number().nullish(),
+      coverImage: zod.string().nullish(),
+      rating: zod.number().nullish(),
+      gallery: zod.array(zod.string()).nullish(),
+      status: zod.string(),
+      createdAt: zod.string(),
+    })
+    .nullish(),
+  rooms: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      accommodationId: zod.string(),
+      name: zod.string(),
+      category: zod.string(),
+      capacity: zod.number().int(),
+      status: zod.enum(["active", "inactive"]),
+      occupied: zod.number().int(),
+      available: zod.number().int(),
+      createdAt: zod.string(),
+      updatedAt: zod.string(),
+    }),
+  ),
+  assignments: zod.array(
+    zod.object({
+      id: zod.string(),
+      passengerId: zod.string(),
+      passengerName: zod.string(),
+      roomId: zod.string(),
+      roomName: zod.string(),
+      roomCategory: zod.string(),
+    }),
+  ),
 });
 
 /**
@@ -5460,6 +5592,206 @@ export const DeleteAccommodationParams = zod.object({
 
 export const DeleteAccommodationResponse = zod.object({
   success: zod.boolean(),
+});
+
+/**
+ * @summary List rooms for an accommodation
+ */
+export const ListAccommodationRoomsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ListAccommodationRoomsResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  accommodationId: zod.string(),
+  name: zod.string(),
+  category: zod.string(),
+  capacity: zod.number().int(),
+  status: zod.enum(["active", "inactive"]),
+  occupied: zod.number().int(),
+  available: zod.number().int(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+export const ListAccommodationRoomsResponse = zod.array(
+  ListAccommodationRoomsResponseItem,
+);
+
+/**
+ * @summary Create a room
+ */
+export const CreateAccommodationRoomParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const CreateAccommodationRoomBody = zod.object({
+  name: zod.string(),
+  category: zod.string().optional(),
+  capacity: zod.number().int().min(1),
+});
+
+export const CreateAccommodationRoomResponse = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  accommodationId: zod.string(),
+  name: zod.string(),
+  category: zod.string(),
+  capacity: zod.number().int(),
+  status: zod.enum(["active", "inactive"]),
+  occupied: zod.number().int(),
+  available: zod.number().int(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+
+/**
+ * @summary Update a room
+ */
+export const UpdateAccommodationRoomParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateAccommodationRoomBody = zod.object({
+  name: zod.string().optional(),
+  category: zod.string().optional(),
+  capacity: zod.number().int().min(1).optional(),
+  status: zod.enum(["active", "inactive"]).optional(),
+});
+
+export const UpdateAccommodationRoomResponse = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  accommodationId: zod.string(),
+  name: zod.string(),
+  category: zod.string(),
+  capacity: zod.number().int(),
+  status: zod.enum(["active", "inactive"]),
+  occupied: zod.number().int(),
+  available: zod.number().int(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+
+/**
+ * @summary Delete a room
+ */
+export const DeleteAccommodationRoomParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteAccommodationRoomResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
+ * @summary Link an accommodation to a trip
+ */
+export const UpdateTripAccommodationParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateTripAccommodationBody = zod.object({
+  accommodationId: zod.string().nullable(),
+});
+
+export const updateTripAccommodationResponseFreeOrganizersMin = 0;
+export const updateTripAccommodationResponseFreeOrganizersMax = 2;
+
+export const updateTripAccommodationResponseFreeGuidesMin = 0;
+export const updateTripAccommodationResponseFreeGuidesMax = 2;
+
+export const UpdateTripAccommodationResponse = zod.object({
+  id: zod.string(),
+  name: zod.string(),
+  slug: zod.string(),
+  description: zod.string().nullish(),
+  destination: zod.string(),
+  destinationCity: zod.string(),
+  destinationState: zod.string(),
+  originCity: zod.string().nullish(),
+  originState: zod.string().nullish(),
+  type: zod.string(),
+  category: zod.string(),
+  departureDate: zod.string(),
+  returnDate: zod.string().nullish(),
+  departureTime: zod.string().nullish(),
+  returnTime: zod.string().nullish(),
+  totalCapacity: zod.number().int(),
+  availableSeats: zod.number().int(),
+  reservedSeats: zod.number().int(),
+  confirmedSeats: zod.number().int(),
+  priceAdult: zod.number(),
+  priceChild: zod.number().nullish(),
+  priceSenior: zod.number().nullish(),
+  inclusions: zod.array(zod.string()),
+  exclusions: zod.array(zod.string()),
+  coverImage: zod.string().nullish(),
+  gallery: zod.array(zod.string()),
+  status: zod.string(),
+  isPublic: zod.boolean(),
+  isFeatured: zod.boolean(),
+  vehiclePlate: zod.string().nullish(),
+  vehicleType: zod.string().nullish(),
+  driverName: zod.string().nullish(),
+  tourGuide: zod.string().nullish(),
+  tripOrganizer: zod.string().nullish(),
+  driver1Cpf: zod.string().nullish(),
+  driver1Cnh: zod.string().nullish(),
+  driver1CnhCategory: zod.string().nullish(),
+  driver1CnhExpiry: zod.string().nullish(),
+  driver2Name: zod.string().nullish(),
+  driver2Cpf: zod.string().nullish(),
+  driver2Cnh: zod.string().nullish(),
+  driver2CnhCategory: zod.string().nullish(),
+  driver2CnhExpiry: zod.string().nullish(),
+  tourGuideCpf: zod.string().nullish(),
+  tourGuideRegistration: zod.string().nullish(),
+  manifestNumber: zod.string().nullish(),
+  seatLayout: zod.string().nullish(),
+  boardingPoints: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        time: zod.string().nullish(),
+        address: zod.string().nullish(),
+      }),
+    )
+    .optional(),
+  itinerary: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
+  fixedCosts: zod.array(zod.unknown()).optional(),
+  variableCosts: zod.array(zod.unknown()).optional(),
+  freeOrganizers: zod
+    .number()
+    .int()
+    .min(updateTripAccommodationResponseFreeOrganizersMin)
+    .max(updateTripAccommodationResponseFreeOrganizersMax)
+    .nullish(),
+  freeGuides: zod
+    .number()
+    .int()
+    .min(updateTripAccommodationResponseFreeGuidesMin)
+    .max(updateTripAccommodationResponseFreeGuidesMax)
+    .nullish(),
+  freePassengers: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        cpf: zod.string(),
+        whatsapp: zod.string(),
+        role: zod.enum(["organizer", "guide"]),
+        seatNumber: zod.string().nullable(),
+        checkedInAt: zod.string().nullish(),
+      }),
+    )
+    .nullish(),
+  layoutId: zod.string().nullish(),
+  showSeatMap: zod.boolean().nullish(),
+  accommodationId: zod.string().nullish(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
 });
 
 /**
@@ -8511,6 +8843,7 @@ export const RegenerateTripSeatMapResponse = zod.object({
     .nullish(),
   layoutId: zod.string().nullish(),
   showSeatMap: zod.boolean().nullish(),
+  accommodationId: zod.string().nullish(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });

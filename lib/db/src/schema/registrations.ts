@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, numeric, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, integer, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -80,6 +80,23 @@ export const accommodationsTable = pgTable("accommodations", {
 export const insertAccommodationSchema = createInsertSchema(accommodationsTable).omit({ createdAt: true, updatedAt: true });
 export type InsertAccommodation = z.infer<typeof insertAccommodationSchema>;
 export type Accommodation = typeof accommodationsTable.$inferSelect;
+
+export const accommodationRoomsTable = pgTable("accommodation_rooms", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull(),
+  accommodationId: text("accommodation_id").notNull().references(() => accommodationsTable.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  category: text("category").notNull().default("standard"),
+  capacity: integer("capacity").notNull(),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+}, (t) => [
+  index("accommodation_rooms_tenant_accommodation_idx").on(t.tenantId, t.accommodationId),
+  uniqueIndex("accommodation_rooms_accommodation_name_unique").on(t.accommodationId, t.name),
+]);
+
+export type AccommodationRoom = typeof accommodationRoomsTable.$inferSelect;
 
 export const destinationsTable = pgTable("destinations", {
   id: text("id").primaryKey(),

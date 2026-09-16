@@ -1,13 +1,13 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { reservationsTable, passengersTable, tripsTable, clientsTable, storeCouponsTable, storesTable, storeOrdersTable, loyaltyMembersTable, loyaltyTransactionsTable, loyaltyProgramsTable, referralsTable, referralSettingsTable, referralCampaignsTable, dealsTable, tenantsTable, emailLogsTable, paymentsTable, commissionsTable, vehicleLayoutsTable, reservationInstallmentsTable, boardingLocationsTable, usersTable } from "@workspace/db";
-import { eq, and, sql, desc, asc, inArray, notInArray, or, ilike } from "drizzle-orm";
+import { reservationsTable, passengersTable, tripsTable, clientsTable, accommodationsTable, accommodationRoomsTable, reservationRoomAssignmentsTable, storeCouponsTable, storesTable, storeOrdersTable, loyaltyMembersTable, loyaltyTransactionsTable, loyaltyProgramsTable, referralsTable, referralSettingsTable, referralCampaignsTable, dealsTable, tenantsTable, emailLogsTable, paymentsTable, commissionsTable, vehicleLayoutsTable, reservationInstallmentsTable, boardingLocationsTable, usersTable } from "@workspace/db";
+import { eq, and, sql, desc, asc, inArray, notInArray, or, ilike, ne } from "drizzle-orm";
 import { formatBRL } from "@workspace/shared";
 import { generateId, generateVoucherCode } from "../lib/id";
 import { getTenantReservationPrefix, tripTypeToCode, getYearMonth, nextReservationSequence, buildReservationNumber } from "../lib/reservation-number";
 import { requireAuth, getTenantUser } from "../lib/tenant";
 import { deriveAgeCategory, getAgeYears, resolveChildAgeCategory, syncIsChildUnder7 } from "../lib/passenger";
-import { CreateReservationBody, UpdateReservationBody, CreatePassengerBody, UpdatePassengerBody } from "@workspace/api-zod";
+import { CreateReservationBody, UpdateReservationBody, CreatePassengerBody, UpdatePassengerBody, UpdateReservationRoomAssignmentsBody } from "@workspace/api-zod";
 import { z } from "zod/v4";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { writeClientActivity } from "../lib/activities";
@@ -132,6 +132,100 @@ async function generateInstallments(
   if (rows.length > 0) {
     await db.insert(reservationInstallmentsTable).values(rows);
   }
+}
+
+function formatRoom(room: typeof accommodationRoomsTable.$inferSelect, occupied: number) {
+  return {
+    id: room.id,
+    tenantId: room.tenantId,
+    accommodationId: room.accommodationId,
+    name: room.name,
+    category: room.category,
+    capacity: room.capacity,
+    status: room.status,
+    occupied,
+    available: Math.max(0, room.capacity - occupied),
+    createdAt: room.createdAt.toISOString(),
+    updatedAt: room.updatedAt.toISOString(),
+  };
+}
+
+async function getRoomAssignmentsPayload(reservationId: string, tenantId: string) {
+  const [reservation] = await db
+    .select({
+      id: reservationsTable.id,
+      tripId: reservationsTable.tripId,
+      accommodationId: tripsTable.accommodationId,
+    })
+    .from(reservationsTable)
+    .innerJoin(tripsTable, eq(tripsTable.id, reservationsTable.tripId))
+    .where(and(
+      eq(reservationsTable.id, reservationId),
+      eq(reservationsTable.tenantId, tenantId),
+    ))
+    .limit(1);
+
+  if (!reservation || !reservation.accommodationId) {
+    return { accommodation: null, rooms: [], assignments: [] };
+  }
+
+  const [accommodation] = await db
+    .select()
+    .from(accommodationsTable)
+    .where(and(
+      eq(accommodationsTable.id, reservation.accommodationId),
+      eq(accommodationsTable.tenantId, tenantId),
+    ))
+    .limit(1);
+
+  const rooms = await db
+    .select()
+    .from(accommodationRoomsTable)
+    .where(and(
+      eq(accommodationRoomsTable.accommodationId, reservation.accommodationId),
+      eq(accommodationRoomsTable.tenantId, tenantId),
+    ))
+    .orderBy(asc(accommodationRoomsTable.name));
+
+  const occupiedRows = await db
+    .select({ roomId: reservationRoomAssignmentsTable.roomId })
+    .from(reservationRoomAssignmentsTable)
+    .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+    .where(and(
+      eq(reservationRoomAssignmentsTable.tenantId, tenantId),
+      eq(reservationRoomAssignmentsTable.tripId, reservation.tripId),
+      inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+    ));
+  const occupiedByRoom = new Map<string, number>();
+  for (const row of occupiedRows) {
+    occupiedByRoom.set(row.roomId, (occupiedByRoom.get(row.roomId) ?? 0) + 1);
+  }
+
+  const assignments = await db
+    .select({
+      id: reservationRoomAssignmentsTable.id,
+      passengerId: reservationRoomAssignmentsTable.passengerId,
+      passengerName: passengersTable.name,
+      roomId: reservationRoomAssignmentsTable.roomId,
+      roomName: accommodationRoomsTable.name,
+      roomCategory: accommodationRoomsTable.category,
+    })
+    .from(reservationRoomAssignmentsTable)
+    .innerJoin(passengersTable, eq(passengersTable.id, reservationRoomAssignmentsTable.passengerId))
+    .innerJoin(accommodationRoomsTable, eq(accommodationRoomsTable.id, reservationRoomAssignmentsTable.roomId))
+    .where(and(
+      eq(reservationRoomAssignmentsTable.reservationId, reservationId),
+      eq(reservationRoomAssignmentsTable.tenantId, tenantId),
+    ))
+    .orderBy(asc(passengersTable.name));
+
+  return {
+    accommodation: accommodation
+      ? { ...accommodation, createdAt: accommodation.createdAt.toISOString(), updatedAt: accommodation.updatedAt.toISOString() }
+      : null,
+    rooms: rooms.map(room => formatRoom(room, occupiedByRoom.get(room.id) ?? 0)),
+    assignments,
+  };
 }
 
 export type ConflictingTrip = {
@@ -1745,6 +1839,17 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         }
       }
 
+      // Room assignments belong to a specific trip. A cancellation or a trip
+      // move invalidates them so they cannot occupy capacity in a stale
+      // itinerary or be shown as current after the reservation is released.
+      if ((isBeingCancelled && cancellationApplied) || tripChanged) {
+        await tx.delete(reservationRoomAssignmentsTable)
+          .where(and(
+            eq(reservationRoomAssignmentsTable.reservationId, req.params.id),
+            eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+          ));
+      }
+
       // If another capacity-changing request won the reservation lock, do not
       // overwrite its status with the stale value from this request. Other
       // fields in the PATCH remain eligible for the normal update below.
@@ -2869,6 +2974,156 @@ router.post("/reservations/import-manifest", async (req, res, next: NextFunction
       broadcastSeatUpdate(candidate.reservation.tripId, me.tenantId).catch(() => {});
     }
     res.json({ created, updated, skipped, errors, warnings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/reservations/:reservationId/room-assignments", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const [reservation] = await db.select({ id: reservationsTable.id })
+      .from(reservationsTable)
+      .where(and(eq(reservationsTable.id, req.params.reservationId), eq(reservationsTable.tenantId, me.tenantId)))
+      .limit(1);
+    if (!reservation) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
+    res.json(await getRoomAssignmentsPayload(req.params.reservationId, me.tenantId));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put("/reservations/:reservationId/room-assignments", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.RESERVATIONS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    const parsed = UpdateReservationRoomAssignmentsBody.safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR"));
+      return;
+    }
+
+    await db.transaction(async (tx) => {
+      const lockedTripResult = await tx.execute<{ accommodation_id: string | null }>(sql`
+        SELECT accommodation_id
+        FROM trips
+        WHERE id = (
+          SELECT trip_id FROM reservations
+          WHERE id = ${req.params.reservationId} AND tenant_id = ${me.tenantId}
+        )
+        FOR UPDATE
+      `);
+      const lockedTrip = lockedTripResult.rows[0];
+      if (!lockedTrip) throw new NotFoundError("Reservation not found", "NOT_FOUND");
+
+      const [reservation] = await tx.select({
+        id: reservationsTable.id,
+        tripId: reservationsTable.tripId,
+      }).from(reservationsTable).where(and(
+        eq(reservationsTable.id, req.params.reservationId),
+        eq(reservationsTable.tenantId, me.tenantId),
+      )).limit(1);
+      if (!reservation) throw new NotFoundError("Reservation not found", "NOT_FOUND");
+
+      const passengers = await tx.select({ id: passengersTable.id })
+        .from(passengersTable)
+        .where(eq(passengersTable.reservationId, reservation.id));
+      const passengerIds = new Set(passengers.map(passenger => passenger.id));
+      const requested = parsed.data.assignments;
+      const requestedPassengerIds = new Set<string>();
+      const requestedRoomIds = requested
+        .map(assignment => assignment.roomId)
+        .filter((roomId): roomId is string => roomId != null);
+
+      for (const assignment of requested) {
+        if (!passengerIds.has(assignment.passengerId)) {
+          throw new ValidationError("Passageiro não pertence à reserva", "PASSENGER_NOT_IN_RESERVATION");
+        }
+        if (requestedPassengerIds.has(assignment.passengerId)) {
+          throw new ValidationError("Passageiro repetido nas atribuições", "DUPLICATE_PASSENGER_ASSIGNMENT");
+        }
+        requestedPassengerIds.add(assignment.passengerId);
+      }
+
+      if (requestedRoomIds.length > 0 && !lockedTrip.accommodation_id) {
+        throw new ValidationError("A viagem não possui hospedagem vinculada", "TRIP_ACCOMMODATION_REQUIRED");
+      }
+
+      const rooms = lockedTrip.accommodation_id
+        ? await tx.select().from(accommodationRoomsTable).where(and(
+          eq(accommodationRoomsTable.tenantId, me.tenantId),
+          eq(accommodationRoomsTable.accommodationId, lockedTrip.accommodation_id),
+          inArray(accommodationRoomsTable.id, [...new Set(requestedRoomIds)]),
+        ))
+        : [];
+      const roomsById = new Map(rooms.map(room => [room.id, room]));
+      const requestedByRoom = new Map<string, number>();
+      for (const roomId of requestedRoomIds) {
+        const room = roomsById.get(roomId);
+        if (!room) throw new ValidationError("Quarto não encontrado nesta hospedagem", "ROOM_NOT_FOUND");
+        if (room.status !== "active") throw new ValidationError("Quarto inativo não pode receber passageiros", "ROOM_INACTIVE");
+        requestedByRoom.set(roomId, (requestedByRoom.get(roomId) ?? 0) + 1);
+      }
+
+      if (requestedRoomIds.length > 0) {
+        const otherAssignments = await tx.select({ roomId: reservationRoomAssignmentsTable.roomId })
+          .from(reservationRoomAssignmentsTable)
+          .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+          .where(and(
+            eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+            eq(reservationRoomAssignmentsTable.tripId, reservation.tripId),
+            ne(reservationRoomAssignmentsTable.reservationId, reservation.id),
+            inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+          ));
+        const occupiedByRoom = new Map<string, number>();
+        for (const assignment of otherAssignments) {
+          occupiedByRoom.set(assignment.roomId, (occupiedByRoom.get(assignment.roomId) ?? 0) + 1);
+        }
+        for (const [roomId, requestedCount] of requestedByRoom) {
+          const room = roomsById.get(roomId)!;
+          const occupied = (occupiedByRoom.get(roomId) ?? 0) + requestedCount;
+          if (occupied > room.capacity) {
+            throw new AppError(
+              `O quarto ${room.name} não possui vagas suficientes`,
+              409,
+              "ROOM_CAPACITY_EXCEEDED",
+              { roomId, capacity: room.capacity, occupied },
+            );
+          }
+        }
+      }
+
+      await tx.delete(reservationRoomAssignmentsTable)
+        .where(and(
+          eq(reservationRoomAssignmentsTable.reservationId, reservation.id),
+          eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+        ));
+      if (requestedRoomIds.length > 0) {
+        await tx.insert(reservationRoomAssignmentsTable).values(
+          requested
+            .filter(assignment => assignment.roomId != null)
+            .map(assignment => ({
+              id: generateId(),
+              tenantId: me.tenantId,
+              tripId: reservation.tripId,
+              reservationId: reservation.id,
+              passengerId: assignment.passengerId,
+              roomId: assignment.roomId!,
+            })),
+        );
+      }
+    });
+
+    res.json(await getRoomAssignmentsPayload(req.params.reservationId, me.tenantId));
   } catch (err) {
     next(err);
   }

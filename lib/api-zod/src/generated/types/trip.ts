@@ -105,6 +105,8 @@ export interface Trip {
   layoutId?: string | null;
   /** @nullable */
   showSeatMap?: boolean | null;
+  /** @nullable */
+  accommodationId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
