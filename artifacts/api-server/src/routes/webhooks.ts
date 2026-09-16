@@ -376,7 +376,7 @@ router.post("/webhooks/stripe/:storeSlug", async (req, res, next: NextFunction):
   }
 });
 
-async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise<void> {
+export async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise<void> {
   const obj = event.data?.object ?? {};
 
   if (event.type === "payment_intent.succeeded") {
