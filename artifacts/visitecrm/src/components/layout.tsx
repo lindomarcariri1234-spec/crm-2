@@ -239,6 +239,14 @@ const AGENCY_NAVIGATION: NavItem[] = [
     ],
   },
   {
+    name: "PMS",
+    href: "/pms",
+    icon: Building2,
+    children: [
+      { name: "Operação de hospedagens", href: "/pms/hospedagens", icon: Building2 },
+    ],
+  },
+  {
     name: "Analíticos",
     href: "/analytics",
     icon: BarChart2,

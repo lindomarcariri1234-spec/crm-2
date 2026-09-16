@@ -44,11 +44,10 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { ListLoadErrorRow } from "@/components/list-load-error";
-import { Plus, Pencil, Trash2, Search, Hotel, Star, Images, ChevronLeft, ChevronRight, X, BedDouble, SlidersHorizontal } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Hotel, Star, Images, ChevronLeft, ChevronRight, X, BedDouble } from "lucide-react";
 import { GalleryUpload } from "@/components/gallery-upload";
 import { AccommodationHelp } from "@/components/accommodation-help";
 import { formatCurrencyBRL as formatCurrency } from "@/lib/utils";
-import { AccommodationOperationsPanel } from "@/components/accommodation-operations-panel";
 
 const ACCOMMODATION_TYPES = ["Hotel", "Pousada", "Resort", "Hostel", "Chácara", "Chalé", "Outro"];
 const AMENITY_OPTIONS = [
@@ -72,7 +71,6 @@ export default function Hospedagens() {
   const updateAcc = useUpdateAccommodation();
   const deleteAcc = useDeleteAccommodation();
   const [roomsFor, setRoomsFor] = useState<Accommodation | null>(null);
-  const [operationsFor, setOperationsFor] = useState<Accommodation | null>(null);
   const [roomForm, setRoomForm] = useState<CreateAccommodationRoomBody>({ name: "", category: "standard", capacity: 2 });
   const [editingRoom, setEditingRoom] = useState<AccommodationRoom | null>(null);
   const { data: rooms = [], refetch: refetchRooms } = useListAccommodationRooms(roomsFor?.id ?? "", {
@@ -229,7 +227,7 @@ export default function Hospedagens() {
         <div>
           <h1 className="text-2xl font-bold">Hospedagens</h1>
           <p className="text-sm text-muted-foreground">
-            {accommodations.length} hospedagem(ns) cadastrada(s)
+            Base de referência com {accommodations.length} parceiro(s) para consulta comercial e operacional
           </p>
         </div>
         <Button data-testid="button-new-hospedagem" onClick={openCreate}>
@@ -327,9 +325,6 @@ export default function Hospedagens() {
                       )}
                       <Button variant="ghost" size="icon" aria-label={`Gerenciar quartos de ${a.name}`} title="Gerenciar quartos" onClick={() => openRooms(a)}>
                         <BedDouble className="w-4 h-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon" aria-label={`Operação de ${a.name}`} title="Tarifas e disponibilidade" onClick={() => setOperationsFor(a)}>
-                        <SlidersHorizontal className="w-4 h-4" />
                       </Button>
                       <Button variant="ghost" size="icon" aria-label={`Editar ${a.name}`} onClick={() => openEdit(a)}>
                         <Pencil className="w-4 h-4" />
@@ -603,15 +598,6 @@ export default function Hospedagens() {
               </div>
             )}
           </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!operationsFor} onOpenChange={(open) => { if (!open) setOperationsFor(null); }}>
-        <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Operação — {operationsFor?.name}</DialogTitle>
-          </DialogHeader>
-          {operationsFor && <AccommodationOperationsPanel accommodationId={operationsFor.id} />}
         </DialogContent>
       </Dialog>
 
