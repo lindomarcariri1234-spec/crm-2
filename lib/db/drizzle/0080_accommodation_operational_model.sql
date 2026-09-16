@@ -30,9 +30,19 @@ CREATE INDEX IF NOT EXISTS "trip_accommodations_tenant_trip_idx" ON "trip_accomm
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "trip_accommodations_tenant_accommodation_idx" ON "trip_accommodations" ("tenant_id", "accommodation_id");
 --> statement-breakpoint
-ALTER TABLE "trip_accommodations" ADD CONSTRAINT "trip_accommodations_tenant_fk" FOREIGN KEY ("tenant_id") REFERENCES "tenants"("id") ON DELETE CASCADE;
+DO $$ BEGIN
+  ALTER TABLE "trip_accommodations"
+    ADD CONSTRAINT "trip_accommodations_tenant_fk"
+    FOREIGN KEY ("tenant_id") REFERENCES "tenants"("id") ON DELETE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "trip_accommodations" ADD CONSTRAINT "trip_accommodations_accommodation_fk" FOREIGN KEY ("accommodation_id") REFERENCES "accommodations"("id") ON DELETE RESTRICT;
+DO $$ BEGIN
+  ALTER TABLE "trip_accommodations"
+    ADD CONSTRAINT "trip_accommodations_accommodation_fk"
+    FOREIGN KEY ("accommodation_id") REFERENCES "accommodations"("id") ON DELETE RESTRICT;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS "accommodation_room_beds" (
   "id" text PRIMARY KEY NOT NULL,
