@@ -1881,6 +1881,13 @@ export interface AccommodationRoom {
   name: string;
   category: string;
   capacity: number;
+  description: string | null;
+  standardOccupancy: number | null;
+  bedConfiguration: string | null;
+  bathroomType: string | null;
+  floor: string | null;
+  currency: string;
+  isActive: boolean;
   pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;
@@ -2889,6 +2896,12 @@ export interface Vehicle {
   type: string;
   plate: string;
   capacity: number;
+  description?: string | null;
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @nullable */
   model?: string | null;
   /** @nullable */
@@ -2995,6 +3008,12 @@ export interface CreateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity: number;
+  description?: string | null;
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @minimum 0 */
   pricePerNight?: number | null;
 }
@@ -3012,6 +3031,12 @@ export interface UpdateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity?: number;
+  description?: string | null;
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @minimum 0 */
   pricePerNight?: number | null;
   status?: UpdateAccommodationRoomBodyStatus;

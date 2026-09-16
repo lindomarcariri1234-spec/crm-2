@@ -5702,6 +5702,12 @@ export const CreateAccommodationRoomBody = zod.object({
   name: zod.string(),
   category: zod.string().optional(),
   capacity: zod.number().int().min(1),
+  description: zod.string().nullish(),
+  standardOccupancy: zod.number().int().min(1).nullish(),
+  bedConfiguration: zod.string().nullish(),
+  bathroomType: zod.string().nullish(),
+  floor: zod.string().nullish(),
+  currency: zod.string().length(3).optional(),
   pricePerNight: zod
     .number()
     .min(createAccommodationRoomBodyPricePerNightMin)
@@ -5715,6 +5721,13 @@ export const CreateAccommodationRoomResponse = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
+  description: zod.string().nullable(),
+  standardOccupancy: zod.number().int().nullable(),
+  bedConfiguration: zod.string().nullable(),
+  bathroomType: zod.string().nullable(),
+  floor: zod.string().nullable(),
+  currency: zod.string(),
+  isActive: zod.boolean(),
   pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),
@@ -5736,6 +5749,12 @@ export const UpdateAccommodationRoomBody = zod.object({
   name: zod.string().optional(),
   category: zod.string().optional(),
   capacity: zod.number().int().min(1).optional(),
+  description: zod.string().nullish(),
+  standardOccupancy: zod.number().int().min(1).nullish(),
+  bedConfiguration: zod.string().nullish(),
+  bathroomType: zod.string().nullish(),
+  floor: zod.string().nullish(),
+  currency: zod.string().length(3).optional(),
   pricePerNight: zod
     .number()
     .min(updateAccommodationRoomBodyPricePerNightMin)
@@ -5750,6 +5769,13 @@ export const UpdateAccommodationRoomResponse = zod.object({
   name: zod.string(),
   category: zod.string(),
   capacity: zod.number().int(),
+  description: zod.string().nullable(),
+  standardOccupancy: zod.number().int().nullable(),
+  bedConfiguration: zod.string().nullable(),
+  bathroomType: zod.string().nullable(),
+  floor: zod.string().nullable(),
+  currency: zod.string(),
+  isActive: zod.boolean(),
   pricePerNight: zod.number().nullable(),
   status: zod.enum(["active", "inactive"]),
   occupied: zod.number().int(),

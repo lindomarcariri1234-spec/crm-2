@@ -15,6 +15,7 @@ After editing all three source files:
 - Rebuild api-zod: `cd lib/api-zod && pnpm tsc --build`
 - Rebuild api-client-react: `cd lib/api-client-react && pnpm tsc --build`
 - The visitecrm frontend then picks up the updated types through project references
+- For request-body changes, update the matching body interfaces in both generated trees as well, then rebuild `api-client-react` before running the frontend typecheck; parallel checks can otherwise read stale `dist` declarations.
 
 **Why:** `lib/api-client-react/src/generated/api.ts` imports types from `./api.schemas` (a local file), NOT from `@workspace/api-zod`. Fixing only api-zod leaves the frontend with stale types — confirmed when CalendarStatus `status` field addition to api-zod still caused TS2339 in configuracoes.tsx until api.schemas.ts was also updated.
 

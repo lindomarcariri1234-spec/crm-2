@@ -12,6 +12,12 @@ export interface UpdateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity?: number;
+  description?: string | null;
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @minimum 0 */
   pricePerNight?: number | null;
   status?: UpdateAccommodationRoomBodyStatus;

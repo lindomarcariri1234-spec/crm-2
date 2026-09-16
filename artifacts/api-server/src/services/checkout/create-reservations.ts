@@ -8,6 +8,10 @@ import {
   passengersTable,
   tripsTable,
   paymentsTable,
+  accommodationsTable,
+  accommodationStaysTable,
+  accommodationStayGuestsTable,
+  tripAccommodationsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { generateId, generateVoucherCode } from "../../lib/id";
@@ -32,6 +36,121 @@ import { recalculateClientFinancials } from "../client-financials";
 import { findTripSeatConflicts } from "../reservation-capacity";
 
 export const CHECKOUT_RESERVATION_HOLD_MINUTES = 30;
+
+function brazilDateOnly(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const result = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${result.year}-${result.month}-${result.day}`;
+}
+
+async function createAccommodationStaysForOrder(
+  exec: Tx,
+  order: {
+    id: string;
+    tenantId: string;
+    clientId: string | null;
+    customerName: string;
+    customerCpf: string | null;
+    coPassengers: Array<{ name: string; cpf?: string; phone?: string }> | null;
+  },
+  items: Array<{
+    productId: string;
+    quantity: number;
+    total: string | null;
+    metadata: Record<string, unknown> | null;
+  }>,
+  productMap: Map<string, typeof storeProductsTable.$inferSelect>,
+) {
+  const lodgingItems = items.filter(item => productMap.get(item.productId)?.accommodationId);
+  if (lodgingItems.length === 0) return;
+
+  const existingStays = await exec.select({ accommodationId: accommodationStaysTable.accommodationId })
+    .from(accommodationStaysTable)
+    .where(and(eq(accommodationStaysTable.tenantId, order.tenantId), eq(accommodationStaysTable.storeOrderId, order.id)));
+  const existingAccommodationIds = new Set(existingStays.map(stay => stay.accommodationId));
+
+  for (const item of lodgingItems) {
+    const product = productMap.get(item.productId)!;
+    if (!product.accommodationId || existingAccommodationIds.has(product.accommodationId)) continue;
+    const [accommodation] = await exec.select({ id: accommodationsTable.id }).from(accommodationsTable).where(and(
+      eq(accommodationsTable.id, product.accommodationId),
+      eq(accommodationsTable.tenantId, order.tenantId),
+      eq(accommodationsTable.status, "active"),
+    )).limit(1);
+    if (!accommodation) {
+      throw new AppError("A hospedagem deste produto não está disponível", 409, "ACCOMMODATION_NOT_AVAILABLE");
+    }
+
+    const metadata = item.metadata ?? {};
+    const checkIn = typeof metadata.checkIn === "string"
+      ? metadata.checkIn
+      : product.startDate ? brazilDateOnly(product.startDate) : null;
+    let checkOut = typeof metadata.checkOut === "string"
+      ? metadata.checkOut
+      : product.endDate ? brazilDateOnly(product.endDate) : null;
+    if (!checkIn) throw new AppError("O produto de hospedagem precisa informar a data de entrada", 400, "ACCOMMODATION_CHECK_IN_REQUIRED");
+    if (!checkOut && product.durationNights && product.durationNights > 0) {
+      const date = new Date(`${checkIn}T12:00:00Z`);
+      date.setUTCDate(date.getUTCDate() + product.durationNights);
+      checkOut = date.toISOString().slice(0, 10);
+    }
+    if (!checkOut || checkOut <= checkIn) {
+      throw new AppError("O produto de hospedagem precisa informar um período válido", 400, "ACCOMMODATION_PERIOD_REQUIRED");
+    }
+    const nights = Math.max(1, Math.round(
+      (new Date(`${checkOut}T12:00:00Z`).getTime() - new Date(`${checkIn}T12:00:00Z`).getTime()) / 86_400_000,
+    ));
+    const [tripContext] = product.tripId
+      ? await exec.select({ id: tripAccommodationsTable.id }).from(tripAccommodationsTable).where(and(
+        eq(tripAccommodationsTable.tenantId, order.tenantId),
+        eq(tripAccommodationsTable.tripId, product.tripId),
+        eq(tripAccommodationsTable.accommodationId, product.accommodationId),
+        eq(tripAccommodationsTable.isPrimary, true),
+      )).limit(1)
+      : [];
+    const stayId = generateId();
+    await exec.insert(accommodationStaysTable).values({
+      id: stayId,
+      tenantId: order.tenantId,
+      accommodationId: product.accommodationId,
+      tripAccommodationId: tripContext?.id ?? null,
+      tripId: product.tripId ?? null,
+      storeOrderId: order.id,
+      clientId: order.clientId,
+      source: "STORE_ORDER",
+      checkIn,
+      checkOut,
+      nights,
+      status: "held",
+      pricingType: "PACKAGE",
+      contractedTotal: item.total ?? String(Number(product.price) * item.quantity),
+      frozenTotal: item.total ?? String(Number(product.price) * item.quantity),
+    });
+    const guests = [
+      { name: order.customerName, document: order.customerCpf, passengerId: null as string | null },
+      ...(order.coPassengers ?? []).map(guest => ({ name: guest.name, document: guest.cpf ?? null, passengerId: null })),
+    ];
+    for (const guest of guests) {
+      await exec.insert(accommodationStayGuestsTable).values({
+        id: generateId(),
+        tenantId: order.tenantId,
+        stayId,
+        clientId: order.clientId,
+        passengerId: guest.passengerId,
+        name: guest.name,
+        document: guest.document,
+        guestType: "adult",
+        status: "expected",
+      });
+    }
+    existingAccommodationIds.add(product.accommodationId);
+  }
+}
 
 function checkoutReservationExpiry(now = new Date()): Date {
   return new Date(now.getTime() + CHECKOUT_RESERVATION_HOLD_MINUTES * 60_000);
@@ -141,6 +260,7 @@ export async function createReservationsForOrder(
       quantity: storeOrderItemsTable.quantity,
       price: storeOrderItemsTable.price,
       total: storeOrderItemsTable.total,
+      metadata: storeOrderItemsTable.metadata,
     })
     .from(storeOrderItemsTable)
     .where(eq(storeOrderItemsTable.orderId, orderId));
@@ -154,6 +274,14 @@ export async function createReservationsForOrder(
     .where(inArray(storeProductsTable.id, productIds));
 
   const productMap = new Map(products.map((p) => [p.id, p]));
+  await createAccommodationStaysForOrder(exec, {
+    id: order.id,
+    tenantId: order.tenantId,
+    clientId: order.clientId ?? null,
+    customerName: order.customerName,
+    customerCpf: order.customerCpf ?? null,
+    coPassengers: order.coPassengers ?? null,
+  }, items, productMap);
 
   const tripLinkedProducts = new Map<string, {
     product: typeof storeProductsTable.$inferSelect;

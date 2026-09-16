@@ -742,6 +742,7 @@ router.get("/public/store/:slug/products", async (req, res, next: NextFunction):
       shortDescription: storeProductsTable.shortDescription,
       categoryId: storeProductsTable.categoryId,
       tripId: storeProductsTable.tripId,
+      accommodationId: storeProductsTable.accommodationId,
       includes: storeProductsTable.includes,
       price: storeProductsTable.price,
       comparePrice: storeProductsTable.comparePrice,

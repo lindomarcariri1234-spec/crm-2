@@ -435,6 +435,7 @@ export interface StoreProduct {
   storeId?: string;
   categoryId?: string | null;
   tripId?: string | null;
+  accommodationId?: string | null;
   availableSeats?: number | null;
   totalCapacity?: number | null;
   departureDate?: string | null;
@@ -702,6 +703,7 @@ export interface ProductInput {
   type?: string;
   categoryId?: string;
   tripId?: string;
+  accommodationId?: string | null;
   shortDescription?: string;
   description?: string;
   price?: string;
