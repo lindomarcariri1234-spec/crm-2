@@ -13,6 +13,9 @@ import {
   accommodationStayGuestsTable,
   accommodationStayRateLinesTable,
   accommodationRoomAssignmentsTable,
+  reservationRoomAssignmentsTable,
+  reservationsTable,
+  tripsTable,
 } from "@workspace/db";
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -20,6 +23,7 @@ import { requireAuth } from "../lib/tenant";
 import { ADMIN_ROLES } from "../lib/tenant";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { generateId } from "../lib/id";
+import { ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
 
 const router = Router();
 
@@ -66,6 +70,7 @@ function formatRoom(room: typeof accommodationRoomsTable.$inferSelect) {
 
 const RateBody = z.object({
   roomId: z.string().optional().nullable(),
+  reservationId: z.string().optional().nullable(),
   category: z.string().optional().nullable(),
   validFrom: z.string().regex(DATE_RE),
   validTo: z.string().regex(DATE_RE),
@@ -76,6 +81,7 @@ const RateBody = z.object({
   minOccupancy: z.number().int().positive().optional().nullable(),
   maxOccupancy: z.number().int().positive().optional().nullable(),
   priority: z.number().int().optional(),
+  status: z.enum(["active", "inactive"]).optional(),
   changeReason: z.string().trim().max(500).optional(),
 });
 
@@ -157,11 +163,13 @@ async function chooseRate(
   checkOut: string,
   nights: number,
   occupancy: number,
+  reservationId?: string | null,
 ) {
   const rates = await exec.select().from(accommodationRatesTable).where(and(
     eq(accommodationRatesTable.tenantId, tenantId),
     eq(accommodationRatesTable.accommodationId, accommodationId),
     eq(accommodationRatesTable.status, "active"),
+    or(isNull(accommodationRatesTable.reservationId), reservationId ? eq(accommodationRatesTable.reservationId, reservationId) : sql`false`),
     lte(accommodationRatesTable.validFrom, checkIn),
     gte(accommodationRatesTable.validTo, checkOut),
     or(isNull(accommodationRatesTable.roomId), eq(accommodationRatesTable.roomId, room.id)),
@@ -175,8 +183,8 @@ async function chooseRate(
       && (rate.maxOccupancy == null || occupancy <= rate.maxOccupancy),
     )
     .sort((a, b) => {
-      const specificityA = (a.roomId ? 2 : 0) + (a.category ? 1 : 0);
-      const specificityB = (b.roomId ? 2 : 0) + (b.category ? 1 : 0);
+      const specificityA = (a.reservationId ? 4 : 0) + (a.roomId ? 2 : 0) + (a.category ? 1 : 0);
+      const specificityB = (b.reservationId ? 4 : 0) + (b.roomId ? 2 : 0) + (b.category ? 1 : 0);
       return specificityB - specificityA || b.priority - a.priority;
     })[0] ?? null;
 }
@@ -244,16 +252,35 @@ async function ensureRoomCanReceiveGuests(
       ));
     used = Number(row?.count ?? 0);
   }
-  const [inventory] = await exec.select({ capacityOverride: accommodationRoomInventoryTable.capacityOverride })
+  const legacyAssignments = await exec.select({ id: reservationRoomAssignmentsTable.id })
+    .from(reservationRoomAssignmentsTable)
+    .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+    .innerJoin(tripsTable, eq(tripsTable.id, reservationRoomAssignmentsTable.tripId))
+    .where(and(
+      eq(reservationRoomAssignmentsTable.tenantId, tenantId),
+      eq(reservationRoomAssignmentsTable.roomId, roomId),
+      eq(tripsTable.accommodationId, accommodationId),
+      inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+      lt(tripsTable.departureDate, new Date(`${checkOut}T12:00:00Z`)),
+      gt(tripsTable.returnDate, new Date(`${checkIn}T12:00:00Z`)),
+    ));
+  used += legacyAssignments.length;
+  const inventoryRows = await exec.select({
+    inventoryDate: accommodationRoomInventoryTable.inventoryDate,
+    status: accommodationRoomInventoryTable.status,
+    capacityOverride: accommodationRoomInventoryTable.capacityOverride,
+  })
     .from(accommodationRoomInventoryTable)
     .where(and(
+      eq(accommodationRoomInventoryTable.tenantId, tenantId),
       eq(accommodationRoomInventoryTable.roomId, roomId),
       gte(accommodationRoomInventoryTable.inventoryDate, checkIn),
       lt(accommodationRoomInventoryTable.inventoryDate, checkOut),
-    ))
-    .orderBy(accommodationRoomInventoryTable.inventoryDate)
-    .limit(1);
-  const capacity = inventory?.capacityOverride ?? room.capacity;
+    ));
+  const capacity = inventoryRows.reduce(
+    (minimum, row) => row.capacityOverride == null ? minimum : Math.min(minimum, row.capacityOverride),
+    room.capacity,
+  );
   if (used + guestCount > capacity) {
     throw new ValidationError(`O quarto ${room.name} não possui capacidade para todos os hóspedes`, "ROOM_CAPACITY_CONFLICT");
   }
@@ -269,6 +296,28 @@ router.get("/accommodations/:id/rates", async (req, res, next: NextFunction) => 
       .where(and(eq(accommodationRatesTable.tenantId, me.tenantId), eq(accommodationRatesTable.accommodationId, req.params.id)))
       .orderBy(desc(accommodationRatesTable.priority), desc(accommodationRatesTable.validFrom));
     res.json(rates.map(formatRate));
+  } catch (err) { next(err); }
+});
+
+router.get("/accommodations/:id/rate-history", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    await findAccommodation(me.tenantId, req.params.id);
+    const history = await db.select().from(accommodationRateHistoryTable)
+      .innerJoin(accommodationRatesTable, eq(accommodationRatesTable.id, accommodationRateHistoryTable.rateId))
+      .where(and(
+        eq(accommodationRateHistoryTable.tenantId, me.tenantId),
+        eq(accommodationRatesTable.accommodationId, req.params.id),
+      ))
+      .orderBy(desc(accommodationRateHistoryTable.createdAt));
+    res.json(history.map(({ accommodation_rate_history: item, accommodation_rates: rate }) => ({
+      ...item,
+      rateId: item.rateId,
+      rateLabel: rate.reservationId ? `Reserva ${rate.reservationId}` : rate.category ?? "Hospedagem",
+      previousValue: item.previousValue == null ? null : Number(item.previousValue),
+      newValue: item.newValue == null ? null : Number(item.newValue),
+    })));
   } catch (err) { next(err); }
 });
 
@@ -293,7 +342,7 @@ router.post("/accommodations/:id/rates", async (req, res, next: NextFunction) =>
     await db.transaction(async tx => {
       await tx.insert(accommodationRatesTable).values({
         id, tenantId: me.tenantId, accommodationId: req.params.id,
-        roomId: parsed.data.roomId ?? null, category: parsed.data.category ?? null,
+        roomId: parsed.data.roomId ?? null, reservationId: parsed.data.reservationId ?? null, category: parsed.data.category ?? null,
         validFrom: parsed.data.validFrom, validTo: parsed.data.validTo, pricingType: parsed.data.pricingType,
         amount: String(parsed.data.amount), minNights: parsed.data.minNights ?? null, maxNights: parsed.data.maxNights ?? null,
         minOccupancy: parsed.data.minOccupancy ?? null, maxOccupancy: parsed.data.maxOccupancy ?? null,
@@ -308,6 +357,56 @@ router.post("/accommodations/:id/rates", async (req, res, next: NextFunction) =>
     const [rate] = await db.select().from(accommodationRatesTable).where(eq(accommodationRatesTable.id, id)).limit(1);
     if (!rate) throw new AppError("Falha ao criar tarifa", 500, "RATE_CREATE_FAILED");
     res.status(201).json({ ...formatRate(rate), nights });
+  } catch (err) { next(err); }
+});
+
+router.patch("/accommodation-rates/:id", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = RateBody.partial().safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(parsed.error.message, "INVALID_RATE")); return; }
+    const [existing] = await db.select().from(accommodationRatesTable).where(and(
+      eq(accommodationRatesTable.id, req.params.id),
+      eq(accommodationRatesTable.tenantId, me.tenantId),
+    )).limit(1);
+    if (!existing) { next(new NotFoundError("Tarifa não encontrada", "RATE_NOT_FOUND")); return; }
+    const validFrom = parsed.data.validFrom ?? existing.validFrom;
+    const validTo = parsed.data.validTo ?? existing.validTo;
+    assertDateRange(validFrom, validTo);
+    const nextValue = {
+      roomId: parsed.data.roomId === undefined ? existing.roomId : parsed.data.roomId,
+      reservationId: parsed.data.reservationId === undefined ? existing.reservationId : parsed.data.reservationId,
+      category: parsed.data.category === undefined ? existing.category : parsed.data.category,
+      validFrom,
+      validTo,
+      pricingType: parsed.data.pricingType ?? existing.pricingType,
+      amount: parsed.data.amount === undefined ? existing.amount : String(parsed.data.amount),
+      minNights: parsed.data.minNights === undefined ? existing.minNights : parsed.data.minNights,
+      maxNights: parsed.data.maxNights === undefined ? existing.maxNights : parsed.data.maxNights,
+      minOccupancy: parsed.data.minOccupancy === undefined ? existing.minOccupancy : parsed.data.minOccupancy,
+      maxOccupancy: parsed.data.maxOccupancy === undefined ? existing.maxOccupancy : parsed.data.maxOccupancy,
+      priority: parsed.data.priority ?? existing.priority,
+      status: parsed.data.status ?? existing.status,
+    };
+    await db.transaction(async tx => {
+      await tx.update(accommodationRatesTable).set(nextValue).where(eq(accommodationRatesTable.id, existing.id));
+      await tx.insert(accommodationRateHistoryTable).values({
+        id: generateId(),
+        tenantId: me.tenantId,
+        rateId: existing.id,
+        action: "updated",
+        previousValue: existing.amount,
+        newValue: String(nextValue.amount),
+        previousPeriod: `${existing.validFrom}/${existing.validTo}`,
+        newPeriod: `${nextValue.validFrom}/${nextValue.validTo}`,
+        changedBy: me.id,
+        changeReason: parsed.data.changeReason ?? null,
+      });
+    });
+    const [updated] = await db.select().from(accommodationRatesTable).where(eq(accommodationRatesTable.id, existing.id)).limit(1);
+    res.json(formatRate(updated!));
   } catch (err) { next(err); }
 });
 
@@ -407,6 +506,106 @@ router.post("/accommodations/:id/blocks", async (req, res, next: NextFunction) =
   } catch (err) { next(err); }
 });
 
+router.get("/accommodations/:id/blocks", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    await findAccommodation(me.tenantId, req.params.id);
+    const blocks = await db.select().from(accommodationRoomBlocksTable)
+      .where(and(
+        eq(accommodationRoomBlocksTable.tenantId, me.tenantId),
+        eq(accommodationRoomBlocksTable.accommodationId, req.params.id),
+      ))
+      .orderBy(desc(accommodationRoomBlocksTable.startDate));
+    res.json(blocks);
+  } catch (err) { next(err); }
+});
+
+router.delete("/accommodation-room-blocks/:id", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const [block] = await db.select().from(accommodationRoomBlocksTable).where(and(
+      eq(accommodationRoomBlocksTable.id, req.params.id),
+      eq(accommodationRoomBlocksTable.tenantId, me.tenantId),
+    )).limit(1);
+    if (!block) { next(new NotFoundError("Bloqueio não encontrado", "BLOCK_NOT_FOUND")); return; }
+    await db.delete(accommodationRoomBlocksTable).where(eq(accommodationRoomBlocksTable.id, block.id));
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+const InventoryBody = z.object({
+  inventoryDate: z.string().regex(DATE_RE),
+  status: z.enum(["available", "blocked", "maintenance", "closed"]).default("available"),
+  capacityOverride: z.number().int().min(0).optional().nullable(),
+  blockedReason: z.string().max(500).optional().nullable(),
+  maintenanceReason: z.string().max(500).optional().nullable(),
+});
+
+router.get("/accommodation-rooms/:id/inventory", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const [room] = await db.select({ id: accommodationRoomsTable.id }).from(accommodationRoomsTable).where(and(
+      eq(accommodationRoomsTable.id, req.params.id),
+      eq(accommodationRoomsTable.tenantId, me.tenantId),
+    )).limit(1);
+    if (!room) { next(new NotFoundError("Quarto não encontrado", "ROOM_NOT_FOUND")); return; }
+    const from = String(req.query.from ?? "0001-01-01");
+    const to = String(req.query.to ?? "9999-12-31");
+    const rows = await db.select().from(accommodationRoomInventoryTable).where(and(
+      eq(accommodationRoomInventoryTable.tenantId, me.tenantId),
+      eq(accommodationRoomInventoryTable.roomId, room.id),
+      gte(accommodationRoomInventoryTable.inventoryDate, from),
+      lte(accommodationRoomInventoryTable.inventoryDate, to),
+    )).orderBy(asc(accommodationRoomInventoryTable.inventoryDate));
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
+router.put("/accommodation-rooms/:id/inventory", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = InventoryBody.safeParse(req.body);
+    if (!parsed.success) { next(new ValidationError(parsed.error.message, "INVALID_INVENTORY")); return; }
+    const [room] = await db.select({ id: accommodationRoomsTable.id }).from(accommodationRoomsTable).where(and(
+      eq(accommodationRoomsTable.id, req.params.id),
+      eq(accommodationRoomsTable.tenantId, me.tenantId),
+    )).limit(1);
+    if (!room) { next(new NotFoundError("Quarto não encontrado", "ROOM_NOT_FOUND")); return; }
+    const id = generateId();
+    await db.insert(accommodationRoomInventoryTable).values({
+      id,
+      tenantId: me.tenantId,
+      roomId: room.id,
+      inventoryDate: parsed.data.inventoryDate,
+      status: parsed.data.status,
+      capacityOverride: parsed.data.capacityOverride ?? null,
+      blockedReason: parsed.data.blockedReason ?? null,
+      maintenanceReason: parsed.data.maintenanceReason ?? null,
+    }).onConflictDoUpdate({
+      target: [accommodationRoomInventoryTable.roomId, accommodationRoomInventoryTable.inventoryDate],
+      set: {
+        status: parsed.data.status,
+        capacityOverride: parsed.data.capacityOverride ?? null,
+        blockedReason: parsed.data.blockedReason ?? null,
+        maintenanceReason: parsed.data.maintenanceReason ?? null,
+        updatedAt: new Date(),
+      },
+    });
+    const [row] = await db.select().from(accommodationRoomInventoryTable).where(and(
+      eq(accommodationRoomInventoryTable.tenantId, me.tenantId),
+      eq(accommodationRoomInventoryTable.roomId, room.id),
+      eq(accommodationRoomInventoryTable.inventoryDate, parsed.data.inventoryDate),
+    )).limit(1);
+    res.json(row);
+  } catch (err) { next(err); }
+});
+
 router.get("/accommodations/:id/availability", async (req, res, next: NextFunction) => {
   try {
     const me = await requireAuth(req, res);
@@ -436,6 +635,29 @@ router.get("/accommodations/:id/availability", async (req, res, next: NextFuncti
       gt(accommodationRoomAssignmentsTable.checkOut, checkIn),
       isNull(accommodationRoomAssignmentsTable.unassignedAt),
     ));
+    const legacyAssignments = await db.select({
+      roomId: reservationRoomAssignmentsTable.roomId,
+    }).from(reservationRoomAssignmentsTable)
+      .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+      .innerJoin(tripsTable, eq(tripsTable.id, reservationRoomAssignmentsTable.tripId))
+      .where(and(
+        eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+        eq(tripsTable.accommodationId, req.params.id),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+        lt(tripsTable.departureDate, new Date(`${checkOut}T12:00:00Z`)),
+        gt(tripsTable.returnDate, new Date(`${checkIn}T12:00:00Z`)),
+      ));
+    const inventoryRows = await db.select({
+      roomId: accommodationRoomInventoryTable.roomId,
+      inventoryDate: accommodationRoomInventoryTable.inventoryDate,
+      status: accommodationRoomInventoryTable.status,
+      capacityOverride: accommodationRoomInventoryTable.capacityOverride,
+    }).from(accommodationRoomInventoryTable).where(and(
+      eq(accommodationRoomInventoryTable.tenantId, me.tenantId),
+      gte(accommodationRoomInventoryTable.inventoryDate, checkIn),
+      lt(accommodationRoomInventoryTable.inventoryDate, checkOut),
+      inArray(accommodationRoomInventoryTable.roomId, rooms.map(room => room.id)),
+    ));
     const blockedRooms = await db.select({ roomId: accommodationRoomBlocksTable.roomId }).from(accommodationRoomBlocksTable).where(and(
       eq(accommodationRoomBlocksTable.tenantId, me.tenantId),
       eq(accommodationRoomBlocksTable.accommodationId, req.params.id),
@@ -446,6 +668,13 @@ router.get("/accommodations/:id/availability", async (req, res, next: NextFuncti
     const blockedRoomIds = new Set(blockedRooms.flatMap(row => row.roomId ? [row.roomId] : rooms.map(room => room.id)));
     const assignmentCounts = new Map<string, number>();
     for (const assignment of assignments) assignmentCounts.set(assignment.roomId, (assignmentCounts.get(assignment.roomId) ?? 0) + 1);
+    for (const assignment of legacyAssignments) assignmentCounts.set(assignment.roomId, (assignmentCounts.get(assignment.roomId) ?? 0) + 1);
+    const inventoryByRoom = new Map<string, typeof inventoryRows>();
+    for (const row of inventoryRows) {
+      const rows = inventoryByRoom.get(row.roomId) ?? [];
+      rows.push(row);
+      inventoryByRoom.set(row.roomId, rows);
+    }
     res.json({
       accommodationId: req.params.id,
       checkIn,
@@ -453,8 +682,14 @@ router.get("/accommodations/:id/availability", async (req, res, next: NextFuncti
       nights: assertDateRange(checkIn, checkOut),
       rooms: rooms.map(room => {
         const used = assignmentCounts.get(room.id) ?? 0;
-        const blocked = blockedRoomIds.has(room.id) || room.status !== "active" || room.isActive === false;
-        return { ...formatRoom(room), occupied: used, available: blocked ? 0 : Math.max(0, room.capacity - used), blocked };
+        const roomInventory = inventoryByRoom.get(room.id) ?? [];
+        const inventoryBlocked = roomInventory.some(row => row.status !== "available");
+        const capacity = roomInventory.reduce(
+          (minimum, row) => row.capacityOverride == null ? minimum : Math.min(minimum, row.capacityOverride),
+          room.capacity,
+        );
+        const blocked = blockedRoomIds.has(room.id) || inventoryBlocked || room.status !== "active" || room.isActive === false;
+        return { ...formatRoom(room), occupied: used, capacity, available: blocked ? 0 : Math.max(0, capacity - used), blocked };
       }),
     });
   } catch (err) { next(err); }
@@ -558,7 +793,7 @@ router.post("/accommodation-stays", async (req, res, next: NextFunction) => {
       }
       for (const [roomId, count] of byRoom) {
         const room = rooms.get(roomId)!;
-        const rate = await chooseRate(tx, me.tenantId, parsed.data.accommodationId, room, parsed.data.checkIn, parsed.data.checkOut, nights, count);
+        const rate = await chooseRate(tx, me.tenantId, parsed.data.accommodationId, room, parsed.data.checkIn, parsed.data.checkOut, nights, count, parsed.data.reservationId);
         const pricingType = rate?.pricingType ?? parsed.data.pricingType ?? (room.pricePerNight == null ? null : "PER_ROOM");
         const unitPrice = rate ? Number(rate.amount) : room.pricePerNight == null ? null : Number(room.pricePerNight);
         if (pricingType && unitPrice != null) {

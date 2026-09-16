@@ -64,6 +64,7 @@ export const accommodationRatesTable = pgTable("accommodation_rates", {
   tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   accommodationId: text("accommodation_id").notNull().references(() => accommodationsTable.id, { onDelete: "cascade" }),
   roomId: text("room_id").references(() => accommodationRoomsTable.id, { onDelete: "cascade" }),
+  reservationId: text("reservation_id"),
   category: text("category"),
   validFrom: date("valid_from").notNull(),
   validTo: date("valid_to").notNull(),
@@ -81,6 +82,7 @@ export const accommodationRatesTable = pgTable("accommodation_rates", {
 }, (table) => [
   index("accommodation_rates_lookup_idx").on(table.tenantId, table.accommodationId, table.validFrom, table.validTo),
   index("accommodation_rates_room_idx").on(table.roomId, table.validFrom, table.validTo),
+  index("accommodation_rates_reservation_idx").on(table.tenantId, table.reservationId, table.validFrom, table.validTo),
 ]);
 
 export const insertAccommodationRateSchema = createInsertSchema(accommodationRatesTable).omit({ createdAt: true, updatedAt: true });

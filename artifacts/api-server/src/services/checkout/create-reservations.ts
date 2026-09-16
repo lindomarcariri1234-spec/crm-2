@@ -11,12 +11,19 @@ import {
   accommodationsTable,
   accommodationStaysTable,
   accommodationStayGuestsTable,
+  accommodationRoomsTable,
+  accommodationRoomBlocksTable,
+  accommodationRoomInventoryTable,
+  accommodationRoomAssignmentsTable,
+  reservationRoomAssignmentsTable,
+  accommodationRatesTable,
+  accommodationStayRateLinesTable,
   tripAccommodationsTable,
 } from "@workspace/db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { generateId, generateVoucherCode } from "../../lib/id";
 import { AppError } from "../../lib/errors";
-import { RESERVATION_STATUS, PAYMENT_STATUS } from "@workspace/permissions";
+import { ACTIVE_RESERVATION_STATUSES, RESERVATION_STATUS, PAYMENT_STATUS } from "@workspace/permissions";
 import {
   tripTypeToCode,
   nextReservationSequence,
@@ -36,6 +43,7 @@ import { recalculateClientFinancials } from "../client-financials";
 import { findTripSeatConflicts } from "../reservation-capacity";
 
 export const CHECKOUT_RESERVATION_HOLD_MINUTES = 30;
+const ACTIVE_ACCOMMODATION_STAY_STATUSES = ["held", "confirmed", "checked_in", "in_house"];
 
 function brazilDateOnly(value: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -46,6 +54,113 @@ function brazilDateOnly(value: Date): string {
   }).formatToParts(value);
   const result = Object.fromEntries(parts.map(part => [part.type, part.value]));
   return `${result.year}-${result.month}-${result.day}`;
+}
+
+async function assignDirectSaleGuestsToRooms(
+  exec: Tx,
+  tenantId: string,
+  accommodationId: string,
+  stayId: string,
+  guestIds: string[],
+  checkIn: string,
+  checkOut: string,
+  requestedRoomId?: string,
+) {
+  const rooms = await exec.select().from(accommodationRoomsTable)
+    .where(and(
+      eq(accommodationRoomsTable.tenantId, tenantId),
+      eq(accommodationRoomsTable.accommodationId, accommodationId),
+      eq(accommodationRoomsTable.status, "active"),
+      eq(accommodationRoomsTable.isActive, true),
+      requestedRoomId ? eq(accommodationRoomsTable.id, requestedRoomId) : sql`true`,
+    ))
+    .orderBy(asc(accommodationRoomsTable.name))
+    .for("update");
+  let remaining = guestIds.length;
+  const assignments: Array<{ roomId: string; guestId: string }> = [];
+  for (const room of rooms) {
+    if (remaining <= 0) break;
+    const [blocked] = await exec.select({ id: accommodationRoomBlocksTable.id })
+      .from(accommodationRoomBlocksTable)
+      .where(and(
+        eq(accommodationRoomBlocksTable.tenantId, tenantId),
+        eq(accommodationRoomBlocksTable.accommodationId, accommodationId),
+        eq(accommodationRoomBlocksTable.status, "active"),
+        lt(accommodationRoomBlocksTable.startDate, checkOut),
+        gt(accommodationRoomBlocksTable.endDate, checkIn),
+        or(isNull(accommodationRoomBlocksTable.roomId), eq(accommodationRoomBlocksTable.roomId, room.id)),
+      ))
+      .limit(1);
+    if (blocked) continue;
+    const inventory = await exec.select({
+      status: accommodationRoomInventoryTable.status,
+      capacityOverride: accommodationRoomInventoryTable.capacityOverride,
+    }).from(accommodationRoomInventoryTable).where(and(
+      eq(accommodationRoomInventoryTable.tenantId, tenantId),
+      eq(accommodationRoomInventoryTable.roomId, room.id),
+      gte(accommodationRoomInventoryTable.inventoryDate, checkIn),
+      lt(accommodationRoomInventoryTable.inventoryDate, checkOut),
+    ));
+    if (inventory.some(row => row.status !== "available")) continue;
+    const capacity = inventory.reduce(
+      (minimum, row) => row.capacityOverride == null ? minimum : Math.min(minimum, row.capacityOverride),
+      room.capacity,
+    );
+    const stays = await exec.select({ id: accommodationStaysTable.id })
+      .from(accommodationStaysTable)
+      .where(and(
+        eq(accommodationStaysTable.tenantId, tenantId),
+        eq(accommodationStaysTable.accommodationId, accommodationId),
+        inArray(accommodationStaysTable.status, ACTIVE_ACCOMMODATION_STAY_STATUSES),
+        lt(accommodationStaysTable.checkIn, checkOut),
+        gt(accommodationStaysTable.checkOut, checkIn),
+        ne(accommodationStaysTable.id, stayId),
+      ));
+    const [occupied] = await exec.select({ count: sql<number>`count(*)` })
+      .from(accommodationRoomAssignmentsTable)
+      .where(and(
+        eq(accommodationRoomAssignmentsTable.tenantId, tenantId),
+        eq(accommodationRoomAssignmentsTable.roomId, room.id),
+        inArray(accommodationRoomAssignmentsTable.stayId, stays.map(stay => stay.id)),
+        eq(accommodationRoomAssignmentsTable.status, "active"),
+        isNull(accommodationRoomAssignmentsTable.unassignedAt),
+      ));
+    const legacy = await exec.select({ id: reservationRoomAssignmentsTable.id })
+      .from(reservationRoomAssignmentsTable)
+      .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+      .innerJoin(tripsTable, eq(tripsTable.id, reservationRoomAssignmentsTable.tripId))
+      .where(and(
+        eq(reservationRoomAssignmentsTable.tenantId, tenantId),
+        eq(reservationRoomAssignmentsTable.roomId, room.id),
+        eq(tripsTable.accommodationId, accommodationId),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+        lt(tripsTable.departureDate, new Date(`${checkOut}T12:00:00Z`)),
+        gt(tripsTable.returnDate, new Date(`${checkIn}T12:00:00Z`)),
+      ));
+    const available = Math.max(0, capacity - Number(occupied?.count ?? 0) - legacy.length);
+    const take = Math.min(available, remaining);
+    for (let index = 0; index < take; index += 1) {
+      assignments.push({ roomId: room.id, guestId: guestIds[guestIds.length - remaining + index]! });
+    }
+    remaining -= take;
+  }
+  if (remaining > 0) {
+    throw new AppError("Não há quartos disponíveis para todos os hóspedes no período escolhido", 409, "ACCOMMODATION_NO_AVAILABILITY");
+  }
+  for (const assignment of assignments) {
+    await exec.insert(accommodationRoomAssignmentsTable).values({
+      id: generateId(),
+      tenantId,
+      stayId,
+      stayGuestId: assignment.guestId,
+      roomId: assignment.roomId,
+      bedId: null,
+      checkIn,
+      checkOut,
+      assignedBy: null,
+    });
+  }
+  return assignments;
 }
 
 async function createAccommodationStaysForOrder(
@@ -135,9 +250,12 @@ async function createAccommodationStaysForOrder(
       { name: order.customerName, document: order.customerCpf, passengerId: null as string | null },
       ...(order.coPassengers ?? []).map(guest => ({ name: guest.name, document: guest.cpf ?? null, passengerId: null })),
     ];
+    const guestIds: string[] = [];
     for (const guest of guests) {
+      const guestId = generateId();
+      guestIds.push(guestId);
       await exec.insert(accommodationStayGuestsTable).values({
-        id: generateId(),
+        id: guestId,
         tenantId: order.tenantId,
         stayId,
         clientId: order.clientId,
@@ -147,6 +265,92 @@ async function createAccommodationStaysForOrder(
         guestType: "adult",
         status: "expected",
       });
+    }
+    let directAssignments: Array<{ roomId: string; guestId: string }> = [];
+    if (!product.tripId) {
+      const requestedRoomId = typeof metadata.roomId === "string" ? metadata.roomId : undefined;
+      directAssignments = await assignDirectSaleGuestsToRooms(
+        exec,
+        order.tenantId,
+        product.accommodationId,
+        stayId,
+        guestIds,
+        checkIn,
+        checkOut,
+        requestedRoomId,
+      );
+      const roomIds = [...new Set(directAssignments.map(assignment => assignment.roomId))];
+      const [rooms, rates] = await Promise.all([
+        exec.select().from(accommodationRoomsTable).where(inArray(accommodationRoomsTable.id, roomIds)),
+        exec.select().from(accommodationRatesTable).where(and(
+          eq(accommodationRatesTable.tenantId, order.tenantId),
+          eq(accommodationRatesTable.accommodationId, product.accommodationId),
+          eq(accommodationRatesTable.status, "active"),
+          isNull(accommodationRatesTable.reservationId),
+          lte(accommodationRatesTable.validFrom, checkIn),
+          gte(accommodationRatesTable.validTo, checkOut),
+        )),
+      ]);
+      const roomById = new Map(rooms.map(room => [room.id, room]));
+      const assignmentCountByRoom = new Map<string, number>();
+      for (const assignment of directAssignments) {
+        assignmentCountByRoom.set(assignment.roomId, (assignmentCountByRoom.get(assignment.roomId) ?? 0) + 1);
+      }
+      let dynamicTotal = 0;
+      let dynamicComplete = rates.length > 0;
+      let firstPricingType: string | null = null;
+      const dynamicLines: Array<{
+        roomId: string;
+        rateId: string;
+        pricingType: string;
+        unitPrice: string;
+        quantity: number;
+        nights: number;
+        subtotal: string;
+      }> = [];
+      for (const [roomId, guestCount] of assignmentCountByRoom) {
+        const room = roomById.get(roomId);
+        const rate = rates
+          .filter(candidate =>
+            (!candidate.roomId || candidate.roomId === roomId)
+            && (!candidate.category || candidate.category === room?.category)
+            && (candidate.minOccupancy == null || guestCount >= candidate.minOccupancy)
+            && (candidate.maxOccupancy == null || guestCount <= candidate.maxOccupancy),
+          )
+          .sort((a, b) => ((b.roomId ? 2 : 0) + (b.category ? 1 : 0)) - ((a.roomId ? 2 : 0) + (a.category ? 1 : 0)) || b.priority - a.priority)[0];
+        if (!rate) {
+          dynamicComplete = false;
+          break;
+        }
+        const quantity = rate.pricingType === "PER_PERSON" || rate.pricingType === "PER_BED" ? guestCount : 1;
+        const subtotal = roundMoney(Number(rate.amount) * quantity * nights);
+        dynamicTotal += subtotal;
+        firstPricingType ??= rate.pricingType;
+        dynamicLines.push({
+          roomId,
+          rateId: rate.id,
+          pricingType: rate.pricingType,
+          unitPrice: String(rate.amount),
+          quantity,
+          nights,
+          subtotal: String(subtotal),
+        });
+      }
+      if (dynamicComplete) {
+        for (const line of dynamicLines) {
+          await exec.insert(accommodationStayRateLinesTable).values({
+            id: generateId(),
+            tenantId: order.tenantId,
+            stayId,
+            ...line,
+          });
+        }
+        await exec.update(accommodationStaysTable).set({
+          pricingType: firstPricingType,
+          contractedTotal: String(dynamicTotal),
+          frozenTotal: String(dynamicTotal),
+        }).where(eq(accommodationStaysTable.id, stayId));
+      }
     }
     existingAccommodationIds.add(product.accommodationId);
   }

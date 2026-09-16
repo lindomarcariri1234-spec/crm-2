@@ -568,6 +568,13 @@
       "when": 1808900000000,
       "tag": "0081_store_product_accommodation",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1809000000000,
+      "tag": "0082_accommodation_reservation_rates",
+      "breakpoints": true
     }
   ]
 }
