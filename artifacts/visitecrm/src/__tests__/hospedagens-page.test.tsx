@@ -48,7 +48,7 @@ beforeEach(() => {
       pricePerNight: "180.00",
       rating: null,
       status: "active",
-      gallery: [],
+       gallery: ["https://example.com/pousada.jpg"],
       coverImage: null,
     }],
     isError: false,
@@ -72,5 +72,7 @@ describe("Hospedagens page", () => {
     expect(handle.container.textContent).toContain("Pousada do Cariri");
     expect(handle.container.querySelector('button[aria-label="Editar Pousada do Cariri"]')).not.toBeNull();
     expect(handle.container.querySelector('button[aria-label="Excluir Pousada do Cariri"]')).not.toBeNull();
+    expect(handle.container.querySelector('button[aria-label="Gerenciar quartos de Pousada do Cariri"]')).not.toBeNull();
+    expect(handle.container.querySelector('button[aria-label="Ver fotos de Pousada do Cariri"]')).not.toBeNull();
   });
 });
