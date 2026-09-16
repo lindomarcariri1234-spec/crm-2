@@ -1,8 +1,21 @@
 uploads = []
-outputs = []
 
 [[generated]]
 id = "04_YbCz-6UmHxn51jksGK"
 uri = "file://artifacts/guide-app/assets/images/icon.png"
 type = "image"
 title = "generated_image"
+
+[[outputs]]
+id = "DO2vQ98oFdUR7gZG3uc4m"
+uri = "file://docs/arquitetura-hospedagens-dois-modos.md"
+type = "text"
+title = "Arquitetura de hospedagens — dois modos"
+description = "Proposta revisada do VisiteCRM para operar excursões sem vínculo direto, com vínculo direto ou em modo misto, sem duplicar o PMS."
+logical_id = "a6ca4445-32d8-4f6c-b42e-2fa46a1f2c80"
+content_hash = "sha256:bdf11d92d6582ed84fd47ff478383177200a6473595d38766ea431ba98344828"
+size = 17188
+mtime_ms = 1789577620104
+storage_uri = "gcs://replit-rams-assets-reed/rams/assets/repl:ab84617d-cd68-4929-8822-9cf171f4e47b/a6ca4445-32d8-4f6c-b42e-2fa46a1f2c80/940dbf8f-1872-4730-88a7-3ad6466990da"
+storage_version_token = "1789577627175627"
+content_type = "text/markdown"
