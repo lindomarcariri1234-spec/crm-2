@@ -44,6 +44,7 @@ import {
   X,
   Menu,
   MapPin,
+  ClipboardList,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -244,6 +245,7 @@ const AGENCY_NAVIGATION: NavItem[] = [
     icon: Building2,
     children: [
       { name: "Operação de hospedagens", href: "/pms/hospedagens", icon: Building2 },
+        { name: "Reservas diretas", href: "/pms/reservas", icon: ClipboardList },
     ],
   },
   {

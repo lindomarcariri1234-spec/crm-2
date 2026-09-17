@@ -48,6 +48,7 @@ const Veiculos = lazy(() => import("@/pages/cadastros/veiculos"));
 const Layouts = lazy(() => import("@/pages/cadastros/layouts"));
 const Hospedagens = lazy(() => import("@/pages/cadastros/hospedagens"));
 const PmsHospedagens = lazy(() => import("@/pages/pms/hospedagens"));
+const PmsReservas = lazy(() => import("@/pages/pms/reservas"));
 const Destinos = lazy(() => import("@/pages/cadastros/destinos"));
 const Produtos = lazy(() => import("@/pages/cadastros/produtos"));
 const LocaisEmbarque = lazy(() => import("@/pages/cadastros/locais-embarque"));
@@ -572,6 +573,7 @@ function Router() {
       {/* PMS */}
       <Route path="/pms" component={() => <Redirect to="/pms/hospedagens" />} />
       <Route path="/pms/hospedagens" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={PmsHospedagens} />} />
+      <Route path="/pms/reservas" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={PmsReservas} />} />
 
       {/* Analytics */}
       <Route path="/analytics" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Analytics} />} />

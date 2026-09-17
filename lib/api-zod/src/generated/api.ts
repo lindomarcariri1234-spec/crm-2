@@ -8,6 +8,773 @@
 import * as zod from "zod";
 
 /**
+ * @summary List active PMS properties
+ */
+export const ListPmsPropertiesResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  legacyAccommodationId: zod.string().nullish(),
+  name: zod.string(),
+  legalName: zod.string().nullish(),
+  tradeName: zod.string().nullish(),
+  propertyType: zod.string(),
+  description: zod.string().nullish(),
+  documentNumber: zod.string().nullish(),
+  email: zod.string().email().nullish(),
+  phone: zod.string().nullish(),
+  website: zod.string().url().nullish(),
+  address: zod.string().nullish(),
+  city: zod.string().nullish(),
+  state: zod.string().nullish(),
+  timezone: zod.string(),
+  currency: zod.string(),
+  locale: zod.string(),
+  checkInTime: zod.string(),
+  checkOutTime: zod.string(),
+  status: zod.string(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+export const ListPmsPropertiesResponse = zod.array(
+  ListPmsPropertiesResponseItem,
+);
+
+/**
+ * @summary List room types for a PMS property
+ */
+export const ListPmsRoomTypesParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ListPmsRoomTypesResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  propertyId: zod.string(),
+  legacyCategory: zod.string().nullish(),
+  name: zod.string(),
+  code: zod.string(),
+  description: zod.string().nullish(),
+  maxOccupancy: zod.number().int(),
+  baseOccupancy: zod.number().int(),
+  defaultPrice: zod.number().nullish(),
+  status: zod.string(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+export const ListPmsRoomTypesResponse = zod.array(ListPmsRoomTypesResponseItem);
+
+/**
+ * @summary List active accommodation units for a PMS property
+ */
+export const ListPmsUnitsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ListPmsUnitsResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  propertyId: zod.string(),
+  roomTypeId: zod.string(),
+  legacyRoomId: zod.string().nullish(),
+  unitNumber: zod.string(),
+  name: zod.string(),
+  floor: zod.string().nullish(),
+  maxOccupancy: zod.number().int(),
+  status: zod.string(),
+  housekeepingStatus: zod.string(),
+  maintenanceStatus: zod.string(),
+  roomType: zod
+    .object({
+      id: zod.string(),
+      name: zod.string(),
+      code: zod.string().nullish(),
+    })
+    .optional(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+});
+export const ListPmsUnitsResponse = zod.array(ListPmsUnitsResponseItem);
+
+/**
+ * @summary Check direct lodging availability
+ */
+export const GetPmsAvailabilityQueryParams = zod.object({
+  propertyId: zod.coerce.string(),
+  checkIn: zod.date(),
+  checkOut: zod.date(),
+});
+
+export const GetPmsAvailabilityResponse = zod.object({
+  property: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    legacyAccommodationId: zod.string().nullish(),
+    name: zod.string(),
+    legalName: zod.string().nullish(),
+    tradeName: zod.string().nullish(),
+    propertyType: zod.string(),
+    description: zod.string().nullish(),
+    documentNumber: zod.string().nullish(),
+    email: zod.string().email().nullish(),
+    phone: zod.string().nullish(),
+    website: zod.string().url().nullish(),
+    address: zod.string().nullish(),
+    city: zod.string().nullish(),
+    state: zod.string().nullish(),
+    timezone: zod.string(),
+    currency: zod.string(),
+    locale: zod.string(),
+    checkInTime: zod.string(),
+    checkOutTime: zod.string(),
+    status: zod.string(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+  checkIn: zod.coerce.date(),
+  checkOut: zod.coerce.date(),
+  nights: zod.number().int(),
+  roomTypes: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      code: zod.string(),
+      maxOccupancy: zod.number().int(),
+      totalUnits: zod.number().int(),
+      availableUnits: zod.number().int(),
+      pricePerNight: zod.number(),
+      totalForStay: zod.number(),
+    }),
+  ),
+});
+
+/**
+ * @summary List direct lodging reservations
+ */
+export const listPmsReservationsQueryLimitDefault = 100;
+export const listPmsReservationsQueryLimitMax = 200;
+
+export const ListPmsReservationsQueryParams = zod.object({
+  propertyId: zod.coerce.string().optional(),
+  status: zod.coerce.string().optional(),
+  limit: zod.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(listPmsReservationsQueryLimitMax)
+    .default(listPmsReservationsQueryLimitDefault),
+});
+
+export const ListPmsReservationsResponseItem = zod.object({
+  id: zod.string(),
+  tenantId: zod.string(),
+  propertyId: zod.string(),
+  legacyReservationId: zod.string().nullish(),
+  clientId: zod.string().nullish(),
+  reservationNumber: zod.string(),
+  source: zod.string(),
+  channel: zod.string(),
+  status: zod.string(),
+  checkIn: zod.coerce.date(),
+  checkOut: zod.coerce.date(),
+  adults: zod.number().int(),
+  children: zod.number().int(),
+  infants: zod.number().int(),
+  totalAmount: zod.number(),
+  paidAmount: zod.number(),
+  balanceAmount: zod.number(),
+  currency: zod.string(),
+  notes: zod.string().nullish(),
+  expiresAt: zod.coerce.date().nullish(),
+  createdAt: zod.coerce.date(),
+  updatedAt: zod.coerce.date(),
+  property: zod
+    .object({
+      id: zod.string(),
+      name: zod.string(),
+    })
+    .optional(),
+});
+export const ListPmsReservationsResponse = zod.array(
+  ListPmsReservationsResponseItem,
+);
+
+/**
+ * @summary Create a confirmed direct lodging reservation
+ */
+export const createPmsReservationBodySourceDefault = `DIRECT`;
+export const createPmsReservationBodyChannelDefault = `CRM`;
+export const createPmsReservationBodyAdultsDefault = 1;
+
+export const createPmsReservationBodyChildrenDefault = 0;
+export const createPmsReservationBodyChildrenMin = 0;
+
+export const createPmsReservationBodyInfantsDefault = 0;
+export const createPmsReservationBodyInfantsMin = 0;
+
+export const createPmsReservationBodyCurrencyDefault = `BRL`;
+export const createPmsReservationBodyCurrencyMin = 3;
+export const createPmsReservationBodyCurrencyMax = 3;
+
+export const createPmsReservationBodyItemsItemAdultsDefault = 1;
+
+export const createPmsReservationBodyItemsItemChildrenDefault = 0;
+export const createPmsReservationBodyItemsItemChildrenMin = 0;
+
+export const createPmsReservationBodyItemsItemUnitPriceMin = 0;
+
+export const createPmsReservationBodyGuestsItemGuestTypeDefault = `ADULT`;
+export const createPmsReservationBodyGuestsItemItemIndexMin = 0;
+
+export const CreatePmsReservationBody = zod.object({
+  propertyId: zod.string(),
+  clientId: zod.string().nullish(),
+  source: zod.string().default(createPmsReservationBodySourceDefault),
+  channel: zod.string().default(createPmsReservationBodyChannelDefault),
+  checkIn: zod.coerce.date(),
+  checkOut: zod.coerce.date(),
+  adults: zod
+    .number()
+    .int()
+    .min(1)
+    .default(createPmsReservationBodyAdultsDefault),
+  children: zod
+    .number()
+    .int()
+    .min(createPmsReservationBodyChildrenMin)
+    .default(createPmsReservationBodyChildrenDefault),
+  infants: zod
+    .number()
+    .int()
+    .min(createPmsReservationBodyInfantsMin)
+    .default(createPmsReservationBodyInfantsDefault),
+  currency: zod
+    .string()
+    .min(createPmsReservationBodyCurrencyMin)
+    .max(createPmsReservationBodyCurrencyMax)
+    .default(createPmsReservationBodyCurrencyDefault),
+  notes: zod.string().nullish(),
+  items: zod
+    .array(
+      zod.object({
+        roomTypeId: zod.string(),
+        quantity: zod.number().int().min(1),
+        adults: zod
+          .number()
+          .int()
+          .min(1)
+          .default(createPmsReservationBodyItemsItemAdultsDefault),
+        children: zod
+          .number()
+          .int()
+          .min(createPmsReservationBodyItemsItemChildrenMin)
+          .default(createPmsReservationBodyItemsItemChildrenDefault),
+        unitPrice: zod
+          .number()
+          .min(createPmsReservationBodyItemsItemUnitPriceMin)
+          .optional(),
+        ratePlanId: zod.string().nullish(),
+      }),
+    )
+    .min(1),
+  guests: zod
+    .array(
+      zod.object({
+        fullName: zod.string(),
+        documentType: zod.string().nullish(),
+        documentNumber: zod.string().nullish(),
+        birthDate: zod.coerce.date().nullish(),
+        guestType: zod
+          .enum(["ADULT", "CHILD", "INFANT"])
+          .default(createPmsReservationBodyGuestsItemGuestTypeDefault),
+        itemIndex: zod
+          .number()
+          .int()
+          .min(createPmsReservationBodyGuestsItemItemIndexMin)
+          .optional(),
+      }),
+    )
+    .optional(),
+});
+
+export const CreatePmsReservationResponse = zod.object({
+  reservation: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    propertyId: zod.string(),
+    legacyReservationId: zod.string().nullish(),
+    clientId: zod.string().nullish(),
+    reservationNumber: zod.string(),
+    source: zod.string(),
+    channel: zod.string(),
+    status: zod.string(),
+    checkIn: zod.coerce.date(),
+    checkOut: zod.coerce.date(),
+    adults: zod.number().int(),
+    children: zod.number().int(),
+    infants: zod.number().int(),
+    totalAmount: zod.number(),
+    paidAmount: zod.number(),
+    balanceAmount: zod.number(),
+    currency: zod.string(),
+    notes: zod.string().nullish(),
+    expiresAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+    property: zod
+      .object({
+        id: zod.string(),
+        name: zod.string(),
+      })
+      .optional(),
+  }),
+  property: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    legacyAccommodationId: zod.string().nullish(),
+    name: zod.string(),
+    legalName: zod.string().nullish(),
+    tradeName: zod.string().nullish(),
+    propertyType: zod.string(),
+    description: zod.string().nullish(),
+    documentNumber: zod.string().nullish(),
+    email: zod.string().email().nullish(),
+    phone: zod.string().nullish(),
+    website: zod.string().url().nullish(),
+    address: zod.string().nullish(),
+    city: zod.string().nullish(),
+    state: zod.string().nullish(),
+    timezone: zod.string(),
+    currency: zod.string(),
+    locale: zod.string(),
+    checkInTime: zod.string(),
+    checkOutTime: zod.string(),
+    status: zod.string(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      roomTypeId: zod.string(),
+      unitId: zod.string().nullish(),
+      ratePlanId: zod.string().nullish(),
+      checkIn: zod.coerce.date(),
+      checkOut: zod.coerce.date(),
+      adults: zod.number().int(),
+      children: zod.number().int(),
+      quantity: zod.number().int(),
+      unitPrice: zod.number(),
+      total: zod.number(),
+      roomType: zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        code: zod.string().nullish(),
+      }),
+      unit: zod.union([
+        zod.object({
+          id: zod.string(),
+          name: zod.string().nullish(),
+          unitNumber: zod.string().nullish(),
+        }),
+        zod.null(),
+      ]),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+  guests: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      reservationUnitId: zod.string().nullish(),
+      guestProfileId: zod.string().nullish(),
+      fullName: zod.string(),
+      documentType: zod.string().nullish(),
+      documentNumber: zod.string().nullish(),
+      birthDate: zod.coerce.date().nullish(),
+      guestType: zod.string(),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Get a direct lodging reservation
+ */
+export const GetPmsReservationParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetPmsReservationResponse = zod.object({
+  reservation: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    propertyId: zod.string(),
+    legacyReservationId: zod.string().nullish(),
+    clientId: zod.string().nullish(),
+    reservationNumber: zod.string(),
+    source: zod.string(),
+    channel: zod.string(),
+    status: zod.string(),
+    checkIn: zod.coerce.date(),
+    checkOut: zod.coerce.date(),
+    adults: zod.number().int(),
+    children: zod.number().int(),
+    infants: zod.number().int(),
+    totalAmount: zod.number(),
+    paidAmount: zod.number(),
+    balanceAmount: zod.number(),
+    currency: zod.string(),
+    notes: zod.string().nullish(),
+    expiresAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+    property: zod
+      .object({
+        id: zod.string(),
+        name: zod.string(),
+      })
+      .optional(),
+  }),
+  property: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    legacyAccommodationId: zod.string().nullish(),
+    name: zod.string(),
+    legalName: zod.string().nullish(),
+    tradeName: zod.string().nullish(),
+    propertyType: zod.string(),
+    description: zod.string().nullish(),
+    documentNumber: zod.string().nullish(),
+    email: zod.string().email().nullish(),
+    phone: zod.string().nullish(),
+    website: zod.string().url().nullish(),
+    address: zod.string().nullish(),
+    city: zod.string().nullish(),
+    state: zod.string().nullish(),
+    timezone: zod.string(),
+    currency: zod.string(),
+    locale: zod.string(),
+    checkInTime: zod.string(),
+    checkOutTime: zod.string(),
+    status: zod.string(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      roomTypeId: zod.string(),
+      unitId: zod.string().nullish(),
+      ratePlanId: zod.string().nullish(),
+      checkIn: zod.coerce.date(),
+      checkOut: zod.coerce.date(),
+      adults: zod.number().int(),
+      children: zod.number().int(),
+      quantity: zod.number().int(),
+      unitPrice: zod.number(),
+      total: zod.number(),
+      roomType: zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        code: zod.string().nullish(),
+      }),
+      unit: zod.union([
+        zod.object({
+          id: zod.string(),
+          name: zod.string().nullish(),
+          unitNumber: zod.string().nullish(),
+        }),
+        zod.null(),
+      ]),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+  guests: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      reservationUnitId: zod.string().nullish(),
+      guestProfileId: zod.string().nullish(),
+      fullName: zod.string(),
+      documentType: zod.string().nullish(),
+      documentNumber: zod.string().nullish(),
+      birthDate: zod.coerce.date().nullish(),
+      guestType: zod.string(),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Add guests to a direct lodging reservation
+ */
+export const AddPmsReservationGuestsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const addPmsReservationGuestsBodyGuestsItemGuestTypeDefault = `ADULT`;
+export const addPmsReservationGuestsBodyGuestsItemItemIndexMin = 0;
+
+export const AddPmsReservationGuestsBody = zod.object({
+  guests: zod
+    .array(
+      zod.object({
+        fullName: zod.string(),
+        documentType: zod.string().nullish(),
+        documentNumber: zod.string().nullish(),
+        birthDate: zod.coerce.date().nullish(),
+        guestType: zod
+          .enum(["ADULT", "CHILD", "INFANT"])
+          .default(addPmsReservationGuestsBodyGuestsItemGuestTypeDefault),
+        itemIndex: zod
+          .number()
+          .int()
+          .min(addPmsReservationGuestsBodyGuestsItemItemIndexMin)
+          .optional(),
+      }),
+    )
+    .min(1),
+});
+
+export const AddPmsReservationGuestsResponse = zod.object({
+  reservation: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    propertyId: zod.string(),
+    legacyReservationId: zod.string().nullish(),
+    clientId: zod.string().nullish(),
+    reservationNumber: zod.string(),
+    source: zod.string(),
+    channel: zod.string(),
+    status: zod.string(),
+    checkIn: zod.coerce.date(),
+    checkOut: zod.coerce.date(),
+    adults: zod.number().int(),
+    children: zod.number().int(),
+    infants: zod.number().int(),
+    totalAmount: zod.number(),
+    paidAmount: zod.number(),
+    balanceAmount: zod.number(),
+    currency: zod.string(),
+    notes: zod.string().nullish(),
+    expiresAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+    property: zod
+      .object({
+        id: zod.string(),
+        name: zod.string(),
+      })
+      .optional(),
+  }),
+  property: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    legacyAccommodationId: zod.string().nullish(),
+    name: zod.string(),
+    legalName: zod.string().nullish(),
+    tradeName: zod.string().nullish(),
+    propertyType: zod.string(),
+    description: zod.string().nullish(),
+    documentNumber: zod.string().nullish(),
+    email: zod.string().email().nullish(),
+    phone: zod.string().nullish(),
+    website: zod.string().url().nullish(),
+    address: zod.string().nullish(),
+    city: zod.string().nullish(),
+    state: zod.string().nullish(),
+    timezone: zod.string(),
+    currency: zod.string(),
+    locale: zod.string(),
+    checkInTime: zod.string(),
+    checkOutTime: zod.string(),
+    status: zod.string(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      roomTypeId: zod.string(),
+      unitId: zod.string().nullish(),
+      ratePlanId: zod.string().nullish(),
+      checkIn: zod.coerce.date(),
+      checkOut: zod.coerce.date(),
+      adults: zod.number().int(),
+      children: zod.number().int(),
+      quantity: zod.number().int(),
+      unitPrice: zod.number(),
+      total: zod.number(),
+      roomType: zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        code: zod.string().nullish(),
+      }),
+      unit: zod.union([
+        zod.object({
+          id: zod.string(),
+          name: zod.string().nullish(),
+          unitNumber: zod.string().nullish(),
+        }),
+        zod.null(),
+      ]),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+  guests: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      reservationUnitId: zod.string().nullish(),
+      guestProfileId: zod.string().nullish(),
+      fullName: zod.string(),
+      documentType: zod.string().nullish(),
+      documentNumber: zod.string().nullish(),
+      birthDate: zod.coerce.date().nullish(),
+      guestType: zod.string(),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Assign or clear accommodation units
+ */
+export const AssignPmsReservationUnitsParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const AssignPmsReservationUnitsBody = zod.object({
+  assignments: zod.array(
+    zod.object({
+      reservationUnitId: zod.string(),
+      unitId: zod.string().nullable(),
+    }),
+  ),
+});
+
+export const AssignPmsReservationUnitsResponse = zod.object({
+  reservation: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    propertyId: zod.string(),
+    legacyReservationId: zod.string().nullish(),
+    clientId: zod.string().nullish(),
+    reservationNumber: zod.string(),
+    source: zod.string(),
+    channel: zod.string(),
+    status: zod.string(),
+    checkIn: zod.coerce.date(),
+    checkOut: zod.coerce.date(),
+    adults: zod.number().int(),
+    children: zod.number().int(),
+    infants: zod.number().int(),
+    totalAmount: zod.number(),
+    paidAmount: zod.number(),
+    balanceAmount: zod.number(),
+    currency: zod.string(),
+    notes: zod.string().nullish(),
+    expiresAt: zod.coerce.date().nullish(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+    property: zod
+      .object({
+        id: zod.string(),
+        name: zod.string(),
+      })
+      .optional(),
+  }),
+  property: zod.object({
+    id: zod.string(),
+    tenantId: zod.string(),
+    legacyAccommodationId: zod.string().nullish(),
+    name: zod.string(),
+    legalName: zod.string().nullish(),
+    tradeName: zod.string().nullish(),
+    propertyType: zod.string(),
+    description: zod.string().nullish(),
+    documentNumber: zod.string().nullish(),
+    email: zod.string().email().nullish(),
+    phone: zod.string().nullish(),
+    website: zod.string().url().nullish(),
+    address: zod.string().nullish(),
+    city: zod.string().nullish(),
+    state: zod.string().nullish(),
+    timezone: zod.string(),
+    currency: zod.string(),
+    locale: zod.string(),
+    checkInTime: zod.string(),
+    checkOutTime: zod.string(),
+    status: zod.string(),
+    createdAt: zod.coerce.date(),
+    updatedAt: zod.coerce.date(),
+  }),
+  items: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      roomTypeId: zod.string(),
+      unitId: zod.string().nullish(),
+      ratePlanId: zod.string().nullish(),
+      checkIn: zod.coerce.date(),
+      checkOut: zod.coerce.date(),
+      adults: zod.number().int(),
+      children: zod.number().int(),
+      quantity: zod.number().int(),
+      unitPrice: zod.number(),
+      total: zod.number(),
+      roomType: zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        code: zod.string().nullish(),
+      }),
+      unit: zod.union([
+        zod.object({
+          id: zod.string(),
+          name: zod.string().nullish(),
+          unitNumber: zod.string().nullish(),
+        }),
+        zod.null(),
+      ]),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+  guests: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      reservationId: zod.string(),
+      reservationUnitId: zod.string().nullish(),
+      guestProfileId: zod.string().nullish(),
+      fullName: zod.string(),
+      documentType: zod.string().nullish(),
+      documentNumber: zod.string().nullish(),
+      birthDate: zod.coerce.date().nullish(),
+      guestType: zod.string(),
+      createdAt: zod.coerce.date(),
+      updatedAt: zod.coerce.date(),
+    }),
+  ),
+});
+
+/**
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({

@@ -575,6 +575,13 @@
       "when": 1809000000000,
       "tag": "0082_accommodation_reservation_rates",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1809100000000,
+      "tag": "0083_pms_core",
+      "breakpoints": true
     }
   ]
 }

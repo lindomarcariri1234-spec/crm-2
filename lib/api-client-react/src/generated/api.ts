@@ -20,8 +20,10 @@ import type {
   Accommodation,
   AccommodationRoom,
   ActivityItem,
+  AddPmsReservationGuestsBody,
   AdminStats,
   AdminUserItem,
+  AssignPmsReservationUnitsBody,
   AuditLog,
   AuditLogWithTenant,
   Automation,
@@ -90,6 +92,7 @@ import type {
   CreatePaymentBody,
   CreatePipelineBody,
   CreatePlanBody,
+  CreatePmsReservationBody,
   CreateProductBody,
   CreateProductCategoryBody,
   CreateProductImageBody,
@@ -125,6 +128,7 @@ import type {
   GetDashboardRevenueChartParams,
   GetInsightsSummaryParams,
   GetNpsSummaryParams,
+  GetPmsAvailabilityParams,
   GetPublicReferralInfo200,
   GetPublicReferralInfoParams,
   GetReservationStatsParams,
@@ -147,6 +151,7 @@ import type {
   ListOutboundMessagesParams,
   ListOutboundProviderFailureSummaryParams,
   ListPaymentsParams,
+  ListPmsReservationsParams,
   ListProductsParams,
   ListReferrals200,
   ListReferralsParams,
@@ -182,6 +187,12 @@ import type {
   Plan,
   PlansStripeHealth,
   PlatformSetting,
+  PmsAvailability,
+  PmsProperty,
+  PmsReservationDetail,
+  PmsReservationSummary,
+  PmsRoomType,
+  PmsUnit,
   Product,
   ProductCategory,
   ProductImage,
@@ -296,6 +307,861 @@ const withQueryKey = <T extends object, K>(
     });
   }
   return result;
+};
+
+export const getListPmsPropertiesUrl = () => {
+  return `/api/pms/properties`;
+};
+
+/**
+ * @summary List active PMS properties
+ */
+export const listPmsProperties = async (
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsProperty[]> => {
+  return customFetch<PmsProperty[]>(getListPmsPropertiesUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPmsPropertiesQueryKey = () => {
+  return [`/api/pms/properties`] as const;
+};
+
+export const getListPmsPropertiesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPmsProperties>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPmsProperties>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPmsPropertiesQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPmsProperties>>
+  > = ({ signal }) => listPmsProperties({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPmsProperties>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPmsPropertiesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPmsProperties>>
+>;
+export type ListPmsPropertiesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List active PMS properties
+ */
+
+export function useListPmsProperties<
+  TData = Awaited<ReturnType<typeof listPmsProperties>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listPmsProperties>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPmsPropertiesQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getListPmsRoomTypesUrl = (id: string) => {
+  return `/api/pms/properties/${id}/room-types`;
+};
+
+/**
+ * @summary List room types for a PMS property
+ */
+export const listPmsRoomTypes = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsRoomType[]> => {
+  return customFetch<PmsRoomType[]>(getListPmsRoomTypesUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPmsRoomTypesQueryKey = (id: string) => {
+  return [`/api/pms/properties/${id}/room-types`] as const;
+};
+
+export const getListPmsRoomTypesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPmsRoomTypes>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPmsRoomTypes>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPmsRoomTypesQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPmsRoomTypes>>
+  > = ({ signal }) => listPmsRoomTypes(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPmsRoomTypes>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPmsRoomTypesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPmsRoomTypes>>
+>;
+export type ListPmsRoomTypesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List room types for a PMS property
+ */
+
+export function useListPmsRoomTypes<
+  TData = Awaited<ReturnType<typeof listPmsRoomTypes>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPmsRoomTypes>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPmsRoomTypesQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getListPmsUnitsUrl = (id: string) => {
+  return `/api/pms/properties/${id}/units`;
+};
+
+/**
+ * @summary List active accommodation units for a PMS property
+ */
+export const listPmsUnits = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsUnit[]> => {
+  return customFetch<PmsUnit[]>(getListPmsUnitsUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPmsUnitsQueryKey = (id: string) => {
+  return [`/api/pms/properties/${id}/units`] as const;
+};
+
+export const getListPmsUnitsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPmsUnits>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPmsUnits>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPmsUnitsQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listPmsUnits>>> = ({
+    signal,
+  }) => listPmsUnits(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPmsUnits>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPmsUnitsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPmsUnits>>
+>;
+export type ListPmsUnitsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List active accommodation units for a PMS property
+ */
+
+export function useListPmsUnits<
+  TData = Awaited<ReturnType<typeof listPmsUnits>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPmsUnits>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPmsUnitsQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getGetPmsAvailabilityUrl = (params: GetPmsAvailabilityParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/pms/availability?${stringifiedParams}`
+    : `/api/pms/availability`;
+};
+
+/**
+ * @summary Check direct lodging availability
+ */
+export const getPmsAvailability = async (
+  params: GetPmsAvailabilityParams,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsAvailability> => {
+  return customFetch<PmsAvailability>(getGetPmsAvailabilityUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPmsAvailabilityQueryKey = (
+  params?: GetPmsAvailabilityParams,
+) => {
+  return [`/api/pms/availability`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetPmsAvailabilityQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPmsAvailability>>,
+  TError = ErrorType<unknown>,
+>(
+  params: GetPmsAvailabilityParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPmsAvailability>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPmsAvailabilityQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPmsAvailability>>
+  > = ({ signal }) => getPmsAvailability(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPmsAvailability>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPmsAvailabilityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPmsAvailability>>
+>;
+export type GetPmsAvailabilityQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Check direct lodging availability
+ */
+
+export function useGetPmsAvailability<
+  TData = Awaited<ReturnType<typeof getPmsAvailability>>,
+  TError = ErrorType<unknown>,
+>(
+  params: GetPmsAvailabilityParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPmsAvailability>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPmsAvailabilityQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getListPmsReservationsUrl = (
+  params?: ListPmsReservationsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/pms/reservations?${stringifiedParams}`
+    : `/api/pms/reservations`;
+};
+
+/**
+ * @summary List direct lodging reservations
+ */
+export const listPmsReservations = async (
+  params?: ListPmsReservationsParams,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsReservationSummary[]> => {
+  return customFetch<PmsReservationSummary[]>(
+    getListPmsReservationsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPmsReservationsQueryKey = (
+  params?: ListPmsReservationsParams,
+) => {
+  return [`/api/pms/reservations`, ...(params ? [params] : [])] as const;
+};
+
+export const getListPmsReservationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPmsReservations>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListPmsReservationsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPmsReservations>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPmsReservationsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPmsReservations>>
+  > = ({ signal }) =>
+    listPmsReservations(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPmsReservations>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPmsReservationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPmsReservations>>
+>;
+export type ListPmsReservationsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List direct lodging reservations
+ */
+
+export function useListPmsReservations<
+  TData = Awaited<ReturnType<typeof listPmsReservations>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListPmsReservationsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPmsReservations>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPmsReservationsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getCreatePmsReservationUrl = () => {
+  return `/api/pms/reservations`;
+};
+
+/**
+ * @summary Create a confirmed direct lodging reservation
+ */
+export const createPmsReservation = async (
+  createPmsReservationBody: CreatePmsReservationBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsReservationDetail> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<PmsReservationDetail>(getCreatePmsReservationUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(createPmsReservationBody),
+  });
+};
+
+export const getCreatePmsReservationMutationKey = () =>
+  ["createPmsReservation"] as const;
+
+export const getCreatePmsReservationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPmsReservation>>,
+    TError,
+    CreatePmsReservationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createPmsReservation>>,
+  TError,
+  CreatePmsReservationMutationVariables,
+  TContext
+> => {
+  const mutationKey = getCreatePmsReservationMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createPmsReservation>>,
+    CreatePmsReservationMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createPmsReservation(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreatePmsReservationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createPmsReservation>>
+>;
+export type CreatePmsReservationMutationBody =
+  BodyType<CreatePmsReservationBody>;
+export type CreatePmsReservationMutationError = ErrorType<unknown>;
+export type CreatePmsReservationMutationVariables = {
+  data: BodyType<CreatePmsReservationBody>;
+};
+
+/**
+ * @summary Create a confirmed direct lodging reservation
+ */
+export const useCreatePmsReservation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createPmsReservation>>,
+    TError,
+    CreatePmsReservationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createPmsReservation>>,
+  TError,
+  CreatePmsReservationMutationVariables,
+  TContext
+> => {
+  return useMutation(getCreatePmsReservationMutationOptions(options));
+};
+
+export const getGetPmsReservationUrl = (id: string) => {
+  return `/api/pms/reservations/${id}`;
+};
+
+/**
+ * @summary Get a direct lodging reservation
+ */
+export const getPmsReservation = async (
+  id: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsReservationDetail> => {
+  return customFetch<PmsReservationDetail>(getGetPmsReservationUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPmsReservationQueryKey = (id: string) => {
+  return [`/api/pms/reservations/${id}`] as const;
+};
+
+export const getGetPmsReservationQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPmsReservation>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPmsReservation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPmsReservationQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPmsReservation>>
+  > = ({ signal }) => getPmsReservation(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPmsReservation>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPmsReservationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPmsReservation>>
+>;
+export type GetPmsReservationQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get a direct lodging reservation
+ */
+
+export function useGetPmsReservation<
+  TData = Awaited<ReturnType<typeof getPmsReservation>>,
+  TError = ErrorType<unknown>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPmsReservation>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPmsReservationQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export const getAddPmsReservationGuestsUrl = (id: string) => {
+  return `/api/pms/reservations/${id}/guests`;
+};
+
+/**
+ * @summary Add guests to a direct lodging reservation
+ */
+export const addPmsReservationGuests = async (
+  id: string,
+  addPmsReservationGuestsBody: AddPmsReservationGuestsBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsReservationDetail> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<PmsReservationDetail>(getAddPmsReservationGuestsUrl(id), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(addPmsReservationGuestsBody),
+  });
+};
+
+export const getAddPmsReservationGuestsMutationKey = () =>
+  ["addPmsReservationGuests"] as const;
+
+export const getAddPmsReservationGuestsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addPmsReservationGuests>>,
+    TError,
+    AddPmsReservationGuestsMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof addPmsReservationGuests>>,
+  TError,
+  AddPmsReservationGuestsMutationVariables,
+  TContext
+> => {
+  const mutationKey = getAddPmsReservationGuestsMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof addPmsReservationGuests>>,
+    AddPmsReservationGuestsMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return addPmsReservationGuests(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AddPmsReservationGuestsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof addPmsReservationGuests>>
+>;
+export type AddPmsReservationGuestsMutationBody =
+  BodyType<AddPmsReservationGuestsBody>;
+export type AddPmsReservationGuestsMutationError = ErrorType<unknown>;
+export type AddPmsReservationGuestsMutationVariables = {
+  id: string;
+  data: BodyType<AddPmsReservationGuestsBody>;
+};
+
+/**
+ * @summary Add guests to a direct lodging reservation
+ */
+export const useAddPmsReservationGuests = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof addPmsReservationGuests>>,
+    TError,
+    AddPmsReservationGuestsMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof addPmsReservationGuests>>,
+  TError,
+  AddPmsReservationGuestsMutationVariables,
+  TContext
+> => {
+  return useMutation(getAddPmsReservationGuestsMutationOptions(options));
+};
+
+export const getAssignPmsReservationUnitsUrl = (id: string) => {
+  return `/api/pms/reservations/${id}/assignments`;
+};
+
+/**
+ * @summary Assign or clear accommodation units
+ */
+export const assignPmsReservationUnits = async (
+  id: string,
+  assignPmsReservationUnitsBody: AssignPmsReservationUnitsBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsReservationDetail> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<PmsReservationDetail>(
+    getAssignPmsReservationUnitsUrl(id),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(assignPmsReservationUnitsBody),
+    },
+  );
+};
+
+export const getAssignPmsReservationUnitsMutationKey = () =>
+  ["assignPmsReservationUnits"] as const;
+
+export const getAssignPmsReservationUnitsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof assignPmsReservationUnits>>,
+    TError,
+    AssignPmsReservationUnitsMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof assignPmsReservationUnits>>,
+  TError,
+  AssignPmsReservationUnitsMutationVariables,
+  TContext
+> => {
+  const mutationKey = getAssignPmsReservationUnitsMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof assignPmsReservationUnits>>,
+    AssignPmsReservationUnitsMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return assignPmsReservationUnits(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AssignPmsReservationUnitsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof assignPmsReservationUnits>>
+>;
+export type AssignPmsReservationUnitsMutationBody =
+  BodyType<AssignPmsReservationUnitsBody>;
+export type AssignPmsReservationUnitsMutationError = ErrorType<unknown>;
+export type AssignPmsReservationUnitsMutationVariables = {
+  id: string;
+  data: BodyType<AssignPmsReservationUnitsBody>;
+};
+
+/**
+ * @summary Assign or clear accommodation units
+ */
+export const useAssignPmsReservationUnits = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof assignPmsReservationUnits>>,
+    TError,
+    AssignPmsReservationUnitsMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof assignPmsReservationUnits>>,
+  TError,
+  AssignPmsReservationUnitsMutationVariables,
+  TContext
+> => {
+  return useMutation(getAssignPmsReservationUnitsMutationOptions(options));
 };
 
 export const getHealthCheckUrl = () => {

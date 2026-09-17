@@ -4857,6 +4857,293 @@ export interface SalesCycleData {
   trend: SalesCycleTrendPoint[];
 }
 
+export interface PmsProperty {
+  id: string;
+  tenantId: string;
+  /** @nullable */
+  legacyAccommodationId?: string | null;
+  name: string;
+  /** @nullable */
+  legalName?: string | null;
+  /** @nullable */
+  tradeName?: string | null;
+  propertyType: string;
+  /** @nullable */
+  description?: string | null;
+  /** @nullable */
+  documentNumber?: string | null;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  phone?: string | null;
+  /** @nullable */
+  website?: string | null;
+  /** @nullable */
+  address?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  state?: string | null;
+  timezone: string;
+  currency: string;
+  locale: string;
+  checkInTime: string;
+  checkOutTime: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsRoomType {
+  id: string;
+  tenantId: string;
+  propertyId: string;
+  /** @nullable */
+  legacyCategory?: string | null;
+  name: string;
+  code: string;
+  /** @nullable */
+  description?: string | null;
+  maxOccupancy: number;
+  baseOccupancy: number;
+  /** @nullable */
+  defaultPrice?: number | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsRoomTypeReference {
+  id: string;
+  name: string;
+  /** @nullable */
+  code?: string | null;
+}
+
+export interface PmsUnit {
+  id: string;
+  tenantId: string;
+  propertyId: string;
+  roomTypeId: string;
+  /** @nullable */
+  legacyRoomId?: string | null;
+  unitNumber: string;
+  name: string;
+  /** @nullable */
+  floor?: string | null;
+  maxOccupancy: number;
+  status: string;
+  housekeepingStatus: string;
+  maintenanceStatus: string;
+  roomType?: PmsRoomTypeReference;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsAvailabilityRoomType {
+  id: string;
+  name: string;
+  code: string;
+  maxOccupancy: number;
+  totalUnits: number;
+  availableUnits: number;
+  pricePerNight: number;
+  totalForStay: number;
+}
+
+export interface PmsAvailability {
+  property: PmsProperty;
+  checkIn: string;
+  checkOut: string;
+  nights: number;
+  roomTypes: PmsAvailabilityRoomType[];
+}
+
+export type PmsReservationSummaryProperty = {
+  id: string;
+  name: string;
+};
+
+export interface PmsReservationSummary {
+  id: string;
+  tenantId: string;
+  propertyId: string;
+  /** @nullable */
+  legacyReservationId?: string | null;
+  /** @nullable */
+  clientId?: string | null;
+  reservationNumber: string;
+  source: string;
+  channel: string;
+  status: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children: number;
+  infants: number;
+  totalAmount: number;
+  paidAmount: number;
+  balanceAmount: number;
+  currency: string;
+  /** @nullable */
+  notes?: string | null;
+  /** @nullable */
+  expiresAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  property?: PmsReservationSummaryProperty;
+}
+
+export interface PmsUnitReference {
+  id: string;
+  /** @nullable */
+  name?: string | null;
+  /** @nullable */
+  unitNumber?: string | null;
+}
+
+export interface PmsReservationItem {
+  id: string;
+  tenantId: string;
+  reservationId: string;
+  roomTypeId: string;
+  /** @nullable */
+  unitId?: string | null;
+  /** @nullable */
+  ratePlanId?: string | null;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children: number;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  roomType: PmsRoomTypeReference;
+  unit: PmsUnitReference | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsReservationGuest {
+  id: string;
+  tenantId: string;
+  reservationId: string;
+  /** @nullable */
+  reservationUnitId?: string | null;
+  /** @nullable */
+  guestProfileId?: string | null;
+  fullName: string;
+  /** @nullable */
+  documentType?: string | null;
+  /** @nullable */
+  documentNumber?: string | null;
+  /** @nullable */
+  birthDate?: string | null;
+  guestType: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsReservationDetail {
+  reservation: PmsReservationSummary;
+  property: PmsProperty;
+  items: PmsReservationItem[];
+  guests: PmsReservationGuest[];
+}
+
+export type PmsGuestInputGuestType =
+  (typeof PmsGuestInputGuestType)[keyof typeof PmsGuestInputGuestType];
+
+export const PmsGuestInputGuestType = {
+  ADULT: "ADULT",
+  CHILD: "CHILD",
+  INFANT: "INFANT",
+} as const;
+
+export interface PmsGuestInput {
+  fullName: string;
+  /** @nullable */
+  documentType?: string | null;
+  /** @nullable */
+  documentNumber?: string | null;
+  /** @nullable */
+  birthDate?: string | null;
+  guestType?: PmsGuestInputGuestType;
+  /** @minimum 0 */
+  itemIndex?: number;
+}
+
+export interface CreatePmsReservationItem {
+  roomTypeId: string;
+  /** @minimum 1 */
+  quantity: number;
+  /** @minimum 1 */
+  adults?: number;
+  /** @minimum 0 */
+  children?: number;
+  /** @minimum 0 */
+  unitPrice?: number;
+  /** @nullable */
+  ratePlanId?: string | null;
+}
+
+export interface CreatePmsReservationBody {
+  propertyId: string;
+  /** @nullable */
+  clientId?: string | null;
+  source?: string;
+  channel?: string;
+  checkIn: string;
+  checkOut: string;
+  /** @minimum 1 */
+  adults?: number;
+  /** @minimum 0 */
+  children?: number;
+  /** @minimum 0 */
+  infants?: number;
+  /**
+   * @minLength 3
+   * @maxLength 3
+   */
+  currency?: string;
+  /** @nullable */
+  notes?: string | null;
+  /** @minItems 1 */
+  items: CreatePmsReservationItem[];
+  guests?: PmsGuestInput[];
+}
+
+export interface PmsUnitAssignment {
+  reservationUnitId: string;
+  /** @nullable */
+  unitId: string | null;
+}
+
+export type GetPmsAvailabilityParams = {
+  propertyId: string;
+  checkIn: string;
+  checkOut: string;
+};
+
+export type ListPmsReservationsParams = {
+  propertyId?: string;
+  status?: string;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  limit?: number;
+};
+
+export type AddPmsReservationGuestsBody = {
+  /** @minItems 1 */
+  guests: PmsGuestInput[];
+};
+
+export type AssignPmsReservationUnitsBody = {
+  assignments: PmsUnitAssignment[];
+};
+
 export type ListAdminInvoicesParams = {
   tenantId?: string;
   status?: string;
