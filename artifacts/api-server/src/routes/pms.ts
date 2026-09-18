@@ -40,6 +40,7 @@ import { z } from "zod";
 import { requireAuth } from "../lib/tenant";
 import { ConflictError, NotFoundError, ValidationError } from "../lib/errors";
 import { generateId } from "../lib/id";
+import { calculatePmsFinancials } from "../lib/pms-financials";
 
 const router = Router();
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -838,6 +839,15 @@ router.patch("/pms/reservations/:id", async (req, res, next: NextFunction) => {
         checkOut,
         reservation.id,
       );
+      const paidAmount = Number(reservation.paidAmount);
+      const financials = calculatePmsFinancials(prepared.totalAmount, paidAmount);
+      if (!financials) {
+        throw new ValidationError(
+          "O novo total não pode ser menor que o valor já recebido. Ajuste o pagamento antes de reduzir a reserva.",
+          "PMS_TOTAL_BELOW_PAID",
+          { totalAmount: prepared.totalAmount, paidAmount },
+        );
+      }
       const itemIds: string[] = [];
 
       if (data.items) {
@@ -930,16 +940,15 @@ router.patch("/pms/reservations/:id", async (req, res, next: NextFunction) => {
         }
       }
 
-      const paidAmount = Number(reservation.paidAmount);
-      const balanceAmount = Math.max(0, prepared.totalAmount - paidAmount);
       await tx.update(pmsReservationsTable).set({
         checkIn,
         checkOut,
         adults: data.adults ?? reservation.adults,
         children: data.children ?? reservation.children,
         infants: data.infants ?? reservation.infants,
-        totalAmount: prepared.totalAmount.toFixed(2),
-        balanceAmount: balanceAmount.toFixed(2),
+        totalAmount: financials.totalAmount.toFixed(2),
+        paidAmount: financials.paidAmount.toFixed(2),
+        balanceAmount: financials.balanceAmount.toFixed(2),
         notes: data.notes === undefined ? reservation.notes : data.notes,
         updatedAt: new Date(),
       }).where(and(

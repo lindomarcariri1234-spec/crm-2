@@ -130,7 +130,8 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   }
   if (response.status === 404) throw new Error("O registro solicitado não foi encontrado.");
   if (response.status === 409) throw new Error("A disponibilidade mudou. Atualize a consulta e tente novamente.");
-  throw new Error("Não foi possível concluir a operação. Tente novamente.");
+  const errorBody = await response.json().catch(() => null) as { message?: string; error?: string } | null;
+  throw new Error(errorBody?.message ?? errorBody?.error ?? "Não foi possível concluir a operação. Tente novamente.");
 }
 
 function dateIn(offset: number) {
@@ -168,6 +169,23 @@ function statusVariant(status: string): "default" | "secondary" | "outline" | "d
   if (status === "cancelled") return "destructive";
   if (status === "held") return "outline";
   return "secondary";
+}
+
+function paymentState(reservation: ReservationSummary) {
+  const total = Number(reservation.totalAmount);
+  const paid = Number(reservation.paidAmount);
+  const expectedBalance = Math.max(0, Math.round((total - paid) * 100) / 100);
+  const balance = Number(reservation.balanceAmount);
+  if (paid > total + 0.005) {
+    return { label: "Pagamento excede o total; requer ajuste", className: "text-destructive" };
+  }
+  if (Math.abs(expectedBalance - balance) > 0.005) {
+    return { label: "Saldo inconsistente; requer revisão", className: "text-destructive" };
+  }
+  if (balance <= 0.005) {
+    return { label: "Pagamento integral", className: "text-primary" };
+  }
+  return { label: "Saldo pendente", className: "text-amber-700 dark:text-amber-400" };
 }
 
 export default function PmsReservas() {
@@ -654,6 +672,7 @@ function ReservationEditPanel({ detail, availability, availabilityLoading, check
 
 function ReservationDetailView({ detail, units, unitsLoading, assignments, onAssignmentChange, onSaveAssignments, savingAssignments }: { detail: ReservationDetail; units: Unit[]; unitsLoading: boolean; assignments: Record<string, string>; onAssignmentChange: (itemId: string, unitId: string) => void; onSaveAssignments: () => void; savingAssignments: boolean }) {
   const reservation = detail.reservation;
+  const financialState = paymentState(reservation);
   const currentAssignment = (item: ReservationItem) => assignments[item.id] ?? item.unit?.id ?? "";
   const unitLabel = (unit: Unit) => unit.unitNumber ? `${unit.unitNumber} · ${unit.name ?? "Unidade"}` : unit.name ?? "Unidade";
   return <div className="space-y-5" data-testid={`detail-reservation-${reservation.id}`}>
@@ -664,6 +683,14 @@ function ReservationDetailView({ detail, units, unitsLoading, assignments, onAss
       <DetailMetric label="Total" value={formatMoney(reservation.totalAmount)} icon={<CircleDollarSign className="h-4 w-4" />} />
       <div className="rounded-md border bg-muted/20 p-3"><p className="text-[11px] uppercase tracking-wide text-muted-foreground">Status</p><Badge variant={statusVariant(reservation.status)} className="mt-1">{statusLabel(reservation.status)}</Badge></div>
     </div>
+     <div className="grid gap-3 sm:grid-cols-2">
+       <DetailMetric label="Recebido" value={formatMoney(reservation.paidAmount, detail.property.currency ?? "BRL")} icon={<CircleDollarSign className="h-4 w-4" />} />
+       <div className="rounded-md border bg-muted/20 p-3">
+         <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Saldo</p>
+         <p className={`mt-1 text-sm font-semibold ${financialState.className}`}>{formatMoney(reservation.balanceAmount, detail.property.currency ?? "BRL")}</p>
+         <p className={`mt-1 text-xs ${financialState.className}`} data-testid="pms-payment-state">{financialState.label}</p>
+       </div>
+     </div>
     <div className="grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
       <section className="space-y-3"><div><h3 className="text-sm font-semibold">Itens e unidades</h3><p className="text-xs text-muted-foreground">Associe cada item a uma unidade para orientar a recepção.</p></div><div className="overflow-hidden rounded-md border"><Table><TableHeader><TableRow><TableHead>Quarto</TableHead><TableHead>Hóspedes</TableHead><TableHead>Unidade</TableHead><TableHead className="text-right">Total</TableHead></TableRow></TableHeader><TableBody>{detail.items.map((item) => { const matchingUnits = units.filter((unit) => unit.roomType.id === item.roomTypeId); return <TableRow key={item.id}><TableCell><div className="font-medium">{item.roomType?.name ?? "Tipo de quarto"}</div><div className="text-xs text-muted-foreground">{item.quantity} unidade(s)</div></TableCell><TableCell className="text-sm">{item.adults} adultos{item.children ? ` · ${item.children} crianças` : ""}</TableCell><TableCell>{unitsLoading ? <div className="h-8 w-40 animate-pulse rounded bg-muted" /> : <select aria-label={`Unidade para ${item.roomType?.name ?? "item"}`} data-testid={`select-unit-${item.id}`} className="h-8 w-full min-w-[150px] rounded-md border bg-background px-2 text-xs" value={currentAssignment(item)} onChange={(event) => onAssignmentChange(item.id, event.target.value)}><option value="">Sem unidade</option>{matchingUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitLabel(unit)}</option>)}</select>}</TableCell><TableCell className="text-right font-medium">{formatMoney(item.total, detail.property.currency ?? "BRL")}</TableCell></TableRow>; })}{detail.items.length === 0 && <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">Nenhum item de quarto nesta reserva.</TableCell></TableRow>}</TableBody></Table></div><div className="flex justify-end"><Button type="button" size="sm" data-testid="button-save-assignments" onClick={onSaveAssignments} disabled={savingAssignments || unitsLoading}><Save className="mr-2 h-4 w-4" />{savingAssignments ? "Salvando..." : "Salvar alocação"}</Button></div></section>
       <section className="space-y-3"><div><h3 className="text-sm font-semibold">Hóspedes principais</h3><p className="text-xs text-muted-foreground">Informações registradas na criação da reserva.</p></div><div className="space-y-2">{detail.guests.map((guest, index) => { const guestType = guest.guestType.toLowerCase(); return <div key={guest.id ?? `${guest.fullName}-${index}`} className="flex items-center gap-3 rounded-md border p-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><UserRound className="h-4 w-4" /></div><div className="min-w-0"><p className="truncate text-sm font-medium">{guest.fullName}</p><p className="text-xs capitalize text-muted-foreground">{guestType === "adult" ? "Adulto" : guestType}</p></div><Check className="ml-auto h-4 w-4 text-primary" /></div>; })}{detail.guests.length === 0 && <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">Nenhum hóspede informado.</p>}</div><div className="rounded-md bg-muted/30 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><MapPin className="h-4 w-4 text-primary" /> {detail.property.name}</div><p className="mt-1 pl-6 text-xs text-muted-foreground">{detail.property.city}{detail.property.state ? ` · ${detail.property.state}` : ""} · Check-in {detail.property.checkInTime ?? "—"} · Check-out {detail.property.checkOutTime ?? "—"}</p></div></section>
