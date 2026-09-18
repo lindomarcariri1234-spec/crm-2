@@ -434,6 +434,55 @@ export default function Financial() {
 
       <FinancialMetricsOverview />
 
+      <Card data-testid="section-pms-payment-adjustments">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <DollarSign className="h-4 w-4" /> Ajustes de pagamentos PMS
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Correções e estornos de reservas diretas no período. Estes lançamentos ficam fora da receita recebida e não são tratados como novas vendas.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {loadingFinancialMetrics ? (
+            <div className="h-16 animate-pulse rounded bg-muted" data-testid="status-pms-adjustments-loading" />
+          ) : (financialMetrics?.pmsPaymentAdjustments.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground" data-testid="status-pms-adjustments-empty">Nenhum ajuste de pagamento PMS no período.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Reserva</TableHead>
+                    <TableHead>Recebido anterior</TableHead>
+                    <TableHead>Recebido novo</TableHead>
+                    <TableHead>Variação</TableHead>
+                    <TableHead>Motivo</TableHead>
+                    <TableHead>Ajustado por</TableHead>
+                    <TableHead>Data</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {financialMetrics!.pmsPaymentAdjustments.map((adjustment) => (
+                    <TableRow key={adjustment.id} data-testid={`row-pms-payment-adjustment-${adjustment.id}`}>
+                      <TableCell className="font-medium">{adjustment.reservationNumber || adjustment.reservationId}</TableCell>
+                      <TableCell>{fmt(adjustment.previousPaidAmount)}</TableCell>
+                      <TableCell>{fmt(adjustment.newPaidAmount)}</TableCell>
+                      <TableCell className={adjustment.deltaAmount < 0 ? "font-medium text-destructive" : "font-medium text-emerald-600"}>
+                        {adjustment.deltaAmount < 0 ? "−" : "+"}{fmt(Math.abs(adjustment.deltaAmount))}
+                      </TableCell>
+                      <TableCell className="min-w-48 max-w-80 whitespace-normal">{adjustment.reason}</TableCell>
+                      <TableCell>{adjustment.adjustedByName ?? "Usuário removido"}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatDate(adjustment.createdAt)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <KpiCard
           icon={TrendingUp}

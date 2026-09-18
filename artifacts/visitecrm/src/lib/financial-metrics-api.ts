@@ -35,6 +35,17 @@ export interface FinancialMetricsResponse {
   totals: FinancialMetricTotals;
   byTrip: Array<{ tripId: string } & FinancialMetricTotals>;
   byUser: Array<{ userId: string } & FinancialMetricTotals>;
+  pmsPaymentAdjustments: Array<{
+    id: string;
+    reservationId: string;
+    reservationNumber: string;
+    previousPaidAmount: number;
+    newPaidAmount: number;
+    deltaAmount: number;
+    reason: string;
+    adjustedByName: string | null;
+    createdAt: string;
+  }>;
   diagnostics: {
     sourceRows: Record<string, number>;
     excluded: Record<string, number>;
