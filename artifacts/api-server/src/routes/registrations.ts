@@ -621,6 +621,7 @@ router.patch("/accommodation-rooms/:id", async (req, res, next: NextFunction): P
     const savedRoom = await db.transaction(async (tx) => {
       const [room] = await tx.select().from(accommodationRoomsTable)
         .where(and(eq(accommodationRoomsTable.id, req.params.id), eq(accommodationRoomsTable.tenantId, me.tenantId)))
+        .for("update")
         .limit(1);
       if (!room) throw new NotFoundError("Room not found", "NOT_FOUND");
       if (parsed.data.capacity != null) {

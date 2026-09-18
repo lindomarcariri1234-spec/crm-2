@@ -108,6 +108,7 @@ const run = randomUUID().replace(/-/g, "").slice(0, 10);
 const tenantA = `room-tenant-a-${run}`;
 const tenantB = `room-tenant-b-${run}`;
 const userA = `room-user-a-${run}`;
+const userA2 = `room-user-a2-${run}`;
 const userB = `room-user-b-${run}`;
 const accommodationA = `room-accommodation-a-${run}`;
 const accommodationB = `room-accommodation-b-${run}`;
@@ -182,6 +183,7 @@ beforeAll(async () => {
   ]);
   await db.insert(usersTable).values([
     { id: userA, clerkId: `room-clerk-a-${run}`, tenantId: tenantA, name: "Room Admin A", email: `room-admin-a-${run}@test.com`, role: ROLES.AGENCY_ADMIN, referralCode: `ROOMA${run}` },
+    { id: userA2, clerkId: `room-clerk-a2-${run}`, tenantId: tenantA, name: "Room Admin A2", email: `room-admin-a2-${run}@test.com`, role: ROLES.AGENCY_ADMIN, referralCode: `ROOMA2${run}` },
     { id: userB, clerkId: `room-clerk-b-${run}`, tenantId: tenantB, name: "Room Admin B", email: `room-admin-b-${run}@test.com`, role: ROLES.AGENCY_ADMIN, referralCode: `ROOMB${run}` },
   ]);
   await db.insert(accommodationsTable).values([
@@ -238,10 +240,13 @@ beforeEach(async () => {
   await clearAssignments();
   authTenant.id = userA;
   authTenant.tenantId = tenantA;
-  vi.mocked(requireAuth).mockImplementation(async () => ({
-    id: authTenant.id,
-    tenantId: authTenant.tenantId,
-    role: authTenant.role,
+  vi.mocked(requireAuth).mockImplementation((async (req?: { headers?: Record<string, string | string[] | undefined> }) => {
+    const secondAdmin = req?.headers?.["x-room-admin"] === "second";
+    return {
+      id: secondAdmin ? userA2 : authTenant.id,
+      tenantId: secondAdmin ? tenantA : authTenant.tenantId,
+      role: authTenant.role,
+    };
   }) as never);
   await db.update(accommodationRoomsTable).set({ capacity: 1, status: "active" }).where(eq(accommodationRoomsTable.id, roomA));
   await db.update(accommodationRoomsTable).set({ capacity: 2, status: "active" }).where(eq(accommodationRoomsTable.id, roomLarge));
@@ -447,6 +452,84 @@ describe("room assignments", () => {
     const assignments = await db.select().from(reservationRoomAssignmentsTable)
       .where(and(eq(reservationRoomAssignmentsTable.tenantId, tenantA), eq(reservationRoomAssignmentsTable.roomId, roomA)));
     expect(assignments).toHaveLength(1);
+  });
+
+  it("keeps concurrent room edits and audit snapshots in one persisted sequence", async () => {
+    await db.delete(auditLogsTable).where(and(
+      eq(auditLogsTable.tenantId, tenantA),
+      eq(auditLogsTable.entityId, roomA),
+    ));
+
+    const initialRoom = await db.select().from(accommodationRoomsTable)
+      .where(eq(accommodationRoomsTable.id, roomA));
+    expect(initialRoom).toHaveLength(1);
+    expect(initialRoom[0]).toMatchObject({ name: "A-1", capacity: 1, status: "active" });
+
+    const results = await Promise.all([
+      request(app)
+        .patch(`/api/accommodation-rooms/${roomA}`)
+        .send({ name: "A-1 editado pelo primeiro administrador" }),
+      request(app)
+        .patch(`/api/accommodation-rooms/${roomA}`)
+        .set("x-room-admin", "second")
+        .send({ name: "A-1 editado pelo segundo administrador" }),
+    ]);
+
+    expect(results.map(result => result.status)).toEqual([200, 200]);
+    expect(results.map(result => result.body.name)).toEqual(expect.arrayContaining([
+      "A-1 editado pelo primeiro administrador",
+      "A-1 editado pelo segundo administrador",
+    ]));
+
+    const [finalRoom] = await db.select().from(accommodationRoomsTable)
+      .where(eq(accommodationRoomsTable.id, roomA));
+    expect(finalRoom).toBeDefined();
+    expect(finalRoom).toMatchObject({
+      name: expect.stringMatching(/^A-1 editado pelo (primeiro|segundo) administrador$/),
+      capacity: 1,
+      status: "active",
+    });
+
+    const allRoomLogs = await db.select().from(auditLogsTable)
+      .where(and(
+        eq(auditLogsTable.tenantId, tenantA),
+        eq(auditLogsTable.entityType, "accommodation_room"),
+        eq(auditLogsTable.entityId, roomA),
+      ));
+    expect(allRoomLogs).toHaveLength(2);
+
+    const roomLogs = await db.select().from(auditLogsTable)
+      .where(and(
+        eq(auditLogsTable.tenantId, tenantA),
+        eq(auditLogsTable.entityType, "accommodation_room"),
+        eq(auditLogsTable.entityId, roomA),
+        eq(auditLogsTable.action, "room_updated"),
+      ))
+    expect(roomLogs).toHaveLength(2);
+    expect(new Set(roomLogs.map(log => log.userId))).toEqual(new Set([userA, userA2]));
+
+    const firstLog = roomLogs.find(log => (log.before as { name?: string } | null)?.name === "A-1");
+    const secondLog = roomLogs.find(log => log !== firstLog);
+    if (!firstLog || !secondLog) throw new Error("Expected a two-event room audit chain");
+    expect(firstLog.before).toMatchObject({ name: "A-1", capacity: 1, status: "active" });
+    expect(firstLog.after).toMatchObject({ capacity: 1, status: "active" });
+    expect(secondLog.before).toEqual(firstLog.after);
+    expect(secondLog.after).toEqual({
+      accommodationId: accommodationA,
+      name: finalRoom.name,
+      category: "standard",
+      capacity: 1,
+      pricePerNight: 150,
+      status: "active",
+      isActive: true,
+      description: null,
+      standardOccupancy: null,
+      bedConfiguration: null,
+      bathroomType: null,
+      floor: null,
+      currency: "BRL",
+    });
+    expect(finalRoom.name).toBe(secondLog.after && (secondLog.after as { name: string }).name);
   });
 
   it("keeps the reservation and trip allocation summaries consistent", async () => {
