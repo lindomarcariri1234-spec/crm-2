@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
+  Ban,
   BedDouble,
   CalendarDays,
   Check,
@@ -11,6 +12,7 @@ import {
   Hotel,
   Loader2,
   MapPin,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
@@ -73,6 +75,9 @@ type ReservationSummary = {
   source: string;
   channel: string;
   createdAt: string;
+  updatedAt: string;
+  notes?: string | null;
+  cancellationReason?: string | null;
 };
 
 type ReservationItem = {
@@ -183,6 +188,17 @@ export default function PmsReservas() {
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [guests, setGuests] = useState<GuestForm[]>([{ fullName: "", guestType: "ADULT" }]);
   const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState(false);
+  const [cancelConfirming, setCancelConfirming] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [editCheckIn, setEditCheckIn] = useState("");
+  const [editCheckOut, setEditCheckOut] = useState("");
+  const [editAdults, setEditAdults] = useState("1");
+  const [editChildren, setEditChildren] = useState("0");
+  const [editInfants, setEditInfants] = useState("0");
+  const [editNotes, setEditNotes] = useState("");
+  const [editQuantities, setEditQuantities] = useState<Record<string, number>>({});
+  const [editGuests, setEditGuests] = useState<GuestForm[]>([]);
 
   const propertiesQuery = useQuery({
     queryKey: ["pms-properties"],
@@ -209,6 +225,33 @@ export default function PmsReservas() {
     queryFn: () => requestJson<ReservationDetail>(`/api/pms/reservations/${selectedId}`),
     enabled: Boolean(selectedId),
   });
+  const editAvailabilityQuery = useQuery({
+    queryKey: ["pms-edit-availability", detailQuery.data?.property.id, selectedId, editCheckIn, editCheckOut],
+    queryFn: () =>
+      requestJson<Availability>(
+        `/api/pms/availability?propertyId=${encodeURIComponent(detailQuery.data!.property.id)}&checkIn=${editCheckIn}&checkOut=${editCheckOut}&excludeReservationId=${encodeURIComponent(selectedId)}`,
+      ),
+    enabled: Boolean(editing && selectedId && detailQuery.data?.property.id && editCheckIn && editCheckOut && editCheckIn < editCheckOut),
+  });
+  useEffect(() => {
+    const detail = detailQuery.data;
+    if (!detail) return;
+    setEditCheckIn(detail.reservation.checkIn);
+    setEditCheckOut(detail.reservation.checkOut);
+    setEditAdults(String(detail.reservation.adults));
+    setEditChildren(String(detail.reservation.children));
+    setEditInfants(String(detail.reservation.infants));
+    setEditNotes(detail.reservation.notes ?? "");
+    setEditGuests(detail.guests.map(guest => ({ fullName: guest.fullName, guestType: guest.guestType })));
+    const quantities = detail.items.reduce<Record<string, number>>((result, item) => {
+      result[item.roomTypeId] = (result[item.roomTypeId] ?? 0) + item.quantity;
+      return result;
+    }, {});
+    setEditQuantities(quantities);
+    setEditing(false);
+    setCancelConfirming(false);
+    setCancelReason("");
+  }, [detailQuery.data?.reservation.id, detailQuery.data?.reservation.updatedAt]);
   const unitsQuery = useQuery({
     queryKey: ["pms-property-units", detailQuery.data?.property.id],
     queryFn: () => requestJson<Unit[]>(`/api/pms/properties/${detailQuery.data!.property.id}/units`),
@@ -271,6 +314,65 @@ export default function PmsReservas() {
     onError: (error: Error) => toast({ title: "Não foi possível criar a reserva", description: error.message, variant: "destructive" }),
   });
 
+  const updateReservation = useMutation({
+    mutationFn: () => {
+      const availability = editAvailabilityQuery.data;
+      if (!detailQuery.data || !availability) throw new Error("Consulte a disponibilidade para o novo período.");
+      const selectedRoomTypes = availability.roomTypes.filter((room) => (editQuantities[room.id] ?? 0) > 0);
+      if (selectedRoomTypes.length === 0) throw new Error("Escolha ao menos um tipo de quarto.");
+      return requestJson<ReservationDetail>(`/api/pms/reservations/${selectedId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          checkIn: editCheckIn,
+          checkOut: editCheckOut,
+          adults: Number(editAdults),
+          children: Number(editChildren),
+          infants: Number(editInfants),
+          notes: editNotes.trim() || null,
+          items: selectedRoomTypes.map((room) => ({
+            roomTypeId: room.id,
+            quantity: editQuantities[room.id],
+            adults: Number(editAdults),
+            children: Number(editChildren),
+            unitPrice: Number(room.pricePerNight),
+          })),
+          guests: editGuests.map((guest) => ({
+            fullName: guest.fullName.trim(),
+            guestType: guest.guestType,
+          })),
+        }),
+      });
+    },
+    onSuccess: (detail) => {
+      queryClient.setQueryData(["pms-reservation", selectedId], detail);
+      queryClient.invalidateQueries({ queryKey: ["pms-reservations"] });
+      queryClient.invalidateQueries({ queryKey: ["pms-availability"] });
+      setEditing(false);
+      toast({ title: "Reserva atualizada", description: "Datas, itens e valores foram atualizados." });
+    },
+    onError: (error: Error) => toast({ title: "Não foi possível atualizar a reserva", description: error.message, variant: "destructive" }),
+  });
+
+  const cancelReservation = useMutation({
+    mutationFn: () => {
+      const reason = cancelReason.trim();
+      if (reason.length < 3) throw new Error("Informe o motivo do cancelamento.");
+      return requestJson<ReservationDetail>(`/api/pms/reservations/${selectedId}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+    },
+    onSuccess: (detail) => {
+      queryClient.setQueryData(["pms-reservation", selectedId], detail);
+      queryClient.invalidateQueries({ queryKey: ["pms-reservations"] });
+      queryClient.invalidateQueries({ queryKey: ["pms-availability"] });
+      setCancelConfirming(false);
+      setCancelReason("");
+      toast({ title: "Reserva cancelada", description: "A disponibilidade foi liberada para o período." });
+    },
+    onError: (error: Error) => toast({ title: "Não foi possível cancelar a reserva", description: error.message, variant: "destructive" }),
+  });
+
   const saveAssignments = useMutation({
     mutationFn: () =>
       requestJson<ReservationDetail>(`/api/pms/reservations/${selectedId}/assignments`, {
@@ -292,10 +394,14 @@ export default function PmsReservas() {
   function selectReservation(id: string) {
     setSelectedId(id);
     setAssignments({});
+    setEditing(false);
+    setCancelConfirming(false);
   }
 
   function resetNewReservation() {
     setSelectedId("");
+    setEditing(false);
+    setCancelConfirming(false);
     setForm((current) => ({ ...current, notes: "" }));
     setQuantities({});
     setGuests([{ fullName: "", guestType: "ADULT" }]);
@@ -419,7 +525,61 @@ export default function PmsReservas() {
         <Card className="border-primary/20 shadow-sm">
           <CardHeader className="border-b bg-primary/[0.025] pb-4"><div className="flex items-start justify-between gap-3"><div><CardTitle className="flex items-center gap-2 text-base"><UserRound className="h-4 w-4 text-primary" /> Detalhe da reserva</CardTitle><CardDescription>Confira hóspedes, valores e alocação de unidades.</CardDescription></div><Button type="button" variant="ghost" size="icon" data-testid="button-close-reservation-detail" aria-label="Fechar detalhe" onClick={() => setSelectedId("")}><X className="h-4 w-4" /></Button></div></CardHeader>
           <CardContent className="p-5">
-            {detailQuery.isLoading ? <div className="h-32 animate-pulse rounded-md bg-muted" /> : detailQuery.isError || !detailQuery.data ? <InlineError text="Não foi possível carregar o detalhe da reserva." /> : <ReservationDetailView detail={detailQuery.data} units={unitsQuery.data ?? []} unitsLoading={unitsQuery.isLoading} assignments={assignments} onAssignmentChange={(itemId, unitId) => setAssignments((current) => ({ ...current, [itemId]: unitId }))} onSaveAssignments={() => saveAssignments.mutate()} savingAssignments={saveAssignments.isPending} />}
+            {detailQuery.isLoading ? <div className="h-32 animate-pulse rounded-md bg-muted" /> : detailQuery.isError || !detailQuery.data ? <InlineError text="Não foi possível carregar o detalhe da reserva." /> : (
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/20 p-3">
+                  <div className="text-sm text-muted-foreground">
+                    {detailQuery.data.reservation.status.toLowerCase() === "cancelled"
+                      ? <span>Cancelada: {detailQuery.data.reservation.cancellationReason || "motivo não informado"}</span>
+                      : <span>Alterações de datas, quartos e hóspedes recalculam a disponibilidade antes de salvar.</span>}
+                  </div>
+                  {detailQuery.data.reservation.status.toLowerCase() !== "cancelled" && detailQuery.data.reservation.status.toLowerCase() !== "expired" && (
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" size="sm" data-testid="button-edit-pms-reservation" onClick={() => { setEditing(true); setCancelConfirming(false); }}>
+                        <Pencil className="mr-2 h-4 w-4" /> Editar reserva
+                      </Button>
+                      <Button type="button" variant="destructive" size="sm" data-testid="button-cancel-pms-reservation" onClick={() => { setCancelConfirming(true); setEditing(false); }}>
+                        <Ban className="mr-2 h-4 w-4" /> Cancelar
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                {cancelConfirming && (
+                  <div className="space-y-3 rounded-md border border-destructive/30 bg-destructive/[0.04] p-4">
+                    <div><p className="text-sm font-semibold">Confirmar cancelamento</p><p className="text-xs text-muted-foreground">A reserva deixará de bloquear a disponibilidade. O motivo ficará registrado no histórico.</p></div>
+                    <textarea aria-label="Motivo do cancelamento" data-testid="input-pms-cancellation-reason" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Informe o motivo do cancelamento" className="min-h-20 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring" />
+                    <div className="flex justify-end gap-2"><Button type="button" variant="ghost" size="sm" onClick={() => setCancelConfirming(false)}>Voltar</Button><Button type="button" variant="destructive" size="sm" data-testid="button-confirm-pms-cancellation" onClick={() => cancelReservation.mutate()} disabled={cancelReservation.isPending || cancelReason.trim().length < 3}>{cancelReservation.isPending ? "Cancelando..." : "Confirmar cancelamento"}</Button></div>
+                  </div>
+                )}
+                {editing && (
+                  <ReservationEditPanel
+                    detail={detailQuery.data}
+                    availability={editAvailabilityQuery.data}
+                    availabilityLoading={editAvailabilityQuery.isFetching}
+                    checkIn={editCheckIn}
+                    checkOut={editCheckOut}
+                    adults={editAdults}
+                    children={editChildren}
+                    infants={editInfants}
+                    notes={editNotes}
+                    quantities={editQuantities}
+                    guests={editGuests}
+                    onCheckInChange={setEditCheckIn}
+                    onCheckOutChange={setEditCheckOut}
+                    onAdultsChange={setEditAdults}
+                    onChildrenChange={setEditChildren}
+                    onInfantsChange={setEditInfants}
+                    onNotesChange={setEditNotes}
+                    onQuantityChange={(roomId, quantity) => setEditQuantities((current) => ({ ...current, [roomId]: quantity }))}
+                    onGuestChange={(index, fullName) => setEditGuests((current) => current.map((guest, guestIndex) => guestIndex === index ? { ...guest, fullName } : guest))}
+                    onSave={() => updateReservation.mutate()}
+                    onCancel={() => setEditing(false)}
+                    saving={updateReservation.isPending}
+                  />
+                )}
+                <ReservationDetailView detail={detailQuery.data} units={unitsQuery.data ?? []} unitsLoading={unitsQuery.isLoading} assignments={assignments} onAssignmentChange={(itemId, unitId) => setAssignments((current) => ({ ...current, [itemId]: unitId }))} onSaveAssignments={() => saveAssignments.mutate()} savingAssignments={saveAssignments.isPending} />
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -439,6 +599,57 @@ function InlineError({ text }: { text: string }) {
 
 function EmptyState({ text }: { text: string }) {
   return <div className="px-5 py-12 text-center text-sm text-muted-foreground" data-testid="status-pms-empty"><ClipboardList className="mx-auto mb-2 h-6 w-6 text-primary/50" /><p>{text}</p><p className="mt-1 text-xs">A lista será atualizada após uma nova confirmação.</p></div>;
+}
+
+function ReservationEditPanel({ detail, availability, availabilityLoading, checkIn, checkOut, adults, children, infants, notes, quantities, guests, onCheckInChange, onCheckOutChange, onAdultsChange, onChildrenChange, onInfantsChange, onNotesChange, onQuantityChange, onGuestChange, onSave, onCancel, saving }: {
+  detail: ReservationDetail;
+  availability?: Availability;
+  availabilityLoading: boolean;
+  checkIn: string;
+  checkOut: string;
+  adults: string;
+  children: string;
+  infants: string;
+  notes: string;
+  quantities: Record<string, number>;
+  guests: GuestForm[];
+  onCheckInChange: (value: string) => void;
+  onCheckOutChange: (value: string) => void;
+  onAdultsChange: (value: string) => void;
+  onChildrenChange: (value: string) => void;
+  onInfantsChange: (value: string) => void;
+  onNotesChange: (value: string) => void;
+  onQuantityChange: (roomId: string, value: number) => void;
+  onGuestChange: (index: number, value: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}) {
+  return <section className="space-y-4 rounded-md border border-primary/20 bg-primary/[0.025] p-4" data-testid="pms-reservation-edit-panel">
+    <div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-semibold">Editar reserva</h3><p className="text-xs text-muted-foreground">A nova disponibilidade é consultada sem contar esta própria reserva.</p></div><Button type="button" variant="ghost" size="sm" onClick={onCancel}>Fechar edição</Button></div>
+    <div className="grid gap-3 md:grid-cols-[1fr_1fr_1fr]">
+      <div className="space-y-1.5"><Label htmlFor="edit-pms-check-in">Entrada</Label><Input id="edit-pms-check-in" data-testid="input-edit-pms-check-in" type="date" value={checkIn} onChange={(event) => onCheckInChange(event.target.value)} /></div>
+      <div className="space-y-1.5"><Label htmlFor="edit-pms-check-out">Saída</Label><Input id="edit-pms-check-out" data-testid="input-edit-pms-check-out" type="date" value={checkOut} onChange={(event) => onCheckOutChange(event.target.value)} /></div>
+      <div className="flex items-end text-sm text-muted-foreground">{availabilityLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Recalculando disponibilidade…</> : availability ? `${availability.nights} noite(s)` : checkIn >= checkOut ? "A saída precisa ser posterior à entrada." : "Aguardando disponibilidade"}</div>
+    </div>
+    <div className="grid gap-3 sm:grid-cols-3">
+      <NumberField id="edit-pms-adults" label="Adultos" value={adults} min={1} onChange={onAdultsChange} />
+      <NumberField id="edit-pms-children" label="Crianças" value={children} min={0} onChange={onChildrenChange} />
+      <NumberField id="edit-pms-infants" label="Bebês" value={infants} min={0} onChange={onInfantsChange} />
+    </div>
+    <div className="overflow-hidden rounded-md border">
+      <Table><TableHeader><TableRow><TableHead>Tipo de quarto</TableHead><TableHead>Disponível</TableHead><TableHead>Diária</TableHead><TableHead className="text-right">Qtd.</TableHead></TableRow></TableHeader><TableBody>
+        {availabilityLoading && <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">Consultando disponibilidade…</TableCell></TableRow>}
+        {!availabilityLoading && !availability && <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">Informe um período válido.</TableCell></TableRow>}
+        {(availability?.roomTypes ?? []).map((room) => <TableRow key={room.id}><TableCell><div className="font-medium">{room.name}</div><div className="text-xs text-muted-foreground">{room.code ?? "Sem código"}</div></TableCell><TableCell><Badge variant={room.availableUnits > 0 ? "secondary" : "outline"}>{room.availableUnits} unidade(s)</Badge></TableCell><TableCell>{formatMoney(room.pricePerNight, detail.property.currency ?? "BRL")}</TableCell><TableCell className="text-right"><Input aria-label={`Quantidade editada de ${room.name}`} data-testid={`input-edit-room-quantity-${room.id}`} type="number" min={0} max={room.availableUnits} className="ml-auto h-8 w-20 text-right" value={quantities[room.id] ?? 0} onChange={(event) => onQuantityChange(room.id, Math.min(room.availableUnits, Math.max(0, Number(event.target.value) || 0)))} disabled={room.availableUnits === 0} /></TableCell></TableRow>)}
+      </TableBody></Table>
+    </div>
+    <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+      <div className="space-y-2"><Label>Hóspedes</Label>{guests.length === 0 && <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">Nenhum hóspede registrado.</p>}{guests.map((guest, index) => <Input key={index} aria-label={`Nome editado do hóspede ${index + 1}`} data-testid={`input-edit-guest-name-${index}`} value={guest.fullName} onChange={(event) => onGuestChange(index, event.target.value)} placeholder={`Hóspede ${index + 1}`} />)}</div>
+      <div className="space-y-1.5"><Label htmlFor="edit-pms-notes">Observações</Label><textarea id="edit-pms-notes" data-testid="input-edit-pms-notes" value={notes} onChange={(event) => onNotesChange(event.target.value)} className="min-h-24 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring" /></div>
+    </div>
+    <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={onCancel}>Cancelar edição</Button><Button type="button" data-testid="button-save-pms-reservation-edit" onClick={onSave} disabled={saving || availabilityLoading || !availability || checkIn >= checkOut}>{saving ? "Salvando..." : "Salvar alterações"}</Button></div>
+  </section>;
 }
 
 function ReservationDetailView({ detail, units, unitsLoading, assignments, onAssignmentChange, onSaveAssignments, savingAssignments }: { detail: ReservationDetail; units: Unit[]; unitsLoading: boolean; assignments: Record<string, string>; onAssignmentChange: (itemId: string, unitId: string) => void; onSaveAssignments: () => void; savingAssignments: boolean }) {

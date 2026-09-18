@@ -47,6 +47,7 @@ import type {
   CalendarSyncRequest,
   CalendarSyncResponse,
   Campaign,
+  CancelPmsReservationBody,
   CartItem,
   ChartDataPoint,
   ChatbotConversation,
@@ -258,6 +259,7 @@ import type {
   UpdatePipelineBody,
   UpdatePlanBody,
   UpdatePlatformSettingBody,
+  UpdatePmsReservationBody,
   UpdateProductBody,
   UpdateReferralBody,
   UpdateReferralSettingsBody,
@@ -948,6 +950,218 @@ export function useGetPmsReservation<
 
   return withQueryKey(query, queryOptions.queryKey);
 }
+
+export const getUpdatePmsReservationUrl = (id: string) => {
+  return `/api/pms/reservations/${id}`;
+};
+
+/**
+ * @summary Update a direct lodging reservation
+ */
+export const updatePmsReservation = async (
+  id: string,
+  updatePmsReservationBody: UpdatePmsReservationBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsReservationDetail> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<PmsReservationDetail>(getUpdatePmsReservationUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(updatePmsReservationBody),
+  });
+};
+
+export const getUpdatePmsReservationMutationKey = () =>
+  ["updatePmsReservation"] as const;
+
+export const getUpdatePmsReservationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePmsReservation>>,
+    TError,
+    UpdatePmsReservationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updatePmsReservation>>,
+  TError,
+  UpdatePmsReservationMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUpdatePmsReservationMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updatePmsReservation>>,
+    UpdatePmsReservationMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updatePmsReservation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdatePmsReservationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updatePmsReservation>>
+>;
+export type UpdatePmsReservationMutationBody =
+  BodyType<UpdatePmsReservationBody>;
+export type UpdatePmsReservationMutationError = ErrorType<unknown>;
+export type UpdatePmsReservationMutationVariables = {
+  id: string;
+  data: BodyType<UpdatePmsReservationBody>;
+};
+
+/**
+ * @summary Update a direct lodging reservation
+ */
+export const useUpdatePmsReservation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updatePmsReservation>>,
+    TError,
+    UpdatePmsReservationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updatePmsReservation>>,
+  TError,
+  UpdatePmsReservationMutationVariables,
+  TContext
+> => {
+  return useMutation(getUpdatePmsReservationMutationOptions(options));
+};
+
+export const getCancelPmsReservationUrl = (id: string) => {
+  return `/api/pms/reservations/${id}/cancel`;
+};
+
+/**
+ * @summary Cancel a direct lodging reservation
+ */
+export const cancelPmsReservation = async (
+  id: string,
+  cancelPmsReservationBody: CancelPmsReservationBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<PmsReservationDetail> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return customFetch<PmsReservationDetail>(getCancelPmsReservationUrl(id), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(cancelPmsReservationBody),
+  });
+};
+
+export const getCancelPmsReservationMutationKey = () =>
+  ["cancelPmsReservation"] as const;
+
+export const getCancelPmsReservationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelPmsReservation>>,
+    TError,
+    CancelPmsReservationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof cancelPmsReservation>>,
+  TError,
+  CancelPmsReservationMutationVariables,
+  TContext
+> => {
+  const mutationKey = getCancelPmsReservationMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof cancelPmsReservation>>,
+    CancelPmsReservationMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return cancelPmsReservation(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CancelPmsReservationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof cancelPmsReservation>>
+>;
+export type CancelPmsReservationMutationBody =
+  BodyType<CancelPmsReservationBody>;
+export type CancelPmsReservationMutationError = ErrorType<unknown>;
+export type CancelPmsReservationMutationVariables = {
+  id: string;
+  data: BodyType<CancelPmsReservationBody>;
+};
+
+/**
+ * @summary Cancel a direct lodging reservation
+ */
+export const useCancelPmsReservation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof cancelPmsReservation>>,
+    TError,
+    CancelPmsReservationMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof cancelPmsReservation>>,
+  TError,
+  CancelPmsReservationMutationVariables,
+  TContext
+> => {
+  return useMutation(getCancelPmsReservationMutationOptions(options));
+};
 
 export const getAddPmsReservationGuestsUrl = (id: string) => {
   return `/api/pms/reservations/${id}/guests`;

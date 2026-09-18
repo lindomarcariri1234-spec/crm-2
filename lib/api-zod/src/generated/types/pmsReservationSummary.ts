@@ -31,6 +31,8 @@ export interface PmsReservationSummary {
   /** @nullable */
   notes?: string | null;
   /** @nullable */
+  cancellationReason?: string | null;
+  /** @nullable */
   expiresAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;

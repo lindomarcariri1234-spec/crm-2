@@ -122,3 +122,4 @@
 - [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
 - [Audit failure log hygiene](audit-failure-logging.md) — audit-write failures log only operational identifiers and error type; never snapshots or raw exception details
 - [PMS legacy projection](pms-legacy-projection.md) — keep legacy accommodations as the source and idempotently project new records before PMS reads
+- [PMS schema verification](pms-schema-verification.md) — after PMS column migrations, verify the live database separately; an apparently successful migrate can still leave schema drift

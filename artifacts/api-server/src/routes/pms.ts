@@ -85,6 +85,23 @@ const AddGuestsBody = z.object({
   guests: z.array(GuestBody.omit({ itemIndex: true })).min(1).max(500),
 });
 
+const UpdateReservationBody = z.object({
+  checkIn: z.string().regex(DATE_RE).optional(),
+  checkOut: z.string().regex(DATE_RE).optional(),
+  adults: z.number().int().min(1).max(500).optional(),
+  children: z.number().int().min(0).max(500).optional(),
+  infants: z.number().int().min(0).max(500).optional(),
+  notes: z.string().trim().max(2000).optional().nullable(),
+  items: z.array(ReservationItemBody).min(1).max(50).optional(),
+  guests: z.array(GuestBody).max(500).optional(),
+}).refine(value => Object.keys(value).length > 0, {
+  message: "Informe ao menos um campo para alterar",
+});
+
+const CancelReservationBody = z.object({
+  reason: z.string().trim().min(3).max(500),
+});
+
 const AssignmentsBody = z.object({
   assignments: z.array(z.object({
     reservationUnitId: z.string().min(1),
@@ -129,6 +146,78 @@ function formatReservation(reservation: typeof pmsReservationsTable.$inferSelect
     createdAt: reservation.createdAt.toISOString(),
     updatedAt: reservation.updatedAt.toISOString(),
     expiresAt: reservation.expiresAt?.toISOString() ?? null,
+  };
+}
+
+type ReservationItemInput = z.infer<typeof ReservationItemBody>;
+
+async function prepareReservationItems(
+  exec: PmsExecutor,
+  tenantId: string,
+  property: typeof propertiesTable.$inferSelect,
+  items: ReservationItemInput[],
+  checkIn: string,
+  checkOut: string,
+  excludedReservationId?: string,
+) {
+  const nights = assertDateRange(checkIn, checkOut);
+  const roomTypeIds = [...new Set(items.map(item => item.roomTypeId))].sort();
+  const roomTypes = await exec.select().from(roomTypesTable).where(and(
+    eq(roomTypesTable.tenantId, tenantId),
+    eq(roomTypesTable.propertyId, property.id),
+    inArray(roomTypesTable.id, roomTypeIds),
+    eq(roomTypesTable.status, "active"),
+  ));
+  if (roomTypes.length !== roomTypeIds.length) {
+    throw new ValidationError("Um dos tipos de quarto não pertence à propriedade", "PMS_ROOM_TYPE_NOT_FOUND");
+  }
+
+  const requestedByType = new Map<string, number>();
+  for (const item of items) {
+    requestedByType.set(item.roomTypeId, (requestedByType.get(item.roomTypeId) ?? 0) + item.quantity);
+  }
+  for (const roomTypeId of roomTypeIds) {
+    await exec.select({ id: roomTypesTable.id }).from(roomTypesTable).where(and(
+      eq(roomTypesTable.tenantId, tenantId),
+      eq(roomTypesTable.id, roomTypeId),
+    )).for("update").limit(1);
+    const availability = await getTypeAvailability(
+      exec,
+      tenantId,
+      property.id,
+      roomTypeId,
+      checkIn,
+      checkOut,
+      excludedReservationId,
+    );
+    if (availability.availableUnits < (requestedByType.get(roomTypeId) ?? 0)) {
+      throw new ConflictError(
+        "Não há unidades suficientes para o tipo de quarto selecionado",
+        "PMS_INSUFFICIENT_AVAILABILITY",
+      );
+    }
+  }
+
+  const prepared = [];
+  for (const item of items) {
+    const unitPrice = item.unitPrice ?? await chooseLegacyRate(
+      exec,
+      tenantId,
+      property,
+      item.roomTypeId,
+      checkIn,
+      checkOut,
+    );
+    prepared.push({
+      ...item,
+      unitPrice,
+      total: Number((unitPrice * nights * item.quantity).toFixed(2)),
+    });
+  }
+  return {
+    nights,
+    items: prepared,
+    totalAmount: Number(prepared.reduce((sum, item) => sum + item.total, 0).toFixed(2)),
   };
 }
 
@@ -527,7 +616,7 @@ router.get("/pms/properties/:id/units", async (req, res, next: NextFunction) => 
   }
 });
 
-router.get("/pms/availability", async (req, res, next: NextFunction) => {
+ router.get("/pms/availability", async (req, res, next: NextFunction) => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
@@ -535,6 +624,9 @@ router.get("/pms/availability", async (req, res, next: NextFunction) => {
     const propertyId = String(req.query.propertyId ?? "");
     const checkIn = String(req.query.checkIn ?? "");
     const checkOut = String(req.query.checkOut ?? "");
+    const excludedReservationId = typeof req.query.excludeReservationId === "string"
+      ? req.query.excludeReservationId
+      : undefined;
     const nights = assertDateRange(checkIn, checkOut);
     const property = await findProperty(me.tenantId, propertyId);
     const types = await db.select().from(roomTypesTable).where(and(
@@ -552,6 +644,7 @@ router.get("/pms/availability", async (req, res, next: NextFunction) => {
         roomType.id,
         checkIn,
         checkOut,
+        excludedReservationId,
       );
       const price = await chooseLegacyRate(db, me.tenantId, property, roomType.id, checkIn, checkOut);
       roomTypes.push({
@@ -621,55 +714,21 @@ router.post("/pms/reservations", async (req, res, next: NextFunction) => {
       throw new ValidationError(parsed.error.message, "INVALID_PMS_RESERVATION");
     }
     const data = parsed.data;
-    const nights = assertDateRange(data.checkIn, data.checkOut);
+    assertDateRange(data.checkIn, data.checkOut);
     const property = await findProperty(me.tenantId, data.propertyId);
     const reservationId = generateId();
     const reservationNumber = `PMS-${data.checkIn.replaceAll("-", "")}-${reservationId.slice(0, 8).toUpperCase()}`;
 
     await db.transaction(async tx => {
-      const roomTypeIds = [...new Set(data.items.map(item => item.roomTypeId))];
-      const roomTypes = await tx.select().from(roomTypesTable).where(and(
-        eq(roomTypesTable.tenantId, me.tenantId),
-        eq(roomTypesTable.propertyId, data.propertyId),
-        inArray(roomTypesTable.id, roomTypeIds),
-        eq(roomTypesTable.status, "active"),
-      ));
-      if (roomTypes.length !== roomTypeIds.length) {
-        throw new ValidationError("Um dos tipos de quarto não pertence à propriedade", "PMS_ROOM_TYPE_NOT_FOUND");
-      }
-
-      const totals: number[] = [];
-      for (const item of data.items) {
-        await tx.select({ id: roomTypesTable.id }).from(roomTypesTable).where(eq(
-          roomTypesTable.id,
-          item.roomTypeId,
-        )).for("update").limit(1);
-        const availability = await getTypeAvailability(
-          tx,
-          me.tenantId,
-          data.propertyId,
-          item.roomTypeId,
-          data.checkIn,
-          data.checkOut,
-        );
-        if (availability.availableUnits < item.quantity) {
-          throw new ConflictError(
-            "Não há unidades suficientes para o tipo de quarto selecionado",
-            "PMS_INSUFFICIENT_AVAILABILITY",
-          );
-        }
-        const price = item.unitPrice ?? await chooseLegacyRate(
-          tx,
-          me.tenantId,
-          property,
-          item.roomTypeId,
-          data.checkIn,
-          data.checkOut,
-        );
-        totals.push(Number((price * nights * item.quantity).toFixed(2)));
-      }
-
-      const totalAmount = Number(totals.reduce((sum, value) => sum + value, 0).toFixed(2));
+      const prepared = await prepareReservationItems(
+        tx,
+        me.tenantId,
+        property,
+        data.items,
+        data.checkIn,
+        data.checkOut,
+      );
+      const totalAmount = prepared.totalAmount;
       await tx.insert(pmsReservationsTable).values({
         id: reservationId,
         tenantId: me.tenantId,
@@ -692,9 +751,7 @@ router.post("/pms/reservations", async (req, res, next: NextFunction) => {
       });
 
       const insertedItems = [];
-      for (let index = 0; index < data.items.length; index++) {
-        const item = data.items[index];
-        const unitPrice = totals[index] / nights / item.quantity;
+      for (const item of prepared.items) {
         const itemId = generateId();
         await tx.insert(pmsReservationUnitsTable).values({
           id: itemId,
@@ -708,8 +765,8 @@ router.post("/pms/reservations", async (req, res, next: NextFunction) => {
           adults: item.adults,
           children: item.children,
           quantity: item.quantity,
-          unitPrice: unitPrice.toFixed(2),
-          total: totals[index].toFixed(2),
+          unitPrice: item.unitPrice.toFixed(2),
+          total: item.total.toFixed(2),
         });
         insertedItems.push(itemId);
       }
@@ -734,6 +791,198 @@ router.post("/pms/reservations", async (req, res, next: NextFunction) => {
     });
 
     res.status(201).json(await getReservationDetail(me.tenantId, reservationId));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/pms/reservations/:id", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const parsed = UpdateReservationBody.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.message, "INVALID_PMS_RESERVATION_UPDATE");
+    const data = parsed.data;
+
+    await db.transaction(async tx => {
+      const [reservation] = await tx.select().from(pmsReservationsTable).where(and(
+        eq(pmsReservationsTable.id, req.params.id),
+        eq(pmsReservationsTable.tenantId, me.tenantId),
+      )).for("update").limit(1);
+      if (!reservation) throw new NotFoundError("Reserva PMS não encontrada", "PMS_RESERVATION_NOT_FOUND");
+      if (["CANCELLED", "EXPIRED"].includes(reservation.status)) {
+        throw new ValidationError("Não é possível alterar uma reserva encerrada", "PMS_RESERVATION_CLOSED");
+      }
+
+      const property = await findProperty(me.tenantId, reservation.propertyId);
+      const checkIn = data.checkIn ?? reservation.checkIn;
+      const checkOut = data.checkOut ?? reservation.checkOut;
+      const currentItems = await tx.select().from(pmsReservationUnitsTable).where(and(
+        eq(pmsReservationUnitsTable.tenantId, me.tenantId),
+        eq(pmsReservationUnitsTable.reservationId, reservation.id),
+      )).orderBy(asc(pmsReservationUnitsTable.createdAt));
+      const requestedItems: ReservationItemInput[] = data.items ?? currentItems.map(item => ({
+        roomTypeId: item.roomTypeId,
+        quantity: item.quantity,
+        adults: item.adults,
+        children: item.children,
+        unitPrice: Number(item.unitPrice),
+        ratePlanId: item.ratePlanId,
+      }));
+      const prepared = await prepareReservationItems(
+        tx,
+        me.tenantId,
+        property,
+        requestedItems,
+        checkIn,
+        checkOut,
+        reservation.id,
+      );
+      const itemIds: string[] = [];
+
+      if (data.items) {
+        await tx.delete(pmsReservationUnitsTable).where(and(
+          eq(pmsReservationUnitsTable.tenantId, me.tenantId),
+          eq(pmsReservationUnitsTable.reservationId, reservation.id),
+        ));
+        for (let index = 0; index < prepared.items.length; index++) {
+          const item = prepared.items[index];
+          const previous = currentItems[index];
+          let unitId: string | null = null;
+          if (
+            previous?.unitId &&
+            previous.roomTypeId === item.roomTypeId &&
+            previous.quantity === item.quantity
+          ) {
+            const [unit] = await tx.select().from(accommodationUnitsTable).where(and(
+              eq(accommodationUnitsTable.id, previous.unitId),
+              eq(accommodationUnitsTable.tenantId, me.tenantId),
+              eq(accommodationUnitsTable.propertyId, reservation.propertyId),
+              eq(accommodationUnitsTable.roomTypeId, item.roomTypeId),
+              eq(accommodationUnitsTable.status, "active"),
+            )).for("update").limit(1);
+            if (unit && !(await legacyRoomIsUnavailable(
+              tx,
+              me.tenantId,
+              unit,
+              checkIn,
+              checkOut,
+              reservation.id,
+            ))) {
+              unitId = unit.id;
+            }
+          }
+          const itemId = generateId();
+          itemIds.push(itemId);
+          await tx.insert(pmsReservationUnitsTable).values({
+            id: itemId,
+            tenantId: me.tenantId,
+            reservationId: reservation.id,
+            roomTypeId: item.roomTypeId,
+            unitId,
+            ratePlanId: item.ratePlanId ?? null,
+            checkIn,
+            checkOut,
+            adults: item.adults,
+            children: item.children,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice.toFixed(2),
+            total: item.total.toFixed(2),
+          });
+        }
+      } else {
+        itemIds.push(...currentItems.map(item => item.id));
+        for (let index = 0; index < prepared.items.length; index++) {
+          const item = prepared.items[index];
+          await tx.update(pmsReservationUnitsTable).set({
+            checkIn,
+            checkOut,
+            unitPrice: item.unitPrice.toFixed(2),
+            total: item.total.toFixed(2),
+          }).where(and(
+            eq(pmsReservationUnitsTable.id, currentItems[index].id),
+            eq(pmsReservationUnitsTable.tenantId, me.tenantId),
+          ));
+        }
+      }
+
+      if (data.guests) {
+        await tx.delete(pmsReservationGuestsTable).where(and(
+          eq(pmsReservationGuestsTable.tenantId, me.tenantId),
+          eq(pmsReservationGuestsTable.reservationId, reservation.id),
+        ));
+        for (const guest of data.guests) {
+          if (guest.itemIndex !== undefined && !itemIds[guest.itemIndex]) {
+            throw new ValidationError("Hóspede associado a um item inexistente", "INVALID_PMS_GUEST_ITEM");
+          }
+          await tx.insert(pmsReservationGuestsTable).values({
+            id: generateId(),
+            tenantId: me.tenantId,
+            reservationId: reservation.id,
+            reservationUnitId: guest.itemIndex === undefined ? null : itemIds[guest.itemIndex],
+            guestProfileId: null,
+            fullName: guest.fullName,
+            documentType: guest.documentType ?? null,
+            documentNumber: guest.documentNumber ?? null,
+            birthDate: guest.birthDate ?? null,
+            guestType: guest.guestType,
+          });
+        }
+      }
+
+      const paidAmount = Number(reservation.paidAmount);
+      const balanceAmount = Math.max(0, prepared.totalAmount - paidAmount);
+      await tx.update(pmsReservationsTable).set({
+        checkIn,
+        checkOut,
+        adults: data.adults ?? reservation.adults,
+        children: data.children ?? reservation.children,
+        infants: data.infants ?? reservation.infants,
+        totalAmount: prepared.totalAmount.toFixed(2),
+        balanceAmount: balanceAmount.toFixed(2),
+        notes: data.notes === undefined ? reservation.notes : data.notes,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(pmsReservationsTable.id, reservation.id),
+        eq(pmsReservationsTable.tenantId, me.tenantId),
+      ));
+    });
+
+    res.json(await getReservationDetail(me.tenantId, req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/pms/reservations/:id/cancel", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const parsed = CancelReservationBody.safeParse(req.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.message, "INVALID_PMS_CANCELLATION");
+
+    await db.transaction(async tx => {
+      const [reservation] = await tx.select().from(pmsReservationsTable).where(and(
+        eq(pmsReservationsTable.id, req.params.id),
+        eq(pmsReservationsTable.tenantId, me.tenantId),
+      )).for("update").limit(1);
+      if (!reservation) throw new NotFoundError("Reserva PMS não encontrada", "PMS_RESERVATION_NOT_FOUND");
+      if (reservation.status === "CANCELLED") return;
+      if (reservation.status === "EXPIRED") {
+        throw new ValidationError("A reserva já expirou e não pode ser cancelada", "PMS_RESERVATION_CLOSED");
+      }
+      await tx.update(pmsReservationsTable).set({
+        status: "CANCELLED",
+        cancellationReason: parsed.data.reason,
+        expiresAt: null,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(pmsReservationsTable.id, reservation.id),
+        eq(pmsReservationsTable.tenantId, me.tenantId),
+      ));
+    });
+
+    res.json(await getReservationDetail(me.tenantId, req.params.id));
   } catch (err) {
     next(err);
   }

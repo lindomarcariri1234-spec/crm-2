@@ -130,6 +130,9 @@ paths:
           in: query
           required: true
           schema: { type: string, format: date }
+        - name: excludeReservationId
+          in: query
+          schema: { type: string }
       responses:
         "200":
           description: Availability by room type
@@ -190,6 +193,46 @@ paths:
       responses:
         "200":
           description: Reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
+    patch:
+      operationId: updatePmsReservation
+      summary: Update a direct lodging reservation
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsReservationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePmsReservationBody"
+      responses:
+        "200":
+          description: Updated reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
+
+  /pms/reservations/{id}/cancel:
+    post:
+      operationId: cancelPmsReservation
+      summary: Cancel a direct lodging reservation
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsReservationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelPmsReservationBody"
+      responses:
+        "200":
+          description: Cancelled reservation detail
           content:
             application/json:
               schema:
@@ -12530,6 +12573,7 @@ components:
         balanceAmount: { type: number }
         currency: { type: string }
         notes: { type: [string, "null"] }
+        cancellationReason: { type: [string, "null"] }
         expiresAt: { type: [string, "null"], format: date-time }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -12655,6 +12699,31 @@ components:
           items:
             $ref: "#/components/schemas/PmsGuestInput"
       required: [propertyId, checkIn, checkOut, items]
+
+    UpdatePmsReservationBody:
+      type: object
+      properties:
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        adults: { type: integer, minimum: 1 }
+        children: { type: integer, minimum: 0 }
+        infants: { type: integer, minimum: 0 }
+        notes: { type: [string, "null"] }
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CreatePmsReservationItem"
+        guests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PmsGuestInput"
+
+    CancelPmsReservationBody:
+      type: object
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
+      required: [reason]
 
     PmsUnitAssignment:
       type: object

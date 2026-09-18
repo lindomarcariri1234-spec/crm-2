@@ -163,6 +163,7 @@ export const pmsReservationsTable = pgTable("pms_reservations", {
   balanceAmount: numeric("balance_amount", { precision: 12, scale: 2 }).notNull().default("0"),
   currency: text("currency").notNull().default("BRL"),
   notes: text("notes"),
+  cancellationReason: text("cancellation_reason"),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

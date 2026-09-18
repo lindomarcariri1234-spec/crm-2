@@ -6,9 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type GetPmsAvailabilityParams = {
-  propertyId: string;
-  checkIn: Date;
-  checkOut: Date;
-  excludeReservationId?: string;
-};
+export interface CancelPmsReservationBody {
+  /**
+   * @minLength 3
+   * @maxLength 500
+   */
+  reason: string;
+}

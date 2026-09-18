@@ -4988,6 +4988,8 @@ export interface PmsReservationSummary {
   /** @nullable */
   notes?: string | null;
   /** @nullable */
+  cancellationReason?: string | null;
+  /** @nullable */
   expiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -5113,6 +5115,30 @@ export interface CreatePmsReservationBody {
   guests?: PmsGuestInput[];
 }
 
+export interface UpdatePmsReservationBody {
+  checkIn?: string;
+  checkOut?: string;
+  /** @minimum 1 */
+  adults?: number;
+  /** @minimum 0 */
+  children?: number;
+  /** @minimum 0 */
+  infants?: number;
+  /** @nullable */
+  notes?: string | null;
+  /** @minItems 1 */
+  items?: CreatePmsReservationItem[];
+  guests?: PmsGuestInput[];
+}
+
+export interface CancelPmsReservationBody {
+  /**
+   * @minLength 3
+   * @maxLength 500
+   */
+  reason: string;
+}
+
 export interface PmsUnitAssignment {
   reservationUnitId: string;
   /** @nullable */
@@ -5123,6 +5149,7 @@ export type GetPmsAvailabilityParams = {
   propertyId: string;
   checkIn: string;
   checkOut: string;
+  excludeReservationId?: string;
 };
 
 export type ListPmsReservationsParams = {
