@@ -44,6 +44,10 @@ vi.mock("@/hooks/use-toast", () => ({
 import Hospedagens from "../pages/cadastros/hospedagens.js";
 
 beforeEach(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
   mockRoomQuery.data = [];
   mockRoomQuery.refetch.mockReset();
   mockAuditQuery.refetch.mockReset();
@@ -120,6 +124,114 @@ describe("Hospedagens page", () => {
       variant: "destructive",
     }));
     expect(mockToast.mock.calls.flat().join(" ")).not.toContain("connection string");
+  });
+
+  it("shows a safe validation message when creating an accommodation fails", async () => {
+    mockMutation.mutateAsync.mockRejectedValue({
+      response: {
+        data: {
+          code: "VALIDATION_ERROR",
+          error: "database constraint details",
+        },
+      },
+    });
+
+    const handle = await renderComponent(createElement(Hospedagens));
+    await flushAct(() => {
+      handle.container.querySelector('[data-testid="button-new-hospedagem"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    const dialog = document.body.querySelector('[role="dialog"]');
+    const nameInput = dialog?.querySelector("input") as HTMLInputElement | null;
+    expect(nameInput).not.toBeNull();
+    if (!nameInput) throw new Error("Accommodation name input not found");
+    await flushAct(() => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      valueSetter?.call(nameInput, "Hotel de teste");
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      nameInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flushAct(() => {
+      dialog?.querySelector('button[role="combobox"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      Array.from(document.body.querySelectorAll('[role="option"]'))
+        .find(option => option.textContent === "Hotel")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushAct(() => {
+      Array.from(document.body.querySelectorAll("button"))
+        .find(button => button.textContent === "Criar")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "Confira os dados da hospedagem e tente novamente.",
+      variant: "destructive",
+    });
+    expect(mockToast.mock.calls.flat().join(" ")).not.toContain("database constraint details");
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+    await handle.rerender(createElement(Hospedagens));
+  });
+
+  it("keeps the accommodation edit open and hides infrastructure details when saving fails", async () => {
+    mockMutation.mutateAsync.mockRejectedValue(new Error("database host unavailable"));
+
+    const handle = await renderComponent(createElement(Hospedagens));
+    await flushAct(() => {
+      handle.container.querySelector('button[aria-label="Editar Pousada do Cariri"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      Array.from(document.body.querySelectorAll("button"))
+        .find(button => button.textContent === "Salvar")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(mockRefetch).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "Não foi possível salvar a hospedagem. A alteração não foi aplicada. Tente novamente.",
+      variant: "destructive",
+    });
+    expect(mockToast.mock.calls.flat().join(" ")).not.toContain("database host unavailable");
+    await handle.rerender(createElement(Hospedagens));
+  });
+
+  it("keeps the accommodation listed and gives a safe not-found message when deletion fails", async () => {
+    mockMutation.mutateAsync.mockRejectedValue({
+      response: {
+        data: {
+          code: "ACCOMMODATION_NOT_FOUND",
+          error: "internal record lookup details",
+        },
+      },
+    });
+
+    const handle = await renderComponent(createElement(Hospedagens));
+    await flushAct(() => {
+      handle.container.querySelector('button[aria-label="Excluir Pousada do Cariri"]')?.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await flushAct(() => {
+      Array.from(document.body.querySelectorAll('[role="dialog"] button'))
+        .find(button => button.textContent === "Excluir")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(handle.container.textContent).toContain("Pousada do Cariri");
+    expect(mockRefetch).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "Esta hospedagem não está mais disponível. Atualize a lista e tente novamente.",
+      variant: "destructive",
+    });
+    expect(mockToast.mock.calls.flat().join(" ")).not.toContain("internal record lookup details");
+    await handle.rerender(createElement(Hospedagens));
   });
 
   it("keeps the room form state and gives a safe save error when editing fails", async () => {

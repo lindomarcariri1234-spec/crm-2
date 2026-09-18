@@ -80,6 +80,30 @@ function roomAuditDetails(log: AuditLog) {
 }
 
 type RoomMutationOperation = "save" | "delete" | "status";
+type AccommodationMutationOperation = "create" | "update" | "delete";
+
+function accommodationMutationErrorMessage(error: unknown, operation: AccommodationMutationOperation) {
+  const responseData = (error as { response?: { data?: { code?: string } } })?.response?.data;
+  const code = responseData?.code;
+  if (code === "ACCOMMODATION_NOT_FOUND" || code === "NOT_FOUND") {
+    return "Esta hospedagem não está mais disponível. Atualize a lista e tente novamente.";
+  }
+  if (code === "FORBIDDEN" || code === "FORBIDDEN_ROLE") {
+    return "Você não tem permissão para alterar esta hospedagem.";
+  }
+  if (code === "VALIDATION_ERROR") {
+    return "Confira os dados da hospedagem e tente novamente.";
+  }
+  if (code === "ACCOMMODATION_CREATE_FAILED") {
+    return "Não foi possível criar a hospedagem. Tente novamente.";
+  }
+  if (operation === "delete") {
+    return "Não foi possível excluir a hospedagem. A exclusão não foi aplicada. Tente novamente.";
+  }
+  return operation === "create"
+    ? "Não foi possível criar a hospedagem. A alteração não foi aplicada. Tente novamente."
+    : "Não foi possível salvar a hospedagem. A alteração não foi aplicada. Tente novamente.";
+}
 
 function roomMutationErrorMessage(error: unknown, operation: RoomMutationOperation, nextStatus?: string) {
   const responseData = (error as { response?: { data?: { code?: string } } })?.response?.data;
@@ -228,10 +252,10 @@ export default function Hospedagens() {
       setModalOpen(false);
       refetch();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message
-        || "Erro ao salvar hospedagem";
-      toast({ title: msg, variant: "destructive" });
+      toast({
+        title: accommodationMutationErrorMessage(err, editing ? "update" : "create"),
+        variant: "destructive",
+      });
     }
   }
 
@@ -242,10 +266,10 @@ export default function Hospedagens() {
       setDeleteId(null);
       refetch();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message
-        || "Erro ao excluir";
-      toast({ title: msg, variant: "destructive" });
+      toast({
+        title: accommodationMutationErrorMessage(err, "delete"),
+        variant: "destructive",
+      });
     }
   }
 

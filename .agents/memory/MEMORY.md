@@ -124,3 +124,4 @@
 - [PMS legacy projection](pms-legacy-projection.md) — keep legacy accommodations as the source and idempotently project new records before PMS reads
 - [PMS schema verification](pms-schema-verification.md) — after PMS column migrations, verify the live database separately; an apparently successful migrate can still leave schema drift
 - [Concurrent audit snapshot tests](concurrent-audit-snapshot-tests.md) — assert concurrent event order through before/after snapshot chaining, not timestamps that may tie
+- [Radix form test harness](radix-form-test-harness.md) — mock scrollIntoView and use the native input value setter when testing controlled inputs and Radix Select in the DOM harness
