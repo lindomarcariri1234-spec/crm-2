@@ -185,6 +185,8 @@ export default function Financial() {
   const [categoryFilter, setCategoryFilter] = useState(() => new URLSearchParams(searchStr).get("category") ?? "");
   const [dateFrom, setDateFrom] = useState(() => new URLSearchParams(searchStr).get("dateFrom") ?? "");
   const [dateTo, setDateTo] = useState(() => new URLSearchParams(searchStr).get("dateTo") ?? "");
+  const [pmsReservationFilter, setPmsReservationFilter] = useState(() => new URLSearchParams(searchStr).get("reservationNumber") ?? "");
+  const [pmsAdjustedByFilter, setPmsAdjustedByFilter] = useState(() => new URLSearchParams(searchStr).get("adjustedBy") ?? "");
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -193,9 +195,11 @@ export default function Financial() {
     if (categoryFilter) params.set("category", categoryFilter);
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
+    if (pmsReservationFilter) params.set("reservationNumber", pmsReservationFilter);
+    if (pmsAdjustedByFilter) params.set("adjustedBy", pmsAdjustedByFilter);
     navigate(`?${params.toString()}`, { replace: true });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, statusFilter, categoryFilter, dateFrom, dateTo]);
+  }, [tab, statusFilter, categoryFilter, dateFrom, dateTo, pmsReservationFilter, pmsAdjustedByFilter]);
   const [showUpcomingInstallments, setShowUpcomingInstallments] = useState(false);
   const [upcomingInstallments, setUpcomingInstallments] = useState<Array<{
     id: string; reservationId: string; installmentNumber: number; dueDate: string;
@@ -268,8 +272,6 @@ export default function Financial() {
   const { data: rulesData, isLoading: loadingRules, refetch: refetchRules } = useListCommissionRules();
   const { data: chartData } = useGetDashboardRevenueChart({ period: "12m" });
   const { data: clientsData } = useListClients({ limit: 500, page: 1 });
-  const [pmsReservationFilter, setPmsReservationFilter] = useState("");
-  const [pmsAdjustedByFilter, setPmsAdjustedByFilter] = useState("");
   const financialAdjustmentFilters = useMemo(() => ({
     reservationNumber: pmsReservationFilter.trim() || undefined,
     adjustedBy: pmsAdjustedByFilter.trim() || undefined,
@@ -285,6 +287,14 @@ export default function Financial() {
   const canonicalTotals = financialMetrics?.totals;
   const canonicalRevenue = canonicalTotals?.receivedRevenue ?? 0;
   const canonicalCosts = canonicalTotals?.operatingCostsPaid ?? 0;
+  const financialExportHref = useMemo(() => {
+    const params = new URLSearchParams({ reportType: "financial" });
+    if (dateFrom) params.set("startDate", dateFrom);
+    if (dateTo) params.set("endDate", dateTo);
+    if (pmsReservationFilter.trim()) params.set("reservationNumber", pmsReservationFilter.trim());
+    if (pmsAdjustedByFilter.trim()) params.set("adjustedBy", pmsAdjustedByFilter.trim());
+    return `/downloads?${params.toString()}`;
+  }, [dateFrom, dateTo, pmsReservationFilter, pmsAdjustedByFilter]);
 
   const createPayment = useCreatePayment();
   const updatePayment = useUpdatePayment();
@@ -426,6 +436,11 @@ export default function Financial() {
           <Link href="/financeiro/expenses">
             <Button variant="ghost" size="sm">
               <ExternalLink className="w-4 h-4 mr-1.5" /> Despesas
+            </Button>
+          </Link>
+          <Link href={financialExportHref}>
+            <Button variant="outline" size="sm">
+              <ExternalLink className="w-4 h-4 mr-1.5" /> Exportar
             </Button>
           </Link>
           <Button variant="outline" onClick={() => setIsExpenseOpen(true)}>
