@@ -7,6 +7,7 @@ import {
   accommodationUnitsTable,
   ratePlansTable,
   pmsReservationsTable,
+  pmsPaymentAdjustmentsTable,
   pmsReservationUnitsTable,
   pmsReservationGuestsTable,
   accommodationsTable,
@@ -20,7 +21,7 @@ import {
   reservationsTable,
   tripsTable,
 } from "@workspace/db";
-import { ACTIVE_RESERVATION_STATUSES } from "@workspace/permissions";
+import { ACTIVE_RESERVATION_STATUSES, ADMIN_ROLES } from "@workspace/permissions";
 import {
   and,
   asc,
@@ -38,7 +39,7 @@ import {
 } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth } from "../lib/tenant";
-import { ConflictError, NotFoundError, ValidationError } from "../lib/errors";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { generateId } from "../lib/id";
 import { calculatePmsFinancials } from "../lib/pms-financials";
 
@@ -108,6 +109,11 @@ const AssignmentsBody = z.object({
     reservationUnitId: z.string().min(1),
     unitId: z.string().min(1).nullable(),
   })).max(100),
+});
+
+const PaymentAdjustmentBody = z.object({
+  paidAmount: z.number().finite().nonnegative().max(9999999999.99),
+  reason: z.string().trim().min(3).max(500),
 });
 
 function assertDateRange(checkIn: string, checkOut: string): number {
@@ -532,6 +538,11 @@ async function getReservationDetail(tenantId: string, id: string) {
     eq(pmsReservationGuestsTable.reservationId, id),
   )).orderBy(asc(pmsReservationGuestsTable.createdAt));
 
+  const paymentAdjustments = await db.select().from(pmsPaymentAdjustmentsTable).where(and(
+    eq(pmsPaymentAdjustmentsTable.tenantId, tenantId),
+    eq(pmsPaymentAdjustmentsTable.reservationId, id),
+  )).orderBy(desc(pmsPaymentAdjustmentsTable.createdAt));
+
   return {
     reservation: formatReservation(reservation.reservation),
     property: formatProperty(reservation.property),
@@ -548,6 +559,13 @@ async function getReservationDetail(tenantId: string, id: string) {
       ...guest,
       createdAt: guest.createdAt.toISOString(),
       updatedAt: guest.updatedAt.toISOString(),
+    })),
+    paymentAdjustments: paymentAdjustments.map(adjustment => ({
+      ...adjustment,
+      previousPaidAmount: Number(adjustment.previousPaidAmount),
+      newPaidAmount: Number(adjustment.newPaidAmount),
+      deltaAmount: Number(adjustment.deltaAmount),
+      createdAt: adjustment.createdAt.toISOString(),
     })),
   };
 }
@@ -950,6 +968,67 @@ router.patch("/pms/reservations/:id", async (req, res, next: NextFunction) => {
         paidAmount: financials.paidAmount.toFixed(2),
         balanceAmount: financials.balanceAmount.toFixed(2),
         notes: data.notes === undefined ? reservation.notes : data.notes,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(pmsReservationsTable.id, reservation.id),
+        eq(pmsReservationsTable.tenantId, me.tenantId),
+      ));
+    });
+
+    res.json(await getReservationDetail(me.tenantId, req.params.id));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/pms/reservations/:id/payment-adjustments", async (req, res, next: NextFunction) => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!ADMIN_ROLES.includes(me.role)) {
+      throw new ForbiddenError("Somente administradores podem ajustar pagamentos", "PMS_PAYMENT_ADJUSTMENT_FORBIDDEN");
+    }
+    const parsed = PaymentAdjustmentBody.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ValidationError(parsed.error.message, "INVALID_PMS_PAYMENT_ADJUSTMENT");
+    }
+    const { paidAmount, reason } = parsed.data;
+
+    await db.transaction(async tx => {
+      const [reservation] = await tx.select().from(pmsReservationsTable).where(and(
+        eq(pmsReservationsTable.id, req.params.id),
+        eq(pmsReservationsTable.tenantId, me.tenantId),
+      )).for("update").limit(1);
+      if (!reservation) throw new NotFoundError("Reserva PMS não encontrada", "PMS_RESERVATION_NOT_FOUND");
+      if (["CANCELLED", "EXPIRED"].includes(reservation.status)) {
+        throw new ValidationError("Não é possível ajustar o pagamento de uma reserva encerrada", "PMS_RESERVATION_CLOSED");
+      }
+
+      const financials = calculatePmsFinancials(Number(reservation.totalAmount), paidAmount);
+      if (!financials) {
+        throw new ValidationError(
+          "O valor recebido não pode ser maior que o total da reserva.",
+          "PMS_PAID_ABOVE_TOTAL",
+          { totalAmount: Number(reservation.totalAmount), paidAmount },
+        );
+      }
+
+      const previousPaidAmount = Number(reservation.paidAmount);
+      if (financials.paidAmount === Math.round(previousPaidAmount * 100) / 100) return;
+
+      await tx.insert(pmsPaymentAdjustmentsTable).values({
+        id: generateId(),
+        tenantId: me.tenantId,
+        reservationId: reservation.id,
+        adjustedById: me.id,
+        previousPaidAmount: previousPaidAmount.toFixed(2),
+        newPaidAmount: financials.paidAmount.toFixed(2),
+        deltaAmount: (financials.paidAmount - Math.round(previousPaidAmount * 100) / 100).toFixed(2),
+        reason,
+      });
+      await tx.update(pmsReservationsTable).set({
+        paidAmount: financials.paidAmount.toFixed(2),
+        balanceAmount: financials.balanceAmount.toFixed(2),
         updatedAt: new Date(),
       }).where(and(
         eq(pmsReservationsTable.id, reservation.id),

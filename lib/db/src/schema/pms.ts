@@ -12,6 +12,7 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { tenantsTable } from "./tenants";
+import { usersTable } from "./users";
 import { accommodationsTable, accommodationRoomsTable } from "./registrations";
 
 /**
@@ -171,6 +172,20 @@ export const pmsReservationsTable = pgTable("pms_reservations", {
   uniqueIndex("pms_reservations_tenant_number_unique").on(table.tenantId, table.reservationNumber),
   index("pms_reservations_tenant_dates_idx").on(table.tenantId, table.propertyId, table.checkIn, table.checkOut),
   index("pms_reservations_tenant_status_idx").on(table.tenantId, table.status),
+]);
+
+export const pmsPaymentAdjustmentsTable = pgTable("pms_payment_adjustments", {
+  id: text("id").primaryKey(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
+  reservationId: text("reservation_id").notNull().references(() => pmsReservationsTable.id, { onDelete: "cascade" }),
+  adjustedById: text("adjusted_by_id").references(() => usersTable.id, { onDelete: "set null" }),
+  previousPaidAmount: numeric("previous_paid_amount", { precision: 12, scale: 2 }).notNull(),
+  newPaidAmount: numeric("new_paid_amount", { precision: 12, scale: 2 }).notNull(),
+  deltaAmount: numeric("delta_amount", { precision: 12, scale: 2 }).notNull(),
+  reason: text("reason").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("pms_payment_adjustments_tenant_reservation_idx").on(table.tenantId, table.reservationId, table.createdAt),
 ]);
 
 export const pmsReservationUnitsTable = pgTable("reservation_units", {

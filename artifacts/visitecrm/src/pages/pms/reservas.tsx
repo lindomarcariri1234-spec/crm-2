@@ -102,11 +102,21 @@ type ReservationGuest = {
   itemIndex?: number | null;
 };
 
+type PaymentAdjustment = {
+  id: string;
+  previousPaidAmount: number;
+  newPaidAmount: number;
+  deltaAmount: number;
+  reason: string;
+  createdAt: string;
+};
+
 type ReservationDetail = {
   reservation: ReservationSummary;
   property: Property;
   items: ReservationItem[];
   guests: ReservationGuest[];
+  paymentAdjustments: PaymentAdjustment[];
 };
 
 type Unit = {
@@ -217,6 +227,9 @@ export default function PmsReservas() {
   const [editNotes, setEditNotes] = useState("");
   const [editQuantities, setEditQuantities] = useState<Record<string, number>>({});
   const [editGuests, setEditGuests] = useState<GuestForm[]>([]);
+  const [paymentAdjusting, setPaymentAdjusting] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentReason, setPaymentReason] = useState("");
 
   const propertiesQuery = useQuery({
     queryKey: ["pms-properties"],
@@ -391,6 +404,28 @@ export default function PmsReservas() {
     onError: (error: Error) => toast({ title: "Não foi possível cancelar a reserva", description: error.message, variant: "destructive" }),
   });
 
+  const adjustPayment = useMutation({
+    mutationFn: () => {
+      const paidAmount = Number(paymentAmount.replace(",", "."));
+      const reason = paymentReason.trim();
+      if (!Number.isFinite(paidAmount) || paidAmount < 0) throw new Error("Informe um valor recebido válido.");
+      if (reason.length < 3) throw new Error("Informe o motivo do ajuste.");
+      return requestJson<ReservationDetail>(`/api/pms/reservations/${selectedId}/payment-adjustments`, {
+        method: "POST",
+        body: JSON.stringify({ paidAmount, reason }),
+      });
+    },
+    onSuccess: (detail) => {
+      queryClient.setQueryData(["pms-reservation", selectedId], detail);
+      queryClient.invalidateQueries({ queryKey: ["pms-reservations"] });
+      setPaymentAdjusting(false);
+      setPaymentAmount("");
+      setPaymentReason("");
+      toast({ title: "Pagamento ajustado", description: "O valor recebido e o saldo foram recalculados." });
+    },
+    onError: (error: Error) => toast({ title: "Não foi possível ajustar o pagamento", description: error.message, variant: "destructive" }),
+  });
+
   const saveAssignments = useMutation({
     mutationFn: () =>
       requestJson<ReservationDetail>(`/api/pms/reservations/${selectedId}/assignments`, {
@@ -414,6 +449,9 @@ export default function PmsReservas() {
     setAssignments({});
     setEditing(false);
     setCancelConfirming(false);
+    setPaymentAdjusting(false);
+    setPaymentAmount("");
+    setPaymentReason("");
   }
 
   function resetNewReservation() {
@@ -556,6 +594,9 @@ export default function PmsReservas() {
                       <Button type="button" variant="outline" size="sm" data-testid="button-edit-pms-reservation" onClick={() => { setEditing(true); setCancelConfirming(false); }}>
                         <Pencil className="mr-2 h-4 w-4" /> Editar reserva
                       </Button>
+                      <Button type="button" variant="outline" size="sm" data-testid="button-adjust-pms-payment" onClick={() => { setPaymentAdjusting(true); setPaymentAmount(String(detailQuery.data.reservation.paidAmount)); setPaymentReason(""); setEditing(false); setCancelConfirming(false); }}>
+                        <CircleDollarSign className="mr-2 h-4 w-4" /> Ajustar pagamento
+                      </Button>
                       <Button type="button" variant="destructive" size="sm" data-testid="button-cancel-pms-reservation" onClick={() => { setCancelConfirming(true); setEditing(false); }}>
                         <Ban className="mr-2 h-4 w-4" /> Cancelar
                       </Button>
@@ -567,6 +608,30 @@ export default function PmsReservas() {
                     <div><p className="text-sm font-semibold">Confirmar cancelamento</p><p className="text-xs text-muted-foreground">A reserva deixará de bloquear a disponibilidade. O motivo ficará registrado no histórico.</p></div>
                     <textarea aria-label="Motivo do cancelamento" data-testid="input-pms-cancellation-reason" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Informe o motivo do cancelamento" className="min-h-20 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring" />
                     <div className="flex justify-end gap-2"><Button type="button" variant="ghost" size="sm" onClick={() => setCancelConfirming(false)}>Voltar</Button><Button type="button" variant="destructive" size="sm" data-testid="button-confirm-pms-cancellation" onClick={() => cancelReservation.mutate()} disabled={cancelReservation.isPending || cancelReason.trim().length < 3}>{cancelReservation.isPending ? "Cancelando..." : "Confirmar cancelamento"}</Button></div>
+                  </div>
+                )}
+                {paymentAdjusting && (
+                  <div className="space-y-3 rounded-md border border-primary/30 bg-primary/[0.04] p-4">
+                    <div>
+                      <p className="text-sm font-semibold">Ajustar pagamento recebido</p>
+                      <p className="text-xs text-muted-foreground">Use esta ação para registrar um estorno, correção ou reaplicação. O histórico anterior será preservado.</p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_1fr]">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="pms-payment-amount">Valor recebido</Label>
+                        <Input id="pms-payment-amount" data-testid="input-pms-payment-amount" type="number" min={0} step="0.01" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="pms-payment-reason">Motivo</Label>
+                        <textarea id="pms-payment-reason" data-testid="input-pms-payment-reason" value={paymentReason} onChange={(event) => setPaymentReason(event.target.value)} placeholder="Ex.: estorno solicitado pelo hóspede" className="min-h-20 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring" />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setPaymentAdjusting(false)}>Voltar</Button>
+                      <Button type="button" size="sm" data-testid="button-confirm-pms-payment-adjustment" onClick={() => adjustPayment.mutate()} disabled={adjustPayment.isPending || paymentReason.trim().length < 3 || paymentAmount.trim() === ""}>
+                        {adjustPayment.isPending ? "Salvando..." : "Salvar ajuste"}
+                      </Button>
+                    </div>
                   </div>
                 )}
                 {editing && (
@@ -691,6 +756,24 @@ function ReservationDetailView({ detail, units, unitsLoading, assignments, onAss
          <p className={`mt-1 text-xs ${financialState.className}`} data-testid="pms-payment-state">{financialState.label}</p>
        </div>
      </div>
+    <section className="rounded-md border bg-muted/10 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div><h3 className="text-sm font-semibold">Histórico de ajustes</h3><p className="text-xs text-muted-foreground">Alterações no valor recebido ficam registradas para conferência.</p></div>
+        <Badge variant="outline">{detail.paymentAdjustments.length} registro(s)</Badge>
+      </div>
+      {detail.paymentAdjustments.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {detail.paymentAdjustments.map((adjustment) => (
+            <div key={adjustment.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded border bg-background px-3 py-2 text-xs">
+              <span>{formatMoney(adjustment.previousPaidAmount, detail.property.currency ?? "BRL")} → {formatMoney(adjustment.newPaidAmount, detail.property.currency ?? "BRL")}</span>
+              <span className={adjustment.deltaAmount < 0 ? "text-destructive" : "text-primary"}>{adjustment.deltaAmount < 0 ? "Estorno" : "Recebimento"} {formatMoney(Math.abs(adjustment.deltaAmount), detail.property.currency ?? "BRL")}</span>
+              <span className="text-muted-foreground">{adjustment.reason}</span>
+              <time className="text-muted-foreground">{formatDate(adjustment.createdAt)}</time>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
     <div className="grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
       <section className="space-y-3"><div><h3 className="text-sm font-semibold">Itens e unidades</h3><p className="text-xs text-muted-foreground">Associe cada item a uma unidade para orientar a recepção.</p></div><div className="overflow-hidden rounded-md border"><Table><TableHeader><TableRow><TableHead>Quarto</TableHead><TableHead>Hóspedes</TableHead><TableHead>Unidade</TableHead><TableHead className="text-right">Total</TableHead></TableRow></TableHeader><TableBody>{detail.items.map((item) => { const matchingUnits = units.filter((unit) => unit.roomType.id === item.roomTypeId); return <TableRow key={item.id}><TableCell><div className="font-medium">{item.roomType?.name ?? "Tipo de quarto"}</div><div className="text-xs text-muted-foreground">{item.quantity} unidade(s)</div></TableCell><TableCell className="text-sm">{item.adults} adultos{item.children ? ` · ${item.children} crianças` : ""}</TableCell><TableCell>{unitsLoading ? <div className="h-8 w-40 animate-pulse rounded bg-muted" /> : <select aria-label={`Unidade para ${item.roomType?.name ?? "item"}`} data-testid={`select-unit-${item.id}`} className="h-8 w-full min-w-[150px] rounded-md border bg-background px-2 text-xs" value={currentAssignment(item)} onChange={(event) => onAssignmentChange(item.id, event.target.value)}><option value="">Sem unidade</option>{matchingUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitLabel(unit)}</option>)}</select>}</TableCell><TableCell className="text-right font-medium">{formatMoney(item.total, detail.property.currency ?? "BRL")}</TableCell></TableRow>; })}{detail.items.length === 0 && <TableRow><TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">Nenhum item de quarto nesta reserva.</TableCell></TableRow>}</TableBody></Table></div><div className="flex justify-end"><Button type="button" size="sm" data-testid="button-save-assignments" onClick={onSaveAssignments} disabled={savingAssignments || unitsLoading}><Save className="mr-2 h-4 w-4" />{savingAssignments ? "Salvando..." : "Salvar alocação"}</Button></div></section>
       <section className="space-y-3"><div><h3 className="text-sm font-semibold">Hóspedes principais</h3><p className="text-xs text-muted-foreground">Informações registradas na criação da reserva.</p></div><div className="space-y-2">{detail.guests.map((guest, index) => { const guestType = guest.guestType.toLowerCase(); return <div key={guest.id ?? `${guest.fullName}-${index}`} className="flex items-center gap-3 rounded-md border p-3"><div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><UserRound className="h-4 w-4" /></div><div className="min-w-0"><p className="truncate text-sm font-medium">{guest.fullName}</p><p className="text-xs capitalize text-muted-foreground">{guestType === "adult" ? "Adulto" : guestType}</p></div><Check className="ml-auto h-4 w-4 text-primary" /></div>; })}{detail.guests.length === 0 && <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">Nenhum hóspede informado.</p>}</div><div className="rounded-md bg-muted/30 p-3 text-sm"><div className="flex items-center gap-2 font-medium"><MapPin className="h-4 w-4 text-primary" /> {detail.property.name}</div><p className="mt-1 pl-6 text-xs text-muted-foreground">{detail.property.city}{detail.property.state ? ` · ${detail.property.state}` : ""} · Check-in {detail.property.checkInTime ?? "—"} · Check-out {detail.property.checkOutTime ?? "—"}</p></div></section>
