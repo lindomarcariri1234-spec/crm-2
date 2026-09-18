@@ -528,7 +528,8 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
    *
    * When no trip is chosen, createReservation is never called, so
    * createdReservationId stays undefined, and the guard opens → createDeal IS
-   * called to create a lead card in the Pipeline.
+   * called to create a lead card in the Pipeline, even when the caller does
+   * not provide a stage explicitly and the modal must use the Lead fallback.
    */
   it("DOES call createDeal when no trip is selected (normal lead-without-reservation path)", async () => {
     const { container } = await renderComponent(
@@ -537,7 +538,6 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
         onClose: vi.fn(),
         editClient: null,
         onSave: vi.fn(),
-        defaultStageId: "stage-lead",
         pipelineId: "pipe-1",
       }),
     );
@@ -580,7 +580,12 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
     expect(createReservationMock).not.toHaveBeenCalled();
 
     // Guard opens (createdReservationId=undefined) → deal IS created for lead
-    expect(createDealMock).toHaveBeenCalledOnce();
+    expect(createDealMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        stageId: "stage-lead",
+        title: "João Souza — Lead",
+      }),
+    });
   });
 
   /**

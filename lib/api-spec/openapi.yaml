@@ -8996,7 +8996,7 @@ components:
           type: ["string", "null"]
         expectedCloseDate:
           type: ["string", "null"]
-      required: [stageId, title, value]
+      required: [title, value]
 
     UpdateDealBody:
       type: object

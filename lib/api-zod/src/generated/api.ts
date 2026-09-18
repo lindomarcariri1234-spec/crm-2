@@ -5560,7 +5560,7 @@ export const ListDealsResponse = zod.array(ListDealsResponseItem);
  * @summary Create a deal
  */
 export const CreateDealBody = zod.object({
-  stageId: zod.string(),
+  stageId: zod.string().optional(),
   title: zod.string(),
   description: zod.string().nullish(),
   value: zod.number(),

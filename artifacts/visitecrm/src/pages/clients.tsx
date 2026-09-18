@@ -433,6 +433,9 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const stages = pipelineId
     ? allStages?.filter(s => s.pipelineId === pipelineId)
     : allStages;
+  const fallbackLeadStageId = stages?.find(
+    stage => stage.name.trim().toLowerCase() === "lead",
+  )?.id ?? stages?.[0]?.id;
   const { data: tripsData } = useListTrips({ limit: 100 });
   const { data: usersData } = useListUsers();
   const { data: me } = useGetMe();
@@ -634,25 +637,23 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
           // already created/moved the deal to "Reserva Criada". Skip frontend deal
           // creation to avoid duplicates in the Pipeline.
           if (!createdReservationId) {
-            const leadStage = stages?.find(s => s.name === "Lead");
+            const leadStage = stages?.find(s => s.name.trim().toLowerCase() === "lead");
             const dealStageId = hasTrip
-              ? (leadStage?.id ?? defaultStageId)
-              : defaultStageId;
-            if (dealStageId) {
-              const tripName = selectedTrip?.name ?? "Viagem";
-              await createDeal.mutateAsync({
-                data: {
-                  stageId: dealStageId,
-                  ...(hasTrip ? { tripId: form.tripId } : {}),
-                  title: hasTrip ? `${form.name} — ${tripName}` : `${form.name} — Lead`,
-                  value: hasTrip ? (valorComDesconto ?? 0) : 0,
-                  clientId: savedId,
-                  leadName: form.name,
-                  leadWhatsapp: form.whatsapp,
-                  ...(form.travelReason !== "none" ? { travelReason: form.travelReason } : {}),
-                },
-              });
-            }
+              ? (leadStage?.id ?? defaultStageId ?? fallbackLeadStageId)
+              : (defaultStageId ?? fallbackLeadStageId);
+            const tripName = selectedTrip?.name ?? "Viagem";
+            await createDeal.mutateAsync({
+              data: {
+                ...(dealStageId ? { stageId: dealStageId } : {}),
+                ...(hasTrip ? { tripId: form.tripId } : {}),
+                title: hasTrip ? `${form.name} — ${tripName}` : `${form.name} — Lead`,
+                value: hasTrip ? (valorComDesconto ?? 0) : 0,
+                clientId: savedId,
+                leadName: form.name,
+                leadWhatsapp: form.whatsapp,
+                ...(form.travelReason !== "none" ? { travelReason: form.travelReason } : {}),
+              },
+            });
           }
         }
       }
