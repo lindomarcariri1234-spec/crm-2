@@ -188,5 +188,16 @@ describe("canonical financial metrics", () => {
     }
     expect(dialect.sqlToQuery(filters.payments!).params).not.toContain(asOf);
     expect(dialect.sqlToQuery(filters.overduePayments!).params).toContain(asOf.toISOString());
+
+    const filtered = buildFinancialMetricFilters(tenantId, period, asOf, {
+      reservationNumber: "PMS-001",
+      adjustedBy: "Ana",
+    });
+    const pmsQuery = dialect.sqlToQuery(filtered.pmsPaymentAdjustments!);
+    expect(pmsQuery.params).toEqual(expect.arrayContaining([
+      tenantId,
+      "%PMS-001%",
+      "%Ana%",
+    ]));
   });
 });

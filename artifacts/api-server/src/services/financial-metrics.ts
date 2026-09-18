@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNotNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, ilike, inArray, isNotNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import {
   db, commissionsTable, expensesTable, financialLedgerEntriesTable, paymentsTable,
   pmsPaymentAdjustmentsTable, pmsReservationsTable, referralCommissionsTable, referralsTable,
@@ -44,6 +44,10 @@ export const FINANCIAL_METRIC_CONTRACTS = {
 
 export type FinancialPeriod = { start: Date; end: Date; label: string; asOf?: Date };
 export type FinancialMetricsPeriod = "7d" | "30d" | "90d" | "12m";
+export type FinancialMetricsFilters = {
+  reservationNumber?: string;
+  adjustedBy?: string;
+};
 type Money = number;
 type AnyRow = Record<string, unknown>;
 
@@ -130,7 +134,12 @@ type FinancialMetricSnapshot = {
   unpaidReferralCommissions: unknown;
 };
 
-export function buildFinancialMetricFilters(tenantId: string, period: FinancialPeriod, asOf: Date) {
+export function buildFinancialMetricFilters(
+  tenantId: string,
+  period: FinancialPeriod,
+  asOf: Date,
+  searchFilters: FinancialMetricsFilters = {},
+) {
   const paidReservationsInPeriod = db
     .select({ reservationId: paymentsTable.reservationId })
     .from(paymentsTable)
@@ -158,6 +167,22 @@ export function buildFinancialMetricFilters(tenantId: string, period: FinancialP
     and(gte(amountDate, period.start), lt(amountDate, period.end)),
     and(eq(table.status, "paid"), gte(paidAt, period.start), lt(paidAt, period.end)),
   );
+
+  const pmsPaymentAdjustmentFilters = [
+    eq(pmsPaymentAdjustmentsTable.tenantId, tenantId),
+    gte(pmsPaymentAdjustmentsTable.createdAt, period.start),
+    lt(pmsPaymentAdjustmentsTable.createdAt, period.end),
+  ];
+  if (searchFilters.reservationNumber) {
+    pmsPaymentAdjustmentFilters.push(
+      ilike(pmsReservationsTable.reservationNumber, `%${searchFilters.reservationNumber}%`),
+    );
+  }
+  if (searchFilters.adjustedBy) {
+    pmsPaymentAdjustmentFilters.push(
+      ilike(usersTable.name, `%${searchFilters.adjustedBy}%`),
+    );
+  }
 
   return {
     reservations: and(
@@ -243,21 +268,21 @@ export function buildFinancialMetricFilters(tenantId: string, period: FinancialP
       eq(referralCommissionsTable.tenantId, tenantId),
       sql`${referralCommissionsTable.status} not in ('paid', 'cancelled', 'refunded', 'failed', 'charged_back')`,
     ),
-    pmsPaymentAdjustments: and(
-      eq(pmsPaymentAdjustmentsTable.tenantId, tenantId),
-      gte(pmsPaymentAdjustmentsTable.createdAt, period.start),
-      lt(pmsPaymentAdjustmentsTable.createdAt, period.end),
-    ),
+    pmsPaymentAdjustments: and(...pmsPaymentAdjustmentFilters),
   };
 }
 
-export async function loadFinancialMetrics(tenantId: string, period: FinancialPeriod) {
+export async function loadFinancialMetrics(
+  tenantId: string,
+  period: FinancialPeriod,
+  searchFilters: FinancialMetricsFilters = {},
+) {
   // Keep the same instant for the snapshot predicates and the response.  The
   // period end is exclusive everywhere in this loader, which is important for
   // adjacent BRT calendar periods.
   const asOf = period.asOf ?? new Date();
   const reportPeriod = { ...period, asOf };
-  const filters = buildFinancialMetricFilters(tenantId, period, asOf);
+  const filters = buildFinancialMetricFilters(tenantId, period, asOf, searchFilters);
 
   const [
     reservations, payments, expenses, tripCosts, commissions, referralCommissions,

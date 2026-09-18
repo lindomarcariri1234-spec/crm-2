@@ -268,7 +268,13 @@ export default function Financial() {
   const { data: rulesData, isLoading: loadingRules, refetch: refetchRules } = useListCommissionRules();
   const { data: chartData } = useGetDashboardRevenueChart({ period: "12m" });
   const { data: clientsData } = useListClients({ limit: 500, page: 1 });
-  const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics();
+  const [pmsReservationFilter, setPmsReservationFilter] = useState("");
+  const [pmsAdjustedByFilter, setPmsAdjustedByFilter] = useState("");
+  const financialAdjustmentFilters = useMemo(() => ({
+    reservationNumber: pmsReservationFilter.trim() || undefined,
+    adjustedBy: pmsAdjustedByFilter.trim() || undefined,
+  }), [pmsReservationFilter, pmsAdjustedByFilter]);
+  const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics(undefined, financialAdjustmentFilters);
 
   const clientMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -444,6 +450,46 @@ export default function Financial() {
           </p>
         </CardHeader>
         <CardContent>
+          <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+            <div className="space-y-1.5">
+              <label htmlFor="pms-reservation-filter" className="text-xs font-medium">Número da reserva</label>
+              <Input
+                id="pms-reservation-filter"
+                type="search"
+                value={pmsReservationFilter}
+                onChange={(event) => setPmsReservationFilter(event.target.value)}
+                placeholder="Buscar por número"
+                className="h-9"
+                data-testid="input-pms-reservation-filter"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="pms-adjusted-by-filter" className="text-xs font-medium">Responsável</label>
+              <Input
+                id="pms-adjusted-by-filter"
+                type="search"
+                value={pmsAdjustedByFilter}
+                onChange={(event) => setPmsAdjustedByFilter(event.target.value)}
+                placeholder="Buscar por nome"
+                className="h-9"
+                data-testid="input-pms-adjusted-by-filter"
+              />
+            </div>
+            {(pmsReservationFilter || pmsAdjustedByFilter) && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-9"
+                onClick={() => {
+                  setPmsReservationFilter("");
+                  setPmsAdjustedByFilter("");
+                }}
+                data-testid="button-clear-pms-adjustment-filters"
+              >
+                Limpar filtros
+              </Button>
+            )}
+          </div>
           {loadingFinancialMetrics ? (
             <div className="h-16 animate-pulse rounded bg-muted" data-testid="status-pms-adjustments-loading" />
           ) : (financialMetrics?.pmsPaymentAdjustments.length ?? 0) === 0 ? (

@@ -105,6 +105,8 @@ export default function Downloads() {
   const [reportType, setReportType] = useState<ReportType>("financial");
   const [startDate, setStartDate] = useState(format(startOfMonth(new Date()), "yyyy-MM-dd"));
   const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [pmsReservationNumber, setPmsReservationNumber] = useState("");
+  const [pmsAdjustedBy, setPmsAdjustedBy] = useState("");
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
 
   const today = format(new Date(), "yyyy-MM-dd");
@@ -182,7 +184,16 @@ export default function Downloads() {
         method: isCommunication ? "GET" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: isCommunication ? undefined : JSON.stringify({ reportType, format: fmt, startDate, endDate }),
+        body: isCommunication ? undefined : JSON.stringify({
+          reportType,
+          format: fmt,
+          startDate,
+          endDate,
+          ...(reportType === "financial" ? {
+            reservationNumber: pmsReservationNumber.trim() || undefined,
+            adjustedBy: pmsAdjustedBy.trim() || undefined,
+          } : {}),
+        }),
         },
       );
       if (!res.ok) {
@@ -450,6 +461,33 @@ export default function Downloads() {
                 onChange={e => setEndDate(e.target.value)}
               />
             </div>
+
+            {reportType === "financial" && (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Reserva PMS</Label>
+                  <Input
+                    type="search"
+                    className="h-8 text-sm w-[160px]"
+                    value={pmsReservationNumber}
+                    onChange={e => setPmsReservationNumber(e.target.value)}
+                    placeholder="Número da reserva"
+                    data-testid="input-export-pms-reservation"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Responsável pelo ajuste</Label>
+                  <Input
+                    type="search"
+                    className="h-8 text-sm w-[180px]"
+                    value={pmsAdjustedBy}
+                    onChange={e => setPmsAdjustedBy(e.target.value)}
+                    placeholder="Nome do responsável"
+                    data-testid="input-export-pms-adjusted-by"
+                  />
+                </div>
+              </>
+            )}
 
             <div className="flex gap-2 flex-wrap">
               {((reportType === "communication" ? ["csv", "pdf"] : ["csv", "xlsx", "pdf"]) as ExportFormat[]).map(fmt => {

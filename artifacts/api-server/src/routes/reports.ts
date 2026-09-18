@@ -11,7 +11,7 @@ import {
   pmsReservationsTable,
   usersTable,
 } from "@workspace/db";
-import { eq, and, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, gte, ilike, lte, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import ExcelJS from "exceljs";
@@ -31,6 +31,8 @@ const ReportExportBody = z.object({
   format: z.enum(["csv", "xlsx", "pdf"]),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  reservationNumber: z.string().trim().max(100).optional(),
+  adjustedBy: z.string().trim().max(100).optional(),
 });
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
@@ -94,7 +96,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
       next(new ValidationError(parsed.error.issues[0]?.message ?? "Dados inválidos", "VALIDATION_ERROR"));
       return;
     }
-    const { reportType, format: fmt, startDate, endDate } = parsed.data;
+    const { reportType, format: fmt, startDate, endDate, reservationNumber, adjustedBy } = parsed.data;
 
     const tenantId = me.tenantId;
     // Default start-of-month uses Brazil calendar so the report covers the correct month at night
@@ -157,6 +159,8 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
             eq(pmsPaymentAdjustmentsTable.tenantId, tenantId),
             gte(pmsPaymentAdjustmentsTable.createdAt, start),
             lte(pmsPaymentAdjustmentsTable.createdAt, end),
+            ...(reservationNumber ? [ilike(pmsReservationsTable.reservationNumber, `%${reservationNumber}%`)] : []),
+            ...(adjustedBy ? [ilike(usersTable.name, `%${adjustedBy}%`)] : []),
           ))
           .limit(MAX_EXPORT_ROWS + 1),
       ]);
