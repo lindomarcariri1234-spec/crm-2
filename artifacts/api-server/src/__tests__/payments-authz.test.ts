@@ -422,6 +422,92 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
     expect(res.body.summary.total).toBe(1000);
   });
 
+  it("GET /expenses?includeTripCosts=true keeps cancelled rows auditable but excludes them from every KPI", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const currentMonth = new Date("2026-09-10T12:00:00Z");
+    const agencyRows = [
+      {
+        id: "agency-active",
+        tenantId: "tenant-001",
+        tripId: "trip-001",
+        category: "transport",
+        description: "Despesa ativa",
+        amount: "300.00",
+        supplierId: null,
+        paymentMethod: "pix",
+        paymentDate: currentMonth,
+        dueDate: new Date("2026-09-10T12:00:00Z"),
+        status: "paid",
+        notes: null,
+        createdAt: new Date("2026-09-01T12:00:00Z"),
+      },
+      {
+        id: "agency-cancelled",
+        tenantId: "tenant-001",
+        tripId: "trip-001",
+        category: "transport",
+        description: "Despesa cancelada",
+        amount: "800.00",
+        supplierId: null,
+        paymentMethod: "pix",
+        paymentDate: currentMonth,
+        dueDate: new Date("2026-09-11T12:00:00Z"),
+        status: "cancelled",
+        notes: null,
+        createdAt: new Date("2026-09-02T12:00:00Z"),
+      },
+    ];
+    const tripRows = [
+      {
+        id: "trip-active",
+        tenantId: "tenant-001",
+        tripId: "trip-001",
+        category: "Transporte",
+        description: "Custo direto ativo",
+        supplierId: null,
+        supplierName: null,
+        amount: "700.00",
+        status: "paid",
+        dueDate: new Date("2026-09-12T12:00:00Z"),
+        paidAt: currentMonth,
+        notes: null,
+        createdAt: new Date("2026-09-03T12:00:00Z"),
+      },
+      {
+        id: "trip-cancelled",
+        tenantId: "tenant-001",
+        tripId: "trip-001",
+        category: "Transporte",
+        description: "Custo direto cancelado",
+        supplierId: null,
+        supplierName: null,
+        amount: "900.00",
+        status: "cancelled",
+        dueDate: new Date("2026-09-13T12:00:00Z"),
+        paidAt: currentMonth,
+        notes: null,
+        createdAt: new Date("2026-09-04T12:00:00Z"),
+      },
+    ];
+    dbState.selectRows = [agencyRows, tripRows, agencyRows, tripRows];
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/expenses?includeTripCosts=true&tripId=trip-001");
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "agency-cancelled", source: "agency", status: "cancelled" }),
+      expect.objectContaining({ id: "trip-cancelled", source: "trip", status: "cancelled" }),
+    ]));
+    expect(res.body.summary).toMatchObject({
+      total: 1000,
+      paid: 1000,
+      pending: 0,
+      overdue: 0,
+      paidThisMonth: 1000,
+    });
+  });
+
   it("POST /expenses → 403 for SUPPORT", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.SUPPORT) as never);
     const res = await request(buildApp(paymentsRouter)).post("/api/expenses").send({});
@@ -453,6 +539,80 @@ describe("trip costs authorization — FINANCIAL permission enforcement", () => 
     const res = await request(buildApp(tripCostsRouter)).get("/api/trips/trip-001/costs");
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.costs)).toBe(true);
+  });
+
+  it("GET /trips/:id/costs keeps cancelled rows visible but excludes them from the trip totals", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const activeTripCost = {
+      id: "trip-active",
+      tripId: "trip-001",
+      tenantId: "tenant-001",
+      category: "Transporte",
+      description: "Custo direto ativo",
+      supplierId: null,
+      supplierName: null,
+      amount: "700.00",
+      status: "paid",
+      dueDate: new Date("2026-09-12T12:00:00Z"),
+      paidAt: new Date("2026-09-10T12:00:00Z"),
+      notes: null,
+      createdAt: new Date("2026-09-03T12:00:00Z"),
+    };
+    const cancelledTripCost = {
+      ...activeTripCost,
+      id: "trip-cancelled",
+      amount: "900.00",
+      status: "cancelled",
+    };
+    const activeAgencyExpense = {
+      ...FAKE_PAYMENT,
+      id: "agency-active",
+      tripId: "trip-001",
+      amount: "300.00",
+      type: undefined,
+      paymentDate: new Date("2026-09-10T12:00:00Z"),
+      dueDate: new Date("2026-09-10T12:00:00Z"),
+      status: "paid",
+    };
+    const cancelledAgencyExpense = {
+      ...activeAgencyExpense,
+      id: "agency-cancelled",
+      amount: "800.00",
+      status: "cancelled",
+    };
+    const tripRow = {
+      id: "trip-001",
+      priceAdult: "0",
+      priceChild: null,
+      priceSenior: null,
+      totalCapacity: 20,
+      fixedCosts: [],
+      variableCosts: [],
+    };
+    dbState.selectRows = [
+      [{ id: "trip-001" }],
+      [activeTripCost, cancelledTripCost],
+      [activeAgencyExpense, cancelledAgencyExpense],
+      [tripRow],
+      [{ total: 0 }],
+    ];
+
+    const res = await request(buildApp(tripCostsRouter)).get("/api/trips/trip-001/costs");
+
+    expect(res.status).toBe(200);
+    expect(res.body.costs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "trip-cancelled", status: "cancelled" }),
+    ]));
+    expect(res.body.agencyExpenses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "agency-cancelled", status: "cancelled" }),
+    ]));
+    expect(res.body.summary).toMatchObject({
+      totalTripCosts: 700,
+      totalAgencyExpenses: 300,
+      totalRealCosts: 1000,
+      totalPaidCosts: 1000,
+      totalPendingCosts: 0,
+    });
   });
 
   it("POST /trips/:id/costs → 403 for SUPPORT (cannot tamper with cost rows)", async () => {

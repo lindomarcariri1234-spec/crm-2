@@ -170,15 +170,16 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
         inArray(reservationsTable.status, [RESERVATION_STATUS.CONFIRMED]),
       ));
 
-    const totalTripCosts = costs.reduce((s, c) => s + Number(c.amount), 0);
+    const activeTripCosts = costs.filter(c => c.status !== "cancelled");
+    const totalTripCosts = activeTripCosts.reduce((s, c) => s + Number(c.amount), 0);
     const activeAgencyExpenses = agencyExpenses.filter(e => e.status !== "cancelled");
     const totalAgencyExpenses = activeAgencyExpenses.reduce((s, e) => s + Number(e.amount), 0);
     const totalRealCosts = totalTripCosts + totalAgencyExpenses;
     const totalPaidCosts =
-      costs.filter(c => c.status === EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
+      activeTripCosts.filter(c => c.status === EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
       + activeAgencyExpenses.filter(e => e.status === EXPENSE_STATUS.PAID).reduce((s, e) => s + Number(e.amount), 0);
     const totalPendingCosts =
-      costs.filter(c => c.status !== EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
+      activeTripCosts.filter(c => c.status !== EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
       + activeAgencyExpenses.filter(e => e.status !== EXPENSE_STATUS.PAID).reduce((s, e) => s + Number(e.amount), 0);
 
     const priceAdult = Number(tripRow?.priceAdult ?? 0);
