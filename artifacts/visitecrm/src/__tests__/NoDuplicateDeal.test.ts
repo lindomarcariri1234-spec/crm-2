@@ -796,9 +796,9 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
     });
 
     const expectedDescription =
-      "Os dados do cliente foram salvos, mas o Quarto 2 ficou sem vagas: capacidade 2 pessoa(s), ocupação atual 2, 0 vaga(s) disponível(is). Escolha outro quarto e tente novamente.";
+      "Os dados do cliente foram salvos, mas quarto 2 sem vagas: Capacidade: 2 pessoa(s). Ocupação atual: 2. Vagas disponíveis antes desta tentativa: 0. Escolha outro quarto e tente novamente.";
     expect(toastMock).toHaveBeenCalledWith({
-      title: "Quarto não atualizado",
+      title: "Quarto 2 sem vagas",
       description: expectedDescription,
       variant: "destructive",
     });

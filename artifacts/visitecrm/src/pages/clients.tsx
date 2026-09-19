@@ -52,6 +52,7 @@ import {
   parseClientCsv,
   splitClientCsvList,
 } from "@/lib/client-csv-import";
+import { formatRoomCapacityError, getRoomCapacityError } from "@/lib/room-capacity";
 import { ROLES, PAYMENT_STATUS, ADMIN_ROLES } from "@workspace/permissions";
 
 function cleanCPF(cpf: string): string {
@@ -674,28 +675,24 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
               });
             }
           } catch (error: unknown) {
-            const responseData = (
-              (error as { data?: unknown })?.data
-              ?? (error as { response?: { data?: unknown } })?.response?.data
-            ) as Record<string, unknown> | undefined;
-            const message = responseData?.code === "ROOM_CAPACITY_EXCEEDED"
+            const capacityError = getRoomCapacityError(error);
+            const message = capacityError
               ? (() => {
-                const capacity = typeof responseData.capacity === "number" ? responseData.capacity : null;
-                const currentOccupied = typeof responseData.currentOccupied === "number"
-                  ? responseData.currentOccupied
-                  : typeof responseData.occupied === "number" ? responseData.occupied : null;
-                const available = capacity != null && currentOccupied != null
-                  ? Math.max(0, capacity - currentOccupied)
-                  : null;
-                const roomName = selectedRoom?.name ?? "quarto selecionado";
-                const details = capacity != null && currentOccupied != null && available != null
-                  ? `capacidade ${capacity} pessoa(s), ocupação atual ${currentOccupied}, ${available} vaga(s) disponível(is)`
-                  : "não há vagas suficientes";
-                return `Os dados do cliente foram salvos, mas o ${roomName} ficou sem vagas: ${details}. Escolha outro quarto e tente novamente.`;
+                const feedback = formatRoomCapacityError(
+                  capacityError,
+                  selectedRoom?.name ?? "quarto selecionado",
+                );
+                return `Os dados do cliente foram salvos, mas ${feedback.title.toLowerCase()}: ${feedback.description} Escolha outro quarto e tente novamente.`;
               })()
               : "Os dados do cliente foram salvos, mas a atribuição do quarto não foi alterada. Tente novamente.";
             setRoomAssignmentError(message);
-            toast({ title: "Quarto não atualizado", description: message, variant: "destructive" });
+            toast({
+              title: capacityError
+                ? formatRoomCapacityError(capacityError, selectedRoom?.name ?? "quarto selecionado").title
+                : "Quarto não atualizado",
+              description: message,
+              variant: "destructive",
+            });
             return;
           }
         }

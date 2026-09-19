@@ -86,7 +86,7 @@ describe("ReservationPassengersTab room capacity feedback", () => {
     await flushAct(() => saveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
 
     const alert = handle.container.querySelector('[data-testid="room-capacity-error"]');
-    expect(alert?.textContent).toContain("Quarto Quarto 101 sem vagas");
+    expect(alert?.textContent).toContain("Quarto 101 sem vagas");
     expect(alert?.textContent).toContain("Capacidade: 2 pessoa(s). Ocupação atual: 2.");
     expect(alert?.textContent).toContain("Vagas disponíveis antes desta tentativa: 0.");
     expect(alert?.textContent).toContain("Suas alterações foram mantidas");

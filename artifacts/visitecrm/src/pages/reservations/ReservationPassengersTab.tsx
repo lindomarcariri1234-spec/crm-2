@@ -21,43 +21,14 @@ import { AGE_CATEGORY_LABELS } from "./constants";
 import { PassengerForm } from "./PassengerForm";
 import { formatDate } from "@/lib/utils";
 import { RoomAllocationSummaryTable } from "./RoomAllocationSummaryTable";
+import {
+  formatRoomCapacityError,
+  getRoomCapacityError,
+  type RoomCapacityError,
+} from "@/lib/room-capacity";
 
 const PLACEHOLDER_NAME = "A preencher";
 const ROOM_AVAILABILITY_REFRESH_INTERVAL_MS = 15_000;
-
-type RoomCapacityError = {
-  roomId: string;
-  capacity: number;
-  occupied: number;
-  currentOccupied: number;
-  requestedCount?: number;
-};
-
-function getRoomCapacityError(error: unknown): RoomCapacityError | null {
-  if (!error || typeof error !== "object") return null;
-  const candidate = error as {
-    data?: unknown;
-    response?: { data?: unknown };
-  };
-  const data = candidate.data ?? candidate.response?.data;
-  if (!data || typeof data !== "object") return null;
-  const details = data as Record<string, unknown>;
-  if (
-    details.code !== "ROOM_CAPACITY_EXCEEDED" ||
-    typeof details.roomId !== "string" ||
-    typeof details.capacity !== "number" ||
-    typeof details.occupied !== "number"
-  ) {
-    return null;
-  }
-  return {
-    roomId: details.roomId,
-    capacity: details.capacity,
-    occupied: details.occupied,
-    currentOccupied: typeof details.currentOccupied === "number" ? details.currentOccupied : details.occupied,
-    requestedCount: typeof details.requestedCount === "number" ? details.requestedCount : undefined,
-  };
-}
 
 export function ReservationPassengersTab({ reservationId }: { reservationId: string }) {
   const [addOpen, setAddOpen] = useState(false);
@@ -154,6 +125,12 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
   const list = (passengers ?? []) as Passenger[];
   const checkedInCount = list.filter(p => p.checkedInAt).length;
   const placeholderCount = list.filter(p => p.name === PLACEHOLDER_NAME).length;
+  const roomCapacityFeedback = roomCapacityError
+    ? formatRoomCapacityError(
+      roomCapacityError,
+      roomData?.rooms.find(room => room.id === roomCapacityError.roomId)?.name ?? "quarto selecionado",
+    )
+    : null;
 
   return (
     <div className="space-y-4 py-2">
@@ -217,17 +194,17 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
                   toast({ title: "Quartos atualizados" });
                 } catch (err: unknown) {
                    const capacityError = getRoomCapacityError(err);
-                   if (capacityError) {
-                     setRoomCapacityError(capacityError);
-                     const roomName = roomData.rooms.find(room => room.id === capacityError.roomId)?.name ?? "selecionado";
-                     const currentAvailable = Math.max(0, capacityError.capacity - capacityError.currentOccupied);
-                     toast({
-                       title: `Quarto ${roomName} sem vagas`,
-                       description: `Capacidade: ${capacityError.capacity}. Ocupação atual: ${capacityError.currentOccupied}. Vagas disponíveis antes desta tentativa: ${currentAvailable}. Suas alterações foram mantidas; escolha outro quarto e tente salvar novamente.`,
-                       variant: "destructive",
-                     });
-                     return;
-                   }
+                  if (capacityError) {
+                    setRoomCapacityError(capacityError);
+                    const roomName = roomData.rooms.find(room => room.id === capacityError.roomId)?.name ?? "quarto selecionado";
+                    const feedback = formatRoomCapacityError(capacityError, roomName);
+                    toast({
+                      title: feedback.title,
+                      description: `${feedback.description} Suas alterações foram mantidas; escolha outro quarto e tente salvar novamente.`,
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const message = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
                     || (err as { message?: string })?.message || "Não foi possível atualizar os quartos";
                   toast({ title: message, variant: "destructive" });
@@ -238,15 +215,12 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
               {updateRoomAssignments.isPending ? "Salvando..." : "Salvar quartos"}
             </Button>
           </div>
-          {roomCapacityError && (
+          {roomCapacityError && roomCapacityFeedback && (
             <Alert data-testid="room-capacity-error" variant="destructive">
               <AlertCircle className="h-4 w-4" />
-              <AlertTitle>
-                Quarto {roomData.rooms.find(room => room.id === roomCapacityError.roomId)?.name ?? "selecionado"} sem vagas
-              </AlertTitle>
+              <AlertTitle>{roomCapacityFeedback.title}</AlertTitle>
               <AlertDescription>
-                Capacidade: {roomCapacityError.capacity} pessoa(s). Ocupação atual: {roomCapacityError.currentOccupied}.
-                Vagas disponíveis antes desta tentativa: {Math.max(0, roomCapacityError.capacity - roomCapacityError.currentOccupied)}.
+                {roomCapacityFeedback.description}{" "}
                 Suas alterações foram mantidas. Escolha outro quarto e tente salvar novamente.
               </AlertDescription>
             </Alert>
