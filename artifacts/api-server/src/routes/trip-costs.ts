@@ -44,6 +44,54 @@ const UpdateTripCostBody = z.object({
   notes: z.string().nullish(),
 });
 
+type PlannedFixedCost = {
+  id: string;
+  category: string;
+  description: string;
+  value: number;
+};
+
+type PlannedVariableCost = {
+  id: string;
+  category: string;
+  description: string;
+  valuePax: number;
+};
+
+export function calculatePlannedCosts(
+  fixedCosts: PlannedFixedCost[],
+  variableCosts: PlannedVariableCost[],
+  planningCapacity: number,
+) {
+  const plannedFixed = fixedCosts.reduce((sum, cost) => sum + Number(cost.value ?? 0), 0);
+  const plannedVariable = variableCosts.reduce(
+    (sum, cost) => sum + Number(cost.valuePax ?? 0) * planningCapacity,
+    0,
+  );
+
+  return {
+    plannedBudget: plannedFixed + plannedVariable,
+    plannedCosts: [
+      ...fixedCosts.map((cost) => ({
+        id: cost.id,
+        kind: "fixed" as const,
+        category: cost.category,
+        description: cost.description,
+        amount: Number(cost.value ?? 0),
+        amountPerPassenger: null,
+      })),
+      ...variableCosts.map((cost) => ({
+        id: cost.id,
+        kind: "variable" as const,
+        category: cost.category,
+        description: cost.description,
+        amount: Number(cost.valuePax ?? 0) * planningCapacity,
+        amountPerPassenger: Number(cost.valuePax ?? 0),
+      })),
+    ],
+  };
+}
+
 function formatCost(c: typeof tripCostsTable.$inferSelect) {
   return {
     id: c.id,
@@ -144,29 +192,13 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
     // realized revenue and payment status, otherwise the budget changes when
     // a reservation is confirmed and no longer matches the Prices tab.
     const planningCapacity = tripRow?.totalCapacity ?? 0;
-    const fixedCosts = Array.isArray(tripRow?.fixedCosts) ? tripRow.fixedCosts as Array<{ id: string; category: string; description: string; value: number }> : [];
-    const variableCosts = Array.isArray(tripRow?.variableCosts) ? tripRow.variableCosts as Array<{ id: string; category: string; description: string; valuePax: number }> : [];
-    const plannedFixed = fixedCosts.reduce((s, c) => s + (c.value ?? 0), 0);
-    const plannedVariable = variableCosts.reduce((s, c) => s + (c.valuePax ?? 0) * planningCapacity, 0);
-    const totalPlanned = plannedFixed + plannedVariable;
-    const plannedCosts = [
-      ...fixedCosts.map(c => ({
-        id: c.id,
-        kind: "fixed" as const,
-        category: c.category,
-        description: c.description,
-        amount: Number(c.value ?? 0),
-        amountPerPassenger: null,
-      })),
-      ...variableCosts.map(c => ({
-        id: c.id,
-        kind: "variable" as const,
-        category: c.category,
-        description: c.description,
-        amount: Number(c.valuePax ?? 0) * planningCapacity,
-        amountPerPassenger: Number(c.valuePax ?? 0),
-      })),
-    ];
+    const fixedCosts = Array.isArray(tripRow?.fixedCosts) ? tripRow.fixedCosts as PlannedFixedCost[] : [];
+    const variableCosts = Array.isArray(tripRow?.variableCosts) ? tripRow.variableCosts as PlannedVariableCost[] : [];
+    const { plannedBudget: totalPlanned, plannedCosts } = calculatePlannedCosts(
+      fixedCosts,
+      variableCosts,
+      planningCapacity,
+    );
 
     res.json({
       costs: costs.map(formatCost),

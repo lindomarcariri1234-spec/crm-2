@@ -119,7 +119,7 @@ vi.mock("../lib/tenant", () => ({
 // ---------------------------------------------------------------------------
 
 import { requireAuth } from "../lib/tenant";
-import tripCostsRouter from "../routes/trip-costs.js";
+import tripCostsRouter, { calculatePlannedCosts } from "../routes/trip-costs.js";
 import platformSettingsRouter from "../routes/platform-settings.js";
 import reportsRouter from "../routes/reports.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
@@ -150,6 +150,74 @@ function buildApp(router: express.Router) {
 
 const AGENCY_USER = { id: "user-001", tenantId: "tenant-001", role: ROLES.AGENCY_ADMIN };
 const SUPERADMIN_USER = { id: "user-002", tenantId: "tenant-001", role: ROLES.SUPER_ADMIN };
+
+describe("trip planning budget calculation", () => {
+  it("uses full capacity for variable costs and preserves the per-passenger value", () => {
+    const fixedCosts = [
+      { id: "fixed-transport", category: "Transporte", description: "Fretamento", value: 12_500 },
+    ];
+    const variableCosts = [
+      { id: "variable-food", category: "Alimentação", description: "Alimentação dos passageiros", valuePax: 35 },
+      { id: "variable-gifts", category: "Extras", description: "Brindes", valuePax: 6 },
+      { id: "variable-referral", category: "Extras", description: "Link de Indicação", valuePax: 42 },
+    ];
+
+    const plan = calculatePlannedCosts(fixedCosts, variableCosts, 55);
+
+    expect(plan.plannedBudget).toBe(17_065);
+    expect(plan.plannedCosts).toEqual([
+      {
+        id: "fixed-transport",
+        kind: "fixed",
+        category: "Transporte",
+        description: "Fretamento",
+        amount: 12_500,
+        amountPerPassenger: null,
+      },
+      {
+        id: "variable-food",
+        kind: "variable",
+        category: "Alimentação",
+        description: "Alimentação dos passageiros",
+        amount: 1_925,
+        amountPerPassenger: 35,
+      },
+      {
+        id: "variable-gifts",
+        kind: "variable",
+        category: "Extras",
+        description: "Brindes",
+        amount: 330,
+        amountPerPassenger: 6,
+      },
+      {
+        id: "variable-referral",
+        kind: "variable",
+        category: "Extras",
+        description: "Link de Indicação",
+        amount: 2_310,
+        amountPerPassenger: 42,
+      },
+    ]);
+  });
+
+  it("does not recalculate the planned budget from confirmed passenger count", () => {
+    const variableCosts = [
+      { id: "variable-food", category: "Alimentação", description: "Alimentação", valuePax: 35 },
+    ];
+
+    const planWithTwentyConfirmed = calculatePlannedCosts([], variableCosts, 55);
+    const planWithNoConfirmed = calculatePlannedCosts([], variableCosts, 55);
+
+    expect(planWithTwentyConfirmed.plannedBudget).toBe(1_925);
+    expect(planWithNoConfirmed.plannedBudget).toBe(planWithTwentyConfirmed.plannedBudget);
+    expect(planWithTwentyConfirmed.plannedCosts[0]).toMatchObject({
+      amount: 1_925,
+      amountPerPassenger: 35,
+    });
+  });
+
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/trips/:id/costs
