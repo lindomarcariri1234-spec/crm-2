@@ -73,6 +73,7 @@ vi.mock("@workspace/db", () => ({
   db: { select: mockSelect, insert: mockInsert, update: mockUpdate },
   tripsTable: {},
   tripCostsTable: {},
+  expensesTable: {},
   platformSettingsTable: {},
   redisAlertLogTable: {},
   reservationsTable: {},
@@ -217,6 +218,107 @@ describe("trip planning budget calculation", () => {
     });
   });
 
+});
+
+describe("GET /api/trips/:id/costs — cancelled expenses", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requireAuthMock.mockResolvedValue(AGENCY_USER as never);
+  });
+
+  it("keeps cancelled expenses visible without including them in trip results", async () => {
+    const activeTripCost = {
+      id: "trip-active",
+      tripId: "trip-001",
+      tenantId: "tenant-001",
+      category: "Transporte",
+      description: "Custo direto ativo",
+      supplierId: null,
+      supplierName: null,
+      amount: "700.00",
+      status: "paid",
+      dueDate: new Date("2026-09-12T12:00:00Z"),
+      paidAt: new Date("2026-09-10T12:00:00Z"),
+      notes: null,
+      createdAt: new Date("2026-09-03T12:00:00Z"),
+    };
+    const cancelledTripCost = {
+      ...activeTripCost,
+      id: "trip-cancelled",
+      amount: "900.00",
+      status: "cancelled",
+    };
+    const activeAgencyExpense = {
+      id: "agency-active",
+      tripId: "trip-001",
+      tenantId: "tenant-001",
+      category: "transport",
+      description: "Despesa ativa",
+      amount: "300.00",
+      supplierId: null,
+      paymentMethod: "pix",
+      paymentDate: new Date("2026-09-10T12:00:00Z"),
+      dueDate: new Date("2026-09-10T12:00:00Z"),
+      status: "paid",
+      notes: null,
+      createdAt: new Date("2026-09-01T12:00:00Z"),
+    };
+    const cancelledAgencyExpense = {
+      ...activeAgencyExpense,
+      id: "agency-cancelled",
+      amount: "800.00",
+      status: "cancelled",
+    };
+    const tripRow = {
+      id: "trip-001",
+      priceAdult: "100.00",
+      priceChild: null,
+      priceSenior: null,
+      totalCapacity: 20,
+      fixedCosts: [{ id: "planned-transport", category: "Transporte", description: "Planejado", value: 100 }],
+      variableCosts: [],
+    };
+
+    const selectResult = (rows: unknown[]) => {
+      const terminal = () => Promise.resolve(rows);
+      const whereResult = Object.assign(Promise.resolve(rows), {
+        limit: terminal,
+        orderBy: terminal,
+      });
+      return {
+        from: () => ({
+          where: () => whereResult,
+          limit: terminal,
+          orderBy: terminal,
+        }),
+      };
+    };
+    mockSelect
+      .mockImplementationOnce(() => selectResult([{ id: "trip-001" }]))
+      .mockImplementationOnce(() => selectResult([activeTripCost, cancelledTripCost]))
+      .mockImplementationOnce(() => selectResult([activeAgencyExpense, cancelledAgencyExpense]))
+      .mockImplementationOnce(() => selectResult([tripRow]))
+      .mockImplementationOnce(() => selectResult([{ total: 2 }]));
+
+    const res = await request(buildApp(tripCostsRouter)).get("/api/trips/trip-001/costs");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.costs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "trip-cancelled", status: "cancelled" }),
+    ]));
+    expect(res.body.agencyExpenses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "agency-cancelled", status: "cancelled" }),
+    ]));
+    expect(res.body.summary).toMatchObject({
+      totalTripCosts: 700,
+      totalAgencyExpenses: 300,
+      totalRealCosts: 1000,
+      totalPaidCosts: 1000,
+      totalPendingCosts: 0,
+      profit: -800,
+      budgetVariance: 900,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
