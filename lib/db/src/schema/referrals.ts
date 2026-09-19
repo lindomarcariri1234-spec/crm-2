@@ -114,7 +114,7 @@ export const referralBonusReversalsTable = pgTable("referral_bonus_reversals", {
 }, (t) => [
   check("referral_bonus_reversals_positive_amount_check", sql`${t.amount} > 0`),
   foreignKey({
-    name: "referral_bonus_reversals_tenant_referral_fkey",
+    name: "referral_bonus_reversals_tenant_referral_validated_fkey",
     columns: [t.tenantId, t.referralId],
     foreignColumns: [referralsTable.tenantId, referralsTable.id],
   }).onDelete("restrict"),
@@ -263,7 +263,7 @@ export const referralCommissionsTable = pgTable("referral_commissions", {
   check("referral_commissions_pending_payment_check", sql`${t.status} NOT IN ('pending', 'approved') OR ${t.paidAt} IS NULL`),
   check("referral_commissions_reversal_consistency_check", sql`${t.status} <> 'reversed' OR ${t.reversedAt} IS NOT NULL`),
   foreignKey({
-    name: "referral_commissions_tenant_referral_fkey",
+    name: "referral_commissions_tenant_referral_validated_fkey",
     columns: [t.tenantId, t.referralId],
     foreignColumns: [referralsTable.tenantId, referralsTable.id],
   }).onDelete("restrict"),
