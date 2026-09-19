@@ -67,6 +67,7 @@ export const referralsTable = pgTable("referrals", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
+  unique("referrals_tenant_id_unique").on(t.tenantId, t.id),
   check("referrals_status_check", sql`${t.status} IN ('pending', 'completed', 'converted', 'expired', 'reversed')`),
   check("referrals_nonnegative_amounts_check", sql`
     ${t.bonusAmount} >= 0
@@ -88,7 +89,6 @@ export const referralsTable = pgTable("referrals", {
   index("referrals_tenant_status_expires_idx").on(t.tenantId, t.status, t.expiresAt),
   index("referrals_tenant_reservation_idx").on(t.tenantId, t.reservationId),
   index("referrals_tenant_code_idx").on(t.tenantId, t.code),
-  unique("referrals_tenant_id_unique").on(t.tenantId, t.id),
   index("referrals_financial_bonus_paid_idx").on(t.tenantId, t.status, t.bonusPaidAt),
   index("referrals_financial_credit_used_idx").on(t.tenantId, t.status, t.bonusCreditUsedAt),
 ]);
