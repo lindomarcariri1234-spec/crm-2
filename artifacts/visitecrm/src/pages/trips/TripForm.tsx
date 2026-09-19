@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useGetTrip, useCreateTrip, useUpdateTrip, useListLayouts, useListBoardingLocations, useListAccommodations, useGetCurrentSubscription, useGetMe } from "@workspace/api-client-react";
@@ -30,6 +31,7 @@ const TRIP_FORM_API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 export function TripForm({ tripId }: { tripId?: string }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { data: me } = useGetMe();
   const canViewFinancial = me ? hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.VIEW) : false;
   const [tab, setTab] = useState("basico");
@@ -245,6 +247,12 @@ export function TripForm({ tripId }: { tripId?: string }) {
             freePassengers: freePassengersPayload,
           },
         });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: [`/api/trips/${tripId}/costs`] }),
+          queryClient.invalidateQueries({ queryKey: ["trip-costs", tripId] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+        ]);
       } else {
         await createTrip.mutateAsync({
           data: {
@@ -324,6 +332,12 @@ export function TripForm({ tripId }: { tripId?: string }) {
           variableCosts: form.variableCostItems,
         },
       });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: [`/api/trips/${tripId}/costs`] }),
+        queryClient.invalidateQueries({ queryKey: ["trip-costs", tripId] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+      ]);
       toast({ title: "Custos salvos com sucesso" });
     } catch {
       toast({ title: "Erro ao salvar custos", variant: "destructive" });

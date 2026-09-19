@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
   useListExpenses,
@@ -64,13 +65,15 @@ export default function Expenses() {
   const [createCategory, setCreateCategory] = useState("transport");
   const [createSupplierId, setCreateSupplierId] = useState("none");
   const [createTripId, setCreateTripId] = useState("none");
+  const queryClient = useQueryClient();
 
-  const { data: allExpensesForKpi } = useListExpenses({ limit: 500 });
+  const { data: allExpensesForKpi } = useListExpenses({ limit: 500, includeTripCosts: true });
 
   const { data: expensesData, isLoading, isError, refetch } = useListExpenses({
     status: statusFilter || undefined,
     tripId: tripFilter || undefined,
     limit: 200,
+    includeTripCosts: true,
   });
   const { data: tripsData } = useListTrips({ limit: 100 });
   const { data: suppliersRaw } = useListSuppliers();
@@ -92,26 +95,27 @@ export default function Expenses() {
     const [_kpiYear, _kpiMonth1] = _todayBRKpi.split("-").map(Number);
     const now = new Date();
     const allFull = allExpensesForKpi?.data ?? [];
-    let all = allFull;
+    const active = (e: typeof allFull[number]) => e.status !== EXPENSE_STATUS.CANCELLED;
+    let all = allFull.filter(active);
     if (periodFilter === "month") {
-      all = allFull.filter(e => {
+      all = allFull.filter(e => active(e) && (() => {
         if (!e.dueDate) return false;
         const s = e.dueDate.slice(0, 7); // "YYYY-MM" from ISO date string
         return s === _todayBRKpi.slice(0, 7);
-      });
+      })());
     } else if (periodFilter === "quarter") {
       const cutoff = new Date(now); cutoff.setMonth(now.getMonth() - 3);
-      all = allFull.filter(e => e.dueDate && new Date(e.dueDate) >= cutoff);
+      all = allFull.filter(e => active(e) && e.dueDate && new Date(e.dueDate) >= cutoff);
     } else if (periodFilter === "year") {
       const cutoff = new Date(now); cutoff.setFullYear(now.getFullYear() - 1);
-      all = allFull.filter(e => e.dueDate && new Date(e.dueDate) >= cutoff);
+      all = allFull.filter(e => active(e) && e.dueDate && new Date(e.dueDate) >= cutoff);
     }
     const total = all.reduce((s, e) => s + parseFloat(String(e.amount)), 0);
     const paid = all.filter(e => e.status === EXPENSE_STATUS.PAID).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
     const pending = all.filter(e => e.status === EXPENSE_STATUS.PENDING).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
     const overdue = all.filter(e => e.status === EXPENSE_STATUS.OVERDUE).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
     const paidThisMonth = allFull.filter(e =>
-      e.status === EXPENSE_STATUS.PAID && e.paymentDate &&
+      active(e) && e.status === EXPENSE_STATUS.PAID && e.paymentDate &&
       e.paymentDate.slice(0, 7) === _todayBRKpi.slice(0, 7)
     ).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
     return { total, paid, pending, overdue, paidThisMonth };
@@ -139,7 +143,12 @@ export default function Expenses() {
       id,
       data: { status: EXPENSE_STATUS.PAID, paymentDate: localToday() }
     });
-    refetch();
+    await Promise.all([
+      refetch(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -161,7 +170,12 @@ export default function Expenses() {
     setCreateCategory("transport");
     setCreateSupplierId("none");
     setCreateTripId("none");
-    refetch();
+    await Promise.all([
+      refetch(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const hasFilters = statusFilter || categoryFilter || tripFilter || dateFrom || dateTo || supplierFilter;
@@ -245,6 +259,7 @@ export default function Expenses() {
             <SelectItem value={EXPENSE_STATUS.PENDING}>Pendente</SelectItem>
             <SelectItem value={EXPENSE_STATUS.PAID}>Pago</SelectItem>
             <SelectItem value={EXPENSE_STATUS.OVERDUE}>Vencido</SelectItem>
+            <SelectItem value={EXPENSE_STATUS.CANCELLED}>Cancelado</SelectItem>
           </SelectContent>
         </Select>
         <Select value={categoryFilter || "all"} onValueChange={v => setCategoryFilter(v === "all" ? "" : v)}>
@@ -295,7 +310,8 @@ export default function Expenses() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Descrição</TableHead>
+               <TableHead>Descrição</TableHead>
+               <TableHead>Origem</TableHead>
               <TableHead>Categoria</TableHead>
               <TableHead>Fornecedor</TableHead>
               <TableHead>Viagem</TableHead>
@@ -313,19 +329,26 @@ export default function Expenses() {
               ))
             ) : isError ? (
               <ListLoadErrorRow
-                colSpan={9}
+                 colSpan={10}
                 onRetry={refetch}
                 message="Não foi possível carregar as despesas."
               />
             ) : expenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+                 <TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
                   {hasFilters ? "Nenhuma despesa com os filtros selecionados." : "Nenhuma despesa registrada."}
                 </TableCell>
               </TableRow>
             ) : expenses.map(e => (
               <TableRow key={e.id}>
                 <TableCell className="font-medium text-sm">{e.description}</TableCell>
+                 <TableCell className="text-sm">
+                   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                     e.source === "trip" ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-700"
+                   }`}>
+                     {e.source === "trip" ? "Custo da viagem" : "Despesa da agência"}
+                   </span>
+                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">{CATEGORY_LABELS[e.category] ?? e.category}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {e.supplierId ? (
@@ -335,9 +358,9 @@ export default function Expenses() {
                       onClick={() => setSupplierFilter(e.supplierId!)}
                       title="Filtrar por este fornecedor"
                     >
-                      {suppliersMap[e.supplierId] ?? e.supplierId.slice(0, 8) + "…"}
+                       {e.supplierName ?? suppliersMap[e.supplierId] ?? e.supplierId.slice(0, 8) + "…"}
                     </button>
-                  ) : "—"}
+                   ) : e.supplierName ?? "—"}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">{e.tripId ? tripsData?.data.find(t => t.id === e.tripId)?.name ?? e.tripId.slice(0, 8) + "…" : "—"}</TableCell>
                 <TableCell className="text-sm">{new Date(e.dueDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}</TableCell>
@@ -349,7 +372,7 @@ export default function Expenses() {
                   </span>
                 </TableCell>
                 <TableCell className="text-right">
-                  {e.status !== EXPENSE_STATUS.PAID && (
+                   {e.source !== "trip" && e.status !== EXPENSE_STATUS.PAID && e.status !== EXPENSE_STATUS.CANCELLED && (
                     <Button size="sm" variant="outline" onClick={() => handleMarkPaid(e.id)}>
                       <CheckCircle className="w-4 h-4 mr-1" /> Pago
                     </Button>

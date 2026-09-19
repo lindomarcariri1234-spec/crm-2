@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -256,6 +257,7 @@ function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
 
 export function TripCostsTab({ tripId }: { tripId: string }) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { data, isLoading, isError, refetch } = useListTripCosts(tripId, {
     query: { queryKey: ["trip-costs", tripId], enabled: !!tripId },
   });
@@ -315,12 +317,24 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     try {
       await deleteCost.mutateAsync({ id: tripId, costId: id });
       toast({ title: "Custo removido" });
-      refetch();
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+      ]);
     } catch {
       toast({ title: "Erro ao remover custo", variant: "destructive" });
     } finally {
       setDeletingId(null);
     }
+  };
+
+  const refreshFinancialViews = async () => {
+    await Promise.all([
+      refetch(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const groupedByCategory = COST_CATEGORIES.reduce((acc, cat) => {
@@ -593,7 +607,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
         cost={editingCost}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSaved={() => refetch()}
+         onSaved={() => { void refreshFinancialViews(); }}
       />
     </div>
   );

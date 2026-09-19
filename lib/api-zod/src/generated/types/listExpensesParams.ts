@@ -15,6 +15,10 @@ export type ListExpensesParams = {
    * @nullable
    */
   status?: string | null;
+  /**
+   * Include direct trip costs in the consolidated financial list
+   */
+  includeTripCosts?: boolean;
   page?: number;
   limit?: number;
 };

@@ -3875,12 +3875,14 @@ export const ListTripCostsResponse = zod.object({
       description: zod.string(),
       amount: zod.number(),
       supplierId: zod.string().nullish(),
+      supplierName: zod.string().nullish(),
       paymentMethod: zod.string().nullish(),
       paymentDate: zod.string().nullish(),
       dueDate: zod.string(),
       status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
       notes: zod.string().nullish(),
       createdAt: zod.string(),
+      source: zod.enum(["agency", "trip"]).optional(),
     }),
   ),
   plannedCosts: zod.array(
@@ -5484,12 +5486,17 @@ export const GetPaymentsSummaryResponse = zod.object({
 /**
  * @summary List expenses
  */
+export const listExpensesQueryIncludeTripCostsDefault = false;
 export const listExpensesQueryPageDefault = 1;
 export const listExpensesQueryLimitDefault = 20;
 
 export const ListExpensesQueryParams = zod.object({
   tripId: zod.coerce.string().nullish(),
   status: zod.coerce.string().nullish(),
+  includeTripCosts: zod.coerce
+    .boolean()
+    .default(listExpensesQueryIncludeTripCostsDefault)
+    .describe("Include direct trip costs in the consolidated financial list"),
   page: zod.coerce.number().int().default(listExpensesQueryPageDefault),
   limit: zod.coerce.number().int().default(listExpensesQueryLimitDefault),
 });
@@ -5503,12 +5510,14 @@ export const ListExpensesResponse = zod.object({
       description: zod.string(),
       amount: zod.number(),
       supplierId: zod.string().nullish(),
+      supplierName: zod.string().nullish(),
       paymentMethod: zod.string().nullish(),
       paymentDate: zod.string().nullish(),
       dueDate: zod.string(),
       status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
       notes: zod.string().nullish(),
       createdAt: zod.string(),
+      source: zod.enum(["agency", "trip"]).optional(),
     }),
   ),
   total: zod.number().int(),
@@ -5537,12 +5546,14 @@ export const CreateExpenseResponse = zod.object({
   description: zod.string(),
   amount: zod.number(),
   supplierId: zod.string().nullish(),
+  supplierName: zod.string().nullish(),
   paymentMethod: zod.string().nullish(),
   paymentDate: zod.string().nullish(),
   dueDate: zod.string(),
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
+  source: zod.enum(["agency", "trip"]).optional(),
 });
 
 /**
@@ -5568,12 +5579,14 @@ export const UpdateExpenseResponse = zod.object({
   description: zod.string(),
   amount: zod.number(),
   supplierId: zod.string().nullish(),
+  supplierName: zod.string().nullish(),
   paymentMethod: zod.string().nullish(),
   paymentDate: zod.string().nullish(),
   dueDate: zod.string(),
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
+  source: zod.enum(["agency", "trip"]).optional(),
 });
 
 /**

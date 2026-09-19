@@ -163,6 +163,7 @@ export * from "./destination";
 export * from "./document";
 export * from "./expense";
 export * from "./expenseListResponse";
+export * from "./expenseSource";
 export * from "./expenseStatus";
 export * from "./exportOutboundMessagesBounceType";
 export * from "./exportOutboundMessagesChannel";

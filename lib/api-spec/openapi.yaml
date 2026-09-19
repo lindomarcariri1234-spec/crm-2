@@ -2350,6 +2350,12 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: includeTripCosts
+          in: query
+          description: Include direct trip costs in the consolidated financial list
+          schema:
+            type: boolean
+            default: false
         - name: page
           in: query
           schema:
@@ -8872,6 +8878,8 @@ components:
           type: number
         supplierId:
           type: ["string", "null"]
+        supplierName:
+          type: ["string", "null"]
         paymentMethod:
           type: ["string", "null"]
         paymentDate:
@@ -8884,6 +8892,9 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        source:
+          type: string
+          enum: [agency, trip]
       required: [id, category, description, amount, dueDate, status, createdAt]
 
     ExpenseListResponse:

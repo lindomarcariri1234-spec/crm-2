@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { paymentsTable, expensesTable, reservationsTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
+import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql, desc, inArray } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
@@ -338,6 +338,17 @@ function formatExpense(e: typeof expensesTable.$inferSelect) {
     amount: Number(e.amount), supplierId: e.supplierId, paymentMethod: e.paymentMethod,
     paymentDate: e.paymentDate?.toISOString() ?? null, dueDate: e.dueDate.toISOString(),
     status: e.status, notes: e.notes, createdAt: e.createdAt.toISOString(),
+    source: "agency" as const, supplierName: null,
+  };
+}
+
+function formatTripCost(c: typeof tripCostsTable.$inferSelect) {
+  return {
+    id: c.id, tripId: c.tripId, category: c.category, description: c.description,
+    amount: Number(c.amount), supplierId: c.supplierId ?? null, supplierName: c.supplierName ?? null,
+    paymentMethod: null, paymentDate: c.paidAt?.toISOString() ?? null,
+    dueDate: (c.dueDate ?? c.createdAt).toISOString(), status: c.status,
+    notes: c.notes ?? null, createdAt: c.createdAt.toISOString(), source: "trip" as const,
   };
 }
 
@@ -1021,14 +1032,41 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
     if (!me) return;
     if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
-    const { tripId, status, page = "1", limit = "20" } = req.query as Record<string, string>;
+    const { tripId, status, page = "1", limit = "20", includeTripCosts } = req.query as Record<string, string>;
     const pageNum = parseInt(page) || 1;
     const limitNum = Math.min(parseInt(limit) || 20, 500);
     const offset = (pageNum - 1) * limitNum;
+    const shouldIncludeTripCosts = includeTripCosts === "true";
 
     const conditions: ReturnType<typeof eq>[] = [eq(expensesTable.tenantId, me.tenantId)];
     if (tripId) conditions.push(eq(expensesTable.tripId, tripId));
     if (status) conditions.push(eq(expensesTable.status, parseExpenseStatus(status)));
+
+    if (shouldIncludeTripCosts) {
+      const tripCostConditions: ReturnType<typeof eq>[] = [eq(tripCostsTable.tenantId, me.tenantId)];
+      if (tripId) tripCostConditions.push(eq(tripCostsTable.tripId, tripId));
+      if (status) tripCostConditions.push(eq(tripCostsTable.status, parseExpenseStatus(status)));
+
+      const [expenses, tripCosts] = await Promise.all([
+        db.select().from(expensesTable).where(and(...conditions)),
+        db.select().from(tripCostsTable).where(and(...tripCostConditions)),
+      ]);
+      const consolidated = [
+        ...expenses.map(formatExpense),
+        ...tripCosts.map(formatTripCost),
+      ].sort((a, b) => {
+        const byDueDate = new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime();
+        return byDueDate || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
+      res.json({
+        data: consolidated.slice(offset, offset + limitNum),
+        total: consolidated.length,
+        page: pageNum,
+        limit: limitNum,
+      });
+      return;
+    }
 
     const expenses = await db.select().from(expensesTable)
       .where(and(...conditions)).orderBy(desc(expensesTable.dueDate))

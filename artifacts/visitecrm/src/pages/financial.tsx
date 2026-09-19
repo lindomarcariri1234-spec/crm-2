@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
   useGetPaymentsSummary,
@@ -165,6 +166,7 @@ type SettlementData = {
 export default function Financial() {
   const searchStr = useSearch();
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
   const initialTab = useMemo(() => {
     const params = new URLSearchParams(searchStr);
     const t = params.get("tab");
@@ -345,7 +347,12 @@ export default function Financial() {
     });
     setIsExpenseOpen(false);
     setExpenseCategory("transport");
-    refetchExpenses();
+    await Promise.all([
+      refetchExpenses(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const handleMarkPaid = async (paymentId: string) => {
@@ -359,7 +366,12 @@ export default function Financial() {
       id: expenseId,
       data: { status: PAYMENT_STATUS.PAID, paymentDate: localToday() }
     });
-    refetchExpenses();
+    await Promise.all([
+      refetchExpenses(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const handleApproveCommission = async (id: string) => {

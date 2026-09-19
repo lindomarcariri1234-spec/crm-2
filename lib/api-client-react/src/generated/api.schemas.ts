@@ -1352,6 +1352,13 @@ export interface TripPricing {
   senior: number | null;
 }
 
+export type ExpenseSource = (typeof ExpenseSource)[keyof typeof ExpenseSource];
+
+export const ExpenseSource = {
+  agency: "agency",
+  trip: "trip",
+} as const;
+
 export interface Expense {
   id: string;
   /** @nullable */
@@ -1362,6 +1369,8 @@ export interface Expense {
   /** @nullable */
   supplierId?: string | null;
   /** @nullable */
+  supplierName?: string | null;
+  /** @nullable */
   paymentMethod?: string | null;
   /** @nullable */
   paymentDate?: string | null;
@@ -1370,6 +1379,7 @@ export interface Expense {
   /** @nullable */
   notes?: string | null;
   createdAt: string;
+  source?: ExpenseSource;
 }
 
 export interface ListTripCostsResponse {
@@ -5511,6 +5521,10 @@ export type ListExpensesParams = {
    * @nullable
    */
   status?: string | null;
+  /**
+   * Include direct trip costs in the consolidated financial list
+   */
+  includeTripCosts?: boolean;
   page?: number;
   limit?: number;
 };
