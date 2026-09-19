@@ -65,6 +65,35 @@ const costFormSchema = z.object({
 
 type CostFormValues = z.infer<typeof costFormSchema>;
 
+const AGENCY_CATEGORY_LABELS: Record<string, string> = {
+  transport: "Transporte",
+  accommodation: "Hospedagem",
+  food: "Alimentação",
+  marketing: "Marketing",
+  administrative: "Taxas",
+  commission: "Marketing",
+  other: "Outros",
+};
+
+type DisplayCost = {
+  id: string;
+  category: string;
+  description: string;
+  amount: number;
+  status: string;
+  dueDate: string | null;
+  paidAt: string | null;
+  notes: string | null;
+  supplierName: string | null;
+  createdAt: string;
+  source: "trip" | "agency";
+  sourceLabel: string;
+};
+
+function getAgencyCategoryLabel(category: string) {
+  return AGENCY_CATEGORY_LABELS[category] ?? category;
+}
+
 function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
   tripId: string;
   cost: TripCost | null;
@@ -227,7 +256,7 @@ function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
 
 export function TripCostsTab({ tripId }: { tripId: string }) {
   const { toast } = useToast();
-  const { data, isLoading, refetch } = useListTripCosts(tripId, {
+  const { data, isLoading, isError, refetch } = useListTripCosts(tripId, {
     query: { queryKey: ["trip-costs", tripId], enabled: !!tripId },
   });
   const deleteCost = useDeleteTripCost();
@@ -238,9 +267,43 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
   const costs = data?.costs ?? [];
+  const agencyExpenses = data?.agencyExpenses ?? [];
+  const plannedCosts = data?.plannedCosts ?? [];
   const summary = data?.summary;
+  const pricing = data?.pricing;
 
-  const filtered = costs.filter(c => {
+  const mergedCosts: DisplayCost[] = [
+    ...costs.map((cost): DisplayCost => ({
+      id: cost.id,
+      category: cost.category,
+      description: cost.description,
+      amount: cost.amount,
+      status: cost.status,
+      dueDate: cost.dueDate,
+      paidAt: cost.paidAt,
+      notes: cost.notes,
+      supplierName: cost.supplierName,
+      createdAt: cost.createdAt,
+      source: "trip",
+      sourceLabel: "Custo da viagem",
+    })),
+    ...agencyExpenses.map((expense): DisplayCost => ({
+      id: expense.id,
+      category: getAgencyCategoryLabel(expense.category),
+      description: expense.description,
+      amount: expense.amount,
+      status: expense.status,
+      dueDate: expense.dueDate,
+      paidAt: expense.paymentDate ?? null,
+      notes: expense.notes ?? null,
+      supplierName: null,
+      createdAt: expense.createdAt,
+      source: "agency",
+      sourceLabel: "Despesa da agência",
+    })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const filtered = mergedCosts.filter(c => {
     if (filterCategory !== "all" && c.category !== filterCategory) return false;
     if (filterStatus !== "all" && c.status !== filterStatus) return false;
     return true;
@@ -261,7 +324,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
   };
 
   const groupedByCategory = COST_CATEGORIES.reduce((acc, cat) => {
-    acc[cat] = costs.filter(c => c.category === cat).reduce((s, c) => s + c.amount, 0);
+    acc[cat] = mergedCosts.filter(c => c.category === cat).reduce((s, c) => s + c.amount, 0);
     return acc;
   }, {} as Record<string, number>);
 
@@ -314,6 +377,82 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
         </div>
       )}
 
+      {(pricing || summary) && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {pricing && (
+            <div className="bg-card border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-semibold text-sm">Preços por categoria</h3>
+                  <p className="text-xs text-muted-foreground">Valores cadastrados para esta viagem</p>
+                </div>
+                <Banknote className="w-4 h-4 text-blue-600" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: "Adulto", value: pricing.adult },
+                  { label: "Criança", value: pricing.child },
+                  { label: "Idoso", value: pricing.senior },
+                ].map(price => (
+                  <div key={price.label} className="rounded-md bg-muted/40 p-3">
+                    <p className="text-xs text-muted-foreground">{price.label}</p>
+                    <p className="mt-1 font-semibold text-sm">{price.value == null ? "—" : formatCurrency(price.value)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {summary && (
+            <div className="bg-card border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="font-semibold text-sm">Composição dos custos reais</h3>
+                  <p className="text-xs text-muted-foreground">Fontes mantidas separadas e totalizadas uma única vez</p>
+                </div>
+                <Receipt className="w-4 h-4 text-red-600" />
+              </div>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Custos diretos da viagem</span>
+                  <span className="font-medium">{formatCurrency(summary.totalTripCosts)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Despesas vinculadas da agência</span>
+                  <span className="font-medium">{formatCurrency(summary.totalAgencyExpenses)}</span>
+                </div>
+                <div className="flex justify-between border-t pt-2 font-semibold">
+                  <span>Total real conciliado</span>
+                  <span>{formatCurrency(summary.totalRealCosts)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {plannedCosts.length > 0 && (
+        <div className="bg-card border rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="font-semibold text-sm">Orçamento planejado por categoria</h3>
+              <p className="text-xs text-muted-foreground">Custos fixos e variáveis cadastrados no planejamento</p>
+            </div>
+            <PiggyBank className="w-4 h-4 text-amber-600" />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {plannedCosts.map(item => (
+              <div key={item.id} className="flex items-center justify-between rounded-md bg-muted/30 p-3 text-xs">
+                <div className="min-w-0 pr-3">
+                  <p className="truncate font-medium">{item.description}</p>
+                  <p className="text-muted-foreground">{item.category} · {item.kind === "fixed" ? "Fixo" : "Variável"}</p>
+                </div>
+                <span className="shrink-0 font-semibold">{formatCurrency(item.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {summary && summary.totalPendingCosts > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -326,8 +465,8 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
       <div className="bg-card border rounded-lg">
         <div className="flex items-center justify-between p-4 border-b">
           <div className="flex items-center gap-3">
-            <h3 className="font-semibold text-sm">Custos da Viagem</h3>
-            <Badge variant="secondary">{costs.length}</Badge>
+            <h3 className="font-semibold text-sm">Custos e despesas da viagem</h3>
+            <Badge variant="secondary">{mergedCosts.length}</Badge>
           </div>
           <div className="flex items-center gap-2">
             <Select value={filterCategory} onValueChange={setFilterCategory}>
@@ -348,6 +487,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                 <SelectItem value="pending">Pendente</SelectItem>
                 <SelectItem value="paid">Pago</SelectItem>
                 <SelectItem value="overdue">Vencido</SelectItem>
+                <SelectItem value="cancelled">Cancelada</SelectItem>
               </SelectContent>
             </Select>
             <Button size="sm" className="h-8 text-xs gap-1" onClick={() => { setEditingCost(null); setModalOpen(true); }}>
@@ -362,11 +502,19 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
           </div>
+        ) : isError ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <AlertCircle className="w-10 h-10 mx-auto mb-3 opacity-40 text-destructive" />
+            <p className="text-sm">Não foi possível carregar os dados financeiros desta viagem.</p>
+            <Button variant="outline" size="sm" className="mt-3 text-xs" onClick={() => refetch()}>
+              Tentar novamente
+            </Button>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <Wallet className="w-10 h-10 mx-auto mb-3 opacity-25" />
-            <p className="text-sm">{costs.length === 0 ? "Nenhum custo registrado ainda" : "Nenhum custo com esses filtros"}</p>
-            {costs.length === 0 && (
+            <p className="text-sm">{mergedCosts.length === 0 ? "Nenhum custo ou despesa vinculada ainda" : "Nenhum custo com esses filtros"}</p>
+            {mergedCosts.length === 0 && (
               <Button variant="outline" size="sm" className="mt-3 text-xs" onClick={() => { setEditingCost(null); setModalOpen(true); }}>
                 <Plus className="w-3.5 h-3.5 mr-1.5" />
                 Adicionar primeiro custo
@@ -383,6 +531,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm">{cost.description}</span>
                       <Badge variant="outline" className="text-[10px] px-1.5 py-0">{cost.category}</Badge>
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{cost.sourceLabel}</Badge>
                       <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full border font-medium ${statusInfo.color}`}>
                         {statusInfo.label}
                       </span>
@@ -399,24 +548,32 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                       {formatCurrency(cost.amount)}
                     </p>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
-                      onClick={() => { setEditingCost(cost); setModalOpen(true); }}>
-                      <Pencil className="w-3 h-3" />
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                      disabled={deletingId === cost.id}
-                      onClick={() => handleDelete(cost.id)}>
-                      {deletingId === cost.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                    </Button>
-                  </div>
+                   {cost.source === "trip" && (
+                     <div className="flex items-center gap-1 shrink-0">
+                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
+                         onClick={() => {
+                           const editableCost = costs.find(item => item.id === cost.id);
+                           if (editableCost) {
+                             setEditingCost(editableCost);
+                             setModalOpen(true);
+                           }
+                         }}>
+                         <Pencil className="w-3 h-3" />
+                       </Button>
+                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                         disabled={deletingId === cost.id}
+                         onClick={() => handleDelete(cost.id)}>
+                         {deletingId === cost.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                       </Button>
+                     </div>
+                   )}
                 </div>
               );
             })}
           </div>
         )}
 
-        {costs.length > 0 && (
+        {mergedCosts.length > 0 && (
           <div className="border-t p-4">
             <p className="text-xs font-medium text-muted-foreground mb-2">Resumo por categoria</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">

@@ -5,10 +5,16 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { Expense } from "./expense";
 import type { TripCost } from "./tripCost";
 import type { TripCostSummary } from "./tripCostSummary";
+import type { TripPlannedCost } from "./tripPlannedCost";
+import type { TripPricing } from "./tripPricing";
 
 export interface ListTripCostsResponse {
   costs: TripCost[];
+  agencyExpenses: Expense[];
+  plannedCosts: TripPlannedCost[];
+  pricing: TripPricing;
   summary: TripCostSummary;
 }

@@ -7517,6 +7517,10 @@ components:
       properties:
         expectedRevenue:
           type: number
+        totalTripCosts:
+          type: number
+        totalAgencyExpenses:
+          type: number
         totalRealCosts:
           type: number
         totalPaidCosts:
@@ -7533,7 +7537,36 @@ components:
           type: number
         confirmedSeats:
           type: integer
-      required: [expectedRevenue, totalRealCosts, totalPaidCosts, totalPendingCosts, profit, margin, plannedBudget, budgetVariance, confirmedSeats]
+      required: [expectedRevenue, totalTripCosts, totalAgencyExpenses, totalRealCosts, totalPaidCosts, totalPendingCosts, profit, margin, plannedBudget, budgetVariance, confirmedSeats]
+
+    TripPlannedCost:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [fixed, variable]
+        category:
+          type: string
+        description:
+          type: string
+        amount:
+          type: number
+        amountPerPassenger:
+          type: ["number", "null"]
+      required: [id, kind, category, description, amount, amountPerPassenger]
+
+    TripPricing:
+      type: object
+      properties:
+        adult:
+          type: number
+        child:
+          type: ["number", "null"]
+        senior:
+          type: ["number", "null"]
+      required: [adult, child, senior]
 
     ListTripCostsResponse:
       type: object
@@ -7542,9 +7575,19 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TripCost"
+        agencyExpenses:
+          type: array
+          items:
+            $ref: "#/components/schemas/Expense"
+        plannedCosts:
+          type: array
+          items:
+            $ref: "#/components/schemas/TripPlannedCost"
+        pricing:
+          $ref: "#/components/schemas/TripPricing"
         summary:
           $ref: "#/components/schemas/TripCostSummary"
-      required: [costs, summary]
+      required: [costs, agencyExpenses, plannedCosts, pricing, summary]
 
     CreateTripCostBody:
       type: object

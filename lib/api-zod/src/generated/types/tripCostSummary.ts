@@ -8,6 +8,8 @@
 
 export interface TripCostSummary {
   expectedRevenue: number;
+  totalTripCosts: number;
+  totalAgencyExpenses: number;
   totalRealCosts: number;
   totalPaidCosts: number;
   totalPendingCosts: number;

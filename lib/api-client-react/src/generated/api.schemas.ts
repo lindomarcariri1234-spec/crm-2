@@ -1313,6 +1313,8 @@ export interface TripCost {
 
 export interface TripCostSummary {
   expectedRevenue: number;
+  totalTripCosts: number;
+  totalAgencyExpenses: number;
   totalRealCosts: number;
   totalPaidCosts: number;
   totalPendingCosts: number;
@@ -1323,8 +1325,57 @@ export interface TripCostSummary {
   confirmedSeats: number;
 }
 
+export type TripPlannedCostKind =
+  (typeof TripPlannedCostKind)[keyof typeof TripPlannedCostKind];
+
+export const TripPlannedCostKind = {
+  fixed: "fixed",
+  variable: "variable",
+} as const;
+
+export interface TripPlannedCost {
+  id: string;
+  kind: TripPlannedCostKind;
+  category: string;
+  description: string;
+  amount: number;
+  /** @nullable */
+  amountPerPassenger: number | null;
+}
+
+export interface TripPricing {
+  adult: number;
+  /** @nullable */
+  child: number | null;
+  /** @nullable */
+  senior: number | null;
+}
+
+export interface Expense {
+  id: string;
+  /** @nullable */
+  tripId?: string | null;
+  category: string;
+  description: string;
+  amount: number;
+  /** @nullable */
+  supplierId?: string | null;
+  /** @nullable */
+  paymentMethod?: string | null;
+  /** @nullable */
+  paymentDate?: string | null;
+  dueDate: string;
+  status: ExpenseStatus;
+  /** @nullable */
+  notes?: string | null;
+  createdAt: string;
+}
+
 export interface ListTripCostsResponse {
   costs: TripCost[];
+  agencyExpenses: Expense[];
+  plannedCosts: TripPlannedCost[];
+  pricing: TripPricing;
   summary: TripCostSummary;
 }
 
@@ -2294,26 +2345,6 @@ export interface FinancialSummary {
   overduePayable: number;
   collectedThisMonth: number;
   paidThisMonth: number;
-}
-
-export interface Expense {
-  id: string;
-  /** @nullable */
-  tripId?: string | null;
-  category: string;
-  description: string;
-  amount: number;
-  /** @nullable */
-  supplierId?: string | null;
-  /** @nullable */
-  paymentMethod?: string | null;
-  /** @nullable */
-  paymentDate?: string | null;
-  dueDate: string;
-  status: ExpenseStatus;
-  /** @nullable */
-  notes?: string | null;
-  createdAt: string;
 }
 
 export interface ExpenseListResponse {
