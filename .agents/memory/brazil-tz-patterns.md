@@ -15,6 +15,9 @@ Never use `toLocaleDateString()`, `toLocaleString()`, or `toISOString().slice(0,
 `artifacts/visitecrm/src/lib/utils.ts` exports `formatDate`, `formatDateShort`, `formatDateTime` — all use `Intl.DateTimeFormat` with `timeZone: "America/Sao_Paulo"`.
 - date-only strings → append `T12:00:00` before parsing (avoids UTC midnight off-by-one)
 - Use these everywhere; do NOT add local `toLocaleDateString("pt-BR")` calls.
+- Trip endpoints are pairs of calendar date + optional time; use the shared trip datetime parser/formatter for countdowns, durations, and labels instead of `new Date(date + "T" + time)`.
+
+**Why:** The API persists the calendar date separately from the departure/return time. Parsing the pair as an unzoned browser-local string makes the result depend on the user's machine timezone and causes the same trip to show different countdowns or durations.
 
 ### Backend — date display in emails/PDFs
 Use a local helper pattern (already in reminder.worker.ts):

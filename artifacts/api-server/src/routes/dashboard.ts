@@ -715,6 +715,9 @@ router.get("/dashboard/upcoming-trips", async (req, res, next: NextFunction): Pr
     res.json(trips.map(t => ({
       id: t.id, name: t.name, destination: t.destination,
       departureDate: t.departureDate.toISOString(),
+      departureTime: t.departureTime ?? null,
+      returnDate: t.returnDate?.toISOString() ?? null,
+      returnTime: t.returnTime ?? null,
       availableSeats: t.availableSeats, totalCapacity: t.totalCapacity,
       status: t.status, coverImage: t.coverImage,
     })));
