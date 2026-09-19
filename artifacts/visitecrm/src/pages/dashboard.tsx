@@ -33,6 +33,7 @@ import { format, parseISO, differenceInDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 import { formatCurrency } from "@/lib/utils";
+import { formatTripDateTime, parseTripDateTime } from "@/lib/tripDateTime";
 import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
 import { useFinancialMetrics } from "@/lib/financial-metrics-api";
 
@@ -1099,7 +1100,9 @@ function AgencyDashboard() {
                       <div key={trip.id} className="flex items-center justify-between p-2 rounded-lg border hover:bg-muted/50">
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-sm truncate">{trip.name}</p>
-                          <p className="text-xs text-muted-foreground">{format(parseISO(trip.departureDate), "dd/MM/yyyy", { locale: ptBR })}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatTripDateTime(trip.departureDate, trip.departureTime)}
+                          </p>
                         </div>
                         <div className="flex items-center gap-2 ml-2">
                           <span className="text-xs text-muted-foreground">{occupancy}% ocup.</span>
@@ -1302,7 +1305,15 @@ function ClientDashboard() {
   const [voucherReservation, setVoucherReservation] = useState<Reservation | null>(null);
 
   const nextTrip = upcomingTrips?.[0];
-  const daysToTrip = nextTrip ? differenceInDays(parseISO(nextTrip.departureDate), new Date()) : null;
+  const daysToTrip = nextTrip
+    ? Math.max(
+      0,
+      Math.ceil(
+        (parseTripDateTime(nextTrip.departureDate, nextTrip.departureTime).getTime() - Date.now()) /
+          (1000 * 60 * 60 * 24),
+      ),
+    )
+    : null;
 
   const { data: nextTripReservations } = useListReservations(
     { tripId: nextTrip?.id ?? "", limit: 1 },
@@ -1358,7 +1369,7 @@ function ClientDashboard() {
               clientName={me?.name ?? myReservation.client.name}
               agencyName={me?.tenant?.name ?? "Agência"}
               agencyLogo={me?.tenant?.logoUrl}
-              departureDate={format(parseISO(nextTrip.departureDate), "dd/MM/yyyy")}
+              departureDate={formatTripDateTime(nextTrip.departureDate, nextTrip.departureTime)}
               onViewVoucher={() => { setVoucherReservation(myReservation); setVoucherAutoDownload(false); setVoucherOpen(true); }}
               onDownloadPdf={() => { setVoucherReservation(myReservation); setVoucherAutoDownload(true); setVoucherOpen(true); }}
             />
@@ -1376,7 +1387,7 @@ function ClientDashboard() {
                   <h3 className="text-lg font-bold">{nextTrip.name}</h3>
                   <p className="text-muted-foreground">{nextTrip.destination}</p>
                   <p className="text-sm mt-1">
-                    <span className="font-medium">{format(parseISO(nextTrip.departureDate), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}</span>
+                    <span className="font-medium">{formatTripDateTime(nextTrip.departureDate, nextTrip.departureTime)}</span>
                     {daysToTrip != null && daysToTrip > 0 && <Badge className="ml-2" variant="outline">Faltam {daysToTrip} dias</Badge>}
                   </p>
                 </div>

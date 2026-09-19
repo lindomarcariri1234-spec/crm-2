@@ -749,6 +749,12 @@ export interface TripSummary {
   name: string;
   destination: string;
   departureDate: string;
+  /** @nullable */
+  departureTime?: string | null;
+  /** @nullable */
+  returnDate?: string | null;
+  /** @nullable */
+  returnTime?: string | null;
   availableSeats: number;
   totalCapacity: number;
   status: string;
@@ -2907,12 +2913,6 @@ export interface Vehicle {
   type: string;
   plate: string;
   capacity: number;
-  description?: string | null;
-  standardOccupancy?: number | null;
-  bedConfiguration?: string | null;
-  bathroomType?: string | null;
-  floor?: string | null;
-  currency?: string;
   /** @nullable */
   model?: string | null;
   /** @nullable */

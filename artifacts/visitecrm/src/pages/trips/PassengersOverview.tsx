@@ -14,7 +14,7 @@ import {
   List, UserRound, MapPin, ChevronDown, ClipboardCheck, AlertTriangle, ShoppingBag, Star,
 } from "lucide-react";
 import { STATUS_MAP } from "./constants";
-import { formatCurrency, formatDate } from "./utils";
+import { formatCurrency, formatTripDateRange } from "./utils";
 import { PAYMENT_METHOD_LABELS } from "@/lib/labels";
 import type { FixedCostItem, VariableCostItem } from "./types";
 import { PassengersOverviewFinancialDialog } from "./PassengersOverviewFinancialDialog";
@@ -246,9 +246,11 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
             {trip && (
               <>
                 {" · "}
-                {formatDate(trip.departureDate)}{trip.departureTime ? ` às ${trip.departureTime}` : ""}
-                {trip.returnDate && (
-                  <> — {formatDate(trip.returnDate)}{trip.returnTime ? ` às ${trip.returnTime}` : ""}</>
+                {formatTripDateRange(
+                  trip.departureDate,
+                  trip.returnDate,
+                  trip.departureTime,
+                  trip.returnTime,
                 )}
               </>
             )}
@@ -298,13 +300,6 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
             <span className="text-sm text-muted-foreground flex items-center gap-1">
               <MapPin className="w-3.5 h-3.5 text-blue-500" />
               <span>Saída de <strong className="text-blue-600">{[trip.originCity, trip.originState].filter(Boolean).join(", ")}</strong></span>
-            </span>
-          )}
-          {(trip.departureTime || trip.returnTime) && (
-            <span className="text-sm text-muted-foreground">
-              {trip.departureTime && <>Partida: <strong>{trip.departureTime}</strong></>}
-              {trip.departureTime && trip.returnTime && <> · </>}
-              {trip.returnTime && <>Volta: <strong>{trip.returnTime}</strong></>}
             </span>
           )}
           {trip.driverName && <span className="text-sm text-muted-foreground">Motorista: <strong>{trip.driverName}</strong></span>}

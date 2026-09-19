@@ -13,7 +13,12 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { STATUS_MAP } from "./constants";
-import { formatCurrency, formatDate, generateProductSlug, buildTripProductPayload } from "./utils";
+import {
+  formatCurrency,
+  formatTripDateRange,
+  generateProductSlug,
+  buildTripProductPayload,
+} from "./utils";
 import { TripCountdown, OccupancyBar } from "./TripCountdown";
 
 export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open: boolean; onClose: () => void }) {
@@ -143,8 +148,12 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
                 <div className="flex items-center gap-1">
                   <Calendar className="w-3 h-3 shrink-0" />
                   <span>
-                    {formatDate(trip.departureDate)}
-                    {trip.returnDate && ` → ${formatDate(trip.returnDate)}`}
+                     {formatTripDateRange(
+                       trip.departureDate,
+                       trip.returnDate,
+                       trip.departureTime,
+                       trip.returnTime,
+                     ).replace(" — ", " → ")}
                   </span>
                 </div>
                 {durationLabel && (
@@ -167,12 +176,6 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
                   <div className="flex items-center gap-1 col-span-2">
                     <MapPin className="w-3 h-3 shrink-0 text-blue-500" />
                     <span>Saída de {[trip.originCity, trip.originState].filter(Boolean).join(", ")}</span>
-                  </div>
-                )}
-                {trip.departureTime && (
-                  <div className="flex items-center gap-1">
-                    <Clock className="w-3 h-3 shrink-0" />
-                    <span>Partida: {trip.departureTime}{trip.returnTime ? ` · Volta: ${trip.returnTime}` : ""}</span>
                   </div>
                 )}
                 {((Number(trip.freeOrganizers) || 0) + (Number(trip.freeGuides) || 0) > 0) && (
@@ -298,8 +301,14 @@ export function TripCard({ trip, isVendedor, seatMapEnabled = true, onDelete, on
         </div>
         <div className="flex items-center gap-1 text-sm text-muted-foreground">
           <Calendar className="w-3 h-3" />
-          <span>{formatDate(trip.departureDate)}{trip.departureTime ? ` às ${trip.departureTime}` : ""}</span>
-          {trip.returnDate && <><span>—</span><span>{formatDate(trip.returnDate)}{trip.returnTime ? ` às ${trip.returnTime}` : ""}</span></>}
+          <span>
+            {formatTripDateRange(
+              trip.departureDate,
+              trip.returnDate,
+              trip.departureTime,
+              trip.returnTime,
+            )}
+          </span>
         </div>
         <TripCountdown date={trip.departureDate} time={trip.departureTime} />
         <OccupancyBar reserved={trip.reservedSeats} confirmed={trip.confirmedSeats} free={freeCount} total={trip.totalCapacity} />

@@ -11,6 +11,12 @@ export interface TripSummary {
   name: string;
   destination: string;
   departureDate: string;
+  /** @nullable */
+  departureTime?: string | null;
+  /** @nullable */
+  returnDate?: string | null;
+  /** @nullable */
+  returnTime?: string | null;
   availableSeats: number;
   totalCapacity: number;
   status: string;

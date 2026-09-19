@@ -6789,6 +6789,12 @@ components:
           type: string
         departureDate:
           type: string
+        departureTime:
+          type: ["string", "null"]
+        returnDate:
+          type: ["string", "null"]
+        returnTime:
+          type: ["string", "null"]
         availableSeats:
           type: integer
         totalCapacity:
