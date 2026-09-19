@@ -22,6 +22,8 @@ export const emailLogsTable = pgTable("email_logs", {
     .where(sql`${table.retriesExhaustedAt} IS NOT NULL`),
   index("email_logs_outbound_message_idx")
     .on(table.tenantId, table.outboundMessageId),
+  index("email_logs_tenant_referral_idx")
+    .on(table.tenantId, table.referralId, table.createdAt),
 ]);
 
 export type EmailLog = typeof emailLogsTable.$inferSelect;

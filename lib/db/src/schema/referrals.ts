@@ -64,6 +64,10 @@ export const referralsTable = pgTable("referrals", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
+  index("referrals_tenant_created_idx").on(t.tenantId, t.createdAt),
+  index("referrals_tenant_status_expires_idx").on(t.tenantId, t.status, t.expiresAt),
+  index("referrals_tenant_reservation_idx").on(t.tenantId, t.reservationId),
+  index("referrals_tenant_code_idx").on(t.tenantId, t.code),
   index("referrals_financial_bonus_paid_idx").on(t.tenantId, t.status, t.bonusPaidAt),
   index("referrals_financial_credit_used_idx").on(t.tenantId, t.status, t.bonusCreditUsedAt),
 ]);
@@ -98,7 +102,7 @@ export type ReferralBonusReversal = typeof referralBonusReversalsTable.$inferSel
 export const referralTrackingTable = pgTable("referral_tracking", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull(),
-  cookieId: text("cookie_id").notNull().unique(),
+  cookieId: text("cookie_id").notNull(),
   referralCode: text("referral_code").notNull(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
@@ -119,7 +123,10 @@ export const referralTrackingTable = pgTable("referral_tracking", {
   utmTerm: text("utm_term"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("referral_tracking_tenant_cookie_unique").on(t.tenantId, t.cookieId),
+  index("referral_tracking_tenant_code_idx").on(t.tenantId, t.referralCode),
+]);
 
 export const insertReferralTrackingSchema = createInsertSchema(referralTrackingTable).omit({ createdAt: true, updatedAt: true });
 export type InsertReferralTracking = z.infer<typeof insertReferralTrackingSchema>;

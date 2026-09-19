@@ -213,8 +213,6 @@ export default function Indicacoes() {
   const referralsCanUpgrade = canUpgradeForFeature(subData, "referrals");
 
   const { toast } = useToast();
-  const { data: referralsResponse, refetch } = useListReferrals();
-  const referrals = ((referralsResponse as { data?: EnrichedReferral[] } | undefined)?.data ?? (Array.isArray(referralsResponse) ? referralsResponse as EnrichedReferral[] : [])) as EnrichedReferral[];
   const { data: stats } = useGetReferralStats();
   const { data: commissionReport } = useGetReferralCommissionReport();
   const { data: settings, refetch: refetchSettings } = useGetReferralSettings();
@@ -314,6 +312,7 @@ export default function Indicacoes() {
   const [bonusFilter, setBonusFilter] = useState<"all" | "unpaid">("all");
   const [fraudFilter, setFraudFilter] = useState(false);
   const [bonusNotifiedFilter, setBonusNotifiedFilter] = useState<"all" | "notified" | "not_notified">("all");
+  const [referralsPage, setReferralsPage] = useState(1);
   const [selectedBonusIds, setSelectedBonusIds] = useState<Set<string>>(new Set());
   const [bulkPayDialogOpen, setBulkPayDialogOpen] = useState(false);
   const [bulkPaying, setBulkPaying] = useState(false);
@@ -322,6 +321,30 @@ export default function Indicacoes() {
   const [shareReferral, setShareReferral] = useState<EnrichedReferral | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedMessage, setCopiedMessage] = useState(false);
+
+  const referralListParams = {
+    page: referralsPage,
+    limit: 100,
+    status: statusFilter !== "all" && statusFilter !== "expiringSoon" && !fraudFilter ? statusFilter : undefined,
+    search: searchQuery.trim() || undefined,
+    bonusPaid: bonusFilter === "unpaid" ? false : undefined,
+    fraudFlag: fraudFilter ? true : undefined,
+    expiringSoon: statusFilter === "expiringSoon" ? true : undefined,
+    bonusNotified: bonusNotifiedFilter === "all" ? undefined : bonusNotifiedFilter === "notified",
+  };
+  const { data: referralsResponse, refetch } = useListReferrals(referralListParams);
+  const referrals = ((referralsResponse as { data?: EnrichedReferral[] } | undefined)?.data
+    ?? (Array.isArray(referralsResponse) ? referralsResponse as EnrichedReferral[] : [])) as EnrichedReferral[];
+  const referralsPagination = (referralsResponse as {
+    pagination?: { page: number; limit: number; total: number; totalPages: number };
+  } | undefined)?.pagination;
+  const referralTotal = referralsPagination?.total ?? referrals.length;
+  const referralPageCount = Math.max(1, referralsPagination?.totalPages ?? 1);
+
+  useEffect(() => {
+    setReferralsPage(1);
+    setSelectedBonusIds(new Set());
+  }, [searchQuery, statusFilter, bonusFilter, fraudFilter, bonusNotifiedFilter]);
 
   const [campaignsDialogOpen, setCampaignsDialogOpen] = useState(false);
   const [showCampaignForm, setShowCampaignForm] = useState(false);
@@ -828,10 +851,14 @@ export default function Indicacoes() {
     if (fraudFilter) return r.fraudFlag === true;
     if (statusFilter === "expiringSoon") {
       const exp = r.expiresAt ? new Date(r.expiresAt).getTime() : null;
-      return r.status === REFERRAL_STATUS.PENDING && exp !== null && exp > now && exp <= now + sevenDaysMs;
+      const matchNotified = bonusNotifiedFilter === "all"
+        || (bonusNotifiedFilter === "notified" ? r.bonusReleaseNotifiedAt != null : r.bonusReleaseNotifiedAt == null);
+      return r.status === REFERRAL_STATUS.PENDING && exp !== null && exp > now && exp <= now + sevenDaysMs && matchNotified;
     }
     const matchStatus = statusFilter === "all" || r.status === statusFilter;
     const matchBonus = bonusFilter === "all" || (bonusFilter === "unpaid" && !r.bonusPaid);
+    const matchNotified = bonusNotifiedFilter === "all"
+      || (bonusNotifiedFilter === "notified" ? r.bonusReleaseNotifiedAt != null : r.bonusReleaseNotifiedAt == null);
     const q = searchQuery.toLowerCase();
     const matchSearch = !q
       || r.code.toLowerCase().includes(q)
@@ -840,7 +867,7 @@ export default function Indicacoes() {
       || ((r as EnrichedReferral).referrerWhatsapp ?? "").toLowerCase().includes(q)
       || (r.referredEmail ?? "").toLowerCase().includes(q)
       || (r.referredName ?? "").toLowerCase().includes(q);
-    return matchStatus && matchSearch && matchBonus;
+    return matchStatus && matchSearch && matchBonus && matchNotified;
   });
 
   const settingsDiscountPct = settings ? parseFloat(String(settings.discountValue)) : 5;
@@ -869,6 +896,7 @@ export default function Indicacoes() {
 
   function applyTab(tab: string) {
     setSelectedBonusIds(new Set());
+    setReferralsPage(1);
     setFraudFilter(tab === "suspicious");
     setBonusFilter(tab === "completed-unpaid" ? "unpaid" : "all");
     setStatusFilter(
@@ -1054,7 +1082,10 @@ export default function Indicacoes() {
           )}
           <Select
             value={bonusNotifiedFilter}
-            onValueChange={(v) => setBonusNotifiedFilter(v as "all" | "notified" | "not_notified")}
+            onValueChange={(v) => {
+              setReferralsPage(1);
+              setBonusNotifiedFilter(v as "all" | "notified" | "not_notified");
+            }}
           >
             <SelectTrigger className="w-[200px]">
               <SelectValue />
@@ -1586,7 +1617,11 @@ export default function Indicacoes() {
           <Input
             placeholder="Buscar por código, nome, e-mail ou WhatsApp..."
             value={searchQuery}
-            onChange={(e) => { setSearchQuery(e.target.value); setSelectedBonusIds(new Set()); }}
+            onChange={(e) => {
+              setReferralsPage(1);
+              setSearchQuery(e.target.value);
+              setSelectedBonusIds(new Set());
+            }}
             className="max-w-xs"
             disabled={fraudFilter || statusFilter === "expiringSoon"}
           />
@@ -1600,7 +1635,9 @@ export default function Indicacoes() {
               Pagar selecionados ({selectedBonusIds.size})
             </Button>
           )}
-          <span className="text-sm text-muted-foreground ml-auto">{filtered.length} indicações</span>
+          <span className="text-sm text-muted-foreground ml-auto">
+            {filtered.length} nesta página{referralTotal > filtered.length ? ` · ${referralTotal} no total` : ""}
+          </span>
         </div>
 
         {["all", "pending", "expiringSoon", "completed", "completed-unpaid", "expired", "suspicious"].map((tabVal) => (
@@ -1864,6 +1901,32 @@ export default function Indicacoes() {
           </TabsContent>
         ))}
       </Tabs>
+
+      {referralPageCount > 1 && (
+        <div className="flex items-center justify-center gap-3 mt-4">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={referralsPage <= 1}
+            onClick={() => setReferralsPage((page) => Math.max(1, page - 1))}
+          >
+            <ChevronLeft className="w-3.5 h-3.5 mr-1" />
+            Anterior
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            Página {referralsPage} de {referralPageCount}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={referralsPage >= referralPageCount}
+            onClick={() => setReferralsPage((page) => Math.min(referralPageCount, page + 1))}
+          >
+            Próxima
+            <ChevronRight className="w-3.5 h-3.5 ml-1" />
+          </Button>
+        </div>
+      )}
 
       {/* Share Link & QR-Code Dialog */}
       <Dialog open={shareModalOpen} onOpenChange={(open) => { setShareModalOpen(open); if (!open) { setCopiedLink(false); setCopiedMessage(false); setShareReferral(null); } }}>

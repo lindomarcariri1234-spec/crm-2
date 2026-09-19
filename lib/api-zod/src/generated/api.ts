@@ -8464,6 +8464,10 @@ export const ListReferralsQueryParams = zod.object({
   limit: zod.coerce.number().int().default(listReferralsQueryLimitDefault),
   status: zod.coerce.string().optional(),
   search: zod.coerce.string().optional(),
+  bonusPaid: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  fraudFlag: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  expiringSoon: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  bonusNotified: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
 });
 
 export const ListReferralsResponse = zod.object({

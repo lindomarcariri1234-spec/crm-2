@@ -128,3 +128,4 @@
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md) — mocks instantiated with `new` need constructable function/class shapes after the Vitest 4 upgrade
 - [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
+- [Referral cap concurrency](referral-cap-concurrency.md) — reserve capped conversions with a conditional no-op client update so PostgreSQL holds the row lock through checkout commit

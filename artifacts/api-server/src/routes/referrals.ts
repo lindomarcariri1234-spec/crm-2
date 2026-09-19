@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable, auditLogsTable } from "@workspace/db";
-import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull } from "drizzle-orm";
+import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull, gte, lte } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
@@ -112,6 +112,7 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
       .where(and(
         eq(referralsTable.tenantId, me.tenantId),
         eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
+        eq(referralsTable.bonusPaid, true),
       ));
 
     const [discountRow] = await db.select({
@@ -197,6 +198,10 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
     const offset = (page - 1) * limit;
     const status = req.query.status as string | undefined;
     const search = req.query.search as string | undefined;
+    const bonusPaid = req.query.bonusPaid as string | undefined;
+    const fraudFlag = req.query.fraudFlag as string | undefined;
+    const expiringSoon = req.query.expiringSoon as string | undefined;
+    const bonusNotified = req.query.bonusNotified as string | undefined;
 
     const validReferralStatuses = Object.values(REFERRAL_STATUS);
     if (status && !validReferralStatuses.includes(status as (typeof validReferralStatuses)[number])) {
@@ -215,6 +220,21 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
         ilike(clientsTable.name, `%${search}%`),
         ilike(clientsTable.email, `%${search}%`),
       )!);
+    }
+    if (bonusPaid === "true") conditions.push(eq(referralsTable.bonusPaid, true));
+    if (bonusPaid === "false") conditions.push(eq(referralsTable.bonusPaid, false));
+    if (fraudFlag === "true") conditions.push(eq(referralsTable.fraudFlag, true));
+    if (fraudFlag === "false") conditions.push(eq(referralsTable.fraudFlag, false));
+    if (bonusNotified === "true") conditions.push(isNotNull(referralsTable.bonusReleaseNotifiedAt));
+    if (bonusNotified === "false") conditions.push(isNull(referralsTable.bonusReleaseNotifiedAt));
+    if (expiringSoon === "true") {
+      const now = new Date();
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      conditions.push(
+        eq(referralsTable.status, REFERRAL_STATUS.PENDING),
+        gte(referralsTable.expiresAt, now),
+        lte(referralsTable.expiresAt, sevenDaysFromNow),
+      );
     }
 
     const [totalRow] = await db.select({ total: count() }).from(referralsTable)
@@ -743,7 +763,7 @@ router.post("/referrals/:id/resend-expiry-warning", async (req, res, next: NextF
       .set(clearUpdate)
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
 
-    await dispatchReferralExpiringSoonEmail(row.referrerId, me.tenantId, row.code, expiresAt, windowNum);
+    await dispatchReferralExpiringSoonEmail(row.referrerId, me.tenantId, row.code, expiresAt, windowNum, row.id);
 
     const sentNow = new Date();
     const sentUpdate = windowNum === 7
@@ -886,23 +906,12 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
     if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
-      code: referralsTable.code,
-      referrerClientEmail: clientsTable.email,
+      id: referralsTable.id,
     }).from(referralsTable)
-      .leftJoin(clientsTable, and(
-        eq(referralsTable.referrerId, clientsTable.id),
-        eq(clientsTable.tenantId, me.tenantId),
-      ))
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
       .limit(1);
 
     if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
-
-    const referrerEmail = row.referrerClientEmail;
-    if (!referrerEmail) {
-      res.json({ d7: null, d1: null });
-      return;
-    }
 
     const logs = await db.select({
       id: emailLogsTable.id,
@@ -913,8 +922,7 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
     }).from(emailLogsTable)
       .where(and(
         eq(emailLogsTable.tenantId, me.tenantId),
-        eq(emailLogsTable.recipient, referrerEmail),
-        ilike(emailLogsTable.subject, `%${row.code}%`),
+        eq(emailLogsTable.referralId, row.id),
       ))
       .orderBy(desc(emailLogsTable.createdAt))
       .limit(50);
@@ -1002,7 +1010,11 @@ router.get("/referrals/:id/share", async (req, res, next: NextFunction): Promise
 
     if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
 
-    const frontendBase = (process.env["FRONTEND_URL"] ?? `https://${process.env["REPLIT_DEV_DOMAIN"] ?? "localhost"}`).replace(/\/$/, "");
+    const frontendBase = (
+      process.env["STORE_PUBLIC_URL"] ??
+      process.env["FRONTEND_URL"] ??
+      "https://visitecrm.com"
+    ).replace(/\/$/, "");
     const slug = row.tenantSlug ?? me.tenantId;
     const link = `${frontendBase}/loja/${slug}/indicacao?code=${row.code}`;
 

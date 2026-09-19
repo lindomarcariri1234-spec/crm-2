@@ -5892,6 +5892,10 @@ export type ListReferralsParams = {
   limit?: number;
   status?: string;
   search?: string;
+  bonusPaid?: boolean;
+  fraudFlag?: boolean;
+  expiringSoon?: boolean;
+  bonusNotified?: boolean;
 };
 
 export type ListReferrals200Pagination = {

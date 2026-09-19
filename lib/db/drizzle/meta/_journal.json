@@ -596,6 +596,13 @@
       "when": 1809200000000,
       "tag": "0085_pms_payment_adjustments",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1789851000000,
+      "tag": "0086_referral_integrity_indexes",
+      "breakpoints": true
     }
   ]
 }
