@@ -319,43 +319,6 @@ export default function Hospedagens() {
     }
   }
 
-  function openRooms(a: Accommodation) {
-    setRoomsFor(a);
-    setEditingRoom(null);
-    setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null, standardOccupancy: 2, currency: "BRL" });
-  }
-
-  async function handleRoomSave() {
-    if (!roomsFor || !roomForm.name.trim()) return;
-    try {
-      if (editingRoom) {
-        await updateRoom.mutateAsync({ id: editingRoom.id, data: roomForm });
-      } else {
-        await createRoom.mutateAsync({ id: roomsFor.id, data: roomForm });
-      }
-      setEditingRoom(null);
-      setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null, standardOccupancy: 2, currency: "BRL" });
-      await refetchRooms();
-      toast({ title: editingRoom ? "Quarto atualizado" : "Quarto criado" });
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message || "Não foi possível salvar o quarto";
-      toast({ title: msg, variant: "destructive" });
-    }
-  }
-
-  async function handleRoomDelete(room: AccommodationRoom) {
-    try {
-      await deleteRoom.mutateAsync({ id: room.id });
-      await refetchRooms();
-      toast({ title: "Quarto excluído" });
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message || "Não foi possível excluir o quarto";
-      toast({ title: msg, variant: "destructive" });
-    }
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
