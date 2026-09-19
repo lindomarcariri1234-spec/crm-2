@@ -42,7 +42,7 @@
     "ioredis": "^5.10.1",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
-    "multer": "^2.2.0",
+    "multer": "^2.3.0",
     "node-cron": "^4.2.1",
     "openai": "^6.27.0",
     "pdfkit": "^0.18.0",
