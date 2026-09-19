@@ -8172,6 +8172,9 @@ components:
           type: ["string", "null"]
         packageType:
           type: ["string", "null"]
+        roomId:
+          type: ["string", "null"]
+          description: ID of the accommodation room assigned to the primary passenger
         hasInsurance:
           type: boolean
         totalValue:
@@ -8268,9 +8271,13 @@ components:
             name: { type: string }
             type: { type: string }
           required: [id, name, type]
+        rooms:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccommodationRoom"
         allocationSummary:
           $ref: "#/components/schemas/RoomAllocationSummary"
-      required: [accommodation, allocationSummary]
+      required: [accommodation, rooms, allocationSummary]
 
     RoomAvailability:
       allOf:

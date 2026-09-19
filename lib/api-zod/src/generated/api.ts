@@ -3660,6 +3660,29 @@ export const GetTripRoomAllocationSummaryResponse = zod.object({
       type: zod.string(),
     })
     .nullable(),
+  rooms: zod.array(
+    zod.object({
+      id: zod.string(),
+      tenantId: zod.string(),
+      accommodationId: zod.string(),
+      name: zod.string(),
+      category: zod.string(),
+      capacity: zod.number().int(),
+      description: zod.string().nullish(),
+      standardOccupancy: zod.number().int().nullish(),
+      bedConfiguration: zod.string().nullish(),
+      bathroomType: zod.string().nullish(),
+      floor: zod.string().nullish(),
+      currency: zod.string().optional(),
+      isActive: zod.boolean().optional(),
+      pricePerNight: zod.number().nullable(),
+      status: zod.enum(["active", "inactive"]),
+      occupied: zod.number().int(),
+      available: zod.number().int(),
+      createdAt: zod.string(),
+      updatedAt: zod.string(),
+    }),
+  ),
   allocationSummary: zod.object({
     nights: zod.number().int(),
     rows: zod.array(
@@ -4191,6 +4214,10 @@ export const CreateReservationBody = zod.object({
   seats: zod.array(zod.string()),
   tripType: zod.string().nullish(),
   packageType: zod.string().nullish(),
+  roomId: zod
+    .string()
+    .nullish()
+    .describe("ID of the accommodation room assigned to the primary passenger"),
   hasInsurance: zod.boolean().optional(),
   totalValue: zod.number(),
   paymentMethod: zod.string().nullish(),

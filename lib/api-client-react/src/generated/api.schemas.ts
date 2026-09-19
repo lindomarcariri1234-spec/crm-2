@@ -1775,6 +1775,11 @@ export interface CreateReservationBody {
   tripType?: string | null;
   /** @nullable */
   packageType?: string | null;
+  /**
+   * ID of the accommodation room assigned to the primary passenger
+   * @nullable
+   */
+  roomId?: string | null;
   hasInsurance?: boolean;
   totalValue: number;
   /** @nullable */
@@ -1861,11 +1866,6 @@ export type TripRoomAllocationSummaryResponseAccommodation = {
   type: string;
 } | null;
 
-export interface TripRoomAllocationSummaryResponse {
-  accommodation: TripRoomAllocationSummaryResponseAccommodation;
-  allocationSummary: RoomAllocationSummary;
-}
-
 export type AccommodationRoomStatus =
   (typeof AccommodationRoomStatus)[keyof typeof AccommodationRoomStatus];
 
@@ -1899,6 +1899,12 @@ export interface AccommodationRoom {
   available: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TripRoomAllocationSummaryResponse {
+  accommodation: TripRoomAllocationSummaryResponseAccommodation;
+  rooms: AccommodationRoom[];
+  allocationSummary: RoomAllocationSummary;
 }
 
 export type RoomAvailability = AccommodationRoom;

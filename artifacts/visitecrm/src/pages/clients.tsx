@@ -6,8 +6,11 @@ import {
   useListPipelineStages, useListTrips, useListUsers,
   useCreateDeal, useListPayments, useCreateReservation,
   useCalculateCommission, useGetMe, useDeleteClient,
+  useListAccommodations, useGetTripRoomAllocationSummary,
+  useListReservations, useListPassengers, useGetReservationRoomAssignments,
+  useUpdateReservationRoomAssignments,
 } from "@workspace/api-client-react";
-import type { Client } from "@workspace/api-client-react";
+import type { Client, AccommodationRoom } from "@workspace/api-client-react";
 import { Client360Modal } from "@/components/client360-modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -265,7 +268,6 @@ const GENDER_OPTIONS = [
 const ORIGIN_OPTIONS = ["Indicação", "Instagram", "WhatsApp", "Google", "Cliente Antigo", "Evento", "Outros"];
 const MARITAL_OPTIONS = ["Solteiro(a)", "Casado(a)", "Divorciado(a)", "Viúvo(a)"];
 const TRAVEL_TYPE_OPTIONS = ["Casal", "Bate-volta", "Excursão", "Trilha", "Corporativo"];
-const ROOM_TYPE_OPTIONS = ["Quarto Casal", "Quarto Triplo", "Quarto Quádruplo", "Quarto Compartilhado", "Não se aplica"];
 const TRAVEL_REASON_OPTIONS = ["Lazer", "Aniversário", "Família", "Romance", "Negócios"];
 const TRAVEL_INTERESTS_OPTIONS = ["Gastronomia", "Natureza", "Cultura e história", "Compras", "Aventura", "Religiosidade", "Descanso", "Ecoturismo", "Arte e música", "Fotografia"];
 const PAYMENT_METHOD_OPTIONS = ["Dinheiro", "PIX", "Cartão Débito", "Cartão Crédito", "Boleto", "Transferência"];
@@ -315,7 +317,7 @@ interface ClientFormData {
   instagram: string; pipelineStage: string; classification: string; status: string;
   origin: string; maritalStatus: string;
   tripId: string; boardingPoint: string; seatNumber: string;
-  travelType: string; roomType: string; hasInsurance: boolean; isGratuidade: boolean;
+  travelType: string; accommodationId: string; roomId: string; hasInsurance: boolean; isGratuidade: boolean;
   hasMinorChild: boolean; isOnLap: boolean; travelReason: string;
   ticketPrice: string; quantity: string; discount: string; paymentMethod: string;
   amountPaid: string; commission: string; consultantId: string;
@@ -333,7 +335,7 @@ const EMPTY_CLIENT: ClientFormData = {
   addressCity: "", addressState: "", instagram: "", pipelineStage: "none",
   classification: "lead", status: "active", origin: "none", maritalStatus: "none",
   tripId: "none", boardingPoint: "none", seatNumber: "", travelType: "none",
-  roomType: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
+  accommodationId: "none", roomId: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
   ticketPrice: "", quantity: "1", discount: "", paymentMethod: "none", amountPaid: "", commission: "", consultantId: "none",
   installments: "1",
   internalRating: 0, observations: "",
@@ -361,7 +363,7 @@ function clientToForm(c: Client): ClientFormData {
     classification: c.classification ?? "lead", status: c.status ?? "active",
     origin: c.origin ?? "none", maritalStatus: c.maritalStatus ?? "none",
     tripId: "none", boardingPoint: "none", seatNumber: "", travelType: "none",
-    roomType: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
+    accommodationId: "none", roomId: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
     ticketPrice: "", quantity: "1", discount: "", paymentMethod: "none", amountPaid: "", commission: "", consultantId: "none",
   installments: "1",
     internalRating: c.internalRating ?? 0, observations: c.observations ?? "",
@@ -439,10 +441,14 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const { data: tripsData } = useListTrips({ limit: 100 });
   const { data: usersData } = useListUsers();
   const { data: me } = useGetMe();
+  const { data: accommodationsData } = useListAccommodations({
+    query: { queryKey: ["client-modal-accommodations"], staleTime: 0, refetchOnMount: "always" },
+  });
   const createClient = useCreateClient();
   const updateClient = useUpdateClient();
   const createDeal = useCreateDeal();
   const createReservation = useCreateReservation();
+  const updateReservationRoomAssignments = useUpdateReservationRoomAssignments();
 
   useEffect(() => {
     if (open) {
@@ -456,7 +462,6 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   }, [open, editClient]);
 
   const isEditing = !!editClient;
-  const isPending = createClient.isPending || updateClient.isPending || createDeal.isPending || createReservation.isPending;
   const set = (key: keyof ClientFormData) => (val: string) => setForm(prev => ({ ...prev, [key]: val }));
   const whatsappHasInvalidFormat =
     form.whatsapp.length > 0 && !isValidBrazilWhatsAppPhone(form.whatsapp);
@@ -464,7 +469,77 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const trips = tripsData?.data ?? [];
   const users = usersData ?? [];
   const selectedTrip = trips.find(t => t.id === form.tripId);
+  const reservationsForTripQuery = useListReservations(
+    {
+      clientId: editClient?.id,
+      tripId: form.tripId !== "none" ? form.tripId : undefined,
+      limit: 10,
+    },
+    {
+      query: {
+        queryKey: ["client-modal-reservations", editClient?.id, form.tripId],
+        enabled: isEditing && form.tripId !== "none",
+        staleTime: 0,
+        refetchOnMount: "always",
+      },
+    },
+  );
+  const existingReservation = reservationsForTripQuery.data?.data.find(
+    reservation => !["cancelled", "refunded"].includes(reservation.status),
+  );
+  const existingReservationId = existingReservation?.id ?? "";
+  const existingPassengersQuery = useListPassengers(existingReservationId, {
+    query: { queryKey: ["client-modal-passengers", existingReservationId], enabled: !!existingReservationId },
+  });
+  const existingPassengers = existingPassengersQuery.data ?? [];
+  const { data: existingRoomAssignments } = useGetReservationRoomAssignments(existingReservationId, {
+    query: { queryKey: ["client-modal-room-assignments", existingReservationId], enabled: !!existingReservationId },
+  });
+  const { data: tripRoomData, isLoading: isLoadingTripRooms } = useGetTripRoomAllocationSummary(
+    form.tripId !== "none" ? form.tripId : "",
+    {
+      query: {
+        queryKey: ["client-modal-trip-room-summary", form.tripId],
+        enabled: form.tripId !== "none",
+        staleTime: 0,
+        refetchOnMount: "always",
+      },
+    },
+  );
+  const isLoadingRoomAssignmentData =
+    isEditing
+    && form.tripId !== "none"
+    && (reservationsForTripQuery.isLoading || (!!existingReservationId && existingPassengersQuery.isLoading));
+  const isPending = createClient.isPending
+    || updateClient.isPending
+    || createDeal.isPending
+    || createReservation.isPending
+    || updateReservationRoomAssignments.isPending
+    || isLoadingRoomAssignmentData;
+  const accommodations = (accommodationsData ?? []).filter(a => a.status === "active");
+  const accommodationRooms = (tripRoomData?.rooms ?? []) as AccommodationRoom[];
+  const availableRooms = accommodationRooms.filter(room => room.status === "active" && room.isActive !== false);
+  const selectedAccommodation = accommodations.find(a => a.id === form.accommodationId);
   const boardingPoints = (selectedTrip?.boardingPoints ?? []) as Array<{ id: string; name: string }>;
+
+  useEffect(() => {
+    if (!existingReservationId || !existingRoomAssignments) return;
+    const roomId = existingRoomAssignments.assignments[0]?.roomId ?? "none";
+    setForm(prev => prev.roomId === "none" ? { ...prev, roomId } : prev);
+  }, [existingReservationId, existingRoomAssignments]);
+
+  useEffect(() => {
+    if (form.tripId === "none") {
+      setForm(prev => ({ ...prev, accommodationId: "none", roomId: "none" }));
+      return;
+    }
+    const linkedAccommodationId = selectedTrip?.accommodationId ?? "none";
+    setForm(prev => ({
+      ...prev,
+      accommodationId: linkedAccommodationId,
+      roomId: prev.accommodationId === linkedAccommodationId ? prev.roomId : "none",
+    }));
+  }, [form.tripId, selectedTrip?.accommodationId]);
 
   useEffect(() => {
     if (form.tripId && form.tripId !== "none" && selectedTrip) {
@@ -486,6 +561,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const quantity = parseInt(form.quantity) || 1;
   const discount = parseFloat(form.discount) || 0;
   const amountPaid = parseFloat(form.amountPaid) || 0;
+  const selectedRoomId = form.roomId !== "none" ? form.roomId : undefined;
   const valorTotal = ticketPrice * quantity;
   const valorComDesconto = Math.max(0, valorTotal - discount);
   const faltaPagar = valorComDesconto - amountPaid;
@@ -563,26 +639,39 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
         const consultantId = form.consultantId !== "none" ? form.consultantId : null;
         if (hasTrip && (ticketPrice > 0 || form.isGratuidade || form.isOnLap)) {
           try {
-            await createReservation.mutateAsync({
-              data: {
-                tripId: form.tripId,
-                clientId: savedId,
-                seats: selectedSeats,
-                totalValue: valorComDesconto,
-                paidValue: amountPaid || undefined,
-                discountTotal: discount > 0 ? discount : undefined,
-                paymentMethod: form.paymentMethod !== "none" ? form.paymentMethod.toLowerCase().replace(/ /g, "_") : undefined,
-                installments: parseInt(form.installments) || 1,
-                commissionAmount: commission > 0 ? commission : null,
-                sellerId: consultantId,
-                notes: form.observations || undefined,
-                isGratuidade: form.isGratuidade || undefined,
-                isOnLap: form.isOnLap || undefined,
-                isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
-              },
-            });
+            if (existingReservation?.id) {
+              await updateReservationRoomAssignments.mutateAsync({
+                reservationId: existingReservation.id,
+                data: {
+                  assignments: existingPassengers.map(passenger => ({
+                    passengerId: passenger.id,
+                    roomId: selectedRoomId ?? null,
+                  })),
+                },
+              });
+            } else {
+              await createReservation.mutateAsync({
+                data: {
+                  tripId: form.tripId,
+                  clientId: savedId,
+                  seats: selectedSeats,
+                  totalValue: valorComDesconto,
+                  paidValue: amountPaid || undefined,
+                  discountTotal: discount > 0 ? discount : undefined,
+                  paymentMethod: form.paymentMethod !== "none" ? form.paymentMethod.toLowerCase().replace(/ /g, "_") : undefined,
+                  installments: parseInt(form.installments) || 1,
+                  commissionAmount: commission > 0 ? commission : null,
+                  sellerId: consultantId,
+                  notes: form.observations || undefined,
+                  isGratuidade: form.isGratuidade || undefined,
+                  isOnLap: form.isOnLap || undefined,
+                  isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
+                  roomId: selectedRoomId,
+                },
+              });
+            }
           } catch {
-            // Reservation creation failure should not block client update
+            // Reservation or room sync failure should not block client update.
           }
         }
       } else {
@@ -625,6 +714,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                   isGratuidade: form.isGratuidade || undefined,
                   isOnLap: form.isOnLap || undefined,
                   isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
+                  roomId: selectedRoomId,
                 },
               });
               createdReservationId = resResult.id;
@@ -977,14 +1067,61 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Pacote / Quarto</Label>
-                <Select value={form.roomType} onValueChange={set("roomType")}>
-                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                <Label>Hospedagem da viagem</Label>
+                <Select
+                  value={form.accommodationId}
+                  onValueChange={v => setForm(prev => ({ ...prev, accommodationId: v, roomId: "none" }))}
+                  disabled={!selectedTrip || !!selectedTrip.accommodationId}
+                >
+                  <SelectTrigger><SelectValue placeholder="Selecionar hospedagem..." /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Não especificado</SelectItem>
-                    {ROOM_TYPE_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    <SelectItem value="none">Não especificada</SelectItem>
+                    {accommodations.map(accommodation => (
+                      <SelectItem key={accommodation.id} value={accommodation.id}>
+                        {accommodation.name}{accommodation.city ? ` — ${accommodation.city}` : ""}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                {selectedTrip?.accommodationId ? (
+                  <p className="text-xs text-muted-foreground">
+                    Hospedagem definida na viagem: {selectedAccommodation?.name ?? tripRoomData?.accommodation?.name ?? "carregando..."}.
+                  </p>
+                ) : selectedTrip ? (
+                  <p className="text-xs text-amber-600">
+                    Vincule uma hospedagem à viagem antes de atribuir um quarto.
+                  </p>
+                ) : null}
+              </div>
+              <div className="space-y-2">
+                <Label>Pacote / Quarto</Label>
+                <Select
+                  value={form.roomId}
+                  onValueChange={set("roomId")}
+                  disabled={!selectedTrip?.accommodationId || isLoadingTripRooms || availableRooms.length === 0}
+                >
+                  <SelectTrigger><SelectValue placeholder={isLoadingTripRooms ? "Carregando quartos..." : "Selecionar quarto..."} /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Não especificado</SelectItem>
+                    {availableRooms.map(room => {
+                      const isFull = room.available < quantity && room.id !== form.roomId;
+                      return (
+                        <SelectItem key={room.id} value={room.id} disabled={isFull}>
+                          {room.name} · capacidade {room.capacity} · {Math.max(0, room.available)} vaga(s)
+                          {room.pricePerNight != null ? ` · ${formatCurrency(room.pricePerNight)}/noite` : ""}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+                {selectedTrip?.accommodationId && !isLoadingTripRooms && availableRooms.length === 0 && (
+                  <p className="text-xs text-muted-foreground">Nenhum quarto ativo cadastrado nesta hospedagem.</p>
+                )}
+                {form.roomId !== "none" && (
+                  <p className="text-xs text-muted-foreground">
+                    A ocupação será validada novamente no salvamento para evitar overbooking.
+                  </p>
+                )}
               </div>
               <div className="col-span-2 flex flex-col gap-3 pt-1">
                 <div className="flex items-center gap-3">
