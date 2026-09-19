@@ -76,7 +76,15 @@ vi.mock("@workspace/db", () => ({
   referralSettingsTable: {},
   referralTrackingTable: {},
   referralCampaignsTable: {},
-  emailLogsTable: {},
+  emailLogsTable: {
+    id: "id",
+    tenantId: "tenant_id",
+    referralId: "referral_id",
+    notificationType: "notification_type",
+    status: "status",
+    errorMessage: "error_message",
+    createdAt: "created_at",
+  },
   reservationsTable: {},
   storeOrdersTable: {},
   paymentsTable: {},
@@ -847,6 +855,43 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
 
     expect(res.status).toBe(404);
     expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
+  });
+
+  it("resolves D-7 and D-1 status by notification type, not translated subject", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ id: "ref-001" }]))
+      .mockImplementationOnce(() => makeChain([
+        { id: "log-d1", notificationType: "expiry_warning_1", status: "failed", errorMessage: "provider unavailable", createdAt: new Date("2026-09-02") },
+        { id: "log-d7", notificationType: "expiry_warning_7", status: "sent", errorMessage: null, createdAt: new Date("2026-09-01") },
+        { id: "legacy", notificationType: null, status: "sent", errorMessage: null, createdAt: new Date("2026-09-03") },
+      ]));
+
+    const res = await request(buildApp())
+      .get("/api/referrals/ref-001/expiry-email-status");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      d7: { status: "sent", errorMessage: null, sentAt: "2026-09-01T00:00:00.000Z" },
+      d1: { status: "failed", errorMessage: "provider unavailable", sentAt: "2026-09-02T00:00:00.000Z" },
+    });
+  });
+
+  it("resolves bonus-release status by the persisted notification type", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ code: "JOAO123", referrerClientEmail: "joao@example.com" }]))
+      .mockImplementationOnce(() => makeChain([
+        { id: "log-bonus", notificationType: "bonus_released", status: "sent", errorMessage: null, createdAt: new Date("2026-09-04") },
+      ]));
+
+    const res = await request(buildApp())
+      .get("/api/referrals/ref-001/bonus-release-email-status");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      bonusRelease: { status: "sent", errorMessage: null, sentAt: "2026-09-04T00:00:00.000Z" },
+    });
   });
 
   it("reuses the request key for repeated clicks while allowing a later attempt to get a new key", async () => {

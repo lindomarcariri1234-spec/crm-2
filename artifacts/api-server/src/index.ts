@@ -28,6 +28,7 @@ import { runBirthdayCron } from "./lib/birthday";
 import { processNpsDispatch, processInstallmentDueReminders, processTrialExpiryNotifications } from "./workers/reminder.worker";
 import { retryPendingAttendanceReplies } from "./services/whatsapp-attendance";
 import { runUploadThingOrphanCleanup } from "./lib/uploadthing-orphan-cleanup";
+import { runReferralAttemptLogCleanup } from "./lib/referral-attempt-log-cleanup";
 import { runExpiredReservationsCron } from "./lib/expired-reservations";
 import { runPipelineTripEndedCron } from "./services/pipeline-automation";
 import { calculateScoresForAllTenants } from "./lib/client-scores";
@@ -311,6 +312,11 @@ applyMigrations()
       scheduleDistributedCron("abandoned-referrals", "0 5 * * *", async () => {
         logger.info("[abandoned-referrals] Daily sweep triggered");
         await runAbandonedOrderReferralCleanup();
+      }, { timezone: "America/Sao_Paulo" });
+
+      scheduleDistributedCron("referral-attempt-log-cleanup", "30 5 * * *", async () => {
+        logger.info("[referral-attempt-log-cleanup] Daily retention sweep triggered");
+        await runReferralAttemptLogCleanup();
       }, { timezone: "America/Sao_Paulo" });
 
       scheduleDistributedCron("seat-reconciliation", "0 4 * * *", async () => {

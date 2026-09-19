@@ -937,7 +937,7 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
 
     const logs = await db.select({
       id: emailLogsTable.id,
-      subject: emailLogsTable.subject,
+      notificationType: emailLogsTable.notificationType,
       status: emailLogsTable.status,
       errorMessage: emailLogsTable.errorMessage,
       createdAt: emailLogsTable.createdAt,
@@ -945,12 +945,13 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
       .where(and(
         eq(emailLogsTable.tenantId, me.tenantId),
         eq(emailLogsTable.referralId, row.id),
+        inArray(emailLogsTable.notificationType, ["expiry_warning_7", "expiry_warning_1"]),
       ))
       .orderBy(desc(emailLogsTable.createdAt))
       .limit(50);
 
-    const d7Logs = logs.filter((l) => l.subject.includes("7 dias"));
-    const d1Logs = logs.filter((l) => l.subject.includes("1 dia"));
+    const d7Logs = logs.filter((l) => l.notificationType === "expiry_warning_7");
+    const d1Logs = logs.filter((l) => l.notificationType === "expiry_warning_1");
 
     const toEntry = (log: typeof logs[0] | undefined) =>
       log ? { status: log.status, errorMessage: log.errorMessage ?? null, sentAt: log.createdAt } : null;
@@ -986,13 +987,12 @@ router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: N
       return;
     }
 
-    // The bonus-release email is enqueued with the referral id stamped on the
-    // email log (see enqueueReferralBonusReleasedEmail) and a distinctive
-    // subject ("…disponível para resgate…"). Filter on both so we never pick up
-    // an expiry-warning email (which also stamps referralId) for this referral.
+    // The bonus-release email is enqueued with the referral id and stable
+    // notification type stamped on the email log. Filtering by type prevents
+    // an expiry-warning email for the same referral from being selected.
     const logs = await db.select({
       id: emailLogsTable.id,
-      subject: emailLogsTable.subject,
+      notificationType: emailLogsTable.notificationType,
       status: emailLogsTable.status,
       errorMessage: emailLogsTable.errorMessage,
       createdAt: emailLogsTable.createdAt,
@@ -1000,7 +1000,7 @@ router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: N
       .where(and(
         eq(emailLogsTable.tenantId, me.tenantId),
         eq(emailLogsTable.referralId, req.params.id),
-        ilike(emailLogsTable.subject, `%disponível para resgate%`),
+        eq(emailLogsTable.notificationType, "bonus_released"),
       ))
       .orderBy(desc(emailLogsTable.createdAt))
       .limit(50);

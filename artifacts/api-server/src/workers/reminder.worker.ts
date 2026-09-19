@@ -974,6 +974,7 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
       id: emailLogsTable.id,
       tenantId: emailLogsTable.tenantId,
       referralId: emailLogsTable.referralId,
+      notificationType: emailLogsTable.notificationType,
       subject: emailLogsTable.subject,
       recipient: emailLogsTable.recipient,
     })
@@ -983,7 +984,7 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
         eq(emailLogsTable.status, "failed"),
         isNotNull(emailLogsTable.referralId),
         gte(emailLogsTable.createdAt, twoHoursAgo),
-        like(emailLogsTable.subject, "⏰%"),
+          inArray(emailLogsTable.notificationType, ["expiry_warning_7", "expiry_warning_1"]),
       ),
     );
 
@@ -1008,16 +1009,21 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
 
   for (const log of toRetry) {
     const referralId = log.referralId!;
+    const notificationType = log.notificationType;
+    if (notificationType !== "expiry_warning_7" && notificationType !== "expiry_warning_1") {
+      skipped++;
+      continue;
+    }
 
     // Fetch all email_log entries for this referral in the 2-hour window.
     const windowLogs = await db
-      .select({ status: emailLogsTable.status, isAutoRetry: emailLogsTable.isAutoRetry })
+        .select({ status: emailLogsTable.status, isAutoRetry: emailLogsTable.isAutoRetry, notificationType: emailLogsTable.notificationType })
       .from(emailLogsTable)
       .where(
         and(
           eq(emailLogsTable.referralId, referralId),
           gte(emailLogsTable.createdAt, twoHoursAgo),
-          like(emailLogsTable.subject, "⏰%"),
+          inArray(emailLogsTable.notificationType, ["expiry_warning_7", "expiry_warning_1"]),
         ),
       );
 
@@ -1118,6 +1124,7 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
       tenantId: log.tenantId,
       referralId,
       recipient: referrer.email ?? "",
+      notificationType: log.notificationType,
       subject: log.subject,
       status: "queued",
       isAutoRetry: true,
@@ -1126,7 +1133,7 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
     const referralHtml = `<p>Olá, <strong>${escapeHtml(referrer.name ?? referrer.email)}</strong>!</p><p>Seu código de indicação <strong>${escapeHtml(referral.code)}</strong> expira em <strong>${escapeHtml(formattedDate)}</strong> (${daysLeft} dias).</p><p>Compartilhe: <a href="${shareUrl}">${shareUrl}</a></p>`;
     const result = await dispatchOutboundMessage({
       tenantId: log.tenantId,
-      eventType: "referral_expiring",
+      eventType: notificationType,
       idempotencyKey: `referral_expiring:${referralId}:retry_${windowLogs.length + 1}`,
       recipient: { type: "client", id: referral.referrerId },
       email: {
@@ -1137,7 +1144,7 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
       whatsapp: {
         text: `⏰ Seu código ${referral.code} expira em ${formattedDate} (${daysLeft} dias).\n\nCompartilhe com seus amigos: ${defaultShareMessage}`,
       },
-      metadata: { referralId, autoRetry: true, attempt: windowLogs.length + 1 },
+        metadata: { referralId, autoRetry: true, attempt: windowLogs.length + 1, notificationType },
     });
 
     await db
@@ -1225,15 +1232,36 @@ async function processExpiredReferralNotifications(): Promise<void> {
       const [referrer] = await db.select({ name: clientsTable.name, email: clientsTable.email })
         .from(clientsTable).where(and(eq(clientsTable.id, referral.referrerId), eq(clientsTable.tenantId, referral.tenantId))).limit(1);
       const [tenant] = await db.select({ name: tenantsTable.name }).from(tenantsTable).where(eq(tenantsTable.id, referral.tenantId)).limit(1);
-      await dispatchOutboundMessage({
+      const notificationType = "expired";
+      const subject = "⏰ Seu código de indicação expirou";
+      const outbound = await dispatchOutboundMessage({
         tenantId: referral.tenantId,
-        eventType: "referral_expired",
+        eventType: notificationType,
         idempotencyKey: `referral_expired:${referral.id}:expired`,
         recipient: { type: "client", id: referral.referrerId },
-        email: { subject: "⏰ Seu código de indicação expirou", html: `<p>Olá, ${escapeHtml(referrer?.name ?? "cliente")}!</p><p>Seu código de indicação <strong>${escapeHtml(referral.code)}</strong> expirou.</p>`, senderName: tenant?.name },
+        email: { subject, html: `<p>Olá, ${escapeHtml(referrer?.name ?? "cliente")}!</p><p>Seu código de indicação <strong>${escapeHtml(referral.code)}</strong> expirou.</p>`, senderName: tenant?.name },
         whatsapp: { text: `⏰ Seu código de indicação ${referral.code} expirou.` },
-        metadata: { referralId: referral.id, window: "expired" },
+        metadata: { referralId: referral.id, window: "expired", notificationType },
       });
+      const emailDelivery = outbound.deliveries.find((delivery) => delivery.channel === "email");
+      if (outbound.created && emailDelivery && referrer?.email) {
+        await db.insert(emailLogsTable).values({
+          id: generateId(),
+          tenantId: referral.tenantId,
+          referralId: referral.id,
+          notificationType,
+          outboundMessageId: outbound.message.id,
+          recipient: referrer.email,
+          subject,
+          status: emailDelivery.status === "accepted"
+            ? "sent"
+            : emailDelivery.status === "failed" || emailDelivery.status === "skipped"
+            ? "failed"
+            : "queued",
+          messageId: emailDelivery.externalId ?? null,
+          errorMessage: emailDelivery.lastError ?? emailDelivery.skippedReason ?? null,
+        });
+      }
       notified++;
     } catch (err) {
       errors++;
@@ -1346,22 +1374,49 @@ async function processExpiringSoonReferralNotifications(): Promise<void> {
 
       // Resolve the client for both-channel ledger delivery.
       const [referrer] = await db
-        .select({ name: clientsTable.name })
+        .select({ name: clientsTable.name, email: clientsTable.email })
         .from(clientsTable)
         .where(and(eq(clientsTable.id, referral.referrerId), eq(clientsTable.tenantId, referral.tenantId)))
         .limit(1);
 
+      if (!referrer?.email) {
+        skippedNoEmail++;
+        continue;
+      }
+
       const [tenant] = await db.select({ name: tenantsTable.name }).from(tenantsTable).where(eq(tenantsTable.id, referral.tenantId)).limit(1);
       const daysLeft = windowLabel;
-      await dispatchOutboundMessage({
+      const notificationType = windowLabel === 7 ? "expiry_warning_7" : "expiry_warning_1";
+      const subject = `⏰ Seu código expira em ${daysLeft} dia${daysLeft === 1 ? "" : "s"}`;
+      const outbound = await dispatchOutboundMessage({
         tenantId: referral.tenantId,
-        eventType: "referral_expiring",
+        eventType: notificationType,
         idempotencyKey: `referral_expiring:${referral.id}:d${windowLabel}`,
         recipient: { type: "client", id: referral.referrerId },
-        email: { subject: `⏰ Seu código expira em ${daysLeft} dia${daysLeft === 1 ? "" : "s"}`, html: `<p>Olá, ${escapeHtml(referrer?.name ?? "cliente")}!</p><p>Seu código <strong>${escapeHtml(referral.code)}</strong> expira em ${daysLeft} dias.</p>`, senderName: tenant?.name },
+        email: { subject, html: `<p>Olá, ${escapeHtml(referrer.name ?? "cliente")}!</p><p>Seu código <strong>${escapeHtml(referral.code)}</strong> expira em ${daysLeft} dias.</p>`, senderName: tenant?.name },
         whatsapp: { text: `⏰ Seu código ${referral.code} expira em ${daysLeft} dia${daysLeft === 1 ? "" : "s"}.` },
-        metadata: { referralId: referral.id, window: windowLabel },
+        metadata: { referralId: referral.id, window: windowLabel, notificationType },
       });
+
+      const emailDelivery = outbound.deliveries.find((delivery) => delivery.channel === "email");
+      if (outbound.created && emailDelivery) {
+        await db.insert(emailLogsTable).values({
+          id: generateId(),
+          tenantId: referral.tenantId,
+          referralId: referral.id,
+          recipient: referrer.email,
+          notificationType,
+          outboundMessageId: outbound.message.id,
+          subject,
+          status: emailDelivery.status === "accepted"
+            ? "sent"
+            : emailDelivery.status === "failed" || emailDelivery.status === "skipped"
+            ? "failed"
+            : "queued",
+          messageId: emailDelivery.externalId ?? null,
+          errorMessage: emailDelivery.lastError ?? emailDelivery.skippedReason ?? null,
+        });
+      }
 
       // Task #151: mark the warning as sent on the referral row.
       await db

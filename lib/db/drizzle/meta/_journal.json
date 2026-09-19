@@ -638,6 +638,20 @@
       "when": 1809800000000,
       "tag": "0091_referral_validated_tenant_fks",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1809900000000,
+      "tag": "0092_referral_notification_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1809910000000,
+      "tag": "0093_referral_reversal_notification_type",
+      "breakpoints": true
     }
   ]
 }

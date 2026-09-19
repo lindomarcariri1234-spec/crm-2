@@ -28,10 +28,11 @@ async function dispatchReferralOutbound(
   referralId?: string,
   reservationId?: string | null,
 ): Promise<void> {
+  const scopedKey = referralId ? `${key}:referral:${referralId}` : key;
   const outbound = await dispatchOutboundMessage({
     tenantId,
     eventType,
-    idempotencyKey: `referral:${key}:${eventType}`,
+    idempotencyKey: `referral:${scopedKey}:${eventType}`,
     recipient: recipient.id ? { type: "client", id: recipient.id } : {
       type: "direct", name: recipient.name, email: recipient.email, whatsapp: recipient.whatsapp,
     },
@@ -40,7 +41,15 @@ async function dispatchReferralOutbound(
     origin: `referral-${eventType}`,
     metadata: { ...metadata, referralId, reservationId },
   });
-  await projectOutboundEmailLog(tenantId, reservationId ?? null, recipient.email, subject, outbound, referralId ?? null);
+  await projectOutboundEmailLog(
+    tenantId,
+    reservationId ?? null,
+    recipient.email,
+    subject,
+    outbound,
+    referralId ?? null,
+    eventType,
+  );
 
   // The idempotency key intentionally returns the existing message on a
   // repeated callback. If its provider attempt was exhausted, reopen that
@@ -58,7 +67,7 @@ async function dispatchReferralOutbound(
           eq(emailLogsTable.tenantId, tenantId),
           referralId ? eq(emailLogsTable.referralId, referralId) : isNull(emailLogsTable.referralId),
           reservationId ? eq(emailLogsTable.reservationId, reservationId) : isNull(emailLogsTable.reservationId),
-          eq(emailLogsTable.subject, subject),
+          eq(emailLogsTable.notificationType, eventType),
         ));
     }
   }
@@ -71,6 +80,7 @@ async function projectOutboundEmailLog(
   subject: string,
   outbound: Awaited<ReturnType<typeof dispatchOutboundMessage>>,
   referralId: string | null = null,
+  notificationType: string | null = null,
 ): Promise<void> {
   if (!outbound.created) return;
   const delivery = outbound.deliveries.find((item) => item.channel === "email");
@@ -81,6 +91,7 @@ async function projectOutboundEmailLog(
     tenantId,
     reservationId,
     referralId,
+    notificationType,
     outboundMessageId: outbound.message.id,
     recipient,
     subject,
@@ -1018,7 +1029,8 @@ export async function enqueueReferralExpiringSoonEmail(
   const emailLogId = generateId();
   const daysLabel = props.daysLeft <= 1 ? "1 dia" : `${props.daysLeft} dias`;
   const subject = `⏰ Seu código ${props.referralCode} vence em ${daysLabel} — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, "expiring_soon", clientId ?? props.referrerEmail, {
+  const notificationType = props.daysLeft <= 1 ? "expiry_warning_1" : "expiry_warning_7";
+  await dispatchReferralOutbound(tenantId, notificationType, clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Seu código vence em ${escapeHtmlEmail(daysLabel)}</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu código <strong>${escapeHtmlEmail(props.referralCode)}</strong> vence em ${escapeHtmlEmail(props.expiresAt)}. Compartilhe agora para ganhar seu bônus.</p>${props.shareUrl ? `<p><a href="${props.shareUrl}">Compartilhar código</a></p>` : ""}`,

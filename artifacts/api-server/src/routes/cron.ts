@@ -10,6 +10,7 @@ import { runSeatReconciliationCron } from "../lib/seat-reconciliation";
 import { runStripeHealthCheckCron } from "../lib/stripe-health-check";
 import { runCampaignAutomationCron } from "../lib/campaign-automation";
 import { runUploadThingOrphanCleanup } from "../lib/uploadthing-orphan-cleanup";
+import { runReferralAttemptLogCleanup } from "../lib/referral-attempt-log-cleanup";
 import { runExpiredReservationsCron } from "../lib/expired-reservations";
 import { retryPendingReservationConfirmedWhatsApps } from "../services/checkout/reservation-confirmation-outbox";
 import { retryPendingAttendanceReplies } from "../services/whatsapp-attendance";
@@ -52,6 +53,7 @@ const JOBS: Record<string, () => Promise<unknown>> = {
   "installment-due-reminder": processInstallmentDueReminders,
   "trial-expiry": processTrialExpiryNotifications,
   "uploadthing-orphan": runUploadThingOrphanCleanup,
+  "referral-attempt-log-cleanup": runReferralAttemptLogCleanup,
   // Sub-daily jobs — Vercel Hobby cannot schedule these natively (see
   // VERCEL_DEPLOYMENT.md). Endpoints exist regardless so Pro-plan cron or an
   // external scheduler (cron-job.org, GitHub Actions, Upstash QStash, etc.)
