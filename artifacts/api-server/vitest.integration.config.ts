@@ -11,6 +11,7 @@ export default defineConfig({
       "src/__tests__/reservation-referral-payment-reversal-integration.test.ts",
       "src/__tests__/unlink-client-from-trips-concurrency-integration.test.ts",
       "src/__tests__/room-assignments.integration.test.ts",
+      "src/__tests__/accommodation-capacity.integration.test.ts",
     ],
   },
 });

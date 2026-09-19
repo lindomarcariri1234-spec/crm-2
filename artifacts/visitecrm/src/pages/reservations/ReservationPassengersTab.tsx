@@ -14,14 +14,21 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { AlertCircle, BedDouble, CheckCircle, LogIn, Pencil, RotateCcw, Trash2, UserPlus, Users } from "lucide-react";
 import { AGE_CATEGORY_LABELS } from "./constants";
 import { PassengerForm } from "./PassengerForm";
 import { formatDate } from "@/lib/utils";
 import { RoomAllocationSummaryTable } from "./RoomAllocationSummaryTable";
+import {
+  formatRoomCapacityError,
+  getRoomCapacityError,
+  type RoomCapacityError,
+} from "@/lib/room-capacity";
 
 const PLACEHOLDER_NAME = "A preencher";
+const ROOM_AVAILABILITY_REFRESH_INTERVAL_MS = 15_000;
 
 export function ReservationPassengersTab({ reservationId }: { reservationId: string }) {
   const [addOpen, setAddOpen] = useState(false);
@@ -37,16 +44,22 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
   const deletePassenger = useDeletePassenger();
   const checkInPassenger = useCheckInPassenger();
   const undoCheckInPassenger = useUndoCheckInPassenger();
-  const { data: roomData, isLoading: roomsLoading } = useGetReservationRoomAssignments(reservationId, {
-    query: { queryKey: ["reservation-room-assignments", reservationId] },
+  const { data: roomData, isLoading: roomsLoading, isFetching: roomsFetching } = useGetReservationRoomAssignments(reservationId, {
+    query: {
+      queryKey: ["reservation-room-assignments", reservationId],
+      refetchInterval: ROOM_AVAILABILITY_REFRESH_INTERVAL_MS,
+      refetchOnWindowFocus: true,
+    },
   });
   const updateRoomAssignments = useUpdateReservationRoomAssignments();
   const [roomSelections, setRoomSelections] = useState<Record<string, string>>({});
+  const [roomCapacityError, setRoomCapacityError] = useState<RoomCapacityError | null>(null);
+  const [hasPendingRoomChanges, setHasPendingRoomChanges] = useState(false);
 
   useEffect(() => {
-    if (!roomData) return;
+    if (!roomData || hasPendingRoomChanges) return;
     setRoomSelections(Object.fromEntries(roomData.assignments.map(assignment => [assignment.passengerId, assignment.roomId])));
-  }, [roomData]);
+  }, [hasPendingRoomChanges, roomData]);
 
   const handleAdd = async (fd: FormData, ageCategory: string) => {
     await createPassenger.mutateAsync({
@@ -112,6 +125,12 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
   const list = (passengers ?? []) as Passenger[];
   const checkedInCount = list.filter(p => p.checkedInAt).length;
   const placeholderCount = list.filter(p => p.name === PLACEHOLDER_NAME).length;
+  const roomCapacityFeedback = roomCapacityError
+    ? formatRoomCapacityError(
+      roomCapacityError,
+      roomData?.rooms.find(room => room.id === roomCapacityError.roomId)?.name ?? "quarto selecionado",
+    )
+    : null;
 
   return (
     <div className="space-y-4 py-2">
@@ -148,14 +167,19 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
               <BedDouble className="w-4 h-4 mt-0.5 text-indigo-600" />
               <div>
                 <p className="text-sm font-semibold">Hospedagem: {roomData.accommodation.name}</p>
-                <p className="text-xs text-muted-foreground">Escolha um quarto por passageiro. A capacidade é validada no servidor.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Escolha um quarto por passageiro. A capacidade é validada no servidor.
+                    <span data-testid="room-availability-auto-refresh">
+                      {" "}Disponibilidade atualizada automaticamente a cada 15 segundos{roomsFetching ? " (atualizando...)" : ""}; suas escolhas pendentes não são substituídas.
+                    </span>
+                  </p>
               </div>
             </div>
             <Button
               size="sm"
               onClick={async () => {
                 try {
-                  await updateRoomAssignments.mutateAsync({
+                  const updatedRoomData = await updateRoomAssignments.mutateAsync({
                     reservationId,
                     data: {
                       assignments: list.map(passenger => ({
@@ -164,8 +188,23 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
                       })),
                     },
                   });
+                  setRoomSelections(Object.fromEntries(updatedRoomData.assignments.map(assignment => [assignment.passengerId, assignment.roomId])));
+                  setHasPendingRoomChanges(false);
+                  setRoomCapacityError(null);
                   toast({ title: "Quartos atualizados" });
                 } catch (err: unknown) {
+                   const capacityError = getRoomCapacityError(err);
+                  if (capacityError) {
+                    setRoomCapacityError(capacityError);
+                    const roomName = roomData.rooms.find(room => room.id === capacityError.roomId)?.name ?? "quarto selecionado";
+                    const feedback = formatRoomCapacityError(capacityError, roomName);
+                    toast({
+                      title: feedback.title,
+                      description: `${feedback.description} Suas alterações foram mantidas; escolha outro quarto e tente salvar novamente.`,
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const message = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
                     || (err as { message?: string })?.message || "Não foi possível atualizar os quartos";
                   toast({ title: message, variant: "destructive" });
@@ -176,13 +215,30 @@ export function ReservationPassengersTab({ reservationId }: { reservationId: str
               {updateRoomAssignments.isPending ? "Salvando..." : "Salvar quartos"}
             </Button>
           </div>
+          {roomCapacityError && roomCapacityFeedback && (
+            <Alert data-testid="room-capacity-error" variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>{roomCapacityFeedback.title}</AlertTitle>
+              <AlertDescription>
+                {roomCapacityFeedback.description}{" "}
+                Suas alterações foram mantidas. Escolha outro quarto e tente salvar novamente.
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="space-y-2">
             {list.map(passenger => {
               const selectedRoom = roomSelections[passenger.id] || "none";
               return (
                 <div key={passenger.id} className="grid grid-cols-[1fr_220px] items-center gap-3 rounded-md border bg-background px-3 py-2">
                   <span className="text-sm font-medium truncate">{passenger.name}</span>
-                  <Select value={selectedRoom} onValueChange={value => setRoomSelections(current => ({ ...current, [passenger.id]: value === "none" ? "" : value }))}>
+                  <Select
+                    value={selectedRoom}
+                    onValueChange={value => {
+                      setRoomCapacityError(null);
+                      setHasPendingRoomChanges(true);
+                      setRoomSelections(current => ({ ...current, [passenger.id]: value === "none" ? "" : value }));
+                    }}
+                  >
                     <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Sem quarto" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Sem quarto</SelectItem>

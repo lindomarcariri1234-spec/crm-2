@@ -7,9 +7,9 @@
  * back the serialized JSON and assert on the redacted payload.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import pino from "pino";
-import { redactConfig, REDACT_PATHS } from "../lib/logger";
+import { logAuditWriteFailure, logger, redactConfig, REDACT_PATHS } from "../lib/logger";
 
 const REDACTED = "[REDACTED]";
 
@@ -133,5 +133,33 @@ describe("logger redactConfig", () => {
     expect(entry.status).toBe("active");
     expect(entry.tenantId).toBe("tenant-001");
     expect(entry.count).toBe(42);
+  });
+
+  it("logs audit failure metadata without snapshots or exception details", () => {
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+
+    logAuditWriteFailure({
+      operation: "room_updated",
+      tenantId: "tenant-001",
+      entityType: "accommodation_room",
+      entityId: "room-001",
+      requestId: "request-001",
+    }, new Error("private snapshot and SQL details"));
+
+    expect(errorSpy).toHaveBeenCalledWith({
+      operation: "room_updated",
+      tenantId: "tenant-001",
+      entityType: "accommodation_room",
+      entityId: "room-001",
+      requestId: "request-001",
+      errorType: "Error",
+    }, "Audit log write failed; transaction rolled back");
+    const [metadata] = errorSpy.mock.calls[0] as [Record<string, unknown>];
+    expect(metadata).not.toHaveProperty("before");
+    expect(metadata).not.toHaveProperty("after");
+    expect(JSON.stringify(metadata)).not.toContain("private snapshot");
+    expect(JSON.stringify(metadata)).not.toContain("SQL details");
+
+    errorSpy.mockRestore();
   });
 });

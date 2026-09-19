@@ -59,8 +59,239 @@ tags:
     description: Dashboard summary data
   - name: notes
     description: Client notes
+  - name: pms
+    description: Direct lodging PMS operations
 
 paths:
+  /pms/properties:
+    get:
+      operationId: listPmsProperties
+      summary: List active PMS properties
+      tags: [pms]
+      responses:
+        "200":
+          description: Active properties
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PmsProperty"
+
+  /pms/properties/{id}/room-types:
+    get:
+      operationId: listPmsRoomTypes
+      summary: List room types for a PMS property
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsPropertyId"
+      responses:
+        "200":
+          description: Room types
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PmsRoomType"
+
+  /pms/properties/{id}/units:
+    get:
+      operationId: listPmsUnits
+      summary: List active accommodation units for a PMS property
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsPropertyId"
+      responses:
+        "200":
+          description: Accommodation units
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PmsUnit"
+
+  /pms/availability:
+    get:
+      operationId: getPmsAvailability
+      summary: Check direct lodging availability
+      tags: [pms]
+      parameters:
+        - name: propertyId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: checkIn
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: checkOut
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - name: excludeReservationId
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Availability by room type
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsAvailability"
+
+  /pms/reservations:
+    get:
+      operationId: listPmsReservations
+      summary: List direct lodging reservations
+      tags: [pms]
+      parameters:
+        - name: propertyId
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+      responses:
+        "200":
+          description: Reservation summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PmsReservationSummary"
+    post:
+      operationId: createPmsReservation
+      summary: Create a confirmed direct lodging reservation
+      tags: [pms]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePmsReservationBody"
+      responses:
+        "201":
+          description: Created reservation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
+
+  /pms/reservations/{id}:
+    get:
+      operationId: getPmsReservation
+      summary: Get a direct lodging reservation
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsReservationId"
+      responses:
+        "200":
+          description: Reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
+    patch:
+      operationId: updatePmsReservation
+      summary: Update a direct lodging reservation
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsReservationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePmsReservationBody"
+      responses:
+        "200":
+          description: Updated reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
+
+  /pms/reservations/{id}/cancel:
+    post:
+      operationId: cancelPmsReservation
+      summary: Cancel a direct lodging reservation
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsReservationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelPmsReservationBody"
+      responses:
+        "200":
+          description: Cancelled reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
+
+  /pms/reservations/{id}/guests:
+    post:
+      operationId: addPmsReservationGuests
+      summary: Add guests to a direct lodging reservation
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsReservationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [guests]
+              properties:
+                guests:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: "#/components/schemas/PmsGuestInput"
+      responses:
+        "201":
+          description: Updated reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
+
+  /pms/reservations/{id}/assignments:
+    put:
+      operationId: assignPmsReservationUnits
+      summary: Assign or clear accommodation units
+      tags: [pms]
+      parameters:
+        - $ref: "#/components/parameters/PmsReservationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assignments]
+              properties:
+                assignments:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PmsUnitAssignment"
+      responses:
+        "200":
+          description: Updated reservation detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PmsReservationDetail"
   /health:
     get:
       operationId: healthCheck
@@ -5139,6 +5370,24 @@ paths:
       operationId: listAuditLogs
       summary: List audit logs
       tags: [Audit]
+      parameters:
+        - name: accommodationId
+          in: query
+          description: Filter room audit events by accommodation
+          schema:
+            type: string
+        - name: from
+          in: query
+          description: Inclusive start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          description: Inclusive end date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
       responses:
         "200":
           description: List of audit logs
@@ -5686,6 +5935,17 @@ paths:
                 $ref: "#/components/schemas/TestWhatsAppMessageResult"
 
 components:
+  parameters:
+    PmsPropertyId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    PmsReservationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
   schemas:
     PlanStripeHealthItem:
       type: object
@@ -7912,6 +8172,9 @@ components:
           type: ["string", "null"]
         packageType:
           type: ["string", "null"]
+        roomId:
+          type: ["string", "null"]
+          description: ID of the accommodation room assigned to the primary passenger
         hasInsurance:
           type: boolean
         totalValue:
@@ -8008,9 +8271,13 @@ components:
             name: { type: string }
             type: { type: string }
           required: [id, name, type]
+        rooms:
+          type: array
+          items:
+            $ref: "#/components/schemas/AccommodationRoom"
         allocationSummary:
           $ref: "#/components/schemas/RoomAllocationSummary"
-      required: [accommodation, allocationSummary]
+      required: [accommodation, rooms, allocationSummary]
 
     RoomAvailability:
       allOf:
@@ -8736,7 +9003,7 @@ components:
           type: ["string", "null"]
         expectedCloseDate:
           type: ["string", "null"]
-      required: [stageId, title, value]
+      required: [title, value]
 
     UpdateDealBody:
       type: object
@@ -9412,6 +9679,13 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer }
+        description: { type: ["string", "null"] }
+        standardOccupancy: { type: ["integer", "null"] }
+        bedConfiguration: { type: ["string", "null"] }
+        bathroomType: { type: ["string", "null"] }
+        floor: { type: ["string", "null"] }
+        currency: { type: string }
+        isActive: { type: boolean }
         pricePerNight: { type: number, nullable: true }
         status: { type: string, enum: [active, inactive] }
         occupied: { type: integer }
@@ -9426,6 +9700,12 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer, minimum: 1 }
+        description: { type: string, nullable: true }
+        standardOccupancy: { type: integer, minimum: 1, nullable: true }
+        bedConfiguration: { type: string, nullable: true }
+        bathroomType: { type: string, nullable: true }
+        floor: { type: string, nullable: true }
+        currency: { type: string }
         pricePerNight: { type: number, minimum: 0, nullable: true }
       required: [name, capacity]
 
@@ -9435,8 +9715,15 @@ components:
         name: { type: string }
         category: { type: string }
         capacity: { type: integer, minimum: 1 }
+        description: { type: string, nullable: true }
+        standardOccupancy: { type: integer, minimum: 1, nullable: true }
+        bedConfiguration: { type: string, nullable: true }
+        bathroomType: { type: string, nullable: true }
+        floor: { type: string, nullable: true }
+        currency: { type: string }
         pricePerNight: { type: number, minimum: 0, nullable: true }
         status: { type: string, enum: [active, inactive] }
+        isActive: { type: boolean }
 
     UpdateTripAccommodationBody:
       type: object
@@ -12168,4 +12455,287 @@ components:
           items:
             $ref: "#/components/schemas/SalesCycleTrendPoint"
       required: [totalClients, clientsWithPayment, byChannel, bySeller, trend]
+
+    PmsProperty:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        legacyAccommodationId: { type: [string, "null"] }
+        name: { type: string }
+        legalName: { type: [string, "null"] }
+        tradeName: { type: [string, "null"] }
+        propertyType: { type: string }
+        description: { type: [string, "null"] }
+        documentNumber: { type: [string, "null"] }
+        email: { type: [string, "null"], format: email }
+        phone: { type: [string, "null"] }
+        website: { type: [string, "null"], format: uri }
+        address: { type: [string, "null"] }
+        city: { type: [string, "null"] }
+        state: { type: [string, "null"] }
+        timezone: { type: string }
+        currency: { type: string }
+        locale: { type: string }
+        checkInTime: { type: string }
+        checkOutTime: { type: string }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, tenantId, name, propertyType, timezone, currency, locale, checkInTime, checkOutTime, status, createdAt, updatedAt]
+
+    PmsRoomType:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        propertyId: { type: string }
+        legacyCategory: { type: [string, "null"] }
+        name: { type: string }
+        code: { type: string }
+        description: { type: [string, "null"] }
+        maxOccupancy: { type: integer }
+        baseOccupancy: { type: integer }
+        defaultPrice: { type: [number, "null"] }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, tenantId, propertyId, name, code, maxOccupancy, baseOccupancy, status, createdAt, updatedAt]
+
+    PmsUnit:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        propertyId: { type: string }
+        roomTypeId: { type: string }
+        legacyRoomId: { type: [string, "null"] }
+        unitNumber: { type: string }
+        name: { type: string }
+        floor: { type: [string, "null"] }
+        maxOccupancy: { type: integer }
+        status: { type: string }
+        housekeepingStatus: { type: string }
+        maintenanceStatus: { type: string }
+        roomType:
+          $ref: "#/components/schemas/PmsRoomTypeReference"
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, tenantId, propertyId, roomTypeId, unitNumber, name, maxOccupancy, status, housekeepingStatus, maintenanceStatus, createdAt, updatedAt]
+
+    PmsRoomTypeReference:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        code: { type: [string, "null"] }
+      required: [id, name]
+
+    PmsAvailabilityRoomType:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        code: { type: string }
+        maxOccupancy: { type: integer }
+        totalUnits: { type: integer }
+        availableUnits: { type: integer }
+        pricePerNight: { type: number }
+        totalForStay: { type: number }
+      required: [id, name, code, maxOccupancy, totalUnits, availableUnits, pricePerNight, totalForStay]
+
+    PmsAvailability:
+      type: object
+      properties:
+        property:
+          $ref: "#/components/schemas/PmsProperty"
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        nights: { type: integer }
+        roomTypes:
+          type: array
+          items:
+            $ref: "#/components/schemas/PmsAvailabilityRoomType"
+      required: [property, checkIn, checkOut, nights, roomTypes]
+
+    PmsReservationSummary:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        propertyId: { type: string }
+        legacyReservationId: { type: [string, "null"] }
+        clientId: { type: [string, "null"] }
+        reservationNumber: { type: string }
+        source: { type: string }
+        channel: { type: string }
+        status: { type: string }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        adults: { type: integer }
+        children: { type: integer }
+        infants: { type: integer }
+        totalAmount: { type: number }
+        paidAmount: { type: number }
+        balanceAmount: { type: number }
+        currency: { type: string }
+        notes: { type: [string, "null"] }
+        cancellationReason: { type: [string, "null"] }
+        expiresAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        property:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+          required: [id, name]
+      required: [id, tenantId, propertyId, reservationNumber, source, channel, status, checkIn, checkOut, adults, children, infants, totalAmount, paidAmount, balanceAmount, currency, createdAt, updatedAt]
+
+    PmsReservationItem:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        reservationId: { type: string }
+        roomTypeId: { type: string }
+        unitId: { type: [string, "null"] }
+        ratePlanId: { type: [string, "null"] }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        adults: { type: integer }
+        children: { type: integer }
+        quantity: { type: integer }
+        unitPrice: { type: number }
+        total: { type: number }
+        roomType:
+          $ref: "#/components/schemas/PmsRoomTypeReference"
+        unit:
+          anyOf:
+            - $ref: "#/components/schemas/PmsUnitReference"
+            - type: "null"
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, tenantId, reservationId, roomTypeId, checkIn, checkOut, adults, children, quantity, unitPrice, total, roomType, unit, createdAt, updatedAt]
+
+    PmsUnitReference:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: [string, "null"] }
+        unitNumber: { type: [string, "null"] }
+      required: [id]
+
+    PmsReservationGuest:
+      type: object
+      properties:
+        id: { type: string }
+        tenantId: { type: string }
+        reservationId: { type: string }
+        reservationUnitId: { type: [string, "null"] }
+        guestProfileId: { type: [string, "null"] }
+        fullName: { type: string }
+        documentType: { type: [string, "null"] }
+        documentNumber: { type: [string, "null"] }
+        birthDate: { type: [string, "null"], format: date }
+        guestType: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, tenantId, reservationId, fullName, guestType, createdAt, updatedAt]
+
+    PmsReservationDetail:
+      type: object
+      properties:
+        reservation:
+          $ref: "#/components/schemas/PmsReservationSummary"
+        property:
+          $ref: "#/components/schemas/PmsProperty"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PmsReservationItem"
+        guests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PmsReservationGuest"
+      required: [reservation, property, items, guests]
+
+    PmsGuestInput:
+      type: object
+      properties:
+        fullName: { type: string }
+        documentType: { type: [string, "null"] }
+        documentNumber: { type: [string, "null"] }
+        birthDate: { type: [string, "null"], format: date }
+        guestType: { type: string, enum: [ADULT, CHILD, INFANT], default: ADULT }
+        itemIndex: { type: integer, minimum: 0 }
+      required: [fullName]
+
+    CreatePmsReservationItem:
+      type: object
+      properties:
+        roomTypeId: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        adults: { type: integer, minimum: 1, default: 1 }
+        children: { type: integer, minimum: 0, default: 0 }
+        unitPrice: { type: number, minimum: 0 }
+        ratePlanId: { type: [string, "null"] }
+      required: [roomTypeId, quantity]
+
+    CreatePmsReservationBody:
+      type: object
+      properties:
+        propertyId: { type: string }
+        clientId: { type: [string, "null"] }
+        source: { type: string, default: DIRECT }
+        channel: { type: string, default: CRM }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        adults: { type: integer, minimum: 1, default: 1 }
+        children: { type: integer, minimum: 0, default: 0 }
+        infants: { type: integer, minimum: 0, default: 0 }
+        currency: { type: string, minLength: 3, maxLength: 3, default: BRL }
+        notes: { type: [string, "null"] }
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CreatePmsReservationItem"
+        guests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PmsGuestInput"
+      required: [propertyId, checkIn, checkOut, items]
+
+    UpdatePmsReservationBody:
+      type: object
+      properties:
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        adults: { type: integer, minimum: 1 }
+        children: { type: integer, minimum: 0 }
+        infants: { type: integer, minimum: 0 }
+        notes: { type: [string, "null"] }
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CreatePmsReservationItem"
+        guests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PmsGuestInput"
+
+    CancelPmsReservationBody:
+      type: object
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
+      required: [reason]
+
+    PmsUnitAssignment:
+      type: object
+      properties:
+        reservationUnitId: { type: string }
+        unitId: { type: [string, "null"] }
+      required: [reservationUnitId, unitId]
 

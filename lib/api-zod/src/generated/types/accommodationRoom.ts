@@ -14,13 +14,18 @@ export interface AccommodationRoom {
   name: string;
   category: string;
   capacity: number;
-  description: string | null;
-  standardOccupancy: number | null;
-  bedConfiguration: string | null;
-  bathroomType: string | null;
-  floor: string | null;
-  currency: string;
-  isActive: boolean;
+  /** @nullable */
+  description?: string | null;
+  /** @nullable */
+  standardOccupancy?: number | null;
+  /** @nullable */
+  bedConfiguration?: string | null;
+  /** @nullable */
+  bathroomType?: string | null;
+  /** @nullable */
+  floor?: string | null;
+  currency?: string;
+  isActive?: boolean;
   pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;

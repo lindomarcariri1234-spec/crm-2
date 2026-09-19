@@ -12,6 +12,7 @@ export interface CreateAccommodationRoomBody {
   /** @minimum 1 */
   capacity: number;
   description?: string | null;
+  /** @minimum 1 */
   standardOccupancy?: number | null;
   bedConfiguration?: string | null;
   bathroomType?: string | null;

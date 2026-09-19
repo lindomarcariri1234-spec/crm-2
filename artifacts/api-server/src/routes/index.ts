@@ -62,6 +62,7 @@ import cronRouter from "./cron";
 import spreadsheetImportsRouter from "./spreadsheet-imports";
 import financialMetricsRouter from "./financial-metrics";
 import outboundMessagesRouter from "./outbound-messages";
+import pmsRouter from "./pms";
 
 const router: IRouter = Router();
 
@@ -84,6 +85,7 @@ router.use(communicationRouter);
 router.use(outboundMessagesRouter);
 router.use(registrationsRouter);
 router.use(accommodationOperationsRouter);
+router.use(pmsRouter);
 router.use(marketingRouter);
 router.use(loyaltyRouter);
 router.use(commissionsRouter);

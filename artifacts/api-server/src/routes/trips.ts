@@ -1061,6 +1061,7 @@ router.get("/trips/:id/room-allocation-summary", async (req, res, next: NextFunc
     if (!trip.accommodationId) {
       res.json({
         accommodation: null,
+        rooms: [],
         allocationSummary: buildRoomAllocationSummary([], [], getTripNights(trip.departureDate, trip.returnDate)),
       });
       return;
@@ -1089,17 +1090,32 @@ router.get("/trips/:id/room-allocation-summary", async (req, res, next: NextFunc
         inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
       ));
 
-    const rooms = [...new Map(assignedRows.map(row => [
-      row.roomId,
-      {
-        id: row.roomId,
-        category: row.category,
-        capacity: row.capacity,
-        pricePerNight: row.pricePerNight,
-      },
-    ])).values()];
+    const accommodationRooms = await db.select().from(accommodationRoomsTable)
+      .where(and(
+        eq(accommodationRoomsTable.tenantId, me.tenantId),
+        eq(accommodationRoomsTable.accommodationId, trip.accommodationId),
+      ))
+      .orderBy(asc(accommodationRoomsTable.name));
+    const occupiedByRoom = new Map<string, number>();
+    for (const row of assignedRows) {
+      occupiedByRoom.set(row.roomId, (occupiedByRoom.get(row.roomId) ?? 0) + 1);
+    }
+    const rooms = accommodationRooms.map(room => ({
+      ...room,
+      pricePerNight: room.pricePerNight == null ? null : Number(room.pricePerNight),
+      occupied: occupiedByRoom.get(room.id) ?? 0,
+      available: Math.max(0, room.capacity - (occupiedByRoom.get(room.id) ?? 0)),
+      createdAt: room.createdAt.toISOString(),
+      updatedAt: room.updatedAt.toISOString(),
+    }));
+    const summaryRooms = rooms.map(room => ({
+      id: room.id,
+      category: room.category,
+      capacity: room.capacity,
+      pricePerNight: room.pricePerNight,
+    }));
     const allocationSummary = buildRoomAllocationSummary(
-      rooms,
+      summaryRooms,
       assignedRows.map(row => row.roomId),
       getTripNights(trip.departureDate, trip.returnDate),
     );
@@ -1112,6 +1128,7 @@ router.get("/trips/:id/room-allocation-summary", async (req, res, next: NextFunc
             type: accommodation.type,
           }
         : null,
+      rooms,
       allocationSummary,
     });
   } catch (err) {

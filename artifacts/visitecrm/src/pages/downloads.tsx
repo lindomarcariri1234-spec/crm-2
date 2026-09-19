@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useGetMe, useListAuditLogs, useListReferrals, useListCommissions, useListDeals } from "@workspace/api-client-react";
 import { ADMIN_ROLES } from "@workspace/permissions";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,6 +27,7 @@ import {
 import { ManifestImportModal } from "./ManifestImportModal";
 import { OperationalImportModal, type ImportEntity } from "@/components/operational-import-modal";
 import { QueryErrorState } from "@/components/query-error-state";
+import { Link, useLocation, useSearch } from "wouter";
 
 function downloadCsv(rows: string[][], filename: string) {
   const content = rows.map(r => r.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -86,6 +87,8 @@ async function fetchAllPages<T>(
 }
 
 export default function Downloads() {
+  const searchStr = useSearch();
+  const [, navigate] = useLocation();
   const { toast } = useToast();
   const { data: me } = useGetMe();
   const isAdmin = !!me && ADMIN_ROLES.includes(me.role);
@@ -95,17 +98,31 @@ export default function Downloads() {
     isError: auditLogsError,
     error: auditLogsQueryError,
     refetch: refetchAuditLogs,
-  } = useListAuditLogs({
+  } = useListAuditLogs(undefined, {
     query: {
       queryKey: ["/api/audit-logs"],
       enabled: isAdmin,
     },
   });
 
-  const [reportType, setReportType] = useState<ReportType>("financial");
-  const [startDate, setStartDate] = useState(format(startOfMonth(new Date()), "yyyy-MM-dd"));
-  const [endDate, setEndDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [reportType, setReportType] = useState<ReportType>(() => {
+    const value = new URLSearchParams(searchStr).get("reportType");
+    return REPORT_TYPES.some(report => report.value === value) ? value as ReportType : "financial";
+  });
+  const [startDate, setStartDate] = useState(() => new URLSearchParams(searchStr).get("startDate") ?? format(startOfMonth(new Date()), "yyyy-MM-dd"));
+  const [endDate, setEndDate] = useState(() => new URLSearchParams(searchStr).get("endDate") ?? format(new Date(), "yyyy-MM-dd"));
+  const [pmsReservationNumber, setPmsReservationNumber] = useState(() => new URLSearchParams(searchStr).get("reservationNumber") ?? "");
+  const [pmsAdjustedBy, setPmsAdjustedBy] = useState(() => new URLSearchParams(searchStr).get("adjustedBy") ?? "");
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams({ reportType, startDate, endDate });
+    if (reportType === "financial") {
+      if (pmsReservationNumber.trim()) params.set("reservationNumber", pmsReservationNumber.trim());
+      if (pmsAdjustedBy.trim()) params.set("adjustedBy", pmsAdjustedBy.trim());
+    }
+    navigate(`/downloads?${params.toString()}`, { replace: true });
+  }, [reportType, startDate, endDate, pmsReservationNumber, pmsAdjustedBy, navigate]);
 
   const today = format(new Date(), "yyyy-MM-dd");
   const monthStart = format(startOfMonth(new Date()), "yyyy-MM-dd");
@@ -182,7 +199,16 @@ export default function Downloads() {
         method: isCommunication ? "GET" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: isCommunication ? undefined : JSON.stringify({ reportType, format: fmt, startDate, endDate }),
+        body: isCommunication ? undefined : JSON.stringify({
+          reportType,
+          format: fmt,
+          startDate,
+          endDate,
+          ...(reportType === "financial" ? {
+            reservationNumber: pmsReservationNumber.trim() || undefined,
+            adjustedBy: pmsAdjustedBy.trim() || undefined,
+          } : {}),
+        }),
         },
       );
       if (!res.ok) {
@@ -379,14 +405,31 @@ export default function Downloads() {
   ];
 
   const selectedReport = REPORT_TYPES.find(r => r.value === reportType);
+  const financialHref = (() => {
+    const params = new URLSearchParams({ tab: "receivable" });
+    if (startDate) params.set("dateFrom", startDate);
+    if (endDate) params.set("dateTo", endDate);
+    if (reportType === "financial") {
+      if (pmsReservationNumber.trim()) params.set("reservationNumber", pmsReservationNumber.trim());
+      if (pmsAdjustedBy.trim()) params.set("adjustedBy", pmsAdjustedBy.trim());
+    }
+    return `/financeiro?${params.toString()}`;
+  })();
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Downloads e Exportações</h1>
-        <p className="text-sm text-muted-foreground">
-          Exporte relatórios ou importe dados por modelos versionados. Arquivos PDF são relatórios somente para leitura e não podem ser importados.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Downloads e Exportações</h1>
+          <p className="text-sm text-muted-foreground">
+            Exporte relatórios ou importe dados por modelos versionados. Arquivos PDF são relatórios somente para leitura e não podem ser importados.
+          </p>
+        </div>
+        <Link href={financialHref}>
+          <Button variant="outline" size="sm" data-testid="link-back-to-financial">
+            <DollarSign className="mr-1.5 h-4 w-4" /> Voltar ao Financeiro
+          </Button>
+        </Link>
       </div>
       {quickDataError && (
         <QueryErrorState
@@ -450,6 +493,33 @@ export default function Downloads() {
                 onChange={e => setEndDate(e.target.value)}
               />
             </div>
+
+            {reportType === "financial" && (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Reserva PMS</Label>
+                  <Input
+                    type="search"
+                    className="h-8 text-sm w-[160px]"
+                    value={pmsReservationNumber}
+                    onChange={e => setPmsReservationNumber(e.target.value)}
+                    placeholder="Número da reserva"
+                    data-testid="input-export-pms-reservation"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs">Responsável pelo ajuste</Label>
+                  <Input
+                    type="search"
+                    className="h-8 text-sm w-[180px]"
+                    value={pmsAdjustedBy}
+                    onChange={e => setPmsAdjustedBy(e.target.value)}
+                    placeholder="Nome do responsável"
+                    data-testid="input-export-pms-adjusted-by"
+                  />
+                </div>
+              </>
+            )}
 
             <div className="flex gap-2 flex-wrap">
               {((reportType === "communication" ? ["csv", "pdf"] : ["csv", "xlsx", "pdf"]) as ExportFormat[]).map(fmt => {

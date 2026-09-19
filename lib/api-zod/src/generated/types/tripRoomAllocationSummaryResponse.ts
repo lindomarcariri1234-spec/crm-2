@@ -5,10 +5,12 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { AccommodationRoom } from "./accommodationRoom";
 import type { RoomAllocationSummary } from "./roomAllocationSummary";
 import type { TripRoomAllocationSummaryResponseAccommodation } from "./tripRoomAllocationSummaryResponseAccommodation";
 
 export interface TripRoomAllocationSummaryResponse {
   accommodation: TripRoomAllocationSummaryResponseAccommodation;
+  rooms: AccommodationRoom[];
   allocationSummary: RoomAllocationSummary;
 }

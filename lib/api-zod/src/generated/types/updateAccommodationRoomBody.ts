@@ -13,6 +13,7 @@ export interface UpdateAccommodationRoomBody {
   /** @minimum 1 */
   capacity?: number;
   description?: string | null;
+  /** @minimum 1 */
   standardOccupancy?: number | null;
   bedConfiguration?: string | null;
   bathroomType?: string | null;
@@ -21,4 +22,5 @@ export interface UpdateAccommodationRoomBody {
   /** @minimum 0 */
   pricePerNight?: number | null;
   status?: UpdateAccommodationRoomBodyStatus;
+  isActive?: boolean;
 }

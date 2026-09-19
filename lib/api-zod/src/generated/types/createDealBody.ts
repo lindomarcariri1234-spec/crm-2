@@ -7,7 +7,7 @@
  */
 
 export interface CreateDealBody {
-  stageId: string;
+  stageId?: string;
   title: string;
   /** @nullable */
   description?: string | null;
