@@ -15,6 +15,8 @@ const router = Router();
 const Query = z.object({
   month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
   period: z.enum(["7d", "30d", "90d", "12m"]).optional(),
+  reservationNumber: z.string().trim().max(100).optional(),
+  adjustedBy: z.string().trim().max(100).optional(),
 }).refine((query) => !(query.month && query.period), {
   message: "Use month or period, not both",
 });
@@ -37,7 +39,10 @@ router.get("/admin/financial-metrics", async (req, res, next: NextFunction): Pro
       : parsed.data.month
         ? saoPauloMonthPeriod(parsed.data.month)
         : currentSaoPauloMonth();
-    res.json(await loadFinancialMetrics(me.tenantId, period));
+    res.json(await loadFinancialMetrics(me.tenantId, period, {
+      reservationNumber: parsed.data.reservationNumber || undefined,
+      adjustedBy: parsed.data.adjustedBy || undefined,
+    }));
   } catch (err) { next(err); }
 });
 

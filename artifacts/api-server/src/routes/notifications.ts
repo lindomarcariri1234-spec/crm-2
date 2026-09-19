@@ -5,6 +5,7 @@ import { eq, and, lt, gte, lte, gt } from "drizzle-orm";
 import { requireAuth } from "../lib/tenant";
 import { ROLES, RESERVATION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, TRIP_STATUS } from "@workspace/permissions";
 import { formatBRLPlain, localToday } from "@workspace/shared";
+import { parseTripDeparture, tripDepartureAtSql } from "../lib/trip-date-time";
 
 const router = Router();
 
@@ -17,7 +18,14 @@ type AlertItem = {
   entityId: string | null;
 };
 
-type TripRow = { id: string; name: string; departureDate: Date; totalCapacity: number; availableSeats: number };
+type TripRow = {
+  id: string;
+  name: string;
+  departureDate: Date;
+  departureTime: string | null;
+  totalCapacity: number;
+  availableSeats: number;
+};
 
 router.get("/notifications", async (req, res, next: NextFunction): Promise<void> => {
   try {
@@ -34,6 +42,7 @@ router.get("/notifications", async (req, res, next: NextFunction): Promise<void>
 
     const now = new Date();
     const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const departureAt = tripDepartureAtSql(tripsTable.departureDate, tripsTable.departureTime);
 
     const alerts: AlertItem[] = [];
 
@@ -64,13 +73,14 @@ router.get("/notifications", async (req, res, next: NextFunction): Promise<void>
             id: tripsTable.id,
             name: tripsTable.name,
             departureDate: tripsTable.departureDate,
+            departureTime: tripsTable.departureTime,
             totalCapacity: tripsTable.totalCapacity,
             availableSeats: tripsTable.availableSeats,
           }).from(tripsTable).where(
             and(
               eq(tripsTable.tenantId, me.tenantId),
-              gte(tripsTable.departureDate, now),
-              lte(tripsTable.departureDate, in7Days),
+              gte(departureAt, now),
+              lte(departureAt, in7Days),
             )
           );
           upcomingTrips = allTrips.filter(t => tripIds.has(t.id)) as TripRow[];
@@ -80,13 +90,14 @@ router.get("/notifications", async (req, res, next: NextFunction): Promise<void>
           id: tripsTable.id,
           name: tripsTable.name,
           departureDate: tripsTable.departureDate,
+          departureTime: tripsTable.departureTime,
           totalCapacity: tripsTable.totalCapacity,
           availableSeats: tripsTable.availableSeats,
         }).from(tripsTable).where(
           and(
             eq(tripsTable.tenantId, me.tenantId),
-            gte(tripsTable.departureDate, now),
-            lte(tripsTable.departureDate, in7Days),
+            gte(departureAt, now),
+            lte(departureAt, in7Days),
             eq(tripsTable.status, TRIP_STATUS.ACTIVE),
           )
         );
@@ -94,7 +105,9 @@ router.get("/notifications", async (req, res, next: NextFunction): Promise<void>
       }
 
       for (const trip of upcomingTrips) {
-        const diffMs = new Date(trip.departureDate).getTime() - now.getTime();
+        const tripDeparture = parseTripDeparture(trip.departureDate, trip.departureTime);
+        if (!tripDeparture) continue;
+        const diffMs = tripDeparture.getTime() - now.getTime();
         const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
         const label = diffDays <= 1 ? "amanhã" : `em ${diffDays} dias`;
         alerts.push({
@@ -168,7 +181,7 @@ router.get("/notifications", async (req, res, next: NextFunction): Promise<void>
       }).from(tripsTable).where(
         and(
           eq(tripsTable.tenantId, me.tenantId),
-          gte(tripsTable.departureDate, now),
+          gte(departureAt, now),
           eq(tripsTable.status, TRIP_STATUS.ACTIVE),
         )
       );

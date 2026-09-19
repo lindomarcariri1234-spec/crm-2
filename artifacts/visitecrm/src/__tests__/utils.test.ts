@@ -14,6 +14,8 @@ import {
   escapeHtml,
   formatCpf,
   generateProductSlug,
+  formatTripDateRange,
+  formatTripDateTime,
 } from "../pages/trips/utils.js";
 
 describe("formatCurrency", () => {
@@ -123,6 +125,22 @@ describe("getCountdownLabel", () => {
   it("returns a non-empty string for an invalid date (parseISO does not throw)", () => {
     const result = getCountdownLabel("not-a-date");
     expect(typeof result).toBe("string");
+  });
+});
+
+describe("trip date and time", () => {
+  it("combines departure and return dates with their respective times", () => {
+    expect(formatTripDateRange(
+      "2026-09-19",
+      "2026-09-21",
+      "21:00",
+      "02:00",
+    )).toBe("19/09/2026 às 21:00 — 21/09/2026 às 02:00");
+  });
+
+  it("keeps a full API date on the same Brazil calendar day", () => {
+    expect(formatTripDateTime("2026-09-19T15:00:00.000Z", "21:00"))
+      .toBe("19/09/2026 às 21:00");
   });
 });
 

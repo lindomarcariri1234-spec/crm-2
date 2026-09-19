@@ -51,3 +51,30 @@ export const logger = pino({
         },
       }),
 });
+
+export interface AuditFailureContext {
+  operation: string;
+  tenantId: string;
+  entityType: string;
+  entityId: string;
+  requestId: string;
+}
+
+/**
+ * Records an audit write failure using an allowlist of operational metadata.
+ * Deliberately does not accept or serialize the failed audit payload or the
+ * original error object, which may contain sensitive snapshots or SQL details.
+ */
+export function logAuditWriteFailure(context: AuditFailureContext, cause: unknown): void {
+  logger.error(
+    {
+      operation: context.operation,
+      tenantId: context.tenantId,
+      entityType: context.entityType,
+      entityId: context.entityId,
+      requestId: context.requestId,
+      errorType: cause instanceof Error ? cause.name : typeof cause,
+    },
+    "Audit log write failed; transaction rolled back",
+  );
+}

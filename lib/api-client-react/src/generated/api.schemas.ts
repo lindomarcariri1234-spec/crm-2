@@ -749,6 +749,12 @@ export interface TripSummary {
   name: string;
   destination: string;
   departureDate: string;
+  /** @nullable */
+  departureTime?: string | null;
+  /** @nullable */
+  returnDate?: string | null;
+  /** @nullable */
+  returnTime?: string | null;
   availableSeats: number;
   totalCapacity: number;
   status: string;
@@ -1307,6 +1313,8 @@ export interface TripCost {
 
 export interface TripCostSummary {
   expectedRevenue: number;
+  totalTripCosts: number;
+  totalAgencyExpenses: number;
   totalRealCosts: number;
   totalPaidCosts: number;
   totalPendingCosts: number;
@@ -1315,10 +1323,70 @@ export interface TripCostSummary {
   plannedBudget: number;
   budgetVariance: number;
   confirmedSeats: number;
+  planningCapacity: number;
+}
+
+export type TripPlannedCostKind =
+  (typeof TripPlannedCostKind)[keyof typeof TripPlannedCostKind];
+
+export const TripPlannedCostKind = {
+  fixed: "fixed",
+  variable: "variable",
+} as const;
+
+export interface TripPlannedCost {
+  id: string;
+  kind: TripPlannedCostKind;
+  category: string;
+  description: string;
+  amount: number;
+  /** @nullable */
+  amountPerPassenger: number | null;
+}
+
+export interface TripPricing {
+  adult: number;
+  /** @nullable */
+  child: number | null;
+  /** @nullable */
+  senior: number | null;
+}
+
+export type ExpenseSource = (typeof ExpenseSource)[keyof typeof ExpenseSource];
+
+export const ExpenseSource = {
+  agency: "agency",
+  trip: "trip",
+} as const;
+
+export interface Expense {
+  id: string;
+  /** @nullable */
+  tripId?: string | null;
+  category: string;
+  description: string;
+  amount: number;
+  /** @nullable */
+  supplierId?: string | null;
+  /** @nullable */
+  supplierName?: string | null;
+  /** @nullable */
+  paymentMethod?: string | null;
+  /** @nullable */
+  paymentDate?: string | null;
+  dueDate: string;
+  status: ExpenseStatus;
+  /** @nullable */
+  notes?: string | null;
+  createdAt: string;
+  source?: ExpenseSource;
 }
 
 export interface ListTripCostsResponse {
   costs: TripCost[];
+  agencyExpenses: Expense[];
+  plannedCosts: TripPlannedCost[];
+  pricing: TripPricing;
   summary: TripCostSummary;
 }
 
@@ -1775,6 +1843,11 @@ export interface CreateReservationBody {
   tripType?: string | null;
   /** @nullable */
   packageType?: string | null;
+  /**
+   * ID of the accommodation room assigned to the primary passenger
+   * @nullable
+   */
+  roomId?: string | null;
   hasInsurance?: boolean;
   totalValue: number;
   /** @nullable */
@@ -1861,11 +1934,6 @@ export type TripRoomAllocationSummaryResponseAccommodation = {
   type: string;
 } | null;
 
-export interface TripRoomAllocationSummaryResponse {
-  accommodation: TripRoomAllocationSummaryResponseAccommodation;
-  allocationSummary: RoomAllocationSummary;
-}
-
 export type AccommodationRoomStatus =
   (typeof AccommodationRoomStatus)[keyof typeof AccommodationRoomStatus];
 
@@ -1881,12 +1949,30 @@ export interface AccommodationRoom {
   name: string;
   category: string;
   capacity: number;
+  /** @nullable */
+  description?: string | null;
+  /** @nullable */
+  standardOccupancy?: number | null;
+  /** @nullable */
+  bedConfiguration?: string | null;
+  /** @nullable */
+  bathroomType?: string | null;
+  /** @nullable */
+  floor?: string | null;
+  currency?: string;
+  isActive?: boolean;
   pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;
   available: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TripRoomAllocationSummaryResponse {
+  accommodation: TripRoomAllocationSummaryResponseAccommodation;
+  rooms: AccommodationRoom[];
+  allocationSummary: RoomAllocationSummary;
 }
 
 export type RoomAvailability = AccommodationRoom;
@@ -2272,24 +2358,18 @@ export interface FinancialSummary {
   paidThisMonth: number;
 }
 
-export interface Expense {
-  id: string;
-  /** @nullable */
-  tripId?: string | null;
+export type ExpenseListSummaryCategoryBreakdownItem = {
   category: string;
-  description: string;
-  amount: number;
-  /** @nullable */
-  supplierId?: string | null;
-  /** @nullable */
-  paymentMethod?: string | null;
-  /** @nullable */
-  paymentDate?: string | null;
-  dueDate: string;
-  status: ExpenseStatus;
-  /** @nullable */
-  notes?: string | null;
-  createdAt: string;
+  total: number;
+};
+
+export interface ExpenseListSummary {
+  total: number;
+  paid: number;
+  pending: number;
+  overdue: number;
+  paidThisMonth: number;
+  categoryBreakdown: ExpenseListSummaryCategoryBreakdownItem[];
 }
 
 export interface ExpenseListResponse {
@@ -2297,6 +2377,7 @@ export interface ExpenseListResponse {
   total: number;
   page: number;
   limit: number;
+  summary?: ExpenseListSummary;
 }
 
 export interface CreateExpenseBody {
@@ -2387,7 +2468,7 @@ export interface Deal {
 }
 
 export interface CreateDealBody {
-  stageId: string;
+  stageId?: string;
   title: string;
   /** @nullable */
   description?: string | null;
@@ -2995,6 +3076,13 @@ export interface CreateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity: number;
+  description?: string | null;
+  /** @minimum 1 */
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @minimum 0 */
   pricePerNight?: number | null;
 }
@@ -3012,9 +3100,17 @@ export interface UpdateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity?: number;
+  description?: string | null;
+  /** @minimum 1 */
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @minimum 0 */
   pricePerNight?: number | null;
   status?: UpdateAccommodationRoomBodyStatus;
+  isActive?: boolean;
 }
 
 export interface UpdateTripAccommodationBody {
@@ -4830,6 +4926,320 @@ export interface SalesCycleData {
   trend: SalesCycleTrendPoint[];
 }
 
+export interface PmsProperty {
+  id: string;
+  tenantId: string;
+  /** @nullable */
+  legacyAccommodationId?: string | null;
+  name: string;
+  /** @nullable */
+  legalName?: string | null;
+  /** @nullable */
+  tradeName?: string | null;
+  propertyType: string;
+  /** @nullable */
+  description?: string | null;
+  /** @nullable */
+  documentNumber?: string | null;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  phone?: string | null;
+  /** @nullable */
+  website?: string | null;
+  /** @nullable */
+  address?: string | null;
+  /** @nullable */
+  city?: string | null;
+  /** @nullable */
+  state?: string | null;
+  timezone: string;
+  currency: string;
+  locale: string;
+  checkInTime: string;
+  checkOutTime: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsRoomType {
+  id: string;
+  tenantId: string;
+  propertyId: string;
+  /** @nullable */
+  legacyCategory?: string | null;
+  name: string;
+  code: string;
+  /** @nullable */
+  description?: string | null;
+  maxOccupancy: number;
+  baseOccupancy: number;
+  /** @nullable */
+  defaultPrice?: number | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsRoomTypeReference {
+  id: string;
+  name: string;
+  /** @nullable */
+  code?: string | null;
+}
+
+export interface PmsUnit {
+  id: string;
+  tenantId: string;
+  propertyId: string;
+  roomTypeId: string;
+  /** @nullable */
+  legacyRoomId?: string | null;
+  unitNumber: string;
+  name: string;
+  /** @nullable */
+  floor?: string | null;
+  maxOccupancy: number;
+  status: string;
+  housekeepingStatus: string;
+  maintenanceStatus: string;
+  roomType?: PmsRoomTypeReference;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsAvailabilityRoomType {
+  id: string;
+  name: string;
+  code: string;
+  maxOccupancy: number;
+  totalUnits: number;
+  availableUnits: number;
+  pricePerNight: number;
+  totalForStay: number;
+}
+
+export interface PmsAvailability {
+  property: PmsProperty;
+  checkIn: string;
+  checkOut: string;
+  nights: number;
+  roomTypes: PmsAvailabilityRoomType[];
+}
+
+export type PmsReservationSummaryProperty = {
+  id: string;
+  name: string;
+};
+
+export interface PmsReservationSummary {
+  id: string;
+  tenantId: string;
+  propertyId: string;
+  /** @nullable */
+  legacyReservationId?: string | null;
+  /** @nullable */
+  clientId?: string | null;
+  reservationNumber: string;
+  source: string;
+  channel: string;
+  status: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children: number;
+  infants: number;
+  totalAmount: number;
+  paidAmount: number;
+  balanceAmount: number;
+  currency: string;
+  /** @nullable */
+  notes?: string | null;
+  /** @nullable */
+  cancellationReason?: string | null;
+  /** @nullable */
+  expiresAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  property?: PmsReservationSummaryProperty;
+}
+
+export interface PmsUnitReference {
+  id: string;
+  /** @nullable */
+  name?: string | null;
+  /** @nullable */
+  unitNumber?: string | null;
+}
+
+export interface PmsReservationItem {
+  id: string;
+  tenantId: string;
+  reservationId: string;
+  roomTypeId: string;
+  /** @nullable */
+  unitId?: string | null;
+  /** @nullable */
+  ratePlanId?: string | null;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children: number;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+  roomType: PmsRoomTypeReference;
+  unit: PmsUnitReference | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsReservationGuest {
+  id: string;
+  tenantId: string;
+  reservationId: string;
+  /** @nullable */
+  reservationUnitId?: string | null;
+  /** @nullable */
+  guestProfileId?: string | null;
+  fullName: string;
+  /** @nullable */
+  documentType?: string | null;
+  /** @nullable */
+  documentNumber?: string | null;
+  /** @nullable */
+  birthDate?: string | null;
+  guestType: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PmsReservationDetail {
+  reservation: PmsReservationSummary;
+  property: PmsProperty;
+  items: PmsReservationItem[];
+  guests: PmsReservationGuest[];
+}
+
+export type PmsGuestInputGuestType =
+  (typeof PmsGuestInputGuestType)[keyof typeof PmsGuestInputGuestType];
+
+export const PmsGuestInputGuestType = {
+  ADULT: "ADULT",
+  CHILD: "CHILD",
+  INFANT: "INFANT",
+} as const;
+
+export interface PmsGuestInput {
+  fullName: string;
+  /** @nullable */
+  documentType?: string | null;
+  /** @nullable */
+  documentNumber?: string | null;
+  /** @nullable */
+  birthDate?: string | null;
+  guestType?: PmsGuestInputGuestType;
+  /** @minimum 0 */
+  itemIndex?: number;
+}
+
+export interface CreatePmsReservationItem {
+  roomTypeId: string;
+  /** @minimum 1 */
+  quantity: number;
+  /** @minimum 1 */
+  adults?: number;
+  /** @minimum 0 */
+  children?: number;
+  /** @minimum 0 */
+  unitPrice?: number;
+  /** @nullable */
+  ratePlanId?: string | null;
+}
+
+export interface CreatePmsReservationBody {
+  propertyId: string;
+  /** @nullable */
+  clientId?: string | null;
+  source?: string;
+  channel?: string;
+  checkIn: string;
+  checkOut: string;
+  /** @minimum 1 */
+  adults?: number;
+  /** @minimum 0 */
+  children?: number;
+  /** @minimum 0 */
+  infants?: number;
+  /**
+   * @minLength 3
+   * @maxLength 3
+   */
+  currency?: string;
+  /** @nullable */
+  notes?: string | null;
+  /** @minItems 1 */
+  items: CreatePmsReservationItem[];
+  guests?: PmsGuestInput[];
+}
+
+export interface UpdatePmsReservationBody {
+  checkIn?: string;
+  checkOut?: string;
+  /** @minimum 1 */
+  adults?: number;
+  /** @minimum 0 */
+  children?: number;
+  /** @minimum 0 */
+  infants?: number;
+  /** @nullable */
+  notes?: string | null;
+  /** @minItems 1 */
+  items?: CreatePmsReservationItem[];
+  guests?: PmsGuestInput[];
+}
+
+export interface CancelPmsReservationBody {
+  /**
+   * @minLength 3
+   * @maxLength 500
+   */
+  reason: string;
+}
+
+export interface PmsUnitAssignment {
+  reservationUnitId: string;
+  /** @nullable */
+  unitId: string | null;
+}
+
+export type GetPmsAvailabilityParams = {
+  propertyId: string;
+  checkIn: string;
+  checkOut: string;
+  excludeReservationId?: string;
+};
+
+export type ListPmsReservationsParams = {
+  propertyId?: string;
+  status?: string;
+  /**
+   * @minimum 1
+   * @maximum 200
+   */
+  limit?: number;
+};
+
+export type AddPmsReservationGuestsBody = {
+  /** @minItems 1 */
+  guests: PmsGuestInput[];
+};
+
+export type AssignPmsReservationUnitsBody = {
+  assignments: PmsUnitAssignment[];
+};
+
 export type ListAdminInvoicesParams = {
   tenantId?: string;
   status?: string;
@@ -5126,9 +5536,43 @@ export type ListExpensesParams = {
    * @nullable
    */
   status?: string | null;
+  /**
+   * @nullable
+   */
+  category?: string | null;
+  /**
+   * @nullable
+   */
+  supplierId?: string | null;
+  /**
+   * @nullable
+   */
+  dateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  dateTo?: string | null;
+  /**
+   * Include direct trip costs in the consolidated financial list
+   */
+  includeTripCosts?: boolean;
+  /**
+   * Period used for the server-side financial summary
+   */
+  summaryPeriod?: ListExpensesSummaryPeriod;
   page?: number;
   limit?: number;
 };
+
+export type ListExpensesSummaryPeriod =
+  (typeof ListExpensesSummaryPeriod)[keyof typeof ListExpensesSummaryPeriod];
+
+export const ListExpensesSummaryPeriod = {
+  all: "all",
+  month: "month",
+  quarter: "quarter",
+  year: "year",
+} as const;
 
 export type ListDealsParams = {
   /**
@@ -5480,6 +5924,21 @@ export type MarkBirthdayConvertedBody = {
 
 export type MarkBirthdayConverted200 = {
   success: boolean;
+};
+
+export type ListAuditLogsParams = {
+  /**
+   * Filter room audit events by accommodation
+   */
+  accommodationId?: string;
+  /**
+   * Inclusive start date in YYYY-MM-DD
+   */
+  from?: string;
+  /**
+   * Inclusive end date in YYYY-MM-DD
+   */
+  to?: string;
 };
 
 export type ListCalendarReconciliationsParams = {

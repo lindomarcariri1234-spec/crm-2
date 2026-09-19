@@ -1,0 +1,1 @@
+ALTER TABLE "pms_reservations" ADD COLUMN IF NOT EXISTS "cancellation_reason" text;

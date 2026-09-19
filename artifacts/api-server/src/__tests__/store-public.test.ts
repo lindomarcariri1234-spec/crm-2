@@ -20,26 +20,46 @@ const {
   mockWhere,
   mockFrom,
   mockSelect,
+  mockUpdate,
+  mockUpdateSet,
   mockTransaction,
   mockOrderBy,
   mockEnqueueConfirmation,
+  mockStripeConstructor,
+  mockStripeCreate,
+  mockStripeRetrieve,
 } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere: ReturnType<typeof vi.fn> = vi.fn(() => ({ limit: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
+  const mockUpdateSet = vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) }));
+  const mockUpdate = vi.fn(() => ({ set: mockUpdateSet }));
   const mockTransaction = vi.fn();
   const mockOrderBy = vi.fn();
   const mockEnqueueConfirmation = vi.fn().mockResolvedValue(undefined);
+  const mockStripeCreate = vi.fn();
+  const mockStripeRetrieve = vi.fn();
+  const mockStripeConstructor = vi.fn(() => ({
+    paymentIntents: {
+      create: mockStripeCreate,
+      retrieve: mockStripeRetrieve,
+    },
+  }));
 
   return {
     mockLimit,
     mockWhere,
     mockFrom,
     mockSelect,
+    mockUpdate,
+    mockUpdateSet,
     mockTransaction,
     mockOrderBy,
     mockEnqueueConfirmation,
+    mockStripeConstructor,
+    mockStripeCreate,
+    mockStripeRetrieve,
   };
 });
 
@@ -51,7 +71,7 @@ vi.mock("@workspace/db", () => ({
   db: {
     select: mockSelect,
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
-    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
+    update: mockUpdate,
     transaction: mockTransaction,
   },
   storesTable: {},
@@ -98,6 +118,10 @@ vi.mock("drizzle-orm", () => ({
   isNull: vi.fn(() => "isNull"),
   isNotNull: vi.fn(() => "isNotNull"),
   sql: Object.assign(vi.fn(() => "sql"), { raw: vi.fn() }),
+}));
+
+vi.mock("stripe", () => ({
+  default: mockStripeConstructor,
 }));
 
 vi.mock("@clerk/express", () => ({
@@ -1009,6 +1033,131 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     // was enqueued during checkout — it is deferred to the payment-confirmation path.
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(mockEnqueueConfirmation).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/public/store/:slug/create-payment-intent — alternative Stripe methods", () => {
+  const STRIPE_STORE = {
+    ...FAKE_STORE,
+    stripeEnabled: true,
+    stripePublicKey: "pk_test_store",
+    stripeSecretKey: "sk_test_store",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLimit.mockReset();
+    mockStripeCreate.mockReset();
+    mockStripeRetrieve.mockReset();
+    mockUpdate.mockClear();
+    mockUpdateSet.mockClear();
+  });
+
+  it.each([
+    ["pix", "pi_pix", "pi_pix_secret"],
+    ["boleto", "pi_boleto", "pi_boleto_secret"],
+  ] as const)("creates a %s PaymentIntent with the matching Stripe method", async (paymentMethod, id, clientSecret) => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod,
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+    mockStripeCreate.mockResolvedValueOnce({
+      id,
+      client_secret: clientSecret,
+      payment_method_types: [paymentMethod],
+    });
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({ orderNumber: FAKE_ORDER.orderNumber, paymentToken: "checkout-token" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      clientSecret,
+      publishableKey: "pk_test_store",
+    });
+    expect(mockStripeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 15000,
+        currency: "brl",
+        payment_method_types: [paymentMethod],
+        receipt_email: "maria@example.com",
+      }),
+      expect.objectContaining({
+        idempotencyKey: `store-order-store-001-gen-id`,
+      }),
+    );
+    expect(mockUpdateSet).toHaveBeenCalledWith({ paymentIntentId: id });
+  });
+
+  it("reuses the existing PaymentIntent and client secret on a retry", async () => {
+    const existingIntent = {
+      id: "pi_pix_existing",
+      client_secret: "pi_pix_existing_secret",
+      payment_method_types: ["pix"],
+    };
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "pix",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+    mockStripeCreate.mockResolvedValueOnce(existingIntent);
+
+    const firstResponse = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({ orderNumber: FAKE_ORDER.orderNumber, paymentToken: "checkout-token" });
+
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "pix",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: existingIntent.id,
+      }]);
+    mockStripeRetrieve.mockResolvedValueOnce(existingIntent);
+
+    const retryResponse = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({ orderNumber: FAKE_ORDER.orderNumber, paymentToken: "checkout-token" });
+
+    expect(firstResponse.status).toBe(200);
+    expect(retryResponse.status).toBe(200);
+    expect(retryResponse.body).toMatchObject({
+      clientSecret: existingIntent.client_secret,
+      paymentIntentId: existingIntent.id,
+      reused: true,
+    });
+    expect(mockStripeCreate).toHaveBeenCalledTimes(1);
+    expect(mockStripeRetrieve).toHaveBeenCalledWith(existingIntent.id);
+  });
+
+  it("rejects an unsupported payment method without updating the order as paid", async () => {
+    mockLimit
+      .mockResolvedValueOnce([STRIPE_STORE])
+      .mockResolvedValueOnce([{
+        ...FAKE_ORDER,
+        paymentMethod: "bank_transfer",
+        storedPaymentToken: "checkout-token",
+        existingPaymentIntentId: null,
+      }]);
+
+    const response = await request(buildApp())
+      .post("/api/public/store/minha-loja/create-payment-intent")
+      .send({ orderNumber: FAKE_ORDER.orderNumber, paymentToken: "checkout-token" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("STRIPE_PAYMENT_METHOD_UNSUPPORTED");
+    expect(mockStripeCreate).not.toHaveBeenCalled();
+    expect(mockStripeRetrieve).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
 

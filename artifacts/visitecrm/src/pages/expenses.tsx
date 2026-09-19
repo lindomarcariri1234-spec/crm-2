@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
   useListExpenses,
@@ -6,6 +7,7 @@ import {
   useUpdateExpense,
   useListTrips,
   useListSuppliers,
+  useListTripCosts,
 } from "@workspace/api-client-react";
 import { EXPENSE_STATUS } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
@@ -15,41 +17,23 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle } from "lucide-react";
+import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS as CATEGORY_LABELS } from "@/lib/labels";
 import { ListLoadErrorRow } from "@/components/list-load-error";
+import {
+  FinancialConsolidationView,
+  normalizeFinancialCategory,
+} from "@/components/financial-consolidation-view";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
-const CATEGORY_COLORS: Record<string, string> = {
-  transport: "#3B82F6",
-  accommodation: "#8B5CF6",
-  food: "#10B981",
-  marketing: "#F59E0B",
-  administrative: "#6366F1",
-  commission: "#EF4444",
-  other: "#94A3B8",
+const EXPENSE_PAGE_SIZE = 50;
+type TripPlanningRecord = {
+  id: string;
+  totalCapacity: number;
+  fixedCosts?: Array<{ id: string; category: string; description: string; value: number }>;
+  variableCosts?: Array<{ id: string; category: string; description: string; valuePax: number }>;
 };
-
-function CategoryChart({ data }: { data: Array<{ category: string; total: number }> }) {
-  const max = Math.max(...data.map(d => d.total), 1);
-  return (
-    <div className="space-y-3">
-      {data.map(d => {
-        const pct = (d.total / max) * 100;
-        return (
-          <div key={d.category} className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground w-28 shrink-0">{CATEGORY_LABELS[d.category] ?? d.category}</span>
-            <div className="flex-1 bg-muted rounded-full h-2">
-              <div className="h-2 rounded-full" style={{ width: `${pct}%`, backgroundColor: CATEGORY_COLORS[d.category] ?? "#94A3B8" }} />
-            </div>
-            <span className="text-xs font-medium w-24 text-right">{fmt(d.total)}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export default function Expenses() {
   const [statusFilter, setStatusFilter] = useState("");
@@ -57,76 +41,111 @@ export default function Expenses() {
   const [tripFilter, setTripFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [periodFilter, setPeriodFilter] = useState("all");
+  const [periodFilter, setPeriodFilter] = useState<"all" | "month" | "quarter" | "year">("all");
+  const [page, setPage] = useState(1);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [expenseMethod, setExpenseMethod] = useState("pix");
   const [supplierFilter, setSupplierFilter] = useState("");
   const [createCategory, setCreateCategory] = useState("transport");
   const [createSupplierId, setCreateSupplierId] = useState("none");
   const [createTripId, setCreateTripId] = useState("none");
-
-  const { data: allExpensesForKpi } = useListExpenses({ limit: 500 });
+  const queryClient = useQueryClient();
 
   const { data: expensesData, isLoading, isError, refetch } = useListExpenses({
     status: statusFilter || undefined,
     tripId: tripFilter || undefined,
-    limit: 200,
+    category: categoryFilter || undefined,
+    supplierId: supplierFilter || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    page,
+    limit: EXPENSE_PAGE_SIZE,
+    includeTripCosts: true,
+    summaryPeriod: periodFilter,
   });
-  const { data: tripsData } = useListTrips({ limit: 100 });
+  const { data: tripsData } = useListTrips({ limit: 500 });
   const { data: suppliersRaw } = useListSuppliers();
+  const { data: selectedTripFinancialData } = useListTripCosts(tripFilter, {
+    query: {
+      enabled: !!tripFilter,
+      queryKey: ["trip-costs", tripFilter],
+    },
+  });
   const createExpense = useCreateExpense();
   const updateExpense = useUpdateExpense();
 
-  const expenses = useMemo(() => {
-    let all = expensesData?.data ?? [];
-    if (categoryFilter) all = all.filter(e => e.category === categoryFilter);
-    if (dateFrom) all = all.filter(e => e.dueDate >= dateFrom);
-    if (dateTo) all = all.filter(e => e.dueDate <= dateTo);
-    if (supplierFilter) all = all.filter(e => e.supplierId === supplierFilter);
-    return all;
-  }, [expensesData, categoryFilter, dateFrom, dateTo, supplierFilter]);
+  const expenses = expensesData?.data ?? [];
+  const kpis = expensesData?.summary ?? {
+    total: 0,
+    paid: 0,
+    pending: 0,
+    overdue: 0,
+    paidThisMonth: 0,
+    categoryBreakdown: [],
+  };
+  const categoryBreakdown = expensesData?.summary?.categoryBreakdown ?? [];
+  const totalPages = Math.max(1, Math.ceil((expensesData?.total ?? 0) / EXPENSE_PAGE_SIZE));
 
-  const kpis = useMemo(() => {
-    // Use Brazil calendar month so KPIs are correct at 21h-midnight BRT
-    const _todayBRKpi = localToday();
-    const [_kpiYear, _kpiMonth1] = _todayBRKpi.split("-").map(Number);
-    const now = new Date();
-    const allFull = allExpensesForKpi?.data ?? [];
-    let all = allFull;
-    if (periodFilter === "month") {
-      all = allFull.filter(e => {
-        if (!e.dueDate) return false;
-        const s = e.dueDate.slice(0, 7); // "YYYY-MM" from ISO date string
-        return s === _todayBRKpi.slice(0, 7);
-      });
-    } else if (periodFilter === "quarter") {
-      const cutoff = new Date(now); cutoff.setMonth(now.getMonth() - 3);
-      all = allFull.filter(e => e.dueDate && new Date(e.dueDate) >= cutoff);
-    } else if (periodFilter === "year") {
-      const cutoff = new Date(now); cutoff.setFullYear(now.getFullYear() - 1);
-      all = allFull.filter(e => e.dueDate && new Date(e.dueDate) >= cutoff);
-    }
-    const total = all.reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const paid = all.filter(e => e.status === EXPENSE_STATUS.PAID).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const pending = all.filter(e => e.status === EXPENSE_STATUS.PENDING).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const overdue = all.filter(e => e.status === EXPENSE_STATUS.OVERDUE).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const paidThisMonth = allFull.filter(e =>
-      e.status === EXPENSE_STATUS.PAID && e.paymentDate &&
-      e.paymentDate.slice(0, 7) === _todayBRKpi.slice(0, 7)
-    ).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    return { total, paid, pending, overdue, paidThisMonth };
-  }, [allExpensesForKpi, periodFilter]);
+  const globalPlannedRows = useMemo(() => (
+    ((tripsData?.data ?? []) as TripPlanningRecord[]).flatMap(trip => [
+      ...(trip.fixedCosts ?? []).map(cost => ({
+        id: `${trip.id}:fixed:${cost.id}`,
+        category: cost.category,
+        description: cost.description,
+        amount: Number(cost.value) || 0,
+        kind: "fixed" as const,
+      })),
+      ...(trip.variableCosts ?? []).map(cost => ({
+        id: `${trip.id}:variable:${cost.id}`,
+        category: cost.category,
+        description: cost.description,
+        amount: (Number(cost.valuePax) || 0) * (trip.totalCapacity ?? 0),
+        kind: "variable" as const,
+      })),
+    ])
+  ), [tripsData]);
 
-  const categoryBreakdown = useMemo(() => {
-    const all = expenses;
-    const map: Record<string, number> = {};
-    for (const e of all) {
-      map[e.category] = (map[e.category] ?? 0) + parseFloat(String(e.amount));
-    }
-    return Object.entries(map)
-      .map(([category, total]) => ({ category, total }))
-      .sort((a, b) => b.total - a.total);
-  }, [expenses]);
+  const selectedTripActualRows = useMemo(() => {
+    if (!selectedTripFinancialData) return [];
+    return [
+      ...(selectedTripFinancialData.costs ?? []).map(cost => ({
+        id: cost.id,
+        category: cost.category,
+        amount: cost.amount,
+        status: cost.status,
+        source: "trip",
+      })),
+      ...(selectedTripFinancialData.agencyExpenses ?? []).map(expense => ({
+        id: expense.id,
+        category: expense.category,
+        amount: expense.amount,
+        status: expense.status,
+        source: "agency",
+      })),
+    ];
+  }, [selectedTripFinancialData]);
+
+  const financialRows = selectedTripActualRows.length > 0 ? selectedTripActualRows : expenses;
+  const financialSummary = selectedTripFinancialData?.summary
+    ? {
+        totalRealCosts: selectedTripFinancialData.summary.totalRealCosts,
+        totalPaidCosts: selectedTripFinancialData.summary.totalPaidCosts,
+        totalPendingCosts: selectedTripFinancialData.summary.totalPendingCosts,
+      }
+    : {
+        total: kpis.total,
+        paid: kpis.paid,
+        pending: kpis.pending,
+        overdue: kpis.overdue,
+      };
+
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, categoryFilter, tripFilter, dateFrom, dateTo, supplierFilter, periodFilter]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const suppliersMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -139,7 +158,12 @@ export default function Expenses() {
       id,
       data: { status: EXPENSE_STATUS.PAID, paymentDate: localToday() }
     });
-    refetch();
+    await Promise.all([
+      refetch(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -161,7 +185,12 @@ export default function Expenses() {
     setCreateCategory("transport");
     setCreateSupplierId("none");
     setCreateTripId("none");
-    refetch();
+    await Promise.all([
+      refetch(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const hasFilters = statusFilter || categoryFilter || tripFilter || dateFrom || dateTo || supplierFilter;
@@ -180,7 +209,7 @@ export default function Expenses() {
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">Resumo financeiro das despesas</p>
-        <Select value={periodFilter} onValueChange={setPeriodFilter}>
+        <Select value={periodFilter} onValueChange={v => setPeriodFilter(v as typeof periodFilter)}>
           <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos os períodos</SelectItem>
@@ -226,28 +255,34 @@ export default function Expenses() {
         </CardContent></Card>
       </div>
 
-      {categoryBreakdown.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Despesas por Categoria</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CategoryChart data={categoryBreakdown} />
-          </CardContent>
-        </Card>
-      )}
+      <FinancialConsolidationView
+        actualRows={financialRows}
+        plannedRows={selectedTripFinancialData?.plannedCosts ?? globalPlannedRows}
+        pricing={selectedTripFinancialData?.pricing}
+        actualSummary={financialSummary}
+        actualCategoryTotals={tripFilter ? undefined : categoryBreakdown.map(item => ({
+          category: normalizeFinancialCategory(item.category),
+          total: item.total,
+        }))}
+        title="Visão financeira consolidada"
+        description={tripFilter
+          ? "Preços por categoria, orçamento planejado, custos da viagem e despesas da agência."
+          : "Custos diretos, despesas da agência e orçamento planejado agregado das viagens reunidos em uma única leitura. Filtre uma viagem para comparar seus preços."}
+        showPaymentBreakdown={!!tripFilter}
+      />
 
       <div className="flex flex-wrap items-center gap-3 bg-card p-4 rounded-lg border">
-        <Select value={statusFilter || "all"} onValueChange={v => setStatusFilter(v === "all" ? "" : v)}>
+         <Select value={statusFilter || "all"} onValueChange={v => { setStatusFilter(v === "all" ? "" : v); }}>
           <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos os status</SelectItem>
             <SelectItem value={EXPENSE_STATUS.PENDING}>Pendente</SelectItem>
             <SelectItem value={EXPENSE_STATUS.PAID}>Pago</SelectItem>
             <SelectItem value={EXPENSE_STATUS.OVERDUE}>Vencido</SelectItem>
+            <SelectItem value={EXPENSE_STATUS.CANCELLED}>Cancelado</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={categoryFilter || "all"} onValueChange={v => setCategoryFilter(v === "all" ? "" : v)}>
+         <Select value={categoryFilter || "all"} onValueChange={v => { setCategoryFilter(v === "all" ? "" : v); }}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Categoria" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas as categorias</SelectItem>
@@ -259,7 +294,7 @@ export default function Expenses() {
             <SelectItem value="other">Outro</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={tripFilter || "all"} onValueChange={v => setTripFilter(v === "all" ? "" : v)}>
+         <Select value={tripFilter || "all"} onValueChange={v => { setTripFilter(v === "all" ? "" : v); }}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Viagem" /></SelectTrigger>
           <SelectContent className="max-h-48">
             <SelectItem value="all">Todas as viagens</SelectItem>
@@ -270,7 +305,7 @@ export default function Expenses() {
         </Select>
         {(suppliersRaw ?? []).length > 0 && (
           <Select value={supplierFilter || "all"} onValueChange={v => setSupplierFilter(v === "all" ? "" : v)}>
-            <SelectTrigger className="w-[160px]"><SelectValue placeholder="Fornecedor" /></SelectTrigger>
+             <SelectTrigger className="w-[160px]"><SelectValue placeholder="Fornecedor" /></SelectTrigger>
             <SelectContent className="max-h-48">
               <SelectItem value="all">Todos fornecedores</SelectItem>
               {(suppliersRaw ?? []).map(s => (
@@ -280,7 +315,7 @@ export default function Expenses() {
           </Select>
         )}
         <div className="flex items-center gap-2">
-          <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-36" placeholder="De" />
+             <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-36" placeholder="De" />
           <span className="text-muted-foreground text-sm">até</span>
           <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-36" placeholder="Até" />
         </div>
@@ -295,7 +330,8 @@ export default function Expenses() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Descrição</TableHead>
+               <TableHead>Descrição</TableHead>
+               <TableHead>Origem</TableHead>
               <TableHead>Categoria</TableHead>
               <TableHead>Fornecedor</TableHead>
               <TableHead>Viagem</TableHead>
@@ -309,23 +345,30 @@ export default function Expenses() {
           <TableBody>
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                <TableRow key={i}>{Array.from({ length: 10 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
               ))
             ) : isError ? (
               <ListLoadErrorRow
-                colSpan={9}
+                 colSpan={10}
                 onRetry={refetch}
                 message="Não foi possível carregar as despesas."
               />
             ) : expenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+                 <TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
                   {hasFilters ? "Nenhuma despesa com os filtros selecionados." : "Nenhuma despesa registrada."}
                 </TableCell>
               </TableRow>
             ) : expenses.map(e => (
               <TableRow key={e.id}>
                 <TableCell className="font-medium text-sm">{e.description}</TableCell>
+                 <TableCell className="text-sm">
+                   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                     e.source === "trip" ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-700"
+                   }`}>
+                     {e.source === "trip" ? "Custo da viagem" : "Despesa da agência"}
+                   </span>
+                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">{CATEGORY_LABELS[e.category] ?? e.category}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {e.supplierId ? (
@@ -335,9 +378,9 @@ export default function Expenses() {
                       onClick={() => setSupplierFilter(e.supplierId!)}
                       title="Filtrar por este fornecedor"
                     >
-                      {suppliersMap[e.supplierId] ?? e.supplierId.slice(0, 8) + "…"}
+                       {e.supplierName ?? suppliersMap[e.supplierId] ?? e.supplierId.slice(0, 8) + "…"}
                     </button>
-                  ) : "—"}
+                   ) : e.supplierName ?? "—"}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">{e.tripId ? tripsData?.data.find(t => t.id === e.tripId)?.name ?? e.tripId.slice(0, 8) + "…" : "—"}</TableCell>
                 <TableCell className="text-sm">{new Date(e.dueDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}</TableCell>
@@ -349,7 +392,7 @@ export default function Expenses() {
                   </span>
                 </TableCell>
                 <TableCell className="text-right">
-                  {e.status !== EXPENSE_STATUS.PAID && (
+                   {e.source !== "trip" && e.status !== EXPENSE_STATUS.PAID && e.status !== EXPENSE_STATUS.CANCELLED && (
                     <Button size="sm" variant="outline" onClick={() => handleMarkPaid(e.id)}>
                       <CheckCircle className="w-4 h-4 mr-1" /> Pago
                     </Button>
@@ -360,6 +403,23 @@ export default function Expenses() {
           </TableBody>
         </Table>
       </div>
+
+       {totalPages > 1 && (
+         <div className="flex items-center justify-between px-2">
+           <p className="text-sm text-muted-foreground">
+             Mostrando {((page - 1) * EXPENSE_PAGE_SIZE) + 1}–{Math.min(page * EXPENSE_PAGE_SIZE, expensesData?.total ?? 0)} de {expensesData?.total ?? 0} registros
+           </p>
+           <div className="flex items-center gap-2">
+             <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+               <ChevronLeft className="w-4 h-4" /> Anterior
+             </Button>
+             <span className="text-sm font-medium">{page} / {totalPages}</span>
+             <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+               Próxima <ChevronRight className="w-4 h-4" />
+             </Button>
+           </div>
+         </div>
+       )}
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         <DialogContent className="max-w-md">

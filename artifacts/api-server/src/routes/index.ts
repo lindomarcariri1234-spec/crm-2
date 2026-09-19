@@ -10,6 +10,7 @@ import paymentsRouter from "./payments";
 import pipelineRouter from "./pipeline";
 import communicationRouter from "./communication";
 import registrationsRouter from "./registrations";
+import accommodationOperationsRouter from "./accommodation-operations";
 import marketingRouter from "./marketing";
 import dashboardRouter from "./dashboard";
 import loyaltyRouter from "./loyalty";
@@ -61,6 +62,7 @@ import cronRouter from "./cron";
 import spreadsheetImportsRouter from "./spreadsheet-imports";
 import financialMetricsRouter from "./financial-metrics";
 import outboundMessagesRouter from "./outbound-messages";
+import pmsRouter from "./pms";
 
 const router: IRouter = Router();
 
@@ -82,6 +84,8 @@ router.use(pipelineRouter);
 router.use(communicationRouter);
 router.use(outboundMessagesRouter);
 router.use(registrationsRouter);
+router.use(accommodationOperationsRouter);
+router.use(pmsRouter);
 router.use(marketingRouter);
 router.use(loyaltyRouter);
 router.use(commissionsRouter);

@@ -1,7 +1,17 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { paymentsTable, reservationsTable, clientsTable, tripsTable, expensesTable, passengersTable } from "@workspace/db";
-import { eq, and, gte, lte, inArray } from "drizzle-orm";
+import {
+  paymentsTable,
+  reservationsTable,
+  clientsTable,
+  tripsTable,
+  expensesTable,
+  passengersTable,
+  pmsPaymentAdjustmentsTable,
+  pmsReservationsTable,
+  usersTable,
+} from "@workspace/db";
+import { eq, and, gte, ilike, lte, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import ExcelJS from "exceljs";
@@ -21,6 +31,8 @@ const ReportExportBody = z.object({
   format: z.enum(["csv", "xlsx", "pdf"]),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  reservationNumber: z.string().trim().max(100).optional(),
+  adjustedBy: z.string().trim().max(100).optional(),
 });
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
@@ -84,7 +96,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
       next(new ValidationError(parsed.error.issues[0]?.message ?? "Dados inválidos", "VALIDATION_ERROR"));
       return;
     }
-    const { reportType, format: fmt, startDate, endDate } = parsed.data;
+    const { reportType, format: fmt, startDate, endDate, reservationNumber, adjustedBy } = parsed.data;
 
     const tenantId = me.tenantId;
     // Default start-of-month uses Brazil calendar so the report covers the correct month at night
@@ -109,7 +121,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
 
     // ── FINANCIAL ──────────────────────────────────────────────────────────────
     if (reportType === "financial") {
-      const [payments, expenses] = await Promise.all([
+      const [payments, expenses, pmsAdjustments] = await Promise.all([
         db.select({
           id: paymentsTable.id,
           type: paymentsTable.type,
@@ -131,9 +143,29 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
           gte(expensesTable.createdAt, start),
           lte(expensesTable.createdAt, end),
         )).limit(MAX_EXPORT_ROWS + 1),
+        db.select({
+          id: pmsPaymentAdjustmentsTable.id,
+          reservationNumber: pmsReservationsTable.reservationNumber,
+          previousPaidAmount: pmsPaymentAdjustmentsTable.previousPaidAmount,
+          newPaidAmount: pmsPaymentAdjustmentsTable.newPaidAmount,
+          deltaAmount: pmsPaymentAdjustmentsTable.deltaAmount,
+          reason: pmsPaymentAdjustmentsTable.reason,
+          createdAt: pmsPaymentAdjustmentsTable.createdAt,
+          adjustedByName: usersTable.name,
+        }).from(pmsPaymentAdjustmentsTable)
+          .innerJoin(pmsReservationsTable, eq(pmsReservationsTable.id, pmsPaymentAdjustmentsTable.reservationId))
+          .leftJoin(usersTable, eq(usersTable.id, pmsPaymentAdjustmentsTable.adjustedById))
+          .where(and(
+            eq(pmsPaymentAdjustmentsTable.tenantId, tenantId),
+            gte(pmsPaymentAdjustmentsTable.createdAt, start),
+            lte(pmsPaymentAdjustmentsTable.createdAt, end),
+            ...(reservationNumber ? [ilike(pmsReservationsTable.reservationNumber, `%${reservationNumber}%`)] : []),
+            ...(adjustedBy ? [ilike(usersTable.name, `%${adjustedBy}%`)] : []),
+          ))
+          .limit(MAX_EXPORT_ROWS + 1),
       ]);
 
-      if (payments.length > MAX_EXPORT_ROWS || expenses.length > MAX_EXPORT_ROWS) {
+      if (payments.length > MAX_EXPORT_ROWS || expenses.length > MAX_EXPORT_ROWS || pmsAdjustments.length > MAX_EXPORT_ROWS) {
         next(new ValidationError(`Volume de dados muito grande para exportação direta (limite de ${MAX_EXPORT_ROWS} registros). Reduza o período.`, "VALIDATION_ERROR"));
         return;
       }
@@ -145,6 +177,15 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
       const totalExpenses = payables.filter(p => p.status === PAYMENT_STATUS.PAID).reduce((s, p) => s + Number(p.amount), 0) +
         expenses.reduce((s, e) => s + Number(e.amount), 0);
       const profit = totalReceived - totalExpenses;
+      const pmsAdjustmentRows = pmsAdjustments.map(adjustment => [
+        adjustment.reservationNumber,
+        fmtCur(adjustment.previousPaidAmount),
+        fmtCur(adjustment.newPaidAmount),
+        fmtCur(adjustment.deltaAmount),
+        adjustment.reason,
+        adjustment.adjustedByName ?? "Usuário removido",
+        fmtDate(adjustment.createdAt),
+      ]);
 
       if (fmt === "csv") {
         const headers = ["Tipo", "Categoria", "Descrição", "Valor", "Status", "Vencimento", "Pago em", "Método"];
@@ -152,7 +193,13 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
           p.type, p.category, p.description ?? "", fmtCur(p.amount),
           p.status, fmtDate(p.dueDate), fmtDate(p.paidAt), p.paymentMethod,
         ]);
-        const csv = "\uFEFF" + buildCsv([headers, ...rows]);
+        const csv = "\uFEFF" + buildCsv([
+          ...[headers, ...rows],
+          [],
+          ["AJUSTES DE PAGAMENTOS PMS (não incluídos na receita)"],
+          ["Reserva", "Recebido anterior", "Recebido novo", "Variação", "Motivo", "Ajustado por", "Criado em"],
+          ...pmsAdjustmentRows,
+        ]);
         res.setHeader("Content-Type", "text/csv;charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename="financeiro_receitas_${new Date().toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 10).replaceAll("-", "")}.csv"`);
         res.send(csv);
@@ -172,6 +219,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
             ["Receitas Pendentes", fmtCur(totalPending)],
             ["Total Despesas", fmtCur(totalExpenses)],
             ["Lucro Líquido", fmtCur(profit)],
+            ["Ajustes PMS (fora da receita)", String(pmsAdjustments.length)],
           ],
           styles: { fontSize: 9 },
           headStyles: { fillColor: [59, 130, 246] },
@@ -207,6 +255,17 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
             headStyles: { fillColor: [239, 68, 68] },
           });
         }
+        if (pmsAdjustmentRows.length > 0) {
+          doc.addPage();
+          pdfSection(doc, "Ajustes de pagamentos PMS (fora da receita)", 18);
+          doc.autoTable({
+            startY: 24,
+            head: [["Reserva", "Recebido anterior", "Recebido novo", "Variação", "Motivo", "Ajustado por", "Criado em"]],
+            body: pmsAdjustmentRows,
+            styles: { fontSize: 7 },
+            headStyles: { fillColor: [124, 58, 237] },
+          });
+        }
 
         const buf = Buffer.from(doc.output("arraybuffer"));
         res.setHeader("Content-Type", "application/pdf");
@@ -229,6 +288,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
           { k: "Receitas Pendentes", v: totalPending },
           { k: "Total Despesas", v: totalExpenses },
           { k: "Lucro Líquido", v: profit },
+          { k: "Ajustes PMS (fora da receita)", v: pmsAdjustments.length },
         ]);
         ws1.getColumn("v").numFmt = '"R$"#,##0.00';
 
@@ -267,6 +327,30 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
           ws3.addRow({ category: e.category, description: e.description, amount: Number(e.amount), status: e.status === EXPENSE_STATUS.PAID ? "Pago" : "Pendente", dueDate: fmtDate(e.dueDate), paidAt: fmtDate(e.paymentDate) });
         }
         ws3.getColumn("amount").numFmt = '"R$"#,##0.00';
+
+        const ws4 = wb.addWorksheet("Ajustes PMS");
+        ws4.columns = [
+          { header: "Reserva", key: "reservation", width: 18 },
+          { header: "Recebido anterior", key: "previous", width: 18 },
+          { header: "Recebido novo", key: "new", width: 16 },
+          { header: "Variação", key: "delta", width: 14 },
+          { header: "Motivo", key: "reason", width: 40 },
+          { header: "Ajustado por", key: "adjustedBy", width: 24 },
+          { header: "Criado em", key: "createdAt", width: 14 },
+        ];
+        ws4.getRow(1).font = { bold: true };
+        for (const adjustment of pmsAdjustments) {
+          ws4.addRow({
+            reservation: adjustment.reservationNumber,
+            previous: Number(adjustment.previousPaidAmount),
+            new: Number(adjustment.newPaidAmount),
+            delta: Number(adjustment.deltaAmount),
+            reason: adjustment.reason,
+            adjustedBy: adjustment.adjustedByName ?? "Usuário removido",
+            createdAt: fmtDate(adjustment.createdAt),
+          });
+        }
+        for (const column of ["previous", "new", "delta"]) ws4.getColumn(column).numFmt = '"R$"#,##0.00';
 
         const buf = await wb.xlsx.writeBuffer();
         res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

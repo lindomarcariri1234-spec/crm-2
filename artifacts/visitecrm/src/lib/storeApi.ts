@@ -258,7 +258,12 @@ export const publicStoreApi = {
       }>;
     }>("GET", `/public/store/${slug}/trips/${tripId}/seat-map`),
   createPaymentIntent: (slug: string, orderNumber: string, paymentToken: string) =>
-    publicReq<{ clientSecret: string; publishableKey: string }>(
+    publicReq<{
+      clientSecret: string | null;
+      paymentIntentId?: string;
+      publishableKey: string;
+      reused?: boolean;
+    }>(
       "POST",
       `/public/store/${slug}/create-payment-intent`,
       { orderNumber, paymentToken }
@@ -435,6 +440,7 @@ export interface StoreProduct {
   storeId?: string;
   categoryId?: string | null;
   tripId?: string | null;
+  accommodationId?: string | null;
   availableSeats?: number | null;
   totalCapacity?: number | null;
   departureDate?: string | null;
@@ -702,6 +708,7 @@ export interface ProductInput {
   type?: string;
   categoryId?: string;
   tripId?: string;
+  accommodationId?: string | null;
   shortDescription?: string;
   description?: string;
   price?: string;

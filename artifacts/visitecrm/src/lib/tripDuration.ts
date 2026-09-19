@@ -1,3 +1,5 @@
+import { parseTripDateTime } from "./tripDateTime";
+
 export interface TripDuration {
   totalMinutes: number;
   days: number;
@@ -14,22 +16,11 @@ export function calculateTripDuration(
 ): TripDuration | null {
   if (!departureDate || !returnDate) return null;
 
-  const depDateStr = departureDate.length <= 10 ? departureDate : departureDate.slice(0, 10);
-  const retDateStr = returnDate.length <= 10 ? returnDate : returnDate.slice(0, 10);
-
-  const [depH = 0, depM = 0] = departureTime
-    ? departureTime.split(":").map(Number)
-    : [0, 0];
-  const [retH = 0, retM = 0] = returnTime
-    ? returnTime.split(":").map(Number)
-    : [0, 0];
-
-  const departure = new Date(
-    `${depDateStr}T${String(depH).padStart(2, "0")}:${String(depM).padStart(2, "0")}:00`,
-  );
-  const returnDt = new Date(
-    `${retDateStr}T${String(retH).padStart(2, "0")}:${String(retM).padStart(2, "0")}:00`,
-  );
+  const departure = parseTripDateTime(departureDate, departureTime);
+  const returnDt = parseTripDateTime(returnDate, returnTime);
+  if (Number.isNaN(departure.getTime()) || Number.isNaN(returnDt.getTime())) {
+    return null;
+  }
 
   const totalMinutes = Math.max(
     0,

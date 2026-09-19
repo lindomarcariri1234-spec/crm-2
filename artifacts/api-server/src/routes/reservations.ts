@@ -1306,15 +1306,67 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
 
     const txResult: TxResult = await db.transaction(async (tx) => {
       const lockResult = await tx.execute(
-        sql`SELECT id, available_seats, type FROM trips WHERE id = ${parsed.data.tripId} AND tenant_id = ${me.tenantId} FOR UPDATE`
+        sql`SELECT id, available_seats, type, accommodation_id FROM trips WHERE id = ${parsed.data.tripId} AND tenant_id = ${me.tenantId} FOR UPDATE`
       );
       // Drizzle's tx.execute() returns the raw node-postgres QueryResult; cast to access .rows
-      const tripRow = (lockResult as unknown as { rows: Array<{ id: string; available_seats: number; type: string }> }).rows[0];
+      const tripRow = (lockResult as unknown as {
+        rows: Array<{ id: string; available_seats: number; type: string; accommodation_id: string | null }>;
+      }).rows[0];
       if (!tripRow) return { error: "Trip not found or not in tenant", status: 400 };
 
       const availableSeats = Number(tripRow.available_seats);
       if (availableSeats < seatsCount) {
         return { error: "Não há vagas suficientes nesta viagem", status: 409, code: "RESERVATION_CONFLICT" };
+      }
+
+      let selectedRoomName: string | null = null;
+      if (parsed.data.roomId) {
+        if (!tripRow.accommodation_id) {
+          return {
+            error: "A viagem não possui hospedagem vinculada",
+            status: 400,
+            code: "TRIP_ACCOMMODATION_REQUIRED",
+          };
+        }
+
+        const [room] = await tx.select({
+          id: accommodationRoomsTable.id,
+          name: accommodationRoomsTable.name,
+          capacity: accommodationRoomsTable.capacity,
+          status: accommodationRoomsTable.status,
+          isActive: accommodationRoomsTable.isActive,
+        }).from(accommodationRoomsTable).where(and(
+          eq(accommodationRoomsTable.id, parsed.data.roomId),
+          eq(accommodationRoomsTable.accommodationId, tripRow.accommodation_id),
+          eq(accommodationRoomsTable.tenantId, me.tenantId),
+        )).limit(1);
+
+        if (!room) {
+          return { error: "Quarto não encontrado na hospedagem da viagem", status: 400, code: "ROOM_NOT_FOUND" };
+        }
+        if (room.status !== "active" || !room.isActive) {
+          return { error: "O quarto selecionado está inativo", status: 409, code: "ROOM_INACTIVE" };
+        }
+
+        const occupiedRows = await tx.select({ passengerId: reservationRoomAssignmentsTable.passengerId })
+          .from(reservationRoomAssignmentsTable)
+          .innerJoin(reservationsTable, eq(reservationsTable.id, reservationRoomAssignmentsTable.reservationId))
+          .where(and(
+            eq(reservationRoomAssignmentsTable.tenantId, me.tenantId),
+            eq(reservationRoomAssignmentsTable.tripId, parsed.data.tripId),
+            eq(reservationRoomAssignmentsTable.roomId, room.id),
+            inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+          ));
+        const requestedOccupancy = Math.max(1, seatsCount);
+        const occupied = occupiedRows.length + requestedOccupancy;
+        if (occupied > room.capacity) {
+          return {
+            error: `O quarto ${room.name} não possui vagas suficientes`,
+            status: 409,
+            code: "ROOM_CAPACITY_EXCEEDED",
+          };
+        }
+        selectedRoomName = room.name;
       }
 
       if (serverCouponId) {
@@ -1341,7 +1393,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         clientId: parsed.data.clientId,
         seats: parsed.data.seats,
         tripType: parsed.data.tripType ?? null,
-        packageType: parsed.data.packageType ?? null,
+        packageType: parsed.data.packageType ?? selectedRoomName,
         hasInsurance: parsed.data.hasInsurance ?? false,
         isGratuidade: parsed.data.isGratuidade ?? false,
         totalValue: String(serverFinalTotal),
@@ -1390,8 +1442,9 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         });
       }
 
+      const passengerIds = [generateId()];
       await tx.insert(passengersTable).values({
-        id: generateId(),
+        id: passengerIds[0],
         reservationId: id,
         name: client.name,
         cpf: client.cpf ?? null,
@@ -1416,8 +1469,10 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
 
       // Create placeholder passengers for additional seats (seats 1..N-1)
       for (let i = 1; i < seatsCount; i++) {
+        const passengerId = generateId();
+        passengerIds.push(passengerId);
         await tx.insert(passengersTable).values({
-          id: generateId(),
+          id: passengerId,
           reservationId: id,
           name: "A preencher",
           cpf: null,
@@ -1428,6 +1483,19 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
           isChildUnder7: false,
           isPrimary: false,
         });
+      }
+
+      if (parsed.data.roomId) {
+        await tx.insert(reservationRoomAssignmentsTable).values(
+          passengerIds.map((passengerId) => ({
+            id: generateId(),
+            tenantId: me.tenantId,
+            tripId: parsed.data.tripId,
+            reservationId: id,
+            passengerId,
+            roomId: parsed.data.roomId!,
+          })),
+        );
       }
 
       await tx.update(tripsTable).set({
@@ -3118,13 +3186,20 @@ router.put("/reservations/:reservationId/room-assignments", async (req, res, nex
         }
         for (const [roomId, requestedCount] of requestedByRoom) {
           const room = roomsById.get(roomId)!;
-          const occupied = (occupiedByRoom.get(roomId) ?? 0) + requestedCount;
+          const currentOccupied = occupiedByRoom.get(roomId) ?? 0;
+          const occupied = currentOccupied + requestedCount;
           if (occupied > room.capacity) {
             throw new AppError(
               `O quarto ${room.name} não possui vagas suficientes`,
               409,
               "ROOM_CAPACITY_EXCEEDED",
-              { roomId, capacity: room.capacity, occupied },
+              {
+                roomId,
+                capacity: room.capacity,
+                occupied,
+                currentOccupied,
+                requestedCount,
+              },
             );
           }
         }

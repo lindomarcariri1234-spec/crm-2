@@ -107,6 +107,40 @@ describe("canonical financial metrics", () => {
     });
   });
 
+  it("discloses PMS payment adjustments without counting them as revenue", () => {
+    const result = calculateFinancialMetrics(sources({
+      reservations: [
+        { id: "legacy-reservation", tripId: "trip", status: "confirmed", totalValue: "100", createdAt: date("2025-02-10T12:00:00Z") },
+      ],
+      payments: [
+        { id: "legacy-payment", reservationId: "legacy-reservation", type: "receivable", status: "paid", amount: "40", paidAt: date("2025-02-10T12:00:00Z") },
+      ],
+      pmsPaymentAdjustments: [
+        {
+          id: "pms-adjustment",
+          reservationId: "pms-reservation",
+          reservationNumber: "PMS-202502-001",
+          previousPaidAmount: "80",
+          newPaidAmount: "30",
+          deltaAmount: "-50",
+          reason: "Estorno parcial",
+          adjustedByName: "Admin",
+          createdAt: date("2025-02-11T12:00:00Z"),
+        },
+      ],
+    }), period);
+
+    expect(result.totals).toMatchObject({ bookedRevenue: 100, receivedRevenue: 40, profit: 40 });
+    expect(result.pmsPaymentAdjustments).toEqual([expect.objectContaining({
+      reservationNumber: "PMS-202502-001",
+      previousPaidAmount: 80,
+      newPaidAmount: 30,
+      deltaAmount: -50,
+      reason: "Estorno parcial",
+    })]);
+    expect(result.diagnostics.sourceRows.pmsPaymentAdjustments).toBe(1);
+  });
+
   it("scales duplicate diagnostics with a large irrelevant history", () => {
     const historicalExpenses = Array.from({ length: 5_000 }, (_, index) => ({
       id: `other-tenant-expense-${index}`,
@@ -154,5 +188,16 @@ describe("canonical financial metrics", () => {
     }
     expect(dialect.sqlToQuery(filters.payments!).params).not.toContain(asOf);
     expect(dialect.sqlToQuery(filters.overduePayments!).params).toContain(asOf.toISOString());
+
+    const filtered = buildFinancialMetricFilters(tenantId, period, asOf, {
+      reservationNumber: "PMS-001",
+      adjustedBy: "Ana",
+    });
+    const pmsQuery = dialect.sqlToQuery(filtered.pmsPaymentAdjustments!);
+    expect(pmsQuery.params).toEqual(expect.arrayContaining([
+      tenantId,
+      "%PMS-001%",
+      "%Ana%",
+    ]));
   });
 });

@@ -73,6 +73,7 @@ vi.mock("@workspace/db", () => ({
   db: { select: mockSelect, insert: mockInsert, update: mockUpdate },
   tripsTable: {},
   tripCostsTable: {},
+  expensesTable: {},
   platformSettingsTable: {},
   redisAlertLogTable: {},
   reservationsTable: {},
@@ -119,7 +120,7 @@ vi.mock("../lib/tenant", () => ({
 // ---------------------------------------------------------------------------
 
 import { requireAuth } from "../lib/tenant";
-import tripCostsRouter from "../routes/trip-costs.js";
+import tripCostsRouter, { calculatePlannedCosts } from "../routes/trip-costs.js";
 import platformSettingsRouter from "../routes/platform-settings.js";
 import reportsRouter from "../routes/reports.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
@@ -150,6 +151,175 @@ function buildApp(router: express.Router) {
 
 const AGENCY_USER = { id: "user-001", tenantId: "tenant-001", role: ROLES.AGENCY_ADMIN };
 const SUPERADMIN_USER = { id: "user-002", tenantId: "tenant-001", role: ROLES.SUPER_ADMIN };
+
+describe("trip planning budget calculation", () => {
+  it("uses full capacity for variable costs and preserves the per-passenger value", () => {
+    const fixedCosts = [
+      { id: "fixed-transport", category: "Transporte", description: "Fretamento", value: 12_500 },
+    ];
+    const variableCosts = [
+      { id: "variable-food", category: "Alimentação", description: "Alimentação dos passageiros", valuePax: 35 },
+      { id: "variable-gifts", category: "Extras", description: "Brindes", valuePax: 6 },
+      { id: "variable-referral", category: "Extras", description: "Link de Indicação", valuePax: 42 },
+    ];
+
+    const plan = calculatePlannedCosts(fixedCosts, variableCosts, 55);
+
+    expect(plan.plannedBudget).toBe(17_065);
+    expect(plan.plannedCosts).toEqual([
+      {
+        id: "fixed-transport",
+        kind: "fixed",
+        category: "Transporte",
+        description: "Fretamento",
+        amount: 12_500,
+        amountPerPassenger: null,
+      },
+      {
+        id: "variable-food",
+        kind: "variable",
+        category: "Alimentação",
+        description: "Alimentação dos passageiros",
+        amount: 1_925,
+        amountPerPassenger: 35,
+      },
+      {
+        id: "variable-gifts",
+        kind: "variable",
+        category: "Extras",
+        description: "Brindes",
+        amount: 330,
+        amountPerPassenger: 6,
+      },
+      {
+        id: "variable-referral",
+        kind: "variable",
+        category: "Extras",
+        description: "Link de Indicação",
+        amount: 2_310,
+        amountPerPassenger: 42,
+      },
+    ]);
+  });
+
+  it("does not recalculate the planned budget from confirmed passenger count", () => {
+    const variableCosts = [
+      { id: "variable-food", category: "Alimentação", description: "Alimentação", valuePax: 35 },
+    ];
+
+    const planWithTwentyConfirmed = calculatePlannedCosts([], variableCosts, 55);
+    const planWithNoConfirmed = calculatePlannedCosts([], variableCosts, 55);
+
+    expect(planWithTwentyConfirmed.plannedBudget).toBe(1_925);
+    expect(planWithNoConfirmed.plannedBudget).toBe(planWithTwentyConfirmed.plannedBudget);
+    expect(planWithTwentyConfirmed.plannedCosts[0]).toMatchObject({
+      amount: 1_925,
+      amountPerPassenger: 35,
+    });
+  });
+
+});
+
+describe("GET /api/trips/:id/costs — cancelled expenses", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    requireAuthMock.mockResolvedValue(AGENCY_USER as never);
+  });
+
+  it("keeps cancelled expenses visible without including them in trip results", async () => {
+    const activeTripCost = {
+      id: "trip-active",
+      tripId: "trip-001",
+      tenantId: "tenant-001",
+      category: "Transporte",
+      description: "Custo direto ativo",
+      supplierId: null,
+      supplierName: null,
+      amount: "700.00",
+      status: "paid",
+      dueDate: new Date("2026-09-12T12:00:00Z"),
+      paidAt: new Date("2026-09-10T12:00:00Z"),
+      notes: null,
+      createdAt: new Date("2026-09-03T12:00:00Z"),
+    };
+    const cancelledTripCost = {
+      ...activeTripCost,
+      id: "trip-cancelled",
+      amount: "900.00",
+      status: "cancelled",
+    };
+    const activeAgencyExpense = {
+      id: "agency-active",
+      tripId: "trip-001",
+      tenantId: "tenant-001",
+      category: "transport",
+      description: "Despesa ativa",
+      amount: "300.00",
+      supplierId: null,
+      paymentMethod: "pix",
+      paymentDate: new Date("2026-09-10T12:00:00Z"),
+      dueDate: new Date("2026-09-10T12:00:00Z"),
+      status: "paid",
+      notes: null,
+      createdAt: new Date("2026-09-01T12:00:00Z"),
+    };
+    const cancelledAgencyExpense = {
+      ...activeAgencyExpense,
+      id: "agency-cancelled",
+      amount: "800.00",
+      status: "cancelled",
+    };
+    const tripRow = {
+      id: "trip-001",
+      priceAdult: "100.00",
+      priceChild: null,
+      priceSenior: null,
+      totalCapacity: 20,
+      fixedCosts: [{ id: "planned-transport", category: "Transporte", description: "Planejado", value: 100 }],
+      variableCosts: [],
+    };
+
+    const selectResult = (rows: unknown[]) => {
+      const terminal = () => Promise.resolve(rows);
+      const whereResult = Object.assign(Promise.resolve(rows), {
+        limit: terminal,
+        orderBy: terminal,
+      });
+      return {
+        from: () => ({
+          where: () => whereResult,
+          limit: terminal,
+          orderBy: terminal,
+        }),
+      };
+    };
+    mockSelect
+      .mockImplementationOnce(() => selectResult([{ id: "trip-001" }]))
+      .mockImplementationOnce(() => selectResult([activeTripCost, cancelledTripCost]))
+      .mockImplementationOnce(() => selectResult([activeAgencyExpense, cancelledAgencyExpense]))
+      .mockImplementationOnce(() => selectResult([tripRow]))
+      .mockImplementationOnce(() => selectResult([{ total: 2 }]));
+
+    const res = await request(buildApp(tripCostsRouter)).get("/api/trips/trip-001/costs");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.costs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "trip-cancelled", status: "cancelled" }),
+    ]));
+    expect(res.body.agencyExpenses).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "agency-cancelled", status: "cancelled" }),
+    ]));
+    expect(res.body.summary).toMatchObject({
+      totalTripCosts: 700,
+      totalAgencyExpenses: 300,
+      totalRealCosts: 1000,
+      totalPaidCosts: 1000,
+      totalPendingCosts: 0,
+      profit: -800,
+      budgetVariance: 900,
+    });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/trips/:id/costs

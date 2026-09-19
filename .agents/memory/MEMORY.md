@@ -119,3 +119,12 @@
 - [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
 - [Vercel CLI firewall fallback](vercel-cli-firewall-fallback.md) — if pnpm dlx is blocked on a transitive download, reuse an already extracted CLI from the pnpm cache
 - [Manual table migration snapshots](manual-table-snapshot-sync.md) — hand-written table migrations need a later consolidated snapshot for live schema verification
+- [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
+- [Audit failure log hygiene](audit-failure-logging.md) — audit-write failures log only operational identifiers and error type; never snapshots or raw exception details
+- [PMS legacy projection](pms-legacy-projection.md) — keep legacy accommodations as the source and idempotently project new records before PMS reads
+- [PMS schema verification](pms-schema-verification.md) — after PMS column migrations, verify the live database separately; an apparently successful migrate can still leave schema drift
+- [Concurrent audit snapshot tests](concurrent-audit-snapshot-tests.md) — assert concurrent event order through before/after snapshot chaining, not timestamps that may tie
+- [Radix form test harness](radix-form-test-harness.md) — mock scrollIntoView and use the native input value setter when testing controlled inputs and Radix Select in the DOM harness
+- [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
+- [Vitest 4 constructor mocks](vitest4-constructor-mocks.md) — mocks instantiated with `new` need constructable function/class shapes after the Vitest 4 upgrade
+- [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping

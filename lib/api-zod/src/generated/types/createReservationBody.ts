@@ -14,6 +14,11 @@ export interface CreateReservationBody {
   tripType?: string | null;
   /** @nullable */
   packageType?: string | null;
+  /**
+   * ID of the accommodation room assigned to the primary passenger
+   * @nullable
+   */
+  roomId?: string | null;
   hasInsurance?: boolean;
   totalValue: number;
   /** @nullable */

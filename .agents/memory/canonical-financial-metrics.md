@@ -5,6 +5,8 @@ description: Rules for keeping VisiteCRM financial totals comparable without dou
 
 Use payment rows for cash received and open receivables/payables; use reservation rows for booked value and discounts. General expenses and trip costs remain separate sources. Seller commissions, referral commissions, client bonuses, client credits and current user referral balances are distinct concepts and must be reported separately.
 
+Trip planning budgets use the trip's full capacity for fixed-plus-variable cost projections; confirmed passengers are reserved for realized revenue and payment metrics, so booking activity must not rewrite the planned budget.
+
 Cash profit subtracts paid operating costs, paid commissions and paid client bonuses from received revenue. Accrued totals must never be silently mixed into that cash formula.
 
 Potential duplicates across general expenses and trip costs may be diagnosed, but must not be automatically merged using amount/date similarity because there is no immutable cross-source identity.

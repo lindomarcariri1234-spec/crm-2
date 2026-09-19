@@ -13,7 +13,7 @@ import {
   X, DollarSign, ClipboardList, AlertCircle, Copy, ShoppingBag, Images, Upload, Download, Loader2,
 } from "lucide-react";
 import { STATUS_MAP, TRIP_TYPES, TRIP_TYPE_LABELS } from "./constants";
-import { formatCurrency, formatDate } from "./utils";
+import { formatCurrency, formatTripDateRange } from "./utils";
 import { TripCountdown, OccupancyBar } from "./TripCountdown";
 import { BoardingPanelModal } from "./BoardingPanelModal";
 import { TripCard, PublishToStoreDialog } from "./TripCard";
@@ -164,7 +164,7 @@ export function TripList() {
                     <p className="font-medium truncate">{trip.name}</p>
                     <p className="text-xs text-muted-foreground">{trip.destination}</p>
                   </div>
-                  <TripCountdown date={trip.departureDate} />
+                  <TripCountdown date={trip.departureDate} time={trip.departureTime} />
                 </div>
                 <OccupancyBar reserved={trip.totalCapacity - trip.availableSeats} confirmed={0} free={0} total={trip.totalCapacity} />
               </div>
@@ -243,7 +243,7 @@ export function TripList() {
                   {trip.originCity && <><span className="text-blue-600 font-medium">{trip.originCity}</span><span>→</span></>}
                   <span>{trip.destinationCity}, {trip.destinationState}</span>
                   <span>·</span>
-                  <span>{formatDate(trip.departureDate)}{trip.departureTime ? ` às ${trip.departureTime}` : ""}</span>
+                   <span>{formatTripDateRange(trip.departureDate, trip.returnDate, trip.departureTime, trip.returnTime)}</span>
                   <TripCountdown date={trip.departureDate} time={trip.departureTime} />
                 </p>
               </div>

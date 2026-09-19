@@ -11,6 +11,8 @@ export * from "./payments";
 export * from "./pipeline";
 export * from "./communication";
 export * from "./registrations";
+export * from "./accommodation";
+export * from "./pms";
 export * from "./marketing";
 export * from "./loyalty";
 export * from "./referrals";

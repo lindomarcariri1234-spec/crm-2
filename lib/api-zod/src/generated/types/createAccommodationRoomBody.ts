@@ -11,6 +11,13 @@ export interface CreateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity: number;
+  description?: string | null;
+  /** @minimum 1 */
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @minimum 0 */
   pricePerNight?: number | null;
 }

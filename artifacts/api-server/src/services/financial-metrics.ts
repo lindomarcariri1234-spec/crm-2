@@ -1,7 +1,8 @@
-import { and, eq, gte, inArray, isNotNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, ilike, inArray, isNotNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
 import {
   db, commissionsTable, expensesTable, financialLedgerEntriesTable, paymentsTable,
-  referralCommissionsTable, referralsTable, reservationsTable, tripCostsTable, usersTable,
+  pmsPaymentAdjustmentsTable, pmsReservationsTable, referralCommissionsTable, referralsTable,
+  reservationsTable, tripCostsTable, usersTable,
 } from "@workspace/db";
 
 /**
@@ -37,11 +38,16 @@ export const FINANCIAL_METRIC_CONTRACTS = {
   operatingCostsPaid: "Paid general expenses plus paid trip costs. Both sources remain separate and cross-source similarities are diagnostic only.",
   profit: "Cash profit: receivedRevenue minus operatingCostsPaid, paid seller/referral commissions, and client referral bonuses paid.",
   margin: "profit / receivedRevenue * 100 (zero when no received revenue).",
-  deduplication: "Rows are de-duplicated only by their immutable id within their own source. Expenses and trip costs are source-distinct and both count; no unsafe amount/date heuristic is used. Ledger entries are disclosed but not folded into totals to avoid double counting their originating referral/commission rows.",
+  deduplication: "Rows are de-duplicated only by their immutable id within their own source. Expenses and trip costs are source-distinct and both count; no unsafe amount/date heuristic is used. Ledger entries and PMS payment adjustments are disclosed but not folded into totals to avoid double counting their originating financial rows.",
+  pmsPaymentAdjustments: "Administrative PMS payment corrections created in the period; disclosed separately and never added to receivedRevenue or bookedRevenue.",
 } as const;
 
 export type FinancialPeriod = { start: Date; end: Date; label: string; asOf?: Date };
 export type FinancialMetricsPeriod = "7d" | "30d" | "90d" | "12m";
+export type FinancialMetricsFilters = {
+  reservationNumber?: string;
+  adjustedBy?: string;
+};
 type Money = number;
 type AnyRow = Record<string, unknown>;
 
@@ -117,7 +123,7 @@ export function rollingFinancialPeriod(period: FinancialMetricsPeriod, now = new
 export type FinancialMetricSources = {
   reservations: AnyRow[]; payments: AnyRow[]; expenses: AnyRow[]; tripCosts: AnyRow[];
   commissions: AnyRow[]; referralCommissions: AnyRow[]; referrals: AnyRow[]; ledgerEntries: AnyRow[];
-  users: AnyRow[];
+  users: AnyRow[]; pmsPaymentAdjustments?: AnyRow[];
 };
 
 type FinancialMetricSnapshot = {
@@ -128,7 +134,12 @@ type FinancialMetricSnapshot = {
   unpaidReferralCommissions: unknown;
 };
 
-export function buildFinancialMetricFilters(tenantId: string, period: FinancialPeriod, asOf: Date) {
+export function buildFinancialMetricFilters(
+  tenantId: string,
+  period: FinancialPeriod,
+  asOf: Date,
+  searchFilters: FinancialMetricsFilters = {},
+) {
   const paidReservationsInPeriod = db
     .select({ reservationId: paymentsTable.reservationId })
     .from(paymentsTable)
@@ -156,6 +167,22 @@ export function buildFinancialMetricFilters(tenantId: string, period: FinancialP
     and(gte(amountDate, period.start), lt(amountDate, period.end)),
     and(eq(table.status, "paid"), gte(paidAt, period.start), lt(paidAt, period.end)),
   );
+
+  const pmsPaymentAdjustmentFilters = [
+    eq(pmsPaymentAdjustmentsTable.tenantId, tenantId),
+    gte(pmsPaymentAdjustmentsTable.createdAt, period.start),
+    lt(pmsPaymentAdjustmentsTable.createdAt, period.end),
+  ];
+  if (searchFilters.reservationNumber) {
+    pmsPaymentAdjustmentFilters.push(
+      ilike(pmsReservationsTable.reservationNumber, `%${searchFilters.reservationNumber}%`),
+    );
+  }
+  if (searchFilters.adjustedBy) {
+    pmsPaymentAdjustmentFilters.push(
+      ilike(usersTable.name, `%${searchFilters.adjustedBy}%`),
+    );
+  }
 
   return {
     reservations: and(
@@ -241,20 +268,26 @@ export function buildFinancialMetricFilters(tenantId: string, period: FinancialP
       eq(referralCommissionsTable.tenantId, tenantId),
       sql`${referralCommissionsTable.status} not in ('paid', 'cancelled', 'refunded', 'failed', 'charged_back')`,
     ),
+    pmsPaymentAdjustments: and(...pmsPaymentAdjustmentFilters),
   };
 }
 
-export async function loadFinancialMetrics(tenantId: string, period: FinancialPeriod) {
+export async function loadFinancialMetrics(
+  tenantId: string,
+  period: FinancialPeriod,
+  searchFilters: FinancialMetricsFilters = {},
+) {
   // Keep the same instant for the snapshot predicates and the response.  The
   // period end is exclusive everywhere in this loader, which is important for
   // adjacent BRT calendar periods.
   const asOf = period.asOf ?? new Date();
   const reportPeriod = { ...period, asOf };
-  const filters = buildFinancialMetricFilters(tenantId, period, asOf);
+  const filters = buildFinancialMetricFilters(tenantId, period, asOf, searchFilters);
 
   const [
     reservations, payments, expenses, tripCosts, commissions, referralCommissions,
     referrals, ledgerEntries, userBalances, overdueBalances, unpaidSellerRows, unpaidReferralRows,
+    pmsPaymentAdjustments,
   ] = await Promise.all([
     // A reservation outside the period is still needed when a payment inside
     // the period must be allocated to its trip.
@@ -276,6 +309,21 @@ export async function loadFinancialMetrics(tenantId: string, period: FinancialPe
       .from(commissionsTable).where(filters.unpaidSellerCommissions),
     db.select({ total: sql<string>`coalesce(sum(${referralCommissionsTable.amount}), 0)` })
       .from(referralCommissionsTable).where(filters.unpaidReferralCommissions),
+    db.select({
+      id: pmsPaymentAdjustmentsTable.id,
+      reservationId: pmsPaymentAdjustmentsTable.reservationId,
+      reservationNumber: pmsReservationsTable.reservationNumber,
+      previousPaidAmount: pmsPaymentAdjustmentsTable.previousPaidAmount,
+      newPaidAmount: pmsPaymentAdjustmentsTable.newPaidAmount,
+      deltaAmount: pmsPaymentAdjustmentsTable.deltaAmount,
+      reason: pmsPaymentAdjustmentsTable.reason,
+      createdAt: pmsPaymentAdjustmentsTable.createdAt,
+      adjustedByName: usersTable.name,
+    }).from(pmsPaymentAdjustmentsTable)
+      .innerJoin(pmsReservationsTable, eq(pmsReservationsTable.id, pmsPaymentAdjustmentsTable.reservationId))
+      .leftJoin(usersTable, eq(usersTable.id, pmsPaymentAdjustmentsTable.adjustedById))
+      .where(filters.pmsPaymentAdjustments)
+      .orderBy(sql`${pmsPaymentAdjustmentsTable.createdAt} desc`),
   ]);
   const overdueByType = new Map(overdueBalances.map(row => [row.type, row.total]));
   const snapshot: FinancialMetricSnapshot = {
@@ -287,7 +335,7 @@ export async function loadFinancialMetrics(tenantId: string, period: FinancialPe
   };
   return calculateFinancialMetrics({
     reservations, payments, expenses, tripCosts, commissions, referralCommissions,
-    referrals, ledgerEntries, users: [],
+    referrals, ledgerEntries, users: [], pmsPaymentAdjustments,
   }, reportPeriod, snapshot);
 }
 
@@ -454,6 +502,17 @@ export function calculateFinancialMetrics(
     }
   }
   const totals = Object.fromEntries(Object.entries(total).map(([key, value]) => [key, key === "margin" ? value : moneyFromCents(value)]));
+  const pmsPaymentAdjustments = (sources.pmsPaymentAdjustments ?? []).map(row => ({
+    id: String(row.id),
+    reservationId: String(row.reservationId),
+    reservationNumber: String(row.reservationNumber ?? ""),
+    previousPaidAmount: moneyFromCents(cents(row.previousPaidAmount)),
+    newPaidAmount: moneyFromCents(cents(row.newPaidAmount)),
+    deltaAmount: moneyFromCents(cents(row.deltaAmount)),
+    reason: String(row.reason ?? ""),
+    adjustedByName: row.adjustedByName == null ? null : String(row.adjustedByName),
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt ?? ""),
+  }));
   const byTripIds = new Set([...Object.keys(tripReceived), ...Object.keys(tripExpenses), ...Object.keys(tripCosts)]);
   const byTrip = [...byTripIds].sort().map(tripId => ({
     tripId, ...financialZeroes(), receivedRevenue: moneyFromCents(tripReceived[tripId] ?? 0),
@@ -462,5 +521,14 @@ export function calculateFinancialMetrics(
   const byUser = Object.entries(userSellerCommissions).sort(([a], [b]) => a.localeCompare(b)).map(([userId, sellerCommissions]) => ({
     userId, ...financialZeroes(), sellerCommissions: moneyFromCents(sellerCommissions),
   }));
-  return { period: { start: period.start.toISOString(), end: period.end.toISOString(), label: period.label, asOf: asOf.toISOString() }, timezone: FINANCIAL_TIMEZONE, contracts: FINANCIAL_METRIC_CONTRACTS, totals, byTrip, byUser, diagnostics };
+  return {
+    period: { start: period.start.toISOString(), end: period.end.toISOString(), label: period.label, asOf: asOf.toISOString() },
+    timezone: FINANCIAL_TIMEZONE,
+    contracts: FINANCIAL_METRIC_CONTRACTS,
+    totals,
+    byTrip,
+    byUser,
+    pmsPaymentAdjustments,
+    diagnostics,
+  };
 }

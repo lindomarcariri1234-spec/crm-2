@@ -8,6 +8,8 @@
 
 export interface TripCostSummary {
   expectedRevenue: number;
+  totalTripCosts: number;
+  totalAgencyExpenses: number;
   totalRealCosts: number;
   totalPaidCosts: number;
   totalPendingCosts: number;
@@ -16,4 +18,5 @@ export interface TripCostSummary {
   plannedBudget: number;
   budgetVariance: number;
   confirmedSeats: number;
+  planningCapacity: number;
 }

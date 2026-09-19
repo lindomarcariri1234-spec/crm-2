@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
   useGetPaymentsSummary,
@@ -165,6 +166,7 @@ type SettlementData = {
 export default function Financial() {
   const searchStr = useSearch();
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
   const initialTab = useMemo(() => {
     const params = new URLSearchParams(searchStr);
     const t = params.get("tab");
@@ -185,6 +187,8 @@ export default function Financial() {
   const [categoryFilter, setCategoryFilter] = useState(() => new URLSearchParams(searchStr).get("category") ?? "");
   const [dateFrom, setDateFrom] = useState(() => new URLSearchParams(searchStr).get("dateFrom") ?? "");
   const [dateTo, setDateTo] = useState(() => new URLSearchParams(searchStr).get("dateTo") ?? "");
+  const [pmsReservationFilter, setPmsReservationFilter] = useState(() => new URLSearchParams(searchStr).get("reservationNumber") ?? "");
+  const [pmsAdjustedByFilter, setPmsAdjustedByFilter] = useState(() => new URLSearchParams(searchStr).get("adjustedBy") ?? "");
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -193,9 +197,11 @@ export default function Financial() {
     if (categoryFilter) params.set("category", categoryFilter);
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
+    if (pmsReservationFilter) params.set("reservationNumber", pmsReservationFilter);
+    if (pmsAdjustedByFilter) params.set("adjustedBy", pmsAdjustedByFilter);
     navigate(`?${params.toString()}`, { replace: true });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, statusFilter, categoryFilter, dateFrom, dateTo]);
+  }, [tab, statusFilter, categoryFilter, dateFrom, dateTo, pmsReservationFilter, pmsAdjustedByFilter]);
   const [showUpcomingInstallments, setShowUpcomingInstallments] = useState(false);
   const [upcomingInstallments, setUpcomingInstallments] = useState<Array<{
     id: string; reservationId: string; installmentNumber: number; dueDate: string;
@@ -268,7 +274,11 @@ export default function Financial() {
   const { data: rulesData, isLoading: loadingRules, refetch: refetchRules } = useListCommissionRules();
   const { data: chartData } = useGetDashboardRevenueChart({ period: "12m" });
   const { data: clientsData } = useListClients({ limit: 500, page: 1 });
-  const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics();
+  const financialAdjustmentFilters = useMemo(() => ({
+    reservationNumber: pmsReservationFilter.trim() || undefined,
+    adjustedBy: pmsAdjustedByFilter.trim() || undefined,
+  }), [pmsReservationFilter, pmsAdjustedByFilter]);
+  const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics(undefined, financialAdjustmentFilters);
 
   const clientMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -279,6 +289,14 @@ export default function Financial() {
   const canonicalTotals = financialMetrics?.totals;
   const canonicalRevenue = canonicalTotals?.receivedRevenue ?? 0;
   const canonicalCosts = canonicalTotals?.operatingCostsPaid ?? 0;
+  const financialExportHref = useMemo(() => {
+    const params = new URLSearchParams({ reportType: "financial" });
+    if (dateFrom) params.set("startDate", dateFrom);
+    if (dateTo) params.set("endDate", dateTo);
+    if (pmsReservationFilter.trim()) params.set("reservationNumber", pmsReservationFilter.trim());
+    if (pmsAdjustedByFilter.trim()) params.set("adjustedBy", pmsAdjustedByFilter.trim());
+    return `/downloads?${params.toString()}`;
+  }, [dateFrom, dateTo, pmsReservationFilter, pmsAdjustedByFilter]);
 
   const createPayment = useCreatePayment();
   const updatePayment = useUpdatePayment();
@@ -329,7 +347,12 @@ export default function Financial() {
     });
     setIsExpenseOpen(false);
     setExpenseCategory("transport");
-    refetchExpenses();
+    await Promise.all([
+      refetchExpenses(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const handleMarkPaid = async (paymentId: string) => {
@@ -343,7 +366,12 @@ export default function Financial() {
       id: expenseId,
       data: { status: PAYMENT_STATUS.PAID, paymentDate: localToday() }
     });
-    refetchExpenses();
+    await Promise.all([
+      refetchExpenses(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
   };
 
   const handleApproveCommission = async (id: string) => {
@@ -422,6 +450,11 @@ export default function Financial() {
               <ExternalLink className="w-4 h-4 mr-1.5" /> Despesas
             </Button>
           </Link>
+          <Link href={financialExportHref}>
+            <Button variant="outline" size="sm">
+              <ExternalLink className="w-4 h-4 mr-1.5" /> Exportar
+            </Button>
+          </Link>
           <Button variant="outline" onClick={() => setIsExpenseOpen(true)}>
             <TrendingDown className="w-4 h-4 mr-2" /> Nova Despesa
           </Button>
@@ -433,6 +466,95 @@ export default function Financial() {
       />
 
       <FinancialMetricsOverview />
+
+      <Card data-testid="section-pms-payment-adjustments">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <DollarSign className="h-4 w-4" /> Ajustes de pagamentos PMS
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Correções e estornos de reservas diretas no período. Estes lançamentos ficam fora da receita recebida e não são tratados como novas vendas.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+            <div className="space-y-1.5">
+              <label htmlFor="pms-reservation-filter" className="text-xs font-medium">Número da reserva</label>
+              <Input
+                id="pms-reservation-filter"
+                type="search"
+                value={pmsReservationFilter}
+                onChange={(event) => setPmsReservationFilter(event.target.value)}
+                placeholder="Buscar por número"
+                className="h-9"
+                data-testid="input-pms-reservation-filter"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="pms-adjusted-by-filter" className="text-xs font-medium">Responsável</label>
+              <Input
+                id="pms-adjusted-by-filter"
+                type="search"
+                value={pmsAdjustedByFilter}
+                onChange={(event) => setPmsAdjustedByFilter(event.target.value)}
+                placeholder="Buscar por nome"
+                className="h-9"
+                data-testid="input-pms-adjusted-by-filter"
+              />
+            </div>
+            {(pmsReservationFilter || pmsAdjustedByFilter) && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-9"
+                onClick={() => {
+                  setPmsReservationFilter("");
+                  setPmsAdjustedByFilter("");
+                }}
+                data-testid="button-clear-pms-adjustment-filters"
+              >
+                Limpar filtros
+              </Button>
+            )}
+          </div>
+          {loadingFinancialMetrics ? (
+            <div className="h-16 animate-pulse rounded bg-muted" data-testid="status-pms-adjustments-loading" />
+          ) : (financialMetrics?.pmsPaymentAdjustments.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground" data-testid="status-pms-adjustments-empty">Nenhum ajuste de pagamento PMS no período.</p>
+          ) : (
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Reserva</TableHead>
+                    <TableHead>Recebido anterior</TableHead>
+                    <TableHead>Recebido novo</TableHead>
+                    <TableHead>Variação</TableHead>
+                    <TableHead>Motivo</TableHead>
+                    <TableHead>Ajustado por</TableHead>
+                    <TableHead>Data</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {financialMetrics!.pmsPaymentAdjustments.map((adjustment) => (
+                    <TableRow key={adjustment.id} data-testid={`row-pms-payment-adjustment-${adjustment.id}`}>
+                      <TableCell className="font-medium">{adjustment.reservationNumber || adjustment.reservationId}</TableCell>
+                      <TableCell>{fmt(adjustment.previousPaidAmount)}</TableCell>
+                      <TableCell>{fmt(adjustment.newPaidAmount)}</TableCell>
+                      <TableCell className={adjustment.deltaAmount < 0 ? "font-medium text-destructive" : "font-medium text-emerald-600"}>
+                        {adjustment.deltaAmount < 0 ? "−" : "+"}{fmt(Math.abs(adjustment.deltaAmount))}
+                      </TableCell>
+                      <TableCell className="min-w-48 max-w-80 whitespace-normal">{adjustment.reason}</TableCell>
+                      <TableCell>{adjustment.adjustedByName ?? "Usuário removido"}</TableCell>
+                      <TableCell className="whitespace-nowrap">{formatDate(adjustment.createdAt)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <KpiCard

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { storeApi, StoreProduct, StoreCategory, ProductInput, VariantItem } from "@/lib/storeApi";
+import { useListAccommodations } from "@workspace/api-client-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -266,6 +267,7 @@ function ProductForm({
     slug: product?.slug ?? "",
     type: product?.type ?? "package",
     categoryId: product?.categoryId ?? undefined,
+    accommodationId: product?.accommodationId ?? undefined,
     shortDescription: product?.shortDescription ?? "",
     description: product?.description ?? "",
     price: product?.price ?? "",
@@ -285,6 +287,9 @@ function ProductForm({
     status: product?.status ?? "draft",
     metaTitle: product?.metaTitle ?? "",
     metaDescription: product?.metaDescription ?? "",
+  });
+  const { data: accommodations = [] } = useListAccommodations({
+    query: { queryKey: ["accommodations"], enabled: form.type === "hotel" },
   });
 
   function set(field: string, value: unknown) {
@@ -373,6 +378,7 @@ function ProductForm({
   }
 
   const isTrip = ["package", "tour", "transfer"].includes(form.type ?? "");
+  const isAccommodation = form.type === "hotel";
 
   return (
     <div className="max-h-[80vh] overflow-y-auto pr-1">
@@ -416,6 +422,24 @@ function ProductForm({
                 </SelectContent>
               </Select>
             </div>
+            {isAccommodation && (
+              <div className="space-y-2 col-span-2">
+                <Label>Hospedagem vinculada</Label>
+                <Select
+                  value={form.accommodationId ?? "none"}
+                  onValueChange={(v) => set("accommodationId", v === "none" ? null : v)}
+                >
+                  <SelectTrigger><SelectValue placeholder="Selecionar hospedagem" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Selecionar depois</SelectItem>
+                    {accommodations.map((accommodation) => (
+                      <SelectItem key={accommodation.id} value={accommodation.id}>{accommodation.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Quando vinculada, a venda cria uma estadia de hospedagem e usa o inventário por data.</p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Categoria</Label>
               <Select
@@ -451,17 +475,17 @@ function ProductForm({
               />
             </div>
 
-            {isTrip && (
+            {(isTrip || isAccommodation) && (
               <>
-                <div className="space-y-2">
+                {isTrip && <div className="space-y-2">
                   <Label>Destino</Label>
                   <Input
                     value={form.destination ?? ""}
                     onChange={(e) => set("destination", e.target.value)}
                     placeholder="Ex: Paris, França"
                   />
-                </div>
-                <div className="space-y-2">
+                </div>}
+                {isTrip && <div className="space-y-2">
                   <Label>Duração (dias)</Label>
                   <Input
                     type="number"
@@ -469,9 +493,9 @@ function ProductForm({
                     value={form.durationDays ?? ""}
                     onChange={(e) => set("durationDays", e.target.value ? parseInt(e.target.value) : undefined)}
                   />
-                </div>
+                </div>}
                 <div className="space-y-2">
-                  <Label>Data de Saída</Label>
+                  <Label>Data de entrada</Label>
                   <Input
                     type="date"
                     value={form.startDate ?? ""}
@@ -479,7 +503,7 @@ function ProductForm({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Data de Retorno</Label>
+                  <Label>Data de saída</Label>
                   <Input
                     type="date"
                     value={form.endDate ?? ""}

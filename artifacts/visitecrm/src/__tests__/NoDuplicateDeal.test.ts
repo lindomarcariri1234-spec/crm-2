@@ -33,10 +33,13 @@ import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js
 // Spies — hoisted so vi.mock factories can close over them
 // ---------------------------------------------------------------------------
 const createClientMock = vi.hoisted(() => vi.fn());
+const updateClientMock = vi.hoisted(() => vi.fn());
 const createReservationMock = vi.hoisted(() => vi.fn());
 const createDealMock = vi.hoisted(() => vi.fn());
+const updateReservationRoomAssignmentsMock = vi.hoisted(() => vi.fn());
 const calculateCommissionMock = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => vi.fn());
+const roomQueryState = vi.hoisted(() => ({ passengersLoading: false, roomTwoAvailable: 2 }));
 
 // Stable data fixtures — MUST be hoisted and reused across renders.
 // If useListTrips() returns a new array object on every render, then
@@ -52,6 +55,7 @@ const TRIPS_FIXTURE = vi.hoisted(() => ({
         departureDate: "2026-09-01T00:00:00Z",
         destination: "Nordeste",
         boardingPoints: [] as Array<{ id: string; name: string }>,
+        accommodationId: "accommodation-1",
         availableSeats: 10,
         totalCapacity: 40,
       },
@@ -90,9 +94,43 @@ vi.mock("@workspace/api-client-react", () => ({
   useListUsers: () => USERS_FIXTURE,
   useGetMe: () => ({ data: { id: "user-1", role: "admin" } }),
   useCreateClient: () => ({ mutateAsync: createClientMock, isPending: false }),
-  useUpdateClient: () => ({ mutateAsync: vi.fn(), isPending: false }),
+   useUpdateClient: () => ({ mutateAsync: updateClientMock, isPending: false }),
   useCreateDeal: () => ({ mutateAsync: createDealMock, isPending: false }),
   useCreateReservation: () => ({ mutateAsync: createReservationMock, isPending: false }),
+  useListAccommodations: () => ({ data: [] }),
+  useGetTripRoomAllocationSummary: () => ({
+    data: {
+      accommodation: { id: "accommodation-1", name: "Pousada de Teste", type: "hotel" },
+      rooms: [
+        { id: "room-1", name: "Quarto 1", category: "standard", capacity: 2, available: 2, occupied: 0, status: "active", isActive: true },
+        { id: "room-2", name: "Quarto 2", category: "standard", capacity: 2, available: roomQueryState.roomTwoAvailable, occupied: 0, status: "active", isActive: true },
+      ],
+      allocationSummary: { nights: 1, rows: [], totalRooms: 0, totalGuests: 0, totalValue: 0 },
+    },
+    isLoading: false,
+  }),
+  useListReservations: () => ({
+    data: { data: [{ id: "reservation-existing", status: "confirmed" }] },
+    isLoading: false,
+  }),
+  useListPassengers: () => ({
+    data: roomQueryState.passengersLoading
+      ? undefined
+      : [{ id: "passenger-1", name: "Maria Silva" }, { id: "passenger-2", name: "A preencher" }],
+    isLoading: roomQueryState.passengersLoading,
+  }),
+  useGetReservationRoomAssignments: () => ({
+    data: {
+      rooms: [],
+      assignments: [{ passengerId: "passenger-1", roomId: "room-1" }],
+      allocationSummary: { nights: 1, rows: [], totalRooms: 0, totalGuests: 0, totalValue: 0 },
+    },
+    isLoading: false,
+  }),
+  useUpdateReservationRoomAssignments: () => ({
+    mutateAsync: updateReservationRoomAssignmentsMock,
+    isPending: false,
+  }),
   useCalculateCommission: (params: unknown) => {
     calculateCommissionMock(params);
     return {
@@ -346,10 +384,14 @@ beforeEach(() => {
   selectRegistry.reset();
   // createClient always resolves with a fresh client id
   createClientMock.mockResolvedValue({ id: "client-123", isNew: true });
+  updateClientMock.mockReset().mockResolvedValue({});
   // Default: reservation succeeds
   createReservationMock.mockResolvedValue({ id: "res-456" });
   // Default: deal creation succeeds (only relevant when guard allows it through)
   createDealMock.mockResolvedValue({ id: "deal-789" });
+  updateReservationRoomAssignmentsMock.mockResolvedValue({});
+  roomQueryState.passengersLoading = false;
+  roomQueryState.roomTwoAvailable = 2;
   calculateCommissionMock.mockClear();
 });
 
@@ -376,9 +418,9 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
 
     // Capture the initial handlers before state changes append handlers from
     // subsequent renders. With no boarding points, the financial selects are:
-    // [7] payment method and [8] consultant/seller.
+    // [8] payment method and [9] consultant/seller.
     const tripIdHandler = selectRegistry.handlers[4];
-    const consultantHandler = selectRegistry.handlers[8];
+    const consultantHandler = selectRegistry.handlers[9];
     expect(tripIdHandler).toBeDefined();
     expect(consultantHandler).toBeDefined();
 
@@ -528,7 +570,8 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
    *
    * When no trip is chosen, createReservation is never called, so
    * createdReservationId stays undefined, and the guard opens → createDeal IS
-   * called to create a lead card in the Pipeline.
+   * called to create a lead card in the Pipeline, even when the caller does
+   * not provide a stage explicitly and the modal must use the Lead fallback.
    */
   it("DOES call createDeal when no trip is selected (normal lead-without-reservation path)", async () => {
     const { container } = await renderComponent(
@@ -537,7 +580,6 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
         onClose: vi.fn(),
         editClient: null,
         onSave: vi.fn(),
-        defaultStageId: "stage-lead",
         pipelineId: "pipe-1",
       }),
     );
@@ -580,7 +622,12 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
     expect(createReservationMock).not.toHaveBeenCalled();
 
     // Guard opens (createdReservationId=undefined) → deal IS created for lead
-    expect(createDealMock).toHaveBeenCalledOnce();
+    expect(createDealMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        stageId: "stage-lead",
+        title: "João Souza — Lead",
+      }),
+    });
   });
 
   /**
@@ -651,5 +698,252 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
 
     // createdReservationId stayed undefined → guard opens → deal created
     expect(createDealMock).toHaveBeenCalledOnce();
+  });
+
+  it("replaces the active reservation room assignments without creating another reservation", async () => {
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: {
+          id: "client-123",
+          name: "Maria Silva",
+          totalSpent: 0,
+          outstandingBalance: 0,
+        } as never,
+        onSave: vi.fn(),
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    // Initial Select order: origin, marital status, gender, pipeline stage,
+    // trip, travel type, accommodation, room, payment method, consultant.
+    const tripIdHandler = selectRegistry.handlers[4];
+    const roomIdHandler = selectRegistry.handlers[7];
+    expect(tripIdHandler).toBeDefined();
+    expect(roomIdHandler).toBeDefined();
+
+    await flushAct(() => {
+      tripIdHandler?.("trip-1");
+    });
+    await flushAct(() => {
+      roomIdHandler?.("room-2");
+    });
+
+    const submitButton = Array.from(container.querySelectorAll("button")).find(
+      button => button.textContent?.includes("Salvar Alterações") || button.textContent?.includes("Salvando"),
+    );
+    expect(submitButton).toBeDefined();
+    expect(submitButton?.disabled).toBe(false);
+
+    await flushAct(async () => {
+      submitButton?.click();
+    });
+
+    expect(createReservationMock).not.toHaveBeenCalled();
+    expect(updateReservationRoomAssignmentsMock).toHaveBeenCalledWith({
+      reservationId: "reservation-existing",
+      data: {
+        assignments: [
+          { passengerId: "passenger-1", roomId: "room-2" },
+          { passengerId: "passenger-2", roomId: "room-2" },
+        ],
+      },
+    });
+  });
+
+  it("shows the capacity warning and keeps the selected room available for retry", async () => {
+    updateReservationRoomAssignmentsMock.mockRejectedValueOnce({
+      data: {
+        code: "ROOM_CAPACITY_EXCEEDED",
+        roomId: "room-2",
+        capacity: 2,
+        occupied: 3,
+        currentOccupied: 2,
+        requestedCount: 1,
+      },
+    });
+
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: {
+          id: "client-123",
+          name: "Maria Silva",
+          totalSpent: 0,
+          outstandingBalance: 0,
+        } as never,
+        onSave: vi.fn(),
+        pipelineId: "pipe-1",
+      }),
+    );
+    const tripIdHandler = selectRegistry.handlers[4];
+    const roomIdHandler = selectRegistry.handlers[7];
+
+    await flushAct(() => {
+      tripIdHandler?.("trip-1");
+    });
+    await flushAct(() => {
+      roomIdHandler?.("room-2");
+    });
+
+    const submitButton = () =>
+      Array.from(container.querySelectorAll("button")).find(
+        button => button.textContent?.includes("Salvar Alterações"),
+      );
+    expect(submitButton()).toBeDefined();
+
+    await flushAct(async () => {
+      submitButton()?.click();
+    });
+
+    const expectedDescription =
+      "Os dados do cliente foram salvos, mas quarto 2 sem vagas: Capacidade: 2 pessoa(s). Ocupação atual: 2. Vagas disponíveis antes desta tentativa: 0. Escolha outro quarto e tente novamente.";
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "Quarto 2 sem vagas",
+      description: expectedDescription,
+      variant: "destructive",
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(expectedDescription);
+    expect(submitButton()).toBeDefined();
+    expect(createReservationMock).not.toHaveBeenCalled();
+
+    // The selected room remains in form state, so a retry sends the same room.
+    await flushAct(async () => {
+      submitButton()?.click();
+    });
+    expect(updateReservationRoomAssignmentsMock).toHaveBeenCalledTimes(2);
+    expect(updateReservationRoomAssignmentsMock.mock.calls[1][0]).toEqual({
+      reservationId: "reservation-existing",
+      data: {
+        assignments: [
+          { passengerId: "passenger-1", roomId: "room-2" },
+          { passengerId: "passenger-2", roomId: "room-2" },
+        ],
+      },
+    });
+  });
+
+  it("keeps edited client data and the previous room assignment when availability changes before save", async () => {
+    let persistedRoomId: string | null = "room-1";
+    updateReservationRoomAssignmentsMock.mockImplementationOnce(
+      async ({ data }: { data: { assignments: Array<{ roomId: string | null }> } }) => {
+        if (roomQueryState.roomTwoAvailable === 0) {
+          throw {
+            data: {
+              code: "ROOM_CAPACITY_EXCEEDED",
+              roomId: "room-2",
+              capacity: 2,
+              occupied: 3,
+              currentOccupied: 2,
+              requestedCount: 1,
+            },
+          };
+        }
+        persistedRoomId = data.assignments[0]?.roomId ?? null;
+        return { assignments: data.assignments };
+      },
+    );
+
+    const modalProps = {
+      open: true,
+      onClose: vi.fn(),
+      editClient: {
+        id: "client-123",
+        name: "Maria Silva",
+        totalSpent: 0,
+        outstandingBalance: 0,
+      } as never,
+      onSave: vi.fn(),
+      pipelineId: "pipe-1",
+    };
+    const { container, rerender } = await renderComponent(
+      createElement(ClientModal, modalProps),
+    );
+    const tripIdHandler = selectRegistry.handlers[4];
+    const roomIdHandler = selectRegistry.handlers[7];
+    const nameInput = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input"),
+    ).find((el) => el.placeholder?.includes("Maria"));
+
+    await flushAct(() => {
+      if (nameInput) setNativeInputValue(nameInput, "Maria Silva Atualizada");
+      tripIdHandler?.("trip-1");
+    });
+    await flushAct(() => {
+      roomIdHandler?.("room-2");
+    });
+
+    // A background refresh observes that the selected room became full before
+    // the user submits. The selection stays in the form so the server remains
+    // the authority for the final capacity check.
+    roomQueryState.roomTwoAvailable = 0;
+    await rerender(createElement(ClientModal, modalProps));
+    expect(container.textContent).toContain("Quarto 2 · capacidade 2 · 0 vaga(s)");
+
+    const submitButton = Array.from(container.querySelectorAll("button")).find(
+      button => button.textContent?.includes("Salvar Alterações"),
+    );
+    expect(submitButton).toBeDefined();
+
+    await flushAct(async () => {
+      submitButton?.click();
+    });
+
+    expect(updateClientMock).toHaveBeenCalledWith({
+      id: "client-123",
+      data: expect.objectContaining({ name: "Maria Silva Atualizada" }),
+    });
+    expect(updateReservationRoomAssignmentsMock).toHaveBeenCalledWith({
+      reservationId: "reservation-existing",
+      data: {
+        assignments: [
+          { passengerId: "passenger-1", roomId: "room-2" },
+          { passengerId: "passenger-2", roomId: "room-2" },
+        ],
+      },
+    });
+    expect(persistedRoomId).toBe("room-1");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Os dados do cliente foram salvos, mas quarto 2 sem vagas",
+    );
+  });
+
+  it("keeps editing disabled until the existing reservation passengers finish loading", async () => {
+    roomQueryState.passengersLoading = true;
+
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: {
+          id: "client-123",
+          name: "Maria Silva",
+          totalSpent: 0,
+          outstandingBalance: 0,
+        } as never,
+        onSave: vi.fn(),
+        pipelineId: "pipe-1",
+      }),
+    );
+    const tripIdHandler = selectRegistry.handlers[4];
+    expect(tripIdHandler).toBeDefined();
+
+    await flushAct(() => {
+      tripIdHandler?.("trip-1");
+    });
+
+    const submitButton = Array.from(container.querySelectorAll("button")).find(
+      button => button.textContent?.includes("Salvar Alterações") || button.textContent?.includes("Salvando"),
+    );
+    expect(submitButton?.disabled).toBe(true);
+
+    await flushAct(async () => {
+      submitButton?.click();
+    });
+
+    expect(updateReservationRoomAssignmentsMock).not.toHaveBeenCalled();
+    expect(createReservationMock).not.toHaveBeenCalled();
   });
 });

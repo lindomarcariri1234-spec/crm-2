@@ -35,6 +35,17 @@ export interface FinancialMetricsResponse {
   totals: FinancialMetricTotals;
   byTrip: Array<{ tripId: string } & FinancialMetricTotals>;
   byUser: Array<{ userId: string } & FinancialMetricTotals>;
+  pmsPaymentAdjustments: Array<{
+    id: string;
+    reservationId: string;
+    reservationNumber: string;
+    previousPaidAmount: number;
+    newPaidAmount: number;
+    deltaAmount: number;
+    reason: string;
+    adjustedByName: string | null;
+    createdAt: string;
+  }>;
   diagnostics: {
     sourceRows: Record<string, number>;
     excluded: Record<string, number>;
@@ -46,6 +57,10 @@ export interface FinancialMetricsResponse {
 }
 
 export type FinancialMetricsPeriod = "7d" | "30d" | "90d" | "12m";
+export interface FinancialMetricsFilters {
+  reservationNumber?: string;
+  adjustedBy?: string;
+}
 
 export const FINANCIAL_METRICS_PERIOD_LABELS: Record<FinancialMetricsPeriod, string> = {
   "7d": "Últimos 7 dias",
@@ -54,12 +69,22 @@ export const FINANCIAL_METRICS_PERIOD_LABELS: Record<FinancialMetricsPeriod, str
   "12m": "Últimos 12 meses",
 };
 
-export const getFinancialMetricsQueryKey = (period?: FinancialMetricsPeriod) =>
-  ["/api/admin/financial-metrics", period ?? "current"] as const;
+export const getFinancialMetricsQueryKey = (
+  period?: FinancialMetricsPeriod,
+  filters: FinancialMetricsFilters = {},
+) =>
+  ["/api/admin/financial-metrics", period ?? "current", filters.reservationNumber ?? "", filters.adjustedBy ?? ""] as const;
 
-export async function getFinancialMetrics(period?: FinancialMetricsPeriod): Promise<FinancialMetricsResponse> {
-  const params = period ? `?period=${encodeURIComponent(period)}` : "";
-  const response = await fetch(`${BASE}/api/admin/financial-metrics${params}`, { credentials: "include" });
+export async function getFinancialMetrics(
+  period?: FinancialMetricsPeriod,
+  filters: FinancialMetricsFilters = {},
+): Promise<FinancialMetricsResponse> {
+  const params = new URLSearchParams();
+  if (period) params.set("period", period);
+  if (filters.reservationNumber) params.set("reservationNumber", filters.reservationNumber);
+  if (filters.adjustedBy) params.set("adjustedBy", filters.adjustedBy);
+  const query = params.toString();
+  const response = await fetch(`${BASE}/api/admin/financial-metrics${query ? `?${query}` : ""}`, { credentials: "include" });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { message?: string; error?: string } | null;
     throw new Error(body?.message ?? body?.error ?? "Não foi possível carregar os indicadores financeiros.");
@@ -67,9 +92,12 @@ export async function getFinancialMetrics(period?: FinancialMetricsPeriod): Prom
   return response.json() as Promise<FinancialMetricsResponse>;
 }
 
-export function useFinancialMetrics(period?: FinancialMetricsPeriod) {
+export function useFinancialMetrics(
+  period?: FinancialMetricsPeriod,
+  filters: FinancialMetricsFilters = {},
+) {
   return useQuery({
-    queryKey: getFinancialMetricsQueryKey(period),
-    queryFn: () => getFinancialMetrics(period),
+    queryKey: getFinancialMetricsQueryKey(period, filters),
+    queryFn: () => getFinancialMetrics(period, filters),
   });
 }

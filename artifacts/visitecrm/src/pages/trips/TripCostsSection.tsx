@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import { CELL_COLORS, COST_CATEGORIES, COST_STATUS_MAP } from "./constants";
 import { formatCurrency, formatDate } from "./utils";
+import { FinancialConsolidationView } from "@/components/financial-consolidation-view";
 
 export function LayoutMiniPreview({ cells, rows, cols }: { cells: { row: number; col: number; floor?: number; type: string }[]; rows: number; cols: number }) {
   const floor1 = cells.filter(c => (c.floor ?? 1) === 1);
@@ -64,6 +66,35 @@ const costFormSchema = z.object({
 });
 
 type CostFormValues = z.infer<typeof costFormSchema>;
+
+const AGENCY_CATEGORY_LABELS: Record<string, string> = {
+  transport: "Transporte",
+  accommodation: "Hospedagem",
+  food: "Alimentação",
+  marketing: "Marketing",
+  administrative: "Taxas",
+  commission: "Marketing",
+  other: "Outros",
+};
+
+type DisplayCost = {
+  id: string;
+  category: string;
+  description: string;
+  amount: number;
+  status: string;
+  dueDate: string | null;
+  paidAt: string | null;
+  notes: string | null;
+  supplierName: string | null;
+  createdAt: string;
+  source: "trip" | "agency";
+  sourceLabel: string;
+};
+
+function getAgencyCategoryLabel(category: string) {
+  return AGENCY_CATEGORY_LABELS[category] ?? category;
+}
 
 function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
   tripId: string;
@@ -227,7 +258,8 @@ function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
 
 export function TripCostsTab({ tripId }: { tripId: string }) {
   const { toast } = useToast();
-  const { data, isLoading, refetch } = useListTripCosts(tripId, {
+  const queryClient = useQueryClient();
+  const { data, isLoading, isError, refetch } = useListTripCosts(tripId, {
     query: { queryKey: ["trip-costs", tripId], enabled: !!tripId },
   });
   const deleteCost = useDeleteTripCost();
@@ -238,9 +270,43 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
   const costs = data?.costs ?? [];
+  const agencyExpenses = data?.agencyExpenses ?? [];
+  const plannedCosts = data?.plannedCosts ?? [];
   const summary = data?.summary;
+  const pricing = data?.pricing;
 
-  const filtered = costs.filter(c => {
+  const mergedCosts: DisplayCost[] = [
+    ...costs.map((cost): DisplayCost => ({
+      id: cost.id,
+      category: cost.category,
+      description: cost.description,
+      amount: cost.amount,
+      status: cost.status,
+      dueDate: cost.dueDate,
+      paidAt: cost.paidAt,
+      notes: cost.notes,
+      supplierName: cost.supplierName,
+      createdAt: cost.createdAt,
+      source: "trip",
+      sourceLabel: "Custo da viagem",
+    })),
+    ...agencyExpenses.map((expense): DisplayCost => ({
+      id: expense.id,
+      category: getAgencyCategoryLabel(expense.category),
+      description: expense.description,
+      amount: expense.amount,
+      status: expense.status,
+      dueDate: expense.dueDate,
+      paidAt: expense.paymentDate ?? null,
+      notes: expense.notes ?? null,
+      supplierName: null,
+      createdAt: expense.createdAt,
+      source: "agency",
+      sourceLabel: "Despesa da agência",
+    })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const filtered = mergedCosts.filter(c => {
     if (filterCategory !== "all" && c.category !== filterCategory) return false;
     if (filterStatus !== "all" && c.status !== filterStatus) return false;
     return true;
@@ -252,7 +318,11 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     try {
       await deleteCost.mutateAsync({ id: tripId, costId: id });
       toast({ title: "Custo removido" });
-      refetch();
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+      ]);
     } catch {
       toast({ title: "Erro ao remover custo", variant: "destructive" });
     } finally {
@@ -260,10 +330,13 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     }
   };
 
-  const groupedByCategory = COST_CATEGORIES.reduce((acc, cat) => {
-    acc[cat] = costs.filter(c => c.category === cat).reduce((s, c) => s + c.amount, 0);
-    return acc;
-  }, {} as Record<string, number>);
+  const refreshFinancialViews = async () => {
+    await Promise.all([
+      refetch(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
+  };
 
   return (
     <div className="space-y-6">
@@ -309,10 +382,23 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                 ? `${formatCurrency(Math.abs(summary.budgetVariance))} abaixo`
                 : `${formatCurrency(summary.budgetVariance)} acima`}
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">Orçado: {formatCurrency(summary.plannedBudget)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Orçado ({summary.planningCapacity} vagas): {formatCurrency(summary.plannedBudget)}</p>
           </div>
         </div>
       )}
+
+      <FinancialConsolidationView
+        actualRows={mergedCosts}
+        plannedRows={plannedCosts}
+        pricing={pricing}
+        actualSummary={summary ? {
+          totalRealCosts: summary.totalRealCosts,
+          totalPaidCosts: summary.totalPaidCosts,
+          totalPendingCosts: summary.totalPendingCosts,
+        } : undefined}
+        title="Conciliação financeira da viagem"
+        description={`Preços, orçamento planejado, custos diretos e despesas da agência · ${summary?.planningCapacity ?? 0} vagas`}
+      />
 
       {summary && summary.totalPendingCosts > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
@@ -326,8 +412,8 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
       <div className="bg-card border rounded-lg">
         <div className="flex items-center justify-between p-4 border-b">
           <div className="flex items-center gap-3">
-            <h3 className="font-semibold text-sm">Custos da Viagem</h3>
-            <Badge variant="secondary">{costs.length}</Badge>
+            <h3 className="font-semibold text-sm">Custos e despesas da viagem</h3>
+            <Badge variant="secondary">{mergedCosts.length}</Badge>
           </div>
           <div className="flex items-center gap-2">
             <Select value={filterCategory} onValueChange={setFilterCategory}>
@@ -348,6 +434,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                 <SelectItem value="pending">Pendente</SelectItem>
                 <SelectItem value="paid">Pago</SelectItem>
                 <SelectItem value="overdue">Vencido</SelectItem>
+                <SelectItem value="cancelled">Cancelada</SelectItem>
               </SelectContent>
             </Select>
             <Button size="sm" className="h-8 text-xs gap-1" onClick={() => { setEditingCost(null); setModalOpen(true); }}>
@@ -362,11 +449,19 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
           </div>
+        ) : isError ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <AlertCircle className="w-10 h-10 mx-auto mb-3 opacity-40 text-destructive" />
+            <p className="text-sm">Não foi possível carregar os dados financeiros desta viagem.</p>
+            <Button variant="outline" size="sm" className="mt-3 text-xs" onClick={() => refetch()}>
+              Tentar novamente
+            </Button>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
             <Wallet className="w-10 h-10 mx-auto mb-3 opacity-25" />
-            <p className="text-sm">{costs.length === 0 ? "Nenhum custo registrado ainda" : "Nenhum custo com esses filtros"}</p>
-            {costs.length === 0 && (
+            <p className="text-sm">{mergedCosts.length === 0 ? "Nenhum custo ou despesa vinculada ainda" : "Nenhum custo com esses filtros"}</p>
+            {mergedCosts.length === 0 && (
               <Button variant="outline" size="sm" className="mt-3 text-xs" onClick={() => { setEditingCost(null); setModalOpen(true); }}>
                 <Plus className="w-3.5 h-3.5 mr-1.5" />
                 Adicionar primeiro custo
@@ -383,6 +478,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm">{cost.description}</span>
                       <Badge variant="outline" className="text-[10px] px-1.5 py-0">{cost.category}</Badge>
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{cost.sourceLabel}</Badge>
                       <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full border font-medium ${statusInfo.color}`}>
                         {statusInfo.label}
                       </span>
@@ -399,36 +495,31 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                       {formatCurrency(cost.amount)}
                     </p>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
-                      onClick={() => { setEditingCost(cost); setModalOpen(true); }}>
-                      <Pencil className="w-3 h-3" />
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                      disabled={deletingId === cost.id}
-                      onClick={() => handleDelete(cost.id)}>
-                      {deletingId === cost.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                    </Button>
-                  </div>
+                   {cost.source === "trip" && (
+                     <div className="flex items-center gap-1 shrink-0">
+                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
+                         onClick={() => {
+                           const editableCost = costs.find(item => item.id === cost.id);
+                           if (editableCost) {
+                             setEditingCost(editableCost);
+                             setModalOpen(true);
+                           }
+                         }}>
+                         <Pencil className="w-3 h-3" />
+                       </Button>
+                       <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                         disabled={deletingId === cost.id}
+                         onClick={() => handleDelete(cost.id)}>
+                         {deletingId === cost.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                       </Button>
+                     </div>
+                   )}
                 </div>
               );
             })}
           </div>
         )}
 
-        {costs.length > 0 && (
-          <div className="border-t p-4">
-            <p className="text-xs font-medium text-muted-foreground mb-2">Resumo por categoria</p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {COST_CATEGORIES.filter(cat => groupedByCategory[cat] > 0).map(cat => (
-                <div key={cat} className="text-xs">
-                  <span className="text-muted-foreground">{cat}: </span>
-                  <span className="font-medium">{formatCurrency(groupedByCategory[cat])}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       <TripCostModal
@@ -436,7 +527,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
         cost={editingCost}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onSaved={() => refetch()}
+         onSaved={() => { void refreshFinancialViews(); }}
       />
     </div>
   );

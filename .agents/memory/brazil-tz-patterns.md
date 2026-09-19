@@ -15,6 +15,9 @@ Never use `toLocaleDateString()`, `toLocaleString()`, or `toISOString().slice(0,
 `artifacts/visitecrm/src/lib/utils.ts` exports `formatDate`, `formatDateShort`, `formatDateTime` — all use `Intl.DateTimeFormat` with `timeZone: "America/Sao_Paulo"`.
 - date-only strings → append `T12:00:00` before parsing (avoids UTC midnight off-by-one)
 - Use these everywhere; do NOT add local `toLocaleDateString("pt-BR")` calls.
+- Trip endpoints are pairs of calendar date + optional time; use the shared trip datetime parser/formatter for countdowns, durations, and labels instead of `new Date(date + "T" + time)`.
+
+**Why:** The API persists the calendar date separately from the departure/return time. Parsing the pair as an unzoned browser-local string makes the result depend on the user's machine timezone and causes the same trip to show different countdowns or durations.
 
 ### Backend — date display in emails/PDFs
 Use a local helper pattern (already in reminder.worker.ts):
@@ -53,3 +56,10 @@ NOT `setDate(getDate()+N); setHours(0,0,0,0)` (uses UTC midnight, misses 10 PM�
 ### PostgreSQL — timezone-aware comparison
 Already done correctly in referral expiry queries: `AT TIME ZONE 'America/Sao_Paulo'`.
 Drizzle js-side: pass UTC Date objects from `brazilDayWindow()`.
+
+### Trip departure instants
+When filtering or ordering trips by when they actually leave, use the shared SQL expression that converts `departureDate` plus `departureTime` into a `timestamptz` in `America/Sao_Paulo`; use its JS parser for notification calculations.
+
+**Why:** `departureDate` preserves a Brazil calendar date but is not the departure instant. Comparing it directly to `now` misclassifies trips with late-night or early-morning departures.
+
+**How to apply:** Keep calendar-day windows for D-N reminder policies, but filter those windows using the combined departure instant and include the optional time in reminder text.

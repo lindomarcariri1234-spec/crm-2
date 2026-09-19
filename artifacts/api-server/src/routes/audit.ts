@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db, auditLogsTable, systemConfigsTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte, lt, or, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth, ADMIN_ROLES } from '../lib/tenant';
@@ -8,13 +8,47 @@ import { ForbiddenError, ValidationError } from "../lib/errors";
 
 const router = Router();
 
+const AuditLogsQuery = z.object({
+  accommodationId: z.string().trim().min(1).max(120).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+function brazilianDateStart(date: string): Date {
+  return new Date(`${date}T03:00:00.000Z`);
+}
+
 router.get("/audit-logs", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    const parsed = AuditLogsQuery.safeParse(req.query);
+    if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+    if (parsed.data.from && parsed.data.to && parsed.data.from > parsed.data.to) {
+      next(new ValidationError("O início do período não pode ser posterior ao fim", "VALIDATION_ERROR")); return;
+    }
+    const conditions = [eq(auditLogsTable.tenantId, me.tenantId)];
+    if (parsed.data.accommodationId) {
+      const accommodationId = parsed.data.accommodationId;
+      conditions.push(
+        eq(auditLogsTable.entityType, "accommodation_room"),
+        or(
+          sql`${auditLogsTable.before}->>'accommodationId' = ${accommodationId}`,
+          sql`${auditLogsTable.after}->>'accommodationId' = ${accommodationId}`,
+        )!,
+      );
+    }
+    if (parsed.data.from) {
+      conditions.push(gte(auditLogsTable.createdAt, brazilianDateStart(parsed.data.from)));
+    }
+    if (parsed.data.to) {
+      const exclusiveEnd = brazilianDateStart(parsed.data.to);
+      exclusiveEnd.setUTCDate(exclusiveEnd.getUTCDate() + 1);
+      conditions.push(lt(auditLogsTable.createdAt, exclusiveEnd));
+    }
     const logs = await db.select().from(auditLogsTable)
-      .where(eq(auditLogsTable.tenantId, me.tenantId))
+      .where(and(...conditions))
       .orderBy(desc(auditLogsTable.createdAt))
       .limit(500);
     res.json(logs);

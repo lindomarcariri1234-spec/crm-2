@@ -98,6 +98,23 @@ describe("legacy calendar event matching", () => {
     ]);
   });
 
+  it("matches a trip using departure and return times in the Brazil timezone", () => {
+    const nightTrip = {
+      ...trip,
+      departureDate: new Date("2026-09-19T15:00:00.000Z"),
+      departureTime: "21:00",
+      returnDate: new Date("2026-09-21T15:00:00.000Z"),
+      returnTime: "02:00",
+    };
+    expect(legacyMatchesForEvent({
+      ...markedTripEvent("night-legacy"),
+      startDateTime: new Date("2026-09-20T00:00:00.000Z"),
+      endDateTime: new Date("2026-09-21T05:00:00.000Z"),
+    }, [nightTrip], [], [])).toEqual([
+      { id: "trip-1", type: "trip", label: "Chapada" },
+    ]);
+  });
+
   it("matches a birthday by month and day, not by the birth year", () => {
     const client = { id: "client-1", name: "Maria", birthDate: new Date("1990-09-15T13:00:00.000Z") };
     expect(legacyMatchesForEvent({

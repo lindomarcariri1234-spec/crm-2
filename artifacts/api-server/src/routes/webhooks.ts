@@ -261,6 +261,67 @@ interface StripeEvent {
   data: { object: Record<string, unknown> };
 }
 
+async function persistStripePaymentInstructions(
+  tx: DbExecutor,
+  store: StoreScope,
+  paymentIntentId: string,
+  paymentIntent: Record<string, unknown>,
+): Promise<void> {
+  const nextAction = paymentIntent["next_action"];
+  if (!nextAction || typeof nextAction !== "object") return;
+
+  const action = nextAction as Record<string, unknown>;
+  const patch: {
+    pixQrCode?: string;
+    pixQrCodeUrl?: string;
+    pixCopyPaste?: string;
+    boletoUrl?: string;
+    boletoBarcode?: string;
+  } = {};
+
+  const pixAction = action["pix_display_qr_code"] ?? action["display_qr_code"];
+  if (
+    (action["type"] === "pix_display_qr_code" || action["type"] === "display_qr_code")
+    && pixAction
+    && typeof pixAction === "object"
+  ) {
+    const qr = pixAction as Record<string, unknown>;
+    const copyPaste = typeof qr["data"] === "string" ? qr["data"] : undefined;
+    const imageUrl = typeof qr["image_url_png"] === "string"
+      ? qr["image_url_png"]
+      : typeof qr["image_url_svg"] === "string"
+        ? qr["image_url_svg"]
+        : undefined;
+    if (copyPaste) {
+      patch.pixQrCode = copyPaste;
+      patch.pixCopyPaste = copyPaste;
+    }
+    if (imageUrl) patch.pixQrCodeUrl = imageUrl;
+  }
+
+  const boletoAction = action["boleto_display_details"] ?? action["display_boleto"];
+  if (
+    (action["type"] === "boleto_display_details" || action["type"] === "display_boleto")
+    && boletoAction
+    && typeof boletoAction === "object"
+  ) {
+    const boleto = boletoAction as Record<string, unknown>;
+    const hostedVoucherUrl = typeof boleto["hosted_voucher_url"] === "string"
+      ? boleto["hosted_voucher_url"]
+      : undefined;
+    const barcode = typeof boleto["number"] === "string" ? boleto["number"] : undefined;
+    if (hostedVoucherUrl) patch.boletoUrl = hostedVoucherUrl;
+    if (barcode) patch.boletoBarcode = barcode;
+  }
+
+  if (Object.keys(patch).length === 0) return;
+  await tx.update(storeOrdersTable).set(patch).where(and(
+    eq(storeOrdersTable.paymentIntentId, paymentIntentId),
+    eq(storeOrdersTable.storeId, store.storeId),
+    eq(storeOrdersTable.tenantId, store.tenantId),
+  ));
+}
+
 router.post("/webhooks/stripe/:storeSlug", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const store = await resolveStore(req.params["storeSlug"] ?? "");
@@ -325,7 +386,7 @@ router.post("/webhooks/stripe/:storeSlug", async (req, res, next: NextFunction):
   }
 });
 
-async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise<void> {
+export async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise<void> {
   const obj = event.data?.object ?? {};
 
   if (event.type === "payment_intent.succeeded") {
@@ -374,6 +435,20 @@ async function handleStripeEvent(event: StripeEvent, store: StoreScope): Promise
         await runPostPaymentSideEffects(result.orderId, accountingOptions);
       }
     }
+    return;
+  }
+
+  if (event.type === "payment_intent.processing" || event.type === "payment_intent.requires_action") {
+    const paymentIntentId = String(obj["id"] ?? "");
+    if (!paymentIntentId) return;
+    await db.transaction(async (tx) => {
+      await persistStripePaymentInstructions(
+        tx as unknown as DbExecutor,
+        store,
+        paymentIntentId,
+        obj,
+      );
+    });
     return;
   }
 

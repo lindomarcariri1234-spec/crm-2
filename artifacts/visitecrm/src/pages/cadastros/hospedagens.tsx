@@ -8,10 +8,12 @@ import {
   useCreateAccommodationRoom,
   useUpdateAccommodationRoom,
   useDeleteAccommodationRoom,
+  useListAuditLogs,
 } from "@workspace/api-client-react";
 import type {
   Accommodation,
   AccommodationRoom,
+  AuditLog,
   CreateAccommodationRoomBody,
   CreateAccommodationBody,
   UpdateAccommodationBody,
@@ -62,6 +64,71 @@ const AMENITY_OPTIONS = [
 ];
 const STATUS_OPTIONS = ["active", "inactive"];
 const statusLabel: Record<string, string> = { active: "Ativo", inactive: "Inativo" };
+const roomAuditActionLabel: Record<string, string> = {
+  room_created: "Criado",
+  room_updated: "Editado",
+  room_activated: "Ativado",
+  room_deactivated: "Desativado",
+  room_deleted: "Excluído",
+};
+
+function roomAuditDetails(log: AuditLog) {
+  const value = (log.after ?? log.before);
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+type RoomMutationOperation = "save" | "delete" | "status";
+type AccommodationMutationOperation = "create" | "update" | "delete";
+
+function accommodationMutationErrorMessage(error: unknown, operation: AccommodationMutationOperation) {
+  const responseData = (error as { response?: { data?: { code?: string } } })?.response?.data;
+  const code = responseData?.code;
+  if (code === "ACCOMMODATION_NOT_FOUND" || code === "NOT_FOUND") {
+    return "Esta hospedagem não está mais disponível. Atualize a lista e tente novamente.";
+  }
+  if (code === "FORBIDDEN" || code === "FORBIDDEN_ROLE") {
+    return "Você não tem permissão para alterar esta hospedagem.";
+  }
+  if (code === "VALIDATION_ERROR") {
+    return "Confira os dados da hospedagem e tente novamente.";
+  }
+  if (code === "ACCOMMODATION_CREATE_FAILED") {
+    return "Não foi possível criar a hospedagem. Tente novamente.";
+  }
+  if (operation === "delete") {
+    return "Não foi possível excluir a hospedagem. A exclusão não foi aplicada. Tente novamente.";
+  }
+  return operation === "create"
+    ? "Não foi possível criar a hospedagem. A alteração não foi aplicada. Tente novamente."
+    : "Não foi possível salvar a hospedagem. A alteração não foi aplicada. Tente novamente.";
+}
+
+function roomMutationErrorMessage(error: unknown, operation: RoomMutationOperation, nextStatus?: string) {
+  const responseData = (error as { response?: { data?: { code?: string } } })?.response?.data;
+  const code = responseData?.code;
+  if (code === "ROOM_CAPACITY_CONFLICT") {
+    return "A capacidade não pode ser menor que a ocupação atual.";
+  }
+  if (code === "ROOM_OCCUPIED") {
+    return "Não é possível excluir um quarto ocupado.";
+  }
+  if (code === "NOT_FOUND" || code === "ROOM_NOT_FOUND") {
+    return "Este quarto não está mais disponível. Atualize a lista e tente novamente.";
+  }
+  if (code === "FORBIDDEN" || code === "FORBIDDEN_ROLE") {
+    return "Você não tem permissão para alterar este quarto.";
+  }
+  if (operation === "status") {
+    return nextStatus === "active"
+      ? "Não foi possível ativar o quarto. O status não foi alterado. Tente novamente."
+      : "Não foi possível inativar o quarto. O status não foi alterado. Tente novamente.";
+  }
+  return operation === "delete"
+    ? "Não foi possível excluir o quarto. A exclusão não foi aplicada. Tente novamente."
+    : "Não foi possível salvar o quarto. A alteração não foi aplicada. Tente novamente.";
+}
 
 
 export default function Hospedagens() {
@@ -73,9 +140,31 @@ export default function Hospedagens() {
   const [roomsFor, setRoomsFor] = useState<Accommodation | null>(null);
   const [roomForm, setRoomForm] = useState<CreateAccommodationRoomBody>({ name: "", category: "standard", capacity: 2 });
   const [editingRoom, setEditingRoom] = useState<AccommodationRoom | null>(null);
+  const [auditFrom, setAuditFrom] = useState("");
+  const [auditTo, setAuditTo] = useState("");
   const { data: rooms = [], refetch: refetchRooms } = useListAccommodationRooms(roomsFor?.id ?? "", {
     query: { enabled: !!roomsFor?.id, queryKey: ["accommodation-rooms", roomsFor?.id] },
   });
+  const {
+    data: roomAuditLogs = [],
+    isLoading: roomAuditLoading,
+    isError: roomAuditError,
+    refetch: refetchRoomAuditLogs,
+  } = useListAuditLogs(
+    roomsFor
+      ? {
+          accommodationId: roomsFor.id,
+          from: auditFrom || undefined,
+          to: auditTo || undefined,
+        }
+      : undefined,
+    {
+      query: {
+        enabled: !!roomsFor?.id,
+        queryKey: ["accommodation-room-audit", roomsFor?.id, auditFrom, auditTo],
+      },
+    },
+  );
   const createRoom = useCreateAccommodationRoom();
   const updateRoom = useUpdateAccommodationRoom();
   const deleteRoom = useDeleteAccommodationRoom();
@@ -163,10 +252,10 @@ export default function Hospedagens() {
       setModalOpen(false);
       refetch();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message
-        || "Erro ao salvar hospedagem";
-      toast({ title: msg, variant: "destructive" });
+      toast({
+        title: accommodationMutationErrorMessage(err, editing ? "update" : "create"),
+        variant: "destructive",
+      });
     }
   }
 
@@ -177,17 +266,19 @@ export default function Hospedagens() {
       setDeleteId(null);
       refetch();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message
-        || "Erro ao excluir";
-      toast({ title: msg, variant: "destructive" });
+      toast({
+        title: accommodationMutationErrorMessage(err, "delete"),
+        variant: "destructive",
+      });
     }
   }
 
   function openRooms(a: Accommodation) {
     setRoomsFor(a);
     setEditingRoom(null);
-    setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
+    setAuditFrom("");
+    setAuditTo("");
+    setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null, standardOccupancy: 2, currency: "BRL" });
   }
 
   async function handleRoomSave() {
@@ -199,13 +290,11 @@ export default function Hospedagens() {
         await createRoom.mutateAsync({ id: roomsFor.id, data: roomForm });
       }
       setEditingRoom(null);
-      setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null });
+      setRoomForm({ name: "", category: "standard", capacity: 2, pricePerNight: null, standardOccupancy: 2, currency: "BRL" });
       await refetchRooms();
       toast({ title: editingRoom ? "Quarto atualizado" : "Quarto criado" });
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message || "Não foi possível salvar o quarto";
-      toast({ title: msg, variant: "destructive" });
+      toast({ title: roomMutationErrorMessage(err, "save"), variant: "destructive" });
     }
   }
 
@@ -215,9 +304,18 @@ export default function Hospedagens() {
       await refetchRooms();
       toast({ title: "Quarto excluído" });
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } }; message?: string })?.response?.data?.error
-        || (err as { message?: string })?.message || "Não foi possível excluir o quarto";
-      toast({ title: msg, variant: "destructive" });
+      toast({ title: roomMutationErrorMessage(err, "delete"), variant: "destructive" });
+    }
+  }
+
+  async function handleRoomStatusToggle(room: AccommodationRoom) {
+    const nextStatus = room.status === "active" ? "inactive" : "active";
+    try {
+      await updateRoom.mutateAsync({ id: room.id, data: { status: nextStatus } });
+      await Promise.all([refetchRooms(), refetchRoomAuditLogs()]);
+      toast({ title: nextStatus === "active" ? "Quarto ativado" : "Quarto inativado" });
+    } catch (err: unknown) {
+      toast({ title: roomMutationErrorMessage(err, "status", nextStatus), variant: "destructive" });
     }
   }
 
@@ -227,7 +325,7 @@ export default function Hospedagens() {
         <div>
           <h1 className="text-2xl font-bold">Hospedagens</h1>
           <p className="text-sm text-muted-foreground">
-            {accommodations.length} hospedagem(ns) cadastrada(s)
+            Base de referência com {accommodations.length} parceiro(s) para consulta comercial e operacional
           </p>
         </div>
         <Button data-testid="button-new-hospedagem" onClick={openCreate}>
@@ -527,8 +625,8 @@ export default function Hospedagens() {
             <DialogTitle>Quartos — {roomsFor?.name}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-[1fr_1fr_90px_110px_auto] items-end gap-2 rounded-lg border bg-muted/30 p-3">
-              <div className="space-y-1">
+            <div className="grid grid-cols-2 md:grid-cols-4 items-end gap-2 rounded-lg border bg-muted/30 p-3">
+              <div className="space-y-1 md:col-span-2">
                 <Label>Nome do quarto</Label>
                 <Input value={roomForm.name} placeholder="Ex.: 101 ou Suíte 1" onChange={e => setRoomForm(f => ({ ...f, name: e.target.value }))} />
               </div>
@@ -544,7 +642,27 @@ export default function Hospedagens() {
                 <Label>Diária</Label>
                 <Input type="number" min={0} step={0.01} placeholder="R$" value={roomForm.pricePerNight ?? ""} onChange={e => setRoomForm(f => ({ ...f, pricePerNight: e.target.value === "" ? null : Number(e.target.value) }))} />
               </div>
-              <Button onClick={handleRoomSave} disabled={createRoom.isPending || updateRoom.isPending || !roomForm.name.trim()}>
+              <div className="space-y-1">
+                <Label>Ocupação padrão</Label>
+                <Input type="number" min={1} max={50} value={roomForm.standardOccupancy ?? ""} onChange={e => setRoomForm(f => ({ ...f, standardOccupancy: e.target.value === "" ? null : Number(e.target.value) }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Configuração de camas</Label>
+                <Input placeholder="Ex.: 1 cama casal" value={roomForm.bedConfiguration ?? ""} onChange={e => setRoomForm(f => ({ ...f, bedConfiguration: e.target.value || null }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Banheiro</Label>
+                <Input placeholder="Privativo" value={roomForm.bathroomType ?? ""} onChange={e => setRoomForm(f => ({ ...f, bathroomType: e.target.value || null }))} />
+              </div>
+              <div className="space-y-1">
+                <Label>Andar</Label>
+                <Input placeholder="Térreo" value={roomForm.floor ?? ""} onChange={e => setRoomForm(f => ({ ...f, floor: e.target.value || null }))} />
+              </div>
+              <div className="space-y-1 md:col-span-3">
+                <Label>Descrição</Label>
+                <Input placeholder="Observações para a operação" value={roomForm.description ?? ""} onChange={e => setRoomForm(f => ({ ...f, description: e.target.value || null }))} />
+              </div>
+              <Button className="w-full" onClick={handleRoomSave} disabled={createRoom.isPending || updateRoom.isPending || !roomForm.name.trim()}>
                 {editingRoom ? "Salvar" : "Adicionar"}
               </Button>
             </div>
@@ -567,8 +685,17 @@ export default function Hospedagens() {
                         <TableCell><Badge variant={room.status === "active" ? "default" : "secondary"}>{room.status === "active" ? "Ativo" : "Inativo"}</Badge></TableCell>
                         <TableCell>
                           <div className="flex gap-1 justify-end">
-                            <Button size="icon" variant="ghost" onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight }); }}><Pencil className="w-4 h-4" /></Button>
-                            <Button size="icon" variant="ghost" className="text-destructive" onClick={() => handleRoomDelete(room)} disabled={deleteRoom.isPending}><Trash2 className="w-4 h-4" /></Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              aria-label={`${room.status === "active" ? "Inativar" : "Ativar"} quarto ${room.name}`}
+                              onClick={() => handleRoomStatusToggle(room)}
+                              disabled={updateRoom.isPending}
+                            >
+                              {room.status === "active" ? "Inativar" : "Ativar"}
+                            </Button>
+                            <Button size="icon" variant="ghost" aria-label={`Editar quarto ${room.name}`} onClick={() => { setEditingRoom(room); setRoomForm({ name: room.name, category: room.category, capacity: room.capacity, pricePerNight: room.pricePerNight, description: room.description, standardOccupancy: room.standardOccupancy, bedConfiguration: room.bedConfiguration, bathroomType: room.bathroomType, floor: room.floor, currency: room.currency }); }}><Pencil className="w-4 h-4" /></Button>
+                            <Button size="icon" variant="ghost" className="text-destructive" aria-label={`Excluir quarto ${room.name}`} onClick={() => handleRoomDelete(room)} disabled={deleteRoom.isPending}><Trash2 className="w-4 h-4" /></Button>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -577,6 +704,88 @@ export default function Hospedagens() {
                 </Table>
               </div>
             )}
+            <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+              <div>
+                <h3 className="text-sm font-semibold">Histórico de alterações</h3>
+                <p className="text-xs text-muted-foreground">
+                  Registro de criação, edição, ativação, desativação e exclusão dos quartos desta hospedagem.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">De</Label>
+                  <Input
+                    type="date"
+                    className="h-8 w-[140px] text-sm"
+                    value={auditFrom}
+                    onChange={e => setAuditFrom(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Até</Label>
+                  <Input
+                    type="date"
+                    className="h-8 w-[140px] text-sm"
+                    value={auditTo}
+                    onChange={e => setAuditTo(e.target.value)}
+                  />
+                </div>
+                {(auditFrom || auditTo) && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => { setAuditFrom(""); setAuditTo(""); }}
+                  >
+                    Limpar período
+                  </Button>
+                )}
+              </div>
+              {roomAuditError ? (
+                <p className="text-sm text-destructive">Não foi possível carregar o histórico.</p>
+              ) : roomAuditLoading ? (
+                <p className="text-sm text-muted-foreground">Carregando histórico...</p>
+              ) : roomAuditLogs.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nenhuma alteração registrada no período.</p>
+              ) : (
+                <div className="overflow-x-auto rounded-md border bg-background">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Data</TableHead>
+                        <TableHead>Operação</TableHead>
+                        <TableHead>Quarto</TableHead>
+                        <TableHead>Valores</TableHead>
+                        <TableHead>Usuário</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {roomAuditLogs.map(log => {
+                        const details = roomAuditDetails(log);
+                        const roomName = typeof details.name === "string" ? details.name : "Quarto removido";
+                        const capacity = typeof details.capacity === "number" ? `${details.capacity} vaga(s)` : null;
+                        const status = typeof details.status === "string" ? statusLabel[details.status] ?? details.status : null;
+                        const values = [capacity, status].filter(Boolean).join(" · ");
+                        return (
+                          <TableRow key={log.id}>
+                            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                              {new Date(log.createdAt).toLocaleString("pt-BR")}
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              {roomAuditActionLabel[log.action] ?? log.action}
+                            </TableCell>
+                            <TableCell className="text-xs font-medium">{roomName}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{values || "—"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{log.userId ?? "—"}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>
