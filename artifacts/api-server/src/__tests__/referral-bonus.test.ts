@@ -70,9 +70,9 @@ vi.mock("@workspace/db", () => ({
     update: updateMocks.update,
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
   },
-  referralsTable:        { id: "id", tenantId: "tenant_id", bonusPaid: "bonus_paid" },
-  clientsTable:          { id: "id", tenantId: "tenant_id" },
-  tenantsTable:          { id: "id" },
+  referralsTable:        { id: "id", tenantId: "tenant_id", code: "code", status: "status", bonusAmount: "bonus_amount", referrerId: "referrer_id", bonusPaid: "bonus_paid" },
+  clientsTable:          { id: "id", tenantId: "tenant_id", referralCodeStatus: "referral_code_status" },
+  tenantsTable:          { id: "id", settings: "settings" },
   referralSettingsTable: {},
   referralTrackingTable: {},
   referralCampaignsTable: {},
@@ -442,6 +442,74 @@ describe("POST /api/referrals/:id/pay-bonus", () => {
     expect(res.body).not.toHaveProperty("referrerClientWhatsapp");
     expect(res.body).not.toHaveProperty("referrerClientPhone");
     expect(res.body).not.toHaveProperty("tenantName");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/referrals/validate/:code — authorization and tenant isolation
+// ---------------------------------------------------------------------------
+
+describe("GET /api/referrals/validate/:code", () => {
+  it("returns 403 before reading referral data when caller lacks commission view permission", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_VIEWER);
+
+    const res = await request(buildApp()).get("/api/referrals/validate/MARIA2026");
+
+    expect(res.status).toBe(403);
+    expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it("validates a referral for a staff member with commission view permission", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_MANAGER);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ settings: {} }]))
+      .mockImplementationOnce(() => makeChain([{
+        id: "ref-001",
+        bonusAmount: "50.00",
+        referrerId: "client-001",
+        referrerCodeStatus: "active",
+      }]));
+
+    const res = await request(buildApp()).get("/api/referrals/validate/MARIA2026");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      valid: true,
+      referralId: "ref-001",
+      bonusAmount: 50,
+    });
+  });
+
+  it("does not expose referral data when the tenant has disabled the program", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_MANAGER);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ settings: { referralsEnabled: false } }]));
+
+    const res = await request(buildApp()).get("/api/referrals/validate/MARIA2026");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      valid: false,
+      bonusAmount: 0,
+      message: "Programa de indicação inativo",
+    });
+    expect(db.select).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns invalid when the tenant-scoped referral lookup finds no matching row", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_MANAGER);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ settings: {} }]))
+      // A referral belonging to another tenant is filtered out by the route query.
+      .mockImplementationOnce(() => makeChain([]));
+
+    const res = await request(buildApp()).get("/api/referrals/validate/MARIA2026");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      valid: false,
+      bonusAmount: 0,
+    });
   });
 });
 

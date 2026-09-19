@@ -1,7 +1,10 @@
-import { pgTable, text, timestamp, numeric, boolean, integer, json, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, boolean, integer, json, jsonb, index, uniqueIndex, check, foreignKey } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { tenantsTable } from "./tenants";
+import { reservationsTable } from "./reservations";
 
 export interface ReferralTierConfig {
   level: string;
@@ -12,7 +15,7 @@ export interface ReferralTierConfig {
 
 export const referralsTable = pgTable("referrals", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   referrerId: text("referrer_id").notNull(),
   referredId: text("referred_id"),
   referredEmail: text("referred_email"),
@@ -47,7 +50,7 @@ export const referralsTable = pgTable("referrals", {
   lastVisit: timestamp("last_visit", { withTimezone: true }),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
   isActive: boolean("is_active").notNull().default(true),
-  reservationId: text("reservation_id"),
+  reservationId: text("reservation_id").references(() => reservationsTable.id, { onDelete: "set null" }),
   source: text("source"),
   notes: text("notes"),
   fraudFlag: boolean("fraud_flag").notNull().default(false),
@@ -64,10 +67,28 @@ export const referralsTable = pgTable("referrals", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
+  check("referrals_status_check", sql`${t.status} IN ('pending', 'completed', 'converted', 'expired', 'reversed')`),
+  check("referrals_nonnegative_amounts_check", sql`
+    ${t.bonusAmount} >= 0
+    AND ${t.discountValue} >= 0
+    AND (${t.discountAmount} IS NULL OR ${t.discountAmount} >= 0)
+    AND (${t.bonusCreditUsedAmount} IS NULL OR ${t.bonusCreditUsedAmount} >= 0)
+    AND ${t.visitsCount} >= 0
+  `),
+  check("referrals_bonus_payment_consistency_check", sql`
+    (${t.bonusPaid} = false AND ${t.bonusPaidAt} IS NULL)
+    OR (${t.bonusPaid} = true AND ${t.bonusPaidAt} IS NOT NULL)
+  `),
+  check("referrals_conversion_consistency_check", sql`
+    (${t.status} IN ('completed', 'converted', 'reversed') AND ${t.convertedAt} IS NOT NULL)
+    OR (${t.status} IN ('pending', 'expired') AND ${t.convertedAt} IS NULL)
+  `),
+  check("referrals_reversal_consistency_check", sql`${t.status} <> 'reversed' OR ${t.reversalAt} IS NOT NULL`),
   index("referrals_tenant_created_idx").on(t.tenantId, t.createdAt),
   index("referrals_tenant_status_expires_idx").on(t.tenantId, t.status, t.expiresAt),
   index("referrals_tenant_reservation_idx").on(t.tenantId, t.reservationId),
   index("referrals_tenant_code_idx").on(t.tenantId, t.code),
+  uniqueIndex("referrals_tenant_id_unique").on(t.tenantId, t.id),
   index("referrals_financial_bonus_paid_idx").on(t.tenantId, t.status, t.bonusPaidAt),
   index("referrals_financial_credit_used_idx").on(t.tenantId, t.status, t.bonusCreditUsedAt),
 ]);
@@ -83,7 +104,7 @@ export type Referral = typeof referralsTable.$inferSelect;
  */
 export const referralBonusReversalsTable = pgTable("referral_bonus_reversals", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   referralId: text("referral_id").notNull(),
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
   reason: text("reason").notNull(),
@@ -91,6 +112,12 @@ export const referralBonusReversalsTable = pgTable("referral_bonus_reversals", {
   confirmedAt: timestamp("confirmed_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
+  check("referral_bonus_reversals_positive_amount_check", sql`${t.amount} > 0`),
+  foreignKey({
+    name: "referral_bonus_reversals_tenant_referral_fkey",
+    columns: [t.tenantId, t.referralId],
+    foreignColumns: [referralsTable.tenantId, referralsTable.id],
+  }).onDelete("restrict"),
   uniqueIndex("referral_bonus_reversals_tenant_referral_unique").on(t.tenantId, t.referralId),
   index("referral_bonus_reversals_tenant_created_idx").on(t.tenantId, t.createdAt),
 ]);
@@ -101,7 +128,7 @@ export type ReferralBonusReversal = typeof referralBonusReversalsTable.$inferSel
 
 export const referralTrackingTable = pgTable("referral_tracking", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   cookieId: text("cookie_id").notNull(),
   referralCode: text("referral_code").notNull(),
   ipAddress: text("ip_address"),
@@ -124,6 +151,11 @@ export const referralTrackingTable = pgTable("referral_tracking", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
+  check("referral_tracking_nonnegative_visits_check", sql`${t.visitsCount} >= 0`),
+  check("referral_tracking_conversion_consistency_check", sql`
+    (${t.converted} = false AND ${t.convertedAt} IS NULL)
+    OR (${t.converted} = true AND ${t.convertedAt} IS NOT NULL)
+  `),
   uniqueIndex("referral_tracking_tenant_cookie_unique").on(t.tenantId, t.cookieId),
   index("referral_tracking_tenant_code_idx").on(t.tenantId, t.referralCode),
 ]);
@@ -134,7 +166,7 @@ export type ReferralTracking = typeof referralTrackingTable.$inferSelect;
 
 export const referralSettingsTable = pgTable("referral_settings", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull().unique(),
+  tenantId: text("tenant_id").notNull().unique().references(() => tenantsTable.id, { onDelete: "cascade" }),
   isEnabled: boolean("is_enabled").notNull().default(true),
   discountType: text("discount_type").notNull().default("percentage"),
   discountValue: numeric("discount_value", { precision: 5, scale: 2 }).notNull().default("5"),
@@ -170,7 +202,7 @@ export type ReferralSettings = typeof referralSettingsTable.$inferSelect;
 
 export const referralCampaignsTable = pgTable("referral_campaigns", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
   endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
@@ -198,14 +230,20 @@ export const referralCampaignsTable = pgTable("referral_campaigns", {
   eligiblePartnerIds: jsonb("eligible_partner_ids").$type<string[]>().notNull().default([]),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  check("referral_campaigns_nonnegative_values_check", sql`
+    (${t.conversionCap} IS NULL OR ${t.conversionCap} > 0)
+    AND (${t.budgetAmount} IS NULL OR ${t.budgetAmount} >= 0)
+    AND ${t.commissionValue} >= 0
+  `),
+]);
 
 export type ReferralCampaign = typeof referralCampaignsTable.$inferSelect;
 
 /** Commercial commission, intentionally separate from the promotional referral bonus. */
 export const referralCommissionsTable = pgTable("referral_commissions", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   referralId: text("referral_id").notNull().unique(),
   referrerId: text("referrer_id").notNull(),
   campaignId: text("campaign_id"),
@@ -220,6 +258,15 @@ export const referralCommissionsTable = pgTable("referral_commissions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
+  check("referral_commissions_nonnegative_amount_check", sql`${t.amount} >= 0`),
+  check("referral_commissions_status_check", sql`${t.status} IN ('pending', 'approved', 'paid', 'reversed')`),
+  check("referral_commissions_pending_payment_check", sql`${t.status} NOT IN ('pending', 'approved') OR ${t.paidAt} IS NULL`),
+  check("referral_commissions_reversal_consistency_check", sql`${t.status} <> 'reversed' OR ${t.reversedAt} IS NOT NULL`),
+  foreignKey({
+    name: "referral_commissions_tenant_referral_fkey",
+    columns: [t.tenantId, t.referralId],
+    foreignColumns: [referralsTable.tenantId, referralsTable.id],
+  }).onDelete("restrict"),
   index("referral_commissions_financial_created_idx").on(t.tenantId, t.status, t.createdAt),
   index("referral_commissions_financial_paid_idx").on(t.tenantId, t.status, t.paidAt),
 ]);
@@ -230,7 +277,7 @@ export type ReferralCommission = typeof referralCommissionsTable.$inferSelect;
 
 export const referralAttemptLogsTable = pgTable("referral_attempt_logs", {
   id: text("id").primaryKey(),
-  tenantId: text("tenant_id").notNull(),
+  tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   clientId: text("client_id").notNull(),
   storeSlug: text("store_slug").notNull(),
   ipAddress: text("ip_address"),

@@ -129,3 +129,4 @@
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md) — mocks instantiated with `new` need constructable function/class shapes after the Vitest 4 upgrade
 - [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
 - [Referral cap concurrency](referral-cap-concurrency.md) — reserve capped conversions with a conditional no-op client update so PostgreSQL holds the row lock through checkout commit
+- [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited

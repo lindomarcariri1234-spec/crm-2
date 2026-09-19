@@ -600,8 +600,29 @@
     {
       "idx": 86,
       "version": "7",
-      "when": 1789851000000,
+      "when": 1809300000000,
       "tag": "0086_referral_integrity_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1809400000000,
+      "tag": "0087_referral_integrity_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1809500000000,
+      "tag": "0088_referral_commission_state_constraint",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1809600000000,
+      "tag": "0089_referral_tenant_scoped_fks",
       "breakpoints": true
     }
   ]

@@ -49,6 +49,25 @@ router.get("/referrals/validate/:code", async (req, res, next: NextFunction): Pr
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const [tenant] = await db
+      .select({ settings: tenantsTable.settings })
+      .from(tenantsTable)
+      .where(eq(tenantsTable.id, me.tenantId))
+      .limit(1);
+    if ((tenant?.settings as Record<string, unknown> | null)?.referralsEnabled === false) {
+      res.json({
+        valid: false,
+        bonusAmount: 0,
+        message: "Programa de indicação inativo",
+      });
+      return;
+    }
+
     const { code } = req.params;
 
     const [referral] = await db
@@ -59,7 +78,10 @@ router.get("/referrals/validate/:code", async (req, res, next: NextFunction): Pr
         referrerCodeStatus: clientsTable.referralCodeStatus,
       })
       .from(referralsTable)
-      .leftJoin(clientsTable, eq(referralsTable.referrerId, clientsTable.id))
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
       .where(and(
         eq(referralsTable.tenantId, me.tenantId),
         eq(referralsTable.code, code),
