@@ -2439,8 +2439,8 @@ CREATE TABLE IF NOT EXISTS "stripe_webhook_events" (
 );;
 
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS "referrals_tenant_id_unique"
-  ON "referrals" USING btree ("tenant_id", "id");;
+ALTER TABLE "referrals" ADD CONSTRAINT "referrals_tenant_id_unique"
+  UNIQUE ("tenant_id", "id");;
 --> statement-breakpoint
 ALTER TABLE "referrals" ADD CONSTRAINT "referrals_tenant_id_fkey"
   FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;;

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, numeric, boolean, integer, json, jsonb, index, uniqueIndex, check, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, boolean, integer, json, jsonb, index, unique, uniqueIndex, check, foreignKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 import { createInsertSchema } from "drizzle-zod";
@@ -88,7 +88,7 @@ export const referralsTable = pgTable("referrals", {
   index("referrals_tenant_status_expires_idx").on(t.tenantId, t.status, t.expiresAt),
   index("referrals_tenant_reservation_idx").on(t.tenantId, t.reservationId),
   index("referrals_tenant_code_idx").on(t.tenantId, t.code),
-  uniqueIndex("referrals_tenant_id_unique").on(t.tenantId, t.id),
+  unique("referrals_tenant_id_unique").on(t.tenantId, t.id),
   index("referrals_financial_bonus_paid_idx").on(t.tenantId, t.status, t.bonusPaidAt),
   index("referrals_financial_credit_used_idx").on(t.tenantId, t.status, t.bonusCreditUsedAt),
 ]);

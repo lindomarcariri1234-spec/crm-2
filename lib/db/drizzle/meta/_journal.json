@@ -624,6 +624,13 @@
       "when": 1809600000000,
       "tag": "0089_referral_tenant_scoped_fks",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1809700000000,
+      "tag": "0090_referral_tenant_key_constraint",
+      "breakpoints": true
     }
   ]
 }
