@@ -749,6 +749,72 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
     });
   });
 
+  it("shows the capacity warning and keeps the selected room available for retry", async () => {
+    updateReservationRoomAssignmentsMock.mockRejectedValueOnce({
+      data: { code: "ROOM_CAPACITY_EXCEEDED" },
+    });
+
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: {
+          id: "client-123",
+          name: "Maria Silva",
+          totalSpent: 0,
+          outstandingBalance: 0,
+        } as never,
+        onSave: vi.fn(),
+        pipelineId: "pipe-1",
+      }),
+    );
+    const tripIdHandler = selectRegistry.handlers[4];
+    const roomIdHandler = selectRegistry.handlers[7];
+
+    await flushAct(() => {
+      tripIdHandler?.("trip-1");
+    });
+    await flushAct(() => {
+      roomIdHandler?.("room-2");
+    });
+
+    const submitButton = () =>
+      Array.from(container.querySelectorAll("button")).find(
+        button => button.textContent?.includes("Salvar Alterações"),
+      );
+    expect(submitButton()).toBeDefined();
+
+    await flushAct(async () => {
+      submitButton()?.click();
+    });
+
+    const expectedDescription =
+      "Os dados do cliente foram salvos, mas o quarto não foi alterado porque não há vagas suficientes. Escolha outro quarto e tente novamente.";
+    expect(toastMock).toHaveBeenCalledWith({
+      title: "Quarto não atualizado",
+      description: expectedDescription,
+      variant: "destructive",
+    });
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(expectedDescription);
+    expect(submitButton()).toBeDefined();
+    expect(createReservationMock).not.toHaveBeenCalled();
+
+    // The selected room remains in form state, so a retry sends the same room.
+    await flushAct(async () => {
+      submitButton()?.click();
+    });
+    expect(updateReservationRoomAssignmentsMock).toHaveBeenCalledTimes(2);
+    expect(updateReservationRoomAssignmentsMock.mock.calls[1][0]).toEqual({
+      reservationId: "reservation-existing",
+      data: {
+        assignments: [
+          { passengerId: "passenger-1", roomId: "room-2" },
+          { passengerId: "passenger-2", roomId: "room-2" },
+        ],
+      },
+    });
+  });
+
   it("keeps editing disabled until the existing reservation passengers finish loading", async () => {
     roomQueryState.passengersLoading = true;
 

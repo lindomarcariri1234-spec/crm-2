@@ -429,6 +429,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const [hasSeatMap, setHasSeatMap] = useState<boolean | null>(null);
   const [limitError, setLimitError] = useState<{ resource: string; current?: number; limit?: number } | null>(null);
   const [duplicateConflict, setDuplicateConflict] = useState<{ id: string; name: string; code: string | null; whatsapp: string } | null>(null);
+  const [roomAssignmentError, setRoomAssignmentError] = useState<string | null>(null);
   const { toast } = useToast();
   const { data: allStages } = useListPipelineStages();
   // When creating a deal, scope stages to the pipeline the user is currently viewing
@@ -458,6 +459,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
       setSelectedSeats(formData.seatNumber ? [formData.seatNumber] : []);
       setHasSeatMap(null);
       setDuplicateConflict(null);
+      setRoomAssignmentError(null);
     }
   }, [open, editClient]);
 
@@ -670,8 +672,15 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 },
               });
             }
-          } catch {
-            // Reservation or room sync failure should not block client update.
+          } catch (error: unknown) {
+            const responseData = (error as { data?: { code?: unknown } })?.data
+              ?? (error as { response?: { data?: { code?: unknown } } })?.response?.data;
+            const message = responseData?.code === "ROOM_CAPACITY_EXCEEDED"
+              ? "Os dados do cliente foram salvos, mas o quarto não foi alterado porque não há vagas suficientes. Escolha outro quarto e tente novamente."
+              : "Os dados do cliente foram salvos, mas a atribuição do quarto não foi alterada. Tente novamente.";
+            setRoomAssignmentError(message);
+            toast({ title: "Quarto não atualizado", description: message, variant: "destructive" });
+            return;
           }
         }
       } else {
@@ -1097,7 +1106,10 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 <Label>Pacote / Quarto</Label>
                 <Select
                   value={form.roomId}
-                  onValueChange={set("roomId")}
+                  onValueChange={value => {
+                    setForm(prev => ({ ...prev, roomId: value }));
+                    setRoomAssignmentError(null);
+                  }}
                   disabled={!selectedTrip?.accommodationId || isLoadingTripRooms || availableRooms.length === 0}
                 >
                   <SelectTrigger><SelectValue placeholder={isLoadingTripRooms ? "Carregando quartos..." : "Selecionar quarto..."} /></SelectTrigger>
@@ -1120,6 +1132,11 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                 {form.roomId !== "none" && (
                   <p className="text-xs text-muted-foreground">
                     A ocupação será validada novamente no salvamento para evitar overbooking.
+                  </p>
+                )}
+                {roomAssignmentError && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {roomAssignmentError}
                   </p>
                 )}
               </div>
