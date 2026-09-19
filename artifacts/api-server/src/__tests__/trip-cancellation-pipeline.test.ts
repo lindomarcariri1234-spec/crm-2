@@ -287,24 +287,28 @@ function queueSelectSlots(activeReservations: Array<{ id: string; clientId: stri
   mockSelect.mockImplementationOnce(() => ({
     from: vi.fn(() => ({
       where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ planId: "starter" }]) })),
+      limit: mockLimit,
     })),
   }));
   // Slot 2: plansTable
   mockSelect.mockImplementationOnce(() => ({
     from: vi.fn(() => ({
       where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ supportedFeatures: [] }]) })),
+      limit: mockLimit,
     })),
   }));
   // Slot 3: reservationsTable (allActiveReservations — no .limit())
   mockSelect.mockImplementationOnce(() => ({
     from: vi.fn(() => ({
       where: vi.fn().mockResolvedValue(activeReservations),
+      limit: mockLimit,
     })),
   }));
   // Slot 5 (final): tripsTable after transaction
   mockSelect.mockImplementationOnce(() => ({
     from: vi.fn(() => ({
       where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([TRIP_ROW]) })),
+      limit: mockLimit,
     })),
   }));
 }
