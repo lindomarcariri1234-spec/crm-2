@@ -3910,6 +3910,7 @@ export const ListTripCostsResponse = zod.object({
     plannedBudget: zod.number(),
     budgetVariance: zod.number(),
     confirmedSeats: zod.number().int(),
+    planningCapacity: zod.number().int(),
   }),
 });
 

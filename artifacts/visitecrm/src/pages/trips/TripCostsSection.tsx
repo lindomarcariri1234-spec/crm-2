@@ -372,7 +372,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                 ? `${formatCurrency(Math.abs(summary.budgetVariance))} abaixo`
                 : `${formatCurrency(summary.budgetVariance)} acima`}
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">Orçado: {formatCurrency(summary.plannedBudget)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Orçado ({summary.planningCapacity} vagas): {formatCurrency(summary.plannedBudget)}</p>
           </div>
         </div>
       )}
@@ -435,7 +435,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
           <div className="flex items-center justify-between mb-3">
             <div>
               <h3 className="font-semibold text-sm">Orçamento planejado por categoria</h3>
-              <p className="text-xs text-muted-foreground">Custos fixos e variáveis cadastrados no planejamento</p>
+              <p className="text-xs text-muted-foreground">Custos fixos e variáveis cadastrados no planejamento · {summary?.planningCapacity ?? 0} vagas</p>
             </div>
             <PiggyBank className="w-4 h-4 text-amber-600" />
           </div>

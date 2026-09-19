@@ -1323,6 +1323,7 @@ export interface TripCostSummary {
   plannedBudget: number;
   budgetVariance: number;
   confirmedSeats: number;
+  planningCapacity: number;
 }
 
 export type TripPlannedCostKind =

@@ -7537,7 +7537,9 @@ components:
           type: number
         confirmedSeats:
           type: integer
-      required: [expectedRevenue, totalTripCosts, totalAgencyExpenses, totalRealCosts, totalPaidCosts, totalPendingCosts, profit, margin, plannedBudget, budgetVariance, confirmedSeats]
+        planningCapacity:
+          type: integer
+      required: [expectedRevenue, totalTripCosts, totalAgencyExpenses, totalRealCosts, totalPaidCosts, totalPendingCosts, profit, margin, plannedBudget, budgetVariance, confirmedSeats, planningCapacity]
 
     TripPlannedCost:
       type: object

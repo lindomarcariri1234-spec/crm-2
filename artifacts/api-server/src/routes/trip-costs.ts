@@ -104,6 +104,7 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
       priceAdult: tripsTable.priceAdult,
       priceChild: tripsTable.priceChild,
       priceSenior: tripsTable.priceSenior,
+      totalCapacity: tripsTable.totalCapacity,
       fixedCosts: tripsTable.fixedCosts,
       variableCosts: tripsTable.variableCosts,
     }).from(tripsTable).where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).limit(1);
@@ -138,10 +139,15 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
     const profit = expectedRevenue2 - totalRealCosts;
     const margin = expectedRevenue2 > 0 ? (profit / expectedRevenue2) * 100 : 0;
 
+    // The planning screen defines variable costs against the trip's full
+    // capacity. Keep that same basis here; confirmed seats are only used for
+    // realized revenue and payment status, otherwise the budget changes when
+    // a reservation is confirmed and no longer matches the Prices tab.
+    const planningCapacity = tripRow?.totalCapacity ?? 0;
     const fixedCosts = Array.isArray(tripRow?.fixedCosts) ? tripRow.fixedCosts as Array<{ id: string; category: string; description: string; value: number }> : [];
     const variableCosts = Array.isArray(tripRow?.variableCosts) ? tripRow.variableCosts as Array<{ id: string; category: string; description: string; valuePax: number }> : [];
     const plannedFixed = fixedCosts.reduce((s, c) => s + (c.value ?? 0), 0);
-    const plannedVariable = variableCosts.reduce((s, c) => s + (c.valuePax ?? 0) * confirmedSeats, 0);
+    const plannedVariable = variableCosts.reduce((s, c) => s + (c.valuePax ?? 0) * planningCapacity, 0);
     const totalPlanned = plannedFixed + plannedVariable;
     const plannedCosts = [
       ...fixedCosts.map(c => ({
@@ -157,7 +163,7 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
         kind: "variable" as const,
         category: c.category,
         description: c.description,
-        amount: Number(c.valuePax ?? 0) * confirmedSeats,
+        amount: Number(c.valuePax ?? 0) * planningCapacity,
         amountPerPassenger: Number(c.valuePax ?? 0),
       })),
     ];
@@ -183,6 +189,7 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
         plannedBudget: totalPlanned,
         budgetVariance: totalRealCosts - totalPlanned,
         confirmedSeats,
+         planningCapacity,
       },
     });
   } catch (err) {
