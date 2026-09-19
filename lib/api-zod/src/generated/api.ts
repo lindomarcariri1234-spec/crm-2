@@ -5487,16 +5487,25 @@ export const GetPaymentsSummaryResponse = zod.object({
  * @summary List expenses
  */
 export const listExpensesQueryIncludeTripCostsDefault = false;
+export const listExpensesQuerySummaryPeriodDefault = `all`;
 export const listExpensesQueryPageDefault = 1;
 export const listExpensesQueryLimitDefault = 20;
 
 export const ListExpensesQueryParams = zod.object({
   tripId: zod.coerce.string().nullish(),
   status: zod.coerce.string().nullish(),
+  category: zod.coerce.string().nullish(),
+  supplierId: zod.coerce.string().nullish(),
+  dateFrom: zod.coerce.string().nullish(),
+  dateTo: zod.coerce.string().nullish(),
   includeTripCosts: zod.coerce
     .boolean()
     .default(listExpensesQueryIncludeTripCostsDefault)
     .describe("Include direct trip costs in the consolidated financial list"),
+  summaryPeriod: zod
+    .enum(["all", "month", "quarter", "year"])
+    .default(listExpensesQuerySummaryPeriodDefault)
+    .describe("Period used for the server-side financial summary"),
   page: zod.coerce.number().int().default(listExpensesQueryPageDefault),
   limit: zod.coerce.number().int().default(listExpensesQueryLimitDefault),
 });
@@ -5523,6 +5532,21 @@ export const ListExpensesResponse = zod.object({
   total: zod.number().int(),
   page: zod.number().int(),
   limit: zod.number().int(),
+  summary: zod
+    .object({
+      total: zod.number(),
+      paid: zod.number(),
+      pending: zod.number(),
+      overdue: zod.number(),
+      paidThisMonth: zod.number(),
+      categoryBreakdown: zod.array(
+        zod.object({
+          category: zod.string(),
+          total: zod.number(),
+        }),
+      ),
+    })
+    .optional(),
 });
 
 /**

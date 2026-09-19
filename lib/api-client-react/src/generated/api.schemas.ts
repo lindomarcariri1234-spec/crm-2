@@ -2358,11 +2358,26 @@ export interface FinancialSummary {
   paidThisMonth: number;
 }
 
+export type ExpenseListSummaryCategoryBreakdownItem = {
+  category: string;
+  total: number;
+};
+
+export interface ExpenseListSummary {
+  total: number;
+  paid: number;
+  pending: number;
+  overdue: number;
+  paidThisMonth: number;
+  categoryBreakdown: ExpenseListSummaryCategoryBreakdownItem[];
+}
+
 export interface ExpenseListResponse {
   data: Expense[];
   total: number;
   page: number;
   limit: number;
+  summary?: ExpenseListSummary;
 }
 
 export interface CreateExpenseBody {
@@ -5522,12 +5537,42 @@ export type ListExpensesParams = {
    */
   status?: string | null;
   /**
+   * @nullable
+   */
+  category?: string | null;
+  /**
+   * @nullable
+   */
+  supplierId?: string | null;
+  /**
+   * @nullable
+   */
+  dateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  dateTo?: string | null;
+  /**
    * Include direct trip costs in the consolidated financial list
    */
   includeTripCosts?: boolean;
+  /**
+   * Period used for the server-side financial summary
+   */
+  summaryPeriod?: ListExpensesSummaryPeriod;
   page?: number;
   limit?: number;
 };
+
+export type ListExpensesSummaryPeriod =
+  (typeof ListExpensesSummaryPeriod)[keyof typeof ListExpensesSummaryPeriod];
+
+export const ListExpensesSummaryPeriod = {
+  all: "all",
+  month: "month",
+  quarter: "quarter",
+  year: "year",
+} as const;
 
 export type ListDealsParams = {
   /**

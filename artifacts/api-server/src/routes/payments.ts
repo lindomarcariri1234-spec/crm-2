@@ -1,7 +1,7 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
 import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
-import { eq, and, sql, desc, inArray } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, gte, lt } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
@@ -349,6 +349,60 @@ function formatTripCost(c: typeof tripCostsTable.$inferSelect) {
     paymentMethod: null, paymentDate: c.paidAt?.toISOString() ?? null,
     dueDate: (c.dueDate ?? c.createdAt).toISOString(), status: c.status,
     notes: c.notes ?? null, createdAt: c.createdAt.toISOString(), source: "trip" as const,
+  };
+}
+
+type ConsolidatedExpense = ReturnType<typeof formatExpense> | ReturnType<typeof formatTripCost>;
+
+function isActiveConsolidatedExpense(row: ConsolidatedExpense): boolean {
+  return row.status !== "cancelled";
+}
+
+function isInExpenseSummaryPeriod(row: ConsolidatedExpense, period: string): boolean {
+  if (period === "all") return true;
+  const dueDate = new Date(row.dueDate);
+  if (Number.isNaN(dueDate.getTime())) return false;
+  const now = new Date();
+  if (period === "month") return row.dueDate.slice(0, 7) === localToday().slice(0, 7);
+  if (period === "quarter") {
+    const cutoff = new Date(now);
+    cutoff.setMonth(now.getMonth() - 3);
+    return dueDate >= cutoff;
+  }
+  if (period === "year") {
+    const cutoff = new Date(now);
+    cutoff.setFullYear(now.getFullYear() - 1);
+    return dueDate >= cutoff;
+  }
+  return true;
+}
+
+function sumConsolidatedExpenses(rows: ConsolidatedExpense[]): number {
+  return rows.reduce((sum, row) => sum + Number(row.amount), 0);
+}
+
+function buildExpenseSummary(rows: ConsolidatedExpense[], period: string, categoryRows: ConsolidatedExpense[]) {
+  const activeRows = rows.filter(isActiveConsolidatedExpense);
+  const periodRows = activeRows.filter(row => isInExpenseSummaryPeriod(row, period));
+  const currentMonth = localToday().slice(0, 7);
+  const paidThisMonth = activeRows
+    .filter(row => row.status === "paid" && row.paymentDate?.slice(0, 7) === currentMonth)
+    .reduce((sum, row) => sum + Number(row.amount), 0);
+  const categoryTotals = new Map<string, number>();
+  for (const row of categoryRows) {
+    if (!isActiveConsolidatedExpense(row)) continue;
+    categoryTotals.set(row.category, (categoryTotals.get(row.category) ?? 0) + Number(row.amount));
+  }
+
+  return {
+    total: sumConsolidatedExpenses(periodRows),
+    paid: sumConsolidatedExpenses(periodRows.filter(row => row.status === "paid")),
+    pending: sumConsolidatedExpenses(periodRows.filter(row => row.status === "pending")),
+    overdue: sumConsolidatedExpenses(periodRows.filter(row => row.status === "overdue")),
+    paidThisMonth,
+    categoryBreakdown: [...categoryTotals.entries()]
+      .map(([category, total]) => ({ category, total }))
+      .sort((a, b) => b.total - a.total),
   };
 }
 
@@ -1032,7 +1086,10 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
     if (!me) return;
     if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.VIEW)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
-    const { tripId, status, page = "1", limit = "20", includeTripCosts } = req.query as Record<string, string>;
+    const {
+      tripId, status, category, supplierId, dateFrom, dateTo,
+      page = "1", limit = "20", includeTripCosts, summaryPeriod = "all",
+    } = req.query as Record<string, string>;
     const pageNum = parseInt(page) || 1;
     const limitNum = Math.min(parseInt(limit) || 20, 500);
     const offset = (pageNum - 1) * limitNum;
@@ -1041,15 +1098,30 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
     const conditions: ReturnType<typeof eq>[] = [eq(expensesTable.tenantId, me.tenantId)];
     if (tripId) conditions.push(eq(expensesTable.tripId, tripId));
     if (status) conditions.push(eq(expensesTable.status, parseExpenseStatus(status)));
+    if (category) conditions.push(eq(expensesTable.category, category));
+    if (supplierId) conditions.push(eq(expensesTable.supplierId, supplierId));
+    const fromDate = dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`) : null;
+    const toDate = dateTo ? new Date(`${dateTo}T00:00:00.000Z`) : null;
+    if (fromDate && !Number.isNaN(fromDate.getTime())) conditions.push(gte(expensesTable.dueDate, fromDate));
+    if (toDate && !Number.isNaN(toDate.getTime())) {
+      toDate.setUTCDate(toDate.getUTCDate() + 1);
+      conditions.push(lt(expensesTable.dueDate, toDate));
+    }
 
     if (shouldIncludeTripCosts) {
       const tripCostConditions: ReturnType<typeof eq>[] = [eq(tripCostsTable.tenantId, me.tenantId)];
       if (tripId) tripCostConditions.push(eq(tripCostsTable.tripId, tripId));
       if (status) tripCostConditions.push(eq(tripCostsTable.status, parseExpenseStatus(status)));
+      if (category) tripCostConditions.push(eq(tripCostsTable.category, category));
+      if (supplierId) tripCostConditions.push(eq(tripCostsTable.supplierId, supplierId));
+      if (fromDate && !Number.isNaN(fromDate.getTime())) tripCostConditions.push(gte(tripCostsTable.dueDate, fromDate));
+      if (toDate && !Number.isNaN(toDate.getTime())) tripCostConditions.push(lt(tripCostsTable.dueDate, toDate));
 
-      const [expenses, tripCosts] = await Promise.all([
+      const [expenses, tripCosts, allExpenses, allTripCosts] = await Promise.all([
         db.select().from(expensesTable).where(and(...conditions)),
         db.select().from(tripCostsTable).where(and(...tripCostConditions)),
+        db.select().from(expensesTable).where(eq(expensesTable.tenantId, me.tenantId)),
+        db.select().from(tripCostsTable).where(eq(tripCostsTable.tenantId, me.tenantId)),
       ]);
       const consolidated = [
         ...expenses.map(formatExpense),
@@ -1058,12 +1130,21 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
         const byDueDate = new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime();
         return byDueDate || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
+      const allConsolidated = [
+        ...allExpenses.map(formatExpense),
+        ...allTripCosts.map(formatTripCost),
+      ];
 
       res.json({
         data: consolidated.slice(offset, offset + limitNum),
         total: consolidated.length,
         page: pageNum,
         limit: limitNum,
+        summary: buildExpenseSummary(
+          allConsolidated,
+          ["all", "month", "quarter", "year"].includes(summaryPeriod) ? summaryPeriod : "all",
+          consolidated,
+        ),
       });
       return;
     }

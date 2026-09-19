@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle } from "lucide-react";
+import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS as CATEGORY_LABELS } from "@/lib/labels";
 import { ListLoadErrorRow } from "@/components/list-load-error";
@@ -31,6 +31,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   commission: "#EF4444",
   other: "#94A3B8",
 };
+const EXPENSE_PAGE_SIZE = 50;
 
 function CategoryChart({ data }: { data: Array<{ category: string; total: number }> }) {
   const max = Math.max(...data.map(d => d.total), 1);
@@ -58,7 +59,8 @@ export default function Expenses() {
   const [tripFilter, setTripFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [periodFilter, setPeriodFilter] = useState("all");
+  const [periodFilter, setPeriodFilter] = useState<"all" | "month" | "quarter" | "year">("all");
+  const [page, setPage] = useState(1);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [expenseMethod, setExpenseMethod] = useState("pix");
   const [supplierFilter, setSupplierFilter] = useState("");
@@ -67,70 +69,42 @@ export default function Expenses() {
   const [createTripId, setCreateTripId] = useState("none");
   const queryClient = useQueryClient();
 
-  const { data: allExpensesForKpi } = useListExpenses({ limit: 500, includeTripCosts: true });
-
   const { data: expensesData, isLoading, isError, refetch } = useListExpenses({
     status: statusFilter || undefined,
     tripId: tripFilter || undefined,
-    limit: 200,
+    category: categoryFilter || undefined,
+    supplierId: supplierFilter || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    page,
+    limit: EXPENSE_PAGE_SIZE,
     includeTripCosts: true,
+    summaryPeriod: periodFilter,
   });
   const { data: tripsData } = useListTrips({ limit: 100 });
   const { data: suppliersRaw } = useListSuppliers();
   const createExpense = useCreateExpense();
   const updateExpense = useUpdateExpense();
 
-  const expenses = useMemo(() => {
-    let all = expensesData?.data ?? [];
-    if (categoryFilter) all = all.filter(e => e.category === categoryFilter);
-    if (dateFrom) all = all.filter(e => e.dueDate >= dateFrom);
-    if (dateTo) all = all.filter(e => e.dueDate <= dateTo);
-    if (supplierFilter) all = all.filter(e => e.supplierId === supplierFilter);
-    return all;
-  }, [expensesData, categoryFilter, dateFrom, dateTo, supplierFilter]);
+  const expenses = expensesData?.data ?? [];
+  const kpis = expensesData?.summary ?? {
+    total: 0,
+    paid: 0,
+    pending: 0,
+    overdue: 0,
+    paidThisMonth: 0,
+    categoryBreakdown: [],
+  };
+  const categoryBreakdown = expensesData?.summary?.categoryBreakdown ?? [];
+  const totalPages = Math.max(1, Math.ceil((expensesData?.total ?? 0) / EXPENSE_PAGE_SIZE));
 
-  const kpis = useMemo(() => {
-    // Use Brazil calendar month so KPIs are correct at 21h-midnight BRT
-    const _todayBRKpi = localToday();
-    const [_kpiYear, _kpiMonth1] = _todayBRKpi.split("-").map(Number);
-    const now = new Date();
-    const allFull = allExpensesForKpi?.data ?? [];
-    const active = (e: typeof allFull[number]) => e.status !== EXPENSE_STATUS.CANCELLED;
-    let all = allFull.filter(active);
-    if (periodFilter === "month") {
-      all = allFull.filter(e => active(e) && (() => {
-        if (!e.dueDate) return false;
-        const s = e.dueDate.slice(0, 7); // "YYYY-MM" from ISO date string
-        return s === _todayBRKpi.slice(0, 7);
-      })());
-    } else if (periodFilter === "quarter") {
-      const cutoff = new Date(now); cutoff.setMonth(now.getMonth() - 3);
-      all = allFull.filter(e => active(e) && e.dueDate && new Date(e.dueDate) >= cutoff);
-    } else if (periodFilter === "year") {
-      const cutoff = new Date(now); cutoff.setFullYear(now.getFullYear() - 1);
-      all = allFull.filter(e => active(e) && e.dueDate && new Date(e.dueDate) >= cutoff);
-    }
-    const total = all.reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const paid = all.filter(e => e.status === EXPENSE_STATUS.PAID).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const pending = all.filter(e => e.status === EXPENSE_STATUS.PENDING).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const overdue = all.filter(e => e.status === EXPENSE_STATUS.OVERDUE).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    const paidThisMonth = allFull.filter(e =>
-      active(e) && e.status === EXPENSE_STATUS.PAID && e.paymentDate &&
-      e.paymentDate.slice(0, 7) === _todayBRKpi.slice(0, 7)
-    ).reduce((s, e) => s + parseFloat(String(e.amount)), 0);
-    return { total, paid, pending, overdue, paidThisMonth };
-  }, [allExpensesForKpi, periodFilter]);
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, categoryFilter, tripFilter, dateFrom, dateTo, supplierFilter, periodFilter]);
 
-  const categoryBreakdown = useMemo(() => {
-    const all = expenses;
-    const map: Record<string, number> = {};
-    for (const e of all) {
-      map[e.category] = (map[e.category] ?? 0) + parseFloat(String(e.amount));
-    }
-    return Object.entries(map)
-      .map(([category, total]) => ({ category, total }))
-      .sort((a, b) => b.total - a.total);
-  }, [expenses]);
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const suppliersMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -194,7 +168,7 @@ export default function Expenses() {
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">Resumo financeiro das despesas</p>
-        <Select value={periodFilter} onValueChange={setPeriodFilter}>
+        <Select value={periodFilter} onValueChange={v => setPeriodFilter(v as typeof periodFilter)}>
           <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos os períodos</SelectItem>
@@ -252,7 +226,7 @@ export default function Expenses() {
       )}
 
       <div className="flex flex-wrap items-center gap-3 bg-card p-4 rounded-lg border">
-        <Select value={statusFilter || "all"} onValueChange={v => setStatusFilter(v === "all" ? "" : v)}>
+         <Select value={statusFilter || "all"} onValueChange={v => { setStatusFilter(v === "all" ? "" : v); }}>
           <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos os status</SelectItem>
@@ -262,7 +236,7 @@ export default function Expenses() {
             <SelectItem value={EXPENSE_STATUS.CANCELLED}>Cancelado</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={categoryFilter || "all"} onValueChange={v => setCategoryFilter(v === "all" ? "" : v)}>
+         <Select value={categoryFilter || "all"} onValueChange={v => { setCategoryFilter(v === "all" ? "" : v); }}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Categoria" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas as categorias</SelectItem>
@@ -274,7 +248,7 @@ export default function Expenses() {
             <SelectItem value="other">Outro</SelectItem>
           </SelectContent>
         </Select>
-        <Select value={tripFilter || "all"} onValueChange={v => setTripFilter(v === "all" ? "" : v)}>
+         <Select value={tripFilter || "all"} onValueChange={v => { setTripFilter(v === "all" ? "" : v); }}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Viagem" /></SelectTrigger>
           <SelectContent className="max-h-48">
             <SelectItem value="all">Todas as viagens</SelectItem>
@@ -285,7 +259,7 @@ export default function Expenses() {
         </Select>
         {(suppliersRaw ?? []).length > 0 && (
           <Select value={supplierFilter || "all"} onValueChange={v => setSupplierFilter(v === "all" ? "" : v)}>
-            <SelectTrigger className="w-[160px]"><SelectValue placeholder="Fornecedor" /></SelectTrigger>
+             <SelectTrigger className="w-[160px]"><SelectValue placeholder="Fornecedor" /></SelectTrigger>
             <SelectContent className="max-h-48">
               <SelectItem value="all">Todos fornecedores</SelectItem>
               {(suppliersRaw ?? []).map(s => (
@@ -295,7 +269,7 @@ export default function Expenses() {
           </Select>
         )}
         <div className="flex items-center gap-2">
-          <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-36" placeholder="De" />
+             <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="w-36" placeholder="De" />
           <span className="text-muted-foreground text-sm">até</span>
           <Input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="w-36" placeholder="Até" />
         </div>
@@ -325,7 +299,7 @@ export default function Expenses() {
           <TableBody>
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={i}>{Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                <TableRow key={i}>{Array.from({ length: 10 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
               ))
             ) : isError ? (
               <ListLoadErrorRow
@@ -383,6 +357,23 @@ export default function Expenses() {
           </TableBody>
         </Table>
       </div>
+
+       {totalPages > 1 && (
+         <div className="flex items-center justify-between px-2">
+           <p className="text-sm text-muted-foreground">
+             Mostrando {((page - 1) * EXPENSE_PAGE_SIZE) + 1}–{Math.min(page * EXPENSE_PAGE_SIZE, expensesData?.total ?? 0)} de {expensesData?.total ?? 0} registros
+           </p>
+           <div className="flex items-center gap-2">
+             <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+               <ChevronLeft className="w-4 h-4" /> Anterior
+             </Button>
+             <span className="text-sm font-medium">{page} / {totalPages}</span>
+             <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+               Próxima <ChevronRight className="w-4 h-4" />
+             </Button>
+           </div>
+         </div>
+       )}
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         <DialogContent className="max-w-md">

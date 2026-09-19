@@ -331,7 +331,7 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       notes: null,
       createdAt: new Date("2026-08-21T12:00:00Z"),
     };
-    dbState.selectRows = [[agencyExpense], [tripCost]];
+    dbState.selectRows = [[agencyExpense], [tripCost], [agencyExpense], [tripCost]];
 
     const res = await request(buildApp(paymentsRouter))
       .get("/api/expenses?includeTripCosts=true&tripId=trip-001&status=pending");
@@ -356,6 +356,70 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
     ]));
     expect(res.body.data.filter((row: { id: string }) => row.id === "agency-expense-001")).toHaveLength(1);
     expect(res.body.data.filter((row: { id: string }) => row.id === "trip-cost-001")).toHaveLength(1);
+    expect(res.body.summary).toMatchObject({
+      total: 1250,
+      paid: 0,
+      pending: 1250,
+      overdue: 0,
+      paidThisMonth: 0,
+    });
+  });
+
+  it("GET /expenses?includeTripCosts=true paginates the consolidated result without changing its total", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const makeExpense = (id: string, amount: string, createdAt: string) => ({
+      id,
+      tenantId: "tenant-001",
+      tripId: "trip-001",
+      category: "transport",
+      description: id,
+      amount,
+      supplierId: null,
+      paymentMethod: "pix",
+      paymentDate: null,
+      dueDate: new Date("2026-08-23T12:00:00Z"),
+      status: "pending",
+      notes: null,
+      createdAt: new Date(createdAt),
+    });
+    const makeTripCost = (id: string, amount: string, createdAt: string) => ({
+      id,
+      tenantId: "tenant-001",
+      tripId: "trip-001",
+      category: "transporte",
+      description: id,
+      amount,
+      supplierId: null,
+      supplierName: null,
+      status: "pending",
+      dueDate: new Date("2026-08-23T12:00:00Z"),
+      paidAt: null,
+      notes: null,
+      createdAt: new Date(createdAt),
+    });
+    const agencyRows = [
+      makeExpense("agency-expense-001", "100.00", "2026-08-20T12:00:00Z"),
+      makeExpense("agency-expense-002", "200.00", "2026-08-19T12:00:00Z"),
+    ];
+    const tripRows = [
+      makeTripCost("trip-cost-001", "300.00", "2026-08-18T12:00:00Z"),
+      makeTripCost("trip-cost-002", "400.00", "2026-08-17T12:00:00Z"),
+    ];
+    dbState.selectRows = [agencyRows, tripRows, agencyRows, tripRows];
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/expenses?includeTripCosts=true&tripId=trip-001&status=pending&page=2&limit=2");
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(4);
+    expect(res.body.page).toBe(2);
+    expect(res.body.limit).toBe(2);
+    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data.map((row: { id: string }) => row.id)).toEqual([
+      "trip-cost-001",
+      "trip-cost-002",
+    ]);
+    expect(res.body.summary.total).toBe(1000);
   });
 
   it("POST /expenses → 403 for SUPPORT", async () => {

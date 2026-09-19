@@ -5,6 +5,7 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { ListExpensesSummaryPeriod } from "./listExpensesSummaryPeriod";
 
 export type ListExpensesParams = {
   /**
@@ -16,9 +17,29 @@ export type ListExpensesParams = {
    */
   status?: string | null;
   /**
+   * @nullable
+   */
+  category?: string | null;
+  /**
+   * @nullable
+   */
+  supplierId?: string | null;
+  /**
+   * @nullable
+   */
+  dateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  dateTo?: string | null;
+  /**
    * Include direct trip costs in the consolidated financial list
    */
   includeTripCosts?: boolean;
+  /**
+   * Period used for the server-side financial summary
+   */
+  summaryPeriod?: ListExpensesSummaryPeriod;
   page?: number;
   limit?: number;
 };

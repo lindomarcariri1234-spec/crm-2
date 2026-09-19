@@ -2350,12 +2350,35 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: category
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: supplierId
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateTo
+          in: query
+          schema:
+            type: ["string", "null"]
         - name: includeTripCosts
           in: query
           description: Include direct trip costs in the consolidated financial list
           schema:
             type: boolean
             default: false
+        - name: summaryPeriod
+          in: query
+          description: Period used for the server-side financial summary
+          schema:
+            type: string
+            enum: [all, month, quarter, year]
+            default: all
         - name: page
           in: query
           schema:
@@ -8910,7 +8933,34 @@ components:
           type: integer
         limit:
           type: integer
+        summary:
+          $ref: "#/components/schemas/ExpenseListSummary"
       required: [data, total, page, limit]
+
+    ExpenseListSummary:
+      type: object
+      properties:
+        total:
+          type: number
+        paid:
+          type: number
+        pending:
+          type: number
+        overdue:
+          type: number
+        paidThisMonth:
+          type: number
+        categoryBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+              total:
+                type: number
+            required: [category, total]
+      required: [total, paid, pending, overdue, paidThisMonth, categoryBreakdown]
 
     CreateExpenseBody:
       type: object
