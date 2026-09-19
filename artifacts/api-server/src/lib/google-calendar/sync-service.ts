@@ -18,6 +18,7 @@ import { generateId } from "../id";
 import { logger } from "../logger";
 import { RESERVATION_STATUS, PAYMENT_STATUS, TRIP_STATUS } from "@workspace/permissions";
 import { formatBRLPlain } from "@workspace/shared";
+import { formatTripDeparture, parseTripDeparture } from "../trip-date-time";
 
 async function getCalendarService(userId: string): Promise<GoogleCalendarService | null> {
   const token = await refreshTokenIfNeeded(userId);
@@ -25,9 +26,14 @@ async function getCalendarService(userId: string): Promise<GoogleCalendarService
   return new GoogleCalendarService(token, userId);
 }
 
-function fmtDate(d: Date | null | undefined): string {
+function fmtTripDate(d: Date | null | undefined, time?: string | null): string {
   if (!d) return "Não informado";
-  return format(d, "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
+  return formatTripDeparture(d, time) || "Não informado";
+}
+
+function calendarTripInstant(date: Date, time?: string | null): Date {
+  if (!time?.trim()) return date;
+  return parseTripDeparture(date, time) ?? date;
 }
 
 function fmtCurrency(v: number | string | null | undefined): string {
@@ -93,7 +99,9 @@ export function legacyMatchesForEvent(
     destination: string;
     originCity: string | null;
     departureDate: Date;
+    departureTime?: string | null;
     returnDate: Date | null;
+    returnTime?: string | null;
   }>,
   payments: Array<{
     id: string;
@@ -114,10 +122,13 @@ export function legacyMatchesForEvent(
   if (event.description?.startsWith("🚌 VIAGEM:")) {
     for (const trip of trips) {
       const location = trip.originCity ? `${trip.originCity} → ${trip.destination}` : trip.destination;
-      const expectedEnd = trip.returnDate ?? addHours(trip.departureDate, 12);
+      const expectedStart = calendarTripInstant(trip.departureDate, trip.departureTime);
+      const expectedEnd = trip.returnDate
+        ? calendarTripInstant(trip.returnDate, trip.returnTime)
+        : addHours(expectedStart, 12);
       if (
         event.summary === `🚌 ${trip.name}` &&
-        sameInstant(event.startDateTime, trip.departureDate) &&
+        sameInstant(event.startDateTime, expectedStart) &&
         sameInstant(event.endDateTime, expectedEnd) &&
         event.location === location
       ) {
@@ -367,7 +378,9 @@ export class CalendarSyncService {
         destination: tripsTable.destination,
         originCity: tripsTable.originCity,
         departureDate: tripsTable.departureDate,
+        departureTime: tripsTable.departureTime,
         returnDate: tripsTable.returnDate,
+        returnTime: tripsTable.returnTime,
       }).from(tripsTable).where(eq(tripsTable.tenantId, actor.tenantId)),
       db.select({
         id: paymentsTable.id,
@@ -616,8 +629,10 @@ export class CalendarSyncService {
       const baseEvent = {
         summary: `🚌 ${trip.name}`,
         location: trip.originCity ? `${trip.originCity} → ${trip.destination}` : trip.destination,
-        startDateTime: trip.departureDate,
-        endDateTime: trip.returnDate ?? addHours(trip.departureDate, 12),
+        startDateTime: calendarTripInstant(trip.departureDate, trip.departureTime),
+        endDateTime: trip.returnDate
+          ? calendarTripInstant(trip.returnDate, trip.returnTime)
+          : addHours(calendarTripInstant(trip.departureDate, trip.departureTime), 12),
       };
 
       const adminUsers = await db.select({
@@ -637,8 +652,8 @@ export class CalendarSyncService {
           `🚌 VIAGEM: ${trip.name}`,
           ``,
           `📍 ${trip.originCity ?? ""} → ${trip.destination}`,
-          `📅 Saída: ${fmtDate(trip.departureDate)}`,
-          trip.returnDate ? `🔙 Retorno: ${fmtDate(trip.returnDate)}` : null,
+          `📅 Saída: ${fmtTripDate(trip.departureDate, trip.departureTime)}`,
+          trip.returnDate ? `🔙 Retorno: ${fmtTripDate(trip.returnDate, trip.returnTime)}` : null,
           ``,
           `👥 Passageiros confirmados: ${confirmedPassengerCount}`,
           `💰 Receita Total: ${fmtCurrency(totalValue)}`,
@@ -711,7 +726,7 @@ export class CalendarSyncService {
             `🚌 VIAGEM: ${trip.name}`,
             ``,
             `📍 ${trip.originCity ?? ""} → ${trip.destination}`,
-            `📅 ${fmtDate(trip.departureDate)}`,
+            `📅 ${fmtTripDate(trip.departureDate, trip.departureTime)}`,
             ``,
             `👥 SEUS CLIENTES (${sellerClients.length}):`,
             ...sellerClients.map((c) => `• ${c.name}`),
@@ -837,8 +852,8 @@ export class CalendarSyncService {
         `🚌 VIAGEM: ${trip.name}`,
         ``,
         `📍 ${trip.originCity ?? ""} → ${trip.destination}`,
-        `📅 Saída: ${fmtDate(trip.departureDate)}`,
-        trip.returnDate ? `🔙 Retorno: ${fmtDate(trip.returnDate)}` : null,
+        `📅 Saída: ${fmtTripDate(trip.departureDate, trip.departureTime)}`,
+        trip.returnDate ? `🔙 Retorno: ${fmtTripDate(trip.returnDate, trip.returnTime)}` : null,
         ``,
         `👥 Passageiros: ${visibleReservations.length}`,
         `💰 Total: ${fmtCurrency(totalValue)}`,
@@ -854,8 +869,10 @@ export class CalendarSyncService {
         {
           summary: `🚌 ${trip.name}`,
           location: trip.originCity ? `${trip.originCity} → ${trip.destination}` : trip.destination,
-          startDateTime: trip.departureDate,
-          endDateTime: trip.returnDate ?? addHours(trip.departureDate, 12),
+          startDateTime: calendarTripInstant(trip.departureDate, trip.departureTime),
+          endDateTime: trip.returnDate
+            ? calendarTripInstant(trip.returnDate, trip.returnTime)
+            : addHours(calendarTripInstant(trip.departureDate, trip.departureTime), 12),
           description,
           attendees: clients.map((c) => c.email).filter(Boolean),
         },
