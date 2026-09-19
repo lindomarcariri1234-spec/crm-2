@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { CELL_COLORS, COST_CATEGORIES, COST_STATUS_MAP } from "./constants";
 import { formatCurrency, formatDate } from "./utils";
+import { FinancialConsolidationView } from "@/components/financial-consolidation-view";
 
 export function LayoutMiniPreview({ cells, rows, cols }: { cells: { row: number; col: number; floor?: number; type: string }[]; rows: number; cols: number }) {
   const floor1 = cells.filter(c => (c.floor ?? 1) === 1);
@@ -337,11 +338,6 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     ]);
   };
 
-  const groupedByCategory = COST_CATEGORIES.reduce((acc, cat) => {
-    acc[cat] = mergedCosts.filter(c => c.category === cat).reduce((s, c) => s + c.amount, 0);
-    return acc;
-  }, {} as Record<string, number>);
-
   return (
     <div className="space-y-6">
       {summary && (
@@ -391,81 +387,18 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
         </div>
       )}
 
-      {(pricing || summary) && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {pricing && (
-            <div className="bg-card border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h3 className="font-semibold text-sm">Preços por categoria</h3>
-                  <p className="text-xs text-muted-foreground">Valores cadastrados para esta viagem</p>
-                </div>
-                <Banknote className="w-4 h-4 text-blue-600" />
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { label: "Adulto", value: pricing.adult },
-                  { label: "Criança", value: pricing.child },
-                  { label: "Idoso", value: pricing.senior },
-                ].map(price => (
-                  <div key={price.label} className="rounded-md bg-muted/40 p-3">
-                    <p className="text-xs text-muted-foreground">{price.label}</p>
-                    <p className="mt-1 font-semibold text-sm">{price.value == null ? "—" : formatCurrency(price.value)}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {summary && (
-            <div className="bg-card border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h3 className="font-semibold text-sm">Composição dos custos reais</h3>
-                  <p className="text-xs text-muted-foreground">Fontes mantidas separadas e totalizadas uma única vez</p>
-                </div>
-                <Receipt className="w-4 h-4 text-red-600" />
-              </div>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Custos diretos da viagem</span>
-                  <span className="font-medium">{formatCurrency(summary.totalTripCosts)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Despesas vinculadas da agência</span>
-                  <span className="font-medium">{formatCurrency(summary.totalAgencyExpenses)}</span>
-                </div>
-                <div className="flex justify-between border-t pt-2 font-semibold">
-                  <span>Total real conciliado</span>
-                  <span>{formatCurrency(summary.totalRealCosts)}</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {plannedCosts.length > 0 && (
-        <div className="bg-card border rounded-lg p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="font-semibold text-sm">Orçamento planejado por categoria</h3>
-              <p className="text-xs text-muted-foreground">Custos fixos e variáveis cadastrados no planejamento · {summary?.planningCapacity ?? 0} vagas</p>
-            </div>
-            <PiggyBank className="w-4 h-4 text-amber-600" />
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {plannedCosts.map(item => (
-              <div key={item.id} className="flex items-center justify-between rounded-md bg-muted/30 p-3 text-xs">
-                <div className="min-w-0 pr-3">
-                  <p className="truncate font-medium">{item.description}</p>
-                  <p className="text-muted-foreground">{item.category} · {item.kind === "fixed" ? "Fixo" : "Variável"}</p>
-                </div>
-                <span className="shrink-0 font-semibold">{formatCurrency(item.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <FinancialConsolidationView
+        actualRows={mergedCosts}
+        plannedRows={plannedCosts}
+        pricing={pricing}
+        actualSummary={summary ? {
+          totalRealCosts: summary.totalRealCosts,
+          totalPaidCosts: summary.totalPaidCosts,
+          totalPendingCosts: summary.totalPendingCosts,
+        } : undefined}
+        title="Conciliação financeira da viagem"
+        description={`Preços, orçamento planejado, custos diretos e despesas da agência · ${summary?.planningCapacity ?? 0} vagas`}
+      />
 
       {summary && summary.totalPendingCosts > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
@@ -587,19 +520,6 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
           </div>
         )}
 
-        {mergedCosts.length > 0 && (
-          <div className="border-t p-4">
-            <p className="text-xs font-medium text-muted-foreground mb-2">Resumo por categoria</p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {COST_CATEGORIES.filter(cat => groupedByCategory[cat] > 0).map(cat => (
-                <div key={cat} className="text-xs">
-                  <span className="text-muted-foreground">{cat}: </span>
-                  <span className="font-medium">{formatCurrency(groupedByCategory[cat])}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       <TripCostModal

@@ -7,6 +7,7 @@ import {
   useUpdateExpense,
   useListTrips,
   useListSuppliers,
+  useListTripCosts,
 } from "@workspace/api-client-react";
 import { EXPENSE_STATUS } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
@@ -20,38 +21,19 @@ import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle, ChevronLeft, Chevr
 import { formatCurrency } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS as CATEGORY_LABELS } from "@/lib/labels";
 import { ListLoadErrorRow } from "@/components/list-load-error";
+import {
+  FinancialConsolidationView,
+  normalizeFinancialCategory,
+} from "@/components/financial-consolidation-view";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
-const CATEGORY_COLORS: Record<string, string> = {
-  transport: "#3B82F6",
-  accommodation: "#8B5CF6",
-  food: "#10B981",
-  marketing: "#F59E0B",
-  administrative: "#6366F1",
-  commission: "#EF4444",
-  other: "#94A3B8",
-};
 const EXPENSE_PAGE_SIZE = 50;
-
-function CategoryChart({ data }: { data: Array<{ category: string; total: number }> }) {
-  const max = Math.max(...data.map(d => d.total), 1);
-  return (
-    <div className="space-y-3">
-      {data.map(d => {
-        const pct = (d.total / max) * 100;
-        return (
-          <div key={d.category} className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground w-28 shrink-0">{CATEGORY_LABELS[d.category] ?? d.category}</span>
-            <div className="flex-1 bg-muted rounded-full h-2">
-              <div className="h-2 rounded-full" style={{ width: `${pct}%`, backgroundColor: CATEGORY_COLORS[d.category] ?? "#94A3B8" }} />
-            </div>
-            <span className="text-xs font-medium w-24 text-right">{fmt(d.total)}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+type TripPlanningRecord = {
+  id: string;
+  totalCapacity: number;
+  fixedCosts?: Array<{ id: string; category: string; description: string; value: number }>;
+  variableCosts?: Array<{ id: string; category: string; description: string; valuePax: number }>;
+};
 
 export default function Expenses() {
   const [statusFilter, setStatusFilter] = useState("");
@@ -81,8 +63,14 @@ export default function Expenses() {
     includeTripCosts: true,
     summaryPeriod: periodFilter,
   });
-  const { data: tripsData } = useListTrips({ limit: 100 });
+  const { data: tripsData } = useListTrips({ limit: 500 });
   const { data: suppliersRaw } = useListSuppliers();
+  const { data: selectedTripFinancialData } = useListTripCosts(tripFilter, {
+    query: {
+      enabled: !!tripFilter,
+      queryKey: ["trip-costs", tripFilter],
+    },
+  });
   const createExpense = useCreateExpense();
   const updateExpense = useUpdateExpense();
 
@@ -97,6 +85,59 @@ export default function Expenses() {
   };
   const categoryBreakdown = expensesData?.summary?.categoryBreakdown ?? [];
   const totalPages = Math.max(1, Math.ceil((expensesData?.total ?? 0) / EXPENSE_PAGE_SIZE));
+
+  const globalPlannedRows = useMemo(() => (
+    ((tripsData?.data ?? []) as TripPlanningRecord[]).flatMap(trip => [
+      ...(trip.fixedCosts ?? []).map(cost => ({
+        id: `${trip.id}:fixed:${cost.id}`,
+        category: cost.category,
+        description: cost.description,
+        amount: Number(cost.value) || 0,
+        kind: "fixed" as const,
+      })),
+      ...(trip.variableCosts ?? []).map(cost => ({
+        id: `${trip.id}:variable:${cost.id}`,
+        category: cost.category,
+        description: cost.description,
+        amount: (Number(cost.valuePax) || 0) * (trip.totalCapacity ?? 0),
+        kind: "variable" as const,
+      })),
+    ])
+  ), [tripsData]);
+
+  const selectedTripActualRows = useMemo(() => {
+    if (!selectedTripFinancialData) return [];
+    return [
+      ...(selectedTripFinancialData.costs ?? []).map(cost => ({
+        id: cost.id,
+        category: cost.category,
+        amount: cost.amount,
+        status: cost.status,
+        source: "trip",
+      })),
+      ...(selectedTripFinancialData.agencyExpenses ?? []).map(expense => ({
+        id: expense.id,
+        category: expense.category,
+        amount: expense.amount,
+        status: expense.status,
+        source: "agency",
+      })),
+    ];
+  }, [selectedTripFinancialData]);
+
+  const financialRows = selectedTripActualRows.length > 0 ? selectedTripActualRows : expenses;
+  const financialSummary = selectedTripFinancialData?.summary
+    ? {
+        totalRealCosts: selectedTripFinancialData.summary.totalRealCosts,
+        totalPaidCosts: selectedTripFinancialData.summary.totalPaidCosts,
+        totalPendingCosts: selectedTripFinancialData.summary.totalPendingCosts,
+      }
+    : {
+        total: kpis.total,
+        paid: kpis.paid,
+        pending: kpis.pending,
+        overdue: kpis.overdue,
+      };
 
   useEffect(() => {
     setPage(1);
@@ -214,16 +255,21 @@ export default function Expenses() {
         </CardContent></Card>
       </div>
 
-      {categoryBreakdown.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Despesas por Categoria</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CategoryChart data={categoryBreakdown} />
-          </CardContent>
-        </Card>
-      )}
+      <FinancialConsolidationView
+        actualRows={financialRows}
+        plannedRows={selectedTripFinancialData?.plannedCosts ?? globalPlannedRows}
+        pricing={selectedTripFinancialData?.pricing}
+        actualSummary={financialSummary}
+        actualCategoryTotals={tripFilter ? undefined : categoryBreakdown.map(item => ({
+          category: normalizeFinancialCategory(item.category),
+          total: item.total,
+        }))}
+        title="Visão financeira consolidada"
+        description={tripFilter
+          ? "Preços por categoria, orçamento planejado, custos da viagem e despesas da agência."
+          : "Custos diretos, despesas da agência e orçamento planejado agregado das viagens reunidos em uma única leitura. Filtre uma viagem para comparar seus preços."}
+        showPaymentBreakdown={!!tripFilter}
+      />
 
       <div className="flex flex-wrap items-center gap-3 bg-card p-4 rounded-lg border">
          <Select value={statusFilter || "all"} onValueChange={v => { setStatusFilter(v === "all" ? "" : v); }}>
