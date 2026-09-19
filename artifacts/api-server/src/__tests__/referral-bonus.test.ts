@@ -2,6 +2,7 @@
  * Referral bonus tests:
  *   POST /api/referrals/:id/pay-bonus  — marks bonusPaid, sends email, guards duplicates/role/status/missing
  *   GET  /api/referrals                — JOIN-enriched response: live referrerName/Email/Whatsapp from clientsTable
+ *   GET  /api/referrals/stats          — filtered global aggregates
  */
 
 import { ROLES } from "@workspace/permissions";
@@ -70,10 +71,15 @@ vi.mock("@workspace/db", () => ({
     update: updateMocks.update,
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
   },
-  referralsTable:        { id: "id", tenantId: "tenant_id", code: "code", status: "status", bonusAmount: "bonus_amount", referrerId: "referrer_id", bonusPaid: "bonus_paid" },
-  clientsTable:          { id: "id", tenantId: "tenant_id", referralCodeStatus: "referral_code_status" },
+  referralsTable:        {
+    id: "id", tenantId: "tenant_id", code: "code", status: "status", bonusAmount: "bonus_amount",
+    referrerId: "referrer_id", bonusPaid: "bonus_paid", fraudFlag: "fraud_flag",
+    expiresAt: "expires_at", bonusReleaseNotifiedAt: "bonus_release_notified_at",
+    referrerName: "referrer_name", referredEmail: "referred_email", referredName: "referred_name",
+  },
+  clientsTable:          { id: "id", tenantId: "tenant_id", referralCodeStatus: "referral_code_status", name: "name", email: "email" },
   tenantsTable:          { id: "id", settings: "settings" },
-  referralSettingsTable: {},
+  referralSettingsTable: { tenantId: "tenant_id", tiersConfig: "tiers_config" },
   referralTrackingTable: {},
   referralCampaignsTable: {},
   emailLogsTable: {
@@ -100,6 +106,10 @@ vi.mock("drizzle-orm", () => ({
   ilike:           vi.fn(() => "ilike"),
   count:           vi.fn(() => "count"),
   inArray:         vi.fn(() => "inArray"),
+  isNull:          vi.fn(() => "isNull"),
+  isNotNull:       vi.fn(() => "isNotNull"),
+  gte:             vi.fn(() => "gte"),
+  lte:             vi.fn(() => "lte"),
   sql:             Object.assign(vi.fn(() => "sql"), { raw: vi.fn() }),
   getTableColumns: vi.fn(() => ({})),
 }));
@@ -517,6 +527,46 @@ describe("GET /api/referrals/validate/:code", () => {
     expect(res.body).toMatchObject({
       valid: false,
       bonusAmount: 0,
+    });
+  });
+});
+
+describe("GET /api/referrals/stats — filtered global aggregates", () => {
+  it("returns operational counts from the full filtered result, not the current page", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([
+        { status: "pending", cnt: "2" },
+        { status: "completed", cnt: "1" },
+      ]))
+      .mockImplementationOnce(() => makeChain([{ total: "10.00" }]))
+      .mockImplementationOnce(() => makeChain([{ total: "25.00" }]))
+      .mockImplementationOnce(() => makeChain([{
+        suspicious: "3",
+        expiringSoon: "2",
+        pendingBonus: "1",
+        bonusNotified: "4",
+        bonusNotNotified: "1",
+      }]))
+      .mockImplementationOnce(() => makeChain([]))
+      .mockImplementationOnce(() => makeChain([]));
+
+    const res = await request(buildApp()).get(
+      "/api/referrals/stats?search=ana&bonusPaid=false&fraudFlag=true&expiringSoon=false&bonusNotified=false",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 3,
+      pending: 2,
+      completed: 1,
+      suspicious: 3,
+      expiringSoon: 2,
+      pendingBonus: 1,
+      bonusNotified: 4,
+      bonusNotNotified: 1,
+      totalBonusPaid: 10,
+      totalDiscountGiven: 25,
     });
   });
 });

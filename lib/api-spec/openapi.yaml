@@ -4604,6 +4604,31 @@ paths:
       operationId: getReferralStats
       summary: Get referral statistics for the tenant
       tags: [Referrals]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: bonusPaid
+          in: query
+          schema:
+            type: boolean
+        - name: fraudFlag
+          in: query
+          schema:
+            type: boolean
+        - name: expiringSoon
+          in: query
+          schema:
+            type: boolean
+        - name: bonusNotified
+          in: query
+          schema:
+            type: boolean
       responses:
         "200":
           description: Referral stats
@@ -11018,7 +11043,17 @@ components:
           type: number
         totalDiscountGiven:
           type: number
-      required: [total, pending, completed, expired, conversionRate, totalBonusPaid, totalDiscountGiven]
+        suspicious:
+          type: integer
+        expiringSoon:
+          type: integer
+        pendingBonus:
+          type: integer
+        bonusNotified:
+          type: integer
+        bonusNotNotified:
+          type: integer
+      required: [total, pending, completed, expired, conversionRate, totalBonusPaid, totalDiscountGiven, suspicious, expiringSoon, pendingBonus, bonusNotified, bonusNotNotified]
 
     ReferralTierConfig:
       type: object

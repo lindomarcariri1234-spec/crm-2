@@ -132,6 +132,7 @@ import type {
   GetPmsAvailabilityParams,
   GetPublicReferralInfo200,
   GetPublicReferralInfoParams,
+  GetReferralStatsParams,
   GetReservationStatsParams,
   GetSalesCycleParams,
   HealthStatus,
@@ -19045,44 +19046,63 @@ export const useCreateReferral = <
   return useMutation(getCreateReferralMutationOptions(options));
 };
 
-export const getGetReferralStatsUrl = () => {
-  return `/api/referrals/stats`;
+export const getGetReferralStatsUrl = (params?: GetReferralStatsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/referrals/stats?${stringifiedParams}`
+    : `/api/referrals/stats`;
 };
 
 /**
  * @summary Get referral statistics for the tenant
  */
 export const getReferralStats = async (
+  params?: GetReferralStatsParams,
   options?: Parameters<typeof customFetch>[1],
 ): Promise<ReferralStats> => {
-  return customFetch<ReferralStats>(getGetReferralStatsUrl(), {
+  return customFetch<ReferralStats>(getGetReferralStatsUrl(params), {
     ...options,
     method: "GET",
   });
 };
 
-export const getGetReferralStatsQueryKey = () => {
-  return [`/api/referrals/stats`] as const;
+export const getGetReferralStatsQueryKey = (
+  params?: GetReferralStatsParams,
+) => {
+  return [`/api/referrals/stats`, ...(params ? [params] : [])] as const;
 };
 
 export const getGetReferralStatsQueryOptions = <
   TData = Awaited<ReturnType<typeof getReferralStats>>,
   TError = ErrorType<unknown>,
->(options?: {
-  query?: UseQueryOptions<
-    Awaited<ReturnType<typeof getReferralStats>>,
-    TError,
-    TData
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}) => {
+>(
+  params?: GetReferralStatsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getReferralStats>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getGetReferralStatsQueryKey();
+  const queryKey =
+    queryOptions?.queryKey ?? getGetReferralStatsQueryKey(params);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getReferralStats>>
-  > = ({ signal }) => getReferralStats({ signal, ...requestOptions });
+  > = ({ signal }) => getReferralStats(params, { signal, ...requestOptions });
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof getReferralStats>>,
@@ -19103,15 +19123,18 @@ export type GetReferralStatsQueryError = ErrorType<unknown>;
 export function useGetReferralStats<
   TData = Awaited<ReturnType<typeof getReferralStats>>,
   TError = ErrorType<unknown>,
->(options?: {
-  query?: UseQueryOptions<
-    Awaited<ReturnType<typeof getReferralStats>>,
-    TError,
-    TData
-  >;
-  request?: SecondParameter<typeof customFetch>;
-}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
-  const queryOptions = getGetReferralStatsQueryOptions(options);
+>(
+  params?: GetReferralStatsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getReferralStats>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetReferralStatsQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

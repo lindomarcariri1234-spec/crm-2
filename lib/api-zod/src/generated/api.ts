@@ -8578,6 +8578,15 @@ export const CreateReferralResponse = zod.object({
 /**
  * @summary Get referral statistics for the tenant
  */
+export const GetReferralStatsQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  search: zod.coerce.string().optional(),
+  bonusPaid: zod.coerce.boolean().optional(),
+  fraudFlag: zod.coerce.boolean().optional(),
+  expiringSoon: zod.coerce.boolean().optional(),
+  bonusNotified: zod.coerce.boolean().optional(),
+});
+
 export const GetReferralStatsResponse = zod.object({
   total: zod.number().int(),
   pending: zod.number().int(),
@@ -8586,6 +8595,11 @@ export const GetReferralStatsResponse = zod.object({
   conversionRate: zod.number().int(),
   totalBonusPaid: zod.number(),
   totalDiscountGiven: zod.number(),
+  suspicious: zod.number().int(),
+  expiringSoon: zod.number().int(),
+  pendingBonus: zod.number().int(),
+  bonusNotified: zod.number().int(),
+  bonusNotNotified: zod.number().int(),
 });
 
 /**

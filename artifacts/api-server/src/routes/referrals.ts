@@ -115,11 +115,55 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
     if (!me) return;
     if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
+    const status = req.query.status as string | undefined;
+    const search = req.query.search as string | undefined;
+    const bonusPaid = req.query.bonusPaid as string | undefined;
+    const fraudFlag = req.query.fraudFlag as string | undefined;
+    const expiringSoon = req.query.expiringSoon as string | undefined;
+    const bonusNotified = req.query.bonusNotified as string | undefined;
+    const validReferralStatuses = Object.values(REFERRAL_STATUS);
+    if (status && !validReferralStatuses.includes(status as (typeof validReferralStatuses)[number])) {
+      next(new ValidationError(String(`Invalid status. Must be one of: ${validReferralStatuses.join(", ")}`), "VALIDATION_ERROR"));
+      return;
+    }
+
+    const conditions = [eq(referralsTable.tenantId, me.tenantId)];
+    if (status) conditions.push(eq(referralsTable.status, status));
+    if (search) {
+      conditions.push(or(
+        ilike(referralsTable.code, `%${search}%`),
+        ilike(referralsTable.referrerName, `%${search}%`),
+        ilike(referralsTable.referredEmail, `%${search}%`),
+        ilike(referralsTable.referredName, `%${search}%`),
+        ilike(clientsTable.name, `%${search}%`),
+        ilike(clientsTable.email, `%${search}%`),
+      )!);
+    }
+    if (bonusPaid === "true") conditions.push(eq(referralsTable.bonusPaid, true));
+    if (bonusPaid === "false") conditions.push(eq(referralsTable.bonusPaid, false));
+    if (fraudFlag === "true") conditions.push(eq(referralsTable.fraudFlag, true));
+    if (fraudFlag === "false") conditions.push(eq(referralsTable.fraudFlag, false));
+    if (bonusNotified === "true") conditions.push(isNotNull(referralsTable.bonusReleaseNotifiedAt));
+    if (bonusNotified === "false") conditions.push(isNull(referralsTable.bonusReleaseNotifiedAt));
+    if (expiringSoon === "true") {
+      const now = new Date();
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      conditions.push(
+        eq(referralsTable.status, REFERRAL_STATUS.PENDING),
+        gte(referralsTable.expiresAt, now),
+        lte(referralsTable.expiresAt, sevenDaysFromNow),
+      );
+    }
+
     const rows = await db.select({
       status: referralsTable.status,
       cnt: count(),
     }).from(referralsTable)
-      .where(eq(referralsTable.tenantId, me.tenantId))
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions))
       .groupBy(referralsTable.status);
 
     const stats: Record<string, number> = { pending: 0, completed: 0, expired: 0 };
@@ -131,19 +175,42 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
     const [earningsRow] = await db.select({
       total: sql<string>`COALESCE(SUM(bonus_amount),0)`,
     }).from(referralsTable)
-      .where(and(
-        eq(referralsTable.tenantId, me.tenantId),
-        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
-        eq(referralsTable.bonusPaid, true),
-      ));
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions, eq(referralsTable.status, REFERRAL_STATUS.COMPLETED), eq(referralsTable.bonusPaid, true)));
 
     const [discountRow] = await db.select({
       total: sql<string>`COALESCE(SUM(discount_amount),0)`,
     }).from(referralsTable)
-      .where(and(
-        eq(referralsTable.tenantId, me.tenantId),
-        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
-      ));
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions, eq(referralsTable.status, REFERRAL_STATUS.COMPLETED)));
+
+    const now = new Date();
+    const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const [globalCounts] = await db.select({
+      suspicious: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.fraudFlag} = true)`,
+      expiringSoon: sql<number>`COUNT(*) FILTER (
+        WHERE ${referralsTable.status} = ${REFERRAL_STATUS.PENDING}
+          AND ${referralsTable.expiresAt} >= ${now}
+          AND ${referralsTable.expiresAt} <= ${sevenDaysFromNow}
+      )`,
+      pendingBonus: sql<number>`COUNT(*) FILTER (
+        WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED}
+          AND ${referralsTable.bonusPaid} = false
+      )`,
+      bonusNotified: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusReleaseNotifiedAt} IS NOT NULL)`,
+      bonusNotNotified: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusReleaseNotifiedAt} IS NULL)`,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions));
 
     const conversionRate = total > 0 ? Math.round((stats.completed / total) * 100) : 0;
 
@@ -161,7 +228,11 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
         conversions: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
       })
       .from(referralsTable)
-      .where(eq(referralsTable.tenantId, me.tenantId))
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions))
       .groupBy(referralsTable.referrerId);
 
     const tierDistribution: Record<string, number> = {};
@@ -192,6 +263,11 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
       conversionRate,
       totalBonusPaid: Number(earningsRow?.total ?? 0),
       totalDiscountGiven: Number(discountRow?.total ?? 0),
+      suspicious: Number(globalCounts?.suspicious ?? 0),
+      expiringSoon: Number(globalCounts?.expiringSoon ?? 0),
+      pendingBonus: Number(globalCounts?.pendingBonus ?? 0),
+      bonusNotified: Number(globalCounts?.bonusNotified ?? 0),
+      bonusNotNotified: Number(globalCounts?.bonusNotNotified ?? 0),
       tiersConfig,
       tierDistribution,
       currentTier: {

@@ -191,6 +191,7 @@ export * from "./getNpsSummaryParams";
 export * from "./getPmsAvailabilityParams";
 export * from "./getPublicReferralInfo200";
 export * from "./getPublicReferralInfoParams";
+export * from "./getReferralStatsParams";
 export * from "./getReservationStatsParams";
 export * from "./getSalesCycleParams";
 export * from "./getSalesCyclePeriod";

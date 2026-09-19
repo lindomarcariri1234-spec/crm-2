@@ -3897,6 +3897,11 @@ export interface ReferralStats {
   conversionRate: number;
   totalBonusPaid: number;
   totalDiscountGiven: number;
+  suspicious: number;
+  expiringSoon: number;
+  pendingBonus: number;
+  bonusNotified: number;
+  bonusNotNotified: number;
 }
 
 export interface ReferralTierConfig {
@@ -5913,6 +5918,15 @@ export type ListReferrals200Pagination = {
 export type ListReferrals200 = {
   data: Referral[];
   pagination: ListReferrals200Pagination;
+};
+
+export type GetReferralStatsParams = {
+  status?: string;
+  search?: string;
+  bonusPaid?: boolean;
+  fraudFlag?: boolean;
+  expiringSoon?: boolean;
+  bonusNotified?: boolean;
 };
 
 export type GetBirthdayUpcomingParams = {

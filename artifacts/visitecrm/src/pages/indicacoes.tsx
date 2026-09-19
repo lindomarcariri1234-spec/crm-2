@@ -103,6 +103,7 @@ import {
   MousePointerClick,
 } from "lucide-react";
 import { ReferralAnalyticsCharts } from "@/components/referral-analytics-charts";
+import { ReferralOverview } from "@/components/referral-overview";
 import { PlanFeatureWall, canUpgradeForFeature, getRequiredPlanLabel } from "@/components/plan-limit-wall";
 import type { LinkedData } from "@/lib/linked-data";
 
@@ -213,7 +214,6 @@ export default function Indicacoes() {
   const referralsCanUpgrade = canUpgradeForFeature(subData, "referrals");
 
   const { toast } = useToast();
-  const { data: stats } = useGetReferralStats();
   const { data: commissionReport } = useGetReferralCommissionReport();
   const { data: settings, refetch: refetchSettings } = useGetReferralSettings();
   const updateReferral = useUpdateReferral();
@@ -225,6 +225,15 @@ export default function Indicacoes() {
   const reversePaidBonus = useReversePaidReferralBonus();
   const { data: me } = useGetMe();
   const queryClient = useQueryClient();
+
+  async function refreshReferralData() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["/api/referrals"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/referrals/stats"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/referrals/analytics"] }),
+      queryClient.invalidateQueries({ queryKey: ["referrals", "commissions", "report"] }),
+    ]);
+  }
 
   const [gapsPage, setGapsPage] = useState(0);
   const { data: gapsData } = useQuery<ReferralReversalGapsResponse>({
@@ -271,7 +280,7 @@ export default function Indicacoes() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["alerts"] }),
         queryClient.invalidateQueries({ queryKey: ["referral-reversal-gaps"] }),
-        refetch(),
+        refreshReferralData(),
       ]);
       toast({
         title: "Reversão resolvida",
@@ -293,7 +302,11 @@ export default function Indicacoes() {
   }
 
   const [analyticsPeriod, setAnalyticsPeriod] = useState<ReferralAnalyticsPeriod>(90);
-  const { data: analyticsData } = useGetReferralAnalytics(analyticsPeriod);
+  const {
+    data: analyticsData,
+    isLoading: analyticsLoading,
+    isError: analyticsError,
+  } = useGetReferralAnalytics(analyticsPeriod);
 
   const [whatsappTestPhone, setWhatsappTestPhone] = useState("");
   const [whatsappTestState, setWhatsappTestState] = useState<Record<string, { loading?: boolean; success?: boolean; error?: string }>>({});
@@ -333,7 +346,21 @@ export default function Indicacoes() {
     expiringSoon: statusFilter === "expiringSoon" ? true : undefined,
     bonusNotified: bonusNotifiedFilter === "all" ? undefined : bonusNotifiedFilter === "notified",
   };
-  const { data: referralsResponse, refetch } = useListReferrals(referralListParams);
+  const referralStatsParams = {
+    status: referralListParams.status,
+    search: referralListParams.search,
+    bonusPaid: referralListParams.bonusPaid,
+    fraudFlag: referralListParams.fraudFlag,
+    expiringSoon: referralListParams.expiringSoon,
+    bonusNotified: referralListParams.bonusNotified,
+  };
+  const { data: stats, isLoading: statsLoading, isError: statsError } = useGetReferralStats(referralStatsParams);
+  const {
+    data: referralsResponse,
+    isLoading: referralsLoading,
+    isFetching: referralsFetching,
+    isError: referralsError,
+  } = useListReferrals(referralListParams);
   const referrals = ((referralsResponse as { data?: EnrichedReferral[] } | undefined)?.data
     ?? (Array.isArray(referralsResponse) ? referralsResponse as EnrichedReferral[] : [])) as EnrichedReferral[];
   const referralsPagination = (referralsResponse as {
@@ -346,6 +373,25 @@ export default function Indicacoes() {
     setReferralsPage(1);
     setSelectedBonusIds(new Set());
   }, [searchQuery, statusFilter, bonusFilter, fraudFilter, bonusNotifiedFilter]);
+
+  useEffect(() => {
+    if (referralsPage > 1 && referralsPage > referralPageCount) {
+      setReferralsPage(referralPageCount);
+      setSelectedBonusIds(new Set());
+    }
+  }, [referralPageCount, referralsPage]);
+
+  useEffect(() => {
+    setSelectedBonusIds(new Set());
+  }, [referralsPage]);
+
+  useEffect(() => {
+    if (!selectedReferral) return;
+    const current = referrals.find((referral) => referral.id === selectedReferral.id);
+    if (current) {
+      setSelectedReferral((previous) => previous ? { ...previous, ...current } : current);
+    }
+  }, [referrals, selectedReferral?.id]);
 
   const [campaignsDialogOpen, setCampaignsDialogOpen] = useState(false);
   const [showCampaignForm, setShowCampaignForm] = useState(false);
@@ -446,7 +492,10 @@ export default function Indicacoes() {
         },
       });
       toast({ title: "Configurações salvas com sucesso" });
-      refetchSettings();
+      await Promise.all([
+        refetchSettings(),
+        refreshReferralData(),
+      ]);
       setSettingsModalOpen(false);
     } catch {
       toast({ title: "Erro ao salvar configurações", variant: "destructive" });
@@ -513,7 +562,7 @@ export default function Indicacoes() {
         data: { isActive: false, status: "expired" },
       });
       toast({ title: "Indicação desativada" });
-      refetch();
+      await refreshReferralData();
     } catch {
       toast({ title: "Erro ao desativar indicação", variant: "destructive" });
     }
@@ -550,7 +599,7 @@ export default function Indicacoes() {
         title: reverseBonusTarget.bonusPaid ? "Estorno financeiro registrado" : "Bônus revertido com sucesso",
         description: "O indicador será notificado por e-mail.",
       });
-      refetch();
+      await refreshReferralData();
       setReverseBonusDialogOpen(false);
       setReverseBonusTarget(null);
       setReverseBonusReason("");
@@ -570,7 +619,7 @@ export default function Indicacoes() {
     try {
       const updated = await payBonus.mutateAsync({ id: payBonusTarget.id });
       toast({ title: "Bônus marcado como pago! E-mail de confirmação enviado ao indicador." });
-      refetch();
+      await refreshReferralData();
       setPayBonusDialogOpen(false);
       setPayBonusTarget(null);
       if (selectedReferral?.id === updated.id) {
@@ -826,7 +875,7 @@ export default function Indicacoes() {
     setBulkPaying(false);
     setBulkPayDialogOpen(false);
     setSelectedBonusIds(new Set());
-    refetch();
+    await refreshReferralData();
     if (failCount === 0) {
       toast({ title: `${successCount} bônus ${successCount === 1 ? "marcado" : "marcados"} como pago${successCount === 1 ? "" : "s"}!` });
     } else {
@@ -863,46 +912,19 @@ export default function Indicacoes() {
     }
   }
 
-  const suspiciousCount = referrals.filter((r) => r.fraudFlag).length;
-
-  // Compute expiring-soon count from loaded referrals using expiresAt
-  const now = Date.now();
-  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-  const expiringSoonCount = referrals.filter((r) => {
-    if (r.status !== REFERRAL_STATUS.PENDING || !r.expiresAt) return false;
-    const exp = new Date(r.expiresAt).getTime();
-    return exp > now && exp <= now + sevenDaysMs;
-  }).length;
-
-  const filtered = referrals.filter((r) => {
-    if (fraudFilter) return r.fraudFlag === true;
-    if (statusFilter === "expiringSoon") {
-      const exp = r.expiresAt ? new Date(r.expiresAt).getTime() : null;
-      const matchNotified = bonusNotifiedFilter === "all"
-        || (bonusNotifiedFilter === "notified" ? r.bonusReleaseNotifiedAt != null : r.bonusReleaseNotifiedAt == null);
-      return r.status === REFERRAL_STATUS.PENDING && exp !== null && exp > now && exp <= now + sevenDaysMs && matchNotified;
-    }
-    const matchStatus = statusFilter === "all" || r.status === statusFilter;
-    const matchBonus = bonusFilter === "all" || (bonusFilter === "unpaid" && !r.bonusPaid);
-    const matchNotified = bonusNotifiedFilter === "all"
-      || (bonusNotifiedFilter === "notified" ? r.bonusReleaseNotifiedAt != null : r.bonusReleaseNotifiedAt == null);
-    const q = searchQuery.toLowerCase();
-    const matchSearch = !q
-      || r.code.toLowerCase().includes(q)
-      || (r.referrerName ?? "").toLowerCase().includes(q)
-      || (r.referrerEmail ?? "").toLowerCase().includes(q)
-      || ((r as EnrichedReferral).referrerWhatsapp ?? "").toLowerCase().includes(q)
-      || (r.referredEmail ?? "").toLowerCase().includes(q)
-      || (r.referredName ?? "").toLowerCase().includes(q);
-    return matchStatus && matchSearch && matchBonus && matchNotified;
-  });
+  // The API applies every active filter before pagination. Do not filter this
+  // page again locally: doing so makes the visible rows and global totals
+  // disagree, especially when the current page is only a partial result.
+  const filtered = referrals;
+  const suspiciousCount = statsLoading || statsError ? null : (stats?.suspicious ?? 0);
+  const expiringSoonCount = statsLoading || statsError ? null : (stats?.expiringSoon ?? 0);
 
   const settingsDiscountPct = settings ? parseFloat(String(settings.discountValue)) : 5;
   const settingsBonusVal = settings ? parseFloat(String(settings.bonusValue)) : 10;
   const isEnabled = settings?.isEnabled ?? true;
   const tenantName = (me as { tenant?: { name?: string } } | undefined)?.tenant?.name ?? "Minha Agência";
 
-  const pendingBonusCount = referrals.filter(r => r.status === REFERRAL_STATUS.COMPLETED && !r.bonusPaid).length;
+  const pendingBonusCount = statsLoading || statsError ? null : (stats?.pendingBonus ?? 0);
 
   const pendingBonusReferrals = filtered.filter(r => r.status === REFERRAL_STATUS.COMPLETED && !r.bonusPaid);
   const allBonusSelected = pendingBonusReferrals.length > 0 && pendingBonusReferrals.every(r => selectedBonusIds.has(r.id));
@@ -1086,22 +1108,22 @@ export default function Indicacoes() {
 
   return (
     <>
-    <div className="space-y-6">
+      <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Programa de Indicações</h1>
           <p className="text-sm text-muted-foreground">
             Gerencie indicações, conversões e pagamentos de bônus
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {!isEnabled && (
             <Badge variant="destructive" className="text-sm px-3 py-1">
               Programa desativado
             </Badge>
           )}
-          {pendingBonusCount > 0 && (
+          {pendingBonusCount !== null && pendingBonusCount > 0 && (
             <Badge variant="outline" className="text-sm px-3 py-1 border-amber-400 text-amber-700 bg-amber-50">
               <Wallet className="w-3 h-3 mr-1" />
               {pendingBonusCount} bônus pendente{pendingBonusCount > 1 ? "s" : ""}
@@ -1119,8 +1141,12 @@ export default function Indicacoes() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Notif. bônus: Todos</SelectItem>
-              <SelectItem value="notified">Notificados</SelectItem>
-              <SelectItem value="not_notified">Não notificados</SelectItem>
+              <SelectItem value="notified">
+                Notificados{stats?.bonusNotified != null ? ` (${stats.bonusNotified})` : ""}
+              </SelectItem>
+              <SelectItem value="not_notified">
+                Não notificados{stats?.bonusNotNotified != null ? ` (${stats.bonusNotNotified})` : ""}
+              </SelectItem>
             </SelectContent>
           </Select>
           <DropdownMenu>
@@ -1160,8 +1186,8 @@ export default function Indicacoes() {
         </div>
       </div>
 
-      {/* Expiring soon alert — count derived from loaded referrals using expiresAt */}
-      {expiringSoonCount > 0 && (
+      {/* Operational alerts use the filtered server-side aggregate, not the current page. */}
+      {expiringSoonCount !== null && expiringSoonCount > 0 && (
         <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
           <Clock className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
@@ -1289,124 +1315,16 @@ export default function Indicacoes() {
         </Card>
       )}
 
-      {/* Stats Cards — period-scoped */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">Desempenho no período</p>
-          <div className="flex items-center gap-1.5">
-            {([30, 90, 180] as ReferralAnalyticsPeriod[]).map((v) => (
-              <Button
-                key={v}
-                size="sm"
-                variant={analyticsPeriod === v ? "default" : "outline"}
-                onClick={() => setAnalyticsPeriod(v)}
-                className="text-xs h-6 px-2.5"
-              >
-                {v} dias
-              </Button>
-            ))}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <Users className="w-4 h-4" />
-                Indicações
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold">{analyticsData?.funnel.created ?? stats?.total ?? referrals.length}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">nos últimos {analyticsPeriod} dias</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <Check className="w-4 h-4" />
-                Convertidas
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold text-green-600">{analyticsData?.funnel.converted ?? stats?.completed ?? 0}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">nos últimos {analyticsPeriod} dias</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <TrendingUp className="w-4 h-4" />
-                Taxa de conversão
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold text-primary">
-                {analyticsData?.conversionRate ?? stats?.conversionRate ?? 0}%
-              </p>
-              {analyticsData && (analyticsData.funnel.created > 0 || analyticsData.prevConversionRate > 0) && (() => {
-                const delta = analyticsData.conversionRate - analyticsData.prevConversionRate;
-                return (
-                  <p className={`text-xs mt-0.5 font-medium ${delta >= 0 ? "text-green-600" : "text-red-500"}`}>
-                    {delta >= 0 ? "+" : ""}{delta}pp vs. período anterior
-                  </p>
-                );
-              })()}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <DollarSign className="w-4 h-4" />
-                Desconto concedido
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold">{fmtCurrency(analyticsData?.discountGiven ?? stats?.totalDiscountGiven ?? 0)}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">nos últimos {analyticsPeriod} dias</p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      {/* Program Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Percent className="w-4 h-4 text-primary" />
-              Desconto para o indicado
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{settingsDiscountPct}%</p>
-            <p className="text-xs text-muted-foreground">{settings?.discountType === "percentage" ? "percentual" : "valor fixo"}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Gift className="w-4 h-4 text-primary" />
-              Bônus para quem indica
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{fmtCurrency(settingsBonusVal)}</p>
-            <p className="text-xs text-muted-foreground">{getReferralRewardLabel(settings?.bonusType)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Clock className="w-4 h-4 text-primary" />
-              Validade do código
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{settings?.expirationDays ?? 30} dias</p>
-            <p className="text-xs text-muted-foreground">após criação</p>
-          </CardContent>
-        </Card>
-      </div>
+      <ReferralOverview
+        analyticsData={analyticsData}
+        analyticsPeriod={analyticsPeriod}
+        onAnalyticsPeriodChange={setAnalyticsPeriod}
+        discountValue={settingsDiscountPct}
+        discountType={settings?.discountType}
+        bonusValue={settingsBonusVal}
+        bonusLabel={getReferralRewardLabel(settings?.bonusType)}
+        expirationDays={settings?.expirationDays ?? 30}
+      />
 
       {/* Commission Report Summary */}
       {commissionReport && (
@@ -1512,6 +1430,20 @@ export default function Indicacoes() {
           period={analyticsPeriod}
           analyticsExportUrl={getReferralAnalyticsExportUrl(analyticsPeriod)}
         />
+      ) : analyticsError ? (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-primary" />
+              Analytics avançado de indicações
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-36 flex items-center justify-center text-muted-foreground text-sm" role="alert">
+              Não foi possível carregar os dados de analytics.
+            </div>
+          </CardContent>
+        </Card>
       ) : (
         <Card>
           <CardHeader className="pb-3">
@@ -1522,7 +1454,7 @@ export default function Indicacoes() {
           </CardHeader>
           <CardContent>
             <div className="h-36 flex items-center justify-center text-muted-foreground text-sm">
-              Carregando dados de analytics...
+              {analyticsLoading ? "Carregando dados de analytics..." : "Sem dados de analytics para este período."}
             </div>
           </CardContent>
         </Card>
@@ -1609,13 +1541,13 @@ export default function Indicacoes() {
       {/* Referrals Table */}
       <Tabs value={activeTab} onValueChange={applyTab}>
         <div className="flex items-center gap-3 mb-3 flex-wrap">
-          <TabsList>
+          <TabsList className="max-w-full overflow-x-auto">
             <TabsTrigger value="all">Todas</TabsTrigger>
             <TabsTrigger value="pending">Pendentes</TabsTrigger>
             <TabsTrigger value="expiringSoon">
               <Clock className="w-3.5 h-3.5 mr-1 text-amber-500" />
               Expiram em breve
-              {expiringSoonCount > 0 && (
+              {expiringSoonCount !== null && expiringSoonCount > 0 && (
                 <Badge variant="outline" className="ml-1.5 px-1.5 py-0 text-xs h-4 border-amber-400 text-amber-700">
                   {expiringSoonCount}
                 </Badge>
@@ -1624,7 +1556,7 @@ export default function Indicacoes() {
             <TabsTrigger value="completed">Convertidas</TabsTrigger>
             <TabsTrigger value="completed-unpaid">
               Bônus pendente
-              {pendingBonusCount > 0 && (
+              {pendingBonusCount !== null && pendingBonusCount > 0 && (
                 <Badge variant="destructive" className="ml-1.5 px-1.5 py-0 text-xs h-4">
                   {pendingBonusCount}
                 </Badge>
@@ -1634,14 +1566,18 @@ export default function Indicacoes() {
             <TabsTrigger value="suspicious">
               <ShieldAlert className="w-3.5 h-3.5 mr-1" />
               Suspeitas
-              {suspiciousCount > 0 && (
+              {suspiciousCount !== null && suspiciousCount > 0 && (
                 <Badge variant="destructive" className="ml-1.5 px-1.5 py-0 text-xs h-4">
                   {suspiciousCount}
                 </Badge>
               )}
             </TabsTrigger>
           </TabsList>
+          <Label htmlFor="referral-search" className="sr-only">
+            Buscar indicações
+          </Label>
           <Input
+            id="referral-search"
             placeholder="Buscar por código, nome, e-mail ou WhatsApp..."
             value={searchQuery}
             onChange={(e) => {
@@ -1663,13 +1599,29 @@ export default function Indicacoes() {
             </Button>
           )}
           <span className="text-sm text-muted-foreground ml-auto">
-            {filtered.length} nesta página{referralTotal > filtered.length ? ` · ${referralTotal} no total` : ""}
+            {referralsFetching ? "Atualizando…" : (
+              <>
+                {filtered.length} nesta página{referralTotal > filtered.length ? ` · ${referralTotal} no total` : ""}
+              </>
+            )}
           </span>
         </div>
 
         {["all", "pending", "expiringSoon", "completed", "completed-unpaid", "expired", "suspicious"].map((tabVal) => (
           <TabsContent key={tabVal} value={tabVal}>
-            {filtered.length === 0 ? (
+            {referralsLoading ? (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground" role="status" aria-live="polite">
+                  Carregando indicações…
+                </CardContent>
+              </Card>
+            ) : referralsError ? (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground" role="alert">
+                  Não foi possível carregar as indicações. Tente atualizar a página.
+                </CardContent>
+              </Card>
+            ) : filtered.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center text-muted-foreground">
                   <BarChart3 className="w-8 h-8 mx-auto mb-2 opacity-30" />
@@ -1678,13 +1630,15 @@ export default function Indicacoes() {
               </Card>
             ) : (
               <Card>
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       {tabVal === "completed-unpaid" && (
                         <TableHead className="w-8">
                           <Checkbox
-                            checked={allBonusSelected}
+                              checked={allBonusSelected}
+                              aria-label="Selecionar todas as indicações com bônus pendente nesta página"
                             onCheckedChange={(checked) => {
                               if (checked) {
                                 setSelectedBonusIds(new Set(pendingBonusReferrals.map(r => r.id)));
@@ -1717,6 +1671,7 @@ export default function Indicacoes() {
                           <TableCell>
                             <Checkbox
                               checked={selectedBonusIds.has(r.id)}
+                              aria-label={`Selecionar indicação ${r.code}`}
                               onCheckedChange={(checked) => {
                                 setSelectedBonusIds(prev => {
                                   const next = new Set(prev);
@@ -1870,7 +1825,13 @@ export default function Indicacoes() {
                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{fmtDate(r.createdAt)}</TableCell>
                         <TableCell>
                           <div className="flex gap-1">
-                            <Button size="sm" variant="ghost" onClick={() => openDetail(r)} title="Ver detalhes">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => openDetail(r)}
+                              title="Ver detalhes"
+                              aria-label={`Ver detalhes da indicação ${r.code}`}
+                            >
                               <Eye className="w-3 h-3" />
                             </Button>
                             <Button
@@ -1879,6 +1840,7 @@ export default function Indicacoes() {
                               className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                               onClick={() => openShare(r)}
                               title="Compartilhar link de indicação"
+                              aria-label={`Compartilhar indicação ${r.code}`}
                             >
                               <Share2 className="w-3 h-3" />
                             </Button>
@@ -1897,6 +1859,7 @@ export default function Indicacoes() {
                                     ? `Bônus disponível em ${fmtDate((r as EnrichedReferral).bonusReleasesAt)}`
                                     : "Pagar bônus"
                                 }
+                                 aria-label={`Pagar bônus da indicação ${r.code}`}
                               >
                                 <Wallet className="w-3 h-3" />
                               </Button>
@@ -1908,12 +1871,20 @@ export default function Indicacoes() {
                                 className="text-red-600 hover:text-red-700 hover:bg-red-50"
                                 onClick={() => openReverseBonusDialog(r)}
                                 title={r.bonusPaid ? "Estornar bônus já pago" : "Reverter bônus"}
+                                 aria-label={`${r.bonusPaid ? "Estornar" : "Reverter"} bônus da indicação ${r.code}`}
                               >
                                 <XCircle className="w-3 h-3" />
                               </Button>
                             )}
                             {r.isActive && r.status === REFERRAL_STATUS.PENDING && (
-                              <Button size="sm" variant="ghost" className="text-destructive" onClick={() => handleDeactivate(r)} title="Desativar">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-destructive"
+                                onClick={() => handleDeactivate(r)}
+                                title="Desativar"
+                                aria-label={`Desativar indicação ${r.code}`}
+                              >
                                 <Ban className="w-3 h-3" />
                               </Button>
                             )}
@@ -1923,6 +1894,7 @@ export default function Indicacoes() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               </Card>
             )}
           </TabsContent>
@@ -2692,7 +2664,7 @@ export default function Indicacoes() {
                           {
                             onSuccess: (updated) => {
                               setSelectedReferral((prev) => prev ? { ...prev, ...updated } : prev);
-                              refetch();
+                              void refreshReferralData();
                               refetchExpiryEmailStatus();
                               toast({ title: "Aviso D-7 reenviado com sucesso" });
                             },
@@ -2716,7 +2688,7 @@ export default function Indicacoes() {
                           {
                             onSuccess: (updated) => {
                               setSelectedReferral((prev) => prev ? { ...prev, ...updated } : prev);
-                              refetch();
+                              void refreshReferralData();
                               refetchExpiryEmailStatus();
                               toast({ title: "Aviso D-1 reenviado com sucesso" });
                             },
@@ -2743,7 +2715,7 @@ export default function Indicacoes() {
                     {
                       onSuccess: (updated) => {
                         setSelectedReferral((prev) => prev ? { ...prev, ...updated } : prev);
-                        refetch();
+                        void refreshReferralData();
                         refetchBonusReleaseEmailStatus();
                         toast({ title: "Notificação de liberação de bônus reenviada com sucesso" });
                       },
