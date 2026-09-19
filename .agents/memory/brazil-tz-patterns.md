@@ -56,3 +56,10 @@ NOT `setDate(getDate()+N); setHours(0,0,0,0)` (uses UTC midnight, misses 10 PMâ€
 ### PostgreSQL â€” timezone-aware comparison
 Already done correctly in referral expiry queries: `AT TIME ZONE 'America/Sao_Paulo'`.
 Drizzle js-side: pass UTC Date objects from `brazilDayWindow()`.
+
+### Trip departure instants
+When filtering or ordering trips by when they actually leave, use the shared SQL expression that converts `departureDate` plus `departureTime` into a `timestamptz` in `America/Sao_Paulo`; use its JS parser for notification calculations.
+
+**Why:** `departureDate` preserves a Brazil calendar date but is not the departure instant. Comparing it directly to `now` misclassifies trips with late-night or early-morning departures.
+
+**How to apply:** Keep calendar-day windows for D-N reminder policies, but filter those windows using the combined departure instant and include the optional time in reminder text.

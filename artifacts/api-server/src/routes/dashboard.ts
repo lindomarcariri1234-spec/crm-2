@@ -16,6 +16,7 @@ import { ROLES, RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, PAYMENT_STATUS,
 import { z } from "zod";
 import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
 import { rankingMetadata } from "../lib/ranking-contract";
+import { tripDepartureAtSql } from "../lib/trip-date-time";
 
 const RevenueChartQuery = z.object({
   period: z.enum(["7d", "30d", "90d", "12m"]).default("30d"),
@@ -672,6 +673,7 @@ router.get("/dashboard/upcoming-trips", async (req, res, next: NextFunction): Pr
     const me = await requireAuth(req, res);
     if (!me) return;
     const now = new Date();
+    const departureAt = tripDepartureAtSql(tripsTable.departureDate, tripsTable.departureTime);
 
     let trips;
 
@@ -702,14 +704,14 @@ router.get("/dashboard/upcoming-trips", async (req, res, next: NextFunction): Pr
       trips = await db.select().from(tripsTable)
         .where(and(
           eq(tripsTable.tenantId, me.tenantId),
-          gte(tripsTable.departureDate, now),
+          gte(departureAt, now),
           inArray(tripsTable.id, tripIds),
         ))
-        .orderBy(tripsTable.departureDate).limit(5);
+        .orderBy(departureAt).limit(5);
     } else {
       trips = await db.select().from(tripsTable)
-        .where(and(eq(tripsTable.tenantId, me.tenantId), gte(tripsTable.departureDate, now)))
-        .orderBy(tripsTable.departureDate).limit(5);
+        .where(and(eq(tripsTable.tenantId, me.tenantId), gte(departureAt, now)))
+        .orderBy(departureAt).limit(5);
     }
 
     res.json(trips.map(t => ({

@@ -9,6 +9,7 @@ import { PAYMENT_STATUS, PAYMENT_TYPE, DEAL_STATUS, TRIP_STATUS, REFERRAL_STATUS
 import { findReferralReversalGaps, countReferralReversalGaps } from "../lib/referral-reversal-gaps";
 import { findStorefrontPipelineGaps } from "../lib/storefront-pipeline-gaps";
 import { formatBRL, localToday } from "@workspace/shared";
+import { tripDepartureAtSql } from "../lib/trip-date-time";
 
 const router = Router();
 
@@ -53,6 +54,7 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
     const in7Days = brMidnight(brYear, brMonth1, brDay + 7);
     const in24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const departureAt = tripDepartureAtSql(tripsTable.departureDate, tripsTable.departureTime);
 
     const todayMonth = brMonth1;
     const todayDay = brDay;
@@ -114,8 +116,8 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
       }).from(tripsTable).where(and(
         eq(tripsTable.tenantId, tenantId),
         eq(tripsTable.status, TRIP_STATUS.ACTIVE),
-        gte(tripsTable.departureDate, now),
-        lte(tripsTable.departureDate, in24Hours),
+        gte(departureAt, now),
+        lte(departureAt, in24Hours),
         sql`${tripsTable.reservedSeats} = 0`,
       )),
 
@@ -128,8 +130,8 @@ router.get("/alerts", async (req, res, next: NextFunction): Promise<void> => {
       }).from(tripsTable).where(and(
         eq(tripsTable.tenantId, tenantId),
         eq(tripsTable.status, TRIP_STATUS.ACTIVE),
-        gte(tripsTable.departureDate, now),
-        lte(tripsTable.departureDate, in7Days),
+        gte(departureAt, now),
+        lte(departureAt, in7Days),
         gt(tripsTable.totalCapacity, 0),
         sql`${tripsTable.reservedSeats}::numeric / nullif(${tripsTable.totalCapacity}, 0) < 0.5`,
       )),

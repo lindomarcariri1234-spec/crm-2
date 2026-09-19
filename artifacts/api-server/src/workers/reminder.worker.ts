@@ -23,6 +23,7 @@ import {
 } from "../services/checkout/reservation-confirmation-outbox";
 import { retryPendingAttendanceReplies } from "../services/whatsapp-attendance";
 import { dispatchOutboundMessage, htmlToWhatsAppText } from "../services/outbound-delivery";
+import { formatTripDeparture, tripDepartureAtSql } from "../lib/trip-date-time";
 
 const BRAZIL_TZ = "America/Sao_Paulo";
 
@@ -73,6 +74,7 @@ export async function processBoardingReminders(): Promise<void> {
   const MAX_BOARDING_REMINDER_DAYS = 14;
   const { start: windowStart } = brazilDayWindow(1);
   const { end: windowEnd } = brazilDayWindow(MAX_BOARDING_REMINDER_DAYS);
+  const departureAt = tripDepartureAtSql(tripsTable.departureDate, tripsTable.departureTime);
 
   const rows = await db
     .select({
@@ -86,6 +88,7 @@ export async function processBoardingReminders(): Promise<void> {
       tripName: tripsTable.name,
       tripDestination: tripsTable.destination,
       departureDate: tripsTable.departureDate,
+      departureTime: tripsTable.departureTime,
       boardingPoints: tripsTable.boardingPoints,
       clientName: clientsTable.name,
       clientEmail: clientsTable.email,
@@ -101,8 +104,8 @@ export async function processBoardingReminders(): Promise<void> {
     .where(
       and(
         eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
-        gte(tripsTable.departureDate, windowStart),
-        lt(tripsTable.departureDate, windowEnd),
+        gte(departureAt, windowStart),
+        lt(departureAt, windowEnd),
       ),
     );
 
@@ -126,7 +129,7 @@ export async function processBoardingReminders(): Promise<void> {
 
   for (const row of rows) {
     const depDate = row.departureDate
-      ? formatDateBRServer(row.departureDate)
+      ? formatTripDeparture(row.departureDate, row.departureTime)
       : "Amanhã";
 
     // Determine how many days until departure using Brazil calendar dates.
@@ -260,6 +263,7 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
   const MAX_DAYS = 30;
   const { start: windowStart } = brazilDayWindow(1);
   const { end: windowEnd } = brazilDayWindow(MAX_DAYS);
+  const departureAt = tripDepartureAtSql(tripsTable.departureDate, tripsTable.departureTime);
 
   const rows = await db
     .select({
@@ -268,6 +272,7 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
       clientId: reservationsTable.clientId,
       balance: reservationsTable.balance,
       departureDate: tripsTable.departureDate,
+      departureTime: tripsTable.departureTime,
       tripName: tripsTable.name,
       tripDestination: tripsTable.destination,
       agencyName: tenantsTable.name,
@@ -280,8 +285,8 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
         eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
         sql`${reservationsTable.balance}::numeric > 0`,
         isNotNull(tripsTable.departureDate),
-        gte(tripsTable.departureDate, windowStart),
-        lt(tripsTable.departureDate, windowEnd),
+        gte(departureAt, windowStart),
+        lt(departureAt, windowEnd),
       ),
     );
 
@@ -320,7 +325,7 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
 
     if (daysUntilDeparture !== configuredDay) { skipped++; continue; }
 
-    const depDateStr = formatDateBRServer(row.departureDate);
+    const depDateStr = formatTripDeparture(row.departureDate, row.departureTime);
 
     const delivery = await deliverReservationReminderOnce({
       reservationId: row.reservationId,
@@ -359,6 +364,7 @@ export async function processWhatsAppPagamentoPendente(): Promise<void> {
 
 async function processDeparturePushReminders(): Promise<void> {
   const { start: d3Start, end: d3End } = brazilDayWindow(3);
+  const departureAt = tripDepartureAtSql(tripsTable.departureDate, tripsTable.departureTime);
 
   const rows = await db
     .select({
@@ -367,6 +373,7 @@ async function processDeparturePushReminders(): Promise<void> {
       tripName: tripsTable.name,
       tripDestination: tripsTable.destination,
       departureDate: tripsTable.departureDate,
+      departureTime: tripsTable.departureTime,
     })
     .from(reservationsTable)
     .innerJoin(tripsTable, eq(reservationsTable.tripId, tripsTable.id))
@@ -375,8 +382,8 @@ async function processDeparturePushReminders(): Promise<void> {
       and(
         eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
         isNotNull(clientsTable.expoPushToken),
-        gte(tripsTable.departureDate, d3Start),
-        lt(tripsTable.departureDate, d3End),
+        gte(departureAt, d3Start),
+        lt(departureAt, d3End),
       ),
     );
 
@@ -384,7 +391,9 @@ async function processDeparturePushReminders(): Promise<void> {
 
   for (const row of rows) {
     if (!row.clientExpoPushToken) continue;
-    const depDate = row.departureDate ? formatDateBRServer(row.departureDate) : "em 3 dias";
+    const depDate = row.departureDate
+      ? formatTripDeparture(row.departureDate, row.departureTime)
+      : "em 3 dias";
     try {
       await sendPushNotification({
         to: row.clientExpoPushToken,
