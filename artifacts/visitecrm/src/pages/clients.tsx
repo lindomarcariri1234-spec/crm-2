@@ -521,6 +521,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const accommodations = (accommodationsData ?? []).filter(a => a.status === "active");
   const accommodationRooms = (tripRoomData?.rooms ?? []) as AccommodationRoom[];
   const availableRooms = accommodationRooms.filter(room => room.status === "active" && room.isActive !== false);
+  const selectedRoom = accommodationRooms.find(room => room.id === form.roomId);
   const selectedAccommodation = accommodations.find(a => a.id === form.accommodationId);
   const boardingPoints = (selectedTrip?.boardingPoints ?? []) as Array<{ id: string; name: string }>;
 
@@ -673,10 +674,25 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
               });
             }
           } catch (error: unknown) {
-            const responseData = (error as { data?: { code?: unknown } })?.data
-              ?? (error as { response?: { data?: { code?: unknown } } })?.response?.data;
+            const responseData = (
+              (error as { data?: unknown })?.data
+              ?? (error as { response?: { data?: unknown } })?.response?.data
+            ) as Record<string, unknown> | undefined;
             const message = responseData?.code === "ROOM_CAPACITY_EXCEEDED"
-              ? "Os dados do cliente foram salvos, mas o quarto não foi alterado porque não há vagas suficientes. Escolha outro quarto e tente novamente."
+              ? (() => {
+                const capacity = typeof responseData.capacity === "number" ? responseData.capacity : null;
+                const currentOccupied = typeof responseData.currentOccupied === "number"
+                  ? responseData.currentOccupied
+                  : typeof responseData.occupied === "number" ? responseData.occupied : null;
+                const available = capacity != null && currentOccupied != null
+                  ? Math.max(0, capacity - currentOccupied)
+                  : null;
+                const roomName = selectedRoom?.name ?? "quarto selecionado";
+                const details = capacity != null && currentOccupied != null && available != null
+                  ? `capacidade ${capacity} pessoa(s), ocupação atual ${currentOccupied}, ${available} vaga(s) disponível(is)`
+                  : "não há vagas suficientes";
+                return `Os dados do cliente foram salvos, mas o ${roomName} ficou sem vagas: ${details}. Escolha outro quarto e tente novamente.`;
+              })()
               : "Os dados do cliente foram salvos, mas a atribuição do quarto não foi alterada. Tente novamente.";
             setRoomAssignmentError(message);
             toast({ title: "Quarto não atualizado", description: message, variant: "destructive" });

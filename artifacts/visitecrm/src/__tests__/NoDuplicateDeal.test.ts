@@ -751,7 +751,14 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
 
   it("shows the capacity warning and keeps the selected room available for retry", async () => {
     updateReservationRoomAssignmentsMock.mockRejectedValueOnce({
-      data: { code: "ROOM_CAPACITY_EXCEEDED" },
+      data: {
+        code: "ROOM_CAPACITY_EXCEEDED",
+        roomId: "room-2",
+        capacity: 2,
+        occupied: 3,
+        currentOccupied: 2,
+        requestedCount: 1,
+      },
     });
 
     const { container } = await renderComponent(
@@ -789,7 +796,7 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
     });
 
     const expectedDescription =
-      "Os dados do cliente foram salvos, mas o quarto não foi alterado porque não há vagas suficientes. Escolha outro quarto e tente novamente.";
+      "Os dados do cliente foram salvos, mas o Quarto 2 ficou sem vagas: capacidade 2 pessoa(s), ocupação atual 2, 0 vaga(s) disponível(is). Escolha outro quarto e tente novamente.";
     expect(toastMock).toHaveBeenCalledWith({
       title: "Quarto não atualizado",
       description: expectedDescription,
