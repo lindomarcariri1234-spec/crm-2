@@ -4540,6 +4540,22 @@ paths:
           in: query
           schema:
             type: string
+        - name: bonusPaid
+          in: query
+          schema:
+            type: boolean
+        - name: fraudFlag
+          in: query
+          schema:
+            type: boolean
+        - name: expiringSoon
+          in: query
+          schema:
+            type: boolean
+        - name: bonusNotified
+          in: query
+          schema:
+            type: boolean
       responses:
         "200":
           description: Paginated list of referrals
@@ -6450,6 +6466,10 @@ components:
       properties:
         type: { type: string, enum: [converted, bonusPaid, reversed, share] }
         message: { type: string }
+        phone:
+          type: string
+          minLength: 8
+          description: Optional test destination; defaults to the configured agency WhatsApp number.
       required: [type]
     TestWhatsAppMessageResult:
       type: object

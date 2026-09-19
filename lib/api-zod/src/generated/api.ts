@@ -8464,10 +8464,10 @@ export const ListReferralsQueryParams = zod.object({
   limit: zod.coerce.number().int().default(listReferralsQueryLimitDefault),
   status: zod.coerce.string().optional(),
   search: zod.coerce.string().optional(),
-  bonusPaid: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
-  fraudFlag: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
-  expiringSoon: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
-  bonusNotified: zod.enum(["true", "false"]).transform((value) => value === "true").optional(),
+  bonusPaid: zod.coerce.boolean().optional(),
+  fraudFlag: zod.coerce.boolean().optional(),
+  expiringSoon: zod.coerce.boolean().optional(),
+  bonusNotified: zod.coerce.boolean().optional(),
 });
 
 export const ListReferralsResponse = zod.object({
@@ -10516,9 +10516,18 @@ export const ReversePaidReferralBonusResponse = zod
 /**
  * @summary Send a referral WhatsApp test message to the configured agency number
  */
+export const testWhatsAppMessageBodyPhoneMin = 8;
+
 export const TestWhatsAppMessageBody = zod.object({
   type: zod.enum(["converted", "bonusPaid", "reversed", "share"]),
   message: zod.string().optional(),
+  phone: zod
+    .string()
+    .min(testWhatsAppMessageBodyPhoneMin)
+    .optional()
+    .describe(
+      "Optional test destination; defaults to the configured agency WhatsApp number.",
+    ),
 });
 
 export const TestWhatsAppMessageResponse = zod.object({

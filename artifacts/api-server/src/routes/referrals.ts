@@ -1663,13 +1663,14 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const parsed = z.object({
       type: z.enum(["converted", "bonusPaid", "reversed", "share"]),
       message: z.string().optional(),
+      phone: z.string().trim().min(8).optional(),
     }).safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
     const [settings] = await db.select().from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
 
-    const phone = settings?.whatsappPhoneNumber;
+    const phone = parsed.data.phone || settings?.whatsappPhoneNumber;
     if (!phone) {
       res.status(400).json({ error: "whatsapp_not_configured" });
       return;
@@ -2322,89 +2323,6 @@ router.get("/referrals/active-campaign", async (req, res, next: NextFunction): P
 
     if (!campaign) { res.json(null); return; }
     res.json({ ...campaign, bonusValue: Number(campaign.bonusValue) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post("/referral-settings/whatsapp-test", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
-    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-
-    const parsed = z.object({
-      phone: z.string().min(8),
-      messageType: z.enum(["converted", "bonusPaid", "reversed", "share"]),
-    }).safeParse(req.body);
-    if (!parsed.success) { next(new ValidationError(String("Parâmetros inválidos" ), "VALIDATION_ERROR")); return; }
-
-    const [settings] = await db.select().from(referralSettingsTable)
-      .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
-
-    const [tenant] = await db.select({ name: tenantsTable.name })
-      .from(tenantsTable).where(eq(tenantsTable.id, me.tenantId)).limit(1);
-
-    const agencyName = tenant?.name ?? "Agência";
-    const bonusValue = parseFloat(String(settings?.bonusValue ?? "10")) || 10;
-    const bonusValFormatted = bonusValue.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const bonusCurrencyFormatted = formatBRL(bonusValue);
-
-    let message: string;
-    const { messageType } = parsed.data;
-
-    if (messageType === "converted") {
-      const template = settings?.whatsappConvertedMessage ??
-        "Boa notícia! {{nome}} usou seu código {{codigo}} e comprou com a {{agencia}}. Seu bônus de R$ {{valor}} está sendo processado.";
-      message = interpolateWhatsAppMessage(template, { nome: "Maria Silva", codigo: "TESTE123", agencia: agencyName, valor: bonusValFormatted });
-    } else if (messageType === "bonusPaid") {
-      const template = settings?.whatsappBonusPaidMessage ??
-        "Seu bônus de R$ {{valor}} foi pago! Obrigado por indicar clientes para a {{agencia}}.";
-      message = interpolateWhatsAppMessage(template, { nome: "João Silva", codigo: "TESTE123", bonus: bonusCurrencyFormatted, valor: bonusValFormatted, agencia: agencyName });
-    } else if (messageType === "reversed") {
-      const template = settings?.whatsappReversedMessage ??
-        "Olá! A reserva de {{nome}} foi cancelada e o bônus de R$ {{valor}} foi estornado do seu saldo na {{agencia}}. Seu saldo atual é R$ {{saldo}}.";
-      message = interpolateWhatsAppMessage(template, { nome: "Maria Silva", valor: bonusValFormatted, agencia: agencyName, saldo: bonusValFormatted });
-    } else {
-      const template = settings?.shareMessage ?? "Use meu código de indicação e ganhe desconto na sua viagem!";
-      message = template
-        .replace(/\{\{?nome\}?\}/g, "João")
-        .replace(/\{\{?codigo\}?\}/g, "TESTE123")
-        .replace(/\{\{?link\}?\}/g, "https://exemplo.com.br/ind/TESTE123")
-        .replace(/\{\{?bonus\}?\}/g, bonusCurrencyFormatted);
-    }
-
-    const deliveryResult = await dispatchOutboundMessage({
-      tenantId: me.tenantId,
-      eventType: "referral_test_whatsapp",
-      idempotencyKey: `referral-test-whatsapp:${messageType}:${generateId()}`,
-      recipient: { type: "direct", whatsapp: parsed.data.phone },
-      whatsapp: { text: message },
-      origin: "referral_settings_test",
-      originChannel: "whatsapp",
-      createdById: me.id,
-    });
-    const whatsappDelivery = deliveryResult.deliveries.find((delivery) => delivery.channel === "whatsapp");
-    const result = {
-      success: whatsappDelivery?.status === "pending" || whatsappDelivery?.status === "accepted",
-      error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason ?? undefined,
-    };
-
-    if (!result.success) {
-      const error = result.error ?? "unknown_error";
-      let detail: string;
-      if (error === "credentials_not_configured") {
-        detail = "Credenciais Z-API não configuradas. Verifique as variáveis ZAPI_INSTANCE_ID e ZAPI_TOKEN.";
-      } else if (error.startsWith("zapi_")) {
-        detail = `Z-API retornou status ${error.replace("zapi_", "")}. Verifique se o número está correto e a instância está conectada.`;
-      } else {
-        detail = `Erro de rede: ${error}`;
-      }
-      next(new AppError(detail, 422, "WHATSAPP_SEND_FAILED"));
-      return;
-    }
-
-    res.json({ success: true, phone: parsed.data.phone });
   } catch (err) {
     next(err);
   }

@@ -727,3 +727,54 @@ describe("GET /api/referrals — clientsTable JOIN enrichment", () => {
     expect(res.body.pagination).toMatchObject({ page: 2, limit: 10, total: 42, totalPages: 5 });
   });
 });
+
+describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint", () => {
+  it("uses the explicit test destination while keeping the canonical request contract", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ whatsappPhoneNumber: "5511888888888", bonusValue: "25" }]))
+      .mockImplementationOnce(() => makeChain([{ name: "Agência Teste" }]));
+
+    const res = await request(buildApp())
+      .post("/api/referral-settings/test-whatsapp")
+      .send({
+        type: "converted",
+        message: "Olá {nome}, seu código é {codigo}.",
+        phone: " 5511999999999 ",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      recipient: { type: "direct", whatsapp: "5511999999999" },
+    }));
+  });
+
+  it("falls back to the configured agency number when no explicit destination is sent", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ whatsappPhoneNumber: "5511888888888", bonusValue: "25" }]))
+      .mockImplementationOnce(() => makeChain([{ name: "Agência Teste" }]));
+
+    const res = await request(buildApp())
+      .post("/api/referral-settings/test-whatsapp")
+      .send({ type: "share", message: "Use o código {codigo}." });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledWith(expect.objectContaining({
+      recipient: { type: "direct", whatsapp: "5511888888888" },
+    }));
+  });
+
+  it("does not keep the legacy duplicate endpoint registered", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+
+    const res = await request(buildApp())
+      .post("/api/referral-settings/whatsapp-test")
+      .send({ phone: "5511999999999", messageType: "share" });
+
+    expect(res.status).toBe(404);
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
+  });
+});

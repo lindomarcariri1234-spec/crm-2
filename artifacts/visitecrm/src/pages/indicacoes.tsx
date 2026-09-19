@@ -819,20 +819,16 @@ export default function Indicacoes() {
     }
     setWhatsappTestState(prev => ({ ...prev, [messageType]: { loading: true } }));
     try {
-      const resp = await fetch("/api/referral-settings/whatsapp-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ phone, messageType }),
-      });
-      const data = await resp.json() as { success: boolean; detail?: string; error?: string };
-      if (data.success) {
-        setWhatsappTestState(prev => ({ ...prev, [messageType]: { success: true } }));
-      } else {
-        setWhatsappTestState(prev => ({ ...prev, [messageType]: { error: data.detail ?? data.error ?? "Erro desconhecido" } }));
-      }
-    } catch {
-      setWhatsappTestState(prev => ({ ...prev, [messageType]: { error: "Falha de conexão" } }));
+      await testWhatsApp.mutateAsync({ data: { type: messageType, phone } });
+      setWhatsappTestState(prev => ({ ...prev, [messageType]: { success: true } }));
+    } catch (err: unknown) {
+      const apiError = (err as { data?: { error?: string; message?: string } })?.data;
+      setWhatsappTestState(prev => ({
+        ...prev,
+        [messageType]: {
+          error: apiError?.error ?? apiError?.message ?? "Erro ao enviar mensagem de teste",
+        },
+      }));
     }
   }
 
