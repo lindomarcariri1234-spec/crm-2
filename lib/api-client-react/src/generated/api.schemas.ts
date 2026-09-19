@@ -2907,6 +2907,12 @@ export interface Vehicle {
   type: string;
   plate: string;
   capacity: number;
+  description?: string | null;
+  standardOccupancy?: number | null;
+  bedConfiguration?: string | null;
+  bathroomType?: string | null;
+  floor?: string | null;
+  currency?: string;
   /** @nullable */
   model?: string | null;
   /** @nullable */
