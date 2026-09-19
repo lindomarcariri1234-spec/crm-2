@@ -1689,6 +1689,12 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     }).safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
+    const requestId = req.get("Idempotency-Key")?.trim();
+    if (!requestId || requestId.length > 200) {
+      res.status(400).json({ error: "idempotency_key_required" });
+      return;
+    }
+
     const [settings] = await db.select().from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
 
@@ -1735,7 +1741,7 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const deliveryResult = await dispatchOutboundMessage({
       tenantId: me.tenantId,
       eventType: "referral_test_whatsapp",
-      idempotencyKey: `referral-test-whatsapp:${parsed.data.type}:${generateId()}`,
+      idempotencyKey: `referral-test-whatsapp:${requestId}`,
       recipient: { type: "direct", whatsapp: phone },
       whatsapp: { text: message },
       origin: "referral_settings_test",

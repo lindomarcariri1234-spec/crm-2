@@ -805,6 +805,7 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
 
     const res = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
+      .set("Idempotency-Key", "attempt-explicit-001")
       .send({
         type: "converted",
         message: "Olá {nome}, seu código é {codigo}.",
@@ -826,6 +827,7 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
 
     const res = await request(buildApp())
       .post("/api/referral-settings/test-whatsapp")
+      .set("Idempotency-Key", "attempt-configured-001")
       .send({ type: "share", message: "Use o código {codigo}." });
 
     expect(res.status).toBe(200);
@@ -840,9 +842,52 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
 
     const res = await request(buildApp())
       .post("/api/referral-settings/whatsapp-test")
+      .set("Idempotency-Key", "legacy-route-001")
       .send({ phone: "5511999999999", messageType: "share" });
 
     expect(res.status).toBe(404);
+    expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
+  });
+
+  it("reuses the request key for repeated clicks while allowing a later attempt to get a new key", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementation(() => makeChain([{ whatsappPhoneNumber: "5511888888888", bonusValue: "25" }, { name: "Agência Teste" }]));
+
+    const first = await request(buildApp())
+      .post("/api/referral-settings/test-whatsapp")
+      .set("Idempotency-Key", "attempt-share-001")
+      .send({ type: "share", message: "Use o código {codigo}." });
+    const repeated = await request(buildApp())
+      .post("/api/referral-settings/test-whatsapp")
+      .set("Idempotency-Key", "attempt-share-001")
+      .send({ type: "share", message: "Use o código {codigo}." });
+    const later = await request(buildApp())
+      .post("/api/referral-settings/test-whatsapp")
+      .set("Idempotency-Key", "attempt-share-002")
+      .send({ type: "share", message: "Use o código {codigo}." });
+
+    expect(first.status).toBe(200);
+    expect(repeated.status).toBe(200);
+    expect(later.status).toBe(200);
+    expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(3);
+    expect(mockDispatchOutboundMessage.mock.calls.map(([input]) => (input as { idempotencyKey: string }).idempotencyKey))
+      .toEqual([
+        "referral-test-whatsapp:attempt-share-001",
+        "referral-test-whatsapp:attempt-share-001",
+        "referral-test-whatsapp:attempt-share-002",
+      ]);
+  });
+
+  it("requires an idempotency key before contacting the provider", async () => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+
+    const res = await request(buildApp())
+      .post("/api/referral-settings/test-whatsapp")
+      .send({ type: "share", message: "Use o código {codigo}." });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "idempotency_key_required" });
     expect(mockDispatchOutboundMessage).not.toHaveBeenCalled();
   });
 });

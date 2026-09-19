@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { localToday } from "@workspace/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,7 +23,7 @@ import {
   useCreateReferralCampaign,
   useDeleteReferralCampaign,
   useUpdateReferralCampaign,
-  useTestWhatsAppMessage,
+  testWhatsAppMessage,
   useGetCurrentSubscription,
   useGetReferralCommissionReport,
   useReversePaidReferralBonus,
@@ -223,7 +223,6 @@ export default function Indicacoes() {
   const resendBonus = useResendBonusRelease();
   const reverseBonus = useReverseReferralBonus();
   const reversePaidBonus = useReversePaidReferralBonus();
-  const testWhatsApp = useTestWhatsAppMessage();
   const { data: me } = useGetMe();
   const queryClient = useQueryClient();
 
@@ -298,6 +297,8 @@ export default function Indicacoes() {
 
   const [whatsappTestPhone, setWhatsappTestPhone] = useState("");
   const [whatsappTestState, setWhatsappTestState] = useState<Record<string, { loading?: boolean; success?: boolean; error?: string }>>({});
+  const [settingsWhatsappTestLoading, setSettingsWhatsappTestLoading] = useState(false);
+  const whatsappTestInFlight = useRef(new Set<string>());
 
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -452,6 +453,18 @@ export default function Indicacoes() {
     }
   }
 
+  function beginWhatsAppTest(scope: string): string | null {
+    if (whatsappTestInFlight.current.has(scope)) return null;
+    whatsappTestInFlight.current.add(scope);
+    return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function endWhatsAppTest(scope: string) {
+    whatsappTestInFlight.current.delete(scope);
+  }
+
   async function sendWhatsAppTest(type: "converted" | "bonusPaid" | "share") {
     const message = type === "converted"
       ? (localSettings.whatsappConvertedMessage as string | undefined) ?? ""
@@ -466,8 +479,15 @@ export default function Indicacoes() {
       toast({ title: "Configure o número WhatsApp da agência antes de testar", variant: "destructive" });
       return;
     }
+    const scope = `settings:${type}`;
+    const attemptId = beginWhatsAppTest(scope);
+    if (!attemptId) return;
+    setSettingsWhatsappTestLoading(true);
     try {
-      await testWhatsApp.mutateAsync({ data: { type, message } });
+      await testWhatsAppMessage(
+        { type, message },
+        { headers: { "Idempotency-Key": attemptId } },
+      );
       toast({ title: "Mensagem de teste enviada!", description: "Verifique o WhatsApp configurado na agência." });
     } catch (err: unknown) {
       const apiError = (err as { data?: { error?: string } })?.data?.error;
@@ -480,6 +500,9 @@ export default function Indicacoes() {
       } else {
         toast({ title: "Erro ao enviar mensagem de teste", variant: "destructive" });
       }
+    } finally {
+      endWhatsAppTest(scope);
+      setSettingsWhatsappTestLoading(false);
     }
   }
 
@@ -817,9 +840,15 @@ export default function Indicacoes() {
       toast({ title: "Informe um número de WhatsApp para teste", variant: "destructive" });
       return;
     }
+    const scope = `explicit:${messageType}`;
+    const attemptId = beginWhatsAppTest(scope);
+    if (!attemptId) return;
     setWhatsappTestState(prev => ({ ...prev, [messageType]: { loading: true } }));
     try {
-      await testWhatsApp.mutateAsync({ data: { type: messageType, phone } });
+      await testWhatsAppMessage(
+        { type: messageType, phone },
+        { headers: { "Idempotency-Key": attemptId } },
+      );
       setWhatsappTestState(prev => ({ ...prev, [messageType]: { success: true } }));
     } catch (err: unknown) {
       const apiError = (err as { data?: { error?: string; message?: string } })?.data;
@@ -829,6 +858,8 @@ export default function Indicacoes() {
           error: apiError?.error ?? apiError?.message ?? "Erro ao enviar mensagem de teste",
         },
       }));
+    } finally {
+      endWhatsAppTest(scope);
     }
   }
 
@@ -2944,10 +2975,10 @@ export default function Indicacoes() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs text-green-700 border-green-400 hover:bg-green-50"
-                disabled={testWhatsApp.isPending}
+                disabled={settingsWhatsappTestLoading}
                 onClick={() => sendWhatsAppTest("share")}
               >
-                {testWhatsApp.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <MessageCircle className="w-3 h-3 mr-1" />}
+                {settingsWhatsappTestLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <MessageCircle className="w-3 h-3 mr-1" />}
                 Testar mensagem
               </Button>
               <p className="text-xs text-muted-foreground">
