@@ -35,8 +35,10 @@ import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js
 const createClientMock = vi.hoisted(() => vi.fn());
 const createReservationMock = vi.hoisted(() => vi.fn());
 const createDealMock = vi.hoisted(() => vi.fn());
+const updateReservationRoomAssignmentsMock = vi.hoisted(() => vi.fn());
 const calculateCommissionMock = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => vi.fn());
+const roomQueryState = vi.hoisted(() => ({ passengersLoading: false }));
 
 // Stable data fixtures — MUST be hoisted and reused across renders.
 // If useListTrips() returns a new array object on every render, then
@@ -52,6 +54,7 @@ const TRIPS_FIXTURE = vi.hoisted(() => ({
         departureDate: "2026-09-01T00:00:00Z",
         destination: "Nordeste",
         boardingPoints: [] as Array<{ id: string; name: string }>,
+        accommodationId: "accommodation-1",
         availableSeats: 10,
         totalCapacity: 40,
       },
@@ -93,6 +96,40 @@ vi.mock("@workspace/api-client-react", () => ({
   useUpdateClient: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useCreateDeal: () => ({ mutateAsync: createDealMock, isPending: false }),
   useCreateReservation: () => ({ mutateAsync: createReservationMock, isPending: false }),
+  useListAccommodations: () => ({ data: [] }),
+  useGetTripRoomAllocationSummary: () => ({
+    data: {
+      accommodation: { id: "accommodation-1", name: "Pousada de Teste", type: "hotel" },
+      rooms: [
+        { id: "room-1", name: "Quarto 1", category: "standard", capacity: 2, available: 2, occupied: 0, status: "active", isActive: true },
+        { id: "room-2", name: "Quarto 2", category: "standard", capacity: 2, available: 2, occupied: 0, status: "active", isActive: true },
+      ],
+      allocationSummary: { nights: 1, rows: [], totalRooms: 0, totalGuests: 0, totalValue: 0 },
+    },
+    isLoading: false,
+  }),
+  useListReservations: () => ({
+    data: { data: [{ id: "reservation-existing", status: "confirmed" }] },
+    isLoading: false,
+  }),
+  useListPassengers: () => ({
+    data: roomQueryState.passengersLoading
+      ? undefined
+      : [{ id: "passenger-1", name: "Maria Silva" }, { id: "passenger-2", name: "A preencher" }],
+    isLoading: roomQueryState.passengersLoading,
+  }),
+  useGetReservationRoomAssignments: () => ({
+    data: {
+      rooms: [],
+      assignments: [{ passengerId: "passenger-1", roomId: "room-1" }],
+      allocationSummary: { nights: 1, rows: [], totalRooms: 0, totalGuests: 0, totalValue: 0 },
+    },
+    isLoading: false,
+  }),
+  useUpdateReservationRoomAssignments: () => ({
+    mutateAsync: updateReservationRoomAssignmentsMock,
+    isPending: false,
+  }),
   useCalculateCommission: (params: unknown) => {
     calculateCommissionMock(params);
     return {
@@ -350,6 +387,8 @@ beforeEach(() => {
   createReservationMock.mockResolvedValue({ id: "res-456" });
   // Default: deal creation succeeds (only relevant when guard allows it through)
   createDealMock.mockResolvedValue({ id: "deal-789" });
+  updateReservationRoomAssignmentsMock.mockResolvedValue({});
+  roomQueryState.passengersLoading = false;
   calculateCommissionMock.mockClear();
 });
 
@@ -376,9 +415,9 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
 
     // Capture the initial handlers before state changes append handlers from
     // subsequent renders. With no boarding points, the financial selects are:
-    // [7] payment method and [8] consultant/seller.
+    // [8] payment method and [9] consultant/seller.
     const tripIdHandler = selectRegistry.handlers[4];
-    const consultantHandler = selectRegistry.handlers[8];
+    const consultantHandler = selectRegistry.handlers[9];
     expect(tripIdHandler).toBeDefined();
     expect(consultantHandler).toBeDefined();
 
@@ -656,5 +695,94 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
 
     // createdReservationId stayed undefined → guard opens → deal created
     expect(createDealMock).toHaveBeenCalledOnce();
+  });
+
+  it("replaces the active reservation room assignments without creating another reservation", async () => {
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: {
+          id: "client-123",
+          name: "Maria Silva",
+          totalSpent: 0,
+          outstandingBalance: 0,
+        } as never,
+        onSave: vi.fn(),
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    // Initial Select order: origin, marital status, gender, pipeline stage,
+    // trip, travel type, accommodation, room, payment method, consultant.
+    const tripIdHandler = selectRegistry.handlers[4];
+    const roomIdHandler = selectRegistry.handlers[7];
+    expect(tripIdHandler).toBeDefined();
+    expect(roomIdHandler).toBeDefined();
+
+    await flushAct(() => {
+      tripIdHandler?.("trip-1");
+    });
+    await flushAct(() => {
+      roomIdHandler?.("room-2");
+    });
+
+    const submitButton = Array.from(container.querySelectorAll("button")).find(
+      button => button.textContent?.includes("Salvar Alterações") || button.textContent?.includes("Salvando"),
+    );
+    expect(submitButton).toBeDefined();
+    expect(submitButton?.disabled).toBe(false);
+
+    await flushAct(async () => {
+      submitButton?.click();
+    });
+
+    expect(createReservationMock).not.toHaveBeenCalled();
+    expect(updateReservationRoomAssignmentsMock).toHaveBeenCalledWith({
+      reservationId: "reservation-existing",
+      data: {
+        assignments: [
+          { passengerId: "passenger-1", roomId: "room-2" },
+          { passengerId: "passenger-2", roomId: "room-2" },
+        ],
+      },
+    });
+  });
+
+  it("keeps editing disabled until the existing reservation passengers finish loading", async () => {
+    roomQueryState.passengersLoading = true;
+
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: {
+          id: "client-123",
+          name: "Maria Silva",
+          totalSpent: 0,
+          outstandingBalance: 0,
+        } as never,
+        onSave: vi.fn(),
+        pipelineId: "pipe-1",
+      }),
+    );
+    const tripIdHandler = selectRegistry.handlers[4];
+    expect(tripIdHandler).toBeDefined();
+
+    await flushAct(() => {
+      tripIdHandler?.("trip-1");
+    });
+
+    const submitButton = Array.from(container.querySelectorAll("button")).find(
+      button => button.textContent?.includes("Salvar Alterações") || button.textContent?.includes("Salvando"),
+    );
+    expect(submitButton?.disabled).toBe(true);
+
+    await flushAct(async () => {
+      submitButton?.click();
+    });
+
+    expect(updateReservationRoomAssignmentsMock).not.toHaveBeenCalled();
+    expect(createReservationMock).not.toHaveBeenCalled();
   });
 });
