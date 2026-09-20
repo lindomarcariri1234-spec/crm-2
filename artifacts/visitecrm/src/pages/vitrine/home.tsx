@@ -16,6 +16,7 @@ import { SectionHeader } from "@/components/vitrine/SectionHeader";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { FlashSaleCountdown } from "@/components/vitrine/FlashSaleCountdown";
 import { getStoredValue } from "./utils/storage";
+import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
 import {
   MapPin,
   Star,
@@ -53,6 +54,7 @@ function ReferralWelcomeBanner({
   const [visible, setVisible] = useState(false);
   const [referrerName, setReferrerName] = useState<string | null>(null);
   const [discountLabel, setDiscountLabel] = useState<string>("5%");
+  const [firstPurchaseOnly, setFirstPurchaseOnly] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -61,6 +63,7 @@ function ReferralWelcomeBanner({
     if (!isWelcome || !refCode) return;
 
     setVisible(true);
+    setFirstPurchaseOnly(false);
 
     const storedName = getStoredValue("referral_referrer_name");
     if (storedName) setReferrerName(storedName);
@@ -69,6 +72,7 @@ function ReferralWelcomeBanner({
       .getReferralInfo(slug, refCode)
       .then((info) => {
         if (info?.referrerName) setReferrerName(info.referrerName);
+        setFirstPurchaseOnly(info?.firstPurchaseOnly === true);
         if (info) {
           const type = info.discountType ?? "percentage";
           const val =
@@ -105,6 +109,11 @@ function ReferralWelcomeBanner({
           Ganhe <strong>{discountLabel} de desconto</strong> na sua reserva. O
           código já está salvo para você!
         </p>
+        {firstPurchaseOnly && (
+          <p role="note" className="text-white/80 text-xs md:text-sm">
+            {FIRST_PURCHASE_REFERRAL_MESSAGE}
+          </p>
+        )}
       </div>
       <button
         onClick={() => setVisible(false)}
