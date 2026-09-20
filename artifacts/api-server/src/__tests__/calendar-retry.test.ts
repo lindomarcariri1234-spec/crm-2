@@ -31,7 +31,12 @@ const mockCalendar = {
 vi.mock("googleapis", () => ({
   google: {
     calendar: vi.fn(() => mockCalendar),
-    auth: { OAuth2: vi.fn(() => ({ setCredentials: vi.fn(), refreshAccessToken: vi.fn() })) },
+    auth: {
+      OAuth2: class {
+        setCredentials = vi.fn();
+        refreshAccessToken = vi.fn();
+      },
+    },
   },
 }));
 

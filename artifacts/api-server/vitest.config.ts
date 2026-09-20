@@ -7,8 +7,10 @@ export default defineConfig({
     // These suites import the real database connection. Run them through
     // `pnpm test:integration` when DATABASE_URL is available.
     exclude: [
-      "src/__tests__/admin-cancel-referral-integration.test.ts",
-      "src/__tests__/backup-export-integration.test.ts",
+      "src/**/*integration.test.ts",
+      "src/__tests__/referral-reversal-gaps.test.ts",
+      "src/__tests__/referral-source-constraint.test.ts",
+      "src/__tests__/reservation-patch-deal-sync.test.ts",
     ],
   },
 });

@@ -181,7 +181,10 @@ describe("DELETE /api/clients/:id", () => {
     }]));
     mockTxUpdate.mockReturnValue({ set: mockTxSet });
     mockTxSet.mockReturnValue({ where: mockTxWhere });
-    mockTxWhere.mockResolvedValue([]);
+    mockTxWhere.mockImplementation(() => Object.assign(
+      Promise.resolve([{ id: "reservation-transitioned" }]),
+      { returning: vi.fn().mockResolvedValue([{ id: "reservation-transitioned" }]) },
+    ));
     mockTxSelect.mockReturnValue(chain([]));
     mockTxDelete.mockReturnValue({ where: mockTxDeleteWhere });
     mockTxDeleteWhere.mockResolvedValue([]);
@@ -224,7 +227,10 @@ describe("DELETE /api/clients/:id", () => {
     }]));
     mockTxUpdate.mockReturnValue({ set: mockTxSet });
     mockTxSet.mockReturnValue({ where: mockTxWhere });
-    mockTxWhere.mockResolvedValue([]);
+    mockTxWhere.mockImplementation(() => Object.assign(
+      Promise.resolve([{ id: "reservation-transitioned" }]),
+      { returning: vi.fn().mockResolvedValue([{ id: "reservation-transitioned" }]) },
+    ));
     mockTxDelete.mockReturnValue({ where: mockTxDeleteWhere });
     mockTxDeleteWhere.mockResolvedValue([]);
     mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>

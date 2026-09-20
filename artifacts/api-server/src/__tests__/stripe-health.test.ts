@@ -20,8 +20,15 @@ import { ROLES } from "@workspace/permissions";
 // vi.hoisted: mock factories must exist before any vi.mock factory runs
 // ---------------------------------------------------------------------------
 
-const { mockOrderBy, mockWhere, mockFrom, mockSelect, mockGetStripeSecretKey, MockStripe } =
-  vi.hoisted(() => {
+const {
+  mockOrderBy,
+  mockWhere,
+  mockFrom,
+  mockSelect,
+  mockGetStripeSecretKey,
+  MockStripe,
+  stripeInstances,
+} = vi.hoisted(() => {
     // The endpoint queries: db.select().from(plansTable).orderBy(...)
     // The result is awaited directly at the .orderBy() call, so mockOrderBy
     // must return a thenable that resolves to the plan rows.
@@ -32,10 +39,22 @@ const { mockOrderBy, mockWhere, mockFrom, mockSelect, mockGetStripeSecretKey, Mo
 
     const mockGetStripeSecretKey = vi.fn<() => Promise<string | null>>();
 
-    // Mock Stripe constructor — each test can override the returned instance
-    const MockStripe = vi.fn();
+    const stripeInstances: Array<{ prices: { search: ReturnType<typeof vi.fn> } }> = [];
 
-    return { mockOrderBy, mockWhere, mockFrom, mockSelect, mockGetStripeSecretKey, MockStripe };
+    // Mock Stripe constructor — each test queues the returned instance.
+    const MockStripe = vi.fn(function MockStripe() {
+      return stripeInstances.shift() ?? { prices: { search: vi.fn() } };
+    });
+
+    return {
+      mockOrderBy,
+      mockWhere,
+      mockFrom,
+      mockSelect,
+      mockGetStripeSecretKey,
+      MockStripe,
+      stripeInstances,
+    };
   });
 
 // ---------------------------------------------------------------------------
@@ -212,7 +231,7 @@ const STRIPE_ANNUAL_PRICE = {
 
 function makeStripeInstance(searchImpl: () => Promise<{ data: unknown[] }>) {
   const instance = { prices: { search: vi.fn(searchImpl) } };
-  MockStripe.mockImplementationOnce(() => instance);
+  stripeInstances.push(instance);
   return instance;
 }
 
@@ -222,6 +241,7 @@ function makeStripeInstance(searchImpl: () => Promise<{ data: unknown[] }>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  stripeInstances.length = 0;
   // Rebuild the select chain after clearAllMocks wipes implementations.
   // The endpoint calls db.select().from(plansTable).orderBy(...) and awaits the result,
   // so mockOrderBy must be configured per-test to resolve the desired plan rows.

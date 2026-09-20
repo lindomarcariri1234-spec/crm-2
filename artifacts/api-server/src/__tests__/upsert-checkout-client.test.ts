@@ -57,13 +57,16 @@ function makeMockTx(selectQueue: object[][]) {
   const mockSetFn = vi.fn().mockReturnValue({ where: mockUpdateWhereFn });
   const mockUpdateFn = vi.fn().mockReturnValue({ set: mockSetFn });
 
-  const mockInsertValuesFn = vi.fn().mockResolvedValue([]);
+  const mockInsertValuesFn = vi.fn().mockImplementation((values: Record<string, unknown>) => ({
+    returning: vi.fn().mockResolvedValue([{ ...values }]),
+  }));
   const mockInsertFn = vi.fn().mockReturnValue({ values: mockInsertValuesFn });
 
   const tx = {
     select: mockSelectFn,
     update: mockUpdateFn,
     insert: mockInsertFn,
+    execute: vi.fn().mockResolvedValue({ rows: [] }),
   } as unknown as Tx;
 
   const spies = {
@@ -84,7 +87,7 @@ const BASE_ARGS = {
   name: "Maria Silva",
   phone: "+55 11 99999-1234",
   createdById: "user-001",
-  cpf: "123.456.789-00",
+  cpf: "52998224725",
   birthDate: new Date("1990-05-15T12:00:00Z"),
 };
 
@@ -173,9 +176,9 @@ describe("upsertCheckoutClient", () => {
 
     expect(result).toEqual({ clientId: "phone-client-id", isNew: false });
     expect(spies.update).toHaveBeenCalledTimes(1);
-    expect(spies.updateSet).toHaveBeenCalledWith({
-      birthDate: BASE_ARGS.birthDate,
-    });
+    expect(spies.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ birthDate: BASE_ARGS.birthDate }),
+    );
     expect(spies.insert).not.toHaveBeenCalled();
   });
 
@@ -222,28 +225,26 @@ describe("upsertCheckoutClient", () => {
     expect(spies.insert).not.toHaveBeenCalled();
   });
 
-  it("does NOT assign CPF when another client in the tenant already owns it", async () => {
-    const existingClient = { id: "existing-004", email: BASE_ARGS.email, cpf: null, birthDate: null };
+  it("prefers the existing client that owns the CPF over an email match", async () => {
     const { tx, spies } = makeMockTx([
-      [existingClient], // existing client lookup
-      [{ id: "other-owner-id" }], // CPF uniqueness check → owned by someone else
+      [{ id: "other-owner-id", email: "other@example.com", cpf: BASE_ARGS.cpf, birthDate: BASE_ARGS.birthDate }],
     ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
 
     expect(result.isNew).toBe(false);
-    expect(result.clientId).toBe("existing-004");
-
-    expect(spies.update).toHaveBeenCalledTimes(1);
-    const setArgs = spies.updateSet.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(setArgs).not.toHaveProperty("cpf");
+    expect(result.clientId).toBe("other-owner-id");
+    expect(spies.insert).not.toHaveBeenCalled();
   });
 
   it("performs no DB update when existing client already has both birthDate and CPF set", async () => {
     const existingClient = {
       id: "existing-005",
       email: BASE_ARGS.email,
-      cpf: "999.888.777-66",
+      name: BASE_ARGS.name,
+      whatsapp: BASE_ARGS.phone,
+      phone: BASE_ARGS.phone,
+      cpf: BASE_ARGS.cpf,
       birthDate: new Date("1988-12-01T00:00:00Z"),
     };
     const { tx, spies } = makeMockTx([[existingClient]]);

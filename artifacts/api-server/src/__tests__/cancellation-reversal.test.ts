@@ -50,7 +50,7 @@ const {
   const capturedInserts: Record<string, unknown>[] = [];
 
   const mockTxLimit = vi.fn();
-  const mockTxWhere = vi.fn(() => ({ limit: mockTxLimit }));
+  const mockTxWhere = vi.fn(() => ({ limit: mockTxLimit, for: mockTxLimit }));
   const mockTxFrom = vi.fn(() => ({ where: mockTxWhere, limit: mockTxLimit }));
   const mockTxSelect = vi.fn(() => ({ from: mockTxFrom }));
 
@@ -101,6 +101,12 @@ vi.mock("@workspace/db", () => ({
   storeReviewsTable: {},
   storeCategoriesTable: {},
   reservationsTable: {},
+  accommodationsTable: {},
+  accommodationRoomsTable: {},
+  reservationRoomAssignmentsTable: {},
+  boardingLocationsTable: {},
+  vehicleLayoutsTable: {},
+  reservationInstallmentsTable: {},
   passengersTable: {},
   tripsTable: {},
   clientsTable: {},
@@ -157,6 +163,7 @@ vi.mock("../queues/email-helpers.js", () => ({
   enqueueReservationConfirmationEmail: vi.fn().mockResolvedValue(undefined),
   enqueueReservationCancellationEmail: mockEnqueueCancellationEmail,
   enqueueNewBookingNotificationEmail: vi.fn().mockResolvedValue(undefined),
+  dispatchReferralReversedEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../lib/google-calendar/sync-service.js", () => ({
@@ -382,6 +389,7 @@ function buildTxMock(
         return { where: updateSetWhere };
       }),
     })),
+    delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
     select: vi.fn().mockImplementation(() => {
       // Dequeue at the terminal await, not at SELECT construction time. This
       // lets FOR UPDATE use its own lock fixture without shifting the queue
@@ -406,7 +414,7 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
 
     mockLimit.mockResolvedValue([]);
-    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockWhere.mockReturnValue({ limit: mockLimit, for: mockLimit });
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
@@ -2507,6 +2515,9 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
           return { where: vi.fn().mockImplementation(protectedTransitionResult) };
         }),
       })),
+      delete: vi.fn().mockImplementation(() => ({
+        where: vi.fn().mockResolvedValue([]),
+      })),
       select: vi.fn().mockImplementation(() => {
         if (tx1SelectCalls++ === 0) {
           return makeChain(
@@ -2541,6 +2552,9 @@ describe("PATCH /api/reservations/:id — cancellation financial reversal", () =
           capturedUpdates.push({ table: "unknown", set: setArg });
           return { where: vi.fn().mockImplementation(protectedTransitionResult) };
         }),
+      })),
+      delete: vi.fn().mockImplementation(() => ({
+        where: vi.fn().mockResolvedValue([]),
       })),
       select: vi.fn().mockImplementation(() => {
         if (tx2SelectCalls++ === 0) {

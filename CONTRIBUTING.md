@@ -12,11 +12,15 @@
 O arquivo `lib/db/drizzle/0000_squash_baseline.sql` é histórico e **nunca deve ser alterado**. Toda evolução de schema deve usar uma migração incremental nova:
 
 1. Atualize o schema Drizzle em `lib/db/src/schema`.
-2. Crie uma migration SQL com timestamp maior que o último registro existente.
-3. Registre a migration em `lib/db/drizzle/meta/_journal.json`.
-4. Revise a migration para garantir que ela seja segura para bancos já existentes; não exclua ou reescreva dados sem aprovação explícita.
-5. Aplique localmente com `pnpm --filter @workspace/db migrate`.
-6. Valide com:
+2. Para cada tabela nova, crie uma migration incremental dedicada à tabela. Para
+   alterações de tabelas existentes, mantenha a mudança na migration incremental
+   correspondente; não esconda um `CREATE TABLE` ou `ALTER TABLE` em uma migration
+   genérica de outra feature.
+3. Crie uma migration SQL com timestamp maior que o último registro existente.
+4. Registre a migration em `lib/db/drizzle/meta/_journal.json`.
+5. Revise a migration para garantir que ela seja segura para bancos já existentes; não exclua ou reescreva dados sem aprovação explícita.
+6. Aplique localmente com `pnpm --filter @workspace/db migrate`.
+7. Valide com:
 
    ```bash
    pnpm --filter @workspace/db check
@@ -26,6 +30,19 @@ O arquivo `lib/db/drizzle/0000_squash_baseline.sql` é histórico e **nunca deve
    ```
 
 Não execute alterações destrutivas em produção sem confirmação explícita.
+
+O build do Vercel não aplica migrations. Antes de publicar uma versão que exige
+mudança de schema, execute a migration como etapa de release autorizada e
+confirme o banco antes do deploy:
+
+```bash
+pnpm --filter @workspace/api-server run migrate:vercel
+```
+
+O arquivo `vercel.json` na raiz do monorepo é a configuração canônica de
+publicação. `artifacts/api-server/vercel.json` deve permanecer compatível com
+ela para instalações que usem esse diretório como Root Directory; nenhum dos
+dois deve encaminhar `/api` para outro projeto.
 
 ## Validação recomendada
 
@@ -78,6 +95,13 @@ pnpm --filter @workspace/db run schema-drift
 ```
 
 Execute os testes do pacote alterado em lotes quando a suite for grande.
+
+Os testes que acessam banco real ficam fora da suite unitária:
+
+```bash
+pnpm --filter @workspace/api-server run test
+pnpm --filter @workspace/api-server run test:integration
+```
 
 ## Finalizar uma Task com commit e push
 

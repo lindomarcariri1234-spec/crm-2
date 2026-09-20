@@ -534,11 +534,6 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
       quantityByProductId: new Map([["prod-001", 1]]),
       tripLinkedProducts: new Map(),
     };
-    const orders = [
-      { ...FAKE_ORDER_ROW, totalAmount: "20.00" },
-      { ...FAKE_ORDER_ROW, totalAmount: "40.00" },
-    ];
-
     const mockOrderBy = vi.fn(() => {
       const creditRows = [{
         id: "credit-001",
@@ -556,13 +551,20 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
     });
     mockSelect.mockReturnValue({ from: mockFrom });
     mockLimit.mockReset();
+    // The two concurrent handlers interleave their owner/settings/order
+    // lookups. After the two store lookups, every remaining limit query can
+    // safely use this row: it has the client identity needed by the cashback
+    // guard and the order fields needed by the response projection.
+    const universalLookupRow = {
+      ...FAKE_ORDER_ROW,
+      id: "client-001",
+      gracePeriodDays: 30,
+      totalAmount: "50.00",
+    };
     mockLimit
       .mockResolvedValueOnce([FAKE_STORE]) // request A — store lookup
       .mockResolvedValueOnce([FAKE_STORE]) // request B — store lookup
-      .mockResolvedValueOnce([{ id: "client-001" }]) // request A — cashback owner
-      .mockResolvedValueOnce([{ id: "client-001" }]) // request B — cashback owner
-      .mockResolvedValueOnce([orders[0]]) // request A — persisted order
-      .mockResolvedValueOnce([orders[1]]); // request B — persisted order
+      .mockResolvedValue([universalLookupRow]);
 
     vi.mocked(getTenantUser).mockResolvedValue({
       id: "user-001",

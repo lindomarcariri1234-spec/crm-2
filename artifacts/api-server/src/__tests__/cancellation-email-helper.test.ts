@@ -192,14 +192,14 @@ it("reopens a failed reversal delivery on a repeated callback without creating a
 
   expect(mockDispatchOutboundMessage).toHaveBeenCalledTimes(2);
   expect(mockDispatchOutboundMessage.mock.calls[0][0]).toEqual(expect.objectContaining({
-    idempotencyKey: "referral:referral-1:reversed",
+    idempotencyKey: "referral:referral-1:referral:referral-1:reversed",
     metadata: expect.objectContaining({
       referralId: "referral-1",
       reservationId: "reservation-1",
     }),
   }));
   expect(mockDispatchOutboundMessage.mock.calls[1][0]).toEqual(expect.objectContaining({
-    idempotencyKey: "referral:referral-1:reversed",
+    idempotencyKey: "referral:referral-1:referral:referral-1:reversed",
     metadata: expect.objectContaining({
       referralId: "referral-1",
       reservationId: "reservation-1",

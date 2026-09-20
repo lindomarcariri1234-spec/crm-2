@@ -86,6 +86,7 @@ vi.mock("@clerk/express", () => ({
 
 vi.mock("@workspace/permissions", () => ({
   RESERVATION_STATUS: {},
+  REFERRAL_STATUS: { PENDING: "pending", COMPLETED: "completed", REVERSED: "reversed" },
 }));
 
 vi.mock("../lib/seat-sse.js", () => ({

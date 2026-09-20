@@ -122,7 +122,9 @@ describe("VideoGalleryUpload upload progress", () => {
   it("shows no invalid ETA during the initial burst, then displays the slow-upload estimate", async () => {
     const xhr = makeXhr();
     const OriginalXHR = globalThis.XMLHttpRequest;
-    globalThis.XMLHttpRequest = vi.fn().mockReturnValue(xhr) as unknown as typeof XMLHttpRequest;
+    globalThis.XMLHttpRequest = vi.fn(function MockXMLHttpRequest() {
+      return xhr;
+    }) as unknown as typeof XMLHttpRequest;
 
     try {
       const { container } = await renderUpload();
@@ -171,7 +173,9 @@ describe("VideoGalleryUpload upload progress", () => {
   it("shows short-window speed alongside ETA after progress has been sampled for about 500ms", async () => {
     const xhr = makeXhr();
     const OriginalXHR = globalThis.XMLHttpRequest;
-    globalThis.XMLHttpRequest = vi.fn().mockReturnValue(xhr) as unknown as typeof XMLHttpRequest;
+    globalThis.XMLHttpRequest = vi.fn(function MockXMLHttpRequest() {
+      return xhr;
+    }) as unknown as typeof XMLHttpRequest;
 
     try {
       const { container } = await renderUpload();

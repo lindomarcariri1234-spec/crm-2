@@ -39,7 +39,9 @@ describe("unlinkClientFromTrips", () => {
     vi.clearAllMocks();
     mockUpdate.mockReturnValue({ set: mockSet });
     mockSet.mockReturnValue({ where: mockWhere });
-    mockWhere.mockResolvedValue([]);
+    mockWhere.mockReturnValue({
+      returning: vi.fn().mockResolvedValue([{ id: "reservation-transitioned" }]),
+    });
     mockSelect.mockReturnValue({
       from: () => ({
         where: () => ({
@@ -98,7 +100,11 @@ describe("unlinkClientFromTrips", () => {
         }),
       }),
     });
-    mockWhere.mockRejectedValueOnce(new Error("trip update failed"));
+    mockWhere
+      .mockImplementationOnce(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: "reservation-transitioned" }]),
+      }))
+      .mockRejectedValueOnce(new Error("trip update failed"));
 
     await expect(
       unlinkClientFromTrips({ select: mockSelect, update: mockUpdate }, "tenant-1", "client-1"),

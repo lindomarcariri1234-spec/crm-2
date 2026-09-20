@@ -86,8 +86,16 @@ jobs:
       - name: Test API suite
         run: pnpm --filter @workspace/api-server run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
 
+      - name: Test API integration suite
+        run: pnpm --filter @workspace/api-server run test:integration
+
       - name: Test frontend suite
         run: pnpm --filter @workspace/visitecrm run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
+
+      - name: Type-check mobile artifacts
+        run: |
+          pnpm --filter @workspace/cliente-app run typecheck
+          pnpm --filter @workspace/guide-app run typecheck
 
       - name: Build API for production
         run: pnpm --filter @workspace/api-server run build
