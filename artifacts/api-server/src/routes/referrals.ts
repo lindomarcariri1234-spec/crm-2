@@ -863,7 +863,19 @@ router.post("/referrals/:id/resend-expiry-warning", async (req, res, next: NextF
       .set(clearUpdate)
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
 
-    await dispatchReferralExpiringSoonEmail(row.referrerId, me.tenantId, row.code, expiresAt, windowNum, row.id);
+    const delivered = await dispatchReferralExpiringSoonEmail(
+      row.referrerId,
+      me.tenantId,
+      row.code,
+      expiresAt,
+      windowNum,
+      row.id,
+      `manual-${generateId()}`,
+    );
+    if (!delivered) {
+      next(new AppError(PUBLIC_REFERRAL_EMAIL_FAILURE, 502, "REFERRAL_EMAIL_FAILED"));
+      return;
+    }
 
     const sentNow = new Date();
     const sentUpdate = windowNum === 7
@@ -958,13 +970,18 @@ router.post("/referrals/:id/resend-bonus-release", async (req, res, next: NextFu
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
 
     const releaseDate = bonusReleasesAt?.toISOString() ?? now.toISOString();
-    await dispatchReferralBonusReleasedEmail(
+    const delivered = await dispatchReferralBonusReleasedEmail(
       row.referrerId,
       me.tenantId,
       parseFloat(String(row.bonusAmount)) || 0,
       releaseDate,
       row.id,
+      `manual-${generateId()}`,
     );
+    if (!delivered) {
+      next(new AppError(PUBLIC_REFERRAL_EMAIL_FAILURE, 502, "REFERRAL_EMAIL_FAILED"));
+      return;
+    }
 
     const sentNow = new Date();
     await db.update(referralsTable)

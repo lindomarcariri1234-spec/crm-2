@@ -2541,7 +2541,10 @@ function recordSuspendedReferralAttempt(params: {
       referralSuspendedAttemptAt: new Date(),
       referralSuspendedAttemptCount: sql`${clientsTable.referralSuspendedAttemptCount} + 1`,
     })
-    .where(eq(clientsTable.id, clientId))
+     .where(and(
+       eq(clientsTable.id, clientId),
+       eq(clientsTable.tenantId, tenantId),
+     ))
     .execute()
     .catch((err: unknown) => {
       logger.warn({ err }, "[store-public] Failed to record suspended referral attempt");

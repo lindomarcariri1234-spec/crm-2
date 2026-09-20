@@ -130,3 +130,4 @@
 - [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
 - [Referral cap concurrency](referral-cap-concurrency.md) — reserve capped conversions with a conditional no-op client update so PostgreSQL holds the row lock through checkout commit
 - [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited
+- [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key

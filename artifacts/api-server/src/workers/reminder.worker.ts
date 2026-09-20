@@ -1430,7 +1430,22 @@ async function processExpiringSoonReferralNotifications(): Promise<void> {
         });
       }
 
-      // Task #151: mark the warning as sent on the referral row.
+      const delivered = emailDelivery !== undefined
+        && emailDelivery.status !== "failed"
+        && emailDelivery.status !== "skipped"
+        && emailDelivery.status !== "unknown";
+      if (!delivered) {
+        errors++;
+        logger.warn(
+          { referralId: referral.id, tenantId: referral.tenantId, windowLabel },
+          "[expiry-warning] Email was not accepted — leaving warning eligible for recovery",
+        );
+        continue;
+      }
+
+      // Task #151: mark the warning as sent only after the durable delivery
+      // was accepted or queued. A failed/skipped provider attempt must remain
+      // eligible for recovery.
       await db
         .update(referralsTable)
         .set(
@@ -1438,7 +1453,13 @@ async function processExpiringSoonReferralNotifications(): Promise<void> {
             ? { expiryWarning7SentAt: new Date() }
             : { expiryWarning1SentAt: new Date() },
         )
-        .where(eq(referralsTable.id, referral.id));
+        .where(and(
+          eq(referralsTable.id, referral.id),
+          eq(referralsTable.tenantId, referral.tenantId),
+          windowLabel === 7
+            ? isNull(referralsTable.expiryWarning7SentAt)
+            : isNull(referralsTable.expiryWarning1SentAt),
+        ));
 
       notified++;
     } catch (err) {
@@ -1562,8 +1583,27 @@ export async function processReferralBonusReleaseNotifications(): Promise<void> 
         continue;
       }
 
-      // Atomically claim the notification slot. The IS NULL guard in the WHERE
-      // clause ensures only one concurrent run dispatches the email.
+      const bonusAmount = parseFloat(String(referral.bonusAmount ?? "0"));
+      // Dispatch first and stamp only when the durable email delivery was
+      // accepted or queued. Claiming the column before dispatch would make a
+      // transient provider/queue failure permanently suppress this notice.
+      const delivered = await dispatchReferralBonusReleasedEmail(
+        referral.referrerId,
+        referral.tenantId,
+        bonusAmount,
+        releaseDate,
+        referral.id,
+      );
+
+      if (!delivered) {
+        errors++;
+        logger.warn(
+          { referralId: referral.id, tenantId: referral.tenantId },
+          "[bonus-release] Email was not accepted — leaving notification eligible for recovery",
+        );
+        continue;
+      }
+
       const notifyNow = new Date();
       const stamped = await db
         .update(referralsTable)
@@ -1572,19 +1612,10 @@ export async function processReferralBonusReleaseNotifications(): Promise<void> 
         .returning({ id: referralsTable.id });
 
       if (stamped.length === 0) {
-        // A concurrent run already claimed the notification slot.
+        // Another run delivered the same idempotent outbound message first.
         skippedAlreadyNotified++;
         continue;
       }
-
-      const bonusAmount = parseFloat(String(referral.bonusAmount ?? "0"));
-      await dispatchReferralBonusReleasedEmail(
-        referral.referrerId,
-        referral.tenantId,
-        bonusAmount,
-        releaseDate,
-        referral.id,
-      );
 
       notified++;
     } catch (err) {

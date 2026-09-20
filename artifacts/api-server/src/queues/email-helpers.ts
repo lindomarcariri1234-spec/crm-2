@@ -28,12 +28,13 @@ async function dispatchReferralOutbound(
   metadata?: Record<string, unknown>,
   referralId?: string,
   reservationId?: string | null,
-): Promise<void> {
+  deliveryAttemptKey?: string,
+): Promise<boolean> {
   const scopedKey = referralId ? `${key}:referral:${referralId}` : key;
   const outbound = await dispatchOutboundMessage({
     tenantId,
     eventType,
-    idempotencyKey: `referral:${scopedKey}:${eventType}`,
+    idempotencyKey: `referral:${scopedKey}:${eventType}${deliveryAttemptKey ? `:${deliveryAttemptKey}` : ""}`,
     recipient: recipient.id ? { type: "client", id: recipient.id } : {
       type: "direct", name: recipient.name, email: recipient.email, whatsapp: recipient.whatsapp,
     },
@@ -72,6 +73,12 @@ async function dispatchReferralOutbound(
         ));
     }
   }
+
+  const emailDelivery = outbound.deliveries.find((delivery) => delivery.channel === "email");
+  return emailDelivery !== undefined
+    && emailDelivery.status !== "failed"
+    && emailDelivery.status !== "skipped"
+    && emailDelivery.status !== "unknown";
 }
 
 async function projectOutboundEmailLog(
@@ -1030,20 +1037,20 @@ export async function enqueueReferralExpiringSoonEmail(
   tenantId: string,
   referralId?: string,
   clientId?: string,
-): Promise<void> {
+  deliveryAttemptKey?: string,
+): Promise<boolean> {
   const emailLogId = generateId();
   const daysLabel = props.daysLeft <= 1 ? "1 dia" : `${props.daysLeft} dias`;
   const subject = `⏰ Seu código ${props.referralCode} vence em ${daysLabel} — ${props.agencyName}`;
   const notificationType = props.daysLeft <= 1
     ? REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1
     : REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7;
-  await dispatchReferralOutbound(tenantId, notificationType, clientId ?? props.referrerEmail, {
+  return dispatchReferralOutbound(tenantId, notificationType, clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Seu código vence em ${escapeHtmlEmail(daysLabel)}</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu código <strong>${escapeHtmlEmail(props.referralCode)}</strong> vence em ${escapeHtmlEmail(props.expiresAt)}. Compartilhe agora para ganhar seu bônus.</p>${props.shareUrl ? `<p><a href="${props.shareUrl}">Compartilhar código</a></p>` : ""}`,
     `Olá, ${props.referrerName}! Seu código ${props.referralCode} vence em ${daysLabel} (${props.expiresAt}). Compartilhe agora para ganhar seu bônus.${props.shareUrl ? ` ${props.shareUrl}` : ""}`,
-    { referralCode: props.referralCode, expiresAt: props.expiresAt }, referralId);
-  return;
+    { referralCode: props.referralCode, expiresAt: props.expiresAt }, referralId, undefined, deliveryAttemptKey);
   const queue = getReferralEmailQueue()!;
 
   if (queue) {
@@ -1105,7 +1112,8 @@ export async function dispatchReferralExpiringSoonEmail(
   expiresAt: Date,
   daysLeft: number,
   referralId?: string,
-): Promise<void> {
+  deliveryAttemptKey?: string,
+): Promise<boolean> {
   const [referrer] = await db
     .select({ name: clientsTable.name, email: clientsTable.email })
     .from(clientsTable)
@@ -1114,7 +1122,7 @@ export async function dispatchReferralExpiringSoonEmail(
 
   if (!referrer?.email) {
     logger.warn({ referrerId, tenantId }, "[email-queue] Referral expiring-soon: referrer has no email — skipping");
-    return;
+    return false;
   }
 
   const [tenant] = await db
@@ -1141,7 +1149,7 @@ export async function dispatchReferralExpiringSoonEmail(
     ?? `Olá! Use meu código ${referralCode} na ${agencyName} e ganhe desconto especial na sua próxima viagem! 🌴✈️`;
   const shareUrl = `https://wa.me/?text=${encodeURIComponent(defaultShareMessage)}`;
 
-  await enqueueReferralExpiringSoonEmail(
+  return enqueueReferralExpiringSoonEmail(
     {
       referrerName: referrer.name ?? referrer.email,
       referrerEmail: referrer.email,
@@ -1155,6 +1163,7 @@ export async function dispatchReferralExpiringSoonEmail(
     tenantId,
     referralId,
     referrerId,
+    deliveryAttemptKey,
   );
 }
 
@@ -1165,16 +1174,16 @@ export async function enqueueReferralBonusReleasedEmail(
   tenantId: string,
   referralId?: string,
   clientId?: string,
-): Promise<void> {
+  deliveryAttemptKey?: string,
+): Promise<boolean> {
   const emailLogId = generateId();
   const subject = `🎉 Seu bônus de indicação está disponível para resgate! — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.BONUS_RELEASED, referralId ?? clientId ?? props.referrerEmail, {
+  return dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.BONUS_RELEASED, referralId ?? clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Seu bônus está disponível!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu bônus de indicação de <strong>${formatBRL(props.bonusAmount)}</strong> está disponível para resgate desde ${escapeHtmlEmail(props.releaseDate)}.</p>`,
     `Olá, ${props.referrerName}! Seu bônus de indicação de ${formatBRL(props.bonusAmount)} está disponível para resgate desde ${props.releaseDate}.`,
-    { bonusAmount: props.bonusAmount, releaseDate: props.releaseDate }, referralId);
-  return;
+    { bonusAmount: props.bonusAmount, releaseDate: props.releaseDate }, referralId, undefined, deliveryAttemptKey);
   const queue = getReferralEmailQueue()!;
 
   if (queue) {
@@ -1235,6 +1244,7 @@ export async function dispatchReferralBonusReleasedEmail(
   bonusAmount: number,
   releaseDate: string,
   referralId?: string,
+  deliveryAttemptKey?: string,
 ): Promise<boolean> {
   const [referrer] = await db
     .select({ name: clientsTable.name, email: clientsTable.email })
@@ -1253,7 +1263,7 @@ export async function dispatchReferralBonusReleasedEmail(
     .where(eq(tenantsTable.id, tenantId))
     .limit(1);
 
-  await enqueueReferralBonusReleasedEmail(
+  const delivered = await enqueueReferralBonusReleasedEmail(
     {
       referrerName: referrer.name ?? referrer.email,
       referrerEmail: referrer.email,
@@ -1265,7 +1275,10 @@ export async function dispatchReferralBonusReleasedEmail(
     tenantId,
     referralId,
     referrerId,
+    deliveryAttemptKey,
   );
+
+  if (!delivered) return false;
 
   insertClientNotification(referrerId, tenantId, "referral_bonus_released", {
     bonusAmount,
