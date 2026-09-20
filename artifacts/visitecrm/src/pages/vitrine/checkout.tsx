@@ -1700,13 +1700,19 @@ export default function VitrineCheckout({
                       <CheckCircle className="w-5 h-5 text-green-500 shrink-0" />
                       <div className="flex-1">
                         <p className="font-mono font-bold text-green-700">{referralResult.code}</p>
-                        <p className="text-xs text-green-600">
-                          {couponResult?.valid
-                            ? "Desconto de indicação não aplicável junto com cupom"
-                            : referralResult.firstPurchaseOnly
-                              ? "Desconto por indicação aplicado! Este benefício vale apenas para a primeira compra concluída deste cliente. O código continua válido para outros clientes."
-                              : "Desconto por indicação aplicado!"}
-                        </p>
+                        {couponResult?.valid ? (
+                          <p className="text-xs text-green-600">
+                            Desconto de indicação não aplicável junto com cupom
+                          </p>
+                        ) : referralResult.firstPurchaseOnly ? (
+                          <p role="note" className="text-xs text-green-600">
+                            Desconto por indicação aplicado! Este benefício vale apenas para a primeira compra concluída deste cliente. O código continua válido para outros clientes.
+                          </p>
+                        ) : (
+                          <p className="text-xs text-green-600">
+                            Desconto por indicação aplicado!
+                          </p>
+                        )}
                       </div>
                       <button onClick={removeReferral} className="text-green-600 hover:text-green-800">
                         <X className="w-4 h-4" />
