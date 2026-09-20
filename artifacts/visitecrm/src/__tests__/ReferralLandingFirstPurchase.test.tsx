@@ -126,4 +126,39 @@ describe("landing pública de indicação", () => {
     expect(container.textContent).not.toContain(FIRST_PURCHASE_REFERRAL_MESSAGE);
     expect(mocks.getReferralInfo.mock.calls[0]).toHaveLength(2);
   });
+
+  it("preserva a indicação ao seguir para os produtos sem consultar o histórico do visitante", async () => {
+    mocks.getReferralInfo.mockResolvedValue({
+      valid: true,
+      code: "INDICA10",
+      referrerName: "Maria",
+      discountPercent: 10,
+      firstPurchaseOnly: true,
+    });
+
+    const { container } = await renderComponent(
+      createElement(ReferralLanding, { slug: "loja-teste", store }),
+    );
+    await flushAct(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[role="note"]')?.textContent).toBe(
+      FIRST_PURCHASE_REFERRAL_MESSAGE,
+    );
+    expect(mocks.setStorefrontReferralCode).toHaveBeenCalledWith(
+      "loja-teste",
+      "INDICA10",
+    );
+
+    const productsButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Ver produtos com desconto"),
+    );
+    expect(productsButton).toBeDefined();
+    await flushAct(() => productsButton?.click());
+
+    expect(mocks.navigate).toHaveBeenCalledWith("/loja/loja-teste/produtos");
+    expect(mocks.getReferralInfo).toHaveBeenCalledTimes(1);
+  });
 });
