@@ -823,6 +823,7 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
       .mockResolvedValueOnce([{ settings: {} }])       // tenant feature flags (resolveCheckoutDiscounts)
       .mockResolvedValueOnce([referrer])               // referrer lookup (resolveCheckoutDiscounts)
       .mockResolvedValueOnce([refSettings])            // referral settings (resolveCheckoutDiscounts)
+      .mockResolvedValueOnce([{ requireFirstPurchase: false }]) // tx referral reservation policy
       .mockResolvedValueOnce([discountedOrder])        // post-tx order re-fetch
       .mockResolvedValue([]);
 

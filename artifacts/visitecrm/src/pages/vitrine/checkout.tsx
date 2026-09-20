@@ -1025,6 +1025,7 @@ export default function VitrineCheckout({
           DEPOSIT_ABOVE_TOTAL: "O valor de entrada não pode ser maior que o total atualizado do pedido.",
           UNAUTHENTICATED_CREDIT: "Entre na sua conta para usar o cashback de indicação.",
           CREDIT_EMAIL_MISMATCH: "O e-mail do checkout precisa ser o mesmo da conta que possui o cashback.",
+          REFERRAL_FIRST_PURCHASE_RESERVED: "Já existe uma compra pendente com este benefício de indicação. Finalize ou cancele a compra anterior antes de tentar novamente.",
           RESERVATION_NO_AGENCY_USER: "A agência ainda não está pronta para confirmar reservas. Tente novamente mais tarde.",
           RESERVATION_SYNC_FAILED: "Não foi possível confirmar a reserva agora. Tente novamente ou contate a agência.",
         };

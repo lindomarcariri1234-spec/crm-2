@@ -1816,6 +1816,13 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
           ));
           return;
         }
+        if (tagged.code === "REFERRAL_FIRST_PURCHASE_RESERVED") {
+          next(new ConflictError(
+            tagged.message,
+            "REFERRAL_FIRST_PURCHASE_RESERVED",
+          ));
+          return;
+        }
         if (txErr.message === "insufficient_stock") {
           next(new ConflictError(`Estoque insuficiente para "${tagged.productName}". Disponível: ${tagged.available ?? 0}`, "INSUFFICIENT_STOCK")); return;
         }

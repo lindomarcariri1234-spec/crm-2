@@ -389,6 +389,31 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
     expect(res.body.code).toBe("RESERVATION_SYNC_FAILED");
   });
 
+  it("returns 409 REFERRAL_FIRST_PURCHASE_RESERVED when the atomic checkout claim loses the race", async () => {
+    setupStoreAndOrderLookup();
+    mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
+    mockResolveDiscounts.mockResolvedValueOnce({
+      ...NO_DISCOUNT,
+      discountAmount: 15,
+      appliedReferralCode: "REF-001",
+      appliedReferralReferrerId: "referrer-001",
+      appliedReferralDiscountValue: 10,
+      appliedReferralDiscountType: "percentage",
+    });
+    mockPersistOrder.mockRejectedValueOnce(Object.assign(
+      new Error("Já existe uma compra pendente com este benefício de indicação."),
+      { code: "REFERRAL_FIRST_PURCHASE_RESERVED" },
+    ));
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, referralCode: "REF-001" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("REFERRAL_FIRST_PURCHASE_RESERVED");
+    expect(mockCreateReservations).not.toHaveBeenCalled();
+  });
+
   it("does not treat a 23505 on a different constraint as DUPLICATE_RESERVATION", async () => {
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
