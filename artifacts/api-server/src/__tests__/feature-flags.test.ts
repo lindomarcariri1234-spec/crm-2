@@ -411,6 +411,26 @@ describe("Feature flag enabled — endpoints return normal responses", () => {
     expect(res.status).toBe(200);
     expect(res.body.valid).toBe(true);
     expect(res.body.code).toBe("REF123");
+    expect(res.body.firstPurchaseOnly).toBe(false);
+  });
+
+  it("POST /referral/validate reports the first-purchase policy without checking customer history", async () => {
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE])
+      .mockResolvedValueOnce([TENANT_ALL_ENABLED])
+      .mockResolvedValueOnce([FAKE_REFERRER])
+      .mockResolvedValueOnce([{ ...FAKE_REF_SETTINGS, requireFirstPurchase: true }])
+      .mockResolvedValue([]);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/referral/validate")
+      .send({ code: "REF123", customerEmail: "customer@example.com" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      valid: true,
+      firstPurchaseOnly: true,
+    });
   });
 
   it("POST /coupons/validate returns 200 with valid=true when couponsEnabled is not set to false", async () => {

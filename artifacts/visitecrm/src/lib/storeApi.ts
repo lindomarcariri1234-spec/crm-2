@@ -819,6 +819,8 @@ export interface ReferralValidation {
   discountPercent?: number;
   discountValue?: number;
   discountType?: string;
+  /** The configured benefit policy, without checking the customer's history. */
+  firstPurchaseOnly?: boolean;
   description?: string;
   error?: string;
 }

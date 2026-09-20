@@ -1702,7 +1702,9 @@ export default function VitrineCheckout({
                         <p className="text-xs text-green-600">
                           {couponResult?.valid
                             ? "Desconto de indicação não aplicável junto com cupom"
-                            : "Desconto de 5% por indicação aplicado!"}
+                            : referralResult.firstPurchaseOnly
+                              ? "Desconto por indicação aplicado! Este benefício vale apenas para a primeira compra concluída deste cliente. O código continua válido para outros clientes."
+                              : "Desconto por indicação aplicado!"}
                         </p>
                       </div>
                       <button onClick={removeReferral} className="text-green-600 hover:text-green-800">

@@ -2648,6 +2648,7 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
       isEnabled: referralSettingsTable.isEnabled,
       expirationDays: referralSettingsTable.expirationDays,
       allowSelfReferral: referralSettingsTable.allowSelfReferral,
+      requireFirstPurchase: referralSettingsTable.requireFirstPurchase,
       minPurchaseAmount: referralSettingsTable.minPurchaseAmount,
       maxReferralsPerUser: referralSettingsTable.maxReferralsPerUser,
     
@@ -2830,6 +2831,7 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
       discountPercent,
       discountValue,
       discountType,
+      firstPurchaseOnly: settings?.requireFirstPurchase ?? true,
       description: `Desconto de ${discountLabel} por indicação de ${referrerName}`,
     
 }
@@ -2932,6 +2934,7 @@ router.get("/public/store/:slug/referral/info", async (req, res, next: NextFunct
       discountValue: referralSettingsTable.discountValue,
       discountType: referralSettingsTable.discountType,
       isActive: referralSettingsTable.isEnabled,
+      requireFirstPurchase: referralSettingsTable.requireFirstPurchase,
     }).from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, store.tenantId)).limit(1);
 
@@ -2950,6 +2953,7 @@ router.get("/public/store/:slug/referral/info", async (req, res, next: NextFunct
       discountPercent,
       discountValue,
       discountType,
+      firstPurchaseOnly: settings?.requireFirstPurchase ?? true,
     });
   } catch (err) {
     next(err);

@@ -25,6 +25,7 @@ export function StepCouponReferral({
     setReferralCode,
     referralApplied,
     referralDiscount,
+    referralFirstPurchaseOnly,
     applyReferral,
     removeReferral,
   } = state;
@@ -43,10 +44,15 @@ export function StepCouponReferral({
           {referralApplied ? (
             <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm">
               <CheckCircle className="w-4 h-4 text-green-600 shrink-0" />
-              <span className="flex-1 text-green-700">
+              <div className="flex-1 text-green-700">
                 Código <strong>{referralCode}</strong> aplicado! Desconto:{" "}
                 <strong>R$ {referralDiscount.toFixed(2)}</strong>
-              </span>
+                {referralFirstPurchaseOnly && (
+                  <p role="note" className="mt-1 text-xs text-green-700">
+                    Este benefício vale apenas para a primeira compra concluída deste cliente. O código continua válido para outros clientes.
+                  </p>
+                )}
+              </div>
               <button onClick={removeReferral} className="text-muted-foreground hover:text-foreground">
                 <X className="w-4 h-4" />
               </button>

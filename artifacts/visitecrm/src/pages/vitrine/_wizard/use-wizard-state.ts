@@ -162,6 +162,7 @@ export function useWizardState({
   const [referralDiscountPct, setReferralDiscountPct] = useState(5);
   const [referralDiscountType, setReferralDiscountType] = useState<"percentage" | "fixed">("percentage");
   const [referralDiscountValue, setReferralDiscountValue] = useState(5);
+  const [referralFirstPurchaseOnly, setReferralFirstPurchaseOnly] = useState(false);
 
   // Referral credit (logged-in referrers spending their earned bonus balance)
   const { isLoaded: clerkIsLoaded, isSignedIn } = useUser();
@@ -265,6 +266,7 @@ export function useWizardState({
             setReferralDiscountType(rType);
             setReferralDiscountValue(rVal);
             setReferralDiscountPct(rType === "percentage" ? rVal : 0);
+            setReferralFirstPurchaseOnly(res.firstPurchaseOnly ?? false);
           }
         })
         .catch(() => {
@@ -358,6 +360,7 @@ export function useWizardState({
         setReferralDiscountType(rType);
         setReferralDiscountValue(rVal);
         setReferralDiscountPct(rType === "percentage" ? rVal : 0);
+        setReferralFirstPurchaseOnly(res.firstPurchaseOnly ?? false);
         setStorefrontReferralCode(slug, referralCode);
       } else {
         alert(res.error ?? "Código inválido");
@@ -795,6 +798,7 @@ export function useWizardState({
     referralDiscountPct,
     referralDiscountType,
     referralDiscountValue,
+    referralFirstPurchaseOnly,
     applyReferral,
     removeReferral,
     basePrice,
