@@ -1769,6 +1769,18 @@ router.get("/referrals/export", async (req, res, next: NextFunction): Promise<vo
   }
 });
 
+function normalizeReferralWhatsAppTestError(delivery: {
+  status?: string | null;
+  lastError?: string | null;
+  skippedReason?: string | null;
+}): "credentials_not_configured" | "whatsapp_invalid_phone" | "provider_network_error" | "provider_rejected" {
+  const error = delivery.lastError ?? delivery.skippedReason;
+  if (error === "credentials_not_configured") return "credentials_not_configured";
+  if (error === "invalid_phone" || error === "whatsapp_invalid_phone") return "whatsapp_invalid_phone";
+  if (delivery.status === "unknown") return "provider_network_error";
+  return "provider_rejected";
+}
+
 router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -1844,12 +1856,14 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const whatsappDelivery = deliveryResult.deliveries.find((delivery) => delivery.channel === "whatsapp");
     const result = {
       success: whatsappDelivery?.status === "pending" || whatsappDelivery?.status === "accepted",
-      error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason ?? undefined,
+      error: whatsappDelivery ? normalizeReferralWhatsAppTestError(whatsappDelivery) : "provider_rejected",
     };
 
     if (!result.success) {
       if (result.error === "credentials_not_configured") {
         res.status(400).json({ error: "credentials_not_configured" });
+      } else if (result.error === "whatsapp_invalid_phone") {
+        res.status(400).json({ error: "whatsapp_invalid_phone" });
       } else {
         res.status(502).json({ error: result.error ?? "send_failed" });
       }

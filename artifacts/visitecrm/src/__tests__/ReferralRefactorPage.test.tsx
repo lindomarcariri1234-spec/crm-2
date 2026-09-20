@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
   mutation: { mutateAsync: vi.fn(), isPending: false },
   updateSettings: { mutateAsync: vi.fn(), isPending: false },
+  testWhatsAppMessage: vi.fn(),
   toast: vi.fn(),
 }));
 
@@ -17,7 +18,20 @@ vi.mock("@workspace/api-client-react", () => ({
   useGetReferralStats: mocks.useGetReferralStats,
   useGetCurrentSubscription: () => ({ data: { plan: { name: "Pro", supportedFeatures: ["referrals"] } } }),
   useGetReferralCommissionReport: () => ({ data: undefined }),
-  useGetReferralSettings: () => ({ data: undefined, refetch: vi.fn() }),
+  useGetReferralSettings: () => ({
+    data: {
+      isEnabled: true,
+      shareMessage: "Use o código {codigo}.",
+      whatsappEnabled: true,
+      whatsappPhoneNumber: "5511888888888",
+      whatsappConvertedMessage: "Olá {nome}.",
+      whatsappBonusPaidMessage: "Bônus pago.",
+      whatsappReversedMessage: "Bônus revertido.",
+      bonusValue: "10.00",
+      tiersConfig: [],
+    },
+    refetch: vi.fn(),
+  }),
   useUpdateReferralSettings: () => mocks.updateSettings,
   usePayReferralBonus: () => mocks.mutation,
   useResendExpiryWarning: () => mocks.mutation,
@@ -34,7 +48,7 @@ vi.mock("@workspace/api-client-react", () => ({
   useCreateReferralCampaign: () => mocks.mutation,
   useDeleteReferralCampaign: () => mocks.mutation,
   useUpdateReferralCampaign: () => mocks.mutation,
-  testWhatsAppMessage: vi.fn(),
+  testWhatsAppMessage: mocks.testWhatsAppMessage,
   getReferralExportUrl: () => "/api/referrals/export",
   getReferralAnalyticsExportUrl: () => "/api/referrals/analytics/export",
 }));
@@ -112,10 +126,30 @@ vi.mock("@/components/referral-table-section", () => ({
   ]),
 }));
 vi.mock("@/components/referral-settings-dialog", () => ({
-  ReferralSettingsDialog: ({ open, onOpenChange, onSave }: any) => open
+  ReferralSettingsDialog: ({ open, onOpenChange, onSave, whatsappTestPhone, setWhatsappTestPhone, whatsappTestState, sendWhatsAppTest, testWhatsappTemplate }: any) => open
     ? createElement("div", { "data-testid": "settings-dialog" }, [
       createElement("button", { key: "close", onClick: () => onOpenChange(false) }, "Fechar configurações"),
       createElement("button", { key: "save", onClick: onSave }, "Salvar configurações"),
+      createElement("input", {
+        key: "phone",
+        "data-testid": "settings-whatsapp-phone",
+        value: whatsappTestPhone,
+        onChange: (event: any) => setWhatsappTestPhone(event.target.value),
+      }),
+      createElement("button", {
+        key: "settings-whatsapp",
+        "data-testid": "settings-whatsapp-test",
+        onClick: () => sendWhatsAppTest("share"),
+      }, "Testar compartilhamento"),
+      createElement("button", {
+        key: "explicit-whatsapp",
+        "data-testid": "explicit-whatsapp-test",
+        onClick: () => testWhatsappTemplate("converted"),
+      }, "Testar conversão"),
+      createElement("span", {
+        key: "explicit-whatsapp-state",
+        "data-testid": "explicit-whatsapp-state",
+      }, whatsappTestState?.converted?.error ?? ""),
     ])
     : null,
 }));
@@ -217,6 +251,7 @@ beforeEach(() => {
   mocks.useListReferrals.mockReset();
   mocks.useGetReferralStats.mockReset();
   mocks.useQuery.mockReset();
+  mocks.testWhatsAppMessage.mockReset();
   mocks.queryClient.invalidateQueries.mockReset();
   mocks.useListReferrals.mockReturnValue({
     data: referralResponse, isLoading: false, isFetching: false, isError: false,
@@ -292,5 +327,52 @@ describe("orquestração da página de indicações", () => {
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(container.querySelector('[data-testid="campaigns-dialog"]')).not.toBeNull();
+  });
+
+  it.each([
+    ["credentials_not_configured", "Credenciais do WhatsApp não configuradas"],
+    ["whatsapp_invalid_phone", "Número WhatsApp inválido"],
+    ["provider_network_error", "Não foi possível confirmar o envio. Tente novamente."],
+    ["provider_rejected", "O provedor recusou o envio. Verifique o número e a configuração."],
+  ])("traduz o erro %s no teste de mensagem das configurações", async (error, message) => {
+    mocks.testWhatsAppMessage.mockRejectedValueOnce({ data: { error } });
+    const { container } = await renderComponent(createElement(Indicacoes));
+
+    await flushAct(() => {
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent?.includes("Configurações"))
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushAct(() => {
+      container.querySelector('[data-testid="settings-whatsapp-test"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(mocks.toast).toHaveBeenCalledWith({ title: message, variant: "destructive" });
+    expect(mocks.toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining("provider") }));
+  });
+
+  it("traduz falha de rede no fluxo de teste de template com número explícito", async () => {
+    mocks.testWhatsAppMessage.mockRejectedValueOnce({
+      data: { error: "provider_network_error", message: "fetch failed: provider timeout" },
+    });
+    const { container } = await renderComponent(createElement(Indicacoes));
+
+    await flushAct(() => {
+      Array.from(container.querySelectorAll("button"))
+        .find((button) => button.textContent?.includes("Configurações"))
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const phone = container.querySelector('[data-testid="settings-whatsapp-phone"]') as HTMLInputElement;
+    await flushAct(() => {
+      setInputValue(phone, "5511999999999");
+    });
+    await flushAct(() => {
+      container.querySelector('[data-testid="explicit-whatsapp-test"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("Não foi possível confirmar o envio. Tente novamente.");
+    expect(container.textContent).not.toContain("provider timeout");
   });
 });

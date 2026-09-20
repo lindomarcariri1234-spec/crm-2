@@ -895,6 +895,49 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
     }));
   });
 
+  it.each([
+    {
+      name: "missing provider credentials",
+      delivery: { channel: "whatsapp", status: "skipped", skippedReason: "credentials_not_configured" },
+      status: 400,
+      error: "credentials_not_configured",
+    },
+    {
+      name: "invalid destination number",
+      delivery: { channel: "whatsapp", status: "skipped", skippedReason: "whatsapp_invalid_phone" },
+      status: 400,
+      error: "whatsapp_invalid_phone",
+    },
+    {
+      name: "network failure",
+      delivery: { channel: "whatsapp", status: "unknown", lastError: "fetch failed: provider timeout" },
+      status: 502,
+      error: "provider_network_error",
+    },
+    {
+      name: "provider rejection",
+      delivery: { channel: "whatsapp", status: "failed", lastError: "zapi_400: invalid request details" },
+      status: 502,
+      error: "provider_rejected",
+    },
+  ])("returns a stable public error for $name without exposing provider details", async ({ delivery, status, error }) => {
+    (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
+    (db.select as ReturnType<typeof vi.fn>)
+      .mockImplementationOnce(() => makeChain([{ whatsappPhoneNumber: "5511888888888", bonusValue: "25" }]))
+      .mockImplementationOnce(() => makeChain([{ name: "Agência Teste" }]));
+    mockDispatchOutboundMessage.mockResolvedValueOnce({ deliveries: [delivery] });
+
+    const res = await request(buildApp())
+      .post("/api/referral-settings/test-whatsapp")
+      .set("Idempotency-Key", `attempt-error-${error}`)
+      .send({ type: "share", message: "Use o código {codigo}.", phone: "5511999999999" });
+
+    expect(res.status).toBe(status);
+    expect(res.body).toEqual({ error });
+    expect(JSON.stringify(res.body)).not.toContain("provider timeout");
+    expect(JSON.stringify(res.body)).not.toContain("invalid request details");
+  });
+
   it("does not keep the legacy duplicate endpoint registered", async () => {
     (requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue(FAKE_ADMIN);
 

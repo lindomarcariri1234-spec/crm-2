@@ -522,6 +522,25 @@ export default function Indicacoes() {
     whatsappTestInFlight.current.delete(scope);
   }
 
+  function getWhatsAppTestErrorMessage(error: string | undefined): string {
+    switch (error) {
+      case "credentials_not_configured":
+        return "Credenciais do WhatsApp não configuradas";
+      case "whatsapp_not_configured":
+        return "Número WhatsApp não configurado";
+      case "whatsapp_invalid_phone":
+        return "Número WhatsApp inválido";
+      case "empty_template":
+        return "Mensagem vazia";
+      case "provider_network_error":
+        return "Não foi possível confirmar o envio. Tente novamente.";
+      case "provider_rejected":
+        return "O provedor recusou o envio. Verifique o número e a configuração.";
+      default:
+        return "Erro ao enviar mensagem de teste";
+    }
+  }
+
   async function sendWhatsAppTest(type: "converted" | "bonusPaid" | "share") {
     const message = type === "converted"
       ? (localSettings.whatsappConvertedMessage as string | undefined) ?? ""
@@ -548,15 +567,7 @@ export default function Indicacoes() {
       toast({ title: "Mensagem de teste enviada!", description: "Verifique o WhatsApp configurado na agência." });
     } catch (err: unknown) {
       const apiError = (err as { data?: { error?: string } })?.data?.error;
-      if (apiError === "credentials_not_configured") {
-        toast({ title: "Credenciais Z-API não configuradas", description: "Configure ZAPI_INSTANCE_ID e ZAPI_TOKEN no servidor.", variant: "destructive" });
-      } else if (apiError === "whatsapp_not_configured") {
-        toast({ title: "Número WhatsApp não configurado", description: "Salve as configurações com um número válido primeiro.", variant: "destructive" });
-      } else if (apiError === "empty_template") {
-        toast({ title: "Mensagem vazia", variant: "destructive" });
-      } else {
-        toast({ title: "Erro ao enviar mensagem de teste", variant: "destructive" });
-      }
+      toast({ title: getWhatsAppTestErrorMessage(apiError), variant: "destructive" });
     } finally {
       endWhatsAppTest(scope);
       setSettingsWhatsappTestLoading(false);
@@ -912,7 +923,7 @@ export default function Indicacoes() {
       setWhatsappTestState(prev => ({
         ...prev,
         [messageType]: {
-          error: apiError?.error ?? apiError?.message ?? "Erro ao enviar mensagem de teste",
+          error: getWhatsAppTestErrorMessage(apiError?.error),
         },
       }));
     } finally {
