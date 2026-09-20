@@ -12,6 +12,7 @@ import { insertClientNotification } from "../lib/client-notifications";
 import { areWorkersEnabled } from "../lib/redis";
 import { dispatchWhatsAppReferralReversed } from "./whatsapp-helpers.js";
 import { dispatchOutboundMessage, retryOutboundDelivery } from "../services/outbound-delivery";
+import { REFERRAL_NOTIFICATION_TYPE } from "../lib/referral-notification-types";
 
 /** Single referral delivery path. Keeping the rendering here intentionally
  * plain makes the same content available to both channels without invoking
@@ -738,7 +739,7 @@ export async function enqueueReferralBonusPaidEmail(
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `Seu bônus de indicação foi pago! — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, "bonus_paid", clientId ?? props.referrerEmail, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.BONUS_PAID, clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Bônus de indicação pago!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>A ${escapeHtmlEmail(props.agencyName)} confirmou o pagamento do seu bônus de <strong>${formatBRL(props.bonusAmount)}</strong>, em ${escapeHtmlEmail(props.paidDate)}.</p>`,
@@ -805,7 +806,7 @@ export async function enqueueReferralConvertedEmail(
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `Sua indicação foi confirmada! — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, "converted", clientId ?? props.referrerEmail, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.CONVERTED, clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Indicação confirmada!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>${escapeHtmlEmail(props.referredName)} realizou uma compra usando seu código. Seu bônus de <strong>${formatBRL(props.bonusAmount)}</strong> será liberado em breve.</p>`,
@@ -872,7 +873,7 @@ export async function enqueueReferralExpiredEmail(
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `Sua indicação expirou — compartilhe novamente! — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, "expired", clientId ?? props.referrerEmail, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.EXPIRED, clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Sua indicação expirou</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu código de indicação expirou sem utilização. Acesse sua Área do Cliente para gerar um novo código e continuar ganhando bônus.</p>`,
@@ -935,6 +936,7 @@ export async function dispatchReferralConvertedEmail(
   referrerId: string,
   referredName: string,
   tenantId: string,
+  referralId?: string,
 ): Promise<void> {
   const [referrer] = await db
     .select({ name: clientsTable.name, email: clientsTable.email })
@@ -972,6 +974,7 @@ export async function dispatchReferralConvertedEmail(
     },
     tenantId,
     referrerId,
+    referralId,
   );
 
   insertClientNotification(referrerId, tenantId, "referral_converted", {
@@ -988,6 +991,7 @@ export async function dispatchReferralConvertedEmail(
 export async function dispatchReferralExpiredEmail(
   referrerId: string,
   tenantId: string,
+  referralId?: string,
 ): Promise<void> {
   const [referrer] = await db
     .select({ name: clientsTable.name, email: clientsTable.email })
@@ -1015,6 +1019,7 @@ export async function dispatchReferralExpiredEmail(
     },
     tenantId,
     referrerId,
+    referralId,
   );
 }
 
@@ -1029,7 +1034,9 @@ export async function enqueueReferralExpiringSoonEmail(
   const emailLogId = generateId();
   const daysLabel = props.daysLeft <= 1 ? "1 dia" : `${props.daysLeft} dias`;
   const subject = `⏰ Seu código ${props.referralCode} vence em ${daysLabel} — ${props.agencyName}`;
-  const notificationType = props.daysLeft <= 1 ? "expiry_warning_1" : "expiry_warning_7";
+  const notificationType = props.daysLeft <= 1
+    ? REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1
+    : REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7;
   await dispatchReferralOutbound(tenantId, notificationType, clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
@@ -1161,7 +1168,7 @@ export async function enqueueReferralBonusReleasedEmail(
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `🎉 Seu bônus de indicação está disponível para resgate! — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, "bonus_released", referralId ?? clientId ?? props.referrerEmail, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.BONUS_RELEASED, referralId ?? clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Seu bônus está disponível!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu bônus de indicação de <strong>${formatBRL(props.bonusAmount)}</strong> está disponível para resgate desde ${escapeHtmlEmail(props.releaseDate)}.</p>`,
@@ -1276,15 +1283,16 @@ async function enqueueReferralLoyaltyPointsEmail(
   props: ReferralLoyaltyPointsEmailProps,
   tenantId: string,
   clientId?: string,
+  referralId?: string,
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `⭐ Você ganhou ${props.pointsEarned} pontos de fidelidade! — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, "loyalty_points", clientId ?? props.referrerEmail, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.LOYALTY_POINTS, referralId ?? clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Você ganhou pontos de fidelidade!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Você ganhou <strong>${props.pointsEarned} pontos</strong>. Seu saldo atual é de ${props.currentBalance} pontos.</p>${props.profileUrl ? `<p><a href="${props.profileUrl}">Ver meu perfil</a></p>` : ""}`,
     `Olá, ${props.referrerName}! Você ganhou ${props.pointsEarned} pontos de fidelidade. Seu saldo atual é de ${props.currentBalance} pontos.${props.profileUrl ? ` ${props.profileUrl}` : ""}`,
-    { pointsEarned: props.pointsEarned, currentBalance: props.currentBalance });
+    { pointsEarned: props.pointsEarned, currentBalance: props.currentBalance }, referralId);
   return;
   const queue = getReferralEmailQueue()!;
 
@@ -1341,6 +1349,7 @@ export async function dispatchReferralLoyaltyPointsEmail(
   tenantId: string,
   pointsEarned: number,
   currentBalance: number,
+  referralId?: string,
 ): Promise<void> {
   const [referrer] = await db
     .select({ name: clientsTable.name, email: clientsTable.email })
@@ -1374,6 +1383,7 @@ export async function dispatchReferralLoyaltyPointsEmail(
     },
     tenantId,
     referrerId,
+    referralId,
   );
 }
 
@@ -1386,7 +1396,7 @@ export async function enqueueReferralWelcomeEmail(
 ): Promise<void> {
   const emailLogId = generateId();
   const subject = `🎁 Seu código de indicação ${props.referralCode} está pronto! — ${props.agencyName}`;
-  await dispatchReferralOutbound(tenantId, "welcome", clientId ?? props.referrerEmail, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.WELCOME, clientId ?? props.referrerEmail, {
     id: clientId, name: props.referrerName, email: props.referrerEmail,
   }, subject,
     `<h2>Seu código de indicação está pronto!</h2><p>Olá, ${escapeHtmlEmail(props.referrerName)}!</p><p>Seu código é <strong>${escapeHtmlEmail(props.referralCode)}</strong>. Compartilhe e ganhe ${formatBRL(props.bonusValue)} de bônus.</p><p><a href="${props.referralLink}">Compartilhar código</a></p>`,
@@ -1644,7 +1654,7 @@ export async function dispatchReferralReversedEmail(opts: {
 
   const subject = `Atualização sobre sua indicação — ${agencyName}`;
 
-  await dispatchReferralOutbound(tenantId, "reversed", referralId ?? `${referrerId}:${referredId ?? "unknown"}`, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.REVERSED, referralId ?? `${referrerId}:${referredId ?? "unknown"}`, {
     id: referrerId, name: referrerName, email: referrer.email,
   }, subject,
     `<h2>Atualização sobre sua indicação</h2><p>Olá, ${escapeHtmlEmail(referrerName)}!</p><p>A indicação${referredName ? ` de ${escapeHtmlEmail(referredName)}` : ""} foi revertida. O valor ajustado é ${formatBRL(bonusAmountNum)} e seu saldo pendente é ${formatBRL(newPendingBalance)}.${reason ? ` Motivo: ${escapeHtmlEmail(reason)}` : ""}</p>`,
@@ -1682,15 +1692,14 @@ export async function dispatchReferralTierUpgradeEmail(
 
   const agencyName = tenant?.name ?? "Agência";
 
-  const emailLogId = generateId();
   const subject = `Você subiu para o nível ${newTierLabel}! — ${agencyName}`;
-  await dispatchReferralOutbound(tenantId, "tier_upgrade", referrerId, {
+  await dispatchReferralOutbound(tenantId, REFERRAL_NOTIFICATION_TYPE.TIER_UPGRADE, referrerId, {
     id: referrerId, name: referrer.name ?? referrer.email, email: referrer.email,
   }, subject,
     `<h2>Você subiu de nível!</h2><p>Olá, ${escapeHtmlEmail(referrer.name ?? referrer.email)}! Você alcançou o nível <strong>${escapeHtmlEmail(newTierLabel)}</strong> (${escapeHtmlEmail(newTierLevel)}), com multiplicador de bônus ${bonusMultiplier}x.</p>`,
     `Olá, ${referrer.name ?? referrer.email}! Você alcançou o nível ${newTierLabel} (${newTierLevel}), com multiplicador de bônus ${bonusMultiplier}x.`);
 
-  logger.info({ emailLogId, referrerId, tenantId, newTierLevel, success: true }, "[email-queue] Referral tier upgrade dispatched");
+  logger.info({ referrerId, tenantId, newTierLevel, success: true }, "[email-queue] Referral tier upgrade dispatched");
 }
 
 // ── Price-drop alerts (public Vitrine, double opt-in) ─────────────────────────
@@ -1888,6 +1897,7 @@ export async function dispatchReferralCodeSuspendedEmail(opts: {
     id: emailLogId,
     tenantId,
     reservationId: null,
+    notificationType: REFERRAL_NOTIFICATION_TYPE.CODE_SUSPENDED,
     recipient: client.email,
     subject,
     status: sendResult.success ? "sent" : "failed",

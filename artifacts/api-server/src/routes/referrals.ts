@@ -18,8 +18,10 @@ import { rankingMetadata } from "../lib/ranking-contract";
 import { calculateReceivedAmount, linkedOrder, linkedReservation } from "../lib/linked-data";
 import { linkedDeal } from "../lib/linked-data";
 import { reversePaidReferralBonus } from "../services/reservation-referral-conversion";
+import { REFERRAL_NOTIFICATION_TYPE } from "../lib/referral-notification-types";
 
 const router = Router();
+const PUBLIC_REFERRAL_EMAIL_FAILURE = "Não foi possível enviar a notificação.";
 const CampaignBonusType = z.enum(["multiplier", "fixed_extra", "fixed_bonus", "percentage_bonus", "reduced_bonus", "no_reward"]);
 const CampaignConfig = z.object({
   eligibleStoreProductIds: z.array(z.string().min(1)).max(500).optional(),
@@ -1021,16 +1023,23 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
       .where(and(
         eq(emailLogsTable.tenantId, me.tenantId),
         eq(emailLogsTable.referralId, row.id),
-        inArray(emailLogsTable.notificationType, ["expiry_warning_7", "expiry_warning_1"]),
+        inArray(emailLogsTable.notificationType, [
+          REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7,
+          REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1,
+        ]),
       ))
       .orderBy(desc(emailLogsTable.createdAt))
       .limit(50);
 
-    const d7Logs = logs.filter((l) => l.notificationType === "expiry_warning_7");
-    const d1Logs = logs.filter((l) => l.notificationType === "expiry_warning_1");
+    const d7Logs = logs.filter((l) => l.notificationType === REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7);
+    const d1Logs = logs.filter((l) => l.notificationType === REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1);
 
     const toEntry = (log: typeof logs[0] | undefined) =>
-      log ? { status: log.status, errorMessage: log.errorMessage ?? null, sentAt: log.createdAt } : null;
+      log ? {
+        status: log.status,
+        errorMessage: log.status === "failed" ? PUBLIC_REFERRAL_EMAIL_FAILURE : null,
+        sentAt: log.createdAt,
+      } : null;
 
     res.json({ d7: toEntry(d7Logs[0]), d1: toEntry(d1Logs[0]) });
   } catch (err) {
@@ -1076,13 +1085,17 @@ router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: N
       .where(and(
         eq(emailLogsTable.tenantId, me.tenantId),
         eq(emailLogsTable.referralId, req.params.id),
-        eq(emailLogsTable.notificationType, "bonus_released"),
+        eq(emailLogsTable.notificationType, REFERRAL_NOTIFICATION_TYPE.BONUS_RELEASED),
       ))
       .orderBy(desc(emailLogsTable.createdAt))
       .limit(50);
 
     const toEntry = (log: typeof logs[0] | undefined) =>
-      log ? { status: log.status, errorMessage: log.errorMessage ?? null, sentAt: log.createdAt } : null;
+      log ? {
+        status: log.status,
+        errorMessage: log.status === "failed" ? PUBLIC_REFERRAL_EMAIL_FAILURE : null,
+        sentAt: log.createdAt,
+      } : null;
 
     res.json({ bonusRelease: toEntry(logs[0]) });
   } catch (err) {
@@ -1554,10 +1567,14 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
     wsRoi.addRow(["Métrica", "Valor"]).font = { bold: true };
     wsRoi.addRow(["Conversões válidas", commercialAnalytics.summary.validReferrals]);
     wsRoi.addRow(["Receita atribuída / valor pago (R$)", commercialAnalytics.summary.attributedRevenue.toFixed(2)]);
+     wsRoi.addRow(["Bônus vinculados a conversões (R$)", commercialAnalytics.summary.bonusConverted.toFixed(2)]);
     wsRoi.addRow(["Bônus promocionais pagos (R$)", commercialAnalytics.summary.rewardsPaid.toFixed(2)]);
     wsRoi.addRow(["Bônus promocionais pendentes (R$)", commercialAnalytics.summary.rewardsPending.toFixed(2)]);
+     wsRoi.addRow(["Créditos de bônus consumidos (R$)", commercialAnalytics.summary.creditsUsed.toFixed(2)]);
     wsRoi.addRow(["Descontos concedidos (R$)", commercialAnalytics.summary.discountGiven.toFixed(2)]);
     wsRoi.addRow(["Comissões contratuais (R$)", commercialAnalytics.summary.commissions.toFixed(2)]);
+     wsRoi.addRow(["Bônus revertidos (R$)", commercialAnalytics.summary.reversedAmount.toFixed(2)]);
+     wsRoi.addRow(["Indicações revertidas", commercialAnalytics.summary.reversedReferrals]);
     wsRoi.addRow(["Custo de aquisição (R$)", commercialAnalytics.summary.acquisitionCost.toFixed(2)]);
     wsRoi.addRow(["CAC (R$)", commercialAnalytics.summary.cac.toFixed(2)]);
     wsRoi.addRow(["ROI (%)", commercialAnalytics.summary.roiPercent.toFixed(2)]);

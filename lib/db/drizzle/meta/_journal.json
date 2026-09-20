@@ -652,6 +652,13 @@
       "when": 1809910000000,
       "tag": "0093_referral_reversal_notification_type",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1809920000000,
+      "tag": "0094_referral_attempt_log_retention_index",
+      "breakpoints": true
     }
   ]
 }

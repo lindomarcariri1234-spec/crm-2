@@ -24,6 +24,7 @@ import {
 import { retryPendingAttendanceReplies } from "../services/whatsapp-attendance";
 import { dispatchOutboundMessage, htmlToWhatsAppText } from "../services/outbound-delivery";
 import { formatTripDeparture, tripDepartureAtSql } from "../lib/trip-date-time";
+import { REFERRAL_NOTIFICATION_TYPE } from "../lib/referral-notification-types";
 
 const BRAZIL_TZ = "America/Sao_Paulo";
 
@@ -984,7 +985,10 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
         eq(emailLogsTable.status, "failed"),
         isNotNull(emailLogsTable.referralId),
         gte(emailLogsTable.createdAt, twoHoursAgo),
-          inArray(emailLogsTable.notificationType, ["expiry_warning_7", "expiry_warning_1"]),
+          inArray(emailLogsTable.notificationType, [
+            REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7,
+            REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1,
+          ]),
       ),
     );
 
@@ -1010,7 +1014,10 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
   for (const log of toRetry) {
     const referralId = log.referralId!;
     const notificationType = log.notificationType;
-    if (notificationType !== "expiry_warning_7" && notificationType !== "expiry_warning_1") {
+    if (
+      notificationType !== REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7
+      && notificationType !== REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1
+    ) {
       skipped++;
       continue;
     }
@@ -1023,7 +1030,10 @@ export async function retryFailedExpiryWarningEmails(): Promise<void> {
         and(
           eq(emailLogsTable.referralId, referralId),
           gte(emailLogsTable.createdAt, twoHoursAgo),
-          inArray(emailLogsTable.notificationType, ["expiry_warning_7", "expiry_warning_1"]),
+          inArray(emailLogsTable.notificationType, [
+            REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7,
+            REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1,
+          ]),
         ),
       );
 
@@ -1232,7 +1242,7 @@ async function processExpiredReferralNotifications(): Promise<void> {
       const [referrer] = await db.select({ name: clientsTable.name, email: clientsTable.email })
         .from(clientsTable).where(and(eq(clientsTable.id, referral.referrerId), eq(clientsTable.tenantId, referral.tenantId))).limit(1);
       const [tenant] = await db.select({ name: tenantsTable.name }).from(tenantsTable).where(eq(tenantsTable.id, referral.tenantId)).limit(1);
-      const notificationType = "expired";
+      const notificationType = REFERRAL_NOTIFICATION_TYPE.EXPIRED;
       const subject = "⏰ Seu código de indicação expirou";
       const outbound = await dispatchOutboundMessage({
         tenantId: referral.tenantId,
@@ -1386,7 +1396,9 @@ async function processExpiringSoonReferralNotifications(): Promise<void> {
 
       const [tenant] = await db.select({ name: tenantsTable.name }).from(tenantsTable).where(eq(tenantsTable.id, referral.tenantId)).limit(1);
       const daysLeft = windowLabel;
-      const notificationType = windowLabel === 7 ? "expiry_warning_7" : "expiry_warning_1";
+      const notificationType = windowLabel === 7
+        ? REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7
+        : REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1;
       const subject = `⏰ Seu código expira em ${daysLeft} dia${daysLeft === 1 ? "" : "s"}`;
       const outbound = await dispatchOutboundMessage({
         tenantId: referral.tenantId,

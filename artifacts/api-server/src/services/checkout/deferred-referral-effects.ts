@@ -24,6 +24,7 @@ interface PendingReferral {
 export interface DeferredReferralResult {
   conversionApplied: boolean;
   referrerId?: string;
+  referralId?: string;
   referralCode?: string;
   customerName?: string;
   tenantId?: string;
@@ -310,6 +311,7 @@ export async function applyDeferredOrderCredits(
       result = {
         conversionApplied: true,
         referrerId: ref.referrerId,
+        referralId: conversion.referralId ?? ref.referralId ?? undefined,
         referralCode: ref.code,
         customerName: order.customerName,
         tenantId: order.tenantId,

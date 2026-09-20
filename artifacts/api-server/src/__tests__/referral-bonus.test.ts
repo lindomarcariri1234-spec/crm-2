@@ -923,7 +923,7 @@ describe("POST /api/referral-settings/test-whatsapp — canonical test endpoint"
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       d7: { status: "sent", errorMessage: null, sentAt: "2026-09-01T00:00:00.000Z" },
-      d1: { status: "failed", errorMessage: "provider unavailable", sentAt: "2026-09-02T00:00:00.000Z" },
+      d1: { status: "failed", errorMessage: "Não foi possível enviar a notificação.", sentAt: "2026-09-02T00:00:00.000Z" },
     });
   });
 

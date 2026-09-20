@@ -282,6 +282,8 @@ export const referralAttemptLogsTable = pgTable("referral_attempt_logs", {
   storeSlug: text("store_slug").notNull(),
   ipAddress: text("ip_address"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  index("referral_attempt_logs_tenant_created_idx").on(table.tenantId, table.createdAt),
+]);
 
 export type ReferralAttemptLog = typeof referralAttemptLogsTable.$inferSelect;

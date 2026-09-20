@@ -55,6 +55,7 @@ export interface RecordReferralArgs {
 }
 
 export interface ReferralConversionResult {
+  referralId?: string;
   tierUpgraded: boolean;
   newTierLevel: string;
   newTierLabel: string;
@@ -125,6 +126,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   // Enforce maxReferralsPerUser cap — if limit is reached (and > 0), skip conversion gracefully
   if (maxReferralsPerUser > 0 && currentCompleted >= maxReferralsPerUser) {
     return {
+      referralId: existingReferralId ?? undefined,
       tierUpgraded: false,
       newTierLevel: "bronze",
       newTierLabel: "Bronze",
@@ -152,6 +154,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
 
     if (!capReservation) {
       return {
+        referralId: existingReferralId ?? undefined,
         tierUpgraded: false,
         newTierLevel: "bronze",
         newTierLabel: "Bronze",
@@ -461,6 +464,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   }
 
   return {
+    referralId,
     tierUpgraded,
     newTierLevel: tierAfter.tier.level,
     newTierLabel: tierAfter.tier.label,

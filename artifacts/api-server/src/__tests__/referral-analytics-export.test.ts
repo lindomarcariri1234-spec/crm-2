@@ -234,14 +234,16 @@ describe("GET /api/referrals/analytics/export", () => {
     expect(resultSheet).toBeDefined();
     expect(resultSheet?.getCell("B2").value).toBe(2);
     expect(resultSheet?.getCell("B3").value).toBe("400.00");
-    expect(resultSheet?.getCell("B4").value).toBe("10.00");
-    expect(resultSheet?.getCell("B5").value).toBe("15.00");
+    expect(resultSheet?.getCell("B4").value).toBe("30.00");
+    expect(resultSheet?.getCell("B5").value).toBe("10.00");
     expect(resultSheet?.getCell("B6").value).toBe("15.00");
-    expect(resultSheet?.getCell("B7").value).toBe("42.00");
-    expect(resultSheet?.getCell("B8").value).toBe("25.00");
-    expect(resultSheet?.getCell("B9").value).toBe("12.50");
-    expect(resultSheet?.getCell("B10").value).toBe("1500.00");
-    expect(resultSheet?.getCell("B11").value).toBe("16.00");
+    expect(resultSheet?.getCell("B7").value).toBe("5.00");
+    expect(resultSheet?.getCell("B8").value).toBe("15.00");
+    expect(resultSheet?.getCell("B9").value).toBe("42.00");
+    expect(resultSheet?.getCell("B12").value).toBe("25.00");
+    expect(resultSheet?.getCell("B13").value).toBe("12.50");
+    expect(resultSheet?.getCell("B14").value).toBe("1500.00");
+    expect(resultSheet?.getCell("B15").value).toBe("16.00");
 
     const rankingSheet = workbook.getWorksheet("Ranking Comercial");
     expect(rankingSheet?.getRow(2).getCell(2).value).toBe("Bruno");
@@ -273,10 +275,14 @@ describe("GET /api/referrals/analytics/export", () => {
     expect(dashboard.body.summary).toEqual({
       validReferrals: 2,
       attributedRevenue: 400,
+      bonusConverted: 30,
       rewardsPaid: 10,
       rewardsPending: 15,
+      creditsUsed: 5,
       discountGiven: 15,
       commissions: 42,
+      reversedAmount: 40,
+      reversedReferrals: 1,
       acquisitionCost: 25,
       cac: 12.5,
       roiPercent: 1500,
@@ -318,8 +324,8 @@ describe("GET /api/referrals/analytics/export", () => {
     );
     const resultSheet = workbook.getWorksheet("Resultado Comercial");
     expect(resultSheet?.getCell("B2").value).toBe(0);
-    expect(resultSheet?.getCell("B8").value).toBe("0.00");
-    expect(resultSheet?.getCell("B11").value).toBe("—");
+    expect(resultSheet?.getCell("B12").value).toBe("0.00");
+    expect(resultSheet?.getCell("B15").value).toBe("—");
     expect(workbook.getWorksheet("Ranking Comercial")?.rowCount).toBe(1);
   });
 });
