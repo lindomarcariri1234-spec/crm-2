@@ -249,7 +249,8 @@ function buildApp() {
 describe("public storefront Clerk boundary", () => {
   it("keeps the public store API outside Clerk without matching lookalike paths", () => {
     expect(shouldBypassClerkForPath("/api/public/store/minha-loja")).toBe(true);
-    expect(shouldBypassClerkForPath("/api/public/store/minha-loja/orders")).toBe(true);
+    expect(shouldBypassClerkForPath("/api/public/store/minha-loja/orders")).toBe(false);
+    expect(shouldBypassClerkForPath("/api/public/store/minha-loja/orders/ORD-001")).toBe(true);
     expect(shouldBypassClerkForPath("/api/publicity")).toBe(false);
     expect(shouldBypassClerkForPath("/api/users/me")).toBe(false);
   });

@@ -135,6 +135,7 @@ async function publicReq<T>(
   const res = await fetch(`${BASE}/api${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: body != null ? JSON.stringify(body) : undefined,
     cache: "no-store",
     ...options,
