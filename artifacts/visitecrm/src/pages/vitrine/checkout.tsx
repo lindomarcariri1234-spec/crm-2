@@ -45,6 +45,7 @@ import {
   setStoredValue,
 } from "./utils/storage";
 import { trackReferralCreditReduction } from "@/lib/analytics";
+import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
 
 type Step = "dados" | "revisao" | "pagamento" | "confirmado";
 
@@ -1706,7 +1707,7 @@ export default function VitrineCheckout({
                           </p>
                         ) : referralResult.firstPurchaseOnly ? (
                           <p role="note" className="text-xs text-green-600">
-                            Desconto por indicação aplicado! Este benefício vale apenas para a primeira compra concluída deste cliente. O código continua válido para outros clientes.
+                            Desconto por indicação aplicado! {FIRST_PURCHASE_REFERRAL_MESSAGE}
                           </p>
                         ) : (
                           <p className="text-xs text-green-600">

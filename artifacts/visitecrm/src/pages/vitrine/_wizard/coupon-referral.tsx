@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tag, CheckCircle, X, Loader2 } from "lucide-react";
 import type { WizardState } from "./use-wizard-state";
+import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "../referral-messages";
 
 export function StepCouponReferral({
   state,
@@ -49,7 +50,7 @@ export function StepCouponReferral({
                 <strong>R$ {referralDiscount.toFixed(2)}</strong>
                 {referralFirstPurchaseOnly && (
                   <p role="note" className="mt-1 text-xs text-green-700">
-                    Este benefício vale apenas para a primeira compra concluída deste cliente. O código continua válido para outros clientes.
+                    {FIRST_PURCHASE_REFERRAL_MESSAGE}
                   </p>
                 )}
               </div>

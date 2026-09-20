@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createElement } from "react";
 import { flushAct, renderComponent, cleanupRoots } from "./eventSourceHarness.js";
 import type { PublicStore } from "../lib/storeApi.js";
+import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "../pages/vitrine/referral-messages.js";
 
 const {
   createOrderSpy,
@@ -1356,8 +1357,8 @@ describe("VitrineCheckout — first-purchase referral message", () => {
 
     const note = handle.container.querySelector('[role="note"]');
     expect(note).not.toBeNull();
-    expect(note?.textContent).toContain(
-      "Este benefício vale apenas para a primeira compra concluída deste cliente.",
+    expect(note?.textContent).toBe(
+      `Desconto por indicação aplicado! ${FIRST_PURCHASE_REFERRAL_MESSAGE}`,
     );
     expect(validateReferralSpy).toHaveBeenCalledWith("loja-teste", "INDICA10");
   });
@@ -1408,9 +1409,7 @@ describe("StepCouponReferral — first-purchase referral message", () => {
     const note = container.querySelector('[role="note"]');
     expect(Boolean(note)).toBe(hasNote);
     if (hasNote) {
-      expect(note?.textContent).toContain(
-        "Este benefício vale apenas para a primeira compra concluída deste cliente.",
-      );
+      expect(note?.textContent).toBe(FIRST_PURCHASE_REFERRAL_MESSAGE);
     } else {
       expect(container.textContent).not.toContain("primeira compra concluída");
     }
