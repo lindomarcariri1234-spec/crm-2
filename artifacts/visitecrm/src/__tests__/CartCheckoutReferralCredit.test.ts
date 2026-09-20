@@ -9,6 +9,7 @@ const {
   createPaymentIntentSpy,
   getOrderSpy,
   getProfileSpy,
+  validateCouponSpy,
   validateReferralSpy,
   confirmPaymentSpy,
   trackReferralCreditReductionSpy,
@@ -18,6 +19,7 @@ const {
   createPaymentIntentSpy: vi.fn(),
   getOrderSpy: vi.fn(),
   getProfileSpy: vi.fn(),
+  validateCouponSpy: vi.fn(),
   validateReferralSpy: vi.fn(),
   confirmPaymentSpy: vi.fn(),
   trackReferralCreditReductionSpy: vi.fn(),
@@ -78,6 +80,7 @@ vi.mock("@/lib/storeApi", () => ({
     }
   },
   publicStoreApi: {
+    validateCoupon: (...args: unknown[]) => validateCouponSpy(...args),
     validateReferral: (...args: unknown[]) => validateReferralSpy(...args),
     createOrder: (...args: unknown[]) => createOrderSpy(...args),
     createPaymentIntent: (...args: unknown[]) => createPaymentIntentSpy(...args),
@@ -191,6 +194,7 @@ beforeEach(() => {
   }).mockResolvedValueOnce({
     referral: { creditBalance: "60.00" },
   });
+  validateCouponSpy.mockReset();
   createOrderSpy.mockReset();
   createPaymentIntentSpy.mockReset();
   getOrderSpy.mockReset();
@@ -249,6 +253,67 @@ describe("VitrineCheckout — referral credit confirmation", () => {
     expect(text).toContain("Saldo atual de cashback: R$ 60.00.");
     expect(trackReferralCreditReductionSpy).toHaveBeenCalledOnce();
     expect(trackReferralCreditReductionSpy).toHaveBeenCalledWith("cart_checkout", 100, 40);
+  });
+
+  it("applies cashback after a coupon and keeps the remaining balance visible", async () => {
+    createOrderSpy.mockResolvedValue(makeOrder("400.00", 80));
+    getProfileSpy.mockReset().mockResolvedValueOnce({
+      referral: { creditBalance: "100.00" },
+    }).mockResolvedValueOnce({
+      referral: { creditBalance: "20.00" },
+    });
+    validateCouponSpy.mockResolvedValue({
+      valid: true,
+      code: "SAVE20",
+      discountAmount: 20,
+    });
+    const { default: VitrineCheckout } = await import(
+      "../pages/vitrine/checkout.js"
+    );
+    const { container } = await renderComponent(
+      createElement(VitrineCheckout, {
+        slug: "loja-teste",
+        store: makeStore({ couponsEnabled: true }),
+      }),
+    );
+
+    await flushAct(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const nameInput = container.querySelector(
+      'input[placeholder="Seu nome completo"]',
+    ) as HTMLInputElement;
+    const emailInput = container.querySelector(
+      'input[placeholder="seu@email.com"]',
+    ) as HTMLInputElement;
+    await flushAct(() => {
+      simulateChange(nameInput, "João Silva");
+      simulateChange(emailInput, "joao@example.com");
+    });
+    await flushAct(() => callOnClick(findButton(container, "Continuar")!));
+
+    const couponInput = container.querySelector(
+      'input[placeholder="SEUCUPOM"]',
+    ) as HTMLInputElement;
+    await flushAct(() => simulateChange(couponInput, "SAVE20"));
+    await flushAct(() => callOnClick(findButton(container, "Aplicar")!));
+    await flushAct(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await flushAct(() => callOnClick(container.querySelector('[role="switch"]')!));
+    expect(container.textContent).toContain("R$ 380.00");
+    await flushAct(() => callOnClick(findButton(container, "Ir para Pagamento")!));
+    await flushAct(() => callOnClick(findButton(container, "Confirmar Pedido")!));
+
+    const payload = createOrderSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.couponCode).toBe("SAVE20");
+    expect(payload.referralCreditUsed).toBe(100);
+    expect(container.textContent).toContain("Aplicamos R$ 80.00 de cashback.");
+    expect(container.textContent).toContain("O novo total do pedido é R$ 400.00.");
+    expect(container.textContent).toContain("Saldo atual de cashback: R$ 20.00.");
   });
 
   it("does not show a reduction warning when the server applies the full amount", async () => {

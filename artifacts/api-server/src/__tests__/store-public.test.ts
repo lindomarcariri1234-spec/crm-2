@@ -911,6 +911,130 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(mockOrderBy).toHaveBeenCalledTimes(2);
   });
 
+  it("applies cashback after a fixed coupon and preserves the remaining total", async () => {
+    const coupon = {
+      id: "coupon-cashback-001",
+      storeId: FAKE_STORE.id,
+      code: "SAVE20",
+      isActive: true,
+      startsAt: new Date("2026-01-01T00:00:00.000Z"),
+      expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+      usageLimit: null,
+      usageCount: 0,
+      type: "fixed",
+      value: "20.00",
+      maxDiscountAmount: null,
+    };
+    const creditRow = {
+      id: "referral-credit-coupon",
+      status: "completed",
+      bonusAmount: "100.00",
+      bonusPaid: true,
+      bonusCreditUsedAmount: "0.00",
+      convertedAt: new Date("2026-01-01T00:00:00.000Z"),
+      expiresAt: new Date("2026-12-01T00:00:00.000Z"),
+    };
+    const discountedOrder = {
+      ...FAKE_ORDER,
+      discountAmount: "120.00",
+      totalAmount: "30.00",
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE]) // getActiveStore
+      .mockResolvedValueOnce([FAKE_PRODUCT]) // product fetch
+      .mockResolvedValueOnce([{ settings: {} }]) // tenant feature flags
+      .mockResolvedValueOnce([coupon]) // coupon lookup
+      .mockResolvedValueOnce([{ id: "client-001" }]) // credit client lookup
+      .mockResolvedValueOnce([{ gracePeriodDays: 30 }]) // referral settings
+      .mockResolvedValueOnce([discountedOrder]); // post-tx order re-fetch
+    mockOrderBy.mockReturnValueOnce(orderedResult([creditRow]));
+    mockOrderBy.mockReturnValueOnce(orderedResult([creditRow]));
+    vi.mocked(getTenantUser).mockResolvedValue({
+      email: VALID_BODY.customerEmail,
+    } as never);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({
+        ...VALID_BODY,
+        couponCode: "SAVE20",
+        referralCreditUsed: 100,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.discountAmount).toBe("120.00");
+    expect(res.body.totalAmount).toBe("30.00");
+    expect(res.body.amountRemaining).toBe("30.00");
+    expect(res.body.referralCreditApplied).toBe(100);
+  });
+
+  it("applies cashback after a referral discount without exceeding the discounted total", async () => {
+    const referrer = {
+      id: "client-ref-cashback",
+      name: "João Referrer",
+      email: "referrer@example.com",
+      referralCodeStatus: "active",
+      successfulReferrals: 0,
+      referralCodeGeneratedAt: new Date(),
+    };
+    const referralSettings = {
+      discountValue: "10.00",
+      discountType: "percentage",
+      isEnabled: true,
+      allowSelfReferral: true,
+      requireFirstPurchase: false,
+      bonusValue: "10.00",
+      minPurchaseAmount: null,
+      maxReferralsPerUser: null,
+      gracePeriodDays: 30,
+    };
+    const creditRow = {
+      id: "referral-credit-code",
+      status: "completed",
+      bonusAmount: "100.00",
+      bonusPaid: true,
+      bonusCreditUsedAmount: "0.00",
+      convertedAt: new Date("2026-01-01T00:00:00.000Z"),
+      expiresAt: new Date("2026-12-01T00:00:00.000Z"),
+    };
+    const discountedOrder = {
+      ...FAKE_ORDER,
+      discountAmount: "115.00",
+      totalAmount: "35.00",
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE]) // getActiveStore
+      .mockResolvedValueOnce([FAKE_PRODUCT]) // product fetch
+      .mockResolvedValueOnce([{ settings: {} }]) // tenant feature flags
+      .mockResolvedValueOnce([referrer]) // referrer lookup
+      .mockResolvedValueOnce([referralSettings]) // referral discount settings
+      .mockResolvedValueOnce([{ id: "client-001" }]) // credit client lookup
+      .mockResolvedValueOnce([{ gracePeriodDays: 30 }]) // credit settings
+      .mockResolvedValueOnce([{ requireFirstPurchase: false }]) // tx referral policy
+      .mockResolvedValueOnce([discountedOrder]); // post-tx order re-fetch
+    mockOrderBy.mockReturnValueOnce(orderedResult([creditRow]));
+    mockOrderBy.mockReturnValueOnce(orderedResult([creditRow]));
+    vi.mocked(getTenantUser).mockResolvedValue({
+      email: VALID_BODY.customerEmail,
+    } as never);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({
+        ...VALID_BODY,
+        referralCode: "VALID-REF-CASHBACK",
+        referralCreditUsed: 100,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.discountAmount).toBe("115.00");
+    expect(res.body.totalAmount).toBe("35.00");
+    expect(res.body.amountRemaining).toBe("35.00");
+    expect(res.body.referralCreditApplied).toBe(100);
+  });
+
   it("clamps referral credit to the order total when the balance is larger", async () => {
     const creditRow = {
       id: "referral-credit-002",
