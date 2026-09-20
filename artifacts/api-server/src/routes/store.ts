@@ -25,7 +25,10 @@ import { requireAuth } from "../lib/tenant";
 import { createReservationsForOrder, confirmReservationsForOrder } from "../services/checkout/create-reservations";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { runDeferredOrderAccounting, runPostPaymentSideEffects } from "../services/checkout/post-booking";
-import { restoreSpentCreditForOrder } from "../services/checkout/deferred-referral-effects";
+import {
+  expirePendingReferralForOrder,
+  restoreSpentCreditForOrder,
+} from "../services/checkout/deferred-referral-effects";
 import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers";
 import { applyOrderInventoryEffects, reverseOrderInventoryEffects } from "../services/checkout/persist-order";
 import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
@@ -1151,6 +1154,20 @@ router.put("/store/orders/:id/status", async (req, res, next: NextFunction): Pro
               reversalReason: "order_cancelled",
             });
           }
+        } else if (ref?.code) {
+          // A pending referral has no conversion timestamp or bonus yet. It
+          // must be expired, not financially reversed. Doing this while the
+          // order row is locked prevents a payment-side effect from promoting
+          // the referral after an administrative cancellation wins the race.
+          await expirePendingReferralForOrder(
+            tx as unknown as Parameters<typeof expirePendingReferralForOrder>[0],
+            {
+              tenantId: me.tenantId,
+              referralId: ref.referralId,
+              referralCode: ref.code,
+              reason: "order_cancelled",
+            },
+          );
         }
 
         const shouldReverseFinancials =

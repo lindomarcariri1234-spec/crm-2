@@ -45,7 +45,7 @@ export function _resetAlertState(): void {
 const UNPAID_STATUSES = [STORE_PAYMENT_STATUS.PENDING, STORE_PAYMENT_STATUS.FAILED] as const;
 
 /**
- * Sweeps store orders that were abandoned (never paid) and reverses their
+ * Sweeps store orders that were abandoned (never paid) and expires their
  * associated PENDING referral rows.
  *
  * ### Why this exists
@@ -63,7 +63,7 @@ const UNPAID_STATUSES = [STORE_PAYMENT_STATUS.PENDING, STORE_PAYMENT_STATUS.FAIL
  *
  * ### Idempotency
  * - The function only targets referral rows with `status = 'pending'`.
- *   Already-reversed rows are invisible to the lookup.
+ *   Already-expired rows are invisible to the lookup.
  * - When `pendingReferral.referralId` is present and the primary lookup finds
  *   no PENDING row, the order is skipped immediately — no fallback is attempted.
  *   This prevents a re-run from touching an unrelated PENDING row that happens to
@@ -120,7 +120,7 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
     "[abandoned-referrals] Sweeping abandoned order referral rows",
   );
 
-  let reversed = 0;
+  let expired = 0;
   let skipped = 0;
   const reversalNow = new Date();
 
@@ -140,9 +140,9 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
 
     // --- Primary path: exact lookup by DB row id ----------------------------
     // Used for all orders that stored referralId in pendingReferral JSONB.
-    // When the primary lookup misses (row already reversed), we skip immediately
+    // When the primary lookup misses (row already expired), we skip immediately
     // rather than falling through to the code-based fallback. Falling back when
-    // referralId is present would risk reversing a different, unrelated PENDING
+    // referralId is present would risk expiring a different, unrelated PENDING
     // row that happens to share the same referral code on a subsequent run.
     if (ref.referralId) {
       const [row] = await db
@@ -165,17 +165,17 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
 
       if (!row) {
         // Primary miss with referralId present means the row is already
-        // reversed (or externally removed). Skip — do NOT fall through.
+        // expired (or externally removed). Skip — do NOT fall through.
         logger.debug(
           { orderId: order.id, tenantId: order.tenantId, referralId: ref.referralId },
-          "[abandoned-referrals] Primary referral row not found — already reversed or gone, skipping",
+          "[abandoned-referrals] Primary referral row not found — already expired or gone, skipping",
         );
         skipped++;
         continue;
       }
 
-      await reverseReferralRow(order.id, order.tenantId, ref.code, row.id, reversalNow);
-      reversed++;
+      await expireReferralRow(order.id, order.tenantId, ref.code, row.id, reversalNow);
+      expired++;
       continue;
     }
 
@@ -200,18 +200,18 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
     if (!row) {
       logger.debug(
         { orderId: order.id, tenantId: order.tenantId },
-        "[abandoned-referrals] No PENDING referral row found — already reversed or not applicable",
+        "[abandoned-referrals] No PENDING referral row found — already expired or not applicable",
       );
       skipped++;
       continue;
     }
 
-    await reverseReferralRow(order.id, order.tenantId, ref.code, row.id, reversalNow);
-    reversed++;
+    await expireReferralRow(order.id, order.tenantId, ref.code, row.id, reversalNow);
+    expired++;
   }
 
   logger.info(
-    { total: orders.length, reversed, skipped },
+    { total: orders.length, expired, skipped },
     "[abandoned-referrals] Sweep complete",
   );
 
@@ -219,7 +219,7 @@ export async function runAbandonedOrderReferralCleanup(): Promise<void> {
   // If every eligible order was skipped and the volume is above threshold,
   // something is misaligned (stale referralIds, schema drift, etc.).
   // Rate-limit to 24 h so a persistent issue doesn't flood the operator.
-  if (skipped > 0 && reversed === 0 && orders.length >= ABANDONED_REFERRAL_ALERT_THRESHOLD) {
+  if (skipped > 0 && expired === 0 && orders.length >= ABANDONED_REFERRAL_ALERT_THRESHOLD) {
     void maybeSendAllSkippedAlert(orders[0].tenantId, orders.length, skipped);
   }
 }
@@ -287,7 +287,7 @@ async function maybeSendAllSkippedAlert(tenantId: string, total: number, skipped
     });
 }
 
-async function reverseReferralRow(
+async function expireReferralRow(
   orderId: string,
   tenantId: string,
   code: string,
@@ -297,15 +297,17 @@ async function reverseReferralRow(
   await db
     .update(referralsTable)
     .set({
-      status: REFERRAL_STATUS.REVERSED,
+      // This row was never converted and therefore has no convertedAt or
+      // bonus to reverse. `reversed` is reserved for completed conversions.
+      status: REFERRAL_STATUS.EXPIRED,
       reversalReason: "order_abandoned",
-      reversalAt: reversalNow,
+      reversalAt: null,
       updatedAt: reversalNow,
     })
     .where(eq(referralsTable.id, referralId));
 
   logger.info(
     { orderId, tenantId, referralId, code },
-    "[abandoned-referrals] PENDING referral row reversed for abandoned order",
+    "[abandoned-referrals] PENDING referral row expired for abandoned order",
   );
 }
