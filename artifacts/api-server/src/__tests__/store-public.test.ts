@@ -1035,6 +1035,70 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
     expect(res.body.referralCreditApplied).toBe(100);
   });
 
+  it("rounds a percentage coupon before applying partial cashback", async () => {
+    const fractionalProduct = {
+      ...FAKE_PRODUCT,
+      price: "149.99",
+    };
+    const percentageCoupon = {
+      id: "coupon-fractional-001",
+      storeId: FAKE_STORE.id,
+      code: "PERCENT17",
+      isActive: true,
+      startsAt: new Date("2026-01-01T00:00:00.000Z"),
+      expiresAt: new Date("2027-01-01T00:00:00.000Z"),
+      usageLimit: null,
+      usageCount: 0,
+      type: "percentage",
+      value: "17.00",
+      maxDiscountAmount: null,
+    };
+    const creditRow = {
+      id: "referral-credit-fractional",
+      status: "completed",
+      bonusAmount: "40.00",
+      bonusPaid: true,
+      bonusCreditUsedAmount: "0.00",
+      convertedAt: new Date("2026-01-01T00:00:00.000Z"),
+      expiresAt: new Date("2026-12-01T00:00:00.000Z"),
+    };
+    const roundedOrder = {
+      ...FAKE_ORDER,
+      subtotal: "149.99",
+      discountAmount: "35.50",
+      totalAmount: "114.49",
+    };
+
+    mockLimit
+      .mockResolvedValueOnce([FAKE_STORE]) // getActiveStore
+      .mockResolvedValueOnce([fractionalProduct]) // product fetch
+      .mockResolvedValueOnce([{ settings: {} }]) // tenant feature flags
+      .mockResolvedValueOnce([percentageCoupon]) // coupon lookup
+      .mockResolvedValueOnce([{ id: "client-001" }]) // credit client lookup
+      .mockResolvedValueOnce([{ gracePeriodDays: 30 }]) // referral settings
+      .mockResolvedValueOnce([roundedOrder]); // post-tx order re-fetch
+    mockOrderBy.mockReturnValueOnce(orderedResult([creditRow]));
+    mockOrderBy.mockReturnValueOnce(orderedResult([creditRow]));
+    vi.mocked(getTenantUser).mockResolvedValue({
+      email: VALID_BODY.customerEmail,
+    } as never);
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({
+        ...VALID_BODY,
+        couponCode: "PERCENT17",
+        referralCreditUsed: 10,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.subtotal).toBe("149.99");
+    expect(res.body.discountAmount).toBe("35.50");
+    expect(res.body.totalAmount).toBe("114.49");
+    expect(res.body.amountRemaining).toBe("114.49");
+    expect(res.body.referralCreditApplied).toBe(10);
+  });
+
   it("clamps referral credit to the order total when the balance is larger", async () => {
     const creditRow = {
       id: "referral-credit-002",
