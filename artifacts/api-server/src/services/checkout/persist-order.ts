@@ -411,7 +411,6 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
           eq(referralsTable.tenantId, args.store.tenantId),
           eq(referralsTable.referrerId, args.referralCreditClientId),
           inArray(referralsTable.status, ["completed", "converted"]),
-          eq(referralsTable.bonusPaid, false),
           sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
         ))
         .orderBy(asc(referralsTable.createdAt), asc(referralsTable.id))

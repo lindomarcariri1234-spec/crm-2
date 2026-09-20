@@ -33,8 +33,9 @@ function money(value: number): number {
 }
 
 /**
- * Separates promotional referral credit from paid bonuses and loyalty points.
- * A credit can only be spent after its grace period, and an expired credit is
+ * Calculates the referral credit that can be used as cashback.
+ * A bonus that was already released/paid is immediately spendable. An unpaid
+ * bonus can only be spent after its grace period, and an expired credit is
  * intentionally excluded from the spendable and pending balances.
  */
 export function calculateReferralWallet(
@@ -57,19 +58,21 @@ export function calculateReferralWallet(
     usedCredit += used;
 
     const remaining = amount - used;
-    if (remaining <= 0 || referral.bonusPaid) continue;
+    if (remaining <= 0) continue;
 
     const expiresAt = asDate(referral.expiresAt);
     if (expiresAt && expiresAt <= now) continue;
 
-    const convertedAt = asDate(referral.convertedAt);
-    const releaseAt = convertedAt
-      ? new Date(convertedAt.getTime() + Math.max(0, gracePeriodDays) * 24 * 60 * 60 * 1000)
-      : null;
+    if (!referral.bonusPaid) {
+      const convertedAt = asDate(referral.convertedAt);
+      const releaseAt = convertedAt
+        ? new Date(convertedAt.getTime() + Math.max(0, gracePeriodDays) * 24 * 60 * 60 * 1000)
+        : null;
 
-    if (releaseAt && releaseAt > now) {
-      pendingCredit += remaining;
-      continue;
+      if (releaseAt && releaseAt > now) {
+        pendingCredit += remaining;
+        continue;
+      }
     }
 
     availableCredit += remaining;

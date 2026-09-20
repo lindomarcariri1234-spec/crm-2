@@ -1691,7 +1691,6 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
             eq(referralsTable.tenantId, store.tenantId),
             eq(referralsTable.referrerId, creditClient.id),
             inArray(referralsTable.status, ["completed", "converted"]),
-            eq(referralsTable.bonusPaid, false),
             // Only rows that still have remaining credit
             sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
           ))

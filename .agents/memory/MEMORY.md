@@ -132,3 +132,4 @@
 - [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited
 - [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key
 - [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
+- [Referral bonus cashback eligibility](referral-bonus-cashback-eligibility.md) — paid referral bonuses are spendable cashback; unpaid bonuses wait for grace period, while expiry/reversal/used amounts remain excluded
