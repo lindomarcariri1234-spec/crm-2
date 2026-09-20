@@ -407,9 +407,9 @@ describe("GET /api/client/me", () => {
       .mockReturnValueOnce(buildWhereResult()) // referral settings
       .mockReturnValueOnce(buildWhereResult([{
         status: "completed",
-        bonusAmount: "20.00",
+        bonusAmount: "100.00",
         bonusPaid: true,
-        bonusCreditUsedAmount: null,
+        bonusCreditUsedAmount: "40.00",
         convertedAt: new Date("2026-08-01T15:00:00.000Z"),
         expiresAt: new Date("2026-12-01T15:00:00.000Z"),
       }])); // wallet rows
@@ -428,8 +428,8 @@ describe("GET /api/client/me", () => {
     expect(res.body.reservations).toEqual([]);
     expect(res.body.referral).toMatchObject({
       totalReferrals: 0,
-      creditBalance: "20.00",
-      wallet: { availableCredit: 20 },
+      creditBalance: "60.00",
+      wallet: { availableCredit: 60 },
     });
   });
 
