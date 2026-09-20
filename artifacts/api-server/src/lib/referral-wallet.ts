@@ -32,6 +32,24 @@ function money(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+export function isReferralCreditSpendable(
+  referral: ReferralWalletRow,
+  gracePeriodDays: number,
+  now = new Date(),
+): boolean {
+  if (!VALID_REFERRAL_STATUSES.has(referral.status)) return false;
+
+  const expiresAt = asDate(referral.expiresAt);
+  if (expiresAt && expiresAt <= now) return false;
+  if (referral.bonusPaid) return true;
+
+  const convertedAt = asDate(referral.convertedAt);
+  const releaseAt = convertedAt
+    ? new Date(convertedAt.getTime() + Math.max(0, gracePeriodDays) * 24 * 60 * 60 * 1000)
+    : null;
+  return !releaseAt || releaseAt <= now;
+}
+
 /**
  * Calculates the referral credit that can be used as cashback.
  * A bonus that was already released/paid is immediately spendable. An unpaid

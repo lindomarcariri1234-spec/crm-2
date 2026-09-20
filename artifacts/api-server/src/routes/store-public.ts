@@ -188,6 +188,7 @@ import
 }
  from "../services/checkout/persist-order"
 ;
+import { isReferralCreditSpendable } from "../lib/referral-wallet";
 
 import 
 {
@@ -1625,6 +1626,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     let appliedCreditAmount = 0
 ;
     let referralCreditClientId: string | undefined;
+    let referralCreditGracePeriodDays: number | undefined;
 
     let creditSpend: Array<
 {
@@ -1679,12 +1681,22 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       if (creditClient) {
         referralCreditClientId = creditClient.id;
         const afterDiscount = roundMoney(Math.max(0, subtotal - discounts.discountAmount));
+        const [creditSettings] = await db
+          .select({ gracePeriodDays: referralSettingsTable.gracePeriodDays })
+          .from(referralSettingsTable)
+          .where(eq(referralSettingsTable.tenantId, store.tenantId))
+          .limit(1);
+        referralCreditGracePeriodDays = creditSettings?.gracePeriodDays ?? 30;
         // Select rows with remaining balance (including partially consumed ones)
         const creditRows = await db
           .select({
             id: referralsTable.id,
+            status: referralsTable.status,
             bonusAmount: referralsTable.bonusAmount,
+            bonusPaid: referralsTable.bonusPaid,
             bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+            convertedAt: referralsTable.convertedAt,
+            expiresAt: referralsTable.expiresAt,
           })
           .from(referralsTable)
           .where(and(
@@ -1695,7 +1707,10 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
             sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
           ))
           .orderBy(asc(referralsTable.createdAt));
-        const totalAvailable = creditRows.reduce(
+        const spendableCreditRows = creditRows.filter((row) =>
+          isReferralCreditSpendable(row, referralCreditGracePeriodDays ?? 30),
+        );
+        const totalAvailable = spendableCreditRows.reduce(
           (s, r) => s + (Number(r.bonusAmount) - Number(r.bonusCreditUsedAmount ?? 0)), 0,
         );
         // Intentional clamp: over-requested credit is silently reduced to available balance.
@@ -1705,7 +1720,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         appliedCreditAmount = roundMoney(requestedCredit);
         // Build greedy spend plan — oldest rows first, partial consumption tracked per-row
         let remaining = appliedCreditAmount;
-        for (const row of creditRows) {
+        for (const row of spendableCreditRows) {
           if (remaining <= 0) break;
           const available = Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0);
           const consume = roundMoney(Math.min(available, remaining));
@@ -1797,6 +1812,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         creditSpend: creditSpend.length > 0 ? creditSpend : undefined,
         referralCreditRequested: data.referralCreditUsed,
         referralCreditClientId,
+        referralCreditGracePeriodDays,
       });
       appliedCreditAmount = persistedOrder.appliedCreditAmount;
     } catch (txErr: unknown) {

@@ -18,6 +18,7 @@ import { and, asc, eq, ne, sql, inArray } from "drizzle-orm";
 import type { DbExecutor } from "../../lib/reservation-payments";
 import { generateId } from "../../lib/id";
 import { roundMoney } from "../../lib/pricing";
+import { isReferralCreditSpendable } from "../../lib/referral-wallet";
 import { lockProductsForCheckout } from "./order-locks";
 import type { Tx } from "./tx";
 import { REFERRAL_STATUS } from "@workspace/permissions";
@@ -93,6 +94,7 @@ export interface PersistOrderArgs {
    * inside this transaction; creditSpend is kept only for older callers. */
   referralCreditRequested?: number;
   referralCreditClientId?: string;
+  referralCreditGracePeriodDays?: number;
 }
 
 export interface PersistOrderResult {
@@ -403,8 +405,12 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
       const creditRows = await tx
         .select({
           id: referralsTable.id,
+          status: referralsTable.status,
           bonusAmount: referralsTable.bonusAmount,
+          bonusPaid: referralsTable.bonusPaid,
           bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+          convertedAt: referralsTable.convertedAt,
+          expiresAt: referralsTable.expiresAt,
         })
         .from(referralsTable)
         .where(and(
@@ -415,20 +421,25 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
         ))
         .orderBy(asc(referralsTable.createdAt), asc(referralsTable.id))
         .for("update");
-      const totalAvailable = creditRows.reduce(
-        (sum, row) => sum + Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0)),
-        0,
+      const spendableCreditRows = creditRows.filter((row) =>
+        isReferralCreditSpendable(
+          row,
+          args.referralCreditGracePeriodDays ?? 30,
+        ),
       );
       appliedCreditAmount = roundMoney(Math.min(
         args.referralCreditRequested,
-        totalAvailable,
+        spendableCreditRows.reduce(
+          (sum, row) => sum + Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0)),
+          0,
+        ),
         afterPromoDiscount,
       ));
       effectiveDiscountAmount = roundMoney(args.promoDiscountAmount + appliedCreditAmount);
       effectiveTotalAmount = roundMoney(Math.max(0, args.subtotal - effectiveDiscountAmount));
       const spend: Array<{ id: string; consumedAmount: number; reserved: boolean }> = [];
       let remaining = appliedCreditAmount;
-      for (const row of creditRows) {
+      for (const row of spendableCreditRows) {
         if (remaining <= 0) break;
         const available = Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0));
         const consume = roundMoney(Math.min(available, remaining));

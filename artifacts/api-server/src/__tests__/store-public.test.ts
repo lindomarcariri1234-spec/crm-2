@@ -40,12 +40,14 @@ const {
   const mockEnqueueConfirmation = vi.fn().mockResolvedValue(undefined);
   const mockStripeCreate = vi.fn();
   const mockStripeRetrieve = vi.fn();
-  const mockStripeConstructor = vi.fn(() => ({
-    paymentIntents: {
-      create: mockStripeCreate,
-      retrieve: mockStripeRetrieve,
-    },
-  }));
+  const mockStripeConstructor = vi.fn(function StripeMock() {
+    return {
+      paymentIntents: {
+        create: mockStripeCreate,
+        retrieve: mockStripeRetrieve,
+      },
+    };
+  });
 
   return {
     mockLimit,
@@ -873,8 +875,12 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
   it("clamps requested referral credit to the available balance before persisting the order", async () => {
     const creditRow = {
       id: "referral-credit-001",
+      status: "completed",
       bonusAmount: "40.00",
+      bonusPaid: true,
       bonusCreditUsedAmount: "0.00",
+      convertedAt: new Date("2026-01-01T00:00:00.000Z"),
+      expiresAt: new Date("2026-12-01T00:00:00.000Z"),
     };
     const creditOrder = {
       ...FAKE_ORDER,
@@ -886,6 +892,7 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
       .mockResolvedValueOnce([FAKE_STORE])       // getActiveStore
       .mockResolvedValueOnce([FAKE_PRODUCT])     // product fetch
       .mockResolvedValueOnce([{ id: "client-001" }]) // credit client lookup
+      .mockResolvedValueOnce([{ gracePeriodDays: 30 }]) // referral settings
       .mockResolvedValueOnce([creditOrder]);     // post-tx order re-fetch
     mockOrderBy
       .mockReturnValueOnce(orderedResult([creditRow])) // route estimate
@@ -907,8 +914,12 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
   it("clamps referral credit to the order total when the balance is larger", async () => {
     const creditRow = {
       id: "referral-credit-002",
+      status: "completed",
       bonusAmount: "500.00",
+      bonusPaid: true,
       bonusCreditUsedAmount: "0.00",
+      convertedAt: new Date("2026-01-01T00:00:00.000Z"),
+      expiresAt: new Date("2026-12-01T00:00:00.000Z"),
     };
     const zeroValueOrder = {
       ...FAKE_ORDER,
@@ -927,6 +938,7 @@ describe("POST /api/public/store/:slug/orders — checkout endpoint", () => {
       .mockResolvedValueOnce([FAKE_STORE])       // getActiveStore
       .mockResolvedValueOnce([FAKE_PRODUCT])     // product fetch
       .mockResolvedValueOnce([{ id: "client-001" }]) // credit client lookup
+      .mockResolvedValueOnce([{ gracePeriodDays: 30 }]) // referral settings
       .mockResolvedValueOnce([zeroValueOrder])   // post-tx order re-fetch
       .mockResolvedValueOnce([lockedOrder]);     // settleZeroValueOrder lock
     mockOrderBy
