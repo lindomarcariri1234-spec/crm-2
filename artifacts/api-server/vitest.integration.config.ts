@@ -8,6 +8,7 @@ export default defineConfig({
       "src/__tests__/backup-export-integration.test.ts",
       "src/__tests__/paid-bonus-reversal-integration.test.ts",
       "src/__tests__/referral-payment-concurrency-integration.test.ts",
+      "src/__tests__/persist-order-first-purchase-concurrency-integration.test.ts",
       "src/__tests__/reservation-referral-payment-reversal-integration.test.ts",
       "src/__tests__/unlink-client-from-trips-concurrency-integration.test.ts",
       "src/__tests__/room-assignments.integration.test.ts",
