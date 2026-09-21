@@ -133,3 +133,4 @@
 - [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key
 - [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
 - [Referral bonus cashback eligibility](referral-bonus-cashback-eligibility.md) — paid referral bonuses are spendable cashback; unpaid bonuses wait for grace period, while expiry/reversal/used amounts remain excluded
+- [Reservation expiry payment locks](reservation-expiry-payment-locks.md) — expiry and every storefront payment path must lock the order before its reservations; only receivable/paid rows protect a hold

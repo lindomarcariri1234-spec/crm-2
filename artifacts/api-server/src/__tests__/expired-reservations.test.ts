@@ -9,9 +9,13 @@ import {
   tripsTable,
   clientsTable,
   reservationsTable,
+  storesTable,
+  storeOrdersTable,
+  paymentsTable,
   type InsertReservation,
   type InsertClient,
 } from "@workspace/db";
+import { PAYMENT_STATUS, PAYMENT_TYPE } from "@workspace/permissions";
 
 vi.mock("../lib/logger.js", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -25,6 +29,7 @@ const USER_ID   = `tstu-${RUN}`;
 const TRIP_ID   = `tstt-${RUN}`;
 const CLIENT_ID = `tstc-${RUN}`;
 const SECOND_CLIENT_ID = `tstc-second-${RUN}`;
+const STORE_ID = `tsts-${RUN}`;
 const INITIAL_SEATS = 10;
 
 function resId(suffix: string) { return `tstr-${RUN}-${suffix}`; }
@@ -54,7 +59,7 @@ function makeClient(overrides: Partial<InsertClient> = {}): InsertClient {
   } as InsertClient;
 }
 
-function makeReservation(fields: Pick<InsertReservation, "id" | "seats" | "totalValue" | "balance" | "voucherCode" | "qrCode" | "status"> & { clientId?: string }): InsertReservation {
+function makeReservation(fields: Pick<InsertReservation, "id" | "seats" | "totalValue" | "balance" | "voucherCode" | "qrCode" | "status"> & { clientId?: string; storeOrderId?: string }): InsertReservation {
   return {
     tenantId: TENANT_ID, tripId: TRIP_ID, clientId: CLIENT_ID, createdById: USER_ID,
     ...fields,
@@ -64,20 +69,26 @@ function makeReservation(fields: Pick<InsertReservation, "id" | "seats" | "total
 beforeAll(async () => {
   await db.insert(tenantsTable).values({ id: TENANT_ID, name: "Cron Test Agency", slug: `cron-test-${RUN}`, email: `cron-${RUN}@test.com`, planId: "starter", status: "trial" });
   await db.insert(usersTable).values({ id: USER_ID, clerkId: `clerk_${RUN}`, tenantId: TENANT_ID, name: "Cron Agent", email: `agent-${RUN}@test.com`, role: ROLES.AGENCY_ADMIN, referralCode: `REF${RUN.toUpperCase()}` });
+  await db.insert(storesTable).values({ id: STORE_ID, tenantId: TENANT_ID, name: "Cron Store", slug: `cron-store-${RUN}`, email: `cron-store-${RUN}@test.com` });
   await db.insert(tripsTable).values({ id: TRIP_ID, tenantId: TENANT_ID, name: "Cron Test Trip", slug: `cron-trip-${RUN}`, destination: "Fortaleza", destinationCity: "Fortaleza", destinationState: "CE", type: "excursao", category: "standard", departureDate: new Date("2027-01-10"), totalCapacity: INITIAL_SEATS, availableSeats: INITIAL_SEATS, reservedSeats: 0, priceAdult: "200", createdById: USER_ID });
   await db.insert(clientsTable).values(makeClient());
   await db.insert(clientsTable).values(makeClient({ id: SECOND_CLIENT_ID, email: `client-second-${RUN}@test.com` }));
 });
 
 afterAll(async () => {
+  await db.delete(paymentsTable).where(eq(paymentsTable.tenantId, TENANT_ID));
+  await db.delete(storeOrdersTable).where(eq(storeOrdersTable.tenantId, TENANT_ID));
   await db.delete(reservationsTable).where(eq(reservationsTable.tenantId, TENANT_ID));
   await db.delete(clientsTable).where(eq(clientsTable.tenantId, TENANT_ID));
+  await db.delete(storesTable).where(eq(storesTable.id, STORE_ID));
   await db.delete(tripsTable).where(eq(tripsTable.id, TRIP_ID));
   await db.delete(usersTable).where(eq(usersTable.id, USER_ID));
   await db.delete(tenantsTable).where(eq(tenantsTable.id, TENANT_ID));
 });
 
 beforeEach(async () => {
+  await db.delete(paymentsTable).where(eq(paymentsTable.tenantId, TENANT_ID));
+  await db.delete(storeOrdersTable).where(eq(storeOrdersTable.tenantId, TENANT_ID));
   await db.delete(reservationsTable).where(and(eq(reservationsTable.tenantId, TENANT_ID), eq(reservationsTable.tripId, TRIP_ID)));
   await db.update(tripsTable).set({ availableSeats: INITIAL_SEATS, reservedSeats: 0 }).where(eq(tripsTable.id, TRIP_ID));
 });
@@ -85,6 +96,23 @@ beforeEach(async () => {
 // Sets expires_at via raw SQL because expiresAt is not yet in the compiled Drizzle insert type
 async function setExpiresAt(id: string, expiresAt: Date) {
   await db.execute(sql`UPDATE reservations SET expires_at = ${expiresAt} WHERE id = ${id}`);
+}
+
+async function createPendingOrder(orderNumber: string) {
+  const [order] = await db.insert(storeOrdersTable).values({
+    id: `tsto-${RUN}-${orderNumber}`,
+    storeId: STORE_ID,
+    tenantId: TENANT_ID,
+    orderNumber,
+    customerName: "Cron Customer",
+    customerEmail: `cron-customer-${orderNumber}@test.com`,
+    customerPhone: "11999990000",
+    subtotal: "300",
+    totalAmount: "300",
+    paymentMethod: "pix",
+    paymentProvider: "mercadopago",
+  }).returning({ id: storeOrdersTable.id, orderNumber: storeOrdersTable.orderNumber });
+  return order!;
 }
 
 describe("runExpiredReservationsCron()", () => {
@@ -121,6 +149,78 @@ describe("runExpiredReservationsCron()", () => {
 
     expect((await readReservation(resId("mixed-exp")))?.status).toBe("cancelled");
     expect((await readReservation(resId("mixed-fut")))?.status).toBe("pending");
+    expect(await readAvailableSeats()).toBe(INITIAL_SEATS - 1);
+  });
+
+  it.each([
+    [PAYMENT_STATUS.PENDING, "pending"],
+    [PAYMENT_STATUS.FAILED, "failed"],
+  ] as const)("cancels an expired reservation even when the only payment row is %s", async (paymentStatus, suffix) => {
+    const order = await createPendingOrder(`ORD-${RUN}-${suffix}`);
+    await db.insert(reservationsTable).values(makeReservation({
+      id: resId(`payment-${suffix}`),
+      seats: ["D1"],
+      totalValue: "300",
+      balance: "300",
+      voucherCode: `VCH-${RUN}-P-${suffix}`,
+      qrCode: `qr-p-${suffix}`,
+      status: "pending",
+      storeOrderId: order.orderNumber,
+    }));
+    await setExpiresAt(resId(`payment-${suffix}`), new Date(Date.now() - 60_000));
+    await db.update(tripsTable).set({ availableSeats: INITIAL_SEATS - 1, reservedSeats: 1 }).where(eq(tripsTable.id, TRIP_ID));
+    await db.insert(paymentsTable).values({
+      id: `tstp-${RUN}-${suffix}`,
+      tenantId: TENANT_ID,
+      reservationId: resId(`payment-${suffix}`),
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "300",
+      paymentMethod: "pix",
+      dueDate: new Date(),
+      status: paymentStatus,
+    });
+
+    await runExpiredReservationsCron();
+
+    expect((await readReservation(resId(`payment-${suffix}`)))?.status).toBe("cancelled");
+    expect(await readAvailableSeats()).toBe(INITIAL_SEATS);
+  });
+
+  it("does not cancel an expired reservation after a receivable payment is paid", async () => {
+    const order = await createPendingOrder(`ORD-${RUN}-paid`);
+    await db.insert(reservationsTable).values(makeReservation({
+      id: resId("payment-paid"),
+      seats: ["E1"],
+      totalValue: "300",
+      balance: "300",
+      voucherCode: `VCH-${RUN}-P-PAID`,
+      qrCode: "qr-p-paid",
+      status: "pending",
+      storeOrderId: order.orderNumber,
+    }));
+    await setExpiresAt(resId("payment-paid"), new Date(Date.now() - 60_000));
+    await db.update(tripsTable).set({ availableSeats: INITIAL_SEATS - 1, reservedSeats: 1 }).where(eq(tripsTable.id, TRIP_ID));
+    await db.insert(paymentsTable).values({
+      id: `tstp-${RUN}-paid`,
+      tenantId: TENANT_ID,
+      // Storefront payments may be allocated only at order level, especially
+      // for mixed carts. The expiry guard must still recognize this receipt.
+      reservationId: null,
+      orderId: order.id,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "300",
+      paymentMethod: "pix",
+      dueDate: new Date(),
+      paidAt: new Date(),
+      status: PAYMENT_STATUS.PAID,
+    });
+
+    await runExpiredReservationsCron();
+
+    expect((await readReservation(resId("payment-paid")))?.status).toBe("pending");
     expect(await readAvailableSeats()).toBe(INITIAL_SEATS - 1);
   });
 });
