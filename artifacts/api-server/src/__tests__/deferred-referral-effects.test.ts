@@ -41,6 +41,9 @@ vi.mock("@workspace/db", () => ({
   referralsTable: {
     id: "id",
     tenantId: "tenant_id",
+    status: "status",
+    reservationId: "reservation_id",
+    reversalReason: "reversal_reason",
     bonusAmount: "bonus_amount",
     bonusCreditUsedAmount: "bonus_credit_used_amount",
     bonusCreditUsedAt: "bonus_credit_used_at",
@@ -65,6 +68,7 @@ vi.mock("drizzle-orm", () => ({
   asc: vi.fn(),
   eq: vi.fn(),
   inArray: vi.fn(),
+  isNull: vi.fn(),
   sql: vi.fn(() => "SQL_EXPR"),
 }));
 
@@ -97,6 +101,7 @@ vi.mock("../lib/logger.js", () => ({
 import { db } from "@workspace/db";
 import {
   applyDeferredOrderCredits,
+  expirePendingReferralForOrder,
   invalidateOrderAfterReservationFailure,
   restoreSpentCreditForOrder,
 } from "../services/checkout/deferred-referral-effects.js";
@@ -129,7 +134,8 @@ function makeTx() {
       updateSetCalls.push(payload);
       return u;
     });
-    u.where = vi.fn(() => Promise.resolve(undefined));
+    u.where = vi.fn(() => u);
+    u.returning = vi.fn(() => Promise.resolve([{ id: "ref-1" }]));
     return u;
   });
   return tx;
@@ -384,6 +390,26 @@ describe("applyDeferredOrderCredits", () => {
 });
 
 describe("cashback reversal helpers", () => {
+  it("expires an unpaid pending referral without creating a financial reversal", async () => {
+    const tx = makeTx();
+
+    await expect(expirePendingReferralForOrder(tx as never, {
+      tenantId: "tenant-1",
+      referralId: "ref-1",
+      referralCode: "SAVE10",
+      reason: "order_cancelled",
+    })).resolves.toBe(true);
+
+    expect(updateSetCalls).toEqual([
+      expect.objectContaining({
+        status: "expired",
+        reversalReason: "order_cancelled",
+        reversalAt: null,
+        updatedAt: expect.any(Date),
+      }),
+    ]);
+  });
+
   it("invalidates a failed checkout, releases its credit and frees the idempotency key", async () => {
     installTx([
       [{

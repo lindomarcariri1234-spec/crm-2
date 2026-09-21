@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tag, CheckCircle, X, Loader2 } from "lucide-react";
 import type { WizardState } from "./use-wizard-state";
+import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "../referral-messages";
 
 export function StepCouponReferral({
   state,
@@ -25,6 +26,7 @@ export function StepCouponReferral({
     setReferralCode,
     referralApplied,
     referralDiscount,
+    referralFirstPurchaseOnly,
     applyReferral,
     removeReferral,
   } = state;
@@ -43,10 +45,15 @@ export function StepCouponReferral({
           {referralApplied ? (
             <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-sm">
               <CheckCircle className="w-4 h-4 text-green-600 shrink-0" />
-              <span className="flex-1 text-green-700">
+              <div className="flex-1 text-green-700">
                 Código <strong>{referralCode}</strong> aplicado! Desconto:{" "}
                 <strong>R$ {referralDiscount.toFixed(2)}</strong>
-              </span>
+                {referralFirstPurchaseOnly && (
+                  <p role="note" className="mt-1 text-xs text-green-700">
+                    {FIRST_PURCHASE_REFERRAL_MESSAGE}
+                  </p>
+                )}
+              </div>
               <button onClick={removeReferral} className="text-muted-foreground hover:text-foreground">
                 <X className="w-4 h-4" />
               </button>

@@ -55,6 +55,7 @@ export interface RecordReferralArgs {
 }
 
 export interface ReferralConversionResult {
+  referralId?: string;
   tierUpgraded: boolean;
   newTierLevel: string;
   newTierLabel: string;
@@ -125,6 +126,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   // Enforce maxReferralsPerUser cap — if limit is reached (and > 0), skip conversion gracefully
   if (maxReferralsPerUser > 0 && currentCompleted >= maxReferralsPerUser) {
     return {
+      referralId: existingReferralId ?? undefined,
       tierUpgraded: false,
       newTierLevel: "bronze",
       newTierLabel: "Bronze",
@@ -133,6 +135,35 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
       loyaltyCurrentBalance: 0,
       loyaltyPointsEmailEnabled: refSettings?.loyaltyPointsEmailEnabled ?? true,
     };
+  }
+
+  // Reserve the referrer's row when a cap is configured. PostgreSQL holds the
+  // row lock acquired by this conditional UPDATE until the surrounding checkout
+  // transaction commits, so concurrent conversions cannot both pass the cap
+  // check. The no-op assignment keeps the existing counter unchanged; the
+  // actual increment remains below, after the referral conversion succeeds.
+  if (maxReferralsPerUser > 0) {
+    const [capReservation] = await tx.update(clientsTable)
+      .set({ updatedAt: sql`${clientsTable.updatedAt}` })
+      .where(and(
+        eq(clientsTable.id, referrerId),
+        eq(clientsTable.tenantId, tenantId),
+        sql`COALESCE(${clientsTable.successfulReferrals}, 0) < ${maxReferralsPerUser}`,
+      ))
+      .returning({ id: clientsTable.id });
+
+    if (!capReservation) {
+      return {
+        referralId: existingReferralId ?? undefined,
+        tierUpgraded: false,
+        newTierLevel: "bronze",
+        newTierLabel: "Bronze",
+        bonusMultiplier: 1,
+        loyaltyPointsGranted: 0,
+        loyaltyCurrentBalance: 0,
+        loyaltyPointsEmailEnabled: refSettings?.loyaltyPointsEmailEnabled ?? true,
+      };
+    }
   }
 
   const { tier } = computeReferralTier(currentCompleted, refSettings?.tiersConfig ?? null);
@@ -323,7 +354,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
       successfulReferrals: sql`COALESCE(successful_referrals, 0) + 1`,
       referralEarnings: sql`COALESCE(referral_earnings, 0) + ${bonusAmount.toFixed(2)}`,
     })
-    .where(eq(clientsTable.id, referrerId));
+    .where(and(eq(clientsTable.id, referrerId), eq(clientsTable.tenantId, tenantId)));
 
   // Detect tier upgrade: if the new count crosses a tier threshold, fire email
   const newCompleted = currentCompleted + 1;
@@ -433,6 +464,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   }
 
   return {
+    referralId,
     tierUpgraded,
     newTierLevel: tierAfter.tier.level,
     newTierLabel: tierAfter.tier.label,

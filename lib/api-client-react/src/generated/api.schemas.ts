@@ -490,6 +490,11 @@ export const TestWhatsAppMessageBodyType = {
 export interface TestWhatsAppMessageBody {
   type: TestWhatsAppMessageBodyType;
   message?: string;
+  /**
+   * Optional test destination; defaults to the configured agency WhatsApp number.
+   * @minLength 8
+   */
+  phone?: string;
 }
 
 export interface TestWhatsAppMessageResult {
@@ -1313,6 +1318,8 @@ export interface TripCost {
 
 export interface TripCostSummary {
   expectedRevenue: number;
+  totalTripCosts: number;
+  totalAgencyExpenses: number;
   totalRealCosts: number;
   totalPaidCosts: number;
   totalPendingCosts: number;
@@ -1321,10 +1328,70 @@ export interface TripCostSummary {
   plannedBudget: number;
   budgetVariance: number;
   confirmedSeats: number;
+  planningCapacity: number;
+}
+
+export type TripPlannedCostKind =
+  (typeof TripPlannedCostKind)[keyof typeof TripPlannedCostKind];
+
+export const TripPlannedCostKind = {
+  fixed: "fixed",
+  variable: "variable",
+} as const;
+
+export interface TripPlannedCost {
+  id: string;
+  kind: TripPlannedCostKind;
+  category: string;
+  description: string;
+  amount: number;
+  /** @nullable */
+  amountPerPassenger: number | null;
+}
+
+export interface TripPricing {
+  adult: number;
+  /** @nullable */
+  child: number | null;
+  /** @nullable */
+  senior: number | null;
+}
+
+export type ExpenseSource = (typeof ExpenseSource)[keyof typeof ExpenseSource];
+
+export const ExpenseSource = {
+  agency: "agency",
+  trip: "trip",
+} as const;
+
+export interface Expense {
+  id: string;
+  /** @nullable */
+  tripId?: string | null;
+  category: string;
+  description: string;
+  amount: number;
+  /** @nullable */
+  supplierId?: string | null;
+  /** @nullable */
+  supplierName?: string | null;
+  /** @nullable */
+  paymentMethod?: string | null;
+  /** @nullable */
+  paymentDate?: string | null;
+  dueDate: string;
+  status: ExpenseStatus;
+  /** @nullable */
+  notes?: string | null;
+  createdAt: string;
+  source?: ExpenseSource;
 }
 
 export interface ListTripCostsResponse {
   costs: TripCost[];
+  agencyExpenses: Expense[];
+  plannedCosts: TripPlannedCost[];
+  pricing: TripPricing;
   summary: TripCostSummary;
 }
 
@@ -2296,24 +2363,18 @@ export interface FinancialSummary {
   paidThisMonth: number;
 }
 
-export interface Expense {
-  id: string;
-  /** @nullable */
-  tripId?: string | null;
+export type ExpenseListSummaryCategoryBreakdownItem = {
   category: string;
-  description: string;
-  amount: number;
-  /** @nullable */
-  supplierId?: string | null;
-  /** @nullable */
-  paymentMethod?: string | null;
-  /** @nullable */
-  paymentDate?: string | null;
-  dueDate: string;
-  status: ExpenseStatus;
-  /** @nullable */
-  notes?: string | null;
-  createdAt: string;
+  total: number;
+};
+
+export interface ExpenseListSummary {
+  total: number;
+  paid: number;
+  pending: number;
+  overdue: number;
+  paidThisMonth: number;
+  categoryBreakdown: ExpenseListSummaryCategoryBreakdownItem[];
 }
 
 export interface ExpenseListResponse {
@@ -2321,6 +2382,7 @@ export interface ExpenseListResponse {
   total: number;
   page: number;
   limit: number;
+  summary?: ExpenseListSummary;
 }
 
 export interface CreateExpenseBody {
@@ -3835,6 +3897,11 @@ export interface ReferralStats {
   conversionRate: number;
   totalBonusPaid: number;
   totalDiscountGiven: number;
+  suspicious: number;
+  expiringSoon: number;
+  pendingBonus: number;
+  bonusNotified: number;
+  bonusNotNotified: number;
 }
 
 export interface ReferralTierConfig {
@@ -5479,9 +5546,43 @@ export type ListExpensesParams = {
    * @nullable
    */
   status?: string | null;
+  /**
+   * @nullable
+   */
+  category?: string | null;
+  /**
+   * @nullable
+   */
+  supplierId?: string | null;
+  /**
+   * @nullable
+   */
+  dateFrom?: string | null;
+  /**
+   * @nullable
+   */
+  dateTo?: string | null;
+  /**
+   * Include direct trip costs in the consolidated financial list
+   */
+  includeTripCosts?: boolean;
+  /**
+   * Period used for the server-side financial summary
+   */
+  summaryPeriod?: ListExpensesSummaryPeriod;
   page?: number;
   limit?: number;
 };
+
+export type ListExpensesSummaryPeriod =
+  (typeof ListExpensesSummaryPeriod)[keyof typeof ListExpensesSummaryPeriod];
+
+export const ListExpensesSummaryPeriod = {
+  all: "all",
+  month: "month",
+  quarter: "quarter",
+  year: "year",
+} as const;
 
 export type ListDealsParams = {
   /**
@@ -5801,6 +5902,10 @@ export type ListReferralsParams = {
   limit?: number;
   status?: string;
   search?: string;
+  bonusPaid?: boolean;
+  fraudFlag?: boolean;
+  expiringSoon?: boolean;
+  bonusNotified?: boolean;
 };
 
 export type ListReferrals200Pagination = {
@@ -5813,6 +5918,15 @@ export type ListReferrals200Pagination = {
 export type ListReferrals200 = {
   data: Referral[];
   pagination: ListReferrals200Pagination;
+};
+
+export type GetReferralStatsParams = {
+  status?: string;
+  search?: string;
+  bonusPaid?: boolean;
+  fraudFlag?: boolean;
+  expiringSoon?: boolean;
+  bonusNotified?: boolean;
 };
 
 export type GetBirthdayUpcomingParams = {

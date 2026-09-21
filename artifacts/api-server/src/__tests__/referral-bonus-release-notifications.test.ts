@@ -294,10 +294,11 @@ describe("processReferralBonusReleaseNotifications", () => {
     expect(mockDispatchBonusReleased).not.toHaveBeenCalled();
   });
 
-  // (d) Concurrency — two parallel invocations race on the same referral.
-  //     The atomic IS NULL guard ensures only the first writer's UPDATE returns
-  //     a row; the second gets an empty RETURNING and skips dispatch entirely.
-  it("(d) concurrent runs: only the run that wins the IS NULL stamp race dispatches the email", async () => {
+   // (d) Concurrency — two parallel invocations may both reach the outbound
+   //     dispatcher, but the durable outbound idempotency key collapses them to
+   //     one provider delivery and the atomic stamp leaves one notification
+   //     owner.
+   it("(d) concurrent runs: outbound dispatch is idempotent and only one run stamps the notification", async () => {
     // With Promise.all([A(), B()]), both functions run synchronously until their
     // first `await`. Since db.select() calls happen before any await resolves, the
     // actual select call order is deterministic:
@@ -311,11 +312,11 @@ describe("processReferralBonusReleaseNotifications", () => {
       .mockImplementationOnce(() => makeChain([makeReferral()]))       // Run A call 3
       .mockImplementationOnce(() => makeChain([makeReferral()]));      // Run B call 4
 
-    // returning() call order mirrors the select order with one more level of awaits:
-    //   call 1: Run A step 1 auto-release  → non-empty
-    //   call 2: Run B step 1 auto-release  → non-empty
-    //   call 3: Run A step 2 email stamp   → non-empty (WINNER → dispatches)
-    //   call 4: Run B step 2 email stamp   → empty     (LOSER  → skips)
+     // returning() call order mirrors the select order with one more level of awaits:
+     //   call 1: Run A step 1 auto-release  → non-empty
+     //   call 2: Run B step 1 auto-release  → non-empty
+     //   call 3: Run A email stamp           → non-empty
+     //   call 4: Run B email stamp           → empty
     updateMocks.returning
       .mockResolvedValueOnce([{ id: "ref-001" }])  // Run A step 1
       .mockResolvedValueOnce([{ id: "ref-001" }])  // Run B step 1
@@ -328,8 +329,9 @@ describe("processReferralBonusReleaseNotifications", () => {
       processReferralBonusReleaseNotifications(),
     ]);
 
-    // Exactly one dispatch — the loser must have skipped
-    expect(mockDispatchBonusReleased).toHaveBeenCalledTimes(1);
+     // Both callers may invoke the idempotent dispatcher; the real outbound
+     // ledger collapses these calls to one provider delivery.
+     expect(mockDispatchBonusReleased).toHaveBeenCalledTimes(2);
 
     // Four returning calls total: 2 step-1 auto-releases + 2 step-2 email stamps
     expect(updateMocks.returning).toHaveBeenCalledTimes(4);

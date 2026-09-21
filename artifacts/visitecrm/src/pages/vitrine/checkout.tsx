@@ -45,6 +45,7 @@ import {
   setStoredValue,
 } from "./utils/storage";
 import { trackReferralCreditReduction } from "@/lib/analytics";
+import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
 
 type Step = "dados" | "revisao" | "pagamento" | "confirmado";
 
@@ -1025,6 +1026,7 @@ export default function VitrineCheckout({
           DEPOSIT_ABOVE_TOTAL: "O valor de entrada não pode ser maior que o total atualizado do pedido.",
           UNAUTHENTICATED_CREDIT: "Entre na sua conta para usar o cashback de indicação.",
           CREDIT_EMAIL_MISMATCH: "O e-mail do checkout precisa ser o mesmo da conta que possui o cashback.",
+          REFERRAL_FIRST_PURCHASE_RESERVED: "Já existe uma compra pendente com este benefício de indicação. Finalize ou cancele a compra anterior antes de tentar novamente.",
           RESERVATION_NO_AGENCY_USER: "A agência ainda não está pronta para confirmar reservas. Tente novamente mais tarde.",
           RESERVATION_SYNC_FAILED: "Não foi possível confirmar a reserva agora. Tente novamente ou contate a agência.",
         };
@@ -1699,11 +1701,19 @@ export default function VitrineCheckout({
                       <CheckCircle className="w-5 h-5 text-green-500 shrink-0" />
                       <div className="flex-1">
                         <p className="font-mono font-bold text-green-700">{referralResult.code}</p>
-                        <p className="text-xs text-green-600">
-                          {couponResult?.valid
-                            ? "Desconto de indicação não aplicável junto com cupom"
-                            : "Desconto de 5% por indicação aplicado!"}
-                        </p>
+                        {couponResult?.valid ? (
+                          <p className="text-xs text-green-600">
+                            Desconto de indicação não aplicável junto com cupom
+                          </p>
+                        ) : referralResult.firstPurchaseOnly ? (
+                          <p role="note" className="text-xs text-green-600">
+                            Desconto por indicação aplicado! {FIRST_PURCHASE_REFERRAL_MESSAGE}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-green-600">
+                            Desconto por indicação aplicado!
+                          </p>
+                        )}
                       </div>
                       <button onClick={removeReferral} className="text-green-600 hover:text-green-800">
                         <X className="w-4 h-4" />

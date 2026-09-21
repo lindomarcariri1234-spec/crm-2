@@ -207,7 +207,10 @@ async function main() {
     console.log(`[run-vercel-build] Frontend copied to ${vercelPublicDir}`);
   }
 
-  runPnpm("migrate:vercel");
+  // Database migrations are deliberately not part of the build. Vercel may
+  // run concurrent preview/production builds, and a build must not mutate a
+  // shared production database. Run `pnpm --filter @workspace/api-server
+  // run migrate:vercel` once as a separately authorized release step.
   runPnpm("build:vercel");
   runOneShotRepairIfRequested();
 

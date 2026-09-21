@@ -11,12 +11,14 @@ import {
   partnerAvailabilityTable,
   partnerCommissionsTable,
   referralsTable,
+  referralSettingsTable,
   settlementItemsTable,
 } from "@workspace/db";
 import { and, asc, eq, ne, sql, inArray } from "drizzle-orm";
 import type { DbExecutor } from "../../lib/reservation-payments";
 import { generateId } from "../../lib/id";
 import { roundMoney } from "../../lib/pricing";
+import { isReferralCreditSpendable } from "../../lib/referral-wallet";
 import { lockProductsForCheckout } from "./order-locks";
 import type { Tx } from "./tx";
 import { REFERRAL_STATUS } from "@workspace/permissions";
@@ -92,12 +94,63 @@ export interface PersistOrderArgs {
    * inside this transaction; creditSpend is kept only for older callers. */
   referralCreditRequested?: number;
   referralCreditClientId?: string;
+  referralCreditGracePeriodDays?: number;
 }
 
 export interface PersistOrderResult {
   reservationClientId: string | null;
   appliedCreditAmount: number;
   totalAmount: number;
+}
+
+/**
+ * Reserve the first-purchase referral benefit inside the order transaction.
+ *
+ * resolveCheckoutDiscounts runs before this transaction, so two checkouts can
+ * both observe that no completed order exists yet. The advisory lock makes
+ * those attempts serialize by tenant + normalized customer email; the second
+ * attempt then sees the first unpaid order's pending referral and can retry
+ * after that order is cancelled instead of creating a second discounted order.
+ */
+async function assertFirstPurchaseReferralAvailable(
+  tx: Tx,
+  args: PersistOrderArgs,
+): Promise<void> {
+  const email = args.data.customerEmail.trim().toLowerCase();
+  const [settings] = await tx
+    .select({ requireFirstPurchase: referralSettingsTable.requireFirstPurchase })
+    .from(referralSettingsTable)
+    .where(eq(referralSettingsTable.tenantId, args.store.tenantId))
+    .limit(1);
+
+  if (!settings?.requireFirstPurchase) return;
+
+  await tx.execute(sql`
+    SELECT pg_advisory_xact_lock(
+      hashtextextended(${args.store.tenantId} || ':' || lower(btrim(${email})), 0)
+    )
+  `);
+
+  const [reservedOrder] = await tx
+    .select({ id: storeOrdersTable.id })
+    .from(storeOrdersTable)
+    .where(and(
+      eq(storeOrdersTable.tenantId, args.store.tenantId),
+      sql`lower(btrim(${storeOrdersTable.customerEmail})) = lower(btrim(${email}))`,
+      sql`${storeOrdersTable.pendingReferral} IS NOT NULL`,
+      ne(storeOrdersTable.status, "cancelled"),
+      ne(storeOrdersTable.paymentStatus, "refunded"),
+      ne(storeOrdersTable.id, args.orderId),
+    ))
+    .limit(1);
+
+  if (reservedOrder) {
+    const error = new Error(
+      "Já existe uma compra pendente com este benefício de indicação. Finalize ou cancele a compra anterior antes de tentar novamente.",
+    ) as Error & { code?: string };
+    error.code = "REFERRAL_FIRST_PURCHASE_RESERVED";
+    throw error;
+  }
 }
 
 async function writePartnerCommissions(
@@ -352,33 +405,41 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
       const creditRows = await tx
         .select({
           id: referralsTable.id,
+          status: referralsTable.status,
           bonusAmount: referralsTable.bonusAmount,
+          bonusPaid: referralsTable.bonusPaid,
           bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+          convertedAt: referralsTable.convertedAt,
+          expiresAt: referralsTable.expiresAt,
         })
         .from(referralsTable)
         .where(and(
           eq(referralsTable.tenantId, args.store.tenantId),
           eq(referralsTable.referrerId, args.referralCreditClientId),
           inArray(referralsTable.status, ["completed", "converted"]),
-          eq(referralsTable.bonusPaid, false),
           sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
         ))
         .orderBy(asc(referralsTable.createdAt), asc(referralsTable.id))
         .for("update");
-      const totalAvailable = creditRows.reduce(
-        (sum, row) => sum + Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0)),
-        0,
+      const spendableCreditRows = creditRows.filter((row) =>
+        isReferralCreditSpendable(
+          row,
+          args.referralCreditGracePeriodDays ?? 30,
+        ),
       );
       appliedCreditAmount = roundMoney(Math.min(
         args.referralCreditRequested,
-        totalAvailable,
+        spendableCreditRows.reduce(
+          (sum, row) => sum + Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0)),
+          0,
+        ),
         afterPromoDiscount,
       ));
       effectiveDiscountAmount = roundMoney(args.promoDiscountAmount + appliedCreditAmount);
       effectiveTotalAmount = roundMoney(Math.max(0, args.subtotal - effectiveDiscountAmount));
       const spend: Array<{ id: string; consumedAmount: number; reserved: boolean }> = [];
       let remaining = appliedCreditAmount;
-      for (const row of creditRows) {
+      for (const row of spendableCreditRows) {
         if (remaining <= 0) break;
         const available = Math.max(0, Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0));
         const consume = roundMoney(Math.min(available, remaining));
@@ -420,6 +481,7 @@ export async function persistCheckoutOrder(args: PersistOrderArgs): Promise<Pers
     // find and update it without inserting a duplicate.
     let pendingReferralId: string | undefined;
     if (args.appliedReferralCode && args.appliedReferralReferrerId) {
+      await assertFirstPurchaseReferralAvailable(tx, args);
       pendingReferralId = generateId();
       await tx.insert(referralsTable).values({
         id: pendingReferralId,

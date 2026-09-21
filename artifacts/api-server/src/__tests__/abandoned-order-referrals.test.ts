@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 // runAbandonedOrderReferralCleanup — unit tests
 //
-// Verifies the abandoned-order referral sweep that runs daily to reverse
+// Verifies the abandoned-order referral sweep that runs daily to expire
 // PENDING referral rows left behind by orders that were never paid.
 //
 // Row-identification strategy:
@@ -68,6 +68,7 @@ vi.mock("@workspace/permissions", () => ({
   REFERRAL_STATUS: {
     PENDING: "pending",
     COMPLETED: "completed",
+    EXPIRED: "expired",
     REVERSED: "reversed",
   },
   STORE_PAYMENT_STATUS: {
@@ -247,10 +248,10 @@ describe("runAbandonedOrderReferralCleanup", () => {
       // Exactly 1 UPDATE — referral row only (no client counter decrement)
       expect(mockDb.update).toHaveBeenCalledTimes(1);
       expect(updateSetCalls[0]).toMatchObject({
-        status: "reversed",
+        status: "expired",
         reversalReason: "order_abandoned",
       });
-      expect(updateSetCalls[0]).toHaveProperty("reversalAt");
+      expect(updateSetCalls[0]).toHaveProperty("reversalAt", null);
       expect(updateSetCalls[0]).toHaveProperty("updatedAt");
     });
 
@@ -286,8 +287,8 @@ describe("runAbandonedOrderReferralCleanup", () => {
       );
     });
 
-    it("is idempotent: second sweep with the same order skips when row was already reversed", async () => {
-      // First run: primary finds the PENDING row → reversed
+    it("is idempotent: second sweep with the same order skips when row was already expired", async () => {
+      // First run: primary finds the PENDING row → expired
       selectQueue.push([ABANDONED_ORDER]);
       selectQueue.push([PENDING_ROW]);
       await runAbandonedOrderReferralCleanup();
@@ -295,10 +296,10 @@ describe("runAbandonedOrderReferralCleanup", () => {
 
       // Second run: same order still matches the WHERE clause (paymentStatus still
       // pending, referralEffectsAppliedAt still null, still old enough), but the
-      // referral row is now REVERSED → primary SELECT returns nothing → skip, no UPDATE.
+      // referral row is now EXPIRED → primary SELECT returns nothing → skip, no UPDATE.
       resetMocks();
       selectQueue.push([ABANDONED_ORDER]); // order still visible
-      selectQueue.push([]);               // primary: row already reversed, returns nothing
+      selectQueue.push([]);               // primary: row already expired, returns nothing
 
       await runAbandonedOrderReferralCleanup();
       expect(mockDb.update).not.toHaveBeenCalled();
@@ -310,7 +311,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       selectQueue.push([PENDING_ROW]);
       await runAbandonedOrderReferralCleanup();
 
-      // Second run: order still visible; primary miss because original row reversed.
+      // Second run: order still visible; primary miss because original row expired.
       // An unrelated PENDING row with the same code now exists (different conversion).
       // The sweep must NOT reverse it — no fallback attempted when referralId present.
       resetMocks();
@@ -353,7 +354,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       expect(hasReservationIdGuard).toBe(true);
     });
 
-    it("reports correct reversed/skipped counts", async () => {
+    it("reports correct expired/skipped counts", async () => {
       const order2 = {
         id: "order-bbb",
         tenantId: TENANT_ID,
@@ -361,13 +362,13 @@ describe("runAbandonedOrderReferralCleanup", () => {
       };
       selectQueue.push([ABANDONED_ORDER, order2]); // 2 eligible orders
       selectQueue.push([PENDING_ROW]);              // order1 primary → found
-      selectQueue.push([]);                         // order2 primary → not found (already reversed)
+      selectQueue.push([]);                         // order2 primary → not found (already expired)
 
       await runAbandonedOrderReferralCleanup();
 
       expect(mockDb.update).toHaveBeenCalledTimes(1); // only order1 reversed
       expect(mockLogInfo).toHaveBeenCalledWith(
-        expect.objectContaining({ total: 2, reversed: 1, skipped: 1 }),
+        expect.objectContaining({ total: 2, expired: 1, skipped: 1 }),
         expect.any(String),
       );
     });
@@ -388,7 +389,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       // 2 selects: orders + fallback (primary path skipped — no referralId)
       expect(mockDb.select).toHaveBeenCalledTimes(2);
       expect(mockDb.update).toHaveBeenCalledTimes(1);
-      expect(updateSetCalls[0]).toMatchObject({ status: "reversed", reversalReason: "order_abandoned" });
+      expect(updateSetCalls[0]).toMatchObject({ status: "expired", reversalReason: "order_abandoned" });
     });
 
     it("skips when fallback also finds nothing", async () => {
@@ -424,7 +425,7 @@ describe("runAbandonedOrderReferralCleanup", () => {
       vi.unstubAllEnvs();
     });
 
-    it("fires alert when skipped > 0, reversed === 0, and total >= threshold", async () => {
+    it("fires alert when skipped > 0, expired === 0, and total >= threshold", async () => {
       vi.stubEnv("SUPERADMIN_EMAIL", "ops@visitecrm.com");
 
       const orders = Array.from({ length: ABANDONED_REFERRAL_ALERT_THRESHOLD }, () => ({

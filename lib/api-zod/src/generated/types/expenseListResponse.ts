@@ -6,10 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Expense } from "./expense";
+import type { ExpenseListSummary } from "./expenseListSummary";
 
 export interface ExpenseListResponse {
   data: Expense[];
   total: number;
   page: number;
   limit: number;
+  summary?: ExpenseListSummary;
 }

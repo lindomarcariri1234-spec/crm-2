@@ -135,6 +135,7 @@ async function publicReq<T>(
   const res = await fetch(`${BASE}/api${path}`, {
     method,
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: body != null ? JSON.stringify(body) : undefined,
     cache: "no-store",
     ...options,
@@ -819,6 +820,8 @@ export interface ReferralValidation {
   discountPercent?: number;
   discountValue?: number;
   discountType?: string;
+  /** The configured benefit policy, without checking the customer's history. */
+  firstPurchaseOnly?: boolean;
   description?: string;
   error?: string;
 }

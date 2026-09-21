@@ -127,3 +127,9 @@
 - [Radix form test harness](radix-form-test-harness.md) — mock scrollIntoView and use the native input value setter when testing controlled inputs and Radix Select in the DOM harness
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md) — mocks instantiated with `new` need constructable function/class shapes after the Vitest 4 upgrade
+- [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
+- [Referral cap concurrency](referral-cap-concurrency.md) — reserve capped conversions with a conditional no-op client update so PostgreSQL holds the row lock through checkout commit
+- [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited
+- [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key
+- [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
+- [Referral bonus cashback eligibility](referral-bonus-cashback-eligibility.md) — paid referral bonuses are spendable cashback; unpaid bonuses wait for grace period, while expiry/reversal/used amounts remain excluded

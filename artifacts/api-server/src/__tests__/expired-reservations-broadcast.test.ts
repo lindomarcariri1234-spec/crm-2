@@ -46,6 +46,7 @@ vi.mock("../lib/logger.js", () => ({
 
 vi.mock("@workspace/permissions", () => ({
   RESERVATION_STATUS: { PENDING: "pending", CANCELLED: "cancelled" },
+  REFERRAL_STATUS: { PENDING: "pending", COMPLETED: "completed", REVERSED: "reversed" },
 }));
 
 vi.mock("../lib/realtime.js", () => ({

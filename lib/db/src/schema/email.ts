@@ -1,11 +1,14 @@
 import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { referralsTable } from "./referrals";
 
 export const emailLogsTable = pgTable("email_logs", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull(),
   reservationId: text("reservation_id"),
-  referralId: text("referral_id"),
+  referralId: text("referral_id").references(() => referralsTable.id, { onDelete: "set null" }),
+  /** Stable notification identity; presentation text may change by locale or template. */
+  notificationType: text("notification_type"),
   outboundMessageId: text("outbound_message_id"),
   recipient: text("recipient").notNull(),
   subject: text("subject").notNull(),
@@ -22,6 +25,10 @@ export const emailLogsTable = pgTable("email_logs", {
     .where(sql`${table.retriesExhaustedAt} IS NOT NULL`),
   index("email_logs_outbound_message_idx")
     .on(table.tenantId, table.outboundMessageId),
+  index("email_logs_tenant_referral_idx")
+    .on(table.tenantId, table.referralId, table.createdAt),
+  index("email_logs_tenant_referral_type_idx")
+    .on(table.tenantId, table.referralId, table.notificationType, table.createdAt),
 ]);
 
 export type EmailLog = typeof emailLogsTable.$inferSelect;

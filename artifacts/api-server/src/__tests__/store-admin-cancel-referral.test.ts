@@ -21,15 +21,16 @@ import request from "supertest";
 // vi.hoisted: shared mocks that must exist before any vi.mock() factory
 // ---------------------------------------------------------------------------
 
-const { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning } = vi.hoisted(() => {
+const { mockReverseProductOnly, mockReverseTripOrder, mockExpirePendingReferral, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning } = vi.hoisted(() => {
   const selectQueue: Array<unknown[]> = [];
   // Default returns true / [] to avoid mock noise
   const mockReverseProductOnly = vi.fn().mockResolvedValue(true);
   const mockReverseTripOrder = vi.fn().mockResolvedValue([]);
+  const mockExpirePendingReferral = vi.fn().mockResolvedValue(true);
   const mockCancelPartnerItems = vi.fn().mockResolvedValue(undefined);
   const mockReverseOrderSettlement = vi.fn().mockResolvedValue(undefined);
   const mockUpdateReturning = vi.fn();
-  return { mockReverseProductOnly, mockReverseTripOrder, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning };
+  return { mockReverseProductOnly, mockReverseTripOrder, mockExpirePendingReferral, mockCancelPartnerItems, mockReverseOrderSettlement, selectQueue, mockUpdateReturning };
 });
 
 // ---------------------------------------------------------------------------
@@ -170,6 +171,7 @@ vi.mock("../services/checkout/post-booking.js", () => ({
 }));
 
 vi.mock("../services/checkout/deferred-referral-effects.js", () => ({
+  expirePendingReferralForOrder: mockExpirePendingReferral,
   restoreSpentCreditForOrder: vi.fn().mockResolvedValue(false),
 }));
 
@@ -284,6 +286,7 @@ beforeEach(() => {
   // Reset default return values after clearAllMocks()
   mockReverseProductOnly.mockResolvedValue(true);
   mockReverseTripOrder.mockResolvedValue([]);
+  mockExpirePendingReferral.mockResolvedValue(true);
     mockCancelPartnerItems.mockResolvedValue(undefined);
   // Default update returns [{id}] (1 row updated)
   mockUpdateReturning.mockResolvedValue([{ id: "order-001" }]);
@@ -429,5 +432,34 @@ describe("PUT /api/store/orders/:id/status — admin manual-cancel referral reve
       expect(mockReverseProductOnly).not.toHaveBeenCalled();
       expect(mockReverseTripOrder).not.toHaveBeenCalled();
     });
+  });
+
+  it("expires a pending referral instead of reversing a bonus when cancelling an unpaid order", async () => {
+    const pendingOrder = {
+      ...FAKE_PAID_ORDER_WITH_REFERRAL,
+      paymentStatus: "pending",
+      status: "pending",
+      referralEffectsAppliedAt: null,
+    };
+    selectQueue.push([FAKE_STORE]);
+    selectQueue.push([pendingOrder]);
+    selectQueue.push([]);
+
+    const res = await request(buildApp())
+      .put("/api/store/orders/order-001/status")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(200);
+    expect(mockExpirePendingReferral).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tenantId: "tenant-001",
+        referralId: "ref-row-001",
+        referralCode: "FRIEND50",
+        reason: "order_cancelled",
+      }),
+    );
+    expect(mockReverseProductOnly).not.toHaveBeenCalled();
+    expect(mockReverseTripOrder).not.toHaveBeenCalled();
   });
 });

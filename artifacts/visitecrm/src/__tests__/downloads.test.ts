@@ -44,10 +44,12 @@ const exceljsMocks = vi.hoisted(() => {
   const addRows = vi.fn();
   const addWorksheet = vi.fn().mockReturnValue({ addRows });
   const writeBuffer = vi.fn().mockResolvedValue(new ArrayBuffer(0));
-  const Workbook = vi.fn().mockImplementation(() => ({
+  const Workbook = vi.fn(function Workbook() {
+    return {
     addWorksheet,
     xlsx: { writeBuffer },
-  }));
+    };
+  });
   return { Workbook, addWorksheet, addRows, writeBuffer };
 });
 
@@ -68,12 +70,14 @@ vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 // jsPDF + autoTable mocks
 // --------------------------------------------------------------------------
 vi.mock("jspdf", () => ({
-  jsPDF: vi.fn().mockImplementation(() => ({
-    setFontSize: vi.fn(),
-    setFont: vi.fn(),
-    text: vi.fn(),
-    save: vi.fn(),
-  })),
+  jsPDF: vi.fn(function JsPdf() {
+    return {
+      setFontSize: vi.fn(),
+      setFont: vi.fn(),
+      text: vi.fn(),
+      save: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock("jspdf-autotable", () => ({

@@ -142,6 +142,8 @@ vi.mock("../pages/trips/constants.js", () => ({
 vi.mock("../pages/trips/utils.js", () => ({
   formatCurrency: (v: number) => `R$ ${v}`,
   formatDate: (d: string) => d,
+  formatTripDateRange: (departureDate: string, returnDate?: string | null) =>
+    returnDate ? `${departureDate} - ${returnDate}` : departureDate,
 }));
 
 vi.mock("../pages/trips/TripCountdown.js", () => ({

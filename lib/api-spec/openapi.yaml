@@ -2350,6 +2350,35 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: category
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: supplierId
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateFrom
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: dateTo
+          in: query
+          schema:
+            type: ["string", "null"]
+        - name: includeTripCosts
+          in: query
+          description: Include direct trip costs in the consolidated financial list
+          schema:
+            type: boolean
+            default: false
+        - name: summaryPeriod
+          in: query
+          description: Period used for the server-side financial summary
+          schema:
+            type: string
+            enum: [all, month, quarter, year]
+            default: all
         - name: page
           in: query
           schema:
@@ -4511,6 +4540,22 @@ paths:
           in: query
           schema:
             type: string
+        - name: bonusPaid
+          in: query
+          schema:
+            type: boolean
+        - name: fraudFlag
+          in: query
+          schema:
+            type: boolean
+        - name: expiringSoon
+          in: query
+          schema:
+            type: boolean
+        - name: bonusNotified
+          in: query
+          schema:
+            type: boolean
       responses:
         "200":
           description: Paginated list of referrals
@@ -4559,6 +4604,31 @@ paths:
       operationId: getReferralStats
       summary: Get referral statistics for the tenant
       tags: [Referrals]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: bonusPaid
+          in: query
+          schema:
+            type: boolean
+        - name: fraudFlag
+          in: query
+          schema:
+            type: boolean
+        - name: expiringSoon
+          in: query
+          schema:
+            type: boolean
+        - name: bonusNotified
+          in: query
+          schema:
+            type: boolean
       responses:
         "200":
           description: Referral stats
@@ -6421,6 +6491,10 @@ components:
       properties:
         type: { type: string, enum: [converted, bonusPaid, reversed, share] }
         message: { type: string }
+        phone:
+          type: string
+          minLength: 8
+          description: Optional test destination; defaults to the configured agency WhatsApp number.
       required: [type]
     TestWhatsAppMessageResult:
       type: object
@@ -7517,6 +7591,10 @@ components:
       properties:
         expectedRevenue:
           type: number
+        totalTripCosts:
+          type: number
+        totalAgencyExpenses:
+          type: number
         totalRealCosts:
           type: number
         totalPaidCosts:
@@ -7533,7 +7611,38 @@ components:
           type: number
         confirmedSeats:
           type: integer
-      required: [expectedRevenue, totalRealCosts, totalPaidCosts, totalPendingCosts, profit, margin, plannedBudget, budgetVariance, confirmedSeats]
+        planningCapacity:
+          type: integer
+      required: [expectedRevenue, totalTripCosts, totalAgencyExpenses, totalRealCosts, totalPaidCosts, totalPendingCosts, profit, margin, plannedBudget, budgetVariance, confirmedSeats, planningCapacity]
+
+    TripPlannedCost:
+      type: object
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          enum: [fixed, variable]
+        category:
+          type: string
+        description:
+          type: string
+        amount:
+          type: number
+        amountPerPassenger:
+          type: ["number", "null"]
+      required: [id, kind, category, description, amount, amountPerPassenger]
+
+    TripPricing:
+      type: object
+      properties:
+        adult:
+          type: number
+        child:
+          type: ["number", "null"]
+        senior:
+          type: ["number", "null"]
+      required: [adult, child, senior]
 
     ListTripCostsResponse:
       type: object
@@ -7542,9 +7651,19 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TripCost"
+        agencyExpenses:
+          type: array
+          items:
+            $ref: "#/components/schemas/Expense"
+        plannedCosts:
+          type: array
+          items:
+            $ref: "#/components/schemas/TripPlannedCost"
+        pricing:
+          $ref: "#/components/schemas/TripPricing"
         summary:
           $ref: "#/components/schemas/TripCostSummary"
-      required: [costs, summary]
+      required: [costs, agencyExpenses, plannedCosts, pricing, summary]
 
     CreateTripCostBody:
       type: object
@@ -8827,6 +8946,8 @@ components:
           type: number
         supplierId:
           type: ["string", "null"]
+        supplierName:
+          type: ["string", "null"]
         paymentMethod:
           type: ["string", "null"]
         paymentDate:
@@ -8839,6 +8960,9 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        source:
+          type: string
+          enum: [agency, trip]
       required: [id, category, description, amount, dueDate, status, createdAt]
 
     ExpenseListResponse:
@@ -8854,7 +8978,34 @@ components:
           type: integer
         limit:
           type: integer
+        summary:
+          $ref: "#/components/schemas/ExpenseListSummary"
       required: [data, total, page, limit]
+
+    ExpenseListSummary:
+      type: object
+      properties:
+        total:
+          type: number
+        paid:
+          type: number
+        pending:
+          type: number
+        overdue:
+          type: number
+        paidThisMonth:
+          type: number
+        categoryBreakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+              total:
+                type: number
+            required: [category, total]
+      required: [total, paid, pending, overdue, paidThisMonth, categoryBreakdown]
 
     CreateExpenseBody:
       type: object
@@ -10892,7 +11043,17 @@ components:
           type: number
         totalDiscountGiven:
           type: number
-      required: [total, pending, completed, expired, conversionRate, totalBonusPaid, totalDiscountGiven]
+        suspicious:
+          type: integer
+        expiringSoon:
+          type: integer
+        pendingBonus:
+          type: integer
+        bonusNotified:
+          type: integer
+        bonusNotNotified:
+          type: integer
+      required: [total, pending, completed, expired, conversionRate, totalBonusPaid, totalDiscountGiven, suspicious, expiringSoon, pendingBonus, bonusNotified, bonusNotNotified]
 
     ReferralTierConfig:
       type: object

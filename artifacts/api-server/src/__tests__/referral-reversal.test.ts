@@ -58,6 +58,7 @@ vi.mock("@workspace/db", () => ({
   tripCheckinsTable: {},
   tripGuideLocationsTable: {},
   storesTable: {},
+  reservationRoomAssignmentsTable: {},
   storeCouponsTable: {},
   storeOrdersTable: {},
   storeProductsTable: {},
@@ -412,7 +413,11 @@ function buildTxMock(capturedSetData: Record<string, unknown>[]) {
     update: vi.fn(() => ({
       set: vi.fn((data: Record<string, unknown>) => {
         capturedSetData.push(data);
-        return { where: vi.fn().mockResolvedValue([]) };
+        return {
+          where: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue([UPDATED_RESERVATION]),
+          })),
+        };
       }),
     })),
     select: vi.fn(() => ({ from: mockFrom })),

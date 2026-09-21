@@ -33,6 +33,7 @@ export const COST_STATUS_MAP: Record<string, { label: string; color: string }> =
   [EXPENSE_STATUS.PENDING]: { label: "Pendente", color: "bg-amber-100 text-amber-700 border-amber-200" },
   [EXPENSE_STATUS.PAID]:    { label: "Pago",     color: "bg-green-100 text-green-700 border-green-200" },
   [EXPENSE_STATUS.OVERDUE]: { label: "Vencido",  color: "bg-red-100 text-red-700 border-red-200" },
+  [EXPENSE_STATUS.CANCELLED]: { label: "Cancelada", color: "bg-gray-100 text-gray-600 border-gray-200" },
 };
 
 export const FIXED_COST_CATEGORIES: Record<string, string[]> = {

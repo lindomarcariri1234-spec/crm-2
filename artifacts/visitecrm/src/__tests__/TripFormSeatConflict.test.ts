@@ -15,12 +15,17 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
 vi.mock("@workspace/api-client-react", () => ({
   useGetTrip: mockGetTrip,
   useCreateTrip: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateTrip: () => ({ mutateAsync: mockUpdateTrip, isPending: false }),
   useListLayouts: () => ({ data: [] }),
   useListBoardingLocations: () => ({ data: [] }),
+  useListAccommodations: () => ({ data: [] }),
   useGetCurrentSubscription: () => ({
     data: { plan: { supportedFeatures: [] } },
   }),

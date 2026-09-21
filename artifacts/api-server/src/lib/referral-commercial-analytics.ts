@@ -20,11 +20,18 @@ export interface CommercialReferralRow {
 export interface ReferralCommercialSummary {
   validReferrals: number;
   attributedRevenue: number;
+  /** Total promotional bonus attached to valid conversions, regardless of payment state. */
+  bonusConverted: number;
   rewardsPaid: number;
   rewardsPending: number;
+  /** Cashback/bonus balance actually consumed by a checkout. */
+  creditsUsed: number;
   discountGiven: number;
   /** Contractual commissions; intentionally excluded from promotional CAC. */
   commissions: number;
+  /** Original bonus amount on referrals later reversed; excluded from valid conversions. */
+  reversedAmount: number;
+  reversedReferrals: number;
   acquisitionCost: number;
   cac: number;
   roiPercent: number;
@@ -73,26 +80,36 @@ export function calculateReferralCommercialAnalytics(
   const summary = {
     validReferrals: 0,
     attributedRevenue: 0,
+    bonusConverted: 0,
     rewardsPaid: 0,
     rewardsPending: 0,
+    creditsUsed: 0,
     discountGiven: 0,
     commissions: 0,
+    reversedAmount: 0,
+    reversedReferrals: 0,
   };
   const ranking = new Map<string, ReferralCommercialRankingEntry>();
 
   for (const row of rows) {
     const convertedAt = dateAt(row.convertedAt);
-    const isValid =
+    const isInPeriod =
       row.tenantId === tenantId &&
-      VALID_REFERRAL_STATUSES.has(row.status) &&
       convertedAt !== null &&
       convertedAt >= since &&
-      (until === undefined || convertedAt <= until) &&
-      row.reservationStatus !== "cancelled";
-    if (!isValid) continue;
+      (until === undefined || convertedAt <= until);
+    if (!isInPeriod) continue;
 
     const bonusAmount = Math.max(0, Number(row.bonusAmount ?? 0));
     const creditUsed = Math.min(bonusAmount, Math.max(0, Number(row.bonusCreditUsedAmount ?? 0)));
+    if (row.status === REFERRAL_STATUS.REVERSED) {
+      summary.reversedAmount += bonusAmount;
+      summary.reversedReferrals += 1;
+      continue;
+    }
+    if (!VALID_REFERRAL_STATUSES.has(row.status)) continue;
+    if (row.reservationStatus === "cancelled") continue;
+
     const revenue = Math.max(0, Number(row.reservationPaidValue ?? 0));
     const discount = Math.max(0, Number(row.discountAmount ?? 0));
     // A ledger commission remains a commission, rather than a promotional
@@ -105,8 +122,10 @@ export function calculateReferralCommercialAnalytics(
 
     summary.validReferrals += 1;
     summary.attributedRevenue += revenue;
+    summary.bonusConverted += bonusAmount;
     summary.rewardsPaid += row.bonusPaid ? bonusAmount : 0;
     summary.rewardsPending += pendingReward;
+    summary.creditsUsed += creditUsed;
     summary.discountGiven += discount;
     summary.commissions += commission;
 
@@ -136,10 +155,14 @@ export function calculateReferralCommercialAnalytics(
     summary: {
       validReferrals: summary.validReferrals,
       attributedRevenue: money(summary.attributedRevenue),
+      bonusConverted: money(summary.bonusConverted),
       rewardsPaid: money(summary.rewardsPaid),
       rewardsPending: money(summary.rewardsPending),
+      creditsUsed: money(summary.creditsUsed),
       discountGiven: money(summary.discountGiven),
       commissions: money(summary.commissions),
+      reversedAmount: money(summary.reversedAmount),
+      reversedReferrals: summary.reversedReferrals,
       acquisitionCost: money(acquisitionCost),
       cac: money(cac),
       roiPercent: money(roiPercent),

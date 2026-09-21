@@ -3867,8 +3867,43 @@ export const ListTripCostsResponse = zod.object({
       createdAt: zod.string(),
     }),
   ),
+  agencyExpenses: zod.array(
+    zod.object({
+      id: zod.string(),
+      tripId: zod.string().nullish(),
+      category: zod.string(),
+      description: zod.string(),
+      amount: zod.number(),
+      supplierId: zod.string().nullish(),
+      supplierName: zod.string().nullish(),
+      paymentMethod: zod.string().nullish(),
+      paymentDate: zod.string().nullish(),
+      dueDate: zod.string(),
+      status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
+      notes: zod.string().nullish(),
+      createdAt: zod.string(),
+      source: zod.enum(["agency", "trip"]).optional(),
+    }),
+  ),
+  plannedCosts: zod.array(
+    zod.object({
+      id: zod.string(),
+      kind: zod.enum(["fixed", "variable"]),
+      category: zod.string(),
+      description: zod.string(),
+      amount: zod.number(),
+      amountPerPassenger: zod.number().nullable(),
+    }),
+  ),
+  pricing: zod.object({
+    adult: zod.number(),
+    child: zod.number().nullable(),
+    senior: zod.number().nullable(),
+  }),
   summary: zod.object({
     expectedRevenue: zod.number(),
+    totalTripCosts: zod.number(),
+    totalAgencyExpenses: zod.number(),
     totalRealCosts: zod.number(),
     totalPaidCosts: zod.number(),
     totalPendingCosts: zod.number(),
@@ -3877,6 +3912,7 @@ export const ListTripCostsResponse = zod.object({
     plannedBudget: zod.number(),
     budgetVariance: zod.number(),
     confirmedSeats: zod.number().int(),
+    planningCapacity: zod.number().int(),
   }),
 });
 
@@ -5450,12 +5486,26 @@ export const GetPaymentsSummaryResponse = zod.object({
 /**
  * @summary List expenses
  */
+export const listExpensesQueryIncludeTripCostsDefault = false;
+export const listExpensesQuerySummaryPeriodDefault = `all`;
 export const listExpensesQueryPageDefault = 1;
 export const listExpensesQueryLimitDefault = 20;
 
 export const ListExpensesQueryParams = zod.object({
   tripId: zod.coerce.string().nullish(),
   status: zod.coerce.string().nullish(),
+  category: zod.coerce.string().nullish(),
+  supplierId: zod.coerce.string().nullish(),
+  dateFrom: zod.coerce.string().nullish(),
+  dateTo: zod.coerce.string().nullish(),
+  includeTripCosts: zod.coerce
+    .boolean()
+    .default(listExpensesQueryIncludeTripCostsDefault)
+    .describe("Include direct trip costs in the consolidated financial list"),
+  summaryPeriod: zod
+    .enum(["all", "month", "quarter", "year"])
+    .default(listExpensesQuerySummaryPeriodDefault)
+    .describe("Period used for the server-side financial summary"),
   page: zod.coerce.number().int().default(listExpensesQueryPageDefault),
   limit: zod.coerce.number().int().default(listExpensesQueryLimitDefault),
 });
@@ -5469,17 +5519,34 @@ export const ListExpensesResponse = zod.object({
       description: zod.string(),
       amount: zod.number(),
       supplierId: zod.string().nullish(),
+      supplierName: zod.string().nullish(),
       paymentMethod: zod.string().nullish(),
       paymentDate: zod.string().nullish(),
       dueDate: zod.string(),
       status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
       notes: zod.string().nullish(),
       createdAt: zod.string(),
+      source: zod.enum(["agency", "trip"]).optional(),
     }),
   ),
   total: zod.number().int(),
   page: zod.number().int(),
   limit: zod.number().int(),
+  summary: zod
+    .object({
+      total: zod.number(),
+      paid: zod.number(),
+      pending: zod.number(),
+      overdue: zod.number(),
+      paidThisMonth: zod.number(),
+      categoryBreakdown: zod.array(
+        zod.object({
+          category: zod.string(),
+          total: zod.number(),
+        }),
+      ),
+    })
+    .optional(),
 });
 
 /**
@@ -5503,12 +5570,14 @@ export const CreateExpenseResponse = zod.object({
   description: zod.string(),
   amount: zod.number(),
   supplierId: zod.string().nullish(),
+  supplierName: zod.string().nullish(),
   paymentMethod: zod.string().nullish(),
   paymentDate: zod.string().nullish(),
   dueDate: zod.string(),
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
+  source: zod.enum(["agency", "trip"]).optional(),
 });
 
 /**
@@ -5534,12 +5603,14 @@ export const UpdateExpenseResponse = zod.object({
   description: zod.string(),
   amount: zod.number(),
   supplierId: zod.string().nullish(),
+  supplierName: zod.string().nullish(),
   paymentMethod: zod.string().nullish(),
   paymentDate: zod.string().nullish(),
   dueDate: zod.string(),
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
+  source: zod.enum(["agency", "trip"]).optional(),
 });
 
 /**
@@ -8393,6 +8464,10 @@ export const ListReferralsQueryParams = zod.object({
   limit: zod.coerce.number().int().default(listReferralsQueryLimitDefault),
   status: zod.coerce.string().optional(),
   search: zod.coerce.string().optional(),
+  bonusPaid: zod.coerce.boolean().optional(),
+  fraudFlag: zod.coerce.boolean().optional(),
+  expiringSoon: zod.coerce.boolean().optional(),
+  bonusNotified: zod.coerce.boolean().optional(),
 });
 
 export const ListReferralsResponse = zod.object({
@@ -8503,6 +8578,15 @@ export const CreateReferralResponse = zod.object({
 /**
  * @summary Get referral statistics for the tenant
  */
+export const GetReferralStatsQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  search: zod.coerce.string().optional(),
+  bonusPaid: zod.coerce.boolean().optional(),
+  fraudFlag: zod.coerce.boolean().optional(),
+  expiringSoon: zod.coerce.boolean().optional(),
+  bonusNotified: zod.coerce.boolean().optional(),
+});
+
 export const GetReferralStatsResponse = zod.object({
   total: zod.number().int(),
   pending: zod.number().int(),
@@ -8511,6 +8595,11 @@ export const GetReferralStatsResponse = zod.object({
   conversionRate: zod.number().int(),
   totalBonusPaid: zod.number(),
   totalDiscountGiven: zod.number(),
+  suspicious: zod.number().int(),
+  expiringSoon: zod.number().int(),
+  pendingBonus: zod.number().int(),
+  bonusNotified: zod.number().int(),
+  bonusNotNotified: zod.number().int(),
 });
 
 /**
@@ -10441,9 +10530,18 @@ export const ReversePaidReferralBonusResponse = zod
 /**
  * @summary Send a referral WhatsApp test message to the configured agency number
  */
+export const testWhatsAppMessageBodyPhoneMin = 8;
+
 export const TestWhatsAppMessageBody = zod.object({
   type: zod.enum(["converted", "bonusPaid", "reversed", "share"]),
   message: zod.string().optional(),
+  phone: zod
+    .string()
+    .min(testWhatsAppMessageBodyPhoneMin)
+    .optional()
+    .describe(
+      "Optional test destination; defaults to the configured agency WhatsApp number.",
+    ),
 });
 
 export const TestWhatsAppMessageResponse = zod.object({

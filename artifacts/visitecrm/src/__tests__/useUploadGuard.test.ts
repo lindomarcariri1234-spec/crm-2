@@ -492,7 +492,9 @@ describe("useUploadImage — guard dialog confirm aborts the XHR and fires onCan
     });
 
     const OriginalXHR = globalThis.XMLHttpRequest;
-    globalThis.XMLHttpRequest = vi.fn().mockReturnValue(xhrMock) as unknown as typeof XMLHttpRequest;
+    globalThis.XMLHttpRequest = vi.fn(function MockXMLHttpRequest() {
+      return xhrMock;
+    }) as unknown as typeof XMLHttpRequest;
 
     try {
       let hookResult: ReturnType<typeof useUploadImage> | null = null;

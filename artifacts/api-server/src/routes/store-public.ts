@@ -188,6 +188,7 @@ import
 }
  from "../services/checkout/persist-order"
 ;
+import { isReferralCreditSpendable } from "../lib/referral-wallet";
 
 import 
 {
@@ -1625,6 +1626,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
     let appliedCreditAmount = 0
 ;
     let referralCreditClientId: string | undefined;
+    let referralCreditGracePeriodDays: number | undefined;
 
     let creditSpend: Array<
 {
@@ -1679,24 +1681,36 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
       if (creditClient) {
         referralCreditClientId = creditClient.id;
         const afterDiscount = roundMoney(Math.max(0, subtotal - discounts.discountAmount));
+        const [creditSettings] = await db
+          .select({ gracePeriodDays: referralSettingsTable.gracePeriodDays })
+          .from(referralSettingsTable)
+          .where(eq(referralSettingsTable.tenantId, store.tenantId))
+          .limit(1);
+        referralCreditGracePeriodDays = creditSettings?.gracePeriodDays ?? 30;
         // Select rows with remaining balance (including partially consumed ones)
         const creditRows = await db
           .select({
             id: referralsTable.id,
+            status: referralsTable.status,
             bonusAmount: referralsTable.bonusAmount,
+            bonusPaid: referralsTable.bonusPaid,
             bonusCreditUsedAmount: referralsTable.bonusCreditUsedAmount,
+            convertedAt: referralsTable.convertedAt,
+            expiresAt: referralsTable.expiresAt,
           })
           .from(referralsTable)
           .where(and(
             eq(referralsTable.tenantId, store.tenantId),
             eq(referralsTable.referrerId, creditClient.id),
             inArray(referralsTable.status, ["completed", "converted"]),
-            eq(referralsTable.bonusPaid, false),
             // Only rows that still have remaining credit
             sql`${referralsTable.bonusAmount} > COALESCE(${referralsTable.bonusCreditUsedAmount}, 0)`,
           ))
           .orderBy(asc(referralsTable.createdAt));
-        const totalAvailable = creditRows.reduce(
+        const spendableCreditRows = creditRows.filter((row) =>
+          isReferralCreditSpendable(row, referralCreditGracePeriodDays ?? 30),
+        );
+        const totalAvailable = spendableCreditRows.reduce(
           (s, r) => s + (Number(r.bonusAmount) - Number(r.bonusCreditUsedAmount ?? 0)), 0,
         );
         // Intentional clamp: over-requested credit is silently reduced to available balance.
@@ -1706,7 +1720,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         appliedCreditAmount = roundMoney(requestedCredit);
         // Build greedy spend plan — oldest rows first, partial consumption tracked per-row
         let remaining = appliedCreditAmount;
-        for (const row of creditRows) {
+        for (const row of spendableCreditRows) {
           if (remaining <= 0) break;
           const available = Number(row.bonusAmount) - Number(row.bonusCreditUsedAmount ?? 0);
           const consume = roundMoney(Math.min(available, remaining));
@@ -1798,6 +1812,7 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
         creditSpend: creditSpend.length > 0 ? creditSpend : undefined,
         referralCreditRequested: data.referralCreditUsed,
         referralCreditClientId,
+        referralCreditGracePeriodDays,
       });
       appliedCreditAmount = persistedOrder.appliedCreditAmount;
     } catch (txErr: unknown) {
@@ -1813,6 +1828,13 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
           next(new ValidationError(
             tagged.message,
             "DEPOSIT_ABOVE_TOTAL",
+          ));
+          return;
+        }
+        if (tagged.code === "REFERRAL_FIRST_PURCHASE_RESERVED") {
+          next(new ConflictError(
+            tagged.message,
+            "REFERRAL_FIRST_PURCHASE_RESERVED",
           ));
           return;
         }
@@ -2541,7 +2563,10 @@ function recordSuspendedReferralAttempt(params: {
       referralSuspendedAttemptAt: new Date(),
       referralSuspendedAttemptCount: sql`${clientsTable.referralSuspendedAttemptCount} + 1`,
     })
-    .where(eq(clientsTable.id, clientId))
+     .where(and(
+       eq(clientsTable.id, clientId),
+       eq(clientsTable.tenantId, tenantId),
+     ))
     .execute()
     .catch((err: unknown) => {
       logger.warn({ err }, "[store-public] Failed to record suspended referral attempt");
@@ -2645,6 +2670,7 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
       isEnabled: referralSettingsTable.isEnabled,
       expirationDays: referralSettingsTable.expirationDays,
       allowSelfReferral: referralSettingsTable.allowSelfReferral,
+      requireFirstPurchase: referralSettingsTable.requireFirstPurchase,
       minPurchaseAmount: referralSettingsTable.minPurchaseAmount,
       maxReferralsPerUser: referralSettingsTable.maxReferralsPerUser,
     
@@ -2827,6 +2853,7 @@ router.post("/public/store/:slug/referral/validate", async (req, res, next: Next
       discountPercent,
       discountValue,
       discountType,
+      firstPurchaseOnly: settings?.requireFirstPurchase ?? true,
       description: `Desconto de ${discountLabel} por indicação de ${referrerName}`,
     
 }
@@ -2929,6 +2956,7 @@ router.get("/public/store/:slug/referral/info", async (req, res, next: NextFunct
       discountValue: referralSettingsTable.discountValue,
       discountType: referralSettingsTable.discountType,
       isActive: referralSettingsTable.isEnabled,
+      requireFirstPurchase: referralSettingsTable.requireFirstPurchase,
     }).from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, store.tenantId)).limit(1);
 
@@ -2947,6 +2975,7 @@ router.get("/public/store/:slug/referral/info", async (req, res, next: NextFunct
       discountPercent,
       discountValue,
       discountType,
+      firstPurchaseOnly: settings?.requireFirstPurchase ?? true,
     });
   } catch (err) {
     next(err);

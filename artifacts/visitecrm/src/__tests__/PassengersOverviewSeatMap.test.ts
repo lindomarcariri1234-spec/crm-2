@@ -33,6 +33,7 @@ vi.mock("@/hooks/useSeatStream", () => ({
 vi.mock("@workspace/api-client-react", () => ({
   useGetMe: mockGetMe,
   useGetTenant: mockGetTenant,
+  useGetTripRoomAllocationSummary: vi.fn(() => ({ data: null })),
   useListTrips: () => ({ data: { data: [] } }),
   useGetTrip: () => ({ data: null }),
   useListReservations: () => ({ data: { data: [] }, refetch: mockRefetch }),

@@ -815,8 +815,9 @@ describe("POST /api/public/store/:slug/orders — referral PENDING row at checko
         minPurchaseAmount: null,
         maxReferralsPerUser: null,
       }],
-      [FAKE_ORDER],                         // 7. post-tx order re-fetch
-      [],                                   // 8. post-tx items re-fetch
+      [{ requireFirstPurchase: false }],    // 7. tx referral reservation policy
+      [FAKE_ORDER],                         // 8. post-tx order re-fetch
+      [],                                   // 9. post-tx items re-fetch
     );
 
     // Override the transaction mock for this test so we can capture the tx

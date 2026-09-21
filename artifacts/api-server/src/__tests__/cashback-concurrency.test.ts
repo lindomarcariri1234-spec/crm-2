@@ -86,11 +86,26 @@ import {
 
 type StoredOrder = Record<string, any>;
 
-const credit = {
+type TestCredit = {
+  id: string;
+  bonusAmount: number;
+  bonusCreditUsedAmount: number;
+  createdAt: Date;
+  status: string;
+  bonusPaid: boolean;
+  convertedAt: Date | null;
+  expiresAt: Date | null;
+};
+
+const credit: TestCredit = {
   id: "credit-1",
   bonusAmount: 40,
   bonusCreditUsedAmount: 0,
   createdAt: new Date("2026-01-01T00:00:00Z"),
+  status: "completed",
+  bonusPaid: true,
+  convertedAt: new Date("2025-12-01T00:00:00Z"),
+  expiresAt: null,
 };
 const credits = [credit];
 
@@ -135,8 +150,12 @@ function rowsFor(table: unknown, condition: unknown): object[] {
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
       .map((row) => ({
         id: row.id,
+        status: row.status,
         bonusAmount: row.bonusAmount.toFixed(2),
+        bonusPaid: row.bonusPaid,
         bonusCreditUsedAmount: row.bonusCreditUsedAmount.toFixed(2),
+        convertedAt: row.convertedAt,
+        expiresAt: row.expiresAt,
       }));
   }
 
@@ -342,12 +361,20 @@ describe("cashback reservation across concurrent checkouts", () => {
         bonusAmount: 20,
         bonusCreditUsedAmount: 0,
         createdAt: new Date("2026-01-01T00:00:00Z"),
+        status: "completed",
+        bonusPaid: true,
+        convertedAt: new Date("2025-12-01T00:00:00Z"),
+        expiresAt: null,
       },
       {
         id: "credit-newest",
         bonusAmount: 25,
         bonusCreditUsedAmount: 0,
         createdAt: new Date("2026-02-01T00:00:00Z"),
+        status: "completed",
+        bonusPaid: true,
+        convertedAt: new Date("2025-12-01T00:00:00Z"),
+        expiresAt: null,
       },
     );
 
@@ -381,5 +408,59 @@ describe("cashback reservation across concurrent checkouts", () => {
 
     expect(credits.map((row) => row.bonusCreditUsedAmount)).toEqual([20, 10]);
     expect(credits.reduce((sum, row) => sum + row.bonusCreditUsedAmount, 0)).toBe(30);
+  });
+
+  it("reserves only paid, unexpired, non-reversed credit with remaining balance", async () => {
+    credits.splice(0, credits.length,
+      {
+        id: "credit-valid",
+        bonusAmount: 40,
+        bonusCreditUsedAmount: 0,
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+        status: "completed",
+        bonusPaid: true,
+        convertedAt: new Date("2025-12-01T00:00:00Z"),
+        expiresAt: new Date("2026-12-01T00:00:00Z"),
+      },
+      {
+        id: "credit-expired",
+        bonusAmount: 50,
+        bonusCreditUsedAmount: 0,
+        createdAt: new Date("2026-01-02T00:00:00Z"),
+        status: "completed",
+        bonusPaid: true,
+        convertedAt: new Date("2025-12-01T00:00:00Z"),
+        expiresAt: new Date("2026-01-01T00:00:00Z"),
+      },
+      {
+        id: "credit-reversed",
+        bonusAmount: 50,
+        bonusCreditUsedAmount: 0,
+        createdAt: new Date("2026-01-03T00:00:00Z"),
+        status: "reversed",
+        bonusPaid: true,
+        convertedAt: new Date("2025-12-01T00:00:00Z"),
+        expiresAt: null,
+      },
+      {
+        id: "credit-consumed",
+        bonusAmount: 50,
+        bonusCreditUsedAmount: 50,
+        createdAt: new Date("2026-01-04T00:00:00Z"),
+        status: "completed",
+        bonusPaid: true,
+        convertedAt: new Date("2025-12-01T00:00:00Z"),
+        expiresAt: null,
+      },
+    );
+
+    const result = await persistCheckoutOrder(checkoutArgs("order-filtered", "ORDER-FILTERED"));
+
+    expect(result.appliedCreditAmount).toBe(30);
+    expect(result.totalAmount).toBe(20);
+    expect(state.orders[0]?.pendingCreditSpend).toEqual([
+      { id: "credit-valid", consumedAmount: 30, reserved: true },
+    ]);
+    expect(credits.map((row) => row.bonusCreditUsedAmount)).toEqual([30, 0, 0, 50]);
   });
 });

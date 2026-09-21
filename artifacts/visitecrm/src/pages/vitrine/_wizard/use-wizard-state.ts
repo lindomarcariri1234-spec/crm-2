@@ -162,6 +162,7 @@ export function useWizardState({
   const [referralDiscountPct, setReferralDiscountPct] = useState(5);
   const [referralDiscountType, setReferralDiscountType] = useState<"percentage" | "fixed">("percentage");
   const [referralDiscountValue, setReferralDiscountValue] = useState(5);
+  const [referralFirstPurchaseOnly, setReferralFirstPurchaseOnly] = useState(false);
 
   // Referral credit (logged-in referrers spending their earned bonus balance)
   const { isLoaded: clerkIsLoaded, isSignedIn } = useUser();
@@ -265,6 +266,7 @@ export function useWizardState({
             setReferralDiscountType(rType);
             setReferralDiscountValue(rVal);
             setReferralDiscountPct(rType === "percentage" ? rVal : 0);
+            setReferralFirstPurchaseOnly(res.firstPurchaseOnly ?? false);
           }
         })
         .catch(() => {
@@ -358,6 +360,7 @@ export function useWizardState({
         setReferralDiscountType(rType);
         setReferralDiscountValue(rVal);
         setReferralDiscountPct(rType === "percentage" ? rVal : 0);
+        setReferralFirstPurchaseOnly(res.firstPurchaseOnly ?? false);
         setStorefrontReferralCode(slug, referralCode);
       } else {
         alert(res.error ?? "Código inválido");
@@ -655,6 +658,8 @@ export function useWizardState({
           "Entre na sua conta para usar o cashback de indicação.",
         CREDIT_EMAIL_MISMATCH:
           "O e-mail da conta precisa ser o mesmo informado no pedido para usar o cashback.",
+        REFERRAL_FIRST_PURCHASE_RESERVED:
+          "Já existe uma compra pendente com este benefício de indicação. Finalize ou cancele a compra anterior antes de tentar novamente.",
         RESERVATION_NO_AGENCY_USER:
           "A agência ainda não está pronta para receber reservas online. Entre em contato para concluir o atendimento.",
         RESERVATION_SYNC_FAILED:
@@ -795,6 +800,7 @@ export function useWizardState({
     referralDiscountPct,
     referralDiscountType,
     referralDiscountValue,
+    referralFirstPurchaseOnly,
     applyReferral,
     removeReferral,
     basePrice,

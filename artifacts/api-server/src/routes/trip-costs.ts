@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { tripCostsTable, tripsTable, reservationsTable } from "@workspace/db";
+import { tripCostsTable, tripsTable, reservationsTable, expensesTable } from "@workspace/db";
 import { eq, and, count, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
@@ -44,6 +44,54 @@ const UpdateTripCostBody = z.object({
   notes: z.string().nullish(),
 });
 
+type PlannedFixedCost = {
+  id: string;
+  category: string;
+  description: string;
+  value: number;
+};
+
+type PlannedVariableCost = {
+  id: string;
+  category: string;
+  description: string;
+  valuePax: number;
+};
+
+export function calculatePlannedCosts(
+  fixedCosts: PlannedFixedCost[],
+  variableCosts: PlannedVariableCost[],
+  planningCapacity: number,
+) {
+  const plannedFixed = fixedCosts.reduce((sum, cost) => sum + Number(cost.value ?? 0), 0);
+  const plannedVariable = variableCosts.reduce(
+    (sum, cost) => sum + Number(cost.valuePax ?? 0) * planningCapacity,
+    0,
+  );
+
+  return {
+    plannedBudget: plannedFixed + plannedVariable,
+    plannedCosts: [
+      ...fixedCosts.map((cost) => ({
+        id: cost.id,
+        kind: "fixed" as const,
+        category: cost.category,
+        description: cost.description,
+        amount: Number(cost.value ?? 0),
+        amountPerPassenger: null,
+      })),
+      ...variableCosts.map((cost) => ({
+        id: cost.id,
+        kind: "variable" as const,
+        category: cost.category,
+        description: cost.description,
+        amount: Number(cost.valuePax ?? 0) * planningCapacity,
+        amountPerPassenger: Number(cost.valuePax ?? 0),
+      })),
+    ],
+  };
+}
+
 function formatCost(c: typeof tripCostsTable.$inferSelect) {
   return {
     id: c.id,
@@ -58,6 +106,23 @@ function formatCost(c: typeof tripCostsTable.$inferSelect) {
     paidAt: c.paidAt?.toISOString() ?? null,
     notes: c.notes ?? null,
     createdAt: c.createdAt.toISOString(),
+  };
+}
+
+function formatAgencyExpense(e: typeof expensesTable.$inferSelect) {
+  return {
+    id: e.id,
+    tripId: e.tripId,
+    category: e.category,
+    description: e.description,
+    amount: Number(e.amount),
+    supplierId: e.supplierId ?? null,
+    paymentMethod: e.paymentMethod ?? null,
+    paymentDate: e.paymentDate?.toISOString() ?? null,
+    dueDate: e.dueDate.toISOString(),
+    status: e.status,
+    notes: e.notes ?? null,
+    createdAt: e.createdAt.toISOString(),
   };
 }
 
@@ -78,8 +143,16 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
       .where(and(eq(tripCostsTable.tripId, req.params.id), eq(tripCostsTable.tenantId, me.tenantId)))
       .orderBy(tripCostsTable.createdAt);
 
+    const agencyExpenses = await db.select()
+      .from(expensesTable)
+      .where(and(eq(expensesTable.tripId, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
+      .orderBy(expensesTable.createdAt);
+
     const [tripRow] = await db.select({
       priceAdult: tripsTable.priceAdult,
+      priceChild: tripsTable.priceChild,
+      priceSenior: tripsTable.priceSenior,
+      totalCapacity: tripsTable.totalCapacity,
       fixedCosts: tripsTable.fixedCosts,
       variableCosts: tripsTable.variableCosts,
     }).from(tripsTable).where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).limit(1);
@@ -97,9 +170,17 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
         inArray(reservationsTable.status, [RESERVATION_STATUS.CONFIRMED]),
       ));
 
-    const totalRealCosts = costs.reduce((s, c) => s + Number(c.amount), 0);
-    const totalPaidCosts = costs.filter(c => c.status === EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0);
-    const totalPendingCosts = costs.filter(c => c.status !== EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0);
+    const activeTripCosts = costs.filter(c => c.status !== "cancelled");
+    const totalTripCosts = activeTripCosts.reduce((s, c) => s + Number(c.amount), 0);
+    const activeAgencyExpenses = agencyExpenses.filter(e => e.status !== "cancelled");
+    const totalAgencyExpenses = activeAgencyExpenses.reduce((s, e) => s + Number(e.amount), 0);
+    const totalRealCosts = totalTripCosts + totalAgencyExpenses;
+    const totalPaidCosts =
+      activeTripCosts.filter(c => c.status === EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
+      + activeAgencyExpenses.filter(e => e.status === EXPENSE_STATUS.PAID).reduce((s, e) => s + Number(e.amount), 0);
+    const totalPendingCosts =
+      activeTripCosts.filter(c => c.status !== EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
+      + activeAgencyExpenses.filter(e => e.status !== EXPENSE_STATUS.PAID).reduce((s, e) => s + Number(e.amount), 0);
 
     const priceAdult = Number(tripRow?.priceAdult ?? 0);
     const confirmedSeats = confirmedSeatsRow?.total ?? 0;
@@ -107,16 +188,32 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
     const profit = expectedRevenue2 - totalRealCosts;
     const margin = expectedRevenue2 > 0 ? (profit / expectedRevenue2) * 100 : 0;
 
-    const fixedCosts = Array.isArray(tripRow?.fixedCosts) ? tripRow.fixedCosts as Array<{ id: string; category: string; description: string; value: number }> : [];
-    const variableCosts = Array.isArray(tripRow?.variableCosts) ? tripRow.variableCosts as Array<{ id: string; category: string; description: string; valuePax: number }> : [];
-    const plannedFixed = fixedCosts.reduce((s, c) => s + (c.value ?? 0), 0);
-    const plannedVariable = variableCosts.reduce((s, c) => s + (c.valuePax ?? 0) * confirmedSeats, 0);
-    const totalPlanned = plannedFixed + plannedVariable;
+    // The planning screen defines variable costs against the trip's full
+    // capacity. Keep that same basis here; confirmed seats are only used for
+    // realized revenue and payment status, otherwise the budget changes when
+    // a reservation is confirmed and no longer matches the Prices tab.
+    const planningCapacity = tripRow?.totalCapacity ?? 0;
+    const fixedCosts = Array.isArray(tripRow?.fixedCosts) ? tripRow.fixedCosts as PlannedFixedCost[] : [];
+    const variableCosts = Array.isArray(tripRow?.variableCosts) ? tripRow.variableCosts as PlannedVariableCost[] : [];
+    const { plannedBudget: totalPlanned, plannedCosts } = calculatePlannedCosts(
+      fixedCosts,
+      variableCosts,
+      planningCapacity,
+    );
 
     res.json({
       costs: costs.map(formatCost),
+      agencyExpenses: agencyExpenses.map(formatAgencyExpense),
+      plannedCosts,
+      pricing: {
+        adult: priceAdult,
+        child: tripRow?.priceChild == null ? null : Number(tripRow.priceChild),
+        senior: tripRow?.priceSenior == null ? null : Number(tripRow.priceSenior),
+      },
       summary: {
         expectedRevenue: expectedRevenue2,
+        totalTripCosts,
+        totalAgencyExpenses,
         totalRealCosts,
         totalPaidCosts,
         totalPendingCosts,
@@ -125,6 +222,7 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
         plannedBudget: totalPlanned,
         budgetVariance: totalRealCosts - totalPlanned,
         confirmedSeats,
+         planningCapacity,
       },
     });
   } catch (err) {
