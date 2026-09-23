@@ -257,6 +257,80 @@ describe("createReservationsForOrder — storefront Pipeline stage", () => {
     );
   });
 
+  it("creates exactly one named passenger per capacity unit for a three-passenger checkout", async () => {
+    const order = {
+      ...BASE_ORDER,
+      seats: ["31", "32", "35"],
+      coPassengers: [
+        { name: "Antonio Francisco", cpf: "111.111.111-11", phone: "88999990001" },
+        { name: "Evelyn Sophia", phone: "88999990002" },
+      ],
+      subtotal: "1797",
+      discountAmount: "0",
+      totalAmount: "1797",
+      couponCode: null,
+      pendingReferral: null,
+    };
+    const tx = makeSelectQueueExecutor([
+      [order],
+      [{ id: "store-1", tenantId: "tenant-1", slug: "minha-loja" }],
+      [{ productId: "product-1", quantity: 3, price: "599", total: "1797" }],
+      [TRIP_PRODUCT],
+      [],
+    ]);
+    mockExecute
+      .mockReset()
+      .mockResolvedValueOnce({
+        rows: [{
+          id: "trip-1",
+          available_seats: 10,
+          total_capacity: 40,
+          show_seat_map: true,
+          seat_map: {
+            "31": { status: "available" },
+            "32": { status: "available" },
+            "35": { status: "available" },
+          },
+          type: "excursao",
+        }],
+      })
+      .mockResolvedValueOnce({ rowCount: 1 });
+
+    await createReservationsForOrder(order.id, tx);
+
+    const passengerRows = mockInsertValues.mock.calls
+      .slice(1)
+      .map((call) => call[0] as { name: string; isPrimary: boolean; seatNumber: string | null });
+    expect(passengerRows).toHaveLength(3);
+    expect(passengerRows.map((passenger) => passenger.name)).toEqual([
+      "Maria Silva",
+      "Antonio Francisco",
+      "Evelyn Sophia",
+    ]);
+    expect(passengerRows.map((passenger) => passenger.seatNumber)).toEqual(["31", "32", "35"]);
+    expect(passengerRows.filter((passenger) => passenger.isPrimary)).toHaveLength(1);
+  });
+
+  it("rejects a multi-passenger checkout without all companion names instead of creating placeholders", async () => {
+    const order = {
+      ...BASE_ORDER,
+      seats: ["31", "32", "35"],
+      coPassengers: [],
+    };
+    const tx = makeSelectQueueExecutor([
+      [order],
+      [{ id: "store-1", tenantId: "tenant-1", slug: "minha-loja" }],
+      [{ productId: "product-1", quantity: 3, price: "599", total: "1797" }],
+      [TRIP_PRODUCT],
+      [],
+    ]);
+
+    await expect(createReservationsForOrder(order.id, tx)).rejects.toMatchObject({
+      code: "PASSENGER_QUANTITY_MISMATCH",
+    });
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
   it("does not create a reservation or Pipeline card for products without a trip", async () => {
     const tx = makeSelectQueueExecutor([
       [BASE_ORDER],

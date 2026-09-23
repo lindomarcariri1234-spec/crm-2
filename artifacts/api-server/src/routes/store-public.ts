@@ -1343,9 +1343,9 @@ const CreateOrderBody = z.object({
   seats: z.array(z.string()).optional(),
   boardingLocationId: z.string().optional(),
   coPassengers: z.array(z.object({
-    name: z.string().min(1),
-    cpf: z.string().optional(),
-    phone: z.string().optional(),
+    name: z.string().trim().min(1),
+    cpf: z.string().trim().optional(),
+    phone: z.string().trim().optional(),
   })).optional(),
   depositAmount: z.number().nonnegative().optional(),
   // Client-generated key, one per checkout attempt. Lets a browser retry /
@@ -1357,6 +1357,70 @@ const CreateOrderBody = z.object({
 }
 )
 ;
+
+function validateCheckoutPassengerData(
+  data: z.infer<typeof CreateOrderBody>,
+  tripLinkedProducts: Map<string, { totalQty: number }>,
+): void {
+  const tripQuantities = [...tripLinkedProducts.values()];
+  const totalTripQuantity = tripQuantities.reduce((sum, item) => sum + item.totalQty, 0);
+  const coPassengers = data.coPassengers ?? [];
+  const submittedSeats = (data.seats ?? []).map((seat) => seat.trim()).filter(Boolean);
+
+  if (tripLinkedProducts.size === 0) {
+    if (coPassengers.length > 0 || submittedSeats.length > 0) {
+      throw new ValidationError(
+        "Passageiros e assentos só podem ser informados para produtos vinculados a uma viagem",
+        "PASSENGER_DATA_WITHOUT_TRIP",
+      );
+    }
+    return;
+  }
+
+  if (submittedSeats.length > 0) {
+    if (tripLinkedProducts.size !== 1) {
+      throw new ValidationError(
+        "A seleção de assentos deve pertencer a uma única viagem",
+        "INVALID_SEAT_SELECTION",
+      );
+    }
+    if (submittedSeats.length !== totalTripQuantity) {
+      throw new ValidationError(
+        `Selecione exatamente ${totalTripQuantity} assento(s) para este pedido`,
+        "SEAT_QUANTITY_MISMATCH",
+      );
+    }
+    if (new Set(submittedSeats).size !== submittedSeats.length) {
+      throw new ValidationError(
+        "A seleção contém assentos duplicados",
+        "DUPLICATE_SEATS",
+      );
+    }
+  }
+
+  // coPassengers is a positional list for one reservation. It cannot safely
+  // describe passengers shared by multiple trip reservations.
+  if (tripLinkedProducts.size > 1 && coPassengers.length > 0) {
+    throw new ValidationError(
+      "Informe passageiros separadamente quando o pedido tiver mais de uma viagem",
+      "PASSENGER_ASSIGNMENT_UNSUPPORTED",
+    );
+  }
+
+  if (tripLinkedProducts.size === 1 && coPassengers.length !== totalTripQuantity - 1) {
+    throw new ValidationError(
+      `Informe o nome dos ${Math.max(0, totalTripQuantity - 1)} acompanhante(s) desta reserva`,
+      "PASSENGER_QUANTITY_MISMATCH",
+    );
+  }
+
+  if (tripLinkedProducts.size > 1 && totalTripQuantity > tripLinkedProducts.size) {
+    throw new ValidationError(
+      "Pedidos com mais de uma viagem precisam informar passageiros por viagem",
+      "PASSENGER_ASSIGNMENT_UNSUPPORTED",
+    );
+  }
+}
 
 
 /**
@@ -1606,7 +1670,6 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
 )
 ;
 
-
     const discounts = await resolveCheckoutDiscounts(
 {
 
@@ -1791,6 +1854,16 @@ router.post("/public/store/:slug/orders", async (req, res, next: NextFunction): 
           return;
         }
       }
+    }
+
+    try {
+      validateCheckoutPassengerData(data, tripLinkedProducts);
+    } catch (validationErr) {
+      if (validationErr instanceof ValidationError) {
+        next(validationErr);
+        return;
+      }
+      throw validationErr;
     }
 
     try {

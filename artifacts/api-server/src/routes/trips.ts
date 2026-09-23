@@ -2032,11 +2032,18 @@ router.get("/trips/:id/boarding-panel", async (req, res, next: NextFunction): Pr
 
     const reservationMap = new Map(reservations.map(r => [r.id, r]));
     const clientMap = new Map(clients.map(c => [c.id, c]));
+    const emittedReservationFinancials = new Set<string>();
 
     const boardingPassengers = passengers.map(p => {
       const reservation = reservationMap.get(p.reservationId);
       const client = reservation?.clientId ? clientMap.get(reservation.clientId) : undefined;
       const effectiveBoardingLocationId = p.boardingLocationId ?? reservation?.boardingLocationId ?? null;
+      const emitFinancials = Boolean(
+        reservation
+        && !reservation.isGratuidade
+        && !emittedReservationFinancials.has(reservation.id),
+      );
+      if (emitFinancials) emittedReservationFinancials.add(reservation!.id);
       return {
         id: p.id,
         reservationId: p.reservationId,
@@ -2058,9 +2065,12 @@ router.get("/trips/:id/boarding-panel", async (req, res, next: NextFunction): Pr
         specialNeeds: p.specialNeeds ?? null,
         documentType: p.documentType ?? null,
         isGratuidade: reservation?.isGratuidade ?? false,
-        totalValue: reservation?.totalValue ?? null,
-        paidValue: reservation?.paidValue ?? null,
-        balance: reservation?.balance ?? null,
+        // A reservation total belongs to the booking, not to each passenger.
+        // Emit it once so the passenger table and its totals cannot multiply a
+        // three-passenger booking by three.
+        totalValue: emitFinancials ? reservation?.totalValue ?? null : null,
+        paidValue: emitFinancials ? reservation?.paidValue ?? null : null,
+        balance: emitFinancials ? reservation?.balance ?? null : null,
       };
     });
 

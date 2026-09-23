@@ -428,11 +428,16 @@ export function useWizardState({
   }
 
   function canProceedFromDados() {
+    const coPassengersComplete =
+      coPassengers.length === Math.max(0, qty - 1) &&
+      coPassengers.every((passenger) => passenger.name.trim().length > 0);
+
     return (
       !!form.customerName.trim() &&
       !!form.customerEmail.trim() &&
       validatePhone(form.customerPhone) &&
-      validateCpf(form.customerCpf)
+      validateCpf(form.customerCpf) &&
+      coPassengersComplete
     );
   }
 
@@ -540,11 +545,13 @@ export function useWizardState({
         .filter(Boolean)
         .join(" ");
 
-      // Build co-passenger list: only send entries that have a name, strip empty slots
+      // The passenger step does not allow proceeding with an empty companion.
+      // Keep the payload positional: index 0 is the second passenger, index 1
+      // is the third passenger, and so on. The API validates the same invariant.
       const filledCoPassengers = coPassengers
         .slice(0, qty - 1)
         .map((cp) => ({
-          name: cp.name.trim() || `Passageiro ${coPassengers.indexOf(cp) + 2}`,
+          name: cp.name.trim(),
           ...(cp.cpf.trim() ? { cpf: cp.cpf.trim() } : {}),
           ...(cp.phone.trim() ? { phone: cp.phone.trim() } : {}),
         }));

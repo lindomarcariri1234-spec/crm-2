@@ -13,6 +13,8 @@ Potential duplicates across general expenses and trip costs may be diagnosed, bu
 
 For a storefront order linked to one reservation, the order's discounted total is the canonical booking total. `depositAmount` is only the requested minimum; only paid receivable rows count as received. Real balance is discounted total minus confirmed receipts.
 
+Passenger and manifest views must emit reservation-level financial fields once per reservation, not once per passenger. Any per-passenger split must be an explicit allocation, never an implicit repeated total.
+
 **Why:** Similar values can represent different liabilities, while one checkout can also span multiple reservations. Heuristic merging either loses valid costs or creates double counting.
 
-**How to apply:** Reuse the canonical financial metrics contract for agency dashboards and insights. Show requested deposit separately from payment received, derive the balance from confirmed receipts, and preserve centavo rounding, explicit America/Sao_Paulo periods, tenant-scoped queries and source-specific status/date semantics.
+**How to apply:** Reuse the canonical financial metrics contract for agency dashboards and insights. Show requested deposit separately from payment received, derive the balance from confirmed receipts, and preserve centavo rounding, explicit America/Sao_Paulo periods, tenant-scoped queries and source-specific status/date semantics. In passenger lists, use a reservation identity set to prevent repeated values from inflating totals.

@@ -551,6 +551,36 @@ export async function createReservationsForOrder(
     };
   }
 
+  const tripQuantities = [...tripLinkedProducts.values()];
+  const totalTripQuantity = tripQuantities.reduce((sum, item) => sum + item.totalQty, 0);
+  const coPassengers = Array.isArray(order.coPassengers) ? order.coPassengers : [];
+
+  // coPassengers is positional data for one reservation: the buyer is the
+  // primary passenger and every remaining capacity unit needs one named row.
+  // Never create synthetic passenger names because they make the manifest and
+  // the checkout disagree while looking like valid data.
+  if (tripLinkedProducts.size === 1 && coPassengers.length !== totalTripQuantity - 1) {
+    throw new AppError(
+      `Dados de passageiros incompletos: esperados ${Math.max(0, totalTripQuantity - 1)} acompanhante(s), recebidos ${coPassengers.length}`,
+      400,
+      "PASSENGER_QUANTITY_MISMATCH",
+    );
+  }
+  if (coPassengers.some((passenger) => !passenger?.name?.trim())) {
+    throw new AppError(
+      "Todos os acompanhantes precisam ter nome",
+      400,
+      "PASSENGER_NAME_REQUIRED",
+    );
+  }
+  if (tripLinkedProducts.size > 1 && totalTripQuantity > tripLinkedProducts.size) {
+    throw new AppError(
+      "Não é possível distribuir passageiros entre várias viagens neste pedido",
+      400,
+      "PASSENGER_ASSIGNMENT_UNSUPPORTED",
+    );
+  }
+
   const ctx = await loadReservationContext({
     tenantId: order.tenantId,
     tripIds: [...tripLinkedProducts.keys()],
@@ -797,8 +827,8 @@ export async function createReservationsForOrder(
     // Create one passenger record per seat.
     //
     // Seat 0 (reservationSeats[0]) → primary passenger (the buyer).
-    // Seat N (reservationSeats[N]) → co-passenger[N-1] from the order, or
-    //   "Passageiro N+1" when no co-passenger data was collected.
+    // Seat N (reservationSeats[N]) → the named co-passenger[N-1] from the
+    // order. The quantity/name invariant is validated before any insert.
     //
     // This ensures the ANTT manifest and Painel de Embarque are fully
     // populated immediately after payment without the agency filling in
@@ -806,8 +836,6 @@ export async function createReservationsForOrder(
     const clientBirthDateForPassenger = order.customerBirthdate
       ? new Date(order.customerBirthdate + "T12:00:00")
       : undefined;
-    const coPassengers = Array.isArray(order.coPassengers) ? order.coPassengers : [];
-
     // Primary passenger (buyer)
     await exec.insert(passengersTable).values({
       id: generateId(),
@@ -825,7 +853,7 @@ export async function createReservationsForOrder(
     // Additional passengers (seats 2, 3, … totalQty)
     for (let i = 1; i < totalQty; i++) {
       const co = coPassengers[i - 1];
-      const passengerName = co?.name?.trim() || `Passageiro ${i + 1}`;
+      const passengerName = co.name.trim();
       await exec.insert(passengersTable).values({
         id: generateId(),
         reservationId,
