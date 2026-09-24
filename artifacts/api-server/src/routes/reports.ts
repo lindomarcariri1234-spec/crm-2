@@ -664,6 +664,7 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
         passSeatNumber: passengersTable.seatNumber,
         passBoardingLocationId: passengersTable.boardingLocationId,
         passPhone: passengersTable.phone,
+        resBoardingLocationId: reservationsTable.boardingLocationId,
         resId: reservationsTable.id,
         resNumber: reservationsTable.reservationNumber,
         resStatus: reservationsTable.status,
@@ -696,7 +697,9 @@ router.post("/reports/export", async (req, res, next: NextFunction): Promise<voi
       for (const p of passengers) {
         seq++;
         const boardingPoints = (p.tripBoardingPoints ?? []) as { id: string; name: string }[];
-        const boardingPoint = boardingPoints.find(bp => bp.id === p.passBoardingLocationId);
+        const boardingPoint = boardingPoints.find(
+          bp => bp.id === (p.passBoardingLocationId ?? p.resBoardingLocationId),
+        );
         manifestRows.push([
           String(seq),
           p.tripName, fmtDate(p.tripDeparture),
