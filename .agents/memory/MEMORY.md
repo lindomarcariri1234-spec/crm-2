@@ -62,6 +62,7 @@
 - [Vitest mock call typing](vitest-mock-call-typing.md) — strict TypeScript infers vi.fn() calls as zero-argument tuples; type mocks or cast call arrays before inspecting arguments.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
+- [Replit Git stale operation state](replit-git-stale-operation-state.md) — stale cherry-pick/rebase markers and old refs locks can mimic merge conflicts; verify operation state before changing branches.
 - [GitHub API push limits](github-api-push-limits.md) — Git Database uploads need small tree batches, paced blob requests, and a separate strategy for oversized generated artifacts
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
