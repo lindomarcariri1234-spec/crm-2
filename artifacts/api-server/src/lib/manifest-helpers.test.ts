@@ -84,6 +84,16 @@ describe("generateManifestHtml", () => {
       const html = generateManifestHtml({ ...basePanel(), departureTime: "14:45" });
       expect(html).toContain("04/07/2026 às 14:45");
     });
+
+  it("keeps a late-night Brazil departure paired with its stored local time", () => {
+    const html = generateManifestHtml({
+      ...basePanel(),
+      departureDate: "2026-09-24T15:00:00.000Z",
+      departureTime: "20:00",
+    });
+    expect(html).toContain("24/09/2026 às 20:00");
+    expect(html).not.toContain("24/09/2026 às 12:00");
+  });
   });
 
   describe("category totals row (removed)", () => {

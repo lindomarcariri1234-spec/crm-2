@@ -18,8 +18,9 @@
     "repair:referral-cancellation": "tsx ./src/repair-referral-cancellation.ts",
     "list:duplicate-reservations": "tsx ./src/list-duplicate-reservations.ts",
     "seed:stripe-plans": "tsx ./src/seed-stripe-plans.ts",
-    "test": "node --test ./verify-publication.test.mjs ./verify-publication-chunks.test.mjs",
+    "test": "node --test ./verify-publication.test.mjs ./verify-publication-chunks.test.mjs ./verify-referral-publication.test.mjs",
     "verify:publication-chunks": "node ./verify-publication-chunks.mjs",
+    "verify:publication-referral": "node ./verify-referral-publication.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

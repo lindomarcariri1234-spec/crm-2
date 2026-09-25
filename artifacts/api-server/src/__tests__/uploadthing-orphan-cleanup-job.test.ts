@@ -346,40 +346,52 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
 
     it("aborts scan and stages any found candidates when listFiles throws mid-pagination", async () => {
       const KEY = "key-before-error";
+      const secretMarker = "uploadthing-test-secret-not-for-logs";
+      const providerError = Object.assign(new Error("UploadThing API unreachable"), {
+        request: { headers: { "x-uploadthing-api-key": secretMarker } },
+      });
       mockStagingEmpty();
       mockListFiles
         .mockResolvedValueOnce(buildPage([KEY], /* hasMore= */ true))
-        .mockRejectedValueOnce(new Error("UploadThing API unreachable"));
+        .mockRejectedValueOnce(providerError);
 
       const result = await runUploadThingOrphanCleanup();
 
       expect(result.scanned).toBe(1);
       expect(result.newlyStaged).toBe(1);
       expect(mockDeleteFiles).not.toHaveBeenCalled();
+      expect(mockLogError).toHaveBeenCalledTimes(1);
       expect(mockLogError).toHaveBeenCalledWith(
-        expect.objectContaining({ err: expect.any(Error), offset: 500 }),
+        { offset: 500 },
         expect.stringContaining("Failed to list files"),
       );
+      expect(JSON.stringify(mockLogError.mock.calls[0])).not.toContain(secretMarker);
     });
 
     it("keeps keys in staging for retry when a deletion batch fails", async () => {
       const KEY = "delete-fail-key";
+      const secretMarker = "uploadthing-delete-test-secret-not-for-logs";
+      const providerError = Object.assign(new Error("UploadThing delete failed"), {
+        request: { headers: { "x-uploadthing-api-key": secretMarker } },
+      });
       const oldStagedAt = Date.now() - GRACE_MS - 1000;
       mockStaging([{ key: KEY, stagedAt: oldStagedAt }]);
       mockListFiles.mockResolvedValueOnce(buildPage([KEY]));
       mockCollectReferenced
         .mockResolvedValueOnce(new Set())
         .mockResolvedValueOnce(new Set());  // per-batch re-check
-      mockDeleteFiles.mockRejectedValueOnce(new Error("UploadThing delete failed"));
+      mockDeleteFiles.mockRejectedValueOnce(providerError);
 
       const result = await runUploadThingOrphanCleanup();
 
       expect(result.deleted).toBe(0);
       expect(result.errors).toBe(1);
+      expect(mockLogError).toHaveBeenCalledTimes(1);
       expect(mockLogError).toHaveBeenCalledWith(
-        expect.objectContaining({ err: expect.any(Error) }),
+        { batchStart: 0, batchSize: 1 },
         expect.stringContaining("Batch deletion failed"),
       );
+      expect(JSON.stringify(mockLogError.mock.calls[0])).not.toContain(secretMarker);
       // Key should be retained in staging for retry
       const written = writtenStaging();
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeDefined();

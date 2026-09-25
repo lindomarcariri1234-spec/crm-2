@@ -41,6 +41,7 @@ import {
   type ManifestPassenger,
   type ManifestPanel,
 } from "../lib/manifest-helpers.js";
+import { isValidTripTime, normalizeTripTime } from "../lib/trip-date-time.js";
 import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, hasPermission, RESOURCES, ACTIONS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
 import { parseTripStatus } from "../lib/status-validators";
 import { getPassengerExportFinancialValues } from "../lib/passenger-export";
@@ -50,6 +51,13 @@ import { AppError, ForbiddenError, NotFoundError, UnprocessableEntityError, Vali
 
 function parseBrazilDate(dateStr: string): Date {
   return new Date(dateStr + "T12:00:00.000-03:00");
+}
+
+function parseTripTime(value: string | null | undefined, fieldLabel: string): string | null {
+  if (!isValidTripTime(value)) {
+    throw new ValidationError(`${fieldLabel} inválido. Use o formato HH:MM.`, "VALIDATION_ERROR");
+  }
+  return normalizeTripTime(value);
 }
 
 function tripImportFingerprint(data: { name: string; destination: string; destinationCity: string; destinationState: string }, departureDate: Date): string {
@@ -171,8 +179,8 @@ async function buildTripInsertValues(
     freeGuides: parsedData.freeGuides ?? 0,
     originCity: parsedData.originCity ?? null,
     originState: parsedData.originState ?? null,
-    departureTime: parsedData.departureTime ?? null,
-    returnTime: parsedData.returnTime ?? null,
+    departureTime: parseTripTime(parsedData.departureTime, "Horário de saída"),
+    returnTime: parseTripTime(parsedData.returnTime, "Horário de retorno"),
     createdById: me.id,
     isPublic: parsedData.isPublic ?? false,
     isFeatured: parsedData.isFeatured ?? false,
@@ -925,8 +933,8 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
       freeGuides: parsed.data.freeGuides ?? 0,
       originCity: parsed.data.originCity ?? null,
       originState: parsed.data.originState ?? null,
-      departureTime: parsed.data.departureTime ?? null,
-      returnTime: parsed.data.returnTime ?? null,
+      departureTime: parseTripTime(parsed.data.departureTime, "Horário de saída"),
+      returnTime: parseTripTime(parsed.data.returnTime, "Horário de retorno"),
       createdById: me.id,
       isPublic: parsed.data.isPublic ?? false,
       isFeatured: parsed.data.isFeatured ?? false,
@@ -1288,8 +1296,12 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
     if (parsed.data.videos !== undefined) updates.videos = parsed.data.videos ?? [];
     if (parsed.data.originCity !== undefined) updates.originCity = parsed.data.originCity ?? null;
     if (parsed.data.originState !== undefined) updates.originState = parsed.data.originState ?? null;
-    if (parsed.data.departureTime !== undefined) updates.departureTime = parsed.data.departureTime ?? null;
-    if (parsed.data.returnTime !== undefined) updates.returnTime = parsed.data.returnTime ?? null;
+    if (parsed.data.departureTime !== undefined) {
+      updates.departureTime = parseTripTime(parsed.data.departureTime, "Horário de saída");
+    }
+    if (parsed.data.returnTime !== undefined) {
+      updates.returnTime = parseTripTime(parsed.data.returnTime, "Horário de retorno");
+    }
     if (parsed.data.driver1Cpf !== undefined) updates.driver1Cpf = parsed.data.driver1Cpf ?? null;
     if (parsed.data.driver1Cnh !== undefined) updates.driver1Cnh = parsed.data.driver1Cnh ?? null;
     if (parsed.data.driver1CnhCategory !== undefined) updates.driver1CnhCategory = parsed.data.driver1CnhCategory ?? null;
@@ -2032,11 +2044,18 @@ router.get("/trips/:id/boarding-panel", async (req, res, next: NextFunction): Pr
 
     const reservationMap = new Map(reservations.map(r => [r.id, r]));
     const clientMap = new Map(clients.map(c => [c.id, c]));
+    const emittedReservationFinancials = new Set<string>();
 
     const boardingPassengers = passengers.map(p => {
       const reservation = reservationMap.get(p.reservationId);
       const client = reservation?.clientId ? clientMap.get(reservation.clientId) : undefined;
       const effectiveBoardingLocationId = p.boardingLocationId ?? reservation?.boardingLocationId ?? null;
+      const emitFinancials = Boolean(
+        reservation
+        && !reservation.isGratuidade
+        && !emittedReservationFinancials.has(reservation.id),
+      );
+      if (emitFinancials) emittedReservationFinancials.add(reservation!.id);
       return {
         id: p.id,
         reservationId: p.reservationId,
@@ -2058,9 +2077,12 @@ router.get("/trips/:id/boarding-panel", async (req, res, next: NextFunction): Pr
         specialNeeds: p.specialNeeds ?? null,
         documentType: p.documentType ?? null,
         isGratuidade: reservation?.isGratuidade ?? false,
-        totalValue: reservation?.totalValue ?? null,
-        paidValue: reservation?.paidValue ?? null,
-        balance: reservation?.balance ?? null,
+        // A reservation total belongs to the booking, not to each passenger.
+        // Emit it once so the passenger table and its totals cannot multiply a
+        // three-passenger booking by three.
+        totalValue: emitFinancials ? reservation?.totalValue ?? null : null,
+        paidValue: emitFinancials ? reservation?.paidValue ?? null : null,
+        balance: emitFinancials ? reservation?.balance ?? null : null,
       };
     });
 

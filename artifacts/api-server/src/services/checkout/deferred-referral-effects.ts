@@ -1,7 +1,7 @@
 import { logger } from "../../lib/logger";
 import { db } from "@workspace/db";
 import { storeOrdersTable, referralsTable, reservationsTable, paymentsTable } from "@workspace/db";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { PAYMENT_STATUS, STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { recordReferralConversion, type ReferralConversionResult } from "./referral-conversion";
 import type { Tx } from "./tx";
@@ -21,9 +21,72 @@ interface PendingReferral {
   referralId?: string | null;
 }
 
+/**
+ * Closes a referral intent that was created for an order but never converted.
+ *
+ * `reversed` is reserved for a financial conversion that had already been
+ * completed and credited. A pending checkout has no convertedAt or bonus and
+ * therefore must end as `expired`, otherwise the referral consistency checks
+ * reject the row (or reports treat it as a real reversal).
+ */
+export async function expirePendingReferralForOrder(
+  tx: Tx,
+  args: {
+    tenantId: string;
+    referralId?: string | null;
+    referralCode?: string | null;
+    reason: "order_cancelled" | "order_abandoned";
+  },
+): Promise<boolean> {
+  let referralId = args.referralId ?? null;
+
+  if (!referralId && args.referralCode) {
+    const [pending] = await tx
+      .select({ id: referralsTable.id })
+      .from(referralsTable)
+      .where(and(
+        eq(referralsTable.tenantId, args.tenantId),
+        eq(referralsTable.code, args.referralCode),
+        eq(referralsTable.status, "pending"),
+        isNull(referralsTable.reservationId),
+      ))
+      .limit(1);
+    referralId = pending?.id ?? null;
+  }
+
+  if (!referralId) return false;
+
+  const referralWhere = args.referralId
+    ? and(
+      eq(referralsTable.id, referralId),
+      eq(referralsTable.tenantId, args.tenantId),
+      eq(referralsTable.status, "pending"),
+    )
+    : and(
+      eq(referralsTable.id, referralId),
+      eq(referralsTable.tenantId, args.tenantId),
+      eq(referralsTable.status, "pending"),
+      isNull(referralsTable.reservationId),
+    );
+
+  const [expired] = await tx
+    .update(referralsTable)
+    .set({
+      status: "expired",
+      reversalReason: args.reason,
+      reversalAt: null,
+      updatedAt: new Date(),
+    })
+    .where(referralWhere)
+    .returning({ id: referralsTable.id });
+
+  return Boolean(expired);
+}
+
 export interface DeferredReferralResult {
   conversionApplied: boolean;
   referrerId?: string;
+  referralId?: string;
   referralCode?: string;
   customerName?: string;
   tenantId?: string;
@@ -310,6 +373,7 @@ export async function applyDeferredOrderCredits(
       result = {
         conversionApplied: true,
         referrerId: ref.referrerId,
+        referralId: conversion.referralId ?? ref.referralId ?? undefined,
         referralCode: ref.code,
         customerName: order.customerName,
         tenantId: order.tenantId,

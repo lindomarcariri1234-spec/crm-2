@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Gift, Tag, Users, ArrowRight, CheckCircle, AlertTriangle } from "lucide-react";
 import { ROLES } from "@workspace/permissions";
 import { setStorefrontReferralCode } from "@/lib/storefrontAttribution";
+import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
 
 interface Props {
   slug: string;
@@ -166,6 +167,11 @@ export default function ReferralLanding({ slug, store }: Props) {
           <p className="text-muted-foreground text-lg">
             Aproveite um desconto exclusivo na sua primeira compra
           </p>
+          {referralInfo.firstPurchaseOnly && (
+            <p role="note" className="text-sm text-muted-foreground max-w-md mx-auto">
+              {FIRST_PURCHASE_REFERRAL_MESSAGE}
+            </p>
+          )}
         </div>
 
         {/* Discount Badge */}

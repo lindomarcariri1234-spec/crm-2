@@ -480,6 +480,7 @@ describe("runPostPaymentSideEffects", () => {
       mockApplyDeferredOrderCredits.mockResolvedValueOnce({
         conversionApplied: true,
         referrerId: "ref-1",
+        referralId: "referral-1",
         tenantId: "tenant-1",
         customerName: "João Silva",
         referralCode: null,
@@ -503,6 +504,7 @@ describe("runPostPaymentSideEffects", () => {
         "ref-1",
         "João Silva",
         "tenant-1",
+        "referral-1",
       );
       expect(mockDispatchReferralTierUpgradeEmail).not.toHaveBeenCalled();
       expect(mockDispatchReferralLoyaltyPointsEmail).not.toHaveBeenCalled();
@@ -512,6 +514,7 @@ describe("runPostPaymentSideEffects", () => {
       mockApplyDeferredOrderCredits.mockResolvedValueOnce({
         conversionApplied: true,
         referrerId: "ref-1",
+        referralId: "referral-1",
         tenantId: "tenant-1",
         customerName: "Maria Souza",
         referralCode: null,
@@ -545,6 +548,7 @@ describe("runPostPaymentSideEffects", () => {
       mockApplyDeferredOrderCredits.mockResolvedValueOnce({
         conversionApplied: true,
         referrerId: "ref-1",
+        referralId: "referral-1",
         tenantId: "tenant-1",
         customerName: "Carlos Pereira",
         referralCode: null,
@@ -569,6 +573,7 @@ describe("runPostPaymentSideEffects", () => {
         "tenant-1",
         150,
         500,
+        "referral-1",
       );
       expect(mockDispatchReferralTierUpgradeEmail).not.toHaveBeenCalled();
     });

@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
+import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql, desc, inArray, gte, lt } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
@@ -11,7 +11,7 @@ import { loyaltyAwardPoints, loyaltyAwardPointsForReservation, loyaltyReverseEar
 import { roundMoney } from "../lib/pricing";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { ALL_STAFF_ROLES } from '../lib/tenant';
-import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { enqueueNewBookingNotificationEmail, dispatchReferralReversedEmail } from "../queues/email-helpers";
@@ -533,6 +533,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
     let reservationClientId: string | null = null;
     let reservationTotalValue: string | null = null;
     let reservationBalance: number | null = null;
+    let reservationStoreOrderId: string | null = null;
     if (parsed.data.reservationId) {
       const [reservation] = await db.select().from(reservationsTable)
         .where(and(eq(reservationsTable.id, parsed.data.reservationId), eq(reservationsTable.tenantId, me.tenantId)))
@@ -541,6 +542,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       reservationClientId = reservation.clientId;
       reservationTotalValue = reservation.totalValue;
       reservationBalance = Number(reservation.balance);
+      reservationStoreOrderId = reservation.storeOrderId;
     }
     if (parsed.data.clientId) {
       const [client] = await db.select().from(clientsTable)
@@ -566,38 +568,105 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       return;
     }
 
+    const createdPaymentEvents: Array<{ id: string; amount: number }> = [];
     const totalCents = Math.round(parsed.data.amount * 100);
     const installmentBaseCents = Math.floor(totalCents / installments);
     const installmentRemainderCents = totalCents - installmentBaseCents * installments;
-    const createdPaymentEvents: Array<{ id: string; amount: number }> = [];
-    for (let i = 1; i <= installments; i++) {
-      const dueDate = new Date(parsed.data.dueDate);
-      dueDate.setMonth(dueDate.getMonth() + (i - 1));
-      const installmentCents = installmentBaseCents + (i <= installmentRemainderCents ? 1 : 0);
-      const paymentId = i === 1 ? id : generateId();
-      createdPaymentEvents.push({ id: paymentId, amount: installmentCents / 100 });
-      await db.insert(paymentsTable).values({
-        id: paymentId,
-        tenantId: me.tenantId,
-        reservationId: parsed.data.reservationId ?? null,
-        clientId: parsed.data.clientId ?? null,
-        type: parsePaymentType(parsed.data.type),
-        category: parsed.data.category,
-        amount: (installmentCents / 100).toFixed(2),
-        paymentMethod: parsed.data.paymentMethod,
-        installmentNumber: i,
-        totalInstallments: installments,
-        dueDate,
-        description: parsed.data.description ?? null,
-        notes: parsed.data.notes ?? null,
-        receiptUrl,
-        ...(explicitStatus ? { status: explicitStatus } : {}),
-        ...(explicitPaidAt ? { paidAt: explicitPaidAt } : {}),
-        ...(parsed.data.reservationId && parsed.data.type === PAYMENT_TYPE.RECEIVABLE
-          ? { gateway: "manual-reservation", transactionId: paymentId }
-          : {}),
-      });
-    }
+
+    // A payment for a storefront reservation must share the order lock with
+    // expiry and gateway confirmation. Otherwise the insert could happen after
+    // the expiry transaction cancelled the reservation, leaving a paid row on a
+    // released seat. The reservation re-check also rejects a late manual
+    // payment that reaches this endpoint after the hold has already elapsed.
+    await db.transaction(async (tx) => {
+      if (parsed.data.reservationId) {
+        // Match the expiry/gateway lock order: store order first, reservation
+        // second. The initial read is only used to locate the order; all
+        // mutable state is re-read under these locks below.
+        if (reservationStoreOrderId) {
+          const [lockedOrder] = await tx
+            .select({
+              status: storeOrdersTable.status,
+              paymentStatus: storeOrdersTable.paymentStatus,
+            })
+            .from(storeOrdersTable)
+            .where(and(
+              eq(storeOrdersTable.tenantId, me.tenantId),
+              eq(storeOrdersTable.orderNumber, reservationStoreOrderId),
+            ))
+            .for("update")
+            .limit(1);
+          if (
+            !lockedOrder
+            || lockedOrder.status === "cancelled"
+            || lockedOrder.paymentStatus === "refunded"
+          ) {
+            throw new ConflictError("Não é possível receber pagamento de um pedido encerrado", "ORDER_CLOSED");
+          }
+        }
+
+        const [lockedReservation] = await tx
+          .select({
+            id: reservationsTable.id,
+            status: reservationsTable.status,
+            storeOrderId: reservationsTable.storeOrderId,
+            expiresAt: reservationsTable.expiresAt,
+          })
+          .from(reservationsTable)
+          .where(and(
+            eq(reservationsTable.id, parsed.data.reservationId),
+            eq(reservationsTable.tenantId, me.tenantId),
+          ))
+          .for("update")
+          .limit(1);
+        if (!lockedReservation) {
+          throw new NotFoundError("Reservation not found or not in tenant", "RESERVATION_NOT_FOUND");
+        }
+        if (
+          lockedReservation.status === "cancelled"
+          || lockedReservation.status === "failed"
+          || lockedReservation.status === "refunded"
+        ) {
+          throw new ConflictError("Não é possível receber pagamento de uma reserva encerrada", "RESERVATION_CLOSED");
+        }
+        if (
+          lockedReservation.status === "pending"
+          && lockedReservation.expiresAt
+          && lockedReservation.expiresAt <= new Date()
+        ) {
+          throw new ConflictError("O prazo para pagamento desta reserva expirou", "RESERVATION_EXPIRED");
+        }
+      }
+
+      for (let i = 1; i <= installments; i++) {
+        const dueDate = new Date(parsed.data.dueDate);
+        dueDate.setMonth(dueDate.getMonth() + (i - 1));
+        const installmentCents = installmentBaseCents + (i <= installmentRemainderCents ? 1 : 0);
+        const paymentId = i === 1 ? id : generateId();
+        createdPaymentEvents.push({ id: paymentId, amount: installmentCents / 100 });
+        await tx.insert(paymentsTable).values({
+          id: paymentId,
+          tenantId: me.tenantId,
+          reservationId: parsed.data.reservationId ?? null,
+          clientId: parsed.data.clientId ?? null,
+          type: parsePaymentType(parsed.data.type),
+          category: parsed.data.category,
+          amount: (installmentCents / 100).toFixed(2),
+          paymentMethod: parsed.data.paymentMethod,
+          installmentNumber: i,
+          totalInstallments: installments,
+          dueDate,
+          description: parsed.data.description ?? null,
+          notes: parsed.data.notes ?? null,
+          receiptUrl,
+          ...(explicitStatus ? { status: explicitStatus } : {}),
+          ...(explicitPaidAt ? { paidAt: explicitPaidAt } : {}),
+          ...(parsed.data.reservationId && parsed.data.type === PAYMENT_TYPE.RECEIVABLE
+            ? { gateway: "manual-reservation", transactionId: paymentId }
+            : {}),
+        });
+      }
+    });
 
     const [payment] = await db.select().from(paymentsTable)
       .where(and(eq(paymentsTable.id, id), eq(paymentsTable.tenantId, me.tenantId)))

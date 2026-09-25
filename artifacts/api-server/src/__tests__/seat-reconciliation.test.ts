@@ -17,7 +17,7 @@ const {
   const capturedSets: Record<string, unknown>[] = [];
   const capturedDeletes: unknown[] = [];
   const mockLimit = vi.fn();
-  const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+  const mockWhere = vi.fn(() => ({ limit: mockLimit, for: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
   const mockTransaction = vi.fn();
@@ -40,6 +40,10 @@ vi.mock("@workspace/db", () => ({
   storeReviewsTable: {},
   storeCategoriesTable: {},
   reservationsTable: {},
+  accommodationsTable: {},
+  accommodationRoomsTable: {},
+  reservationRoomAssignmentsTable: {},
+  boardingLocationsTable: {},
   passengersTable: {},
   tripsTable: {},
   clientsTable: {},
@@ -56,6 +60,8 @@ vi.mock("@workspace/db", () => ({
   usersTable: {},
   paymentsTable: {},
   commissionsTable: {},
+  vehicleLayoutsTable: {},
+  reservationInstallmentsTable: {},
 }));
 
 vi.mock("drizzle-orm", async () => {
@@ -153,7 +159,7 @@ function stubLogger(
   next: express.NextFunction,
 ) {
   const noop = (..._args: unknown[]) => {};
-  req.log = { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop } as never;
+  req.log = { trace: noop, debug: noop, info: noop, warn: noop, error: console.error, fatal: noop } as never;
   next();
 }
 
@@ -247,16 +253,24 @@ interface QueryChain extends Promise<unknown[]> {
   limit(n?: number): Promise<unknown[]>;
   where(cond?: unknown): QueryChain;
   from(table?: unknown): QueryChain;
+  for(lock: string): QueryChain;
   orderBy(...args: unknown[]): Promise<unknown[]>;
 }
 
-function makeChain(data: unknown[]): QueryChain {
-  return Object.assign(Promise.resolve(data), {
-    limit: vi.fn().mockResolvedValue(data),
-    where: vi.fn().mockImplementation(() => makeChain(data)),
-    from: vi.fn().mockImplementation(() => makeChain(data)),
-    orderBy: vi.fn().mockResolvedValue(data),
-  }) as QueryChain;
+function makeChain(
+  resolveData: () => unknown[],
+  forResponse: () => unknown[] = () => [],
+): QueryChain {
+  const chain: Record<string, unknown> = {
+    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve().then(resolveData).then(resolve, reject),
+    limit: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+    where: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+    from: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+    for: vi.fn().mockImplementation(() => makeChain(forResponse)),
+    orderBy: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+  };
+  return chain as QueryChain;
 }
 
 // InsertResult supports both `await values()` and `await values().onConflictDoNothing()`.
@@ -264,7 +278,16 @@ interface InsertResult extends Promise<unknown[]> {
   onConflictDoNothing(): Promise<unknown[]>;
 }
 
-function buildTxMock(selectResponses: unknown[][] = []) {
+function buildTxMock(
+  selectResponses: unknown[][] = [],
+  lockReservation: Record<string, unknown> = {
+    id: "res-001",
+    tripId: "trip-001",
+    status: "pending",
+    seats: ["1A", "2B"],
+    capacityUnits: null,
+  },
+) {
   const queue = [...selectResponses];
   return {
     execute: vi.fn().mockResolvedValue({ rows: [] }),
@@ -279,7 +302,10 @@ function buildTxMock(selectResponses: unknown[][] = []) {
     update: vi.fn().mockImplementation(() => ({
       set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
         capturedSets.push(setArg);
-        return { where: vi.fn().mockResolvedValue([]) };
+        const result = Object.assign(Promise.resolve([]), {
+          returning: vi.fn().mockResolvedValue([{ id: "res-001" }]),
+        });
+        return { where: vi.fn().mockReturnValue(result) };
       }),
     })),
     delete: vi.fn().mockImplementation(() => ({
@@ -288,7 +314,10 @@ function buildTxMock(selectResponses: unknown[][] = []) {
         return Promise.resolve([]);
       }),
     })),
-    select: vi.fn().mockImplementation(() => makeChain(queue.shift() ?? [])),
+    select: vi.fn().mockImplementation(() => makeChain(
+      () => queue.shift() ?? [],
+      () => [lockReservation],
+    )),
   };
 }
 
@@ -303,7 +332,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
 
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
     mockLimit.mockResolvedValue([]);
-    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockWhere.mockReturnValue({ limit: mockLimit, for: mockLimit });
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
@@ -316,7 +345,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
     const placeholder = makePassenger("pax-ph1", false, "2B");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, placeholder]]);
+    const tx = buildTxMock([[updated], [primaryPax, placeholder]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -346,7 +375,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
     const ph2 = makePassenger("pax-ph2", false, "3C");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, ph1, ph2]]);
+    const tx = buildTxMock([[updated], [primaryPax, ph1, ph2]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -382,7 +411,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
     const placeholder = makePassenger("pax-ph1", false, "2B");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, placeholder]]);
+    const tx = buildTxMock([[updated], [primaryPax, placeholder]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -407,7 +436,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
     const ph = makePassenger("pax-ph1", false, "3C");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, filledPax, ph]]);
+    const tx = buildTxMock([[updated], [primaryPax, filledPax, ph]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
 
     const res = await request(app).patch("/api/reservations/res-001").send({ seats: ["1A"] });
@@ -430,7 +459,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
     const filledPax = makePassenger("pax-filled", false, "2B", "Carlos Lima", "555.444.333-22");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, filledPax]]);
+    const tx = buildTxMock([[updated], [primaryPax, filledPax]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
 
     const res = await request(app).patch("/api/reservations/res-001").send({ seats: [] });
@@ -451,7 +480,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
     const ph2 = makePassenger("pax-ph2", false, "3C");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, ph1, ph2]]);
+    const tx = buildTxMock([[updated], [primaryPax, ph1, ph2]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -468,7 +497,7 @@ describe("PATCH /api/reservations/:id — seat-to-passenger reconciliation", () 
 
     mockLimit.mockResolvedValueOnce([existing]);
     // tx selects: [0] re-fetch reservation, [1] current passengers (empty), [2] client lookup
-    const tx = buildTxMock([[updated], [], [FAKE_CLIENT]]);
+    const tx = buildTxMock([[updated], [], [FAKE_CLIENT]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -507,7 +536,7 @@ describe("PATCH /api/reservations/:id — seat bucket transitions", () => {
 
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
     mockLimit.mockResolvedValue([]);
-    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockWhere.mockReturnValue({ limit: mockLimit, for: mockLimit });
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
@@ -520,7 +549,7 @@ describe("PATCH /api/reservations/:id — seat bucket transitions", () => {
     const placeholder = makePassenger("pax-2", false, "2B");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, placeholder]]);
+    const tx = buildTxMock([[updated], [primaryPax, placeholder]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -542,7 +571,7 @@ describe("PATCH /api/reservations/:id — seat bucket transitions", () => {
     const placeholder = makePassenger("pax-2", false, "2B");
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated], [primaryPax, placeholder]]);
+    const tx = buildTxMock([[updated], [primaryPax, placeholder]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -564,7 +593,7 @@ describe("PATCH /api/reservations/:id — seat bucket transitions", () => {
     mockLimit.mockResolvedValueOnce([existing]);
     // Reversal 4 always runs when clientId exists: (1) paymentsTable select → [],
     // (2) loyaltyMembersTable.limit(1) → null (skip clawback), then reservation re-fetch.
-    const tx = buildTxMock([[], [null], [updated]]);
+    const tx = buildTxMock([[], [null], [updated]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -585,7 +614,7 @@ describe("PATCH /api/reservations/:id — seat bucket transitions", () => {
     mockLimit.mockResolvedValueOnce([existing]);
     // Reversal 4 always runs when clientId exists: (1) paymentsTable select → [],
     // (2) loyaltyMembersTable.limit(1) → null (skip clawback), then reservation re-fetch.
-    const tx = buildTxMock([[], [null], [updated]]);
+    const tx = buildTxMock([[], [null], [updated]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 

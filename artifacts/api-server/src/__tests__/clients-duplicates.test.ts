@@ -131,7 +131,7 @@ vi.mock("@clerk/express", () => ({
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: vi.fn(),
   getTenantUser: vi.fn(),
-  ADMIN_ROLES: ["admin"],
+  ADMIN_ROLES: ["admin", "agencia"],
   MANAGEMENT_ROLES: ["admin", "manager"],
 }));
 
@@ -224,7 +224,7 @@ function buildApp() {
 const ADMIN_USER = {
   id: "user-001",
   tenantId: "tenant-001",
-  role: "admin",
+  role: "agencia",
   name: "Admin User",
   email: "admin@example.com",
 };

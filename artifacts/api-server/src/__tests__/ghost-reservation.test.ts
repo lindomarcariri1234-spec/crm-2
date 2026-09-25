@@ -139,7 +139,7 @@ describe("Ghost reservation prevention — checkout route (real DB)", () => {
 });
 
 describe("Checkout order creation — immediate reservation sync (real DB)", () => {
-  it("creates a store order AND the client/reservation immediately at checkout; reservationExpiresAt is null", async () => {
+  it("creates a store order AND the client/reservation immediately at checkout with a short hold expiry", async () => {
     const email = `no-prealloc-${RUN}@test.com`;
 
     const res = await request(buildApp())
@@ -147,10 +147,10 @@ describe("Checkout order creation — immediate reservation sync (real DB)", () 
       .send({ customerName: "No Prealloc Customer", customerEmail: email, items: [{ productId: PROD_ID, quantity: 1 }] });
 
     expect(res.status).toBe(200);
-    // Payment-gated pricing/expiry fields are unaffected: reservationExpiresAt
-    // stays null (no temporary seat holds), but the reservation itself is no
-    // longer payment-gated — it is created synchronously within this request.
-    expect(res.body.reservationExpiresAt).toBeNull();
+    // Checkout creates the pending reservation synchronously and applies the
+    // same short hold window used by the abandoned-order expiry job.
+    expect(res.body.reservationExpiresAt).toEqual(expect.any(String));
+    expect(new Date(res.body.reservationExpiresAt).getTime()).toBeGreaterThan(Date.now());
 
     // Client row MUST exist now — checkout immediately syncs to the CRM so
     // agencies see the lead/client right away, even before payment confirms.

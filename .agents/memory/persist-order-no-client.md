@@ -11,4 +11,5 @@ The store-public checkout route creates the CRM client, reservation, pipeline de
 **How to apply:**
 - Any code path that creates the reservation/client at checkout time must be treated as request-critical, not best-effort: if it throws, the route must return an error (not swallow-and-log-and-200), even though the order row itself may already be persisted.
 - The reservation-creation service function is idempotent by orderId, so returning an error and letting the client retry (or letting the later payment-confirmation call pick it up) is safe — it will not create duplicates.
+- Pending reservations created by checkout still receive the short hold expiry used by abandoned-order cleanup; `reservationExpiresAt` is expected to be a future timestamp, not `null`.
 - When adding a new payment-confirmation gate (e.g. "did payment status actually flip to paid in this request"), gate on the *actual state transition*, not on the requested/payload value — a resent or duplicate "paid" webhook/admin action must not re-trigger payment-recording logic whose own dedup key doesn't recognize the other gateway's prior payment.

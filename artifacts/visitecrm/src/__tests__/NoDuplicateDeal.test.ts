@@ -35,6 +35,7 @@ import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js
 const createClientMock = vi.hoisted(() => vi.fn());
 const updateClientMock = vi.hoisted(() => vi.fn());
 const createReservationMock = vi.hoisted(() => vi.fn());
+const updateReservationMock = vi.hoisted(() => vi.fn());
 const createDealMock = vi.hoisted(() => vi.fn());
 const updateReservationRoomAssignmentsMock = vi.hoisted(() => vi.fn());
 const calculateCommissionMock = vi.hoisted(() => vi.fn());
@@ -97,6 +98,7 @@ vi.mock("@workspace/api-client-react", () => ({
    useUpdateClient: () => ({ mutateAsync: updateClientMock, isPending: false }),
   useCreateDeal: () => ({ mutateAsync: createDealMock, isPending: false }),
   useCreateReservation: () => ({ mutateAsync: createReservationMock, isPending: false }),
+  useUpdateReservation: () => ({ mutateAsync: updateReservationMock, isPending: false }),
   useListAccommodations: () => ({ data: [] }),
   useGetTripRoomAllocationSummary: () => ({
     data: {
@@ -219,13 +221,19 @@ vi.mock("@/components/ui/tabs", () => ({
 vi.mock("@/components/ui/select", () => ({
   Select: ({
     onValueChange,
+    value,
     children,
   }: {
     onValueChange?: (v: string) => void;
+    value?: string;
     children?: unknown;
   }) => {
+    const index = selectRegistry.handlers.length;
     selectRegistry.handlers.push(onValueChange);
-    return createElement("div", null, children as never);
+    return createElement("div", {
+      "data-select-index": index,
+      "data-selected-value": value,
+    }, children as never);
   },
   SelectTrigger: () => null,
   SelectValue: () => null,
@@ -387,6 +395,8 @@ beforeEach(() => {
   updateClientMock.mockReset().mockResolvedValue({});
   // Default: reservation succeeds
   createReservationMock.mockResolvedValue({ id: "res-456" });
+  updateReservationMock.mockReset().mockResolvedValue({});
+  TRIPS_FIXTURE.data.data[0]!.boardingPoints = [];
   // Default: deal creation succeeds (only relevant when guard allows it through)
   createDealMock.mockResolvedValue({ id: "deal-789" });
   updateReservationRoomAssignmentsMock.mockResolvedValue({});
@@ -563,6 +573,70 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
     // Guard is active: createdReservationId="res-456" → !createdReservationId=false
     // → createDeal must NOT be called (no duplicate Pipeline card)
     expect(createDealMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the selected boarding-point ID when a complimentary reservation is created", async () => {
+    TRIPS_FIXTURE.data.data[0]!.boardingPoints = [
+      { id: "boarding-juazeiro", name: "Rodoviária de Juazeiro do Norte" },
+    ];
+
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: null,
+        onSave: vi.fn(),
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    const tripIdHandler = selectRegistry.handlers[4];
+    const nameInput = Array.from(container.querySelectorAll<HTMLInputElement>("input"))
+      .find(input => input.placeholder?.includes("Maria"));
+    const whatsappInput = Array.from(container.querySelectorAll<HTMLInputElement>("input"))
+      .find(input => input.placeholder?.includes("+55"));
+    const cpfInput = Array.from(container.querySelectorAll<HTMLInputElement>("input"))
+      .find(input => input.placeholder?.includes("000.000.000"));
+    const emailInput = Array.from(container.querySelectorAll<HTMLInputElement>("input"))
+      .find(input => input.placeholder?.includes("maria@email.com"));
+
+    await flushAct(() => {
+      if (nameInput) setNativeInputValue(nameInput, "Maria Silva");
+      if (whatsappInput) setNativeInputValue(whatsappInput, "+5531999999999");
+      if (cpfInput) setNativeInputValue(cpfInput, VALID_CPF_DIGITS);
+      if (emailInput) setNativeInputValue(emailInput, "maria@example.com");
+      tripIdHandler?.("trip-1");
+    });
+
+    const boardingPointOption = container.querySelector<HTMLElement>(
+      '[data-value="boarding-juazeiro"]',
+    );
+    const boardingSelectIndex = Number(
+      boardingPointOption?.closest("[data-select-index]")?.getAttribute("data-select-index"),
+    );
+    const boardingPointHandler = selectRegistry.handlers[boardingSelectIndex];
+    expect(boardingPointHandler).toBeDefined();
+    expect(boardingPointOption).not.toBeNull();
+
+    await flushAct(() => {
+      boardingPointHandler?.("boarding-juazeiro");
+      container.querySelector<HTMLInputElement>("#isGratuidade")?.click();
+    });
+
+    const submitButton = Array.from(container.querySelectorAll("button"))
+      .find(button => button.textContent?.includes("Criar"));
+    expect(submitButton?.disabled).toBe(false);
+    await flushAct(async () => {
+      submitButton?.click();
+    });
+
+    expect(createReservationMock).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        isGratuidade: true,
+        boardingLocationId: "boarding-juazeiro",
+      }),
+    }));
   });
 
   /**

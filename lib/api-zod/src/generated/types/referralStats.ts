@@ -14,4 +14,9 @@ export interface ReferralStats {
   conversionRate: number;
   totalBonusPaid: number;
   totalDiscountGiven: number;
+  suspicious: number;
+  expiringSoon: number;
+  pendingBonus: number;
+  bonusNotified: number;
+  bonusNotNotified: number;
 }

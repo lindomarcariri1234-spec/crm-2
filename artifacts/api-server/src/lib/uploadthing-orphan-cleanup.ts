@@ -149,7 +149,7 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
         page = await utapi.listFiles({ limit: PAGE_SIZE, offset });
       } catch (listErr) {
         logger.error(
-          { err: listErr, offset },
+          { offset },
           "[uploadthing-orphan] Failed to list files from UploadThing — aborting scan",
         );
         break;
@@ -244,7 +244,7 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
             updatedStaging.push({ key, stagedAt: existingStagedMap.get(key) ?? now });
           }
           logger.error(
-            { err: batchErr, batchStart: i, batchSize: confirmedBatch.length },
+            { batchStart: i, batchSize: confirmedBatch.length },
             "[uploadthing-orphan] Batch deletion failed — retaining in staging for next run",
           );
         }

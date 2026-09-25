@@ -96,10 +96,14 @@ describe("calculateReferralCommercialAnalytics", () => {
     expect(summary).toEqual({
       validReferrals: 1,
       attributedRevenue: 100,
+      bonusConverted: 10,
       rewardsPaid: 10,
       rewardsPending: 0,
+      creditsUsed: 0,
       discountGiven: 5,
       commissions: 12.5,
+      reversedAmount: 40,
+      reversedReferrals: 1,
       acquisitionCost: 15,
       cac: 15,
       roiPercent: 566.67,
@@ -123,10 +127,14 @@ describe("calculateReferralCommercialAnalytics", () => {
     expect(summary).toEqual({
       validReferrals: 0,
       attributedRevenue: 0,
+      bonusConverted: 0,
       rewardsPaid: 0,
       rewardsPending: 0,
+      creditsUsed: 0,
       discountGiven: 0,
       commissions: 0,
+      reversedAmount: 0,
+      reversedReferrals: 0,
       acquisitionCost: 0,
       cac: 0,
       roiPercent: 0,
@@ -176,6 +184,9 @@ describe("calculateReferralCommercialAnalytics", () => {
     );
 
     expect(summary.commissions).toBe(30);
+    expect(summary.bonusConverted).toBe(10);
+    expect(summary.creditsUsed).toBe(0);
+    expect(summary.reversedAmount).toBe(0);
     expect(summary.acquisitionCost).toBe(15);
     expect(ranking).toEqual([expect.objectContaining({
       referrerId: "referrer-1",

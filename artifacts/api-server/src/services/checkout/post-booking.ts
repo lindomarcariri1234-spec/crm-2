@@ -56,6 +56,7 @@ export async function runDeferredOrderAccounting(
         deferred.referrerId,
         deferred.customerName ?? "",
         deferred.tenantId,
+        deferred.referralId,
       ).catch((err) =>
         logger.error({ err }, "[checkout/post-payment] Failed to dispatch referral-converted email"),
       );
@@ -80,6 +81,7 @@ export async function runDeferredOrderAccounting(
           deferred.tenantId,
           deferred.conversion.loyaltyPointsGranted,
           deferred.conversion.loyaltyCurrentBalance,
+          deferred.referralId,
         ).catch((err) =>
           logger.error({ err }, "[checkout/post-payment] Failed to dispatch referral loyalty-points email"),
         );

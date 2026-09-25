@@ -395,7 +395,24 @@ describe("GET /api/client/me", () => {
     mockLimit
       .mockResolvedValueOnce([FAKE_USER_ROW])           // #1 user
       .mockResolvedValueOnce([FAKE_TENANT_ROW])          // #2 tenant
-      .mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID]); // #3 userId hit → found
+      .mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])  // #3 userId hit → found
+      .mockResolvedValueOnce([{ gracePeriodDays: 30 }]); // referral settings
+    mockOrderBy.mockResolvedValueOnce([]); // reservations
+    mockGroupBy.mockResolvedValueOnce([]); // referral summary
+    mockWhere
+      .mockReturnValueOnce(buildWhereResult()) // user lookup
+      .mockReturnValueOnce(buildWhereResult()) // tenant lookup
+      .mockReturnValueOnce(buildWhereResult()) // client lookup
+      .mockReturnValueOnce(buildWhereResult()) // referral summary
+      .mockReturnValueOnce(buildWhereResult()) // referral settings
+      .mockReturnValueOnce(buildWhereResult([{
+        status: "completed",
+        bonusAmount: "100.00",
+        bonusPaid: true,
+        bonusCreditUsedAmount: "40.00",
+        convertedAt: new Date("2026-08-01T15:00:00.000Z"),
+        expiresAt: new Date("2026-12-01T15:00:00.000Z"),
+      }])); // wallet rows
 
     const app = buildClientPortalApp();
     const res = await request(app).get("/api/client/me");
@@ -409,7 +426,11 @@ describe("GET /api/client/me", () => {
     expect(res.body.user).toMatchObject({ id: "user-001" });
     expect(res.body.tenant).toMatchObject({ id: "tenant-001" });
     expect(res.body.reservations).toEqual([]);
-    expect(res.body.referral).toMatchObject({ totalReferrals: 0 });
+    expect(res.body.referral).toMatchObject({
+      totalReferrals: 0,
+      creditBalance: "60.00",
+      wallet: { availableCredit: 60 },
+    });
   });
 
   it("finds client via email fallback when userId lookup returns nothing", async () => {

@@ -1,10 +1,15 @@
 import { db } from "@workspace/db";
-import { reservationsTable, storeOrdersTable, tripsTable } from "@workspace/db";
+import { paymentsTable, reservationsTable, storeOrdersTable, tripsTable } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { logger } from "./logger";
-import { RESERVATION_STATUS } from "@workspace/permissions";
+import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS } from "@workspace/permissions";
 import { broadcastSeatUpdate } from "./realtime";
+import { cancelPartnerOrderItems } from "../services/checkout/cancel-partner-items";
 import { releaseOrderInventoryHolds } from "../services/checkout/persist-order";
+import {
+  expirePendingReferralForOrder,
+  restoreSpentCreditForOrder,
+} from "../services/checkout/deferred-referral-effects";
 
 type CancelledRow = {
   id: string;
@@ -45,8 +50,9 @@ export async function runExpiredReservationsCron(): Promise<void> {
     `);
 
     // Cancel all expired pending reservations atomically and get the affected rows.
-    // Reservations that already have at least one associated payment are skipped so
-    // that paid-but-slow reservations are never incorrectly cancelled by the TTL cron.
+    // Only a real receivable payment protects a reservation from expiry. Pending,
+    // failed, cancelled, and other non-receivable rows are gateway history, not
+    // proof that money was received.
     const result = await tx.execute(
       sql`
         UPDATE reservations
@@ -69,8 +75,20 @@ export async function runExpiredReservationsCron(): Promise<void> {
             )
           )
           AND NOT EXISTS (
-            SELECT 1 FROM payments
-            WHERE payments.reservation_id = reservations.id
+            SELECT 1
+            FROM payments
+            WHERE payments.tenant_id = reservations.tenant_id
+              AND payments.type = ${PAYMENT_TYPE.RECEIVABLE}
+              AND payments.status = ${PAYMENT_STATUS.PAID}
+              AND (
+                payments.reservation_id = reservations.id
+                OR payments.order_id = (
+                  SELECT store_orders.id
+                  FROM store_orders
+                  WHERE store_orders.tenant_id = reservations.tenant_id
+                    AND store_orders.order_number = reservations.store_order_id
+                )
+              )
           )
         RETURNING id, trip_id, tenant_id, seats, capacity_units, store_order_id
       `,
@@ -105,8 +123,32 @@ export async function runExpiredReservationsCron(): Promise<void> {
       const orders = await tx.select({
         id: storeOrdersTable.id,
         orderNumber: storeOrdersTable.orderNumber,
+        tenantId: storeOrdersTable.tenantId,
+        pendingReferral: storeOrdersTable.pendingReferral,
+        referralEffectsAppliedAt: storeOrdersTable.referralEffectsAppliedAt,
       }).from(storeOrdersTable).where(inArray(storeOrdersTable.orderNumber, orderNumbers));
       for (const order of orders) {
+        if (order.pendingReferral?.code && !order.referralEffectsAppliedAt) {
+          await expirePendingReferralForOrder(
+            tx as unknown as Parameters<typeof expirePendingReferralForOrder>[0],
+            {
+              tenantId: order.tenantId,
+              referralId: order.pendingReferral.referralId,
+              referralCode: order.pendingReferral.code,
+              reason: "order_abandoned",
+            },
+          );
+        }
+        await restoreSpentCreditForOrder(
+          tx as unknown as Parameters<typeof restoreSpentCreditForOrder>[0],
+          order.id,
+        );
+        await cancelPartnerOrderItems(tx, {
+          orderId: order.id,
+          tenantId: order.tenantId,
+          reason: "Pedido expirado sem pagamento",
+          skipAvailabilityRelease: false,
+        });
         await releaseOrderInventoryHolds(order.id, tx);
         await tx.update(storeOrdersTable).set({
           status: "cancelled",

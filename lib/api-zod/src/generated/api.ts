@@ -8464,6 +8464,10 @@ export const ListReferralsQueryParams = zod.object({
   limit: zod.coerce.number().int().default(listReferralsQueryLimitDefault),
   status: zod.coerce.string().optional(),
   search: zod.coerce.string().optional(),
+  bonusPaid: zod.coerce.boolean().optional(),
+  fraudFlag: zod.coerce.boolean().optional(),
+  expiringSoon: zod.coerce.boolean().optional(),
+  bonusNotified: zod.coerce.boolean().optional(),
 });
 
 export const ListReferralsResponse = zod.object({
@@ -8574,6 +8578,15 @@ export const CreateReferralResponse = zod.object({
 /**
  * @summary Get referral statistics for the tenant
  */
+export const GetReferralStatsQueryParams = zod.object({
+  status: zod.coerce.string().optional(),
+  search: zod.coerce.string().optional(),
+  bonusPaid: zod.coerce.boolean().optional(),
+  fraudFlag: zod.coerce.boolean().optional(),
+  expiringSoon: zod.coerce.boolean().optional(),
+  bonusNotified: zod.coerce.boolean().optional(),
+});
+
 export const GetReferralStatsResponse = zod.object({
   total: zod.number().int(),
   pending: zod.number().int(),
@@ -8582,6 +8595,11 @@ export const GetReferralStatsResponse = zod.object({
   conversionRate: zod.number().int(),
   totalBonusPaid: zod.number(),
   totalDiscountGiven: zod.number(),
+  suspicious: zod.number().int(),
+  expiringSoon: zod.number().int(),
+  pendingBonus: zod.number().int(),
+  bonusNotified: zod.number().int(),
+  bonusNotNotified: zod.number().int(),
 });
 
 /**
@@ -10512,9 +10530,18 @@ export const ReversePaidReferralBonusResponse = zod
 /**
  * @summary Send a referral WhatsApp test message to the configured agency number
  */
+export const testWhatsAppMessageBodyPhoneMin = 8;
+
 export const TestWhatsAppMessageBody = zod.object({
   type: zod.enum(["converted", "bonusPaid", "reversed", "share"]),
   message: zod.string().optional(),
+  phone: zod
+    .string()
+    .min(testWhatsAppMessageBodyPhoneMin)
+    .optional()
+    .describe(
+      "Optional test destination; defaults to the configured agency WhatsApp number.",
+    ),
 });
 
 export const TestWhatsAppMessageResponse = zod.object({

@@ -108,10 +108,6 @@ args = "Start application"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "artifacts/cliente-app: expo"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "api-typecheck"
 
 [[workflows.workflow.tasks]]

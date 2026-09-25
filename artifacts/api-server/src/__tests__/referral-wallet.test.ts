@@ -38,7 +38,7 @@ describe("calculateReferralWallet", () => {
     expect(wallet.expiringOn?.toISOString()).toBe("2026-08-26T15:00:00.000Z");
   });
 
-  it("does not surface paid, expired, or reversed rewards as active credit", () => {
+  it("surfaces paid rewards as available credit but excludes expired or reversed rewards", () => {
     const wallet = calculateReferralWallet(
       [
         {
@@ -71,7 +71,7 @@ describe("calculateReferralWallet", () => {
     );
 
     expect(wallet).toEqual({
-      availableCredit: 0,
+      availableCredit: 20,
       pendingCredit: 0,
       usedCredit: 0,
       expiringCredit: 0,

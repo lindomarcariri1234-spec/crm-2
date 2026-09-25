@@ -32,7 +32,10 @@ const {
     mockUpdate: vi.fn(() => ({ set })),
     mockSendReservationConfirmationEmail: vi.fn(),
     mockSendReminderHtmlEmail: vi.fn(),
-    mockWorker: vi.fn().mockImplementation((_queue, processor) => {
+    mockWorker: vi.fn(function MockWorker(
+      _queue: string,
+      processor: (job: unknown) => Promise<unknown>,
+    ) {
       processors.push(processor);
       return {
         on: vi.fn((event, handler) => {

@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable, auditLogsTable } from "@workspace/db";
-import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull } from "drizzle-orm";
+import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull, gte, lte } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
@@ -18,8 +18,10 @@ import { rankingMetadata } from "../lib/ranking-contract";
 import { calculateReceivedAmount, linkedOrder, linkedReservation } from "../lib/linked-data";
 import { linkedDeal } from "../lib/linked-data";
 import { reversePaidReferralBonus } from "../services/reservation-referral-conversion";
+import { REFERRAL_NOTIFICATION_TYPE } from "../lib/referral-notification-types";
 
 const router = Router();
+const PUBLIC_REFERRAL_EMAIL_FAILURE = "Não foi possível enviar a notificação.";
 const CampaignBonusType = z.enum(["multiplier", "fixed_extra", "fixed_bonus", "percentage_bonus", "reduced_bonus", "no_reward"]);
 const CampaignConfig = z.object({
   eligibleStoreProductIds: z.array(z.string().min(1)).max(500).optional(),
@@ -49,6 +51,25 @@ router.get("/referrals/validate/:code", async (req, res, next: NextFunction): Pr
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const [tenant] = await db
+      .select({ settings: tenantsTable.settings })
+      .from(tenantsTable)
+      .where(eq(tenantsTable.id, me.tenantId))
+      .limit(1);
+    if ((tenant?.settings as Record<string, unknown> | null)?.referralsEnabled === false) {
+      res.json({
+        valid: false,
+        bonusAmount: 0,
+        message: "Programa de indicação inativo",
+      });
+      return;
+    }
+
     const { code } = req.params;
 
     const [referral] = await db
@@ -59,7 +80,10 @@ router.get("/referrals/validate/:code", async (req, res, next: NextFunction): Pr
         referrerCodeStatus: clientsTable.referralCodeStatus,
       })
       .from(referralsTable)
-      .leftJoin(clientsTable, eq(referralsTable.referrerId, clientsTable.id))
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
       .where(and(
         eq(referralsTable.tenantId, me.tenantId),
         eq(referralsTable.code, code),
@@ -93,11 +117,55 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
     if (!me) return;
     if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
+    const status = req.query.status as string | undefined;
+    const search = req.query.search as string | undefined;
+    const bonusPaid = req.query.bonusPaid as string | undefined;
+    const fraudFlag = req.query.fraudFlag as string | undefined;
+    const expiringSoon = req.query.expiringSoon as string | undefined;
+    const bonusNotified = req.query.bonusNotified as string | undefined;
+    const validReferralStatuses = Object.values(REFERRAL_STATUS);
+    if (status && !validReferralStatuses.includes(status as (typeof validReferralStatuses)[number])) {
+      next(new ValidationError(String(`Invalid status. Must be one of: ${validReferralStatuses.join(", ")}`), "VALIDATION_ERROR"));
+      return;
+    }
+
+    const conditions = [eq(referralsTable.tenantId, me.tenantId)];
+    if (status) conditions.push(eq(referralsTable.status, status));
+    if (search) {
+      conditions.push(or(
+        ilike(referralsTable.code, `%${search}%`),
+        ilike(referralsTable.referrerName, `%${search}%`),
+        ilike(referralsTable.referredEmail, `%${search}%`),
+        ilike(referralsTable.referredName, `%${search}%`),
+        ilike(clientsTable.name, `%${search}%`),
+        ilike(clientsTable.email, `%${search}%`),
+      )!);
+    }
+    if (bonusPaid === "true") conditions.push(eq(referralsTable.bonusPaid, true));
+    if (bonusPaid === "false") conditions.push(eq(referralsTable.bonusPaid, false));
+    if (fraudFlag === "true") conditions.push(eq(referralsTable.fraudFlag, true));
+    if (fraudFlag === "false") conditions.push(eq(referralsTable.fraudFlag, false));
+    if (bonusNotified === "true") conditions.push(isNotNull(referralsTable.bonusReleaseNotifiedAt));
+    if (bonusNotified === "false") conditions.push(isNull(referralsTable.bonusReleaseNotifiedAt));
+    if (expiringSoon === "true") {
+      const now = new Date();
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      conditions.push(
+        eq(referralsTable.status, REFERRAL_STATUS.PENDING),
+        gte(referralsTable.expiresAt, now),
+        lte(referralsTable.expiresAt, sevenDaysFromNow),
+      );
+    }
+
     const rows = await db.select({
       status: referralsTable.status,
       cnt: count(),
     }).from(referralsTable)
-      .where(eq(referralsTable.tenantId, me.tenantId))
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions))
       .groupBy(referralsTable.status);
 
     const stats: Record<string, number> = { pending: 0, completed: 0, expired: 0 };
@@ -109,18 +177,42 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
     const [earningsRow] = await db.select({
       total: sql<string>`COALESCE(SUM(bonus_amount),0)`,
     }).from(referralsTable)
-      .where(and(
-        eq(referralsTable.tenantId, me.tenantId),
-        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
-      ));
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions, eq(referralsTable.status, REFERRAL_STATUS.COMPLETED), eq(referralsTable.bonusPaid, true)));
 
     const [discountRow] = await db.select({
       total: sql<string>`COALESCE(SUM(discount_amount),0)`,
     }).from(referralsTable)
-      .where(and(
-        eq(referralsTable.tenantId, me.tenantId),
-        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
-      ));
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions, eq(referralsTable.status, REFERRAL_STATUS.COMPLETED)));
+
+    const now = new Date();
+    const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const [globalCounts] = await db.select({
+      suspicious: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.fraudFlag} = true)`,
+      expiringSoon: sql<number>`COUNT(*) FILTER (
+        WHERE ${referralsTable.status} = ${REFERRAL_STATUS.PENDING}
+          AND ${referralsTable.expiresAt} >= ${now}
+          AND ${referralsTable.expiresAt} <= ${sevenDaysFromNow}
+      )`,
+      pendingBonus: sql<number>`COUNT(*) FILTER (
+        WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED}
+          AND ${referralsTable.bonusPaid} = false
+      )`,
+      bonusNotified: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusReleaseNotifiedAt} IS NOT NULL)`,
+      bonusNotNotified: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.bonusReleaseNotifiedAt} IS NULL)`,
+    }).from(referralsTable)
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions));
 
     const conversionRate = total > 0 ? Math.round((stats.completed / total) * 100) : 0;
 
@@ -138,7 +230,11 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
         conversions: sql<number>`COUNT(*) FILTER (WHERE ${referralsTable.status} = ${REFERRAL_STATUS.COMPLETED})`,
       })
       .from(referralsTable)
-      .where(eq(referralsTable.tenantId, me.tenantId))
+      .leftJoin(clientsTable, and(
+        eq(referralsTable.referrerId, clientsTable.id),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
+      .where(and(...conditions))
       .groupBy(referralsTable.referrerId);
 
     const tierDistribution: Record<string, number> = {};
@@ -169,6 +265,11 @@ router.get("/referrals/stats", async (req, res, next: NextFunction): Promise<voi
       conversionRate,
       totalBonusPaid: Number(earningsRow?.total ?? 0),
       totalDiscountGiven: Number(discountRow?.total ?? 0),
+      suspicious: Number(globalCounts?.suspicious ?? 0),
+      expiringSoon: Number(globalCounts?.expiringSoon ?? 0),
+      pendingBonus: Number(globalCounts?.pendingBonus ?? 0),
+      bonusNotified: Number(globalCounts?.bonusNotified ?? 0),
+      bonusNotNotified: Number(globalCounts?.bonusNotNotified ?? 0),
       tiersConfig,
       tierDistribution,
       currentTier: {
@@ -197,6 +298,10 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
     const offset = (page - 1) * limit;
     const status = req.query.status as string | undefined;
     const search = req.query.search as string | undefined;
+    const bonusPaid = req.query.bonusPaid as string | undefined;
+    const fraudFlag = req.query.fraudFlag as string | undefined;
+    const expiringSoon = req.query.expiringSoon as string | undefined;
+    const bonusNotified = req.query.bonusNotified as string | undefined;
 
     const validReferralStatuses = Object.values(REFERRAL_STATUS);
     if (status && !validReferralStatuses.includes(status as (typeof validReferralStatuses)[number])) {
@@ -215,6 +320,21 @@ router.get("/referrals", async (req, res, next: NextFunction): Promise<void> => 
         ilike(clientsTable.name, `%${search}%`),
         ilike(clientsTable.email, `%${search}%`),
       )!);
+    }
+    if (bonusPaid === "true") conditions.push(eq(referralsTable.bonusPaid, true));
+    if (bonusPaid === "false") conditions.push(eq(referralsTable.bonusPaid, false));
+    if (fraudFlag === "true") conditions.push(eq(referralsTable.fraudFlag, true));
+    if (fraudFlag === "false") conditions.push(eq(referralsTable.fraudFlag, false));
+    if (bonusNotified === "true") conditions.push(isNotNull(referralsTable.bonusReleaseNotifiedAt));
+    if (bonusNotified === "false") conditions.push(isNull(referralsTable.bonusReleaseNotifiedAt));
+    if (expiringSoon === "true") {
+      const now = new Date();
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      conditions.push(
+        eq(referralsTable.status, REFERRAL_STATUS.PENDING),
+        gte(referralsTable.expiresAt, now),
+        lte(referralsTable.expiresAt, sevenDaysFromNow),
+      );
     }
 
     const [totalRow] = await db.select({ total: count() }).from(referralsTable)
@@ -743,7 +863,19 @@ router.post("/referrals/:id/resend-expiry-warning", async (req, res, next: NextF
       .set(clearUpdate)
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
 
-    await dispatchReferralExpiringSoonEmail(row.referrerId, me.tenantId, row.code, expiresAt, windowNum);
+    const delivered = await dispatchReferralExpiringSoonEmail(
+      row.referrerId,
+      me.tenantId,
+      row.code,
+      expiresAt,
+      windowNum,
+      row.id,
+      `manual-${generateId()}`,
+    );
+    if (!delivered) {
+      next(new AppError(PUBLIC_REFERRAL_EMAIL_FAILURE, 502, "REFERRAL_EMAIL_FAILED"));
+      return;
+    }
 
     const sentNow = new Date();
     const sentUpdate = windowNum === 7
@@ -838,13 +970,18 @@ router.post("/referrals/:id/resend-bonus-release", async (req, res, next: NextFu
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
 
     const releaseDate = bonusReleasesAt?.toISOString() ?? now.toISOString();
-    await dispatchReferralBonusReleasedEmail(
+    const delivered = await dispatchReferralBonusReleasedEmail(
       row.referrerId,
       me.tenantId,
       parseFloat(String(row.bonusAmount)) || 0,
       releaseDate,
       row.id,
+      `manual-${generateId()}`,
     );
+    if (!delivered) {
+      next(new AppError(PUBLIC_REFERRAL_EMAIL_FAILURE, 502, "REFERRAL_EMAIL_FAILED"));
+      return;
+    }
 
     const sentNow = new Date();
     await db.update(referralsTable)
@@ -886,44 +1023,40 @@ router.get("/referrals/:id/expiry-email-status", async (req, res, next: NextFunc
     if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
     const [row] = await db.select({
-      code: referralsTable.code,
-      referrerClientEmail: clientsTable.email,
+      id: referralsTable.id,
     }).from(referralsTable)
-      .leftJoin(clientsTable, and(
-        eq(referralsTable.referrerId, clientsTable.id),
-        eq(clientsTable.tenantId, me.tenantId),
-      ))
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)))
       .limit(1);
 
     if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
 
-    const referrerEmail = row.referrerClientEmail;
-    if (!referrerEmail) {
-      res.json({ d7: null, d1: null });
-      return;
-    }
-
     const logs = await db.select({
       id: emailLogsTable.id,
-      subject: emailLogsTable.subject,
+      notificationType: emailLogsTable.notificationType,
       status: emailLogsTable.status,
       errorMessage: emailLogsTable.errorMessage,
       createdAt: emailLogsTable.createdAt,
     }).from(emailLogsTable)
       .where(and(
         eq(emailLogsTable.tenantId, me.tenantId),
-        eq(emailLogsTable.recipient, referrerEmail),
-        ilike(emailLogsTable.subject, `%${row.code}%`),
+        eq(emailLogsTable.referralId, row.id),
+        inArray(emailLogsTable.notificationType, [
+          REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7,
+          REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1,
+        ]),
       ))
       .orderBy(desc(emailLogsTable.createdAt))
       .limit(50);
 
-    const d7Logs = logs.filter((l) => l.subject.includes("7 dias"));
-    const d1Logs = logs.filter((l) => l.subject.includes("1 dia"));
+    const d7Logs = logs.filter((l) => l.notificationType === REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_7);
+    const d1Logs = logs.filter((l) => l.notificationType === REFERRAL_NOTIFICATION_TYPE.EXPIRY_WARNING_1);
 
     const toEntry = (log: typeof logs[0] | undefined) =>
-      log ? { status: log.status, errorMessage: log.errorMessage ?? null, sentAt: log.createdAt } : null;
+      log ? {
+        status: log.status,
+        errorMessage: log.status === "failed" ? PUBLIC_REFERRAL_EMAIL_FAILURE : null,
+        sentAt: log.createdAt,
+      } : null;
 
     res.json({ d7: toEntry(d7Logs[0]), d1: toEntry(d1Logs[0]) });
   } catch (err) {
@@ -956,13 +1089,12 @@ router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: N
       return;
     }
 
-    // The bonus-release email is enqueued with the referral id stamped on the
-    // email log (see enqueueReferralBonusReleasedEmail) and a distinctive
-    // subject ("…disponível para resgate…"). Filter on both so we never pick up
-    // an expiry-warning email (which also stamps referralId) for this referral.
+    // The bonus-release email is enqueued with the referral id and stable
+    // notification type stamped on the email log. Filtering by type prevents
+    // an expiry-warning email for the same referral from being selected.
     const logs = await db.select({
       id: emailLogsTable.id,
-      subject: emailLogsTable.subject,
+      notificationType: emailLogsTable.notificationType,
       status: emailLogsTable.status,
       errorMessage: emailLogsTable.errorMessage,
       createdAt: emailLogsTable.createdAt,
@@ -970,13 +1102,17 @@ router.get("/referrals/:id/bonus-release-email-status", async (req, res, next: N
       .where(and(
         eq(emailLogsTable.tenantId, me.tenantId),
         eq(emailLogsTable.referralId, req.params.id),
-        ilike(emailLogsTable.subject, `%disponível para resgate%`),
+        eq(emailLogsTable.notificationType, REFERRAL_NOTIFICATION_TYPE.BONUS_RELEASED),
       ))
       .orderBy(desc(emailLogsTable.createdAt))
       .limit(50);
 
     const toEntry = (log: typeof logs[0] | undefined) =>
-      log ? { status: log.status, errorMessage: log.errorMessage ?? null, sentAt: log.createdAt } : null;
+      log ? {
+        status: log.status,
+        errorMessage: log.status === "failed" ? PUBLIC_REFERRAL_EMAIL_FAILURE : null,
+        sentAt: log.createdAt,
+      } : null;
 
     res.json({ bonusRelease: toEntry(logs[0]) });
   } catch (err) {
@@ -1002,7 +1138,11 @@ router.get("/referrals/:id/share", async (req, res, next: NextFunction): Promise
 
     if (!row) { next(new NotFoundError("Indicação não encontrada", "NOT_FOUND")); return; }
 
-    const frontendBase = (process.env["FRONTEND_URL"] ?? `https://${process.env["REPLIT_DEV_DOMAIN"] ?? "localhost"}`).replace(/\/$/, "");
+    const frontendBase = (
+      process.env["STORE_PUBLIC_URL"] ??
+      process.env["FRONTEND_URL"] ??
+      "https://visitecrm.com"
+    ).replace(/\/$/, "");
     const slug = row.tenantSlug ?? me.tenantId;
     const link = `${frontendBase}/loja/${slug}/indicacao?code=${row.code}`;
 
@@ -1444,10 +1584,14 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
     wsRoi.addRow(["Métrica", "Valor"]).font = { bold: true };
     wsRoi.addRow(["Conversões válidas", commercialAnalytics.summary.validReferrals]);
     wsRoi.addRow(["Receita atribuída / valor pago (R$)", commercialAnalytics.summary.attributedRevenue.toFixed(2)]);
+     wsRoi.addRow(["Bônus vinculados a conversões (R$)", commercialAnalytics.summary.bonusConverted.toFixed(2)]);
     wsRoi.addRow(["Bônus promocionais pagos (R$)", commercialAnalytics.summary.rewardsPaid.toFixed(2)]);
     wsRoi.addRow(["Bônus promocionais pendentes (R$)", commercialAnalytics.summary.rewardsPending.toFixed(2)]);
+     wsRoi.addRow(["Créditos de bônus consumidos (R$)", commercialAnalytics.summary.creditsUsed.toFixed(2)]);
     wsRoi.addRow(["Descontos concedidos (R$)", commercialAnalytics.summary.discountGiven.toFixed(2)]);
     wsRoi.addRow(["Comissões contratuais (R$)", commercialAnalytics.summary.commissions.toFixed(2)]);
+     wsRoi.addRow(["Bônus revertidos (R$)", commercialAnalytics.summary.reversedAmount.toFixed(2)]);
+     wsRoi.addRow(["Indicações revertidas", commercialAnalytics.summary.reversedReferrals]);
     wsRoi.addRow(["Custo de aquisição (R$)", commercialAnalytics.summary.acquisitionCost.toFixed(2)]);
     wsRoi.addRow(["CAC (R$)", commercialAnalytics.summary.cac.toFixed(2)]);
     wsRoi.addRow(["ROI (%)", commercialAnalytics.summary.roiPercent.toFixed(2)]);
@@ -1642,6 +1786,18 @@ router.get("/referrals/export", async (req, res, next: NextFunction): Promise<vo
   }
 });
 
+function normalizeReferralWhatsAppTestError(delivery: {
+  status?: string | null;
+  lastError?: string | null;
+  skippedReason?: string | null;
+}): "credentials_not_configured" | "whatsapp_invalid_phone" | "provider_network_error" | "provider_rejected" {
+  const error = delivery.lastError ?? delivery.skippedReason;
+  if (error === "credentials_not_configured") return "credentials_not_configured";
+  if (error === "invalid_phone" || error === "whatsapp_invalid_phone") return "whatsapp_invalid_phone";
+  if (delivery.status === "unknown") return "provider_network_error";
+  return "provider_rejected";
+}
+
 router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -1651,13 +1807,20 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const parsed = z.object({
       type: z.enum(["converted", "bonusPaid", "reversed", "share"]),
       message: z.string().optional(),
+      phone: z.string().trim().min(8).optional(),
     }).safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+    const requestId = req.get("Idempotency-Key")?.trim();
+    if (!requestId || requestId.length > 200) {
+      res.status(400).json({ error: "idempotency_key_required" });
+      return;
+    }
 
     const [settings] = await db.select().from(referralSettingsTable)
       .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
 
-    const phone = settings?.whatsappPhoneNumber;
+    const phone = parsed.data.phone || settings?.whatsappPhoneNumber;
     if (!phone) {
       res.status(400).json({ error: "whatsapp_not_configured" });
       return;
@@ -1700,7 +1863,7 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const deliveryResult = await dispatchOutboundMessage({
       tenantId: me.tenantId,
       eventType: "referral_test_whatsapp",
-      idempotencyKey: `referral-test-whatsapp:${parsed.data.type}:${generateId()}`,
+      idempotencyKey: `referral-test-whatsapp:${requestId}`,
       recipient: { type: "direct", whatsapp: phone },
       whatsapp: { text: message },
       origin: "referral_settings_test",
@@ -1710,12 +1873,14 @@ router.post("/referral-settings/test-whatsapp", async (req, res, next: NextFunct
     const whatsappDelivery = deliveryResult.deliveries.find((delivery) => delivery.channel === "whatsapp");
     const result = {
       success: whatsappDelivery?.status === "pending" || whatsappDelivery?.status === "accepted",
-      error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason ?? undefined,
+      error: whatsappDelivery ? normalizeReferralWhatsAppTestError(whatsappDelivery) : "provider_rejected",
     };
 
     if (!result.success) {
       if (result.error === "credentials_not_configured") {
         res.status(400).json({ error: "credentials_not_configured" });
+      } else if (result.error === "whatsapp_invalid_phone") {
+        res.status(400).json({ error: "whatsapp_invalid_phone" });
       } else {
         res.status(502).json({ error: result.error ?? "send_failed" });
       }
@@ -2310,89 +2475,6 @@ router.get("/referrals/active-campaign", async (req, res, next: NextFunction): P
 
     if (!campaign) { res.json(null); return; }
     res.json({ ...campaign, bonusValue: Number(campaign.bonusValue) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post("/referral-settings/whatsapp-test", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
-    if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-
-    const parsed = z.object({
-      phone: z.string().min(8),
-      messageType: z.enum(["converted", "bonusPaid", "reversed", "share"]),
-    }).safeParse(req.body);
-    if (!parsed.success) { next(new ValidationError(String("Parâmetros inválidos" ), "VALIDATION_ERROR")); return; }
-
-    const [settings] = await db.select().from(referralSettingsTable)
-      .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
-
-    const [tenant] = await db.select({ name: tenantsTable.name })
-      .from(tenantsTable).where(eq(tenantsTable.id, me.tenantId)).limit(1);
-
-    const agencyName = tenant?.name ?? "Agência";
-    const bonusValue = parseFloat(String(settings?.bonusValue ?? "10")) || 10;
-    const bonusValFormatted = bonusValue.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const bonusCurrencyFormatted = formatBRL(bonusValue);
-
-    let message: string;
-    const { messageType } = parsed.data;
-
-    if (messageType === "converted") {
-      const template = settings?.whatsappConvertedMessage ??
-        "Boa notícia! {{nome}} usou seu código {{codigo}} e comprou com a {{agencia}}. Seu bônus de R$ {{valor}} está sendo processado.";
-      message = interpolateWhatsAppMessage(template, { nome: "Maria Silva", codigo: "TESTE123", agencia: agencyName, valor: bonusValFormatted });
-    } else if (messageType === "bonusPaid") {
-      const template = settings?.whatsappBonusPaidMessage ??
-        "Seu bônus de R$ {{valor}} foi pago! Obrigado por indicar clientes para a {{agencia}}.";
-      message = interpolateWhatsAppMessage(template, { nome: "João Silva", codigo: "TESTE123", bonus: bonusCurrencyFormatted, valor: bonusValFormatted, agencia: agencyName });
-    } else if (messageType === "reversed") {
-      const template = settings?.whatsappReversedMessage ??
-        "Olá! A reserva de {{nome}} foi cancelada e o bônus de R$ {{valor}} foi estornado do seu saldo na {{agencia}}. Seu saldo atual é R$ {{saldo}}.";
-      message = interpolateWhatsAppMessage(template, { nome: "Maria Silva", valor: bonusValFormatted, agencia: agencyName, saldo: bonusValFormatted });
-    } else {
-      const template = settings?.shareMessage ?? "Use meu código de indicação e ganhe desconto na sua viagem!";
-      message = template
-        .replace(/\{\{?nome\}?\}/g, "João")
-        .replace(/\{\{?codigo\}?\}/g, "TESTE123")
-        .replace(/\{\{?link\}?\}/g, "https://exemplo.com.br/ind/TESTE123")
-        .replace(/\{\{?bonus\}?\}/g, bonusCurrencyFormatted);
-    }
-
-    const deliveryResult = await dispatchOutboundMessage({
-      tenantId: me.tenantId,
-      eventType: "referral_test_whatsapp",
-      idempotencyKey: `referral-test-whatsapp:${messageType}:${generateId()}`,
-      recipient: { type: "direct", whatsapp: parsed.data.phone },
-      whatsapp: { text: message },
-      origin: "referral_settings_test",
-      originChannel: "whatsapp",
-      createdById: me.id,
-    });
-    const whatsappDelivery = deliveryResult.deliveries.find((delivery) => delivery.channel === "whatsapp");
-    const result = {
-      success: whatsappDelivery?.status === "pending" || whatsappDelivery?.status === "accepted",
-      error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason ?? undefined,
-    };
-
-    if (!result.success) {
-      const error = result.error ?? "unknown_error";
-      let detail: string;
-      if (error === "credentials_not_configured") {
-        detail = "Credenciais Z-API não configuradas. Verifique as variáveis ZAPI_INSTANCE_ID e ZAPI_TOKEN.";
-      } else if (error.startsWith("zapi_")) {
-        detail = `Z-API retornou status ${error.replace("zapi_", "")}. Verifique se o número está correto e a instância está conectada.`;
-      } else {
-        detail = `Erro de rede: ${error}`;
-      }
-      next(new AppError(detail, 422, "WHATSAPP_SEND_FAILED"));
-      return;
-    }
-
-    res.json({ success: true, phone: parsed.data.phone });
   } catch (err) {
     next(err);
   }

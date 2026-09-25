@@ -389,6 +389,31 @@ describe("POST /api/public/store/:slug/orders — reservation race-condition gua
     expect(res.body.code).toBe("RESERVATION_SYNC_FAILED");
   });
 
+  it("returns 409 REFERRAL_FIRST_PURCHASE_RESERVED when the atomic checkout claim loses the race", async () => {
+    setupStoreAndOrderLookup();
+    mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
+    mockResolveDiscounts.mockResolvedValueOnce({
+      ...NO_DISCOUNT,
+      discountAmount: 15,
+      appliedReferralCode: "REF-001",
+      appliedReferralReferrerId: "referrer-001",
+      appliedReferralDiscountValue: 10,
+      appliedReferralDiscountType: "percentage",
+    });
+    mockPersistOrder.mockRejectedValueOnce(Object.assign(
+      new Error("Já existe uma compra pendente com este benefício de indicação."),
+      { code: "REFERRAL_FIRST_PURCHASE_RESERVED" },
+    ));
+
+    const res = await request(buildApp())
+      .post("/api/public/store/minha-loja/orders")
+      .send({ ...VALID_BODY, referralCode: "REF-001" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("REFERRAL_FIRST_PURCHASE_RESERVED");
+    expect(mockCreateReservations).not.toHaveBeenCalled();
+  });
+
   it("does not treat a 23505 on a different constraint as DUPLICATE_RESERVATION", async () => {
     setupStoreAndOrderLookup();
     mockPrepareItems.mockResolvedValueOnce(TRIP_ITEMS_RESULT);
@@ -509,11 +534,6 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
       quantityByProductId: new Map([["prod-001", 1]]),
       tripLinkedProducts: new Map(),
     };
-    const orders = [
-      { ...FAKE_ORDER_ROW, totalAmount: "20.00" },
-      { ...FAKE_ORDER_ROW, totalAmount: "40.00" },
-    ];
-
     const mockOrderBy = vi.fn(() => {
       const creditRows = [{
         id: "credit-001",
@@ -531,13 +551,20 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
     });
     mockSelect.mockReturnValue({ from: mockFrom });
     mockLimit.mockReset();
+    // The two concurrent handlers interleave their owner/settings/order
+    // lookups. After the two store lookups, every remaining limit query can
+    // safely use this row: it has the client identity needed by the cashback
+    // guard and the order fields needed by the response projection.
+    const universalLookupRow = {
+      ...FAKE_ORDER_ROW,
+      id: "client-001",
+      gracePeriodDays: 30,
+      totalAmount: "50.00",
+    };
     mockLimit
       .mockResolvedValueOnce([FAKE_STORE]) // request A — store lookup
       .mockResolvedValueOnce([FAKE_STORE]) // request B — store lookup
-      .mockResolvedValueOnce([{ id: "client-001" }]) // request A — cashback owner
-      .mockResolvedValueOnce([{ id: "client-001" }]) // request B — cashback owner
-      .mockResolvedValueOnce([orders[0]]) // request A — persisted order
-      .mockResolvedValueOnce([orders[1]]); // request B — persisted order
+      .mockResolvedValue([universalLookupRow]);
 
     vi.mocked(getTenantUser).mockResolvedValue({
       id: "user-001",

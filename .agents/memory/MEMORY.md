@@ -62,6 +62,7 @@
 - [Vitest mock call typing](vitest-mock-call-typing.md) — strict TypeScript infers vi.fn() calls as zero-argument tuples; type mocks or cast call arrays before inspecting arguments.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
+- [Replit Git stale operation state](replit-git-stale-operation-state.md) — stale cherry-pick/rebase markers and old refs locks can mimic merge conflicts; verify operation state before changing branches.
 - [GitHub API push limits](github-api-push-limits.md) — Git Database uploads need small tree batches, paced blob requests, and a separate strategy for oversized generated artifacts
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
@@ -128,3 +129,11 @@
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md) — mocks instantiated with `new` need constructable function/class shapes after the Vitest 4 upgrade
 - [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
+- [Referral cap concurrency](referral-cap-concurrency.md) — reserve capped conversions with a conditional no-op client update so PostgreSQL holds the row lock through checkout commit
+- [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited
+- [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key
+- [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
+- [Referral bonus cashback eligibility](referral-bonus-cashback-eligibility.md) — paid referral bonuses are spendable cashback; unpaid bonuses wait for grace period, while expiry/reversal/used amounts remain excluded
+- [Reservation expiry payment locks](reservation-expiry-payment-locks.md) — expiry and every storefront payment path must lock the order before its reservations; only receivable/paid rows protect a hold
+- [Artifact workflow ownership](artifact-workflow-ownership.md) — registered artifact workflows start independently; do not launch the same artifact again from the aggregate Project workflow
+- [UploadThing SDK error redaction](uploadthing-error-redaction.md) — provider errors can contain auth headers; log only safe operation metadata

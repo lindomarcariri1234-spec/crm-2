@@ -121,8 +121,11 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
 
   // Derived balance from current state
   const currentBalance = Math.max(0, (parseFloat(totalValue) || 0) - (parseFloat(paidValue) || 0));
-  const requestedDeposit = financialSummary?.depositRequested ?? 0;
-  const isDepositOnly = financialSummary?.states.payment === "partially_paid";
+  const requestedDeposit = financialSummary?.depositRequested ?? Number(data?.depositAmount ?? 0);
+  const receivedAmount = financialSummary?.paidAmount ?? Number(data?.paidValue ?? 0);
+  const remainingAmount = financialSummary?.amountRemaining ?? Number(data?.balance ?? 0);
+  const isDepositOnly = financialSummary?.states.payment === "partially_paid"
+    || (requestedDeposit > 0 && receivedAmount > 0 && remainingAmount > 0);
 
   // Load existing data when modal opens / data refreshes
   useEffect(() => {
@@ -285,13 +288,13 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
                   </span>
                   {isDepositOnly && (
                     <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">
-                      Pagamento parcial · saldo pendente
+                      Entrada paga · saldo pendente
                     </Badge>
                   )}
                 </div>
                 {isDepositOnly && (
                   <p className="mt-1.5 text-xs text-amber-800">
-                    Entrada solicitada: {fmt(requestedDeposit)} · Recebido: {fmt(financialSummary?.paidAmount ?? 0)} · Saldo: {fmt(financialSummary?.amountRemaining ?? 0)}
+                    Entrada: {fmt(requestedDeposit)} · Restante: {fmt(remainingAmount)}
                   </p>
                 )}
               </div>

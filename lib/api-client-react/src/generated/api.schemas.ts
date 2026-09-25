@@ -490,6 +490,11 @@ export const TestWhatsAppMessageBodyType = {
 export interface TestWhatsAppMessageBody {
   type: TestWhatsAppMessageBodyType;
   message?: string;
+  /**
+   * Optional test destination; defaults to the configured agency WhatsApp number.
+   * @minLength 8
+   */
+  phone?: string;
 }
 
 export interface TestWhatsAppMessageResult {
@@ -3892,6 +3897,11 @@ export interface ReferralStats {
   conversionRate: number;
   totalBonusPaid: number;
   totalDiscountGiven: number;
+  suspicious: number;
+  expiringSoon: number;
+  pendingBonus: number;
+  bonusNotified: number;
+  bonusNotNotified: number;
 }
 
 export interface ReferralTierConfig {
@@ -5892,6 +5902,10 @@ export type ListReferralsParams = {
   limit?: number;
   status?: string;
   search?: string;
+  bonusPaid?: boolean;
+  fraudFlag?: boolean;
+  expiringSoon?: boolean;
+  bonusNotified?: boolean;
 };
 
 export type ListReferrals200Pagination = {
@@ -5904,6 +5918,15 @@ export type ListReferrals200Pagination = {
 export type ListReferrals200 = {
   data: Referral[];
   pagination: ListReferrals200Pagination;
+};
+
+export type GetReferralStatsParams = {
+  status?: string;
+  search?: string;
+  bonusPaid?: boolean;
+  fraudFlag?: boolean;
+  expiringSoon?: boolean;
+  bonusNotified?: boolean;
 };
 
 export type GetBirthdayUpcomingParams = {

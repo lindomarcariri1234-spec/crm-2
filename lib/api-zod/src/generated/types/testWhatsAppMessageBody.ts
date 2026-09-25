@@ -10,4 +10,9 @@ import type { TestWhatsAppMessageBodyType } from "./testWhatsAppMessageBodyType"
 export interface TestWhatsAppMessageBody {
   type: TestWhatsAppMessageBodyType;
   message?: string;
+  /**
+   * Optional test destination; defaults to the configured agency WhatsApp number.
+   * @minLength 8
+   */
+  phone?: string;
 }

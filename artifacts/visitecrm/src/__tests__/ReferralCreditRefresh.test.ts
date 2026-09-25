@@ -235,6 +235,18 @@ describe("Referral credit refresh after checkout", () => {
     expect(result.current.completedOrder?.referralCreditApplied).toBe(40);
     expect(result.current.completedOrder?.referralCreditBalanceAfter).toBe(60);
     expect(result.current.completedOrder?.totalAmount).toBe("460.00");
+
+    const { StepConfirmation } = await import(
+      "../pages/vitrine/_wizard/step-confirmation.js"
+    );
+    const { container } = await renderComponent(
+      createElement(StepConfirmation, {
+        state: result.current,
+        store: makeStore(),
+        slug: "loja-teste",
+      }),
+    );
+    expect(container.textContent).toContain("Saldo atual de cashback: R$ 60.00.");
   });
 
   it("keeps the order summary when the refreshed cashback balance is unavailable", async () => {

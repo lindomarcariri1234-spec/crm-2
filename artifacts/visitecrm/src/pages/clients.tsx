@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useListClients, useCreateClient, useUpdateClient,
   useListPipelineStages, useListTrips, useListUsers,
-  useCreateDeal, useListPayments, useCreateReservation,
+  useCreateDeal, useListPayments, useCreateReservation, useUpdateReservation,
   useCalculateCommission, useGetMe, useDeleteClient,
   useListAccommodations, useGetTripRoomAllocationSummary,
   useListReservations, useListPassengers, useGetReservationRoomAssignments,
@@ -450,6 +450,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const updateClient = useUpdateClient();
   const createDeal = useCreateDeal();
   const createReservation = useCreateReservation();
+  const updateReservation = useUpdateReservation();
   const updateReservationRoomAssignments = useUpdateReservationRoomAssignments();
 
   useEffect(() => {
@@ -517,6 +518,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
     || updateClient.isPending
     || createDeal.isPending
     || createReservation.isPending
+    || updateReservation.isPending
     || updateReservationRoomAssignments.isPending
     || isLoadingRoomAssignmentData;
   const accommodations = (accommodationsData ?? []).filter(a => a.status === "active");
@@ -525,6 +527,13 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const selectedRoom = accommodationRooms.find(room => room.id === form.roomId);
   const selectedAccommodation = accommodations.find(a => a.id === form.accommodationId);
   const boardingPoints = (selectedTrip?.boardingPoints ?? []) as Array<{ id: string; name: string }>;
+
+  useEffect(() => {
+    if (!existingReservation) return;
+    setForm(prev => prev.boardingPoint === "none"
+      ? { ...prev, boardingPoint: existingReservation.boardingLocationId ?? "none" }
+      : prev);
+  }, [existingReservation?.id, existingReservation?.boardingLocationId]);
 
   useEffect(() => {
     if (!existingReservationId || !existingRoomAssignments) return;
@@ -642,6 +651,24 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
         const commission = parseFloat(form.commission) || 0;
         const consultantId = form.consultantId !== "none" ? form.consultantId : null;
         if (hasTrip && (ticketPrice > 0 || form.isGratuidade || form.isOnLap)) {
+          if (existingReservation?.id) {
+            try {
+              await updateReservation.mutateAsync({
+                id: existingReservation.id,
+                data: {
+                  boardingLocationId: form.boardingPoint !== "none" ? form.boardingPoint : null,
+                },
+              });
+            } catch {
+              const message = "Os dados do cliente foram salvos, mas o local de embarque não foi atualizado. Tente novamente.";
+              toast({
+                title: "Local de embarque não atualizado",
+                description: message,
+                variant: "destructive",
+              });
+              return;
+            }
+          }
           try {
             if (existingReservation?.id) {
               await updateReservationRoomAssignments.mutateAsync({
@@ -671,6 +698,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                   isOnLap: form.isOnLap || undefined,
                   isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
                   roomId: selectedRoomId,
+                  boardingLocationId: form.boardingPoint !== "none" ? form.boardingPoint : null,
                 },
               });
             }
@@ -737,6 +765,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                   isOnLap: form.isOnLap || undefined,
                   isChildUnder7: (form.hasMinorChild && !form.isOnLap) || undefined,
                   roomId: selectedRoomId,
+                  boardingLocationId: form.boardingPoint !== "none" ? form.boardingPoint : null,
                 },
               });
               createdReservationId = resResult.id;
@@ -1033,7 +1062,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                     <SelectTrigger><SelectValue placeholder="Selecionar ponto de embarque..." /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Não especificado</SelectItem>
-                      {boardingPoints.map(bp => <SelectItem key={bp.id} value={bp.name}>{bp.name}</SelectItem>)}
+                      {boardingPoints.map(bp => <SelectItem key={bp.id} value={bp.id}>{bp.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>

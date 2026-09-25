@@ -111,23 +111,41 @@ afterAll(async () => {
 });
 
 /**
- * Captures the `{ total, reversed, skipped }` payload from the sweep's
+ * Captures the `{ total, expired, skipped }` payload from the sweep's
  * final "Sweep complete" structured log. Returns null if the sweep found
  * no orders (i.e., the "Sweep complete" log was never emitted).
  */
-async function runAndCaptureSweepStats(): Promise<{ total: number; reversed: number; skipped: number } | null> {
+async function runAndCaptureSweepStats(): Promise<{ total: number; expired: number; skipped: number } | null> {
   const { logger } = await import("../lib/logger.js");
-  let stats: { total: number; reversed: number; skipped: number } | null = null;
+  let stats: { total: number; expired: number; skipped: number } | null = null;
 
   vi.spyOn(logger, "info").mockImplementation((...args: unknown[]) => {
     const [obj, msg] = args as [unknown, string?, ...unknown[]];
     if (typeof obj === "object" && obj !== null && msg === "[abandoned-referrals] Sweep complete") {
-      stats = obj as { total: number; reversed: number; skipped: number };
+      stats = obj as { total: number; expired: number; skipped: number };
     }
   });
 
   await runAbandonedOrderReferralCleanup();
   return stats;
+}
+
+async function createTripLinkedReservation(): Promise<string> {
+  const reservationId = `test-res-${generateId()}`;
+  reservationIds.push(reservationId);
+  await db.insert(reservationsTable).values({
+    id: reservationId,
+    tenantId: TENANT_ID,
+    tripId: TRIP_ID,
+    seats: [],
+    totalValue: "100.00",
+    balance: "0.00",
+    voucherCode: `VCHR-${generateId()}`,
+    qrCode: `QR-${reservationId}`,
+    createdById: USER_ID,
+    status: RESERVATION_STATUS.CANCELLED,
+  });
+  return reservationId;
 }
 
 describe("runAbandonedOrderReferralCleanup integration", () => {
@@ -202,7 +220,7 @@ describe("runAbandonedOrderReferralCleanup integration", () => {
     //    reversal because no PENDING referral row has reservationId IS NULL for this code.
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(0);
+    expect(stats?.expired).toBe(0);
     expect(stats?.skipped).toBe(1);
 
     // 6. Double-check the referral row itself is still PENDING.
@@ -259,18 +277,18 @@ describe("runAbandonedOrderReferralCleanup integration", () => {
     // 3. Run the sweep and capture summary stats.
     const stats = await runAndCaptureSweepStats();
 
-    // 4. The order was picked up and the referral was reversed (skipped=0).
+    // 4. The order was picked up and the referral was expired (skipped=0).
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(1);
+    expect(stats?.expired).toBe(1);
     expect(stats?.skipped).toBe(0);
 
-    // 5. Double-check the referral row was set to REVERSED.
+    // 5. Double-check the referral row was set to EXPIRED.
     const [referralAfter] = await db
       .select({ status: referralsTable.status })
       .from(referralsTable)
       .where(inArray(referralsTable.id, [referralId]));
-    expect(referralAfter?.status).toBe(REFERRAL_STATUS.REVERSED);
+    expect(referralAfter?.status).toBe(REFERRAL_STATUS.EXPIRED);
   });
 });
 
@@ -291,6 +309,7 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
     // The referral has reservationId set (trip-linked). The isNull guard in
     // the primary WHERE makes PostgreSQL return no row → sweep skips it.
     const code = `PRI-TRIP-${generateId()}`;
+    const reservationId = await createTripLinkedReservation();
     const referralId = `test-ref-${generateId()}`;
     referralIds.push(referralId);
     await db.insert(referralsTable).values({
@@ -299,7 +318,7 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
       referrerId: `fake-referrer-${generateId()}`,
       code,
       status: REFERRAL_STATUS.PENDING,
-      reservationId: `fake-res-${generateId()}`, // trip-linked
+      reservationId, // trip-linked
       bonusAmount: "0",
       discountApplied: true,
       discountValue: "10",
@@ -330,7 +349,7 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
 
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(0);
+    expect(stats?.expired).toBe(0);
     expect(stats?.skipped).toBe(1);
 
     const [after] = await db
@@ -342,7 +361,7 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
 
   it("DOES reverse a PENDING referral with reservationId = null via the primary path (control)", async () => {
     // Primary path with a product-only referral (reservationId = null).
-    // The isNull guard is satisfied → PostgreSQL returns the row → reversed.
+    // The isNull guard is satisfied → PostgreSQL returns the row → expired.
     const code = `PRI-PROD-${generateId()}`;
     const referralId = `test-ref-${generateId()}`;
     referralIds.push(referralId);
@@ -382,20 +401,21 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
 
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(1);
+    expect(stats?.expired).toBe(1);
     expect(stats?.skipped).toBe(0);
 
     const [after] = await db
       .select({ status: referralsTable.status })
       .from(referralsTable)
       .where(inArray(referralsTable.id, [referralId]));
-    expect(after?.status).toBe(REFERRAL_STATUS.REVERSED);
+    expect(after?.status).toBe(REFERRAL_STATUS.EXPIRED);
   });
 
   it("reverses only the product-only referral when both types share one sweep run (primary path)", async () => {
     // Two orders, both with referralId in JSONB (primary path).
-    // Only the product-only one (reservationId = null) is reversed.
+    // Only the product-only one (reservationId = null) is expired.
     const tripCode = `PRI-BOTH-TRIP-${generateId()}`;
+    const tripReservationId = await createTripLinkedReservation();
     const tripReferralId = `test-ref-${generateId()}`;
     referralIds.push(tripReferralId);
     await db.insert(referralsTable).values({
@@ -404,7 +424,7 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
       referrerId: `fake-referrer-${generateId()}`,
       code: tripCode,
       status: REFERRAL_STATUS.PENDING,
-      reservationId: `fake-res-${generateId()}`,
+      reservationId: tripReservationId,
       bonusAmount: "0",
       discountApplied: true,
       discountValue: "10",
@@ -451,7 +471,7 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
 
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(2);
-    expect(stats?.reversed).toBe(1);
+    expect(stats?.expired).toBe(1);
     expect(stats?.skipped).toBe(1);
 
     const [tripAfter] = await db
@@ -464,7 +484,7 @@ describe("runAbandonedOrderReferralCleanup — primary path (referralId in JSONB
       .select({ status: referralsTable.status })
       .from(referralsTable)
       .where(inArray(referralsTable.id, [prodReferralId]));
-    expect(prodAfter?.status).toBe(REFERRAL_STATUS.REVERSED);
+    expect(prodAfter?.status).toBe(REFERRAL_STATUS.EXPIRED);
   });
 });
 
@@ -483,6 +503,7 @@ describe("runAbandonedOrderReferralCleanup — FAILED payment status orders", ()
     // Same scenario as the PENDING tests but with paymentStatus = FAILED.
     // The isNull(reservationId) guard must hold regardless of payment status.
     const code = `FAIL-TRIP-${generateId()}`;
+    const reservationId = await createTripLinkedReservation();
     const referralId = `test-ref-${generateId()}`;
     referralIds.push(referralId);
     await db.insert(referralsTable).values({
@@ -491,7 +512,7 @@ describe("runAbandonedOrderReferralCleanup — FAILED payment status orders", ()
       referrerId: `fake-referrer-${generateId()}`,
       code,
       status: REFERRAL_STATUS.PENDING,
-      reservationId: `fake-res-${generateId()}`, // trip-linked
+      reservationId, // trip-linked
       bonusAmount: "0",
       discountApplied: true,
       discountValue: "10",
@@ -521,7 +542,7 @@ describe("runAbandonedOrderReferralCleanup — FAILED payment status orders", ()
 
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(0);
+    expect(stats?.expired).toBe(0);
     expect(stats?.skipped).toBe(1);
 
     const [after] = await db
@@ -573,14 +594,14 @@ describe("runAbandonedOrderReferralCleanup — FAILED payment status orders", ()
 
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(1);
+    expect(stats?.expired).toBe(1);
     expect(stats?.skipped).toBe(0);
 
     const [after] = await db
       .select({ status: referralsTable.status })
       .from(referralsTable)
       .where(inArray(referralsTable.id, [referralId]));
-    expect(after?.status).toBe(REFERRAL_STATUS.REVERSED);
+    expect(after?.status).toBe(REFERRAL_STATUS.EXPIRED);
   });
 
   // -------------------------------------------------------------------------
@@ -660,7 +681,7 @@ describe("runAbandonedOrderReferralCleanup — FAILED payment status orders", ()
     // has reservationId IS NULL for this code.
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(0);
+    expect(stats?.expired).toBe(0);
     expect(stats?.skipped).toBe(1);
 
     const [referralAfter] = await db
@@ -717,16 +738,16 @@ describe("runAbandonedOrderReferralCleanup — FAILED payment status orders", ()
 
     const stats = await runAndCaptureSweepStats();
 
-    // The order is picked up and the referral is reversed.
+    // The order is picked up and the referral is expired.
     expect(stats).not.toBeNull();
     expect(stats?.total).toBe(1);
-    expect(stats?.reversed).toBe(1);
+    expect(stats?.expired).toBe(1);
     expect(stats?.skipped).toBe(0);
 
     const [referralAfter] = await db
       .select({ status: referralsTable.status })
       .from(referralsTable)
       .where(inArray(referralsTable.id, [referralId]));
-    expect(referralAfter?.status).toBe(REFERRAL_STATUS.REVERSED);
+    expect(referralAfter?.status).toBe(REFERRAL_STATUS.EXPIRED);
   });
 });

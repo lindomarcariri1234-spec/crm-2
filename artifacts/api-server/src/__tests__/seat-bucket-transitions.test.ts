@@ -34,7 +34,7 @@ const {
 } = vi.hoisted(() => {
   const capturedSets: Record<string, unknown>[] = [];
   const mockLimit = vi.fn();
-  const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+  const mockWhere = vi.fn(() => ({ limit: mockLimit, for: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
   const mockTransaction = vi.fn();
@@ -53,6 +53,10 @@ vi.mock("@workspace/db", () => ({
     transaction: mockTransaction,
   },
   reservationsTable: {},
+  accommodationsTable: {},
+  accommodationRoomsTable: {},
+  reservationRoomAssignmentsTable: {},
+  boardingLocationsTable: {},
   passengersTable: {},
   tripsTable: {},
   clientsTable: {},
@@ -78,6 +82,7 @@ vi.mock("@workspace/db", () => ({
   commissionsTable: {},
   usersTable: {},
   vehicleLayoutsTable: {},
+  reservationInstallmentsTable: {},
 }));
 
 vi.mock("drizzle-orm", async () => {
@@ -276,17 +281,32 @@ interface QueryChain extends Promise<unknown[]> {
   orderBy(...args: unknown[]): Promise<unknown[]>;
 }
 
-function makeChain(data: unknown[]): QueryChain {
-  return Object.assign(Promise.resolve(data), {
-    limit: vi.fn().mockResolvedValue(data),
-    where: vi.fn().mockImplementation(() => makeChain(data)),
-    from: vi.fn().mockImplementation(() => makeChain(data)),
-    for: vi.fn().mockImplementation(() => makeChain(data)),
-    orderBy: vi.fn().mockResolvedValue(data),
-  }) as QueryChain;
+function makeChain(
+  resolveData: () => unknown[],
+  forResponse: () => unknown[] = () => [],
+): QueryChain {
+  const chain: Record<string, unknown> = {
+    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve().then(resolveData).then(resolve, reject),
+    limit: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+    where: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+    from: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+    for: vi.fn().mockImplementation(() => makeChain(forResponse)),
+    orderBy: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
+  };
+  return chain as QueryChain;
 }
 
-function buildTxMock(selectResponses: unknown[][] = []) {
+function buildTxMock(
+  selectResponses: unknown[][] = [],
+  lockReservation: Record<string, unknown> = {
+    id: "res-001",
+    tripId: "trip-001",
+    status: RESERVATION_STATUS.PENDING,
+    seats: ["1A", "2B"],
+    capacityUnits: null,
+  },
+) {
   const queue = [...selectResponses];
   return {
     execute: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
@@ -296,13 +316,19 @@ function buildTxMock(selectResponses: unknown[][] = []) {
     update: vi.fn().mockImplementation(() => ({
       set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
         capturedSets.push(setArg);
-        return { where: vi.fn().mockResolvedValue([]) };
+        const result = Object.assign(Promise.resolve([]), {
+          returning: vi.fn().mockResolvedValue([{ id: "res-001" }]),
+        });
+        return { where: vi.fn().mockReturnValue(result) };
       }),
     })),
     delete: vi.fn().mockImplementation(() => ({
       where: vi.fn().mockResolvedValue([]),
     })),
-    select: vi.fn().mockImplementation(() => makeChain(queue.shift() ?? [])),
+    select: vi.fn().mockImplementation(() => makeChain(
+      () => queue.shift() ?? [],
+      () => [lockReservation],
+    )),
   };
 }
 
@@ -320,7 +346,7 @@ describe("Seat bucket counters — status transition paths", () => {
 
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
     mockLimit.mockResolvedValue([]);
-    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockWhere.mockReturnValue({ limit: mockLimit, for: mockLimit });
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
   });
@@ -333,7 +359,7 @@ describe("Seat bucket counters — status transition paths", () => {
     const updated = { ...existing, status: RESERVATION_STATUS.CONFIRMED };
 
     mockLimit.mockResolvedValueOnce([existing]);
-    const tx = buildTxMock([[updated]]);
+    const tx = buildTxMock([[updated]], existing);
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
     mockLimit.mockResolvedValueOnce([FAKE_TRIP]).mockResolvedValueOnce([FAKE_CLIENT]);
 
@@ -369,7 +395,7 @@ describe("Seat bucket counters — status transition paths", () => {
         delete: vi.fn().mockImplementation(() => ({
           where: vi.fn().mockResolvedValue([]),
         })),
-        select: vi.fn().mockImplementation(() => makeChain([existing])),
+        select: vi.fn().mockImplementation(() => makeChain(() => [existing], () => [existing])),
         insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
       };
       return cb(tx);
@@ -405,7 +431,7 @@ describe("Seat bucket counters — status transition paths", () => {
         delete: vi.fn().mockImplementation(() => ({
           where: vi.fn().mockResolvedValue([]),
         })),
-        select: vi.fn().mockImplementation(() => makeChain([existing])),
+        select: vi.fn().mockImplementation(() => makeChain(() => [existing], () => [existing])),
         insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
       };
       return cb(tx);
@@ -442,7 +468,7 @@ describe("Seat bucket counters — status transition paths", () => {
         delete: vi.fn().mockImplementation(() => ({
           where: vi.fn().mockResolvedValue([]),
         })),
-        select: vi.fn().mockImplementation(() => makeChain([existing])),
+        select: vi.fn().mockImplementation(() => makeChain(() => [existing], () => [existing])),
         insert: vi.fn().mockImplementation(() => ({ values: vi.fn().mockResolvedValue([]) })),
       };
       return cb(tx);

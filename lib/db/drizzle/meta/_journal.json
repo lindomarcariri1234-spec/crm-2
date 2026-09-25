@@ -507,49 +507,49 @@
       "breakpoints": true
     },
     {
-      "idx": 73,
+      "idx": 72,
       "version": "7",
       "when": 1808100000000,
       "tag": "0073_cold_solo",
       "breakpoints": true
     },
     {
-      "idx": 74,
+      "idx": 73,
       "version": "7",
       "when": 1808200000000,
       "tag": "0074_referral_bonus_reversals",
       "breakpoints": true
     },
     {
-      "idx": 75,
+      "idx": 74,
       "version": "7",
       "when": 1808300000000,
       "tag": "0075_calendar_legacy_reconciliation",
       "breakpoints": true
     },
     {
-      "idx": 76,
+      "idx": 75,
       "version": "7",
       "when": 1808400000000,
       "tag": "0076_checkout_capacity_claims",
       "breakpoints": true
     },
     {
-      "idx": 77,
+      "idx": 76,
       "version": "7",
       "when": 1808500000000,
       "tag": "0077_accommodation_rooms",
       "breakpoints": true
     },
     {
-      "idx": 78,
+      "idx": 77,
       "version": "7",
       "when": 1808600000000,
       "tag": "0078_accommodation_room_rates",
       "breakpoints": true
     },
     {
-      "idx": 79,
+      "idx": 78,
       "version": "7",
       "when": 1808700000000,
       "tag": "0079_schema_snapshot_sync",
@@ -586,7 +586,7 @@
     {
       "idx": 84,
       "version": "7",
-      "when": 1789740755226,
+      "when": 1809150000000,
       "tag": "0084_low_sway",
       "breakpoints": true
     },
@@ -595,6 +595,69 @@
       "version": "7",
       "when": 1809200000000,
       "tag": "0085_pms_payment_adjustments",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1809300000000,
+      "tag": "0086_referral_integrity_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1809400000000,
+      "tag": "0087_referral_integrity_constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1809500000000,
+      "tag": "0088_referral_commission_state_constraint",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1809600000000,
+      "tag": "0089_referral_tenant_scoped_fks",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1809700000000,
+      "tag": "0090_referral_tenant_key_constraint",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1809800000000,
+      "tag": "0091_referral_validated_tenant_fks",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1809900000000,
+      "tag": "0092_referral_notification_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1809910000000,
+      "tag": "0093_referral_reversal_notification_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1809920000000,
+      "tag": "0094_referral_attempt_log_retention_index",
       "breakpoints": true
     }
   ]
