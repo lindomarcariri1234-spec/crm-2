@@ -14,3 +14,9 @@ The workspace `GITHUB_TOKEN` may belong to a different GitHub user without write
 **How to apply:** Confirm the remote ref is an ancestor or otherwise safely mergeable, prefer one aggregate tree when the request fits, use tree entries with inline text content where practical, pace smaller mutations, and compare the ref again immediately before a non-force update. For identical large generated files, upload one base64 Git blob and reuse its SHA in every tree path instead of transmitting duplicate payloads. If a generated file still exceeds the proxy limit, preserve its remote blob explicitly rather than creating a partial ref.
 
 **Operational note:** In this workspace, shell output can collapse the tab between `git diff --name-status` fields; use `git diff --name-only` for API path enumeration and detect deletions from the filesystem.
+
+An added Replit GitHub connection that can access REST endpoints does not necessarily authenticate the workspace's `git push`. A single API snapshot commit can preserve the final tree and remote parent while omitting local-only commit ancestry.
+
+**Why:** Git transport authentication and connector API authorization are separate; flattening the commit graph would not satisfy a request to publish pending commits.
+
+**How to apply:** If `git push` fails authentication and the user asked to preserve commit history, pause before creating an API snapshot commit. Resume with normal Git authentication, or get explicit approval for a snapshot that does not transfer local-only commits.
