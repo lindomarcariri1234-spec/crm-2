@@ -466,6 +466,14 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   }, [open, editClient]);
 
   const isEditing = !!editClient;
+  const sectionInfo: Record<string, { title: string; description: string }> = {
+    personal: { title: "Dados pessoais", description: "Identificação, contato, endereço e dados necessários para localizar o cadastro." },
+    trip: { title: "Viagem e reserva", description: "Vincule uma viagem e registre embarque, assentos, acompanhantes e serviços." },
+    financial: { title: "Financeiro", description: "Valores da reserva, pagamentos, parcelas, comissão e responsável pela venda." },
+    observations: { title: "Motivo e notas", description: "Registre o motivo da viagem, a avaliação interna e observações da equipe." },
+    followup: { title: "Preferências", description: "Guarde interesses, destinos desejados, gostos pessoais e tags para próximos contatos." },
+    agency: { title: "Relacionamento", description: "Acompanhe a avaliação da agência, feedback e participação como embaixador." },
+  };
   const set = (key: keyof ClientFormData) => (val: string) => setForm(prev => ({ ...prev, [key]: val }));
   const whatsappHasInvalidFormat =
     form.whatsapp.length > 0 && !isValidBrazilWhatsAppPhone(form.whatsapp);
@@ -829,7 +837,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-3 flex-wrap">
             <DialogTitle>{isEditing ? `Editar: ${editClient?.name}` : "Novo Cliente"}</DialogTitle>
@@ -851,6 +859,9 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
               </div>
             )}
           </div>
+          <DialogDescription>
+            Organize o cadastro por etapas. Você pode salvar sem preencher as seções que não se aplicam.
+          </DialogDescription>
         </DialogHeader>
 
         {limitError && (
@@ -891,14 +902,18 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
         )}
 
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="flex w-full justify-start overflow-x-auto text-xs">
-            <TabsTrigger value="personal">Pessoal</TabsTrigger>
-            <TabsTrigger value="trip">Viagem</TabsTrigger>
-            <TabsTrigger value="financial">Financeiro</TabsTrigger>
-            <TabsTrigger value="observations">Obs.</TabsTrigger>
-            <TabsTrigger value="followup">Follow-up</TabsTrigger>
-            <TabsTrigger value="agency">Agência</TabsTrigger>
+          <TabsList aria-label="Etapas do cadastro do cliente" className="grid h-auto w-full grid-cols-3 gap-1 p-1 sm:grid-cols-6">
+            <TabsTrigger data-testid="tab-client-form-personal" className="min-h-9 whitespace-normal px-2 text-center text-xs leading-tight" value="personal">Dados pessoais</TabsTrigger>
+            <TabsTrigger data-testid="tab-client-form-trip" className="min-h-9 whitespace-normal px-2 text-center text-xs leading-tight" value="trip">Viagem e reserva</TabsTrigger>
+            <TabsTrigger data-testid="tab-client-form-financial" className="min-h-9 whitespace-normal px-2 text-center text-xs leading-tight" value="financial">Financeiro</TabsTrigger>
+            <TabsTrigger data-testid="tab-client-form-observations" className="min-h-9 whitespace-normal px-2 text-center text-xs leading-tight" value="observations">Motivo e notas</TabsTrigger>
+            <TabsTrigger data-testid="tab-client-form-followup" className="min-h-9 whitespace-normal px-2 text-center text-xs leading-tight" value="followup">Preferências</TabsTrigger>
+            <TabsTrigger data-testid="tab-client-form-agency" className="min-h-9 whitespace-normal px-2 text-center text-xs leading-tight" value="agency">Relacionamento</TabsTrigger>
           </TabsList>
+          <div data-testid="section-summary-client-form" className="mt-3 rounded-lg border bg-muted/30 px-4 py-3">
+            <p className="text-sm font-semibold">{sectionInfo[tab]?.title}</p>
+            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{sectionInfo[tab]?.description}</p>
+          </div>
 
           {/* Aba 1 — Pessoal */}
           <TabsContent value="personal" className="space-y-4 mt-4">
@@ -1872,6 +1887,7 @@ export default function Clients() {
   }, [sortBy]);
 
   const hasFilters = !!(search || filterStatus !== "all" || filterClassification !== "all" || filterPipelineStage !== "all" || filterCity || filterOrigin || filterTripId !== "all" || filterSellerId !== "all" || filterDateFrom || filterDateTo || filterScoreBand !== "all");
+  const hasAdvancedFilters = !!(filterCity || filterOrigin || filterTripId !== "all" || filterSellerId !== "all" || filterDateFrom || filterDateTo || filterScoreBand !== "all");
 
   const clearFilters = () => {
     setSearch(""); setFilterStatus("all"); setFilterClassification("all");
@@ -2038,148 +2054,200 @@ export default function Clients() {
                 {stages?.map(s => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
               </SelectContent>
             </Select>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Input placeholder="Filtrar por cidade..." value={filterCity} onChange={e => { setFilterCity(e.target.value); setPage(1); }} className="w-36" />
-            <Input placeholder="Filtrar por origem..." value={filterOrigin} onChange={e => { setFilterOrigin(e.target.value); setPage(1); }} className="w-36" />
-            <Select value={filterTripId} onValueChange={v => { setFilterTripId(v); setPage(1); }}>
-              <SelectTrigger className="w-44"><SelectValue placeholder="Viagem de interesse" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas as viagens</SelectItem>
-                {tripsData?.data.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Select value={filterSellerId} onValueChange={v => { setFilterSellerId(v); setPage(1); }}>
-              <SelectTrigger className="w-44"><SelectValue placeholder="Vendedor / Captador" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos os vendedores</SelectItem>
-                {(sellers ?? []).filter(u => u.role === ROLES.SALES || u.role === ROLES.AGENCY_ADMIN).map(u => (
-                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex items-center gap-1">
-              <Label className="text-xs text-muted-foreground whitespace-nowrap">De:</Label>
-              <Input type="date" value={filterDateFrom} onChange={e => { setFilterDateFrom(e.target.value); setPage(1); }} className="w-36" />
-            </div>
-            <div className="flex items-center gap-1">
-              <Label className="text-xs text-muted-foreground whitespace-nowrap">Até:</Label>
-              <Input type="date" value={filterDateTo} onChange={e => { setFilterDateTo(e.target.value); setPage(1); }} className="w-36" />
-            </div>
-            <Select value={filterScoreBand} onValueChange={v => { setFilterScoreBand(v); setPage(1); }}>
-              <SelectTrigger className="w-48"><SelectValue placeholder="Faixa de Score IA" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos os scores</SelectItem>
-                <SelectItem value="alta-compra">Alta prob. compra (≥70%)</SelectItem>
-                <SelectItem value="media-compra">Média prob. compra (40–69%)</SelectItem>
-                <SelectItem value="baixa-compra">Baixa prob. compra (&lt;40%)</SelectItem>
-                <SelectItem value="alto-churn">Alto risco de churn (≥70%)</SelectItem>
-              </SelectContent>
-            </Select>
             {hasFilters && (
-              <Button variant="ghost" size="sm" onClick={clearFilters}>
+              <Button data-testid="button-clear-client-filters" variant="ghost" size="sm" onClick={clearFilters}>
                 <X className="w-4 h-4 mr-1" /> Limpar filtros
               </Button>
             )}
           </div>
+          <details data-testid="filters-client-advanced" className="group rounded-md border border-border/70 bg-muted/20">
+            <summary data-testid="toggle-client-advanced-filters" className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium">
+              <span>Mais filtros</span>
+              {hasAdvancedFilters
+                ? <Badge variant="secondary" className="text-[10px]">Filtros ativos</Badge>
+                : <span className="text-xs font-normal text-muted-foreground">Localidade, viagem, vendedor, período e IA</span>}
+              <ChevronDown className="ml-auto h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="flex flex-wrap gap-2 border-t border-border/70 p-3">
+              <Input placeholder="Filtrar por cidade..." value={filterCity} onChange={e => { setFilterCity(e.target.value); setPage(1); }} className="w-36" />
+              <Input placeholder="Filtrar por origem..." value={filterOrigin} onChange={e => { setFilterOrigin(e.target.value); setPage(1); }} className="w-36" />
+              <Select value={filterTripId} onValueChange={v => { setFilterTripId(v); setPage(1); }}>
+                <SelectTrigger className="w-44"><SelectValue placeholder="Viagem de interesse" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as viagens</SelectItem>
+                  {tripsData?.data.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={filterSellerId} onValueChange={v => { setFilterSellerId(v); setPage(1); }}>
+                <SelectTrigger className="w-44"><SelectValue placeholder="Vendedor / Captador" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os vendedores</SelectItem>
+                  {(sellers ?? []).filter(u => u.role === ROLES.SALES || u.role === ROLES.AGENCY_ADMIN).map(u => (
+                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex items-center gap-1">
+                <Label className="text-xs text-muted-foreground whitespace-nowrap">De:</Label>
+                <Input type="date" value={filterDateFrom} onChange={e => { setFilterDateFrom(e.target.value); setPage(1); }} className="w-36" />
+              </div>
+              <div className="flex items-center gap-1">
+                <Label className="text-xs text-muted-foreground whitespace-nowrap">Até:</Label>
+                <Input type="date" value={filterDateTo} onChange={e => { setFilterDateTo(e.target.value); setPage(1); }} className="w-36" />
+              </div>
+              <Select value={filterScoreBand} onValueChange={v => { setFilterScoreBand(v); setPage(1); }}>
+                <SelectTrigger className="w-48"><SelectValue placeholder="Faixa de Score IA" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os scores</SelectItem>
+                  <SelectItem value="alta-compra">Alta prob. compra (≥70%)</SelectItem>
+                  <SelectItem value="media-compra">Média prob. compra (40–69%)</SelectItem>
+                  <SelectItem value="baixa-compra">Baixa prob. compra (&lt;40%)</SelectItem>
+                  <SelectItem value="alto-churn">Alto risco de churn (≥70%)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </details>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
+          <div className="w-full overflow-x-auto">
+          <Table className="min-w-[980px]">
             <TableHeader>
               <TableRow>
                 <TableHead><SortableHeader label="Cliente" field="name" currentSort={sortBy} currentOrder={sortOrder} onSort={handleSort} /></TableHead>
-                <TableHead>Código</TableHead>
                 <TableHead>Contato</TableHead>
-                <TableHead>Localidade</TableHead>
-                <TableHead>Origem</TableHead>
-                <TableHead>Última Viagem</TableHead>
-                <TableHead>Classificação</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead><SortableHeader label="Gasto Total" field="totalSpent" currentSort={sortBy} currentOrder={sortOrder} onSort={handleSort} /></TableHead>
-                <TableHead>Saldo</TableHead>
-                <TableHead><SortableHeader label="Score IA" field="purchaseScore" currentSort={sortBy} currentOrder={sortOrder} onSort={handleSort} /></TableHead>
-                <TableHead><SortableHeader label="Risco Churn" field="churnScore" currentSort={sortBy} currentOrder={sortOrder} onSort={handleSort} /></TableHead>
+                <TableHead>Relacionamento</TableHead>
+                <TableHead>Perfil</TableHead>
+                <TableHead>
+                  <div className="space-y-1">
+                    <span className="block text-[10px] font-normal text-muted-foreground">Gasto total</span>
+                    <SortableHeader label="Valor" field="totalSpent" currentSort={sortBy} currentOrder={sortOrder} onSort={handleSort} />
+                  </div>
+                </TableHead>
+                <TableHead>
+                  <div className="space-y-1">
+                    <span className="block text-[10px] font-normal text-muted-foreground">Probabilidade de compra / risco</span>
+                    <div className="flex items-center gap-3">
+                      <SortableHeader label="Compra" field="purchaseScore" currentSort={sortBy} currentOrder={sortOrder} onSort={handleSort} />
+                      <SortableHeader label="Churn" field="churnScore" currentSort={sortBy} currentOrder={sortOrder} onSort={handleSort} />
+                    </div>
+                  </div>
+                </TableHead>
                 <TableHead className="text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 Array.from({ length: 6 }).map((_, i) => (
-                  <TableRow key={i}>{Array.from({ length: 13 }).map((__, j) => <TableCell key={j}><Skeleton className="h-8 w-full" /></TableCell>)}</TableRow>
+                  <TableRow key={i}>{Array.from({ length: 7 }).map((__, j) => <TableCell key={j}><Skeleton className="h-8 w-full" /></TableCell>)}</TableRow>
                 ))
               ) : isError ? (
                 <ListLoadErrorRow
-                  colSpan={13}
+                  colSpan={7}
                   onRetry={refetch}
                   message="Não foi possível carregar os clientes."
                 />
               ) : birthdayFilter ? (
                 birthdayClients.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                       Nenhum aniversariante hoje.
                     </TableCell>
                   </TableRow>
                 ) : birthdayClients.map(client => {
                   const status = STATUS_LABELS[client.status];
                   return (
-                    <TableRow key={client.id} className="hover:bg-pink-50/40">
+                    <TableRow key={client.id} data-testid={`row-client-${client.id}`} className="hover:bg-pink-50/40">
                       <TableCell>
-                        <button className="flex items-center gap-3 text-left" onClick={() => setViewClientId(client.id)}>
-                          <div className="w-8 h-8 rounded-full bg-pink-100 flex items-center justify-center text-pink-600 font-bold text-sm shrink-0">
+                        <div className="flex items-center gap-3">
+                          <button className="flex min-w-0 items-center gap-3 text-left" onClick={() => setViewClientId(client.id)}>
+                          <div className="w-9 h-9 rounded-full bg-pink-100 flex items-center justify-center text-pink-600 font-bold text-sm shrink-0">
                             {client.name.charAt(0).toUpperCase()}
                           </div>
-                          <div>
-                            <p className="font-medium text-sm">{client.name} 🎂</p>
-                            <p className="text-xs text-muted-foreground">{client.email}</p>
+                          <div className="min-w-0">
+                            <p className="max-w-[180px] truncate font-medium text-sm">{client.name}</p>
+                            <p className="max-w-[180px] truncate text-xs text-muted-foreground">{client.email}</p>
                           </div>
                         </button>
+                        <div>
+                          {client.customerCode ? (
+                            <button
+                              type="button"
+                              className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-muted border hover:bg-muted/70 transition-colors text-muted-foreground"
+                              title="Copiar código"
+                              aria-label={`Copiar código de ${client.name}`}
+                              data-testid={`button-copy-client-code-${client.id}`}
+                              onClick={() => { navigator.clipboard.writeText(client.customerCode!); toast({ title: "Código copiado!" }); }}
+                            >
+                              {client.customerCode}
+                            </button>
+                          ) : <span className="text-muted-foreground text-xs">—</span>}
+                        </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <p className="text-sm">{client.whatsapp || "—"}</p>
+                        {client.phone && <p className="text-xs text-muted-foreground">{client.phone}</p>}
                       </TableCell>
                       <TableCell>
-                        {client.customerCode ? (
-                          <button
-                            type="button"
-                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-muted border hover:bg-muted/70 transition-colors text-muted-foreground"
-                            title="Copiar código"
-                            onClick={() => { navigator.clipboard.writeText(client.customerCode!); toast({ title: "Código copiado!" }); }}
-                          >
-                            {client.customerCode}
-                          </button>
-                        ) : <span className="text-muted-foreground text-xs">—</span>}
-                      </TableCell>
-                      <TableCell className="text-sm">{client.whatsapp}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{[client.addressCity, client.addressState].filter(Boolean).join(", ") || "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{client.origin || "—"}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {client.birthDate ? formatDateBR(client.birthDate).slice(0, 5) : "—"}
+                        <div className="space-y-1">
+                          <p className="flex items-center gap-1 text-sm">
+                            <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
+                            {[client.addressCity, client.addressState].filter(Boolean).join("/") || "Localidade não informada"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">Origem: {client.origin || "—"}</p>
+                          <p className="max-w-[220px] truncate text-xs text-muted-foreground">
+                            Última viagem: {client.lastTripName || "Nenhuma registrada"}
+                          </p>
+                          <p className="text-xs font-medium text-pink-700">
+                            Aniversário hoje · {client.birthDate ? formatDateBR(client.birthDate).slice(0, 5) : "data não informada"}
+                          </p>
+                        </div>
                       </TableCell>
                       <TableCell>
-                        {client.classification && (
-                          <Badge variant="outline" className="text-[10px]">{CLASSIFICATION_LABELS[client.classification] ?? client.classification}</Badge>
-                        )}
+                        <div className="flex flex-col items-start gap-1">
+                          {client.classification && (
+                            <Badge variant="outline" className="text-[10px]">{CLASSIFICATION_LABELS[client.classification] ?? client.classification}</Badge>
+                          )}
+                          {status && <Badge variant="outline" className={`text-[10px] ${status.color}`}>{status.label}</Badge>}
+                        </div>
                       </TableCell>
                       <TableCell>
-                        {status && <Badge variant="outline" className={`text-[10px] ${status.color}`}>{status.label}</Badge>}
+                        <div className="space-y-1">
+                          <div>
+                            <span className="block text-[10px] text-muted-foreground">Total gasto</span>
+                            <span className="text-sm font-semibold">{formatCurrency(client.totalSpent)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] text-muted-foreground">Saldo</span>
+                            <span className={`text-xs font-medium ${client.outstandingBalance > 0 ? "text-destructive" : "text-muted-foreground"}`}>
+                              {formatCurrency(client.outstandingBalance)}
+                            </span>
+                          </div>
+                        </div>
                       </TableCell>
-                      <TableCell className="text-sm font-medium">{formatCurrency(client.totalSpent)}</TableCell>
-                      <TableCell className="text-sm">{formatCurrency(client.outstandingBalance)}</TableCell>
                       <TableCell>
-                        {client.purchaseScore != null ? (
-                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${
-                            client.purchaseScore >= 70 ? "bg-green-100 text-green-700" :
-                            client.purchaseScore >= 40 ? "bg-yellow-100 text-yellow-700" :
-                            "bg-red-100 text-red-700"
-                          }`}>{client.purchaseScore}%</span>
-                        ) : <span className="text-muted-foreground text-xs">—</span>}
-                      </TableCell>
-                      <TableCell>
-                        {client.churnScore != null ? (
-                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${
-                            client.churnScore >= 70 ? "bg-red-100 text-red-700" :
-                            client.churnScore >= 40 ? "bg-yellow-100 text-yellow-700" :
-                            "bg-green-100 text-green-700"
-                          }`}>{client.churnScore}%</span>
-                        ) : <span className="text-muted-foreground text-xs">—</span>}
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="w-12 text-[10px] text-muted-foreground">Compra</span>
+                            {client.purchaseScore != null ? (
+                              <span className={`rounded-full px-1.5 py-0.5 text-xs font-medium ${
+                                client.purchaseScore >= 70 ? "bg-green-100 text-green-700" :
+                                client.purchaseScore >= 40 ? "bg-yellow-100 text-yellow-700" :
+                                "bg-red-100 text-red-700"
+                              }`}>{client.purchaseScore}%</span>
+                            ) : <span className="text-xs text-muted-foreground">—</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-12 text-[10px] text-muted-foreground">Churn</span>
+                            {client.churnScore != null ? (
+                              <span className={`rounded-full px-1.5 py-0.5 text-xs font-medium ${
+                                client.churnScore >= 70 ? "bg-red-100 text-red-700" :
+                                client.churnScore >= 40 ? "bg-yellow-100 text-yellow-700" :
+                                "bg-green-100 text-green-700"
+                              }`}>{client.churnScore}%</span>
+                            ) : <span className="text-xs text-muted-foreground">—</span>}
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
@@ -2197,7 +2265,7 @@ export default function Clients() {
                 })
               ) : (clientsData?.data ?? []).length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                     {hasFilters ? "Nenhum cliente encontrado com os filtros aplicados." : "Nenhum cliente cadastrado."}
                   </TableCell>
                 </TableRow>
@@ -2205,78 +2273,91 @@ export default function Clients() {
                 (clientsData?.data ?? []).map(client => {
                   const status = STATUS_LABELS[client.status];
                   return (
-                    <TableRow key={client.id} className="hover:bg-muted/30">
+                    <TableRow key={client.id} data-testid={`row-client-${client.id}`} className="hover:bg-muted/30">
                       <TableCell>
-                        <button className="flex items-center gap-3 text-left" onClick={() => setViewClientId(client.id)}>
+                        <div className="flex min-w-[230px] items-center gap-3">
                           <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
                             {client.name.charAt(0).toUpperCase()}
                           </div>
                           <div className="min-w-0">
-                            <p className="font-medium text-sm truncate max-w-[160px]">{client.name}</p>
-                            <p className="text-xs text-muted-foreground truncate max-w-[160px]">{client.email}</p>
+                            <button data-testid={`button-open-client-profile-${client.id}`} className="block max-w-full text-left" onClick={() => setViewClientId(client.id)}>
+                              <p className="max-w-[190px] truncate font-medium text-sm">{client.name}</p>
+                            </button>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <p className="max-w-[135px] truncate text-xs text-muted-foreground">{client.email}</p>
+                              {client.customerCode && (
+                                <button
+                                  type="button"
+                                  className="shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded bg-muted border hover:bg-muted/70 transition-colors text-muted-foreground"
+                                  title="Copiar código"
+                                  aria-label={`Copiar código de ${client.name}`}
+                                  data-testid={`button-copy-client-code-${client.id}`}
+                                  onClick={() => { navigator.clipboard.writeText(client.customerCode!); toast({ title: "Código copiado!" }); }}
+                                >
+                                  {client.customerCode}
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        </button>
+                        </div>
                       </TableCell>
-                      <TableCell>
-                        {client.customerCode ? (
-                          <button
-                            type="button"
-                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-muted border hover:bg-muted/70 transition-colors text-muted-foreground"
-                            title="Copiar código"
-                            onClick={() => { navigator.clipboard.writeText(client.customerCode!); toast({ title: "Código copiado!" }); }}
-                          >
-                            {client.customerCode}
-                          </button>
-                        ) : <span className="text-muted-foreground text-xs">—</span>}
-                      </TableCell>
-                      <TableCell>
+                      <TableCell className="whitespace-nowrap">
                         <p className="text-sm">{client.whatsapp}</p>
                         {client.phone && <p className="text-xs text-muted-foreground">{client.phone}</p>}
                       </TableCell>
                       <TableCell>
-                        {client.addressCity ? (
-                          <div className="flex items-center gap-1 text-sm"><MapPin className="w-3 h-3 text-muted-foreground" />{client.addressCity}{client.addressState ? `/${client.addressState}` : ""}</div>
-                        ) : <span className="text-muted-foreground text-sm">—</span>}
+                        <div className="max-w-[240px] space-y-1">
+                          <p className="flex items-center gap-1 text-sm">
+                            <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
+                            <span className="truncate">{[client.addressCity, client.addressState].filter(Boolean).join("/") || "Localidade não informada"}</span>
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">Origem: {client.origin || "—"}</p>
+                          <p className="truncate text-xs text-muted-foreground">Última viagem: {client.lastTripName || "Nenhuma registrada"}</p>
+                        </div>
                       </TableCell>
                       <TableCell>
-                        {client.origin ? (
-                          <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5 truncate max-w-[100px] inline-block">{client.origin}</span>
-                        ) : <span className="text-muted-foreground text-sm">—</span>}
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge variant="outline" className="text-xs">{CLASSIFICATION_LABELS[client.classification] ?? client.classification}</Badge>
+                          {status ? <Badge className={`${status.color} border text-xs`}>{status.label}</Badge> : <Badge variant="secondary" className="text-xs">{client.status}</Badge>}
+                        </div>
                       </TableCell>
                       <TableCell>
-                        {client.lastTripName ? (
-                          <span className="text-xs text-muted-foreground truncate max-w-[120px] inline-block">{client.lastTripName}</span>
-                        ) : <span className="text-muted-foreground text-sm">—</span>}
+                        <div className="min-w-[125px] space-y-1">
+                          <div>
+                            <span className="block text-[10px] text-muted-foreground">Total gasto</span>
+                            <span className="text-sm font-semibold">{formatCurrency(client.totalSpent)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] text-muted-foreground">Saldo</span>
+                            <span className={`text-xs font-medium ${client.outstandingBalance > 0 ? "text-destructive" : "text-muted-foreground"}`}>
+                              {formatCurrency(client.outstandingBalance)}
+                            </span>
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="text-xs">{CLASSIFICATION_LABELS[client.classification] ?? client.classification}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        {status ? <Badge className={`${status.color} border text-xs`}>{status.label}</Badge> : <Badge variant="secondary" className="text-xs">{client.status}</Badge>}
-                      </TableCell>
-                      <TableCell className="font-medium text-sm">{formatCurrency(client.totalSpent)}</TableCell>
-                      <TableCell>
-                        <span className={`text-sm font-medium ${client.outstandingBalance > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                          {formatCurrency(client.outstandingBalance)}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        {client.purchaseScore != null ? (
-                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${
-                            client.purchaseScore >= 70 ? "bg-green-100 text-green-700" :
-                            client.purchaseScore >= 40 ? "bg-yellow-100 text-yellow-700" :
-                            "bg-red-100 text-red-700"
-                          }`}>{client.purchaseScore}%</span>
-                        ) : <span className="text-muted-foreground text-xs">—</span>}
-                      </TableCell>
-                      <TableCell>
-                        {client.churnScore != null ? (
-                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded-full ${
-                            client.churnScore >= 70 ? "bg-red-100 text-red-700" :
-                            client.churnScore >= 40 ? "bg-yellow-100 text-yellow-700" :
-                            "bg-green-100 text-green-700"
-                          }`}>{client.churnScore}%</span>
-                        ) : <span className="text-muted-foreground text-xs">—</span>}
+                        <div className="min-w-[145px] space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="w-12 text-[10px] text-muted-foreground">Compra</span>
+                            {client.purchaseScore != null ? (
+                              <span className={`rounded-full px-1.5 py-0.5 text-xs font-medium ${
+                                client.purchaseScore >= 70 ? "bg-green-100 text-green-700" :
+                                client.purchaseScore >= 40 ? "bg-yellow-100 text-yellow-700" :
+                                "bg-red-100 text-red-700"
+                              }`}>{client.purchaseScore}%</span>
+                            ) : <span className="text-xs text-muted-foreground">—</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="w-12 text-[10px] text-muted-foreground">Churn</span>
+                            {client.churnScore != null ? (
+                              <span className={`rounded-full px-1.5 py-0.5 text-xs font-medium ${
+                                client.churnScore >= 70 ? "bg-red-100 text-red-700" :
+                                client.churnScore >= 40 ? "bg-yellow-100 text-yellow-700" :
+                                "bg-green-100 text-green-700"
+                              }`}>{client.churnScore}%</span>
+                            ) : <span className="text-xs text-muted-foreground">—</span>}
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
@@ -2306,6 +2387,7 @@ export default function Clients() {
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 

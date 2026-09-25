@@ -1,0 +1,57 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  --button-outline: rgba(0,0,0,.10);
+  --badge-outline: rgba(0,0,0,.05);
+  --opaque-button-border-intensity: -8;
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 224 76% 33%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 214 32% 91%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 224 76% 33%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 175 84% 32%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --accent: 210 40% 96%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 210 40% 98%;
+  --sidebar: 0 0% 100%;
+  --sidebar-foreground: 222 47% 11%;
+  --sidebar-border: 214 32% 91%;
+  --sidebar-primary: 224 76% 33%;
+  --sidebar-primary-foreground: 210 40% 98%;
+  --sidebar-accent: 210 40% 96%;
+  --sidebar-ring: 224 76% 33%;
+  --app-font-sans: 'Inter', sans-serif;
+  --app-font-serif: Georgia, serif;
+  --app-font-mono: Menlo, monospace;
+  --radius: .5rem;
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+.dark {
+  --background: 222 47% 11%; --foreground: 210 40% 98%; --border: 217 32% 17%;
+  --input: 217 32% 17%; --ring: 224 76% 33%; --card: 222 47% 11%;
+  --card-foreground: 210 40% 98%; --card-border: 217 32% 17%;
+  --popover: 222 47% 11%; --popover-foreground: 210 40% 98%;
+  --primary: 224 76% 33%; --primary-foreground: 210 40% 98%;
+  --secondary: 175 84% 32%; --secondary-foreground: 210 40% 98%;
+  --muted: 217 32% 17%; --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217 32% 17%; --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%; --destructive-foreground: 210 40% 98%;
+  --sidebar: 222 47% 11%; --sidebar-foreground: 210 40% 98%;
+  --sidebar-border: 217 32% 17%; --sidebar-primary: 224 76% 33%;
+  --sidebar-primary-foreground: 210 40% 98%; --sidebar-accent: 217 32% 17%;
+  --sidebar-ring: 224 76% 33%;
+}
+.client-records-sandbox { font-family: var(--app-font-sans); }

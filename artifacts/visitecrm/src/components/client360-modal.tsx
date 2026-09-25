@@ -900,12 +900,13 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
 
   return (
     <Dialog open={isOpen} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-6xl max-h-[92vh] overflow-y-auto">
         {loadingClient || !client ? (
           <div className="space-y-4 py-4">
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-6 w-2/3" />
-            <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Skeleton className="h-16 w-full" />
               <Skeleton className="h-16 w-full" />
               <Skeleton className="h-16 w-full" />
               <Skeleton className="h-16 w-full" />
@@ -914,13 +915,13 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
         ) : (
           <>
             <DialogHeader>
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg font-bold">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="w-12 h-12 shrink-0 rounded-full bg-primary/10 flex items-center justify-center text-primary text-lg font-bold">
                   {client.name.charAt(0).toUpperCase()}
                 </div>
-                <div>
+                <div className="min-w-0 flex-1">
                   <DialogTitle className="text-left">{client.name}</DialogTitle>
-                  <p className="text-sm text-muted-foreground">{client.email}</p>
+                  <p className="max-w-full truncate text-sm text-muted-foreground">{client.email}</p>
                   {client.customerCode && (
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <span className="text-xs text-muted-foreground">Código de Registro:</span>
@@ -939,7 +940,7 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2 ml-auto">
+                <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
                   {(() => {
                     const s = STATUS_LABELS[client.status];
                     return s ? <Badge className={`${s.color} border`}>{s.label}</Badge> : null;
@@ -1022,16 +1023,16 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
             })()}
 
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-9">
-                <TabsTrigger value="data">Dados</TabsTrigger>
-                <TabsTrigger value="trips">Viagens</TabsTrigger>
-                <TabsTrigger value="financial">Financeiro</TabsTrigger>
-                <TabsTrigger value="loyalty">Fidelidade</TabsTrigger>
-                <TabsTrigger value="referral">Indicações</TabsTrigger>
-                <TabsTrigger value="history">Histórico</TabsTrigger>
-                <TabsTrigger value="documents">Docs</TabsTrigger>
-                <TabsTrigger value="sonhos">Sonhos</TabsTrigger>
-                <TabsTrigger value="ia">IA</TabsTrigger>
+              <TabsList aria-label="Seções da ficha do cliente" className="flex w-full gap-1 overflow-x-auto overflow-y-hidden p-1">
+                <TabsTrigger data-testid="tab-client-profile-data" className="shrink-0 whitespace-nowrap" value="data">Dados</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-trips" className="shrink-0 whitespace-nowrap" value="trips">Viagens</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-financial" className="shrink-0 whitespace-nowrap" value="financial">Financeiro</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-loyalty" className="shrink-0 whitespace-nowrap" value="loyalty">Fidelidade</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-referral" className="shrink-0 whitespace-nowrap" value="referral">Indicações</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-history" className="shrink-0 whitespace-nowrap" value="history">Histórico</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-documents" className="shrink-0 whitespace-nowrap" value="documents">Docs</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-dreams" className="shrink-0 whitespace-nowrap" value="sonhos">Sonhos</TabsTrigger>
+                <TabsTrigger data-testid="tab-client-profile-ai" className="shrink-0 whitespace-nowrap" value="ia">IA</TabsTrigger>
               </TabsList>
 
               <TabsContent value="data" className="space-y-3 mt-4">
