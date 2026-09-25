@@ -279,6 +279,7 @@ export default function Financial() {
     adjustedBy: pmsAdjustedByFilter.trim() || undefined,
   }), [pmsReservationFilter, pmsAdjustedByFilter]);
   const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics(undefined, financialAdjustmentFilters);
+  const pmsPaymentAdjustments = financialMetrics?.pmsPaymentAdjustments ?? [];
 
   const clientMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -519,7 +520,7 @@ export default function Financial() {
           </div>
           {loadingFinancialMetrics ? (
             <div className="h-16 animate-pulse rounded bg-muted" data-testid="status-pms-adjustments-loading" />
-          ) : (financialMetrics?.pmsPaymentAdjustments.length ?? 0) === 0 ? (
+          ) : pmsPaymentAdjustments.length === 0 ? (
             <p className="text-sm text-muted-foreground" data-testid="status-pms-adjustments-empty">Nenhum ajuste de pagamento PMS no período.</p>
           ) : (
             <div className="overflow-x-auto rounded-md border">
@@ -536,7 +537,7 @@ export default function Financial() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {financialMetrics!.pmsPaymentAdjustments.map((adjustment) => (
+                  {pmsPaymentAdjustments.map((adjustment) => (
                     <TableRow key={adjustment.id} data-testid={`row-pms-payment-adjustment-${adjustment.id}`}>
                       <TableCell className="font-medium">{adjustment.reservationNumber || adjustment.reservationId}</TableCell>
                       <TableCell>{fmt(adjustment.previousPaidAmount)}</TableCell>
