@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useListReservations,
   useGetReservation,
@@ -29,6 +30,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { VoucherQrScannerDialog } from "./VoucherQrScannerDialog";
 import {
   Search,
   QrCode,
@@ -458,6 +460,10 @@ function VoucherGenerator({ onDownload }: { onDownload?: (r: Reservation) => voi
 }
 
 export default function Vouchers() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [qrScannerOpen, setQrScannerOpen] = useState(false);
+  const qrCheckIn = useCheckInReservation();
   const [searchCode, setSearchCode] = useState("");
   const [filterTrip, setFilterTrip] = useState("__all__");
   const [filterStatus, setFilterStatus] = useState("__all__");
@@ -472,6 +478,21 @@ export default function Vouchers() {
 
   const { data: reservationsData } = useListReservations({ limit: 200 });
   const reservations = reservationsData?.data ?? [];
+
+  async function handleQrCheckIn(reservationId: string) {
+    try {
+      await qrCheckIn.mutateAsync({ id: reservationId });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["/api/reservations"] }),
+        queryClient.invalidateQueries({ queryKey: [`/api/reservations/${reservationId}`] }),
+        queryClient.invalidateQueries({ queryKey: ["voucher", reservationId] }),
+      ]);
+      toast({ title: "Check-in realizado com sucesso" });
+    } catch (error) {
+      toast({ title: "Erro ao realizar check-in", variant: "destructive" });
+      throw error;
+    }
+  }
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { data: selectedReservation } = useGetReservation(selectedId ?? "", {
@@ -502,7 +523,7 @@ export default function Vouchers() {
             {checkedIn} de {reservations.length} passageiros realizaram check-in
           </p>
         </div>
-        <Button variant="outline">
+        <Button variant="outline" onClick={() => setQrScannerOpen(true)}>
           <ScanLine className="w-4 h-4 mr-2" />
           Scanner QR (câmera)
         </Button>
@@ -652,6 +673,14 @@ export default function Vouchers() {
           <VoucherGenerator onDownload={handleDownload} />
         </TabsContent>
       </Tabs>
+
+      <VoucherQrScannerDialog
+        open={qrScannerOpen}
+        onOpenChange={setQrScannerOpen}
+        reservations={reservations}
+        onCheckIn={handleQrCheckIn}
+        isCheckingIn={qrCheckIn.isPending}
+      />
 
       <VoucherModal
         reservation={voucherDownloadRes}
