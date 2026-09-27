@@ -222,6 +222,7 @@ vi.mock("../lib/referral-tiers.js", () => ({
 // ---------------------------------------------------------------------------
 
 import { requireAuth } from "../lib/tenant.js";
+import { db } from "@workspace/db";
 import clientPortalRouter from "../routes/client-portal.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 import { computeReferralTier } from "../lib/referral-tiers.js";
@@ -319,7 +320,7 @@ function setupDefaultDbMocks() {
   mockWhere.mockReturnValue(
     Object.assign(Promise.resolve([]), { limit: mockLimit, groupBy: mockGroupBy, orderBy: mockOrderBy }),
   );
-  mockInnerJoin.mockReturnValue({ where: mockInnerJoinWhere });
+  mockInnerJoin.mockReturnValue({ where: mockInnerJoinWhere, innerJoin: mockInnerJoin } as never);
   mockInnerJoinWhere.mockReturnValue({ orderBy: mockOrderBy, limit: mockLimit });
   mockLimit.mockResolvedValue([]);
   mockOrderBy.mockResolvedValue([]);
@@ -360,6 +361,103 @@ function buildWhereResult(rows: unknown[] = []) {
     orderBy: mockOrderBy,
   });
 }
+
+describe("client NPS eligibility and favorites", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    setupDefaultDbMocks();
+    vi.mocked(requireAuth).mockResolvedValue(FAKE_ME_CLIENTE as never);
+  });
+
+  it("rejects ineligible and foreign-client reservations without creating a response", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])
+      .mockResolvedValueOnce([{ id: "res-001", tripId: "trip-001", status: "cancelled", tripReturnDate: new Date() }]);
+    const cancelled = await request(buildClientPortalApp()).post("/api/client/nps").send({ reservationId: "res-001", score: 8 });
+    expect(cancelled.status).toBe(400);
+    expect(cancelled.body.code).toBe("NPS_NOT_ELIGIBLE");
+    mockLimit.mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID]).mockResolvedValueOnce([]);
+    const foreign = await request(buildClientPortalApp()).post("/api/client/nps").send({ reservationId: "other", score: 8 });
+    expect(foreign.status).toBe(404);
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it("accepts a confirmed trip returned recently and records NPS under the authenticated tenant/client", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])
+      .mockResolvedValueOnce([{ id: "res-001", tripId: "trip-001", status: "confirmed", tripReturnDate: new Date() }])
+      .mockResolvedValueOnce([]);
+    const insertValues = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(db.insert).mockReturnValueOnce({ values: insertValues } as never);
+    const response = await request(buildClientPortalApp()).post("/api/client/nps").send({ reservationId: "res-001", score: 8 });
+    expect(response.status).toBe(201);
+    expect(insertValues).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: FAKE_ME_CLIENTE.tenantId, clientId: FAKE_CLIENT_WITH_USERID.id, reservationId: "res-001",
+    }));
+  });
+
+  it("rejects missing favorite resources, invalid types and wrong-tenant trip resources", async () => {
+    const invalid = await request(buildClientPortalApp()).post("/api/client/me/favorites").send({ itemType: "hotel", itemId: "any" });
+    expect(invalid.status).toBe(400);
+    mockLimit.mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID]).mockResolvedValueOnce([]);
+    const foreign = await request(buildClientPortalApp()).post("/api/client/me/favorites").send({ itemType: "trip", itemId: "foreign-trip" });
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.code).toBe("FAVORITE_NOT_FOUND");
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it("returns the existing favorite ID on duplicate, not an invented new ID", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])
+      .mockResolvedValueOnce([{ id: "product-001" }])
+      .mockResolvedValueOnce([{ id: "existing-fav" }]);
+    vi.mocked(db.insert).mockReturnValueOnce({
+      values: () => ({ onConflictDoNothing: () => ({ returning: async () => [] }) }),
+    } as never);
+    const result = await request(buildClientPortalApp()).post("/api/client/me/favorites").send({ itemType: "product", itemId: "product-001" });
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ id: "existing-fav", itemType: "product", itemId: "product-001", alreadyFavorited: true });
+  });
+});
+
+describe("loyalty redemption status gate", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    setupDefaultDbMocks();
+    vi.mocked(requireAuth).mockResolvedValue(FAKE_ME_CLIENTE as never);
+  });
+
+  it.each(["cancelled", "refunded", "completed", "failed"])(
+    "rejects %s even with an outstanding balance before spending points",
+    async (status) => {
+      mockLimit.mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID]).mockResolvedValueOnce([{
+        id: "res-001", status, reservationNumber: "ABC-001", totalValue: "100", paidValue: "10",
+      }]);
+      const response = await request(buildClientPortalApp()).post("/api/client/me/loyalty/redeem")
+        .send({ reservationId: "res-001", pointsToRedeem: 10 });
+      expect(response.status).toBe(400);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns points and monetary discount actually applied when balance caps requested points", async () => {
+    mockLimit.mockResolvedValueOnce([FAKE_CLIENT_WITH_USERID])
+      .mockResolvedValueOnce([{ id: "res-001", status: "confirmed", reservationNumber: "ABC-001", totalValue: "15", paidValue: "10" }])
+      .mockResolvedValueOnce([{ id: "program-001", minRedeemPoints: 1, realPerPoint: "1" }])
+      .mockResolvedValueOnce([{ id: "member-001", availablePoints: 20 }])
+      .mockResolvedValueOnce([{ availablePoints: 20 }])
+      .mockResolvedValueOnce([{ status: "confirmed", reservationNumber: "ABC-001", totalValue: "15", paidValue: "10" }]);
+    mockWhere.mockReturnValue({
+      limit: mockLimit,
+      for: () => ({ limit: mockLimit }),
+    } as never);
+    vi.mocked(db.insert).mockReturnValueOnce({ values: vi.fn().mockResolvedValue(undefined) } as never);
+    mockTransaction.mockImplementation(async (callback) => callback({
+      select: mockSelect, update: mockUpdate, insert: db.insert, execute: mockExecute,
+    }));
+    const response = await request(buildClientPortalApp()).post("/api/client/me/loyalty/redeem")
+      .send({ reservationId: "res-001", pointsToRedeem: 10 });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ pointsRedeemed: 5, discountAmount: 5, newAvailablePoints: 15 });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests: GET /api/client/me
@@ -898,6 +996,16 @@ describe("PATCH /api/client/me", () => {
     vi.resetAllMocks();
     setupDefaultDbMocks();
   });
+
+  it.each(["2025-02-29", "2000-13-01", "1890-01-01", "9999-01-01", "01/01/2000"])(
+    "rejects invalid birth date %s before hitting the database",
+    async (birthDate) => {
+      requireAuthMock.mockResolvedValue(FAKE_ME_CLIENTE as never);
+      const res = await request(buildClientPortalApp()).patch("/api/client/me").send({ birthDate });
+      expect(res.status).toBe(400);
+      expect(mockSelect).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns 403 when user is not a 'cliente'", async () => {
     requireAuthMock.mockResolvedValue(FAKE_ME_ADMIN as never);

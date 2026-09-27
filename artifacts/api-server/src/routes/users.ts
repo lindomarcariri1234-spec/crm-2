@@ -16,7 +16,7 @@ import { getAuth, clerkClient } from "@clerk/express";
 import { ROLES, RESOURCES, ACTIONS, hasPermission } from "@workspace/permissions";
 import { AppError, ForbiddenError, NotFoundError, ValidationError, ConflictError } from "../lib/errors";
 import { normalizeCpfInput, reconcileClientIdentity } from "../services/client-identity";
-import { unlinkClientFromTrips } from "../services/unlink-client-from-trips";
+import { findAccountDeletion, notifyDeletedClientTrips, prepareAccountDeletion, processAccountDeletion } from "../services/account-deletion";
 
 const router = Router();
 
@@ -309,6 +309,12 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
     }
 
     const [existing] = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkId)).limit(1);
+    // A still-valid Clerk session must not recreate a user removed locally
+    // while its provider deletion is pending (or after it completed).
+    if (!existing && await findAccountDeletion(clerkId)) {
+      next(new ConflictError("A exclusão desta conta já foi iniciada.", "ACCOUNT_DELETION_PENDING"));
+      return;
+    }
     if (
       isClientSignup
       && (!canonicalEmailVerified || clerkFetchFailed)
@@ -752,47 +758,16 @@ router.delete("/users/me", async (req, res, next): Promise<void> => {
   try {
     const { userId: clerkId } = getAuth(req);
     if (!clerkId) { next(new AppError("Not authenticated", 401, "UNAUTHENTICATED")); return; }
-
-    const [user] = await db.select().from(usersTable)
-      .where(eq(usersTable.clerkId, clerkId))
-      .limit(1);
-    if (!user) { next(new NotFoundError("Usuário não encontrado", "USER_NOT_FOUND")); return; }
-
-    if (user.role !== ROLES.CLIENT) {
-      next(new ForbiddenError("Apenas clientes podem excluir a própria conta pelo portal.", "FORBIDDEN_ROLE")); return;
+    const prepared = await prepareAccountDeletion(clerkId);
+    if (prepared) notifyDeletedClientTrips(prepared.tripIds);
+    const pending = await findAccountDeletion(clerkId);
+    if (!pending) { next(new NotFoundError("Usuário não encontrado", "USER_NOT_FOUND")); return; }
+    const status = await processAccountDeletion(pending.id, clerkId);
+    if (status === "done") {
+      res.status(204).end();
+    } else {
+      res.status(202).json({ status: "pending", message: "Conta removida localmente; exclusão de autenticação em processamento." });
     }
-
-    try {
-      await clerkClient.users.deleteUser(clerkId);
-    } catch (clerkErr: unknown) {
-      const status = (clerkErr as { status?: number })?.status;
-      if (status !== 404) {
-        next(new AppError("Não foi possível remover a conta de autenticação. Tente novamente.", 502, "CLERK_DELETE_FAILED")); return;
-      }
-    }
-
-    await db.transaction(async (tx) => {
-      if (user.tenantId) {
-        const linkedClients = await tx.select({ id: clientsTable.id })
-          .from(clientsTable)
-          .where(and(
-            eq(clientsTable.userId, user.id),
-            eq(clientsTable.tenantId, user.tenantId),
-          ));
-        await Promise.all(linkedClients.map((linkedClient) =>
-          unlinkClientFromTrips(tx, user.tenantId!, linkedClient.id),
-        ));
-      }
-      const clientLinkCondition = user.tenantId
-        ? and(eq(clientsTable.userId, user.id), eq(clientsTable.tenantId, user.tenantId))
-        : eq(clientsTable.userId, user.id);
-      await tx.update(clientsTable)
-        .set({ userId: sql`NULL` })
-        .where(clientLinkCondition);
-      await tx.delete(usersTable).where(eq(usersTable.id, user.id));
-    });
-
-    res.status(204).end();
   } catch (err) {
     next(err);
   }

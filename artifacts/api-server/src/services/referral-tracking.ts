@@ -1,9 +1,10 @@
 import { randomBytes } from "crypto";
-import { db, referralsTable, referralTrackingTable } from "@workspace/db";
+import { db, clientsTable, referralsTable, referralTrackingTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
+import { ValidationError } from "../lib/errors";
 
-type ReferralTrackingExecutor = Pick<typeof db, "select" | "insert" | "update">;
+type ReferralTrackingExecutor = Pick<typeof db, "select" | "insert" | "update" | "execute">;
 
 export interface ReferralVisitInput {
   tenantId: string;
@@ -66,6 +67,19 @@ export async function recordReferralVisit(
   input: ReferralVisitInput,
 ): Promise<ReferralVisitResult> {
   const now = input.now ?? new Date();
+  const [owner] = await tx.select({ id: clientsTable.id })
+    .from(clientsTable)
+    .where(and(
+      eq(clientsTable.tenantId, input.tenantId),
+      eq(clientsTable.referralCode, input.code),
+      eq(clientsTable.referralCodeStatus, "active"),
+    ))
+    .limit(1);
+  if (!owner) throw new ValidationError("Código de indicação inválido ou bloqueado", "INVALID_REFERRAL_CODE");
+
+  // Serialize visits to the same code, including distinct cookies. The summary
+  // read below must see every committed append before updating CRM rows.
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.tenantId + ":" + input.code}, 0))`);
   let cookieId = input.serverCookieId;
   let existingRecord: {
     pagesVisited: unknown;
@@ -84,7 +98,7 @@ export async function recordReferralVisit(
       ))
       .limit(1);
 
-    if (found) {
+    if (found && found.referralCode === input.code) {
       existingRecord = found;
     } else {
       cookieId = undefined;
@@ -94,16 +108,13 @@ export async function recordReferralVisit(
   if (!cookieId) cookieId = generateCookieId();
 
   if (existingRecord) {
-    const pages = Array.isArray(existingRecord.pagesVisited)
-      ? [...existingRecord.pagesVisited] as string[]
-      : [];
-    if (input.landingPage) pages.push(input.landingPage);
-
     await tx.update(referralTrackingTable)
       .set({
         lastVisit: now,
         visitsCount: sql`visits_count + 1`,
-        pagesVisited: pages,
+        ...(input.landingPage ? {
+          pagesVisited: sql`COALESCE(${referralTrackingTable.pagesVisited}::jsonb, '[]'::jsonb) || ${JSON.stringify([input.landingPage])}::jsonb`,
+        } : {}),
         updatedAt: now,
       })
       .where(and(
@@ -146,8 +157,8 @@ export async function recordReferralVisit(
   await tx.update(referralsTable)
     .set({
       visitsCount,
-      firstVisit: summary?.firstVisit ?? now,
-      lastVisit: summary?.lastVisit ?? now,
+      firstVisit: summary?.firstVisit ? new Date(summary.firstVisit) : now,
+      lastVisit: summary?.lastVisit ? new Date(summary.lastVisit) : now,
       updatedAt: now,
     })
     .where(and(

@@ -57,7 +57,9 @@ export interface ClientLoyalty {
 
 export interface ClientReferral {
   id: string;
+  /** Already masked by the client endpoint; never treat this as a raw contact name. */
   referredName: string | null;
+  /** Already masked by the client endpoint. */
   referredEmail: string | null;
   status: string;
   convertedAt: string | null;
@@ -243,6 +245,7 @@ export interface LoyaltyTransactionsResponse {
 }
 
 export interface RedeemLoyaltyResponse {
+  /** Server-authoritative amount; may be less than the points requested. */
   pointsRedeemed: number;
   discountAmount: number;
   newAvailablePoints: number;

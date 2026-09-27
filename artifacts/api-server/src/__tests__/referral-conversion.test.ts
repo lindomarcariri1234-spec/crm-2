@@ -106,6 +106,7 @@ function makeTx() {
     const chain: Record<string, unknown> = {};
     chain.from    = vi.fn(() => chain);
     chain.where   = vi.fn(() => chain);
+    chain.for     = vi.fn(() => chain);
     chain.orderBy = vi.fn(() => chain);
     chain.limit   = vi.fn(() => Promise.resolve(rows));
     chain.then    = (
@@ -208,6 +209,17 @@ function queueCommonSelects() {
     [],              // 3. storeOrdersTable — no prior order (no fraud signal)
   );
 }
+
+describe("recordReferralConversion — tenant isolation", () => {
+  it("rejects a missing or cross-tenant referrer before any writes", async () => {
+    selectQueue.push([REF_SETTINGS], []);
+    const tx = makeTx();
+    await expect(recordReferralConversion(tx, { ...BASE_ARGS }))
+      .rejects.toMatchObject({ code: "REFERRER_NOT_FOUND" });
+    expect(tx.update).not.toHaveBeenCalled();
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+});
 
 // ---------------------------------------------------------------------------
 // UPDATE path — existingReferralId non-null

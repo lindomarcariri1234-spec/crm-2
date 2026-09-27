@@ -8,6 +8,8 @@ interface FavoritesContextType {
   tripIds: Set<string>;
   productIds: Set<string>;
   loading: boolean;
+  error: string | null;
+  retry: () => Promise<void>;
   toggleFavorite: (itemType: "trip" | "product", itemId: string) => Promise<void>;
   isFavorited: (itemType: "trip" | "product", itemId: string) => boolean;
 }
@@ -22,23 +24,32 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
   const [tripIds, setTripIds] = useState<Set<string>>(new Set());
   const [productIds, setProductIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     if (!isClient) {
       setTripIds(new Set());
       setProductIds(new Set());
+      setError(null);
+      setLoading(false);
       return;
     }
+    let cancelled = false;
     setLoading(true);
+    setError(null);
     clientPortalApi
       .getFavorites()
       .then((data) => {
+        if (cancelled) return;
         setTripIds(new Set(data.trips.map((t) => t.tripId)));
         setProductIds(new Set(data.products.map((p) => p.productId)));
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [isClient]);
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Erro ao carregar favoritos."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [isClient, me?.id, retryKey]);
+  const retry = useCallback(async () => { setRetryKey(key => key + 1); }, []);
 
   const toggleFavorite = useCallback(
     async (itemType: "trip" | "product", itemId: string) => {
@@ -92,7 +103,7 @@ export function FavoritesProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <FavoritesContext.Provider value={{ tripIds, productIds, loading, toggleFavorite, isFavorited }}>
+    <FavoritesContext.Provider value={{ tripIds, productIds, loading, error, retry, toggleFavorite, isFavorited }}>
       {children}
     </FavoritesContext.Provider>
   );

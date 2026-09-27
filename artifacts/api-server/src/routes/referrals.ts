@@ -1,5 +1,5 @@
 import { Router, type NextFunction } from "express";
-import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable, auditLogsTable } from "@workspace/db";
+import { db, referralsTable, clientsTable, referralSettingsTable, referralTrackingTable, tenantsTable, emailLogsTable, reservationsTable, referralCampaignsTable, referralCommissionsTable, partnersTable, storeOrdersTable, dealsTable, paymentsTable, auditLogsTable, outboundMessagesTable } from "@workspace/db";
 import { eq, and, desc, sql, count, ilike, or, inArray, getTableColumns, isNull, isNotNull, gte, lte } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
@@ -22,6 +22,60 @@ import { REFERRAL_NOTIFICATION_TYPE } from "../lib/referral-notification-types";
 
 const router = Router();
 const PUBLIC_REFERRAL_EMAIL_FAILURE = "Não foi possível enviar a notificação.";
+const MAX_REFERRAL_EXPORT_ROWS = 10_000;
+
+/**
+ * An operational claim in the durable outbound ledger, NOT a delivery stamp.
+ * The key is tied to the previous *accepted* stamp; concurrent requests or a
+ * process crash cannot silently create a second provider attempt. Ambiguous
+ * claims remain "unknown" for operational reconciliation, never auto-retried.
+ */
+async function claimManualReferralNotification(input: {
+  tenantId: string;
+  referralId: string;
+  referrerId: string;
+  actorId: string;
+  kind: "expiry-7" | "expiry-1" | "bonus-release";
+  expectedStatus: string;
+  previousStamp: Date | null;
+  expiresAt?: Date;
+}): Promise<string> {
+  const idempotencyKey = `referral:manual:${input.referralId}:${input.kind}:${input.previousStamp?.getTime() ?? "initial"}:${input.expiresAt?.getTime() ?? ""}`;
+  return db.transaction(async (tx) => {
+    const [current] = await tx.select({
+      status: referralsTable.status,
+      expiryWarning7SentAt: referralsTable.expiryWarning7SentAt,
+      expiryWarning1SentAt: referralsTable.expiryWarning1SentAt,
+      bonusReleaseNotifiedAt: referralsTable.bonusReleaseNotifiedAt,
+    }).from(referralsTable)
+      .where(and(eq(referralsTable.tenantId, input.tenantId), eq(referralsTable.id, input.referralId)))
+      .for("update").limit(1);
+    const stamp = input.kind === "expiry-7" ? current?.expiryWarning7SentAt
+      : input.kind === "expiry-1" ? current?.expiryWarning1SentAt
+        : current?.bonusReleaseNotifiedAt;
+    if (!current || current.status !== input.expectedStatus
+      || (stamp?.getTime() ?? null) !== (input.previousStamp?.getTime() ?? null)) {
+      throw new ConflictError("A indicação mudou de estado; atualize antes de reenviar.", "REFERRAL_SEND_CONFLICT");
+    }
+    const [claim] = await tx.insert(outboundMessagesTable).values({
+      id: generateId(),
+      tenantId: input.tenantId,
+      idempotencyKey,
+      eventType: "referral_manual_send_claim",
+      origin: "referral-manual-send-claim",
+      recipientType: "client",
+      recipientId: input.referrerId,
+      createdById: input.actorId,
+      status: "unknown",
+      metadata: { referralId: input.referralId, kind: input.kind },
+    }).onConflictDoNothing({ target: [outboundMessagesTable.tenantId, outboundMessagesTable.idempotencyKey] })
+      .returning({ id: outboundMessagesTable.id });
+    if (!claim) {
+      throw new ConflictError("Envio já iniciado; confirme o resultado no histórico de entregas antes de tentar novamente.", "REFERRAL_SEND_CONFLICT");
+    }
+    return claim.id;
+  });
+}
 const CampaignBonusType = z.enum(["multiplier", "fixed_extra", "fixed_bonus", "percentage_bonus", "reduced_bonus", "no_reward"]);
 const CampaignConfig = z.object({
   eligibleStoreProductIds: z.array(z.string().min(1)).max(500).optional(),
@@ -40,10 +94,10 @@ const CampaignConfig = z.object({
 });
 
 const CreateReferralBody = z.object({
-  referrerId: z.string(),
-  referredId: z.string().optional(),
+  referrerId: z.string().min(1),
+  referredId: z.string().min(1).optional(),
   referredEmail: z.string().email().optional(),
-  code: z.string(),
+  code: z.string().trim().min(1).max(80),
   bonusAmount: z.string().optional(),
 });
 
@@ -520,6 +574,13 @@ router.post("/referrals", async (req, res, next: NextFunction): Promise<void> =>
     if (!ALL_STAFF_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateReferralBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+    const ids = [parsed.data.referrerId, ...(parsed.data.referredId ? [parsed.data.referredId] : [])];
+    const owners = await db.select({ id: clientsTable.id }).from(clientsTable)
+      .where(and(eq(clientsTable.tenantId, me.tenantId), inArray(clientsTable.id, ids)));
+    if (new Set(owners.map((owner) => owner.id)).size !== new Set(ids).size) {
+      next(new ValidationError("Indicador ou indicado não encontrado neste tenant", "INVALID_REFERRAL_CLIENT"));
+      return;
+    }
     const id = generateId();
 
     const [refSettings] = await db
@@ -652,14 +713,14 @@ router.patch("/referrals/:id", async (req, res, next: NextFunction): Promise<voi
       }
     }
 
-    await db.update(referralsTable).set(updates)
+    const [claimed] = await db.update(referralsTable).set(updates)
       .where(and(
         eq(referralsTable.id, req.params.id),
         eq(referralsTable.tenantId, me.tenantId),
-        ...(existing.status === REFERRAL_STATUS.PENDING && parsed.data.status === REFERRAL_STATUS.EXPIRED
-          ? [eq(referralsTable.status, REFERRAL_STATUS.PENDING)]
-          : []),
-      ));
+        eq(referralsTable.status, existing.status),
+        eq(referralsTable.bonusPaid, existing.bonusPaid),
+      )).returning({ id: referralsTable.id });
+    if (!claimed) { next(new ConflictError("A indicação mudou de estado", "REFERRAL_STATE_CONFLICT")); return; }
     const [referral] = await db.select().from(referralsTable)
       .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId))).limit(1);
     if (!referral) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
@@ -855,36 +916,42 @@ router.post("/referrals/:id/resend-expiry-warning", async (req, res, next: NextF
       return;
     }
 
-    const clearUpdate = windowNum === 7
-      ? { expiryWarning7SentAt: null, updatedAt: now }
-      : { expiryWarning1SentAt: null, updatedAt: now };
+    const warningColumn = windowNum === 7 ? referralsTable.expiryWarning7SentAt : referralsTable.expiryWarning1SentAt;
+    const previousWarning = windowNum === 7 ? row.expiryWarning7SentAt : row.expiryWarning1SentAt;
+    const claimId = await claimManualReferralNotification({
+      tenantId: me.tenantId, referralId: row.id, referrerId: row.referrerId,
+      actorId: me.id, kind: windowNum === 7 ? "expiry-7" : "expiry-1",
+      expectedStatus: REFERRAL_STATUS.PENDING,
+      previousStamp: previousWarning, expiresAt,
+    });
 
-    await db.update(referralsTable)
-      .set(clearUpdate)
-      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
-
-    const delivered = await dispatchReferralExpiringSoonEmail(
-      row.referrerId,
-      me.tenantId,
-      row.code,
-      expiresAt,
-      windowNum,
-      row.id,
-      `manual-${generateId()}`,
-    );
+    let delivered = false;
+    try {
+      delivered = await dispatchReferralExpiringSoonEmail(
+        row.referrerId, me.tenantId, row.code, expiresAt, windowNum, row.id,
+        `manual-${claimId}`,
+      );
+    } catch {
+      delivered = false;
+    }
     if (!delivered) {
-      next(new AppError(PUBLIC_REFERRAL_EMAIL_FAILURE, 502, "REFERRAL_EMAIL_FAILED"));
+      next(new AppError(`${PUBLIC_REFERRAL_EMAIL_FAILURE} Confira o histórico antes de tentar novamente.`, 502, "REFERRAL_EMAIL_FAILED"));
       return;
     }
-
-    const sentNow = new Date();
-    const sentUpdate = windowNum === 7
-      ? { expiryWarning7SentAt: sentNow, updatedAt: sentNow }
-      : { expiryWarning1SentAt: sentNow, updatedAt: sentNow };
-
-    await db.update(referralsTable)
-      .set(sentUpdate)
-      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+    // Only an accepted or durably queued email is eligible for the delivery
+    // marker. Do not touch it on failure, unknown outcome, or before dispatch.
+    const sentAt = new Date();
+    const [stamped] = await db.update(referralsTable)
+      .set(windowNum === 7
+        ? { expiryWarning7SentAt: sentAt, updatedAt: sentAt }
+        : { expiryWarning1SentAt: sentAt, updatedAt: sentAt })
+      .where(and(eq(referralsTable.id, row.id), eq(referralsTable.tenantId, me.tenantId),
+        eq(referralsTable.status, REFERRAL_STATUS.PENDING),
+        previousWarning ? eq(warningColumn, previousWarning) : isNull(warningColumn)))
+      .returning({ id: referralsTable.id });
+    if (!stamped) { next(new ConflictError("Indicação alterada após o envio; verifique o histórico de entregas.", "REFERRAL_SEND_CONFLICT")); return; }
+    await db.update(outboundMessagesTable).set({ status: "accepted" })
+      .where(and(eq(outboundMessagesTable.id, claimId), eq(outboundMessagesTable.tenantId, me.tenantId)));
 
     const [updated] = await db.select({
       ...getTableColumns(referralsTable),
@@ -965,28 +1032,38 @@ router.post("/referrals/:id/resend-bonus-release", async (req, res, next: NextFu
     }
 
     const now = new Date();
-    await db.update(referralsTable)
-      .set({ bonusReleaseNotifiedAt: null, updatedAt: now })
-      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+    const claimId = await claimManualReferralNotification({
+      tenantId: me.tenantId, referralId: row.id, referrerId: row.referrerId,
+      actorId: me.id, kind: "bonus-release", expectedStatus: REFERRAL_STATUS.COMPLETED,
+      previousStamp: row.bonusReleaseNotifiedAt,
+    });
 
     const releaseDate = bonusReleasesAt?.toISOString() ?? now.toISOString();
-    const delivered = await dispatchReferralBonusReleasedEmail(
-      row.referrerId,
-      me.tenantId,
-      parseFloat(String(row.bonusAmount)) || 0,
-      releaseDate,
-      row.id,
-      `manual-${generateId()}`,
-    );
+    let delivered = false;
+    try {
+      delivered = await dispatchReferralBonusReleasedEmail(
+        row.referrerId, me.tenantId, parseFloat(String(row.bonusAmount)) || 0,
+        releaseDate, row.id, `manual-${claimId}`,
+      );
+    } catch {
+      delivered = false;
+    }
     if (!delivered) {
-      next(new AppError(PUBLIC_REFERRAL_EMAIL_FAILURE, 502, "REFERRAL_EMAIL_FAILED"));
+      next(new AppError(`${PUBLIC_REFERRAL_EMAIL_FAILURE} Confira o histórico antes de tentar novamente.`, 502, "REFERRAL_EMAIL_FAILED"));
       return;
     }
-
-    const sentNow = new Date();
-    await db.update(referralsTable)
-      .set({ bonusReleaseNotifiedAt: sentNow, updatedAt: sentNow })
-      .where(and(eq(referralsTable.id, req.params.id), eq(referralsTable.tenantId, me.tenantId)));
+    const sentAt = new Date();
+    const [stamped] = await db.update(referralsTable)
+      .set({ bonusReleaseNotifiedAt: sentAt, updatedAt: sentAt })
+      .where(and(eq(referralsTable.id, row.id), eq(referralsTable.tenantId, me.tenantId),
+        eq(referralsTable.status, REFERRAL_STATUS.COMPLETED),
+        row.bonusReleaseNotifiedAt
+          ? eq(referralsTable.bonusReleaseNotifiedAt, row.bonusReleaseNotifiedAt)
+          : isNull(referralsTable.bonusReleaseNotifiedAt)))
+      .returning({ id: referralsTable.id });
+    if (!stamped) { next(new ConflictError("Indicação alterada após o envio; verifique o histórico de entregas.", "REFERRAL_SEND_CONFLICT")); return; }
+    await db.update(outboundMessagesTable).set({ status: "accepted" })
+      .where(and(eq(outboundMessagesTable.id, claimId), eq(outboundMessagesTable.tenantId, me.tenantId)));
 
     const [updated] = await db.select({
       ...getTableColumns(referralsTable),
@@ -1526,9 +1603,14 @@ router.get("/referrals/analytics/export", async (req, res, next: NextFunction): 
           eq(referralsTable.tenantId, me.tenantId),
           sql`${referralsTable.convertedAt} >= ${since}`,
           sql`${referralsTable.convertedAt} <= ${until}`,
-        )),
+        ))
+        .limit(MAX_REFERRAL_EXPORT_ROWS + 1),
     ]);
 
+    if (commercialRows.length > MAX_REFERRAL_EXPORT_ROWS) {
+      next(new AppError("Exportação excede 10.000 indicações; reduza o período.", 413, "REFERRAL_EXPORT_TOO_LARGE"));
+      return;
+    }
     const commercialAnalytics = calculateReferralCommercialAnalytics(
       commercialRows,
       me.tenantId,
@@ -1694,7 +1776,12 @@ router.get("/referrals/export", async (req, res, next: NextFunction): Promise<vo
         eq(clientsTable.tenantId, me.tenantId),
       ))
       .where(and(...conditions))
-      .orderBy(desc(referralsTable.createdAt));
+      .orderBy(desc(referralsTable.createdAt))
+      .limit(MAX_REFERRAL_EXPORT_ROWS + 1);
+    if (rows.length > MAX_REFERRAL_EXPORT_ROWS) {
+      next(new AppError("Exportação excede 10.000 indicações; restrinja os filtros.", 413, "REFERRAL_EXPORT_TOO_LARGE"));
+      return;
+    }
 
     const STATUS_MAP: Record<string, string> = {
       pending: "Pendente",
@@ -1929,8 +2016,10 @@ router.get("/referral-settings", async (req, res, next: NextFunction): Promise<v
         minPurchaseAmount: "0.00",
         maxReferralsPerUser: 0,
       };
-      await db.insert(referralSettingsTable).values(defaults);
-      res.json(defaults);
+      await db.insert(referralSettingsTable).values(defaults).onConflictDoNothing({ target: referralSettingsTable.tenantId });
+      const [saved] = await db.select().from(referralSettingsTable)
+        .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
+      res.json(saved);
       return;
     }
     if (!settings.tiersConfig) {
@@ -1949,37 +2038,37 @@ router.patch("/referral-settings", async (req, res, next: NextFunction): Promise
     if (!me) return;
     if (!hasPermission(me.role, RESOURCES.SETTINGS, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const TierSchema = z.object({
-      level: z.string(),
-      label: z.string(),
-      minReferrals: z.number().int().nonnegative(),
-      bonusMultiplier: z.number().positive(),
+      level: z.string().trim().min(1).max(80),
+      label: z.string().trim().min(1).max(120),
+      minReferrals: z.number().int().min(0).max(1_000_000),
+      bonusMultiplier: z.number().positive().max(100),
     });
     const parsed = z.object({
       isEnabled: z.boolean().optional(),
-      discountType: z.string().optional(),
-      discountValue: z.number().optional(),
-      bonusType: z.string().optional(),
-      bonusValue: z.number().optional(),
-      expirationDays: z.number().optional(),
+      discountType: z.enum(["percentage", "fixed"]).optional(),
+      discountValue: z.number().min(0).max(999.99).optional(),
+      bonusType: z.enum(["credit", "cash"]).optional(),
+      bonusValue: z.number().min(0).max(99_999_999.99).optional(),
+      expirationDays: z.number().int().min(1).max(3650).optional(),
       allowSelfReferral: z.boolean().optional(),
       requireFirstPurchase: z.boolean().optional(),
-      shareMessage: z.string().optional(),
-      tiersConfig: z.array(TierSchema).optional(),
+      shareMessage: z.string().max(2000).optional(),
+      tiersConfig: z.array(TierSchema).max(30).optional(),
       whatsappEnabled: z.boolean().optional(),
-      whatsappPhoneNumber: z.string().optional(),
-      whatsappConvertedMessage: z.string().optional(),
-      whatsappBonusPaidMessage: z.string().optional(),
-      whatsappReversedMessage: z.string().optional(),
+      whatsappPhoneNumber: z.string().max(30).optional(),
+      whatsappConvertedMessage: z.string().max(2000).optional(),
+      whatsappBonusPaidMessage: z.string().max(2000).optional(),
+      whatsappReversedMessage: z.string().max(2000).optional(),
       expiryWarning7DaysEnabled: z.boolean().optional(),
       expiryWarning1DayEnabled: z.boolean().optional(),
       bonusReleaseEmailEnabled: z.boolean().optional(),
-      pointsPerReferral: z.number().int().min(0).optional(),
+      pointsPerReferral: z.number().int().min(0).max(1_000_000).optional(),
       loyaltyPointsEmailEnabled: z.boolean().optional(),
-      gracePeriodDays: z.number().int().min(0).optional(),
-      bonusValidityDays: z.number().int().min(0).optional(),
-      discountExpirationDays: z.number().int().min(0).optional(),
-      minPurchaseAmount: z.number().min(0).optional(),
-      maxReferralsPerUser: z.number().int().min(0).optional(),
+      gracePeriodDays: z.number().int().min(0).max(3650).optional(),
+      bonusValidityDays: z.number().int().min(0).max(3650).optional(),
+      discountExpirationDays: z.number().int().min(0).max(3650).optional(),
+      minPurchaseAmount: z.number().min(0).max(99_999_999.99).optional(),
+      maxReferralsPerUser: z.number().int().min(0).max(1_000_000).optional(),
     }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
 
@@ -2013,7 +2102,13 @@ router.patch("/referral-settings", async (req, res, next: NextFunction): Promise
     const [existing] = await db.select({
       id: referralSettingsTable.id,
       expirationDays: referralSettingsTable.expirationDays,
+      discountType: referralSettingsTable.discountType,
+      discountValue: referralSettingsTable.discountValue,
     }).from(referralSettingsTable).where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
+    if ((parsed.data.discountType ?? existing?.discountType ?? "percentage") === "percentage"
+      && (parsed.data.discountValue ?? Number(existing?.discountValue ?? 5)) > 100) {
+      next(new ValidationError("Desconto percentual deve ser no máximo 100", "VALIDATION_ERROR")); return;
+    }
 
     const expirationDaysChanged = parsed.data.expirationDays != null && (
       !existing || parsed.data.expirationDays !== existing.expirationDays
@@ -2045,9 +2140,18 @@ router.patch("/referral-settings", async (req, res, next: NextFunction): Promise
           expiryWarning1DayEnabled: (updates.expiryWarning1DayEnabled as boolean | undefined) ?? true,
           bonusReleaseEmailEnabled: (updates.bonusReleaseEmailEnabled as boolean | undefined) ?? true,
           loyaltyPointsEmailEnabled: (updates.loyaltyPointsEmailEnabled as boolean | undefined) ?? true,
+          pointsPerReferral: (updates.pointsPerReferral as number | undefined) ?? 0,
+          gracePeriodDays: (updates.gracePeriodDays as number | undefined) ?? 30,
+          bonusValidityDays: (updates.bonusValidityDays as number | undefined) ?? 30,
+          discountExpirationDays: (updates.discountExpirationDays as number | undefined) ?? 30,
+          minPurchaseAmount: (updates.minPurchaseAmount as string | undefined) ?? "0.00",
+          maxReferralsPerUser: (updates.maxReferralsPerUser as number | undefined) ?? 0,
+        }).onConflictDoUpdate({
+          target: referralSettingsTable.tenantId,
+          set: updates as Partial<typeof referralSettingsTable.$inferInsert>,
         });
         [result] = await tx.select().from(referralSettingsTable)
-          .where(eq(referralSettingsTable.id, id)).limit(1);
+          .where(eq(referralSettingsTable.tenantId, me.tenantId)).limit(1);
       } else {
         await tx.update(referralSettingsTable).set(updates as Partial<typeof referralSettingsTable.$inferInsert>)
           .where(eq(referralSettingsTable.tenantId, me.tenantId));

@@ -14,6 +14,7 @@ import { runReferralAttemptLogCleanup } from "../lib/referral-attempt-log-cleanu
 import { runExpiredReservationsCron } from "../lib/expired-reservations";
 import { retryPendingReservationConfirmedWhatsApps } from "../services/checkout/reservation-confirmation-outbox";
 import { retryPendingAttendanceReplies } from "../services/whatsapp-attendance";
+import { retryPendingAccountDeletions } from "../services/account-deletion";
 import { fetchUpstashDailyStats, maybeSendDailyLimitAlert } from "../lib/redis";
 import {
   retryFailedBookingEmails,
@@ -61,6 +62,7 @@ const JOBS: Record<string, () => Promise<unknown>> = {
   "campaign-automation": runCampaignAutomationCron,
   "whatsapp-outbox": retryPendingReservationConfirmedWhatsApps,
   "chatbot-delivery": retryPendingAttendanceReplies,
+  "account-deletion": retryPendingAccountDeletions,
   "outbound-delivery-recovery": async () => { await recoverOutboundDeliveries(); },
   "expired-reservations": runExpiredReservationsCron,
   "email-retry": retryFailedBookingEmails,

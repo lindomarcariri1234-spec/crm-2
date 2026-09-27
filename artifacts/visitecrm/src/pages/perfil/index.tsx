@@ -3,7 +3,9 @@ import { toPng } from "html-to-image";
 import { useLocation, useSearch } from "wouter";
 import { clientPortalApi, type ClientPortalProfile, type ClientLoyalty, type ClientReferral, type FavoritesResponse, type ClientPortalReservation, type ClientLoyaltyTransaction, type ClientAchievementsResponse, type ClientMemoriesResponse, type DreamDestinationItem, type ClubBenefit, type ClubRankingResponse } from "@/lib/clientPortalApi";
 import QRCode from "qrcode";
-import { useGetMe, useGetActiveCampaign } from "@workspace/api-client-react";
+import { useGetMe } from "@workspace/api-client-react";
+import { AsyncEmpty, AsyncError, useAsyncResource } from "./async-state";
+import { profileQuery } from "./profile-query";
 import { RESERVATION_STATUS, REFERRAL_STATUS, INVOICE_STATUS } from "@workspace/permissions";
 import { useSignIn, useClerk } from "@clerk/react";
 import {
@@ -98,6 +100,11 @@ function StatusIcon({ status }: { status: string }) {
   }
 }
 
+// Keep in sync with the client's redemption eligibility on the server.
+function isRedeemableReservation(r: ClientPortalReservation) {
+  return r.status === RESERVATION_STATUS.PENDING || r.status === RESERVATION_STATUS.CONFIRMED;
+}
+
 const fmtDate = (dateStr: string | null) => formatDateShort(dateStr) ?? "A confirmar";
 
 function daysUntil(dateStr: string | null): number | null {
@@ -134,7 +141,7 @@ function ReservationCard({
 }: {
   r: ClientPortalProfile["reservations"][number];
   compact?: boolean;
-  onRedeemClick?: () => void;
+  onRedeemClick?: (trigger: HTMLButtonElement) => void;
 }) {
   const { toast } = useToast();
   const [downloading, setDownloading] = useState(false);
@@ -272,7 +279,7 @@ function ReservationCard({
               )}
               {r.financialSummary.amountRemaining > 0 && onRedeemClick && (
                 <button
-                  onClick={onRedeemClick}
+                  onClick={(event) => onRedeemClick(event.currentTarget)}
                   className="flex items-center gap-1.5 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded px-2 py-1 hover:bg-amber-100 transition-colors"
                 >
                   <Coins className="w-3 h-3" />
@@ -1277,10 +1284,12 @@ function InicioTab({
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {kpis.map((k) => (
-          <Card
+          <button
             key={k.label}
-            className="cursor-pointer hover:shadow-md transition-shadow"
+            type="button"
+            className="text-left rounded-xl border bg-card text-card-foreground shadow-sm cursor-pointer hover:shadow-md transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={k.onClick}
+            aria-label={`${k.label}: ${k.value}. Ver ${k.label}`}
           >
             <CardContent className="p-4">
               <div className={`w-9 h-9 rounded-lg ${k.bg} ${k.color} flex items-center justify-center mb-3`}>
@@ -1290,7 +1299,7 @@ function InicioTab({
               <p className="text-xl font-bold leading-tight">{k.value}</p>
               <p className="text-xs text-muted-foreground mt-0.5 truncate">{k.sub}</p>
             </CardContent>
-          </Card>
+          </button>
         ))}
       </div>
 
@@ -1390,7 +1399,7 @@ function InicioTab({
   );
 }
 
-function ReservasTab({
+export function ReservasTab({
   profile,
   filter,
   onClearFilter,
@@ -1408,12 +1417,15 @@ function ReservasTab({
   const [redeemReservationId, setRedeemReservationId] = useState("");
   const [redeemPoints, setRedeemPoints] = useState("");
   const [redeemLoading, setRedeemLoading] = useState(false);
+  const redeemTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const primaryColor = profile.tenant?.primaryColor ?? "#1E5B8C";
 
-  function openRedeem(reservationId: string, balance: number) {
+  function openRedeem(reservationId: string, balance: number, trigger: HTMLButtonElement) {
     if (!loyalty) return;
-    const maxPts = Math.min(loyalty.availablePoints, Math.ceil(balance / loyalty.realPerPoint));
+    const maxPts = Math.min(loyalty.availablePoints, Math.floor(balance / loyalty.realPerPoint));
+    if (maxPts < loyalty.minRedeemPoints) return;
+    redeemTriggerRef.current = trigger;
     setRedeemReservationId(reservationId);
     setRedeemPoints(String(maxPts));
     setRedeemOpen(true);
@@ -1486,19 +1498,21 @@ function ReservasTab({
 
   const redeemReservation = all.find((r) => r.id === redeemReservationId);
   const maxRedeemPoints = redeemReservation && loyalty
-    ? Math.min(loyalty.availablePoints, Math.ceil(redeemReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
+    ? Math.min(loyalty.availablePoints, Math.floor(redeemReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
     : 0;
   const redeemPointsNum = parseInt(redeemPoints, 10) || 0;
   const estimatedDiscount = loyalty ? redeemPointsNum * loyalty.realPerPoint : 0;
 
-  const redeemModal = redeemOpen && loyalty ? (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={() => !redeemLoading && setRedeemOpen(false)} />
-      <div className="relative bg-background rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-        <div>
-          <h3 className="font-bold text-lg">Usar pontos nesta reserva</h3>
-          <p className="text-sm text-muted-foreground">{redeemReservation?.tripName}</p>
-        </div>
+  const redeemModal = loyalty ? (
+    <Dialog open={redeemOpen} onOpenChange={(open) => { if (!redeemLoading) setRedeemOpen(open); }}>
+      <DialogContent className="max-w-sm" onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        redeemTriggerRef.current?.focus();
+      }}>
+        <DialogHeader>
+          <DialogTitle>Usar pontos nesta reserva</DialogTitle>
+          <DialogDescription>{redeemReservation?.tripName}</DialogDescription>
+        </DialogHeader>
         <form onSubmit={handleRedeem} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="reservasRedeemInput">Pontos a resgatar</Label>
@@ -1543,13 +1557,13 @@ function ReservasTab({
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   ) : null;
 
   if (filter === "com-saldo") {
     const withBalance = all.filter(
-      (r) => r.financialSummary.amountRemaining > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
+      (r) => r.financialSummary.amountRemaining > 0 && isRedeemableReservation(r),
     );
     return (
       <>
@@ -1582,7 +1596,7 @@ function ReservasTab({
                 <ReservationCard
                   key={r.id}
                   r={r}
-                  onRedeemClick={canRedeem ? () => openRedeem(r.id, r.financialSummary.amountRemaining) : undefined}
+                   onRedeemClick={canRedeem && Math.floor(r.financialSummary.amountRemaining / loyalty!.realPerPoint) >= loyalty!.minRedeemPoints ? (trigger) => openRedeem(r.id, r.financialSummary.amountRemaining, trigger) : undefined}
                 />
               ))}
             </div>
@@ -1605,7 +1619,7 @@ function ReservasTab({
               <ReservationCard
                 key={r.id}
                 r={r}
-                onRedeemClick={canRedeem && r.financialSummary.amountRemaining > 0 ? () => openRedeem(r.id, r.financialSummary.amountRemaining) : undefined}
+                 onRedeemClick={canRedeem && isRedeemableReservation(r) && Math.floor(r.financialSummary.amountRemaining / loyalty!.realPerPoint) >= loyalty!.minRedeemPoints ? (trigger) => openRedeem(r.id, r.financialSummary.amountRemaining, trigger) : undefined}
               />
             ))}
           </div>
@@ -2002,6 +2016,7 @@ const REFERRAL_STATUS_MAP: Record<string, { label: string; color: string; icon: 
   [REFERRAL_STATUS.COMPLETED]: { label: "Confirmada", color: "bg-green-100 text-green-800",    icon: <CheckCircle className="w-3.5 h-3.5" /> },
   [REFERRAL_STATUS.CONVERTED]: { label: "Convertida", color: "bg-blue-100 text-blue-800",      icon: <CheckCircle className="w-3.5 h-3.5" /> },
   [REFERRAL_STATUS.EXPIRED]:   { label: "Expirada",   color: "bg-slate-100 text-slate-500",    icon: <XCircle className="w-3.5 h-3.5" /> },
+  [REFERRAL_STATUS.REVERSED]:  { label: "Revertida",  color: "bg-red-100 text-red-700",        icon: <XCircle className="w-3.5 h-3.5" /> },
 };
 
 function ReferralStatusBadge({ status }: { status: string }) {
@@ -2014,23 +2029,9 @@ function ReferralStatusBadge({ status }: { status: string }) {
   );
 }
 
-function maskName(name: string | null): string {
-  if (!name) return "Pessoa indicada";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return `${parts[0].charAt(0).toUpperCase()}${parts[0].slice(1, 3)}***`;
-  return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}.`;
-}
-
-function maskEmail(email: string | null): string {
-  if (!email) return "";
-  const [local, domain] = email.split("@");
-  if (!domain) return email;
-  const visible = local.slice(0, Math.min(3, local.length));
-  return `${visible}***@${domain}`;
-}
-
 function ReferralRow({ r, primaryColor }: { r: ClientReferral; primaryColor: string }) {
-  const displayName = r.referredName ? maskName(r.referredName) : (r.referredEmail ? maskEmail(r.referredEmail) : "Pessoa indicada");
+  // The client endpoint returns only already-masked display values.
+  const displayName = r.referredName ?? r.referredEmail ?? "Pessoa indicada";
   const dateLabel = (r.status === REFERRAL_STATUS.COMPLETED || r.status === REFERRAL_STATUS.CONVERTED) && r.convertedAt
     ? `Convertida em ${new Date(r.convertedAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
     : r.status === REFERRAL_STATUS.EXPIRED && r.expiresAt
@@ -2115,20 +2116,18 @@ const PAGE_SIZE = 10;
 
 function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [loadingQr, setLoadingQr] = useState(false);
-  const [referrals, setReferrals] = useState<ClientReferral[] | null>(null);
-  const [loadingReferrals, setLoadingReferrals] = useState(true);
+  const { data: referralsResponse, loading: loadingReferrals, error: referralsError, reload: retryReferrals } = useAsyncResource(clientPortalApi.getMyReferrals);
+  const referrals = referralsResponse?.data ?? null;
   const searchStr = useSearch();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    const fromUrl = new URLSearchParams(searchStr).get("status");
-    return fromUrl ? parseStatusFilter(fromUrl) : "all";
-  });
+  const statusFilter = parseStatusFilter(new URLSearchParams(searchStr).get("status"));
   const [qrPreviewUrl, setQrPreviewUrl] = useState<string | null>(null);
   const [showQrDialog, setShowQrDialog] = useState(false);
-  const { data: activeCampaign } = useGetActiveCampaign();
+  const { data: activeCampaign, loading: campaignLoading, error: campaignError, reload: retryCampaign } = useAsyncResource(clientPortalApi.getActiveReferralCampaign);
   const [countdown, setCountdown] = useState<string>("");
 
   const referral = profile.referral;
@@ -2148,12 +2147,6 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
     ? `https://wa.me/?text=${encodeURIComponent(`${shareMessage}\n\nMeu código: ${code}\n\n${shareLink}`)}`
     : null;
 
-  // Sync status filter with URL query param
-  useEffect(() => {
-    const fromUrl = new URLSearchParams(searchStr).get("status");
-    setStatusFilter(fromUrl ? parseStatusFilter(fromUrl) : "all");
-  }, [searchStr]);
-
   // Campaign countdown
   useEffect(() => {
     if (!activeCampaign) { setCountdown(""); return; }
@@ -2170,13 +2163,6 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
     const id = setInterval(calc, 1000);
     return () => clearInterval(id);
   }, [activeCampaign]);
-
-  useEffect(() => {
-    clientPortalApi.getMyReferrals()
-      .then((r) => setReferrals(r.data))
-      .catch(() => setReferrals([]))
-      .finally(() => setLoadingReferrals(false));
-  }, []);
 
   const isConverted = (status: string) => status === REFERRAL_STATUS.COMPLETED || status === REFERRAL_STATUS.CONVERTED;
 
@@ -2351,7 +2337,9 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       )}
 
       {/* Campaign banner */}
-      {activeCampaign && countdown && (
+      {campaignLoading ? <Skeleton className="h-20 w-full rounded-xl" /> : campaignError ? (
+        <AsyncError error={campaignError} retry={retryCampaign} title="Não foi possível carregar a campanha." />
+      ) : activeCampaign && countdown ? (
         <div
           className="rounded-xl p-4 text-center shadow-md animate-in fade-in slide-in-from-top-2 duration-500"
           style={{ background: `linear-gradient(135deg, ${primaryColor}dd, ${primaryColor}bb)`, color: primaryForeground }}
@@ -2373,7 +2361,7 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
             </span>
           </p>
         </div>
-      )}
+      ) : <p className="text-xs text-muted-foreground">Nenhuma campanha ativa no momento.</p>}
 
       <div
         className="rounded-2xl p-6"
@@ -2674,9 +2662,10 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                   <button
                     key={f.key}
                     onClick={() => {
-                      setStatusFilter(f.key);
+                      navigate(profileQuery(window.location.search, "status", f.key === "all" ? null : f.key));
                       setVisibleCount(PAGE_SIZE);
                     }}
+                     aria-pressed={active}
                     className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                       active
                         ? "text-white"
@@ -2703,6 +2692,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                 </div>
               ))}
             </div>
+          ) : referralsError ? (
+            <AsyncError error={referralsError} retry={retryReferrals} title="Não foi possível carregar suas indicações." />
           ) : !referrals || referrals.length === 0 ? (
             <div className="text-center py-10">
               <Users className="w-10 h-10 mx-auto mb-3 text-muted-foreground/30" />
@@ -2855,10 +2846,13 @@ function FidelidadeTab({
   const [txHasMore, setTxHasMore] = useState(false);
   const [txLoading, setTxLoading] = useState(false);
   const [txInitialized, setTxInitialized] = useState(false);
+  const [txError, setTxError] = useState<string | null>(null);
+  const txInFlight = useRef(false);
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [redeemReservationId, setRedeemReservationId] = useState("");
   const [redeemPoints, setRedeemPoints] = useState("");
   const [redeemLoading, setRedeemLoading] = useState(false);
+  const redeemTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (loyalty && !txInitialized) {
@@ -2875,15 +2869,26 @@ function FidelidadeTab({
   }, [txRefreshKey]);
 
   async function loadTransactions(page: number, reset = false) {
+    if (txInFlight.current) return;
+    txInFlight.current = true;
     setTxLoading(true);
+    setTxError(null);
     try {
       const result = await clientPortalApi.getLoyaltyTransactions(page);
-      setTxItems((prev) => (reset ? result.data : [...prev, ...result.data]));
+      setTxItems((prev) => {
+        const seen = new Set<string>();
+        return (reset ? result.data : [...prev, ...result.data]).filter((item) => {
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        });
+      });
       setTxHasMore(result.hasMore);
       setTxPage(page);
-    } catch {
-      if (reset && loyalty) setTxItems(loyalty.recentTransactions);
+    } catch (err) {
+      setTxError(err instanceof Error ? err.message : "Tente novamente.");
     } finally {
+      txInFlight.current = false;
       setTxLoading(false);
     }
   }
@@ -2938,17 +2943,17 @@ function FidelidadeTab({
   const equivalentValue = formatBRL(loyalty.availablePoints * loyalty.realPerPoint);
 
   const pendingReservations = reservations.filter(
-    (r) => r.financialSummary.amountRemaining > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
+    (r) => r.financialSummary.amountRemaining > 0 && isRedeemableReservation(r) && !!loyalty && Math.floor(r.financialSummary.amountRemaining / loyalty.realPerPoint) >= loyalty.minRedeemPoints,
   );
 
   const selectedReservation = pendingReservations.find((r) => r.id === redeemReservationId);
   const maxRedeemPoints = selectedReservation
-    ? Math.min(loyalty.availablePoints, Math.ceil(selectedReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
+    ? Math.min(loyalty.availablePoints, Math.floor(selectedReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
     : loyalty.availablePoints;
   const redeemPointsNum = parseInt(redeemPoints, 10) || 0;
   const estimatedDiscount = redeemPointsNum * loyalty.realPerPoint;
 
-  const displayedTransactions = txInitialized ? txItems : loyalty.recentTransactions;
+  const displayedTransactions = txItems;
   const tierBenefitsMap: Record<string, string[]> = (loyalty.tierBenefits as Record<string, string[]> | null) ?? TIER_BENEFITS_DEFAULT;
 
   return (
@@ -3077,9 +3082,10 @@ function FidelidadeTab({
                     size="sm"
                     variant="outline"
                     className="shrink-0"
-                    onClick={() => {
-                      setRedeemReservationId(r.id);
-                      setRedeemPoints(String(Math.min(loyalty.availablePoints, Math.ceil(r.financialSummary.amountRemaining / loyalty.realPerPoint))));
+                    onClick={(event) => {
+                       redeemTriggerRef.current = event.currentTarget;
+                       setRedeemReservationId(r.id);
+                       setRedeemPoints(String(Math.min(loyalty.availablePoints, Math.floor(r.financialSummary.amountRemaining / loyalty.realPerPoint))));
                       setRedeemOpen(true);
                     }}
                   >
@@ -3094,14 +3100,15 @@ function FidelidadeTab({
       )}
 
       {/* Redemption Modal */}
-      {redeemOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40" onClick={() => !redeemLoading && setRedeemOpen(false)} />
-          <div className="relative bg-background rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-            <div>
-              <h3 className="font-bold text-lg">Resgatar pontos</h3>
-              <p className="text-sm text-muted-foreground">{selectedReservation?.tripName}</p>
-            </div>
+      <Dialog open={redeemOpen} onOpenChange={(open) => { if (!redeemLoading) setRedeemOpen(open); }}>
+        <DialogContent className="max-w-sm" onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          redeemTriggerRef.current?.focus();
+        }}>
+          <DialogHeader>
+            <DialogTitle>Resgatar pontos</DialogTitle>
+            <DialogDescription>{selectedReservation?.tripName}</DialogDescription>
+          </DialogHeader>
             <form onSubmit={handleRedeem} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="redeemPointsInput">Pontos a resgatar</Label>
@@ -3146,9 +3153,8 @@ function FidelidadeTab({
                 </Button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
       {/* Transaction History */}
       <Card>
@@ -3157,12 +3163,15 @@ function FidelidadeTab({
           <CardDescription>{loyalty.programName}</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {displayedTransactions.length === 0 && !txLoading ? (
+          {txError && (txItems.length === 0 || !txLoading) && (
+            <AsyncError error={txError} retry={() => loadTransactions(txPage + (txItems.length ? 1 : 0), txItems.length === 0)} title="Não foi possível carregar o extrato." />
+          )}
+          {displayedTransactions.length === 0 && !txLoading && !txError ? (
             <div className="text-center py-10">
               <Coins className="w-10 h-10 mx-auto mb-3 text-muted-foreground/30" />
               <p className="text-sm text-muted-foreground">Nenhuma transação registrada ainda.</p>
             </div>
-          ) : (
+          ) : displayedTransactions.length > 0 || txLoading ? (
             <div className="divide-y">
               {displayedTransactions.map((t) => {
                 const type = TRANSACTION_TYPE_MAP[t.type] ?? { label: t.type, sign: "+" as const, color: "text-slate-500" };
@@ -3194,8 +3203,8 @@ function FidelidadeTab({
                 </div>
               )}
             </div>
-          )}
-          {txHasMore && !txLoading && (
+          ) : null}
+          {txHasMore && !txLoading && !txError && (
             <div className="p-4 border-t">
               <Button variant="outline" size="sm" className="w-full" onClick={() => loadTransactions(txPage + 1)}>
                 Carregar mais
@@ -3569,16 +3578,7 @@ function FavoriteCard({
 
 function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
   const { toast } = useToast();
-  const [data, setData] = useState<FavoritesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi
-      .getFavorites()
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, setData, loading, error, reload } = useAsyncResource(clientPortalApi.getFavorites);
 
   async function handleRemove(itemType: "trip" | "product", itemId: string) {
     setData((prev) => {
@@ -3591,7 +3591,7 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
     try {
       await clientPortalApi.removeFavorite(itemType, itemId);
     } catch {
-      clientPortalApi.getFavorites().then(setData).catch(() => {});
+      void reload();
       toast({ title: "Erro ao remover favorito", description: "Tente novamente.", variant: "destructive" });
     }
   }
@@ -3605,6 +3605,7 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
       </div>
     );
   }
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar os favoritos." />;
 
   const total = (data?.trips.length ?? 0) + (data?.products.length ?? 0);
 
@@ -3662,12 +3663,7 @@ const BADGE_META: Record<string, { name: string; description: string; emoji: str
 };
 
 function ConquistasTab() {
-  const [data, setData] = useState<ClientAchievementsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi.getAchievements().then(setData).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data, loading, error, reload } = useAsyncResource(clientPortalApi.getAchievements);
 
   if (loading) {
     return (
@@ -3676,6 +3672,8 @@ function ConquistasTab() {
       </div>
     );
   }
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar as conquistas." />;
+  if (!data?.badges.length) return <AsyncEmpty>Nenhuma conquista disponível ainda.</AsyncEmpty>;
 
   const earned = (data?.badges ?? []).filter(b => b.earned);
   const locked = (data?.badges ?? []).filter(b => !b.earned);
@@ -3782,14 +3780,10 @@ const BRAZIL_STATE_GRID = [
 ];
 
 function MapaTab() {
-  const [data, setData] = useState<ClientAchievementsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi.getAchievements().then(setData).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data, loading, error, reload } = useAsyncResource(clientPortalApi.getAchievements);
 
   if (loading) return <Skeleton className="h-96 rounded-xl" />;
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar o mapa." />;
 
   const visitedStates = new Set(data?.stats.visitedStates ?? []);
   const totalTrips = data?.stats.totalTrips ?? 0;
@@ -3892,18 +3886,13 @@ function MapaTab() {
 }
 
 function SonhosTab() {
-  const [items, setItems] = useState<DreamDestinationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, setData, loading, error, reload } = useAsyncResource(clientPortalApi.getDreamDestinations);
+  const items = data?.data ?? [];
+  const setItems = (update: (prev: DreamDestinationItem[]) => DreamDestinationItem[]) =>
+    setData(prev => prev ? { ...prev, data: update(prev.data) } : prev);
   const [input, setInput] = useState("");
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
-
-  useEffect(() => {
-    clientPortalApi.getDreamDestinations()
-      .then(d => setItems(d.data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
 
   const addDestination = async () => {
     const val = input.trim();
@@ -3937,6 +3926,7 @@ function SonhosTab() {
       {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
     </div>
   );
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar os destinos." />;
 
   return (
     <div className="space-y-5">
@@ -4041,12 +4031,7 @@ function MemoryCertificate({ memory }: { memory: ClientMemoriesResponse["memorie
 }
 
 function MemoriasTab() {
-  const [data, setData] = useState<ClientMemoriesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi.getMemories().then(setData).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data, loading, error, reload } = useAsyncResource(clientPortalApi.getMemories);
 
   if (loading) {
     return (
@@ -4055,6 +4040,7 @@ function MemoriasTab() {
       </div>
     );
   }
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar as memórias." />;
 
   const memories = data?.memories ?? [];
 
@@ -4165,32 +4151,17 @@ const TIER_ORDER = ["bronze", "silver", "gold", "diamond"];
 
 function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
   const { toast } = useToast();
-  const [config, setConfig] = useState<{ clubName: string; description: string | null } | null>(null);
-  const [benefits, setBenefits] = useState<ClubBenefit[]>([]);
-  const [ranking, setRanking] = useState<ClubRankingResponse | null>(null);
-  const [loadingData, setLoadingData] = useState(true);
+  const { data: club, loading: loadingData, error: clubError, reload: retryClub } = useAsyncResource(async () => {
+    const [config, benefits, ranking] = await Promise.all([
+      clientPortalApi.getClubConfig(), clientPortalApi.getClubBenefits(), clientPortalApi.getClubRanking(),
+    ]);
+    return { config, benefits: benefits.data, ranking };
+  });
+  const config = club?.config;
+  const benefits = club?.benefits ?? [];
+  const ranking = club?.ranking;
   const [optIn, setOptIn] = useState<boolean>(profile.client?.ambassadorOptIn ?? false);
   const [toggling, setToggling] = useState(false);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const [cfg, bnf, rnk] = await Promise.all([
-          clientPortalApi.getClubConfig(),
-          clientPortalApi.getClubBenefits(),
-          clientPortalApi.getClubRanking(),
-        ]);
-        setConfig(cfg);
-        setBenefits(bnf.data);
-        setRanking(rnk);
-      } catch {
-        // club might not be configured yet — silently ignore
-      } finally {
-        setLoadingData(false);
-      }
-    }
-    void load();
-  }, []);
 
   async function handleToggleOptIn() {
     const newVal = !optIn;
@@ -4220,6 +4191,10 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
   const month = ranking?.month
     ? new Date(ranking.month + "-01T12:00:00").toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "America/Sao_Paulo" })
     : "";
+
+  if (loadingData) return <Skeleton className="h-64 rounded-xl" />;
+  if (clubError) return <AsyncError error={clubError} retry={retryClub} title="Não foi possível carregar o Clube." />;
+  if (!config) return <AsyncEmpty>Clube não configurado.</AsyncEmpty>;
 
   return (
     <div className="space-y-6">
@@ -4440,29 +4415,20 @@ export default function PerfilPage() {
   const [, navigate] = useLocation();
   const searchStr = useSearch();
   const { data: me } = useGetMe();
-  const [profile, setProfile] = useState<ClientPortalProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: profile, setData: setProfile, loading, error, reload: reloadProfile } = useAsyncResource(clientPortalApi.getProfile);
 
-  const [activeTab, setActiveTab] = useState(() => {
+  const activeTab = (() => {
     const t = new URLSearchParams(searchStr).get("tab");
     return VALID_PERFIL_TABS.includes(t ?? "") ? t! : "inicio";
-  });
+  })();
   const [reservationFilter, setReservationFilter] = useState<"com-saldo" | null>(null);
   const [loyaltyTxKey, setLoyaltyTxKey] = useState(0);
 
-  useEffect(() => {
-    const t = new URLSearchParams(searchStr).get("tab");
-    if (t && VALID_PERFIL_TABS.includes(t)) setActiveTab(t);
-  }, [searchStr]);
-
-  useEffect(() => {
-    clientPortalApi
-      .getProfile()
-      .then(setProfile)
-      .catch((err) => setError(err.message ?? "Erro ao carregar perfil"))
-      .finally(() => setLoading(false));
-  }, []);
+  function changeTab(tab: string, filter: "com-saldo" | null = null) {
+    if (!VALID_PERFIL_TABS.includes(tab)) return;
+    setReservationFilter(filter);
+    navigate(profileQuery(window.location.search, "tab", tab));
+  }
 
   if (loading) {
     return (
@@ -4474,16 +4440,15 @@ export default function PerfilPage() {
     );
   }
 
-  if (error || !profile) {
+  if (error) {
     return (
       <div className="text-center py-16">
-        <p className="text-muted-foreground">{error ?? "Não foi possível carregar o perfil."}</p>
-        <Button variant="outline" className="mt-4" onClick={() => navigate("/")}>
-          Voltar
-        </Button>
+        <AsyncError error={error} retry={reloadProfile} title="Não foi possível carregar o perfil." />
+        <Button variant="ghost" onClick={() => navigate(me?.tenant?.slug ? `/loja/${me.tenant.slug}` : "/parceiros")}>Voltar para fora do perfil</Button>
       </div>
     );
   }
+  if (!profile) return <AsyncEmpty>Perfil indisponível.</AsyncEmpty>;
 
   const primaryColor = profile.tenant?.primaryColor ?? "#1E5B8C";
 
@@ -4506,13 +4471,7 @@ export default function PerfilPage() {
       </div>
       <Tabs
         value={activeTab}
-        onValueChange={(tab) => {
-          if (tab === "reservas") setReservationFilter(null);
-          setActiveTab(tab);
-          const params = new URLSearchParams(searchStr);
-          params.set("tab", tab);
-          navigate(`?${params.toString()}`, { replace: true });
-        }}
+        onValueChange={(tab) => changeTab(tab)}
       >
         <TabsList className="mb-6 h-auto w-full flex-wrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/90 p-1.5 shadow-sm dark:border-border dark:bg-card sm:w-auto">
           <TabsTrigger value="inicio" className="flex items-center gap-1.5">
@@ -4579,14 +4538,8 @@ export default function PerfilPage() {
           <InicioTab
             profile={profile}
             primaryColor={primaryColor}
-            onTabChange={(tab) => {
-              if (tab === "reservas") setReservationFilter(null);
-              setActiveTab(tab);
-            }}
-            onGoToReservasFiltered={() => {
-              setReservationFilter("com-saldo");
-              setActiveTab("reservas");
-            }}
+            onTabChange={changeTab}
+            onGoToReservasFiltered={() => changeTab("reservas", "com-saldo")}
           />
         </TabsContent>
 
@@ -4597,7 +4550,7 @@ export default function PerfilPage() {
             onClearFilter={() => setReservationFilter(null)}
             loyalty={profile.loyalty}
             onRefresh={() => {
-              clientPortalApi.getProfile().then(setProfile).catch(() => {});
+               void reloadProfile();
               setLoyaltyTxKey((k) => k + 1);
             }}
           />
@@ -4623,7 +4576,7 @@ export default function PerfilPage() {
             reservations={profile.reservations}
             txRefreshKey={loyaltyTxKey}
             onRefresh={() => {
-              clientPortalApi.getProfile().then(setProfile).catch(() => {});
+               void reloadProfile();
             }}
           />
         </TabsContent>

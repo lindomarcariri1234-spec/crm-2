@@ -279,6 +279,7 @@ beforeEach(() => {
   mockTransaction.mockReset().mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) =>
     callback({
       select: mockSelect,
+      execute: vi.fn().mockResolvedValue([]),
       insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
       update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
     }),
@@ -386,7 +387,12 @@ describe("Feature flag enabled — endpoints return normal responses", () => {
     mockLimit
       .mockResolvedValueOnce([FAKE_STORE])
       .mockResolvedValueOnce([TENANT_ALL_ENABLED])
+      .mockResolvedValueOnce([{ id: FAKE_REFERRER.id }])
       .mockResolvedValue([]);
+    mockWhere.mockReturnValue(
+      Object.assign(Promise.resolve([{ visitsCount: 1, firstVisit: new Date(), lastVisit: new Date() }]),
+        { limit: mockLimit, orderBy: vi.fn() }),
+    );
 
     const res = await request(buildApp())
       .post("/api/public/store/minha-loja/referral/track")

@@ -147,12 +147,12 @@ export function ReferralAnalyticsCharts({ data, period, analyticsExportUrl }: Pr
                 <CardTitle className="text-base">Evolução Mensal</CardTitle>
                 <CardDescription>Volume de indicações e conversões nos últimos meses</CardDescription>
               </div>
-              <Button variant="outline" size="sm" asChild>
+              {analyticsExportUrl && <Button variant="outline" size="sm" asChild>
                 <a href={analyticsExportUrl} target="_blank" rel="noopener noreferrer">
                   <Download className="w-3.5 h-3.5 mr-1.5" />
                   Exportar Dados
                 </a>
-              </Button>
+              </Button>}
             </div>
           </CardHeader>
           <CardContent>
