@@ -1,14 +1,13 @@
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { db } from "./connection.js";
+import { db, pool } from "./connection.js";
+import { prepareEmptyMigrations } from "../scripts/prepare-empty-migrations.mjs";
 
 /**
  * Applies all pending Drizzle migrations from the given folder.
  *
- * The migration history was squashed into a single consolidated, idempotent
- * baseline (0000_squash_baseline) generated from the current schema. It uses
- * CREATE TABLE/INDEX IF NOT EXISTS plus DO $$ … EXCEPTION WHEN duplicate_object
- * guards on every FK, so it is safe against both empty databases (creates the
- * full schema) and populated ones (all statements are no-ops).
+ * The immutable baseline adds three constraints to referral tables that were
+ * first created by later migrations. A completely empty public schema needs
+ * those two CREATE TABLE statements before Drizzle runs the baseline.
  *
  * The baseline's `when` in meta/_journal.json is set deliberately low so that
  * databases with existing migration history skip it (the migrator only applies
@@ -16,10 +15,10 @@ import { db } from "./connection.js";
  * databases apply it. Future schema changes are added as new migrations
  * (idx 1+) via `pnpm --filter @workspace/db generate`.
  *
- * No custom bootstrap is required: on first use Drizzle creates the
- * drizzle.__drizzle_migrations tracking table and runs every unapplied
- * migration in journal order.
+ * Existing databases are never bootstrapped; their migration history and
+ * rows remain untouched by this preparation step.
  */
 export async function runMigrations(migrationsFolder: string): Promise<void> {
+  await prepareEmptyMigrations(pool, migrationsFolder);
   await migrate(db, { migrationsFolder });
 }

@@ -71,7 +71,9 @@ jobs:
           pnpm --filter @workspace/db run validate-tables
 
       - name: Apply database migrations for integration tests
-        run: pnpm --filter @workspace/db run migrate
+        run: |
+          pnpm --filter @workspace/db run migrate
+          pnpm --filter @workspace/db run verify-clean-migration
 
       - name: Type-check database, API contracts, and API
         run: |

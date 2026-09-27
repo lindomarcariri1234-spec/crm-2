@@ -13,3 +13,9 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why**: The migrate command is non-interactive and reads the journal to determine what to apply. The generate command would overwrite the journal with drizzle's own snapshot.
 
 **How to apply**: Check the last `idx` in `_journal.json` before writing a new migration. Next migration is last idx + 1.
+
+**Rule for clean-database prerequisites:** Do not rewrite already-applied baseline or incremental SQL to fix a dependency on a table created later in the journal. Prepare the prerequisite from its original CREATE migration only when the public schema is genuinely empty, and keep command-line and application migration entry points aligned.
+
+**Why:** A production database may already have recorded the historical migration hash; changing that history risks divergence or reapplying constraints. A populated database must never receive a fresh-install bootstrap.
+
+**How to apply:** Verify both migration entry points on separate disposable empty databases, and confirm that preparation on a populated database does not create tables or change existing rows.

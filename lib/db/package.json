@@ -9,7 +9,8 @@
   },
   "scripts": {
     "generate": "drizzle-kit generate --config ./drizzle.config.ts",
-    "migrate": "drizzle-kit migrate --config ./drizzle.config.ts",
+    "migrate": "node scripts/prepare-empty-migrations-cli.mjs && drizzle-kit migrate --config ./drizzle.config.ts",
+    "verify-clean-migration": "node scripts/verify-clean-migration.mjs",
     "push": "drizzle-kit push --config ./drizzle.config.ts",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.ts",
     "check": "drizzle-kit check --config ./drizzle.config.ts",
@@ -18,7 +19,7 @@
     "validate-tables": "node scripts/validate-tables.mjs",
     "verify-db": "node scripts/verify-db-columns.mjs",
     "schema-drift": "node scripts/schema-drift.mjs",
-    "test": "node --test scripts/schema-drift.test.mjs"
+    "test": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
     "@workspace/permissions": "workspace:*",
