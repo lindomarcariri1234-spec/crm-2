@@ -70,6 +70,7 @@ overrides:
   '@clerk/clerk-react': 5.61.6
   http-proxy-middleware: 3.0.7
   undici@6: 6.28.0
+  undici@7: 7.29.0
   undici@8: 8.10.0
   tar: 7.5.22
   shell-quote: 1.10.0
@@ -120,6 +121,8 @@ overrides:
   metro-transform-worker: 0.83.7
   '@types/react': 19.1.10
   '@types/react-dom': 19.1.7
+
+packageExtensionsChecksum: sha256-sBbB2yvY6F680asVRZIT4ocUB/+4GlQMSKdG5O4NogA=
 
 patchedDependencies:
   image-size-next@2.1.0:
@@ -591,7 +594,7 @@ importers:
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0
-        version: 3.10.0(react-hook-form@7.89.0(@types/react@19.1.10)(react@19.1.0))
+        version: 3.10.0(react-hook-form@7.89.0(@types/react@19.1.10)(react@19.1.0))(zod@3.25.76)
       '@radix-ui/react-accordion':
         specifier: ^1.2.12
         version: 1.2.20(@types/react-dom@19.1.7(@types/react@19.1.10))(@types/react@19.1.10)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -862,7 +865,7 @@ importers:
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0
-        version: 3.10.0(react-hook-form@7.89.0(@types/react@19.1.10)(react@19.1.0))
+        version: 3.10.0(react-hook-form@7.89.0(@types/react@19.1.10)(react@19.1.0))(zod@3.25.76)
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
@@ -2265,6 +2268,7 @@ packages:
     resolution: {integrity: sha512-79Dv+3mDF7i+2ajj7SkypSKHhl1cbln1OGavqrsF7p6mbUv11xpqpacPsGDCTRvCSjEEIez2ef1NveSVL3b0Ag==}
     peerDependencies:
       react-hook-form: ^7.0.0
+      zod: ^3.0.0
 
   '@ide/backoff@1.0.0':
     resolution: {integrity: sha512-F0YfUDjvT+Mtt/R4xdl2X0EYCHMMiJqNLdxHD++jDT5ydEFIyqbCHh51Qx2E211dgZprPKhV7sHmnXKpLuvc5g==}
@@ -8896,10 +8900,6 @@ packages:
     resolution: {integrity: sha512-LIY910g9TI13YS95lrMFrs8Rm/u/irgHeTWoKCoteeJ04CUJ92eEfj0rVn+7VKMPBpUPiUoBKfhNyLI23EE/KA==}
     engines: {node: '>=18.17'}
 
-  undici@7.24.4:
-    resolution: {integrity: sha512-BM/JzwwaRXxrLdElV2Uo6cTLEjhSb3WXboncJamZ15NgUURmvlXvxa6xkwIOILIjPNo9i8ku136ZvWV0Uly8+w==}
-    engines: {node: '>=20.18.1'}
-
   undici@7.29.0:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
@@ -10765,9 +10765,10 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
-  '@hookform/resolvers@3.10.0(react-hook-form@7.89.0(@types/react@19.1.10)(react@19.1.0))':
+  '@hookform/resolvers@3.10.0(react-hook-form@7.89.0(@types/react@19.1.10)(react@19.1.0))(zod@3.25.76)':
     dependencies:
       react-hook-form: 7.89.0(@types/react@19.1.10)(react@19.1.0)
+      zod: 3.25.76
 
   '@ide/backoff@1.0.0': {}
 
@@ -12144,7 +12145,7 @@ snapshots:
     dependencies:
       '@scalar/helpers': 0.12.0
       pathe: 2.0.3
-      undici: 7.24.4
+      undici: 7.29.0
       yaml: 2.8.3
 
   '@scalar/json-magic@0.15.2':
@@ -17932,8 +17933,6 @@ snapshots:
   undici-types@8.9.0: {}
 
   undici@6.28.0: {}
-
-  undici@7.24.4: {}
 
   undici@7.29.0: {}
 

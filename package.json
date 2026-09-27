@@ -27,6 +27,7 @@
       "@clerk/clerk-react": "5.61.6",
       "http-proxy-middleware": "3.0.7",
       "undici@6": "6.28.0",
+      "undici@7": "7.29.0",
       "undici@8": "8.10.0",
       "tar": "7.5.22",
       "shell-quote": "1.10.0",
@@ -77,6 +78,13 @@
       "metro-transform-worker": "0.83.7",
       "@types/react": "19.1.10",
       "@types/react-dom": "19.1.7"
+    },
+    "packageExtensions": {
+      "@hookform/resolvers@3.10.0": {
+        "peerDependencies": {
+          "zod": "^3.0.0"
+        }
+      }
     },
     "patchedDependencies": {
       "metro@0.83.7": "patches/metro@0.83.7.patch",

@@ -152,3 +152,4 @@
 - [UploadThing SDK error redaction](uploadthing-error-redaction.md) — provider errors can contain auth headers; log only safe operation metadata
 - [Local PostgreSQL integration setup](local-postgres-integration.md) — ephemeral PostgreSQL needs an explicit writable socket directory because `/run/postgresql` is absent
 - [PostgreSQL lock barrier visibility](postgres-lock-barrier-visibility.md) — lock tests should rely on a known blocker PID when pg_stat_activity hides query text
+- [PNPM linker and resolver peers](pnpm-hoisted-lockfile-mismatch.md) — use deploy-matched PNPM for frozen installs; explicitly scope @hookform/resolvers 3 to Zod 3 in mixed Zod 3/4 workspaces
