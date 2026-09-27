@@ -43,3 +43,9 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why:** In a multi-instance deployment, the lock owner must be identifiable without exposing connection URLs, SQL, or unrelated session metadata.
 
 **How to apply:** Keep diagnostics restricted to operational identifiers and test the reported PID/name against a separate lock-holding PostgreSQL session.
+
+**Failed migration retry behavior:** Verify Drizzle's transaction behavior against PostgreSQL before expecting a failed journal run to leave committed partial entries; the tested failure rolls back the journal, while the separately committed empty-schema prerequisites remain for the next process.
+
+**Why:** An assumption that earlier journal rows survive a later SQL error made a recovery test fail; retry must be proven against the actual database transaction boundary.
+
+**How to apply:** Force a SQL error in a disposable copy of a migration, then retry with the canonical journal against the same database and confirm the full journal completes without dropping the database.

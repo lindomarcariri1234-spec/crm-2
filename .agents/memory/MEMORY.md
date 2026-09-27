@@ -10,6 +10,7 @@
 - [Marketing NPS naming conflict](marketing-nps-conflict.md) — `npsResponsesTable` already exists in marketing.ts for e-commerce; client travel NPS uses `clientNpsResponsesTable` in nps.ts / table `client_nps_responses`.
 - [Favorites feature pattern](favorites-pattern.md) — FavoritesContext wraps Vitrine (CartProvider > FavoritesProvider); uses useGetMe role check; optimistic toggle.
 - [Manual migration workflow](manual-migration.md) — drizzle-kit is interactive; write SQL + update _journal.json; run `pnpm --filter @workspace/db migrate`.
+- [Drizzle migration retry semantics](manual-migration.md) — failed SQL runs can roll back the journal batch; prove recovery via lock release and same-database retry, not nonzero partial rows.
 - [Store product vs trip favorites](store-favorites-join.md) — Trip favorites store tripId; join via storeProductsTable.tripId to get slug. Product favorites store storeProductsTable.id; join with storesTable for tenantId filter.
 - [Expo Metro version pins](expo-metro-version-pins.md) — metro-* must be at 0.83.7 EXCEPT metro-file-map (keep 0.83.3) for guide-app Expo artifact to start without crashing.
 - [SSRF for tenant base URLs](ssrf-tenant-base-url.md) — connect-time IP enforcement (not just a pre-check); canonicalize IPv4-in-IPv6 literals; guard empty custom baseURL to avoid leaking keys to OpenAI.
