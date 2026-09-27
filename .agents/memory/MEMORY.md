@@ -148,3 +148,4 @@
 - [Reservation expiry payment locks](reservation-expiry-payment-locks.md) — expiry and every storefront payment path must lock the order before its reservations; only receivable/paid rows protect a hold
 - [Artifact workflow ownership](artifact-workflow-ownership.md) — registered artifact workflows start independently; do not launch the same artifact again from the aggregate Project workflow
 - [UploadThing SDK error redaction](uploadthing-error-redaction.md) — provider errors can contain auth headers; log only safe operation metadata
+- [Local PostgreSQL integration setup](local-postgres-integration.md) — ephemeral PostgreSQL needs an explicit writable socket directory because `/run/postgresql` is absent
