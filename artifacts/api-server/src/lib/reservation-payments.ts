@@ -10,7 +10,7 @@ type ReservationUpdate = Partial<typeof reservationsTable.$inferInsert> & {
   status?: ReservationStatus;
 };
 
-async function sumPaidPayments(
+export async function sumPaidReservationPayments(
   executor: DbExecutor,
   reservationId: string,
   tenantId: string,
@@ -51,7 +51,7 @@ export async function syncReservationPaymentStatus(
   if (!reservation) return;
 
   const totalValue = roundMoney(Number(reservation.totalValue));
-  const paidValue = await sumPaidPayments(executor, reservationId, tenantId);
+  const paidValue = await sumPaidReservationPayments(executor, reservationId, tenantId);
   const balance = roundMoney(Math.max(totalValue - paidValue, 0));
 
   if (

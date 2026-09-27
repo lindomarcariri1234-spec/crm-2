@@ -25,7 +25,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
-const { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable } = vi.hoisted(() => {
+const { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments } = vi.hoisted(() => {
   const dbState = {
     rows: [] as unknown[],
     rowsByTable: new Map<unknown, unknown[]>(),
@@ -54,6 +54,7 @@ const { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockE
   };
   const mockInsertValues = vi.fn().mockResolvedValue(undefined);
   const mockTransaction = vi.fn();
+  const mockSumPaidReservationPayments = vi.fn().mockResolvedValue(0);
   const makeUpdate = () => ({
     set: () => ({
       where: () => ({
@@ -62,7 +63,7 @@ const { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockE
       }),
     }),
   });
-  return { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable };
+  return { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments };
 });
 
 vi.mock("@workspace/db", () => ({
@@ -108,6 +109,7 @@ vi.mock("../lib/google-calendar/sync-service.js", () => ({
   CalendarSyncService: { syncTrip: vi.fn(), syncPayment: vi.fn() },
 }));
 vi.mock("../lib/reservation-payments.js", () => ({
+  sumPaidReservationPayments: mockSumPaidReservationPayments,
   syncReservationPaymentStatus: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../services/checkout/create-reservations.js", () => ({
@@ -182,6 +184,7 @@ beforeEach(() => {
   dbState.rowsByTable.clear();
   dbState.selectRowsQueue = [];
   mockTransaction.mockReset();
+  mockSumPaidReservationPayments.mockResolvedValue(0);
   mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback({
     select: vi.fn(() => makeChain()),
     insert: vi.fn(() => ({ values: mockInsertValues })),
@@ -282,6 +285,7 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
       totalValue: "500.00",
       balance: "410.00",
     }];
+    mockSumPaidReservationPayments.mockResolvedValue(90);
 
     const res = await request(buildApp(paymentsRouter))
       .post("/api/payments")
@@ -296,6 +300,7 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
       });
 
     expect(res.status).toBe(400);
+    expect(res.body.code).toBe("PAYMENT_EXCEEDS_BALANCE");
     expect(res.body.message).toContain("saldo devedor");
     expect(mockInsertValues).not.toHaveBeenCalled();
   });

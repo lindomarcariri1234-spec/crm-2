@@ -150,3 +150,4 @@
 - [Artifact workflow ownership](artifact-workflow-ownership.md) — registered artifact workflows start independently; do not launch the same artifact again from the aggregate Project workflow
 - [UploadThing SDK error redaction](uploadthing-error-redaction.md) — provider errors can contain auth headers; log only safe operation metadata
 - [Local PostgreSQL integration setup](local-postgres-integration.md) — ephemeral PostgreSQL needs an explicit writable socket directory because `/run/postgresql` is absent
+- [PostgreSQL lock barrier visibility](postgres-lock-barrier-visibility.md) — lock tests should rely on a known blocker PID when pg_stat_activity hides query text

@@ -12,7 +12,7 @@ import { roundMoney } from "../lib/pricing";
 import { CalendarSyncService } from "../lib/google-calendar/sync-service";
 import { ALL_STAFF_ROLES } from '../lib/tenant';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
-import { syncReservationPaymentStatus } from "../lib/reservation-payments";
+import { sumPaidReservationPayments, syncReservationPaymentStatus } from "../lib/reservation-payments";
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { enqueueNewBookingNotificationEmail, dispatchReferralReversedEmail } from "../queues/email-helpers";
 import { dispatchWhatsAppPaymentReceived } from "../queues/whatsapp-helpers";
@@ -534,16 +534,14 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
 
     let reservationClientId: string | null = null;
     let reservationTotalValue: string | null = null;
-    let reservationBalance: number | null = null;
     let reservationStoreOrderId: string | null = null;
     if (parsed.data.reservationId) {
-      const [reservation] = await db.select().from(reservationsTable)
+      const [reservation] = await db.select({
+        storeOrderId: reservationsTable.storeOrderId,
+      }).from(reservationsTable)
         .where(and(eq(reservationsTable.id, parsed.data.reservationId), eq(reservationsTable.tenantId, me.tenantId)))
         .limit(1);
       if (!reservation) { next(new NotFoundError("Reservation not found or not in tenant", "RESERVATION_NOT_FOUND")); return; }
-      reservationClientId = reservation.clientId;
-      reservationTotalValue = reservation.totalValue;
-      reservationBalance = Number(reservation.balance);
       reservationStoreOrderId = reservation.storeOrderId;
     }
     if (parsed.data.clientId) {
@@ -560,16 +558,6 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
     const explicitStatus = canSetPaymentStatus && parsed.data.status != null ? parsePaymentStatus(parsed.data.status) : undefined;
     const explicitPaidAt = canSetPaymentStatus && parsed.data.paidAt ? new Date(parsed.data.paidAt) : undefined;
     const isReceivedPayment = explicitStatus === PAYMENT_STATUS.PAID || explicitStatus === PAYMENT_STATUS.APPROVED;
-    if (
-      parsed.data.reservationId &&
-      isReceivedPayment &&
-      reservationBalance != null &&
-      roundMoney(parsed.data.amount) > roundMoney(Math.max(0, reservationBalance))
-    ) {
-      next(new ValidationError("O valor do pagamento não pode ser maior do que o saldo devedor da reserva.", "PAYMENT_EXCEEDS_BALANCE"));
-      return;
-    }
-
     const totalCents = Math.round(parsed.data.amount * 100);
     const installmentBaseCents = Math.floor(totalCents / installments);
     const installmentRemainderCents = totalCents - installmentBaseCents * installments;
@@ -614,6 +602,8 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
         const [lockedReservation] = await tx
           .select({
             id: reservationsTable.id,
+            clientId: reservationsTable.clientId,
+            totalValue: reservationsTable.totalValue,
             status: reservationsTable.status,
             storeOrderId: reservationsTable.storeOrderId,
             expiresAt: reservationsTable.expiresAt,
@@ -628,6 +618,8 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
         if (!lockedReservation) {
           throw new NotFoundError("Reservation not found or not in tenant", "RESERVATION_NOT_FOUND");
         }
+        reservationClientId = lockedReservation.clientId;
+        reservationTotalValue = lockedReservation.totalValue;
         if (
           lockedReservation.status === "cancelled"
           || lockedReservation.status === "failed"
@@ -641,6 +633,23 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
           && lockedReservation.expiresAt <= new Date()
         ) {
           throw new ConflictError("O prazo para pagamento desta reserva expirou", "RESERVATION_EXPIRED");
+        }
+        if (isReceivedPayment) {
+          const paidValue = await sumPaidReservationPayments(
+            tx,
+            parsed.data.reservationId,
+            me.tenantId,
+          );
+          const currentBalance = roundMoney(Math.max(
+            0,
+            roundMoney(Number(lockedReservation.totalValue)) - paidValue,
+          ));
+          if (roundMoney(parsed.data.amount) > currentBalance) {
+            throw new ValidationError(
+              "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
+              "PAYMENT_EXCEEDS_BALANCE",
+            );
+          }
         }
       }
 
