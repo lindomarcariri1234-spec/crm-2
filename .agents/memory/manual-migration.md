@@ -19,3 +19,9 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why:** A production database may already have recorded the historical migration hash; changing that history risks divergence or reapplying constraints. A populated database must never receive a fresh-install bootstrap.
 
 **How to apply:** Verify both migration entry points on separate disposable empty databases, and confirm that preparation on a populated database does not create tables or change existing rows.
+
+**Concurrency rule:** The shared migration pipeline must hold one session-level PostgreSQL advisory lock until the Drizzle runner finishes, for both the CLI and API startup paths.
+
+**Why:** A transaction lock around prerequisite table creation ends before Drizzle applies the journal, leaving concurrent application and CLI starts free to race on the baseline and migration ledger.
+
+**How to apply:** Route every migration entry point through the shared pipeline and test simultaneous CLI/API starts against a disposable empty database.

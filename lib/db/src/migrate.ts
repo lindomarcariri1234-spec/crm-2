@@ -1,6 +1,6 @@
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { db, pool } from "./connection.js";
-import { prepareEmptyMigrations } from "../scripts/prepare-empty-migrations.mjs";
+import { runMigrationPipeline } from "../scripts/prepare-empty-migrations.mjs";
 
 /**
  * Applies all pending Drizzle migrations from the given folder.
@@ -19,6 +19,7 @@ import { prepareEmptyMigrations } from "../scripts/prepare-empty-migrations.mjs"
  * rows remain untouched by this preparation step.
  */
 export async function runMigrations(migrationsFolder: string): Promise<void> {
-  await prepareEmptyMigrations(pool, migrationsFolder);
-  await migrate(db, { migrationsFolder });
+  await runMigrationPipeline(pool, migrationsFolder, () =>
+    migrate(db, { migrationsFolder }),
+  );
 }
