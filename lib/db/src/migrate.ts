@@ -21,5 +21,6 @@ import { runMigrationPipeline } from "../scripts/prepare-empty-migrations.mjs";
 export async function runMigrations(migrationsFolder: string): Promise<void> {
   await runMigrationPipeline(pool, migrationsFolder, () =>
     migrate(db, { migrationsFolder }),
+    { applicationName: "visitecrm-api-migrations" },
   );
 }
