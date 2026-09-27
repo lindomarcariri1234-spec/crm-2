@@ -10,3 +10,7 @@ export declare function runMigrationPipeline<T>(
   migrationsFolder: string,
   applyMigrations: () => Promise<T>,
 ): Promise<T>;
+
+export declare class MigrationLockTimeoutError extends Error {
+  code: "ERR_MIGRATION_LOCK_TIMEOUT";
+}

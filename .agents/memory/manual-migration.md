@@ -25,3 +25,15 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why:** A transaction lock around prerequisite table creation ends before Drizzle applies the journal, leaving concurrent application and CLI starts free to race on the baseline and migration ledger.
 
 **How to apply:** Route every migration entry point through the shared pipeline and test simultaneous CLI/API starts against a disposable empty database.
+
+**Lock wait budget:** `MIGRATION_LOCK_TIMEOUT_MS` configures the maximum startup wait for both CLI and API migration paths; it must be a positive integer in milliseconds, defaulting to 120 seconds. A timeout occurs before schema preparation and journal application.
+
+**Why:** PostgreSQL advisory locks otherwise wait without a bound, which can leave startup stuck when the process holding the lock stops progressing.
+
+**How to apply:** Keep timeout validation and acquisition in the shared pipeline, and verify CLI plus runtime timeout paths leave the schema unchanged.
+
+**Bounded wait implementation:** Apply PostgreSQL `lock_timeout` with `SET LOCAL` in a short transaction while acquiring the session-level migration lock. Commit that transaction before schema preparation; the session lock remains held through the migrator while the local timeout setting does not leak into the pool.
+
+**Why:** A session-level lock is required across the separate Drizzle connection, but a session-scoped timeout setting could leak when the lock connection returns to the pool.
+
+**How to apply:** Preserve the transaction boundary, translate lock-timeout SQLSTATE `55P03` to the actionable migration timeout error, and keep the session lock until the full journal runner ends.
