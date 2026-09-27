@@ -915,6 +915,7 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
             };
             if (existingPayment.reservationId) {
               const [reservation] = await tx.select({
+                totalValue: reservationsTable.totalValue,
                 status: reservationsTable.status,
                 storeOrderId: reservationsTable.storeOrderId,
                 expiresAt: reservationsTable.expiresAt,
@@ -930,6 +931,21 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
                 throw new ConflictError("O pedido da reserva mudou durante a confirmação", "PAYMENT_ORDER_CHANGED");
               }
               assertOpen(reservation);
+              const paidValue = await sumPaidReservationPayments(
+                tx,
+                existingPayment.reservationId,
+                me.tenantId,
+              );
+              const currentBalance = roundMoney(Math.max(
+                0,
+                roundMoney(Number(reservation.totalValue)) - paidValue,
+              ));
+              if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
+                throw new ValidationError(
+                  "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
+                  "PAYMENT_EXCEEDS_BALANCE",
+                );
+              }
             } else if (lockedOrder) {
               const reservations = await tx.select({
                 status: reservationsTable.status,

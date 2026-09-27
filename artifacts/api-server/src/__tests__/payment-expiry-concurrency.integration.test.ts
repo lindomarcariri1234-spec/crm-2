@@ -731,4 +731,87 @@ describe("payment and reservation expiry concurrency — real PostgreSQL", () =>
       blocker.release();
     }
   });
+
+  it("rejects marking an existing payment paid when the reservation total changes while it waits", async () => {
+    const reservation = await createReservation("patch-balance-race", {
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const priorPayment = await createPayment("patch-balance-prior", {
+      reservationId: reservation,
+      status: PAYMENT_STATUS.PAID,
+    });
+    await db.update(paymentsTable)
+      .set({ amount: "40.00" })
+      .where(eq(paymentsTable.id, priorPayment));
+    const payment = await createPayment("patch-balance-pending", { reservationId: reservation });
+    await db.update(paymentsTable)
+      .set({ amount: "55.00" })
+      .where(and(
+        eq(paymentsTable.id, payment),
+        eq(paymentsTable.tenantId, TENANT_ID),
+      ));
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM reservations WHERE id = $1 FOR UPDATE", [reservation]);
+      const [{ pid }] = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows;
+      const paymentPromise = request(buildApp()).patch(`/api/payments/${payment}`).send({
+        status: PAYMENT_STATUS.PAID,
+        paidAt: new Date().toISOString(),
+      });
+
+      const barrier = waitForBlockedQuery(pid, (query) =>
+        query.includes("reservations") && query.includes("for update"),
+      ).then(
+        () => ({ kind: "blocked" as const }),
+        (error) => ({ kind: "timeout" as const, error }),
+      );
+      const firstOutcome = await Promise.race([
+        barrier,
+        paymentPromise.then((response) => ({ kind: "response" as const, response })),
+      ]);
+      if (firstOutcome.kind === "response") {
+        throw new Error(
+          `Payment status update finished before acquiring the reservation lock: ${firstOutcome.response.status} ${JSON.stringify(firstOutcome.response.body)}`,
+        );
+      }
+      if (firstOutcome.kind === "timeout") {
+        throw new Error(
+          `${String(firstOutcome.error)}; PostgreSQL pool total=${pool.totalCount}, idle=${pool.idleCount}, waiting=${pool.waitingCount}`,
+        );
+      }
+
+      await blocker.query(
+        "UPDATE reservations SET total_value = $1, balance = $2 WHERE id = $3 AND tenant_id = $4",
+        ["90.00", "50.00", reservation, TENANT_ID],
+      );
+      await blocker.query("COMMIT");
+
+      const response = await paymentPromise;
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("PAYMENT_EXCEEDS_BALANCE");
+      expect(response.body.message).toContain("saldo devedor");
+      const [storedPayment] = await db.select({
+        status: paymentsTable.status,
+        amount: paymentsTable.amount,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.id, payment),
+        eq(paymentsTable.tenantId, TENANT_ID),
+      ));
+      expect(storedPayment).toEqual({
+        status: PAYMENT_STATUS.PENDING,
+        amount: "55.00",
+      });
+      const [updatedReservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(eq(reservationsTable.id, reservation));
+      expect(Number(updatedReservation?.totalValue)).toBe(90);
+      expect(Number(updatedReservation?.balance)).toBe(50);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
 });
