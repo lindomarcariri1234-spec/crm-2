@@ -1,0 +1,16 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+.client-portal-preview {
+  --background: 216 33.33% 97.06%;
+  --foreground: 202.5 24.49% 19.22%;
+  --border: 200 18.75% 87.45%;
+  --muted-foreground: 200.87 11.11% 40.59%;
+  --card: 0 0% 100%;
+  --primary: 206.73 64.71% 33.33%;
+  font-family: "Inter", sans-serif;
+}
+
+.client-portal-preview button,
+.client-portal-preview a {
+  -webkit-tap-highlight-color: transparent;
+}

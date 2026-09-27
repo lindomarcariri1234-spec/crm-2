@@ -19,7 +19,7 @@ import { roundMoney } from "../../lib/pricing";
 import { computeReferralTier } from "../../lib/referral-tiers";
 import { detectReferralFraud } from "../../lib/referral-fraud";
 import { calculateTier } from "../../lib/loyalty-helpers";
-import { ConflictError } from "../../lib/errors";
+import { ConflictError, NotFoundError } from "../../lib/errors";
 
 export interface RecordReferralArgs {
   tenantId: string;
@@ -101,9 +101,14 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
     })
     .from(clientsTable)
     .where(and(eq(clientsTable.id, referrerId), eq(clientsTable.tenantId, tenantId)))
+    .for("update")
     .limit(1);
+  if (!referrer) {
+    throw new NotFoundError("Indicador não encontrado neste tenant.", "REFERRER_NOT_FOUND");
+  }
 
-  const currentCompleted = referrer?.successfulReferrals ?? 0;
+  // SELECT FOR UPDATE serializes cap and tier decisions for this referrer.
+  const currentCompleted = referrer.successfulReferrals ?? 0;
   // A referral code can have many tracking records. Only a server-issued cookie
   // identifies one of them, so a conversion without that cookie is deliberately
   // attributed to the direct channel instead of borrowing another visitor's UTM.
@@ -135,35 +140,6 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
       loyaltyCurrentBalance: 0,
       loyaltyPointsEmailEnabled: refSettings?.loyaltyPointsEmailEnabled ?? true,
     };
-  }
-
-  // Reserve the referrer's row when a cap is configured. PostgreSQL holds the
-  // row lock acquired by this conditional UPDATE until the surrounding checkout
-  // transaction commits, so concurrent conversions cannot both pass the cap
-  // check. The no-op assignment keeps the existing counter unchanged; the
-  // actual increment remains below, after the referral conversion succeeds.
-  if (maxReferralsPerUser > 0) {
-    const [capReservation] = await tx.update(clientsTable)
-      .set({ updatedAt: sql`${clientsTable.updatedAt}` })
-      .where(and(
-        eq(clientsTable.id, referrerId),
-        eq(clientsTable.tenantId, tenantId),
-        sql`COALESCE(${clientsTable.successfulReferrals}, 0) < ${maxReferralsPerUser}`,
-      ))
-      .returning({ id: clientsTable.id });
-
-    if (!capReservation) {
-      return {
-        referralId: existingReferralId ?? undefined,
-        tierUpgraded: false,
-        newTierLevel: "bronze",
-        newTierLabel: "Bronze",
-        bonusMultiplier: 1,
-        loyaltyPointsGranted: 0,
-        loyaltyCurrentBalance: 0,
-        loyaltyPointsEmailEnabled: refSettings?.loyaltyPointsEmailEnabled ?? true,
-      };
-    }
   }
 
   const { tier } = computeReferralTier(currentCompleted, refSettings?.tiersConfig ?? null);
@@ -284,7 +260,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   if (fraud.flagged) {
     await tx.update(referralsTable)
       .set({ fraudFlag: true, fraudReason: fraud.reason, updatedAt: new Date() })
-      .where(eq(referralsTable.id, referralId));
+      .where(and(eq(referralsTable.id, referralId), eq(referralsTable.tenantId, tenantId)));
   }
 
   // A contractual commission is its own ledger entry. It is never credited to
@@ -364,7 +340,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
   if (referredClientId) {
     await tx.update(clientsTable)
       .set({ referredById: referrerId })
-      .where(and(eq(clientsTable.id, referredClientId), sql`referred_by_id IS NULL`));
+      .where(and(eq(clientsTable.id, referredClientId), eq(clientsTable.tenantId, tenantId), sql`referred_by_id IS NULL`));
   }
 
   const conversionUpdate = {
@@ -412,6 +388,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
         .where(
           and(
             eq(loyaltyProgramsTable.id, loyaltyMember.programId),
+            eq(loyaltyProgramsTable.tenantId, tenantId),
             eq(loyaltyProgramsTable.isActive, true),
           ),
         )
@@ -424,6 +401,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
           .where(
             and(
               eq(loyaltyTransactionsTable.memberId, loyaltyMember.id),
+              eq(loyaltyTransactionsTable.tenantId, tenantId),
               eq(loyaltyTransactionsTable.referenceId, referralId),
               eq(loyaltyTransactionsTable.referenceType, "referral"),
             ),
@@ -454,7 +432,7 @@ export async function recordReferralConversion(tx: Tx, args: RecordReferralArgs)
               tier: newTier,
               lastActivityAt: new Date(),
             })
-            .where(eq(loyaltyMembersTable.id, loyaltyMember.id));
+            .where(and(eq(loyaltyMembersTable.id, loyaltyMember.id), eq(loyaltyMembersTable.tenantId, tenantId)));
 
           loyaltyPointsGranted = pointsPerReferral;
           loyaltyCurrentBalance = newAvailable;

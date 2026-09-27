@@ -8,9 +8,10 @@
  *   (3) The close button on the banner clears submitError
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createElement } from "react";
-import { flushAct, renderComponent, cleanupRoots } from "./eventSourceHarness.js";
+import { createElement, type ReactElement } from "react";
+import { flushAct, renderComponent as renderBareComponent, cleanupRoots } from "./eventSourceHarness.js";
 import type { PublicStore } from "../lib/storeApi.js";
+import { VitrineThemeProvider } from "../contexts/VitrineThemeContext.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -95,6 +96,13 @@ function makeStore(): PublicStore {
     contactEmail: null,
     contactWhatsapp: null,
   } as unknown as PublicStore;
+}
+
+function renderComponent(element: ReactElement) {
+  const store = (element.props as { store?: PublicStore }).store ?? makeStore();
+  return renderBareComponent(
+    createElement(VitrineThemeProvider, { store }, element),
+  );
 }
 
 // ---------------------------------------------------------------------------

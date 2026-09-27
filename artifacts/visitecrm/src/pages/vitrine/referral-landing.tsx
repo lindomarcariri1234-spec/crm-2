@@ -9,6 +9,7 @@ import { Loader2, Gift, Tag, Users, ArrowRight, CheckCircle, AlertTriangle } fro
 import { ROLES } from "@workspace/permissions";
 import { setStorefrontReferralCode } from "@/lib/storefrontAttribution";
 import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
+import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 
 interface Props {
   slug: string;
@@ -26,6 +27,7 @@ export default function ReferralLanding({ slug, store }: Props) {
   const [, navigate] = useLocation();
   const { isSignedIn, isLoaded } = useUser();
   const { data: me } = useGetMe();
+  const { colors } = useVitrineTheme();
   const [referralInfo, setReferralInfo] = useState<ReferralValidation | null>(null);
   const [loading, setLoading] = useState(true);
   const [tracked, setTracked] = useState(false);
@@ -40,9 +42,6 @@ export default function ReferralLanding({ slug, store }: Props) {
       navigate("/perfil?tab=indicacoes");
     }
   }, [isLoaded, isSignedIn, me?.role]);
-
-  const primaryColor = store.primaryColor ?? "#6366f1";
-  const secondaryColor = store.secondaryColor ?? "#4f46e5";
 
   const trackVisit = useCallback((code: string) => {
     // VitrineLayout owns the network event for every page. This landing only
@@ -94,7 +93,7 @@ export default function ReferralLanding({ slug, store }: Props) {
         <p className="text-muted-foreground mb-6 max-w-sm">
           O programa de indicações desta loja não está disponível no momento.
         </p>
-        <Button onClick={goToStore} style={{ background: primaryColor }} className="text-white">
+         <Button onClick={goToStore} style={{ background: colors.primary, color: colors.primaryForeground }}>
           Ver a loja
         </Button>
       </div>
@@ -103,16 +102,16 @@ export default function ReferralLanding({ slug, store }: Props) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${primaryColor}15, ${secondaryColor}08)` }}>
-        <Loader2 className="w-10 h-10 animate-spin" style={{ color: primaryColor }} />
+      <div className="flex min-h-[calc(100dvh-4.5rem)] items-center justify-center px-4 py-16" style={{ background: `linear-gradient(135deg, ${colors.primarySoft}, ${colors.secondarySoft})` }}>
+        <Loader2 className="h-9 w-9 animate-spin" style={{ color: colors.primary }} />
       </div>
     );
   }
 
   if (error || !referralInfo) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-center px-4 py-16">
-        <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${isSuspended ? "bg-amber-100" : "bg-red-100"}`}>
+      <div className="flex min-h-[calc(100dvh-4.5rem)] flex-col items-center justify-center px-4 py-16 text-center">
+        <div className={`mb-5 flex h-16 w-16 items-center justify-center rounded-2xl ${isSuspended ? "bg-amber-100" : "bg-red-100"}`}>
           {isSuspended ? (
             <AlertTriangle className="w-8 h-8 text-amber-500" />
           ) : (
@@ -125,7 +124,7 @@ export default function ReferralLanding({ slug, store }: Props) {
         <p className="text-muted-foreground mb-6 max-w-sm">
           {error ?? "Este código de indicação não existe ou já foi utilizado."}
         </p>
-        <Button onClick={goToStore} style={{ background: primaryColor }}>
+         <Button onClick={goToStore} style={{ background: colors.primary, color: colors.primaryForeground }}>
           Ver a loja mesmo assim
         </Button>
       </div>
@@ -144,25 +143,25 @@ export default function ReferralLanding({ slug, store }: Props) {
   const storeHasLogo = !!store.logoUrl;
 
   return (
-    <div className="min-h-screen" style={{ background: `linear-gradient(135deg, ${primaryColor}18, ${secondaryColor}10)` }}>
-      <div className="max-w-lg mx-auto px-4 py-16 text-center space-y-8">
+    <div className="min-h-[calc(100dvh-4.5rem)]" style={{ background: `linear-gradient(135deg, ${colors.primarySoft}, ${colors.secondarySoft})` }}>
+      <div className="mx-auto max-w-2xl space-y-8 px-4 py-10 text-center sm:py-16">
         {/* Logo */}
         {storeHasLogo ? (
           <img src={store.logoUrl ?? ""} alt={store.name} className="h-16 mx-auto object-contain rounded-xl" />
         ) : (
-          <h2 className="text-2xl font-bold" style={{ color: primaryColor }}>{store.name}</h2>
+           <h2 className="text-2xl font-semibold tracking-[-0.03em]" style={{ color: colors.primary }}>{store.name}</h2>
         )}
 
         {/* Main hero */}
         <div className="space-y-3">
           <div
-            className="w-20 h-20 rounded-full flex items-center justify-center mx-auto shadow-lg"
-            style={{ background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` }}
+             className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl shadow-lg"
+             style={{ background: colors.gradientHero }}
           >
             <Gift className="w-10 h-10 text-white" />
           </div>
-          <h1 className="text-3xl font-bold tracking-tight">
-            Você foi indicado por <span style={{ color: primaryColor }}>{referrerName}</span>!
+           <h1 className="text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">
+             Você foi indicado por <span style={{ color: colors.primary }}>{referrerName}</span>!
           </h1>
           <p className="text-muted-foreground text-lg">
             Aproveite um desconto exclusivo na sua primeira compra
@@ -176,8 +175,8 @@ export default function ReferralLanding({ slug, store }: Props) {
 
         {/* Discount Badge */}
         <div
-          className="rounded-2xl p-6 shadow-md text-white space-y-2"
-          style={{ background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` }}
+           className="space-y-2 rounded-[1.75rem] p-6 text-white shadow-xl sm:p-8"
+           style={{ background: colors.gradientHero }}
         >
           <p className="text-white/80 text-sm uppercase tracking-widest font-medium">Seu desconto exclusivo</p>
           <p className="text-6xl font-extrabold">{discountLabel}</p>
@@ -193,7 +192,7 @@ export default function ReferralLanding({ slug, store }: Props) {
         </div>
 
         {/* How it works */}
-        <div className="bg-white/60 backdrop-blur-sm rounded-2xl p-6 space-y-4 text-left shadow-sm">
+         <div className="space-y-4 rounded-[1.5rem] border border-white/70 bg-white/70 p-6 text-left shadow-sm backdrop-blur-sm">
           <h3 className="font-semibold text-center">Como funciona</h3>
           <div className="space-y-3">
             {[
@@ -204,9 +203,9 @@ export default function ReferralLanding({ slug, store }: Props) {
               <div key={i} className="flex items-start gap-3">
                 <div
                   className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5"
-                  style={{ background: `${primaryColor}20` }}
+                   style={{ background: colors.primarySoft }}
                 >
-                  <span className="text-xs font-bold" style={{ color: primaryColor }}>{i + 1}</span>
+                   <span className="text-xs font-bold" style={{ color: colors.primary }}>{i + 1}</span>
                 </div>
                 <p className="text-sm text-muted-foreground">{text}</p>
               </div>
@@ -215,14 +214,14 @@ export default function ReferralLanding({ slug, store }: Props) {
         </div>
 
         {/* Perks */}
-        <div className="grid grid-cols-3 gap-3">
+         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {[
             { icon: CheckCircle, label: "Seguro e confiável" },
             { icon: Tag, label: `${discountLabel} OFF garantido` },
             { icon: Gift, label: "Sem limites de produtos" },
           ].map(({ icon: Icon, label }, i) => (
-            <div key={i} className="bg-white/50 rounded-xl p-3 text-center space-y-2">
-              <Icon className="w-5 h-5 mx-auto" style={{ color: primaryColor }} />
+            <div key={i} className="space-y-2 rounded-2xl border border-white/60 bg-white/55 p-3 text-center">
+               <Icon className="mx-auto h-5 w-5" style={{ color: colors.primary }} />
               <p className="text-xs font-medium">{label}</p>
             </div>
           ))}
@@ -233,7 +232,7 @@ export default function ReferralLanding({ slug, store }: Props) {
           <Button
             size="lg"
             className="w-full text-white font-semibold text-base h-12 rounded-xl shadow-lg"
-            style={{ background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` }}
+             style={{ background: colors.gradientHero, color: colors.primaryForeground }}
             onClick={goToProducts}
           >
             Ver produtos com desconto

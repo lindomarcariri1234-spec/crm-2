@@ -161,54 +161,61 @@ export default function VitrineLayout({
   const youtubeUrl = getSafeSocialUrl(store.socialYoutube);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div data-testid="vitrine-layout" className="flex min-h-[100dvh] flex-col bg-slate-50 text-slate-900">
       <header
-        className="sticky top-0 z-40 border-b shadow-sm"
+        data-testid="vitrine-header"
+        className="sticky top-0 z-40 border-b border-white/10 shadow-[0_8px_26px_rgba(15,23,42,0.14)]"
         style={{ backgroundColor: colors.primary }}
       >
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="mx-auto flex h-[4.5rem] max-w-6xl items-center justify-between gap-4 px-4 lg:px-8">
           <button
+            data-testid="button-store-home"
             onClick={() => navigate(`/loja/${slug}`)}
-            className="flex items-center gap-3"
+            className="group flex min-w-0 items-center gap-3 text-left"
           >
             {store.logoUrl ? (
               <img
                 src={store.logoUrl}
                 alt={store.name}
-                className="h-10 w-10 rounded object-contain bg-white/10 p-1"
+                data-testid="img-store-logo-header"
+                className="h-11 w-11 rounded-2xl border border-white/20 bg-white/95 object-contain p-1.5 shadow-sm"
               />
             ) : (
-              <div className="h-10 w-10 rounded bg-white/20 flex items-center justify-center font-bold text-white text-lg">
+              <div data-testid="text-store-initial" className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/20 bg-white/15 text-lg font-bold text-white">
                 {store.name.charAt(0)}
               </div>
             )}
-            <span className="text-white font-bold text-lg hidden sm:block">
+            <span data-testid="text-store-name-header" className="hidden max-w-[13rem] truncate text-base font-bold tracking-[-0.02em] text-white sm:block">
               {store.name}
             </span>
           </button>
 
-          <nav className="hidden md:flex items-center gap-6">
+          <nav data-testid="nav-desktop" className="hidden items-center gap-6 md:flex">
             <a
               href={`/loja/${slug}`}
-              className="text-white/90 hover:text-white text-sm font-medium transition-colors"
+              data-testid="link-home-desktop"
+              className="text-sm font-semibold text-white/80 transition-colors hover:text-white"
             >
               Início
             </a>
             <a
               href={`/loja/${slug}/produtos`}
-              className="text-white/90 hover:text-white text-sm font-medium transition-colors"
+              data-testid="link-products-desktop"
+              className="text-sm font-semibold text-white/80 transition-colors hover:text-white"
             >
               Pacotes
             </a>
             <a
               href={`/loja/${slug}/calendario`}
-              className="text-white/90 hover:text-white text-sm font-medium transition-colors"
+              data-testid="link-calendar-desktop"
+              className="text-sm font-semibold text-white/80 transition-colors hover:text-white"
             >
               Calendário
             </a>
             <a
               href={`/loja/${slug}/consultar-pedido`}
-              className="text-white/90 hover:text-white text-sm font-medium transition-colors"
+              data-testid="link-order-lookup-desktop"
+              className="text-sm font-semibold text-white/80 transition-colors hover:text-white"
             >
               Meu Pedido
             </a>
@@ -217,7 +224,8 @@ export default function VitrineLayout({
                 href={`https://wa.me/${store.contactWhatsapp.replace(/\D/g, "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-white/90 hover:text-white text-sm font-medium transition-colors"
+                data-testid="link-whatsapp-desktop"
+                className="text-sm font-semibold text-white/80 transition-colors hover:text-white"
               >
                 WhatsApp
               </a>
@@ -226,17 +234,19 @@ export default function VitrineLayout({
               <div className="relative" ref={profileDropdownRef}>
                 <button
                   onClick={() => setProfileDropdownOpen((v) => !v)}
-                  className="flex items-center gap-1.5 text-white/90 hover:text-white text-sm font-medium transition-colors bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg"
+                  data-testid="button-profile-menu-desktop"
+                  className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3.5 py-2 text-sm font-semibold text-white/90 transition-colors hover:bg-white/20 hover:text-white"
                 >
                   <UserCircle className="w-4 h-4" />
                   Meu Perfil
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {profileDropdownOpen && (
-                  <div className="absolute right-0 mt-1 w-48 rounded-lg bg-white shadow-lg overflow-hidden z-50">
+                  <div data-testid="menu-profile-desktop" className="absolute right-0 z-50 mt-2 w-52 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
                     <a
                       href="/perfil"
-                      className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                      data-testid="link-profile-desktop"
+                      className="flex items-center gap-2 px-4 py-3 text-sm text-slate-700 hover:bg-slate-50"
                       onClick={() => setProfileDropdownOpen(false)}
                     >
                       <UserCircle className="w-4 h-4" />
@@ -245,7 +255,8 @@ export default function VitrineLayout({
                     {store.referralsEnabled !== false && (
                     <a
                       href="/perfil?tab=indicacoes"
-                      className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                      data-testid="link-referrals-desktop"
+                      className="flex items-center gap-2 px-4 py-3 text-sm text-slate-700 hover:bg-slate-50"
                       onClick={() => setProfileDropdownOpen(false)}
                     >
                       <Share2 className="w-4 h-4" />
@@ -254,7 +265,8 @@ export default function VitrineLayout({
                     )}
                     <button
                       onClick={handleSignOut}
-                      className="flex items-center gap-2 w-full px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
+                      data-testid="button-signout-desktop"
+                      className="flex w-full items-center gap-2 px-4 py-3 text-sm text-red-600 hover:bg-red-50"
                     >
                       <LogOut className="w-4 h-4" />
                       Sair
@@ -266,14 +278,16 @@ export default function VitrineLayout({
               <div className="flex items-center gap-2">
                 <a
                   href={`/loja/${slug}/entrar`}
-                  className="flex items-center gap-1.5 text-white/90 hover:text-white text-sm font-medium transition-colors bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg"
+                  data-testid="link-signin-desktop"
+                  className="flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3.5 py-2 text-sm font-semibold text-white/90 transition-colors hover:bg-white/20 hover:text-white"
                 >
                   <UserCircle className="w-4 h-4" />
                   Entrar
                 </a>
                 <a
                   href={`/loja/${slug}/cadastrar`}
-                  className="flex items-center gap-1.5 text-sm font-medium transition-colors bg-white text-gray-900 hover:bg-white/90 px-3 py-1.5 rounded-lg"
+                  data-testid="link-signup-desktop"
+                  className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-900 transition-colors hover:bg-white/90"
                 >
                   Criar conta
                 </a>
@@ -283,8 +297,9 @@ export default function VitrineLayout({
 
           <div className="flex items-center gap-2">
             <button
+              data-testid="button-toggle-search"
               onClick={() => setSearchOpen((v) => !v)}
-              className="flex items-center justify-center w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20"
               aria-label="Buscar"
             >
               <Search className="w-4 h-4" />
@@ -295,8 +310,10 @@ export default function VitrineLayout({
             )}
 
             <button
+              data-testid="button-toggle-mobile-menu"
               onClick={() => setMobileMenuOpen((v) => !v)}
-              className="md:hidden flex items-center justify-center w-10 h-10 rounded-lg bg-white/10 hover:bg-white/20 text-white"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition-colors hover:bg-white/20 md:hidden"
+              aria-label={mobileMenuOpen ? "Fechar menu" : "Abrir menu"}
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -304,8 +321,8 @@ export default function VitrineLayout({
         </div>
 
         {searchOpen && (
-          <div className="border-t border-white/10 px-4 py-3">
-            <form onSubmit={handleSearch} className="max-w-lg mx-auto flex gap-2">
+          <div data-testid="panel-header-search" className="border-t border-white/10 px-4 py-4">
+            <form onSubmit={handleSearch} className="mx-auto flex max-w-2xl gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/60" />
                 <input
@@ -313,20 +330,23 @@ export default function VitrineLayout({
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Buscar destinos, pacotes..."
-                  className="w-full pl-9 pr-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white placeholder:text-white/50 text-sm focus:outline-none focus:bg-white/20"
+                  data-testid="input-header-search"
+                  className="w-full rounded-xl border border-white/20 bg-white/10 py-3 pl-9 pr-4 text-sm text-white placeholder:text-white/50 focus:bg-white/20 focus:outline-none"
                   onKeyDown={(e) => e.key === "Escape" && setSearchOpen(false)}
                 />
               </div>
               <button
+                data-testid="button-submit-header-search"
                 type="submit"
-                className="px-4 py-2 rounded-lg bg-white/20 hover:bg-white/30 text-white text-sm font-medium transition-colors"
+                className="rounded-xl bg-white/15 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/25"
               >
                 Buscar
               </button>
               <button
+                data-testid="button-close-header-search"
                 type="button"
                 onClick={() => setSearchOpen(false)}
-                className="flex items-center justify-center w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 text-white"
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white hover:bg-white/20"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -335,31 +355,35 @@ export default function VitrineLayout({
         )}
 
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-white/10 px-4 py-3 space-y-2">
+          <div data-testid="menu-mobile" className="space-y-2 border-t border-white/10 px-5 py-4 md:hidden">
             <a
               href={`/loja/${slug}`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-1"
+              data-testid="link-home-mobile"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
             >
               Início
             </a>
             <a
               href={`/loja/${slug}/produtos`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-1"
+              data-testid="link-products-mobile"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
             >
               Pacotes
             </a>
             <a
               href={`/loja/${slug}/calendario`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-1"
+              data-testid="link-calendar-mobile"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
             >
               Calendário
             </a>
             <a
               href={`/loja/${slug}/consultar-pedido`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-1"
+              data-testid="link-order-lookup-mobile"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
             >
               Meu Pedido
@@ -369,7 +393,8 @@ export default function VitrineLayout({
                 href={`https://wa.me/${store.contactWhatsapp.replace(/\D/g, "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block text-white/90 hover:text-white text-sm font-medium py-1"
+                data-testid="link-whatsapp-mobile"
+                className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
                 onClick={() => setMobileMenuOpen(false)}
               >
                 WhatsApp
@@ -379,7 +404,8 @@ export default function VitrineLayout({
               <>
                 <a
                   href="/perfil"
-                  className="flex items-center gap-2 text-white/90 hover:text-white text-sm font-medium py-1"
+                  data-testid="link-profile-mobile"
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
                   onClick={() => setMobileMenuOpen(false)}
                 >
                   <UserCircle className="w-4 h-4" />
@@ -388,7 +414,8 @@ export default function VitrineLayout({
                 {store.referralsEnabled !== false && (
                 <a
                   href="/perfil?tab=indicacoes"
-                  className="flex items-center gap-2 text-white/90 hover:text-white text-sm font-medium py-1"
+                  data-testid="link-referrals-mobile"
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
                   onClick={() => setMobileMenuOpen(false)}
                 >
                   <Share2 className="w-4 h-4" />
@@ -397,7 +424,8 @@ export default function VitrineLayout({
                 )}
                 <button
                   onClick={handleSignOut}
-                  className="flex items-center gap-2 text-red-300 hover:text-red-100 text-sm font-medium py-1 w-full"
+                  data-testid="button-signout-mobile"
+                  className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-200 hover:bg-white/10 hover:text-white"
                 >
                   <LogOut className="w-4 h-4" />
                   Sair
@@ -407,7 +435,8 @@ export default function VitrineLayout({
               <>
                 <a
                   href={`/loja/${slug}/entrar`}
-                  className="flex items-center gap-2 text-white/90 hover:text-white text-sm font-medium py-1"
+                  data-testid="link-signin-mobile"
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
                   onClick={() => setMobileMenuOpen(false)}
                 >
                   <UserCircle className="w-4 h-4" />
@@ -415,7 +444,8 @@ export default function VitrineLayout({
                 </a>
                 <a
                   href={`/loja/${slug}/cadastrar`}
-                  className="flex items-center gap-2 text-white/90 hover:text-white text-sm font-medium py-1"
+                  data-testid="link-signup-mobile"
+                  className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
                   onClick={() => setMobileMenuOpen(false)}
                 >
                   Criar conta
@@ -428,40 +458,43 @@ export default function VitrineLayout({
 
       <main className="flex-1">{children}</main>
 
-      <footer className="border-t bg-gray-900 text-gray-300">
-        <div className="max-w-6xl mx-auto px-4 py-10 grid grid-cols-1 md:grid-cols-3 gap-8">
+      <footer data-testid="vitrine-footer" className="border-t border-slate-800 bg-slate-950 text-slate-300">
+        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-10 px-5 py-12 md:grid-cols-3 lg:px-8">
           <div>
-            <h3 className="text-white font-bold mb-3">{store.name}</h3>
+            <h3 data-testid="text-footer-store-name" className="mb-3 text-base font-bold text-white">{store.name}</h3>
             {store.description && (
-              <p className="text-sm leading-relaxed">{store.description}</p>
+              <p data-testid="text-footer-description" className="max-w-sm text-sm leading-relaxed text-slate-400">{store.description}</p>
             )}
-            <div className="flex gap-3 mt-4">
+            <div className="mt-5 flex gap-2">
               {store.socialInstagram && (
                 <a
+                  data-testid="link-footer-instagram"
                   href={`https://instagram.com/${store.socialInstagram.replace("@", "")}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="hover:text-white"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 transition-colors hover:border-slate-500 hover:text-white"
                 >
                   <Instagram className="w-5 h-5" />
                 </a>
               )}
               {facebookUrl && (
                 <a
+                  data-testid="link-footer-facebook"
                   href={facebookUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="hover:text-white"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 transition-colors hover:border-slate-500 hover:text-white"
                 >
                   <Facebook className="w-5 h-5" />
                 </a>
               )}
               {youtubeUrl && (
                 <a
+                  data-testid="link-footer-youtube"
                   href={youtubeUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="hover:text-white"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 transition-colors hover:border-slate-500 hover:text-white"
                 >
                   <Youtube className="w-5 h-5" />
                 </a>
@@ -469,37 +502,37 @@ export default function VitrineLayout({
             </div>
           </div>
           <div>
-            <h3 className="text-white font-bold mb-3">Links Rápidos</h3>
-            <div className="space-y-2 text-sm">
+            <h3 className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-white">Links Rápidos</h3>
+            <div className="space-y-3 text-sm">
               <div>
-                <a href={`/loja/${slug}`} className="hover:text-white">
+                <a data-testid="link-footer-home" href={`/loja/${slug}`} className="text-slate-400 transition-colors hover:text-white">
                   Início
                 </a>
               </div>
               <div>
-                <a href={`/loja/${slug}/produtos`} className="hover:text-white">
+                <a data-testid="link-footer-products" href={`/loja/${slug}/produtos`} className="text-slate-400 transition-colors hover:text-white">
                   Ver Pacotes
                 </a>
               </div>
               <div>
-                <a href={`/loja/${slug}/calendario`} className="hover:text-white">
+                <a data-testid="link-footer-calendar" href={`/loja/${slug}/calendario`} className="text-slate-400 transition-colors hover:text-white">
                   Calendário de Saídas
                 </a>
               </div>
               <div>
-                <a href={`/loja/${slug}/consultar-pedido`} className="hover:text-white">
+                <a data-testid="link-footer-order-lookup" href={`/loja/${slug}/consultar-pedido`} className="text-slate-400 transition-colors hover:text-white">
                   Consultar Pedido
                 </a>
               </div>
             </div>
           </div>
           <div>
-            <h3 className="text-white font-bold mb-3">Contato</h3>
-            <div className="space-y-2 text-sm">
+            <h3 className="mb-4 text-xs font-bold uppercase tracking-[0.16em] text-white">Fale com a equipe</h3>
+            <div className="space-y-3 text-sm text-slate-400">
               {store.contactEmail && (
                 <div className="flex items-center gap-2">
                   <Mail className="w-4 h-4" />
-                  <a href={`mailto:${store.contactEmail}`} className="hover:text-white">
+                  <a data-testid="link-footer-email" href={`mailto:${store.contactEmail}`} className="transition-colors hover:text-white">
                     {store.contactEmail}
                   </a>
                 </div>
@@ -507,7 +540,7 @@ export default function VitrineLayout({
               {store.contactPhone && (
                 <div className="flex items-center gap-2">
                   <Phone className="w-4 h-4" />
-                  <a href={`tel:${store.contactPhone}`} className="hover:text-white">
+                  <a data-testid="link-footer-phone" href={`tel:${store.contactPhone}`} className="transition-colors hover:text-white">
                     {store.contactPhone}
                   </a>
                 </div>
@@ -521,7 +554,7 @@ export default function VitrineLayout({
             </div>
           </div>
         </div>
-        <div className="border-t border-gray-800 text-center py-4 text-xs text-gray-500">
+        <div className="border-t border-slate-800 px-5 py-4 text-center text-xs text-slate-500">
           © {Number(localToday().slice(0, 4))} {store.name} · Powered by VisiteCRM
         </div>
       </footer>

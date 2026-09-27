@@ -26,7 +26,7 @@ import { randomUUID } from "crypto";
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   db,
   tenantsTable,
@@ -34,10 +34,13 @@ import {
   tripsTable,
   clientsTable,
   reservationsTable,
+  reservationInstallmentsTable,
+  paymentsTable,
   passengersTable,
   calendarEventsTable,
 } from "@workspace/db";
-import { ROLES, RESERVATION_STATUS, TRIP_STATUS } from "@workspace/permissions";
+import { ROLES, RESERVATION_STATUS, TRIP_STATUS, PAYMENT_STATUS, PAYMENT_TYPE } from "@workspace/permissions";
+import { syncReservationPaymentStatus } from "../lib/reservation-payments.js";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock references
@@ -790,6 +793,243 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
       .get(`/api/reservations/trip-overlap?clientId=${OTHER_CLIENT_ID}&tripId=${TRIP_ID}`);
 
     expect(response.status).toBe(404);
+  });
+
+  it("keeps the parent balance correct when two installments are paid concurrently", async () => {
+    const installmentAId = `pds-installment-a-${RUN}`;
+    const installmentBId = `pds-installment-b-${RUN}`;
+    await db.insert(reservationInstallmentsTable).values([
+      {
+        id: installmentAId,
+        reservationId: RES_ID,
+        tenantId: TENANT_ID,
+        installmentNumber: 1,
+        dueDate: new Date("2028-01-01T12:00:00Z"),
+        amount: "600.00",
+      },
+      {
+        id: installmentBId,
+        reservationId: RES_ID,
+        tenantId: TENANT_ID,
+        installmentNumber: 2,
+        dueDate: new Date("2028-02-01T12:00:00Z"),
+        amount: "600.00",
+      },
+    ]);
+
+    const app = buildApp();
+    const responses = await Promise.all([
+      request(app).patch(`/api/reservations/installments/${installmentAId}`).send({ paidAmount: 100 }),
+      request(app).patch(`/api/reservations/installments/${installmentBId}`).send({ paidAmount: 200 }),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    const noteUpdate = await request(app)
+      .patch(`/api/reservations/installments/${installmentAId}`)
+      .send({ notes: "Pagamento confirmado" });
+    expect(noteUpdate.status).toBe(200);
+
+    const [reservation] = await db.select({
+      totalValue: reservationsTable.totalValue,
+      paidValue: reservationsTable.paidValue,
+      balance: reservationsTable.balance,
+    }).from(reservationsTable).where(eq(reservationsTable.id, RES_ID)).limit(1);
+    const installments = await db.select().from(reservationInstallmentsTable)
+      .where(eq(reservationInstallmentsTable.reservationId, RES_ID));
+    const expectedPaid = installments.reduce(
+      (sum, installment) => sum + (installment.paidAt ? Number(installment.paidAmount ?? installment.amount) : 0),
+      0,
+    );
+
+    expect(expectedPaid).toBe(300);
+    expect(Number(reservation.paidValue)).toBe(expectedPaid);
+    expect(Number(reservation.balance)).toBe(Math.max(0, Number(reservation.totalValue) - expectedPaid));
+  });
+
+  it("uses the latest paid value when reservation total and installment payment race", async () => {
+    const reservationId = `pdsr-total-race-${RUN}`;
+    const installmentId = `pds-total-race-installment-${RUN}`;
+    const raceClientId = `pds-total-race-client-${RUN}`;
+    const suffix = RUN.replace(/[^a-zA-Z0-9]/g, "");
+    const triggerName = `pds_total_race_${suffix}`;
+    const functionName = `${triggerName}_fn`;
+    await db.insert(clientsTable).values({
+      id: raceClientId,
+      tenantId: TENANT_ID,
+      name: "Total race client",
+      email: `total-race-${RUN}@test.com`,
+      whatsapp: `719${RUN.replace(/[^0-9]/g, "").slice(-8)}`,
+      createdById: USER_ID,
+    });
+    await db.insert(reservationsTable).values({
+      id: reservationId,
+      tenantId: TENANT_ID,
+      tripId: TRIP_ID,
+      clientId: raceClientId,
+      createdById: USER_ID,
+      status: RESERVATION_STATUS.PENDING,
+      totalValue: "1200.00",
+      paidValue: "0.00",
+      balance: "1200.00",
+      seats: [],
+      tripType: "excursao",
+      voucherCode: `VCH-RACE-${RUN.toUpperCase()}`,
+      qrCode: `QR-RACE-${RUN.toUpperCase()}`,
+    });
+    await db.insert(reservationInstallmentsTable).values({
+      id: installmentId,
+      reservationId,
+      tenantId: TENANT_ID,
+      installmentNumber: 1,
+      dueDate: new Date("2028-01-01T12:00:00Z"),
+      amount: "1200.00",
+    });
+
+    // Hold the installment transaction after it updates the parent, giving
+    // the total-value PATCH time to read the old paidValue before it waits.
+    try {
+      await db.execute(sql.raw(`
+        CREATE FUNCTION public."${functionName}"() RETURNS trigger
+        LANGUAGE plpgsql AS $body$
+        BEGIN
+          IF NEW.id = '${reservationId}' AND NEW.paid_value = 200.00 THEN
+            PERFORM pg_sleep(1.5);
+          END IF;
+          RETURN NEW;
+        END;
+        $body$
+      `));
+      await db.execute(sql.raw(`
+        CREATE TRIGGER "${triggerName}"
+        BEFORE UPDATE OF paid_value ON reservations
+        FOR EACH ROW EXECUTE FUNCTION public."${functionName}"()
+      `));
+
+      const app = buildApp();
+      const paymentPromise = request(app)
+        .patch(`/api/reservations/installments/${installmentId}`)
+        .send({ paidAmount: 200 })
+        .then((response) => response);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const totalPromise = request(app)
+        .patch(`/api/reservations/${reservationId}`)
+        .send({ totalValue: 1600 })
+        .then((response) => response);
+      const [paymentResponse, totalResponse] = await Promise.all([paymentPromise, totalPromise]);
+
+      expect(paymentResponse.status).toBe(200);
+      expect(totalResponse.status).toBe(200);
+      const [reservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+        paidValue: reservationsTable.paidValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(eq(reservationsTable.id, reservationId)).limit(1);
+      const [installment] = await db.select().from(reservationInstallmentsTable)
+        .where(eq(reservationInstallmentsTable.id, installmentId)).limit(1);
+      const expectedPaid = installment.paidAt ? Number(installment.paidAmount ?? installment.amount) : 0;
+
+      expect(expectedPaid).toBe(200);
+      expect(Number(reservation.paidValue)).toBe(expectedPaid);
+      expect(Number(reservation.balance)).toBe(Math.max(0, Number(reservation.totalValue) - expectedPaid));
+    } finally {
+      await db.execute(sql.raw(`DROP TRIGGER IF EXISTS "${triggerName}" ON reservations`));
+      await db.execute(sql.raw(`DROP FUNCTION IF EXISTS public."${functionName}"()`));
+    }
+  });
+
+  it("keeps the balance current when a manual payment is reconciled during a total change", async () => {
+    const reservationId = `pdsr-manual-total-race-${RUN}`;
+    const paymentId = `pdsr-manual-payment-${RUN}`;
+    const raceClientId = `pdsr-manual-client-${RUN}`;
+    const suffix = RUN.replace(/[^a-zA-Z0-9]/g, "");
+    const triggerName = `pds_manual_total_race_${suffix}`;
+    const functionName = `${triggerName}_fn`;
+    await db.insert(clientsTable).values({
+      id: raceClientId,
+      tenantId: TENANT_ID,
+      name: "Manual payment total race client",
+      email: `manual-total-race-${RUN}@test.com`,
+      whatsapp: `718${RUN.replace(/[^0-9]/g, "").slice(-8)}`,
+      createdById: USER_ID,
+    });
+    await db.insert(reservationsTable).values({
+      id: reservationId,
+      tenantId: TENANT_ID,
+      tripId: TRIP_ID,
+      clientId: raceClientId,
+      createdById: USER_ID,
+      status: RESERVATION_STATUS.PENDING,
+      totalValue: "1200.00",
+      paidValue: "0.00",
+      balance: "1200.00",
+      seats: [],
+      tripType: "excursao",
+      voucherCode: `VCH-MANUAL-RACE-${RUN.toUpperCase()}`,
+      qrCode: `QR-MANUAL-RACE-${RUN.toUpperCase()}`,
+    });
+
+    try {
+      await db.execute(sql.raw(`
+        CREATE FUNCTION public."${functionName}"() RETURNS trigger
+        LANGUAGE plpgsql AS $body$
+        BEGIN
+          IF NEW.id = '${reservationId}' AND NEW.total_value = 1600.00 THEN
+            PERFORM pg_sleep(1.5);
+          END IF;
+          RETURN NEW;
+        END;
+        $body$
+      `));
+      await db.execute(sql.raw(`
+        CREATE TRIGGER "${triggerName}"
+        BEFORE UPDATE OF total_value ON reservations
+        FOR EACH ROW EXECUTE FUNCTION public."${functionName}"()
+      `));
+
+      const app = buildApp();
+      const totalPromise = request(app)
+        .patch(`/api/reservations/${reservationId}`)
+        .send({ totalValue: 1600 })
+        .then((response) => response);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await db.insert(paymentsTable).values({
+        id: paymentId,
+        tenantId: TENANT_ID,
+        reservationId,
+        clientId: raceClientId,
+        type: PAYMENT_TYPE.RECEIVABLE,
+        category: "reservation",
+        amount: "200.00",
+        paymentMethod: "pix",
+        dueDate: new Date(),
+        paidAt: new Date(),
+        status: PAYMENT_STATUS.PAID,
+        gateway: "manual-reservation",
+        transactionId: paymentId,
+        description: "Manual payment used by the concurrency integration test",
+      });
+      const syncPromise = syncReservationPaymentStatus(reservationId, TENANT_ID);
+      const [totalResponse] = await Promise.all([totalPromise, syncPromise.then(() => null)]);
+
+      expect(totalResponse.status).toBe(200);
+      const [reservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+        paidValue: reservationsTable.paidValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(eq(reservationsTable.id, reservationId)).limit(1);
+      const paidPayments = await db.select({ amount: paymentsTable.amount })
+        .from(paymentsTable)
+        .where(eq(paymentsTable.reservationId, reservationId));
+      const expectedPaid = paidPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+
+      expect(expectedPaid).toBe(200);
+      expect(Number(reservation.paidValue)).toBe(expectedPaid);
+      expect(Number(reservation.balance)).toBe(Math.max(0, Number(reservation.totalValue) - expectedPaid));
+    } finally {
+      await db.execute(sql.raw(`DROP TRIGGER IF EXISTS "${triggerName}" ON reservations`));
+      await db.execute(sql.raw(`DROP FUNCTION IF EXISTS public."${functionName}"()`));
+      await db.delete(paymentsTable).where(eq(paymentsTable.id, paymentId));
+    }
   });
 
 });

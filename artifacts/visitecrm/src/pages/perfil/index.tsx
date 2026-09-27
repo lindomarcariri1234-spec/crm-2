@@ -3,7 +3,9 @@ import { toPng } from "html-to-image";
 import { useLocation, useSearch } from "wouter";
 import { clientPortalApi, type ClientPortalProfile, type ClientLoyalty, type ClientReferral, type FavoritesResponse, type ClientPortalReservation, type ClientLoyaltyTransaction, type ClientAchievementsResponse, type ClientMemoriesResponse, type DreamDestinationItem, type ClubBenefit, type ClubRankingResponse } from "@/lib/clientPortalApi";
 import QRCode from "qrcode";
-import { useGetMe, useGetActiveCampaign } from "@workspace/api-client-react";
+import { useGetMe } from "@workspace/api-client-react";
+import { AsyncEmpty, AsyncError, useAsyncResource } from "./async-state";
+import { profileQuery } from "./profile-query";
 import { RESERVATION_STATUS, REFERRAL_STATUS, INVOICE_STATUS } from "@workspace/permissions";
 import { useSignIn, useClerk } from "@clerk/react";
 import {
@@ -98,6 +100,11 @@ function StatusIcon({ status }: { status: string }) {
   }
 }
 
+// Keep in sync with the client's redemption eligibility on the server.
+function isRedeemableReservation(r: ClientPortalReservation) {
+  return r.status === RESERVATION_STATUS.PENDING || r.status === RESERVATION_STATUS.CONFIRMED;
+}
+
 const fmtDate = (dateStr: string | null) => formatDateShort(dateStr) ?? "A confirmar";
 
 function daysUntil(dateStr: string | null): number | null {
@@ -134,7 +141,7 @@ function ReservationCard({
 }: {
   r: ClientPortalProfile["reservations"][number];
   compact?: boolean;
-  onRedeemClick?: () => void;
+  onRedeemClick?: (trigger: HTMLButtonElement) => void;
 }) {
   const { toast } = useToast();
   const [downloading, setDownloading] = useState(false);
@@ -272,7 +279,7 @@ function ReservationCard({
               )}
               {r.financialSummary.amountRemaining > 0 && onRedeemClick && (
                 <button
-                  onClick={onRedeemClick}
+                  onClick={(event) => onRedeemClick(event.currentTarget)}
                   className="flex items-center gap-1.5 text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded px-2 py-1 hover:bg-amber-100 transition-colors"
                 >
                   <Coins className="w-3 h-3" />
@@ -1067,17 +1074,17 @@ function PreferencesSummaryCard({
     return (
       <button
         type="button"
-        className="w-full text-left flex items-start gap-3 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 hover:bg-violet-100 transition-colors"
+        className="w-full text-left flex items-start gap-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 transition-colors hover:bg-sky-100 dark:border-sky-900 dark:bg-sky-950/40 dark:hover:bg-sky-950/60"
         onClick={onGoToPreferences}
       >
-        <Sparkles className="w-5 h-5 text-violet-500 shrink-0 mt-0.5" />
+        <Sparkles className="w-5 h-5 text-sky-600 shrink-0 mt-0.5 dark:text-sky-300" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-violet-800">Personalize sua experiência</p>
-          <p className="text-xs text-violet-600 mt-0.5">
+          <p className="text-sm font-semibold text-sky-900 dark:text-sky-100">Personalize sua experiência</p>
+          <p className="text-xs text-sky-700 mt-0.5 dark:text-sky-300">
             Conte-nos seus destinos dos sonhos e preferências de viagem para recomendações personalizadas.
           </p>
         </div>
-        <ArrowRight className="w-4 h-4 text-violet-500 shrink-0 mt-0.5" />
+        <ArrowRight className="w-4 h-4 text-sky-600 shrink-0 mt-0.5 dark:text-sky-300" />
       </button>
     );
   }
@@ -1093,39 +1100,39 @@ function PreferencesSummaryCard({
   return (
     <button
       type="button"
-      className="w-full text-left rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 hover:bg-violet-100 transition-colors"
+      className="w-full text-left rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 transition-colors hover:bg-sky-100 dark:border-sky-900 dark:bg-sky-950/40 dark:hover:bg-sky-950/60"
       onClick={onGoToPreferences}
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-violet-500 shrink-0" />
-          <p className="text-sm font-semibold text-violet-800">Suas preferências</p>
+          <Sparkles className="w-4 h-4 text-sky-600 shrink-0 dark:text-sky-300" />
+          <p className="text-sm font-semibold text-sky-900 dark:text-sky-100">Suas preferências</p>
         </div>
-        <span className="text-xs text-violet-500 flex items-center gap-0.5">
+        <span className="text-xs text-sky-700 flex items-center gap-0.5 dark:text-sky-300">
           Editar <ArrowRight className="w-3 h-3" />
         </span>
       </div>
       <div className="space-y-1.5">
         {visibleDestinations.length > 0 && (
           <div className="flex flex-wrap gap-1.5 items-center">
-            <span className="text-xs text-violet-600 shrink-0">
+            <span className="text-xs text-sky-700 shrink-0 dark:text-sky-300">
               <Globe className="w-3 h-3 inline mr-0.5" />
               Sonhos:
             </span>
             {visibleDestinations.map((d) => (
               <span
                 key={d}
-                className="inline-flex items-center px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 text-xs font-medium border border-violet-200"
+                className="inline-flex items-center px-2 py-0.5 rounded-full bg-white text-sky-700 text-xs font-medium border border-sky-200 dark:bg-slate-800 dark:text-sky-200 dark:border-sky-800"
               >
                 {d}
               </span>
             ))}
             {extraDestinations > 0 && (
-              <span className="text-xs text-violet-500">+{extraDestinations}</span>
+              <span className="text-xs text-sky-600 dark:text-sky-300">+{extraDestinations}</span>
             )}
           </div>
         )}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-violet-600">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-700 dark:text-sky-300">
           {travelPreference && (
             <span className="flex items-center gap-1">
               <Users className="w-3 h-3" />
@@ -1219,8 +1226,8 @@ function InicioTab({
       label: "Total Gasto",
       value: fmtCurrency(profile.stats?.totalSpent ?? 0),
       sub: `em ${profile.reservations.filter(r => r.status === RESERVATION_STATUS.CONFIRMED || r.status === RESERVATION_STATUS.COMPLETED).length} reserva(s)`,
-      color: "text-green-600",
-      bg: "bg-green-50",
+      color: "text-teal-600",
+      bg: "bg-teal-50",
       onClick: () => onTabChange("reservas"),
     },
     {
@@ -1228,8 +1235,8 @@ function InicioTab({
       label: "Pontos de Fidelidade",
       value: loyaltyPoints !== null ? loyaltyPoints.toLocaleString("pt-BR") : "—",
       sub: loyaltyPoints !== null ? "pontos disponíveis" : "Sem programa ativo",
-      color: "text-amber-600",
-      bg: "bg-amber-50",
+      color: "text-orange-600",
+      bg: "bg-orange-50",
       onClick: () => loyaltyPoints !== null && onTabChange("fidelidade"),
     },
     {
@@ -1237,62 +1244,161 @@ function InicioTab({
       label: "Indicações",
       value: totalReferrals.toString(),
       sub: `${profile.referral.completedReferrals} confirmada(s)`,
-      color: "text-purple-600",
-      bg: "bg-purple-50",
+      color: "text-sky-700",
+      bg: "bg-sky-50",
       onClick: () => onTabChange("indicacoes"),
     },
   ];
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <ClienteCard profile={profile} primaryColor={primaryColor} />
-        <div className="px-1">
-          <p className="text-sm text-muted-foreground">
-            Bem-vindo(a) de volta, <span className="font-semibold text-foreground">{firstName}</span>!
-            {nextTrip && days !== null && days >= 0 && (
-              <span>
-                {" "}
-                {days === 0
-                  ? "Sua próxima viagem é hoje"
-                  : days === 1
-                  ? "Sua próxima viagem é amanhã!"
-                  : `Sua próxima viagem começa em ${days} dias.`}
-              </span>
+    <div className="space-y-6 sm:space-y-8">
+      <section
+        className="relative overflow-hidden rounded-[2rem] border border-sky-100 bg-white shadow-[0_18px_55px_rgba(14,165,233,0.10)] dark:border-slate-700 dark:bg-slate-900"
+        data-testid="section-portal-welcome"
+      >
+        <div
+          className="absolute inset-y-0 right-0 w-2/3 opacity-90"
+          style={{
+            background: `radial-gradient(circle at 72% 25%, ${primaryColor}34, transparent 36%), radial-gradient(circle at 95% 90%, #14B8A633, transparent 42%), linear-gradient(125deg, transparent 20%, ${primaryColor}10 100%)`,
+          }}
+          aria-hidden="true"
+        />
+        <div className="absolute -right-12 -top-16 h-44 w-44 rounded-full border-[18px] border-sky-100/70 dark:border-sky-800/30" aria-hidden="true" />
+        <div className="absolute -bottom-16 right-28 h-40 w-40 rounded-full border-[14px] border-teal-100/70 dark:border-teal-800/30" aria-hidden="true" />
+        <div className="relative grid gap-7 p-6 sm:p-8 lg:grid-cols-[1fr_auto] lg:items-end lg:p-10">
+          <div className="max-w-2xl">
+            <div className="mb-4 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em]" style={{ color: primaryColor }}>
+              <span className="h-2 w-2 rounded-full bg-teal-400" />
+              Seu espaço de viajante
+              <span className="text-slate-400">·</span>
+              {profile.tenant?.name ?? "sua agência"}
+            </div>
+            <h1 className="text-3xl font-bold tracking-[-0.04em] text-slate-950 dark:text-white sm:text-5xl">
+              Oi, {firstName}.
+              <span className="mt-1 block text-sky-600 dark:text-sky-300">Tem mundo te esperando.</span>
+            </h1>
+            <p className="mt-4 max-w-xl text-sm leading-6 text-slate-600 dark:text-slate-300 sm:text-base">
+              Acompanhe suas reservas, benefícios e os próximos passos para viajar do seu jeito.
+              {nextTrip && days !== null && days >= 0 && (
+                <span className="font-semibold text-slate-900 dark:text-white">
+                  {" "}
+                  {days === 0
+                    ? "Sua próxima viagem é hoje."
+                    : days === 1
+                    ? "Sua próxima viagem é amanhã."
+                    : `Sua próxima viagem começa em ${days} dias.`}
+                </span>
+              )}
+            </p>
+            {!nextTrip && profile.tenant?.slug && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-5 rounded-full border-sky-200 bg-white/80 px-4 text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:bg-slate-900/80 dark:text-sky-200"
+                onClick={() => (window.location.href = `/loja/${profile.tenant!.slug}/produtos`)}
+                data-testid="button-browse-packages-welcome"
+              >
+                Encontrar uma viagem
+                <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+              </Button>
             )}
-          </p>
-          {!nextTrip && profile.tenant?.slug && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              onClick={() => (window.location.href = `/loja/${profile.tenant!.slug}/produtos`)}
-            >
-              Ver Pacotes
-              <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-            </Button>
-          )}
+          </div>
+          <div className="flex items-center gap-3 self-start rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-800/75 dark:text-slate-200 lg:self-end">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700 dark:bg-sky-900/70 dark:text-sky-200">
+              <MapPin className="h-4 w-4" />
+            </span>
+            Feito para a sua jornada
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {kpis.map((k) => (
-          <Card
-            key={k.label}
-            className="cursor-pointer hover:shadow-md transition-shadow"
-            onClick={k.onClick}
-          >
-            <CardContent className="p-4">
-              <div className={`w-9 h-9 rounded-lg ${k.bg} ${k.color} flex items-center justify-center mb-3`}>
-                {k.icon}
+      {nextTrip && (
+        <section
+          className="relative overflow-hidden rounded-[1.75rem] p-6 text-white shadow-[0_18px_45px_rgba(29,78,216,0.20)] sm:p-8"
+          style={{ background: `linear-gradient(120deg, ${primaryColor} 0%, #1D4ED8 62%, #0EA5E9 140%)` }}
+          data-testid="section-next-trip"
+        >
+          <div className="pointer-events-none absolute -right-10 -top-14 h-48 w-48 rounded-full border-[20px] border-white/10" aria-hidden="true" />
+          <div className="pointer-events-none absolute bottom-[-5rem] right-40 h-36 w-36 rounded-full border-[14px] border-teal-200/15" aria-hidden="true" />
+          <div className="relative grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-white/75">
+                <Plane className="h-4 w-4" />
+                Sua próxima viagem
               </div>
-              <p className="text-xs text-muted-foreground mb-0.5">{k.label}</p>
-              <p className="text-xl font-bold leading-tight">{k.value}</p>
-              <p className="text-xs text-muted-foreground mt-0.5 truncate">{k.sub}</p>
-            </CardContent>
-          </Card>
+              <h2 className="mt-4 max-w-xl text-3xl font-bold tracking-[-0.03em] sm:text-4xl" data-testid="text-next-trip-name">
+                {nextTrip.tripName}
+              </h2>
+              <p className="mt-2 flex items-center gap-1.5 text-sm text-white/80" data-testid="text-next-trip-destination">
+                <MapPin className="h-4 w-4" />
+                {nextTrip.tripDestination}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-end gap-6 lg:justify-end">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/65">Embarque</p>
+                <p className="mt-1 text-lg font-semibold">{fmtDate(nextTrip.tripDepartureDate)}</p>
+              </div>
+              {days !== null && days >= 0 && (
+                <div className="rounded-2xl bg-white/15 px-5 py-3 text-center backdrop-blur-sm" data-testid="text-next-trip-countdown">
+                  <strong className="block text-3xl font-bold leading-none">{days}</strong>
+                  <span className="mt-1 block text-[11px] font-medium uppercase tracking-wide text-white/75">
+                    {days === 1 ? "dia para embarcar" : "dias para embarcar"}
+                  </span>
+                </div>
+              )}
+              <Button
+                type="button"
+                variant="secondary"
+                className="rounded-full bg-white text-blue-700 shadow-sm hover:bg-sky-50"
+                onClick={() => onTabChange("reservas")}
+                data-testid="button-open-next-trip"
+              >
+                Ver reserva
+                <ArrowRight className="ml-1.5 h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {kpis.map((k) => (
+          <button
+            key={k.label}
+            type="button"
+            className="group rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition-all hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-[0_12px_30px_rgba(14,165,233,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-sky-700"
+            onClick={k.onClick}
+            aria-label={`${k.label}: ${k.value}. Ver ${k.label}`}
+            data-testid={`button-kpi-${k.label.toLowerCase().replace(/\s+/g, "-")}`}
+          >
+            <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ${k.bg} ${k.color}`}>
+              {k.icon}
+            </div>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{k.label}</p>
+            <p className="mt-1 text-xl font-bold tracking-tight text-slate-900 dark:text-white" data-testid={`text-kpi-${k.label.toLowerCase().replace(/\s+/g, "-")}`}>{k.value}</p>
+            <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{k.sub}</p>
+          </button>
         ))}
       </div>
+
+      <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,420px)] lg:items-start" data-testid="section-traveler-card">
+        <div className="rounded-[1.75rem] border border-sky-100 bg-gradient-to-br from-sky-50 via-white to-teal-50 p-6 dark:border-slate-700 dark:from-sky-950/40 dark:via-slate-900 dark:to-teal-950/30 sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-sky-600 shadow-sm dark:bg-slate-800 dark:text-sky-300">
+              <ShieldCheck className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-teal-600 dark:text-teal-300">Seu cartão do viajante</p>
+              <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-900 dark:text-white">Leve sua jornada com você</h2>
+              <p className="mt-2 max-w-lg text-sm leading-6 text-slate-600 dark:text-slate-300">
+                Consulte seu cartão, código de cliente e benefícios sempre que precisar. As ações de copiar, baixar e compartilhar continuam disponíveis no cartão.
+              </p>
+            </div>
+          </div>
+        </div>
+        <ClienteCard profile={profile} primaryColor={primaryColor} />
+      </section>
 
       {bdDays === 0 && (
         <BirthdayTodayCard
@@ -1351,12 +1457,19 @@ function InicioTab({
       />
 
       {nextTrip && (
-        <div>
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-            Próxima Viagem
-          </h3>
+        <section>
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-teal-600 dark:text-teal-300">Detalhes importantes</p>
+              <h3 className="mt-1 text-xl font-bold tracking-tight text-slate-900 dark:text-white">Sua reserva em um só lugar</h3>
+            </div>
+            <Button variant="ghost" size="sm" className="hidden gap-1 text-sky-700 hover:text-sky-800 dark:text-sky-300 sm:flex" onClick={() => onTabChange("reservas")}>
+              Ver todas
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
           <ReservationCard r={nextTrip} compact={false} />
-        </div>
+        </section>
       )}
 
       {upcoming.length > 1 && (
@@ -1390,7 +1503,7 @@ function InicioTab({
   );
 }
 
-function ReservasTab({
+export function ReservasTab({
   profile,
   filter,
   onClearFilter,
@@ -1408,12 +1521,15 @@ function ReservasTab({
   const [redeemReservationId, setRedeemReservationId] = useState("");
   const [redeemPoints, setRedeemPoints] = useState("");
   const [redeemLoading, setRedeemLoading] = useState(false);
+  const redeemTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const primaryColor = profile.tenant?.primaryColor ?? "#1E5B8C";
 
-  function openRedeem(reservationId: string, balance: number) {
+  function openRedeem(reservationId: string, balance: number, trigger: HTMLButtonElement) {
     if (!loyalty) return;
-    const maxPts = Math.min(loyalty.availablePoints, Math.ceil(balance / loyalty.realPerPoint));
+    const maxPts = Math.min(loyalty.availablePoints, Math.floor(balance / loyalty.realPerPoint));
+    if (maxPts < loyalty.minRedeemPoints) return;
+    redeemTriggerRef.current = trigger;
     setRedeemReservationId(reservationId);
     setRedeemPoints(String(maxPts));
     setRedeemOpen(true);
@@ -1465,15 +1581,17 @@ function ReservasTab({
 
   if (!all.length) {
     return (
-      <div className="text-center py-16">
-        <CalendarCheck className="w-14 h-14 mx-auto mb-4 text-muted-foreground/30" />
-        <h3 className="font-semibold text-lg mb-1">Nenhuma reserva encontrada</h3>
-        <p className="text-muted-foreground text-sm">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <CalendarCheck className="h-7 w-7" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhuma reserva encontrada</h3>
+        <p className="text-sm leading-6 text-muted-foreground">
           Suas reservas aparecerão aqui após a compra de um pacote.
         </p>
         {profile.tenant?.slug && (
           <Button
-            className="mt-4"
+            className="mt-5 rounded-full px-5"
             onClick={() => (window.location.href = `/loja/${profile.tenant!.slug}/produtos`)}
             style={{ backgroundColor: profile.tenant.primaryColor }}
           >
@@ -1486,19 +1604,21 @@ function ReservasTab({
 
   const redeemReservation = all.find((r) => r.id === redeemReservationId);
   const maxRedeemPoints = redeemReservation && loyalty
-    ? Math.min(loyalty.availablePoints, Math.ceil(redeemReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
+    ? Math.min(loyalty.availablePoints, Math.floor(redeemReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
     : 0;
   const redeemPointsNum = parseInt(redeemPoints, 10) || 0;
   const estimatedDiscount = loyalty ? redeemPointsNum * loyalty.realPerPoint : 0;
 
-  const redeemModal = redeemOpen && loyalty ? (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={() => !redeemLoading && setRedeemOpen(false)} />
-      <div className="relative bg-background rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-        <div>
-          <h3 className="font-bold text-lg">Usar pontos nesta reserva</h3>
-          <p className="text-sm text-muted-foreground">{redeemReservation?.tripName}</p>
-        </div>
+  const redeemModal = loyalty ? (
+    <Dialog open={redeemOpen} onOpenChange={(open) => { if (!redeemLoading) setRedeemOpen(open); }}>
+      <DialogContent className="max-w-sm" onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        redeemTriggerRef.current?.focus();
+      }}>
+        <DialogHeader>
+          <DialogTitle>Usar pontos nesta reserva</DialogTitle>
+          <DialogDescription>{redeemReservation?.tripName}</DialogDescription>
+        </DialogHeader>
         <form onSubmit={handleRedeem} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="reservasRedeemInput">Pontos a resgatar</Label>
@@ -1543,28 +1663,30 @@ function ReservasTab({
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   ) : null;
 
   if (filter === "com-saldo") {
     const withBalance = all.filter(
-      (r) => r.financialSummary.amountRemaining > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
+      (r) => r.financialSummary.amountRemaining > 0 && isRedeemableReservation(r),
     );
     return (
       <>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/75 px-4 py-3 dark:border-amber-900/60 dark:bg-amber-950/25">
             <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-orange-500" />
-              <span className="text-sm font-semibold text-orange-800">
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/75 text-orange-500 shadow-sm dark:bg-slate-900/50">
+                <AlertCircle className="h-4 w-4" />
+              </span>
+              <span className="text-sm font-semibold text-orange-800 dark:text-orange-200">
                 {withBalance.length} reserva{withBalance.length !== 1 ? "s" : ""} com pagamento pendente
               </span>
             </div>
             <Button
               variant="ghost"
               size="sm"
-              className="text-xs text-muted-foreground"
+              className="rounded-full text-xs text-muted-foreground"
               onClick={onClearFilter}
             >
               Ver todas
@@ -1572,8 +1694,8 @@ function ReservasTab({
             </Button>
           </div>
           {withBalance.length === 0 ? (
-            <div className="text-center py-10">
-              <CheckCircle className="w-12 h-12 mx-auto mb-3 text-green-400" />
+            <div className="rounded-2xl border border-dashed border-teal-200 bg-teal-50/40 py-12 text-center dark:border-teal-900/60 dark:bg-teal-950/20">
+              <CheckCircle className="mx-auto mb-3 h-12 w-12 text-teal-400" />
               <p className="text-muted-foreground text-sm">Nenhuma reserva com saldo pendente.</p>
             </div>
           ) : (
@@ -1582,7 +1704,7 @@ function ReservasTab({
                 <ReservationCard
                   key={r.id}
                   r={r}
-                  onRedeemClick={canRedeem ? () => openRedeem(r.id, r.financialSummary.amountRemaining) : undefined}
+                   onRedeemClick={canRedeem && Math.floor(r.financialSummary.amountRemaining / loyalty!.realPerPoint) >= loyalty!.minRedeemPoints ? (trigger) => openRedeem(r.id, r.financialSummary.amountRemaining, trigger) : undefined}
                 />
               ))}
             </div>
@@ -1594,10 +1716,11 @@ function ReservasTab({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-7">
       {upcoming.length > 0 && (
         <section>
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h2 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-sky-700 dark:text-sky-300">
+            <span className="h-2 w-2 rounded-full bg-teal-400" />
             Próximas Viagens
           </h2>
           <div className="space-y-3">
@@ -1605,7 +1728,7 @@ function ReservasTab({
               <ReservationCard
                 key={r.id}
                 r={r}
-                onRedeemClick={canRedeem && r.financialSummary.amountRemaining > 0 ? () => openRedeem(r.id, r.financialSummary.amountRemaining) : undefined}
+                 onRedeemClick={canRedeem && isRedeemableReservation(r) && Math.floor(r.financialSummary.amountRemaining / loyalty!.realPerPoint) >= loyalty!.minRedeemPoints ? (trigger) => openRedeem(r.id, r.financialSummary.amountRemaining, trigger) : undefined}
               />
             ))}
           </div>
@@ -1614,7 +1737,8 @@ function ReservasTab({
 
       {past.length > 0 && (
         <section>
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h2 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            <span className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600" />
             Histórico
           </h2>
           <div className="space-y-3">
@@ -1717,15 +1841,15 @@ function SegurancaSection({ email }: { email: string }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
+    <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+      <CardHeader className="border-b border-slate-100 bg-sky-50/45 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+        <CardTitle className="flex items-center gap-2 text-base tracking-tight">
           <ShieldCheck className="w-4 h-4" />
           Segurança
         </CardTitle>
-        <CardDescription>Gerencie o acesso à sua conta.</CardDescription>
+        <CardDescription className="mt-1 leading-5">Gerencie o acesso à sua conta.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-5">
+      <CardContent className="space-y-5 p-5 sm:p-6">
         <div className="flex items-start gap-3">
           <Mail className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
           <div>
@@ -1926,13 +2050,13 @@ function DadosTab({ profile, onUpdated }: { profile: ClientPortalProfile; onUpda
   const email = client?.email ?? user?.email ?? "";
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Informações Pessoais</CardTitle>
-          <CardDescription>Mantenha seus dados atualizados para facilitar suas reservas.</CardDescription>
+    <div className="space-y-5">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-gradient-to-r from-sky-50/70 to-teal-50/45 pb-4 dark:border-slate-800 dark:from-sky-950/25 dark:to-teal-950/15">
+          <CardTitle className="text-base tracking-tight">Informações Pessoais</CardTitle>
+          <CardDescription className="mt-1 leading-5">Mantenha seus dados atualizados para facilitar suas reservas.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5 sm:p-6">
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -1950,7 +2074,7 @@ function DadosTab({ profile, onUpdated }: { profile: ClientPortalProfile; onUpda
                   id="portal-email"
                   value={email}
                   disabled
-                  className="bg-muted"
+                   className="bg-slate-50/80 dark:bg-slate-800/70"
                 />
               </div>
               <div className="space-y-1.5">
@@ -2002,6 +2126,7 @@ const REFERRAL_STATUS_MAP: Record<string, { label: string; color: string; icon: 
   [REFERRAL_STATUS.COMPLETED]: { label: "Confirmada", color: "bg-green-100 text-green-800",    icon: <CheckCircle className="w-3.5 h-3.5" /> },
   [REFERRAL_STATUS.CONVERTED]: { label: "Convertida", color: "bg-blue-100 text-blue-800",      icon: <CheckCircle className="w-3.5 h-3.5" /> },
   [REFERRAL_STATUS.EXPIRED]:   { label: "Expirada",   color: "bg-slate-100 text-slate-500",    icon: <XCircle className="w-3.5 h-3.5" /> },
+  [REFERRAL_STATUS.REVERSED]:  { label: "Revertida",  color: "bg-red-100 text-red-700",        icon: <XCircle className="w-3.5 h-3.5" /> },
 };
 
 function ReferralStatusBadge({ status }: { status: string }) {
@@ -2014,23 +2139,9 @@ function ReferralStatusBadge({ status }: { status: string }) {
   );
 }
 
-function maskName(name: string | null): string {
-  if (!name) return "Pessoa indicada";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return `${parts[0].charAt(0).toUpperCase()}${parts[0].slice(1, 3)}***`;
-  return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}.`;
-}
-
-function maskEmail(email: string | null): string {
-  if (!email) return "";
-  const [local, domain] = email.split("@");
-  if (!domain) return email;
-  const visible = local.slice(0, Math.min(3, local.length));
-  return `${visible}***@${domain}`;
-}
-
 function ReferralRow({ r, primaryColor }: { r: ClientReferral; primaryColor: string }) {
-  const displayName = r.referredName ? maskName(r.referredName) : (r.referredEmail ? maskEmail(r.referredEmail) : "Pessoa indicada");
+  // The client endpoint returns only already-masked display values.
+  const displayName = r.referredName ?? r.referredEmail ?? "Pessoa indicada";
   const dateLabel = (r.status === REFERRAL_STATUS.COMPLETED || r.status === REFERRAL_STATUS.CONVERTED) && r.convertedAt
     ? `Convertida em ${new Date(r.convertedAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
     : r.status === REFERRAL_STATUS.EXPIRED && r.expiresAt
@@ -2115,20 +2226,18 @@ const PAGE_SIZE = 10;
 
 function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [loadingQr, setLoadingQr] = useState(false);
-  const [referrals, setReferrals] = useState<ClientReferral[] | null>(null);
-  const [loadingReferrals, setLoadingReferrals] = useState(true);
+  const { data: referralsResponse, loading: loadingReferrals, error: referralsError, reload: retryReferrals } = useAsyncResource(clientPortalApi.getMyReferrals);
+  const referrals = referralsResponse?.data ?? null;
   const searchStr = useSearch();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
-    const fromUrl = new URLSearchParams(searchStr).get("status");
-    return fromUrl ? parseStatusFilter(fromUrl) : "all";
-  });
+  const statusFilter = parseStatusFilter(new URLSearchParams(searchStr).get("status"));
   const [qrPreviewUrl, setQrPreviewUrl] = useState<string | null>(null);
   const [showQrDialog, setShowQrDialog] = useState(false);
-  const { data: activeCampaign } = useGetActiveCampaign();
+  const { data: activeCampaign, loading: campaignLoading, error: campaignError, reload: retryCampaign } = useAsyncResource(clientPortalApi.getActiveReferralCampaign);
   const [countdown, setCountdown] = useState<string>("");
 
   const referral = profile.referral;
@@ -2148,12 +2257,6 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
     ? `https://wa.me/?text=${encodeURIComponent(`${shareMessage}\n\nMeu código: ${code}\n\n${shareLink}`)}`
     : null;
 
-  // Sync status filter with URL query param
-  useEffect(() => {
-    const fromUrl = new URLSearchParams(searchStr).get("status");
-    setStatusFilter(fromUrl ? parseStatusFilter(fromUrl) : "all");
-  }, [searchStr]);
-
   // Campaign countdown
   useEffect(() => {
     if (!activeCampaign) { setCountdown(""); return; }
@@ -2170,13 +2273,6 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
     const id = setInterval(calc, 1000);
     return () => clearInterval(id);
   }, [activeCampaign]);
-
-  useEffect(() => {
-    clientPortalApi.getMyReferrals()
-      .then((r) => setReferrals(r.data))
-      .catch(() => setReferrals([]))
-      .finally(() => setLoadingReferrals(false));
-  }, []);
 
   const isConverted = (status: string) => status === REFERRAL_STATUS.COMPLETED || status === REFERRAL_STATUS.CONVERTED;
 
@@ -2321,10 +2417,12 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
 
   if (!code) {
     return (
-      <div className="text-center py-16">
-        <Gift className="w-14 h-14 mx-auto mb-4 text-muted-foreground/30" />
-        <h3 className="font-semibold text-lg mb-1">Código de indicação não disponível</h3>
-        <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <Gift className="h-7 w-7" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Código de indicação não disponível</h3>
+        <p className="mx-auto max-w-sm text-sm leading-6 text-muted-foreground">
           Seu código de indicação será gerado automaticamente após a confirmação da sua primeira reserva.
         </p>
       </div>
@@ -2332,11 +2430,13 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Suspended code banner */}
       {!isCodeActive && (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/75 p-4 dark:border-amber-900/60 dark:bg-amber-950/25">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/75 text-amber-600 shadow-sm dark:bg-slate-900/50">
+            <AlertTriangle className="h-5 w-5" />
+          </span>
           <div>
             <p className="text-sm font-semibold text-amber-800">
               {referralCodeStatus === "blocked" ? "Código bloqueado" : "Código cancelado"}
@@ -2351,9 +2451,11 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       )}
 
       {/* Campaign banner */}
-      {activeCampaign && countdown && (
+      {campaignLoading ? <Skeleton className="h-20 w-full rounded-xl" /> : campaignError ? (
+        <AsyncError error={campaignError} retry={retryCampaign} title="Não foi possível carregar a campanha." />
+      ) : activeCampaign && countdown ? (
         <div
-          className="rounded-xl p-4 text-center shadow-md animate-in fade-in slide-in-from-top-2 duration-500"
+          className="rounded-2xl border border-white/20 p-4 text-center shadow-[0_14px_34px_rgba(15,23,42,0.12)] animate-in fade-in slide-in-from-top-2 duration-500"
           style={{ background: `linear-gradient(135deg, ${primaryColor}dd, ${primaryColor}bb)`, color: primaryForeground }}
         >
           <div className="flex items-center justify-center gap-2 font-bold text-base mb-1">
@@ -2373,13 +2475,13 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
             </span>
           </p>
         </div>
-      )}
+      ) : <p className="text-xs text-muted-foreground">Nenhuma campanha ativa no momento.</p>}
 
       <div
-        className="rounded-2xl p-6"
+        className="relative overflow-hidden rounded-[1.75rem] p-6 shadow-[0_18px_45px_rgba(15,23,42,0.14)] sm:p-7"
         style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)`, color: primaryForeground }}
       >
-        <div className="flex items-center gap-3 mb-3">
+          <div className="mb-4 flex items-center gap-3">
           {tenantLogoUrl ? (
             <img src={tenantLogoUrl} alt="Logo" className="w-10 h-10 rounded-full object-contain bg-white/20 p-1" />
           ) : (
@@ -2448,8 +2550,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       </div>
 
       {shareLink && (
-        <Card>
-          <CardContent className="pt-4">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 sm:p-5">
             <Label className="text-sm font-medium">Link de indicação</Label>
             <div className="flex gap-2 mt-2">
               <Input value={shareLink} readOnly className="font-mono text-xs bg-muted" />
@@ -2478,8 +2580,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
         const tc = TIER_COLORS[tierLevel] ?? TIER_COLORS.bronze;
         const completed = referral.completedReferrals;
         return (
-          <Card>
-            <CardContent className="pt-4 pb-4">
+          <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+            <CardContent className="p-4">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
                   <p className="text-xs text-muted-foreground mb-0.5">Seu nível de indicador</p>
@@ -2540,8 +2642,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
         </Card>
         {hasBonus ? (
           <>
-            <Card>
-              <CardContent className="pt-4 pb-3 text-center">
+            <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+              <CardContent className="p-4 text-center">
                 <Clock className="w-5 h-5 mx-auto mb-1.5 text-orange-400" />
                 <p className="text-xl font-bold text-orange-500">
                   {formatBRL(pendingBonus)}
@@ -2549,8 +2651,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                 <p className="text-xs text-muted-foreground">Bônus a receber</p>
               </CardContent>
             </Card>
-            <Card>
-              <CardContent className="pt-4 pb-3 text-center">
+            <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+              <CardContent className="p-4 text-center">
                 <Wallet className="w-5 h-5 mx-auto mb-1.5 text-green-500" />
                 <p className="text-xl font-bold text-green-600">
                   {formatBRL(paidBonus)}
@@ -2560,8 +2662,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
             </Card>
           </>
         ) : (
-          <Card className="col-span-2">
-            <CardContent className="pt-4 pb-4 px-4">
+          <Card className="col-span-2 rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+            <CardContent className="p-4">
               <div className="flex items-start gap-3 mb-3">
                 <Gift className="w-5 h-5 shrink-0 text-muted-foreground/40 mt-0.5" />
                 <div>
@@ -2605,11 +2707,11 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       </div>
 
       {/* "Como funciona" explainer */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Como funciona</CardTitle>
+      <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+          <CardTitle className="text-base tracking-tight">Como funciona</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-3 p-5">
           {[
             { step: "1", text: "Compartilhe seu código ou link com amigos" },
             { step: "2", text: "Seu amigo acessa a loja e faz uma compra usando seu código" },
@@ -2629,11 +2731,11 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       </Card>
 
       {/* Referral list card */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Minhas Indicações</CardTitle>
+      <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+          <CardTitle className="text-base tracking-tight">Minhas Indicações</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5">
           {/* Bonus summary pills */}
           {!loadingReferrals && hasBonus && (
             <div className="flex gap-2 flex-wrap mb-4">
@@ -2674,9 +2776,10 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                   <button
                     key={f.key}
                     onClick={() => {
-                      setStatusFilter(f.key);
+                      navigate(profileQuery(window.location.search, "status", f.key === "all" ? null : f.key));
                       setVisibleCount(PAGE_SIZE);
                     }}
+                     aria-pressed={active}
                     className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                       active
                         ? "text-white"
@@ -2703,6 +2806,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                 </div>
               ))}
             </div>
+          ) : referralsError ? (
+            <AsyncError error={referralsError} retry={retryReferrals} title="Não foi possível carregar suas indicações." />
           ) : !referrals || referrals.length === 0 ? (
             <div className="text-center py-10">
               <Users className="w-10 h-10 mx-auto mb-3 text-muted-foreground/30" />
@@ -2855,10 +2960,13 @@ function FidelidadeTab({
   const [txHasMore, setTxHasMore] = useState(false);
   const [txLoading, setTxLoading] = useState(false);
   const [txInitialized, setTxInitialized] = useState(false);
+  const [txError, setTxError] = useState<string | null>(null);
+  const txInFlight = useRef(false);
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [redeemReservationId, setRedeemReservationId] = useState("");
   const [redeemPoints, setRedeemPoints] = useState("");
   const [redeemLoading, setRedeemLoading] = useState(false);
+  const redeemTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (loyalty && !txInitialized) {
@@ -2875,15 +2983,26 @@ function FidelidadeTab({
   }, [txRefreshKey]);
 
   async function loadTransactions(page: number, reset = false) {
+    if (txInFlight.current) return;
+    txInFlight.current = true;
     setTxLoading(true);
+    setTxError(null);
     try {
       const result = await clientPortalApi.getLoyaltyTransactions(page);
-      setTxItems((prev) => (reset ? result.data : [...prev, ...result.data]));
+      setTxItems((prev) => {
+        const seen = new Set<string>();
+        return (reset ? result.data : [...prev, ...result.data]).filter((item) => {
+          if (seen.has(item.id)) return false;
+          seen.add(item.id);
+          return true;
+        });
+      });
       setTxHasMore(result.hasMore);
       setTxPage(page);
-    } catch {
-      if (reset && loyalty) setTxItems(loyalty.recentTransactions);
+    } catch (err) {
+      setTxError(err instanceof Error ? err.message : "Tente novamente.");
     } finally {
+      txInFlight.current = false;
       setTxLoading(false);
     }
   }
@@ -2918,10 +3037,12 @@ function FidelidadeTab({
 
   if (!loyalty) {
     return (
-      <div className="text-center py-16">
-        <Coins className="w-14 h-14 mx-auto mb-4 text-muted-foreground/30" />
-        <h3 className="font-semibold text-lg mb-1">Programa de fidelidade não ativo</h3>
-        <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <Coins className="h-7 w-7" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Programa de fidelidade não ativo</h3>
+        <p className="mx-auto max-w-sm text-sm leading-6 text-muted-foreground">
           Esta agência ainda não possui um programa de fidelidade. Fique atento às novidades!
         </p>
       </div>
@@ -2938,27 +3059,27 @@ function FidelidadeTab({
   const equivalentValue = formatBRL(loyalty.availablePoints * loyalty.realPerPoint);
 
   const pendingReservations = reservations.filter(
-    (r) => r.financialSummary.amountRemaining > 0 && r.status !== RESERVATION_STATUS.CANCELLED,
+    (r) => r.financialSummary.amountRemaining > 0 && isRedeemableReservation(r) && !!loyalty && Math.floor(r.financialSummary.amountRemaining / loyalty.realPerPoint) >= loyalty.minRedeemPoints,
   );
 
   const selectedReservation = pendingReservations.find((r) => r.id === redeemReservationId);
   const maxRedeemPoints = selectedReservation
-    ? Math.min(loyalty.availablePoints, Math.ceil(selectedReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
+    ? Math.min(loyalty.availablePoints, Math.floor(selectedReservation.financialSummary.amountRemaining / loyalty.realPerPoint))
     : loyalty.availablePoints;
   const redeemPointsNum = parseInt(redeemPoints, 10) || 0;
   const estimatedDiscount = redeemPointsNum * loyalty.realPerPoint;
 
-  const displayedTransactions = txInitialized ? txItems : loyalty.recentTransactions;
+  const displayedTransactions = txItems;
   const tierBenefitsMap: Record<string, string[]> = (loyalty.tierBenefits as Record<string, string[]> | null) ?? TIER_BENEFITS_DEFAULT;
 
   return (
     <div className="space-y-4">
       {/* Hero card */}
       <div
-        className="rounded-2xl p-6"
+        className="relative overflow-hidden rounded-[1.75rem] p-6 shadow-[0_18px_45px_rgba(15,23,42,0.14)] sm:p-7"
         style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)`, color: primaryForeground }}
       >
-        <div className="flex items-start justify-between gap-4">
+        <div className="relative flex items-start justify-between gap-4">
           <div>
             <p className="text-sm opacity-80 mb-1">Pontos disponíveis</p>
             <p className="text-4xl font-extrabold leading-none">
@@ -2986,21 +3107,21 @@ function FidelidadeTab({
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Card>
-          <CardContent className="pt-4 pb-3 text-center">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <p className="text-xs text-muted-foreground mb-1">Pontos acumulados</p>
             <p className="text-xl font-bold">{loyalty.totalPoints.toLocaleString("pt-BR")}</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <p className="text-xs text-muted-foreground mb-1">Acúmulo</p>
             <p className="text-xl font-bold">{loyalty.pointsPerReal} pts/R$</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <p className="text-xs text-muted-foreground mb-1">Mínimo para resgate</p>
             <p className="text-xl font-bold">{loyalty.minRedeemPoints.toLocaleString("pt-BR")} pts</p>
           </CardContent>
@@ -3008,8 +3129,8 @@ function FidelidadeTab({
       </div>
 
       {/* Tier Benefits */}
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
           <CardTitle className="text-base flex items-center gap-2">
             <Star className="w-4 h-4" style={{ color: primaryColor }} />
             Benefícios por nível
@@ -3053,8 +3174,8 @@ function FidelidadeTab({
 
       {/* Redeem Points */}
       {pendingReservations.length > 0 && loyalty.availablePoints >= loyalty.minRedeemPoints && (
-        <Card>
-          <CardHeader className="pb-3">
+        <Card className="overflow-hidden rounded-[1.5rem] border-amber-200/80 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-amber-900/60 dark:bg-slate-900/90">
+          <CardHeader className="border-b border-amber-100 bg-amber-50/50 pb-4 dark:border-amber-900/40 dark:bg-amber-950/20">
             <CardTitle className="text-base flex items-center gap-2">
               <Coins className="w-4 h-4" style={{ color: primaryColor }} />
               Usar pontos em reservas
@@ -3066,7 +3187,7 @@ function FidelidadeTab({
           <CardContent>
             <div className="space-y-2">
               {pendingReservations.map((r) => (
-                <div key={r.id} className="flex items-center justify-between gap-3 p-3 rounded-lg border bg-muted/30">
+                  <div key={r.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-800/60">
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{r.tripName}</p>
                     <p className="text-xs text-muted-foreground">
@@ -3077,9 +3198,10 @@ function FidelidadeTab({
                     size="sm"
                     variant="outline"
                     className="shrink-0"
-                    onClick={() => {
-                      setRedeemReservationId(r.id);
-                      setRedeemPoints(String(Math.min(loyalty.availablePoints, Math.ceil(r.financialSummary.amountRemaining / loyalty.realPerPoint))));
+                    onClick={(event) => {
+                       redeemTriggerRef.current = event.currentTarget;
+                       setRedeemReservationId(r.id);
+                       setRedeemPoints(String(Math.min(loyalty.availablePoints, Math.floor(r.financialSummary.amountRemaining / loyalty.realPerPoint))));
                       setRedeemOpen(true);
                     }}
                   >
@@ -3094,14 +3216,15 @@ function FidelidadeTab({
       )}
 
       {/* Redemption Modal */}
-      {redeemOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40" onClick={() => !redeemLoading && setRedeemOpen(false)} />
-          <div className="relative bg-background rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4">
-            <div>
-              <h3 className="font-bold text-lg">Resgatar pontos</h3>
-              <p className="text-sm text-muted-foreground">{selectedReservation?.tripName}</p>
-            </div>
+      <Dialog open={redeemOpen} onOpenChange={(open) => { if (!redeemLoading) setRedeemOpen(open); }}>
+        <DialogContent className="max-w-sm" onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          redeemTriggerRef.current?.focus();
+        }}>
+          <DialogHeader>
+            <DialogTitle>Resgatar pontos</DialogTitle>
+            <DialogDescription>{selectedReservation?.tripName}</DialogDescription>
+          </DialogHeader>
             <form onSubmit={handleRedeem} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="redeemPointsInput">Pontos a resgatar</Label>
@@ -3146,23 +3269,25 @@ function FidelidadeTab({
                 </Button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
       {/* Transaction History */}
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
           <CardTitle className="text-base">Extrato de pontos</CardTitle>
           <CardDescription>{loyalty.programName}</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          {displayedTransactions.length === 0 && !txLoading ? (
+          {txError && (txItems.length === 0 || !txLoading) && (
+            <AsyncError error={txError} retry={() => loadTransactions(txPage + (txItems.length ? 1 : 0), txItems.length === 0)} title="Não foi possível carregar o extrato." />
+          )}
+          {displayedTransactions.length === 0 && !txLoading && !txError ? (
             <div className="text-center py-10">
               <Coins className="w-10 h-10 mx-auto mb-3 text-muted-foreground/30" />
               <p className="text-sm text-muted-foreground">Nenhuma transação registrada ainda.</p>
             </div>
-          ) : (
+          ) : displayedTransactions.length > 0 || txLoading ? (
             <div className="divide-y">
               {displayedTransactions.map((t) => {
                 const type = TRANSACTION_TYPE_MAP[t.type] ?? { label: t.type, sign: "+" as const, color: "text-slate-500" };
@@ -3194,8 +3319,8 @@ function FidelidadeTab({
                 </div>
               )}
             </div>
-          )}
-          {txHasMore && !txLoading && (
+          ) : null}
+          {txHasMore && !txLoading && !txError && (
             <div className="p-4 border-t">
               <Button variant="outline" size="sm" className="w-full" onClick={() => loadTransactions(txPage + 1)}>
                 Carregar mais
@@ -3293,16 +3418,17 @@ function PreferenciasTab({
   }
 
   return (
-    <div className="space-y-6 max-w-xl">
-      <div>
-        <h3 className="font-semibold text-base">Suas preferências de viagem</h3>
-        <p className="text-sm text-muted-foreground mt-0.5">
+    <div className="max-w-3xl space-y-6 rounded-[1.5rem] border border-sky-100 bg-white/85 p-5 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/85 sm:p-7">
+      <div className="border-b border-slate-100 pb-5 dark:border-slate-800">
+        <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-teal-600 dark:text-teal-300">Seu jeito de viajar</p>
+        <h3 className="text-xl font-bold tracking-tight">Suas preferências de viagem</h3>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">
           Essas informações nos ajudam a criar experiências mais personalizadas para você.
         </p>
       </div>
 
-      <div className="grid gap-5">
-        <div className="space-y-1.5">
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="musicalPreferences">Música ou estilo musical favorito</Label>
           <Input
             id="musicalPreferences"
@@ -3313,7 +3439,7 @@ function PreferenciasTab({
           />
         </div>
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="favoriteDrink">Bebida favorita</Label>
           <Input
             id="favoriteDrink"
@@ -3348,7 +3474,7 @@ function PreferenciasTab({
               {dreamDestinations.map((dest, i) => (
                 <span
                   key={i}
-                  className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-3 py-0.5 text-sm"
+                  className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-0.5 text-sm text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"
                 >
                   {dest}
                   <button
@@ -3365,7 +3491,7 @@ function PreferenciasTab({
           )}
         </div>
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
            <Label htmlFor="foodPreferences">Comida favorita</Label>
           <Input
             id="foodPreferences"
@@ -3376,7 +3502,7 @@ function PreferenciasTab({
           />
         </div>
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
            <Label htmlFor="birthDate">Data de aniversário</Label>
           <Input
             id="birthDate"
@@ -3387,7 +3513,7 @@ function PreferenciasTab({
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>
              Tipo de destino preferido{" "}
             <span className="text-muted-foreground text-xs font-normal">(pode escolher mais de um)</span>
@@ -3410,7 +3536,7 @@ function PreferenciasTab({
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>
             Principais interesses durante a viagem{" "}
             <span className="text-muted-foreground text-xs font-normal">(pode escolher mais de um)</span>
@@ -3433,7 +3559,7 @@ function PreferenciasTab({
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>Você gosta de registrar suas viagens com fotos e vídeos?</Label>
           <div className="flex gap-2">
             {([true, false] as const).map((val) => (
@@ -3453,7 +3579,7 @@ function PreferenciasTab({
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>Como você prefere viajar?</Label>
           <div className="flex flex-wrap gap-2">
             {TRAVEL_STYLES.map((style) => (
@@ -3474,7 +3600,7 @@ function PreferenciasTab({
         </div>
       </div>
 
-      <Button onClick={handleSave} disabled={saving} className="w-full sm:w-auto">
+      <Button onClick={handleSave} disabled={saving} className="w-full rounded-full px-5 sm:w-auto">
         {saving ? (
           <>
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -3510,15 +3636,15 @@ function FavoriteCard({
   const hasDiscount = !!salePrice;
 
   return (
-    <Card>
+    <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] transition-all hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-[0_16px_36px_rgba(14,165,233,0.10)] dark:border-slate-700 dark:bg-slate-900/90">
       <CardContent className="p-0">
-        <div className="flex gap-3 p-3">
-          <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden bg-gradient-to-br from-blue-100 to-blue-200">
+        <div className="flex gap-3 p-3.5 sm:p-4">
+          <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 to-teal-100 dark:from-sky-950/70 dark:to-teal-950/50">
             {imageUrl ? (
               <img src={imageUrl} alt={name} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
-                <MapPin className="w-6 h-6 text-blue-300" />
+                <MapPin className="h-6 w-6 text-sky-400" />
               </div>
             )}
           </div>
@@ -3569,16 +3695,7 @@ function FavoriteCard({
 
 function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
   const { toast } = useToast();
-  const [data, setData] = useState<FavoritesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi
-      .getFavorites()
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  const { data, setData, loading, error, reload } = useAsyncResource(clientPortalApi.getFavorites);
 
   async function handleRemove(itemType: "trip" | "product", itemId: string) {
     setData((prev) => {
@@ -3591,7 +3708,7 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
     try {
       await clientPortalApi.removeFavorite(itemType, itemId);
     } catch {
-      clientPortalApi.getFavorites().then(setData).catch(() => {});
+      void reload();
       toast({ title: "Erro ao remover favorito", description: "Tente novamente.", variant: "destructive" });
     }
   }
@@ -3605,15 +3722,18 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
       </div>
     );
   }
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar os favoritos." />;
 
   const total = (data?.trips.length ?? 0) + (data?.products.length ?? 0);
 
   if (total === 0) {
     return (
-      <div className="text-center py-16">
-        <Heart className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-        <h3 className="font-semibold text-lg mb-1">Nenhum favorito ainda</h3>
-        <p className="text-muted-foreground text-sm max-w-xs mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-rose-400 dark:bg-rose-950/30 dark:text-rose-300">
+          <Heart className="h-6 w-6" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhum favorito ainda</h3>
+        <p className="mx-auto max-w-xs text-sm leading-6 text-muted-foreground">
               Toque no botão de favorito nos cards da loja para guardar suas viagens preferidas aqui.
         </p>
       </div>
@@ -3621,7 +3741,7 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       {data?.trips.map((trip) => (
         <FavoriteCard
           key={trip.favoriteId}
@@ -3662,12 +3782,7 @@ const BADGE_META: Record<string, { name: string; description: string; emoji: str
 };
 
 function ConquistasTab() {
-  const [data, setData] = useState<ClientAchievementsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi.getAchievements().then(setData).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data, loading, error, reload } = useAsyncResource(clientPortalApi.getAchievements);
 
   if (loading) {
     return (
@@ -3676,23 +3791,26 @@ function ConquistasTab() {
       </div>
     );
   }
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar as conquistas." />;
+  if (!data?.badges.length) return <AsyncEmpty>Nenhuma conquista disponível ainda.</AsyncEmpty>;
 
   const earned = (data?.badges ?? []).filter(b => b.earned);
   const locked = (data?.badges ?? []).filter(b => !b.earned);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       {earned.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h3 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-teal-700 dark:text-teal-300">
+            <span className="h-2 w-2 rounded-full bg-teal-400" />
             Conquistas desbloqueadas ({earned.length})
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {earned.map(badge => {
               const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "NOVO", earnedClass: "bg-yellow-50 border-yellow-200" };
               return (
-                <div key={badge.key} className={`rounded-xl border-2 p-4 text-center space-y-1.5 shadow-sm ${meta.earnedClass}`}>
-                  <div className="text-3xl">{meta.emoji}</div>
+                <div key={badge.key} className={`rounded-[1.25rem] border-2 p-4 text-center space-y-1.5 shadow-[0_10px_24px_rgba(15,23,42,0.05)] transition-transform hover:-translate-y-0.5 ${meta.earnedClass}`}>
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/70 text-sm font-bold tracking-wide shadow-sm">{meta.emoji}</div>
                   <div className="font-semibold text-sm leading-tight">{meta.name}</div>
                   <div className="text-xs text-muted-foreground leading-tight">{meta.description}</div>
                   {badge.earnedAt && (
@@ -3714,15 +3832,16 @@ function ConquistasTab() {
 
       {locked.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h3 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            <span className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600" />
             Ainda por desbloquear ({locked.length})
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {locked.map(badge => {
               const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "BLOQUEADO", earnedClass: "" };
               return (
-                <div key={badge.key} className="rounded-xl border-2 border-dashed border-muted p-4 text-center space-y-1.5 bg-muted/30 opacity-60">
-                  <div className="text-3xl grayscale">{meta.emoji}</div>
+                <div key={badge.key} className="rounded-[1.25rem] border-2 border-dashed border-slate-200 bg-slate-50/70 p-4 text-center space-y-1.5 opacity-60 dark:border-slate-700 dark:bg-slate-800/40">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-sm font-bold tracking-wide grayscale dark:bg-slate-800">{meta.emoji}</div>
                   <div className="font-semibold text-sm leading-tight text-muted-foreground">{meta.name}</div>
                   <div className="text-xs text-muted-foreground leading-tight">{meta.description}</div>
                   {badge.target != null && (
@@ -3741,10 +3860,12 @@ function ConquistasTab() {
       )}
 
       {earned.length === 0 && locked.length === 0 && (
-        <div className="text-center py-16">
-          <Trophy className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-          <h3 className="font-semibold text-lg mb-1">Nenhuma conquista ainda</h3>
-          <p className="text-muted-foreground text-sm">Faça sua primeira viagem para começar a desbloquear conquistas!</p>
+        <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center dark:border-slate-700 dark:bg-slate-900/70">
+          <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-amber-500 dark:bg-amber-950/30 dark:text-amber-300">
+            <Trophy className="h-6 w-6" />
+          </span>
+          <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhuma conquista ainda</h3>
+          <p className="text-sm leading-6 text-muted-foreground">Faça sua primeira viagem para começar a desbloquear conquistas!</p>
         </div>
       )}
     </div>
@@ -3782,45 +3903,41 @@ const BRAZIL_STATE_GRID = [
 ];
 
 function MapaTab() {
-  const [data, setData] = useState<ClientAchievementsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi.getAchievements().then(setData).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data, loading, error, reload } = useAsyncResource(clientPortalApi.getAchievements);
 
   if (loading) return <Skeleton className="h-96 rounded-xl" />;
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar o mapa." />;
 
   const visitedStates = new Set(data?.stats.visitedStates ?? []);
   const totalTrips = data?.stats.totalTrips ?? 0;
   const visitedCount = visitedStates.size;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="grid grid-cols-3 gap-3">
-        <Card>
-          <CardContent className="pt-4 pb-4 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <div className="text-2xl font-bold text-primary">{totalTrips}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Viagens realizadas</div>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-4 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <div className="text-2xl font-bold text-primary">{visitedCount}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Estados visitados</div>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-4 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <div className="text-2xl font-bold text-primary">{data?.stats.uniqueDestinations.length ?? 0}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Destinos únicos</div>
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+          <CardTitle className="flex items-center gap-2 text-base tracking-tight">
             <Map className="w-4 h-4" />
             Brasil — estados visitados
           </CardTitle>
@@ -3830,8 +3947,8 @@ function MapaTab() {
         </CardHeader>
         <CardContent className="pb-4">
           <div
-            className="grid gap-1 w-full"
-            style={{ gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gridTemplateRows: "repeat(8, 2rem)" }}
+            className="grid w-full gap-1 sm:gap-1.5"
+            style={{ gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gridTemplateRows: "repeat(8, minmax(1.65rem, 2rem))" }}
           >
             {BRAZIL_STATE_GRID.map(state => {
               const visited = visitedStates.has(state.uf);
@@ -3841,7 +3958,7 @@ function MapaTab() {
                   title={state.name}
                   style={{ gridColumn: state.col, gridRow: state.row }}
                   className={[
-                    "flex items-center justify-center rounded text-xs font-bold cursor-default select-none transition-all",
+                    "flex min-w-0 items-center justify-center rounded-lg text-[10px] font-bold cursor-default select-none transition-all sm:text-xs",
                     visited
                       ? "bg-primary text-primary-foreground shadow-sm"
                       : "bg-muted text-muted-foreground",
@@ -3866,7 +3983,7 @@ function MapaTab() {
       </Card>
 
       {visitedCount > 0 && (
-        <Card>
+        <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Estados que você conheceu</CardTitle>
           </CardHeader>
@@ -3892,18 +4009,13 @@ function MapaTab() {
 }
 
 function SonhosTab() {
-  const [items, setItems] = useState<DreamDestinationItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, setData, loading, error, reload } = useAsyncResource(clientPortalApi.getDreamDestinations);
+  const items = data?.data ?? [];
+  const setItems = (update: (prev: DreamDestinationItem[]) => DreamDestinationItem[]) =>
+    setData(prev => prev ? { ...prev, data: update(prev.data) } : prev);
   const [input, setInput] = useState("");
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
-
-  useEffect(() => {
-    clientPortalApi.getDreamDestinations()
-      .then(d => setItems(d.data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
 
   const addDestination = async () => {
     const val = input.trim();
@@ -3933,21 +4045,23 @@ function SonhosTab() {
   };
 
   if (loading) return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
     </div>
   );
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar os destinos." />;
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-semibold mb-1">Quero conhecer</h2>
-        <p className="text-sm text-muted-foreground">
+    <div className="space-y-6">
+      <div className="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-sky-50/80 via-white to-teal-50/50 p-5 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:from-sky-950/35 dark:via-slate-900 dark:to-teal-950/20 sm:p-7">
+        <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-teal-600 dark:text-teal-300">A sua lista de amanhã</p>
+        <h2 className="text-2xl font-bold tracking-tight">Quero conhecer</h2>
+        <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
           Salve os destinos dos seus sonhos. Usamos essas informações para criar ofertas personalizadas para você.
         </p>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/75 p-2 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row">
         <Input
           placeholder="Ex: Fernando de Noronha, Bariloche, Paris…"
           value={input}
@@ -3955,7 +4069,7 @@ function SonhosTab() {
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addDestination(); } }}
           maxLength={200}
           disabled={saving}
-          className="flex-1"
+          className="h-11 flex-1 border-0 bg-transparent shadow-none focus-visible:ring-0"
         />
         <Button type="button" onClick={addDestination} disabled={!input.trim() || saving || items.length >= 30} size="sm" className="shrink-0">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Adicionar"}
@@ -3963,18 +4077,22 @@ function SonhosTab() {
       </div>
 
       {items.length === 0 ? (
-        <div className="text-center py-14 border-2 border-dashed border-muted rounded-xl">
-          <Globe className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-          <h3 className="font-semibold text-base mb-1">Sua lista está vazia</h3>
-          <p className="text-muted-foreground text-sm">Adicione destinos que você sonha em conhecer!</p>
+        <div className="rounded-[1.5rem] border-2 border-dashed border-sky-200 bg-white/70 py-14 text-center dark:border-slate-700 dark:bg-slate-900/60">
+          <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-50 text-sky-500 dark:bg-sky-950/40 dark:text-sky-300">
+            <Globe className="h-6 w-6" />
+          </span>
+          <h3 className="mb-1 text-base font-semibold tracking-tight">Sua lista está vazia</h3>
+          <p className="text-sm leading-6 text-muted-foreground">Adicione destinos que você sonha em conhecer!</p>
         </div>
       ) : (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">{items.length} destino{items.length !== 1 ? "s" : ""} na lista</p>
           {items.map((dest) => (
-            <div key={dest.id} className="flex items-center justify-between rounded-lg border bg-card px-4 py-3 group hover:bg-muted/30 transition-colors">
+            <div key={dest.id} className="group flex items-center justify-between rounded-2xl border border-sky-100 bg-white/90 px-4 py-3.5 shadow-sm transition-colors hover:border-sky-200 hover:bg-sky-50/40 dark:border-slate-700 dark:bg-slate-900/90 dark:hover:bg-sky-950/20">
               <div className="flex items-center gap-2.5">
-                <MapPin className="w-4 h-4 text-muted-foreground shrink-0" />
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+                  <MapPin className="h-4 w-4" />
+                </span>
                 <span className="font-medium text-sm">{dest.destinationName}</span>
               </div>
               <Button
@@ -4010,8 +4128,8 @@ function MemoryCertificate({ memory }: { memory: ClientMemoriesResponse["memorie
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={() => setOpen(false)}
         >
-          <div
-            className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center space-y-4 border-4 border-amber-300"
+           <div
+             className="w-full max-w-sm space-y-4 rounded-[1.5rem] border-4 border-amber-300 bg-white p-8 text-center shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Trophy className="w-12 h-12 mx-auto text-amber-500" />
@@ -4041,12 +4159,7 @@ function MemoryCertificate({ memory }: { memory: ClientMemoriesResponse["memorie
 }
 
 function MemoriasTab() {
-  const [data, setData] = useState<ClientMemoriesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    clientPortalApi.getMemories().then(setData).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  const { data, loading, error, reload } = useAsyncResource(clientPortalApi.getMemories);
 
   if (loading) {
     return (
@@ -4055,15 +4168,18 @@ function MemoriasTab() {
       </div>
     );
   }
+  if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar as memórias." />;
 
   const memories = data?.memories ?? [];
 
   if (memories.length === 0) {
     return (
-      <div className="text-center py-16">
-        <Camera className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-        <h3 className="font-semibold text-lg mb-1">Nenhuma memória ainda</h3>
-        <p className="text-muted-foreground text-sm max-w-xs mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <Camera className="h-6 w-6" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhuma memória ainda</h3>
+        <p className="mx-auto max-w-xs text-sm leading-6 text-muted-foreground">
           Suas viagens passadas aparecerão aqui com fotos e recordações.
         </p>
       </div>
@@ -4071,13 +4187,13 @@ function MemoriasTab() {
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">{memories.length} viagem{memories.length !== 1 ? "s" : ""} na sua história</p>
+    <div className="space-y-5">
+      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-teal-700 dark:text-teal-300">{memories.length} viagem{memories.length !== 1 ? "s" : ""} na sua história</p>
       {memories.map(memory => (
-        <Card key={memory.reservationId} className="overflow-hidden">
+        <Card key={memory.reservationId} className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
           <div className="flex">
             {memory.tripCoverImage ? (
-              <div className="w-24 sm:w-32 shrink-0 overflow-hidden bg-muted">
+                <div className="w-24 shrink-0 overflow-hidden bg-sky-50 dark:bg-sky-950/40 sm:w-40">
                 <img
                   src={memory.tripCoverImage}
                   alt={memory.tripName}
@@ -4087,8 +4203,8 @@ function MemoriasTab() {
                 />
               </div>
             ) : (
-              <div className="w-24 sm:w-32 shrink-0 bg-muted flex items-center justify-center min-h-28">
-                <Plane className="w-8 h-8 text-muted-foreground/30" />
+              <div className="flex min-h-28 w-24 shrink-0 items-center justify-center bg-sky-50 dark:bg-sky-950/40 sm:w-40">
+                <Plane className="h-8 w-8 text-sky-300" />
               </div>
             )}
             <div className="flex-1 p-4 space-y-2 min-w-0">
@@ -4165,32 +4281,17 @@ const TIER_ORDER = ["bronze", "silver", "gold", "diamond"];
 
 function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
   const { toast } = useToast();
-  const [config, setConfig] = useState<{ clubName: string; description: string | null } | null>(null);
-  const [benefits, setBenefits] = useState<ClubBenefit[]>([]);
-  const [ranking, setRanking] = useState<ClubRankingResponse | null>(null);
-  const [loadingData, setLoadingData] = useState(true);
+  const { data: club, loading: loadingData, error: clubError, reload: retryClub } = useAsyncResource(async () => {
+    const [config, benefits, ranking] = await Promise.all([
+      clientPortalApi.getClubConfig(), clientPortalApi.getClubBenefits(), clientPortalApi.getClubRanking(),
+    ]);
+    return { config, benefits: benefits.data, ranking };
+  });
+  const config = club?.config;
+  const benefits = club?.benefits ?? [];
+  const ranking = club?.ranking;
   const [optIn, setOptIn] = useState<boolean>(profile.client?.ambassadorOptIn ?? false);
   const [toggling, setToggling] = useState(false);
-
-  useEffect(() => {
-    async function load() {
-      try {
-        const [cfg, bnf, rnk] = await Promise.all([
-          clientPortalApi.getClubConfig(),
-          clientPortalApi.getClubBenefits(),
-          clientPortalApi.getClubRanking(),
-        ]);
-        setConfig(cfg);
-        setBenefits(bnf.data);
-        setRanking(rnk);
-      } catch {
-        // club might not be configured yet — silently ignore
-      } finally {
-        setLoadingData(false);
-      }
-    }
-    void load();
-  }, []);
 
   async function handleToggleOptIn() {
     const newVal = !optIn;
@@ -4210,6 +4311,8 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
   }
 
   const currentTier = profile.loyalty?.tier ?? "bronze";
+  const clubPrimaryColor = profile.tenant?.primaryColor ?? "#1D4ED8";
+  const clubPrimaryForeground = readablePortalText(clubPrimaryColor);
   const tierIndex = TIER_ORDER.indexOf(currentTier);
   const upperTiers = TIER_ORDER.slice(tierIndex + 1);
   const currentBenefits = benefits.filter((b) => b.tier === currentTier);
@@ -4221,11 +4324,22 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
     ? new Date(ranking.month + "-01T12:00:00").toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "America/Sao_Paulo" })
     : "";
 
+  if (loadingData) return <Skeleton className="h-64 rounded-xl" />;
+  if (clubError) return <AsyncError error={clubError} retry={retryClub} title="Não foi possível carregar o Clube." />;
+  if (!config) return <AsyncEmpty>Clube não configurado.</AsyncEmpty>;
+
   return (
     <div className="space-y-6">
       {/* Club header */}
-      <Card className="overflow-hidden">
-        <div className="bg-gradient-to-r from-[#D8A646] to-[#F2C14E] p-6 text-[#2F3A43]">
+      <Card className="overflow-hidden rounded-[1.75rem] border-sky-100 bg-white/90 shadow-[0_16px_38px_rgba(15,23,42,0.07)] dark:border-slate-700 dark:bg-slate-900/90">
+        <div
+          className="relative overflow-hidden p-6 sm:p-7"
+          style={{
+            background: `linear-gradient(110deg, ${clubPrimaryColor} 0%, ${clubPrimaryColor}d9 62%, #0EA5E9 140%)`,
+            color: clubPrimaryForeground,
+          }}
+        >
+          <div className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full border-[16px] border-white/10" aria-hidden="true" />
           <div className="flex items-center gap-3">
             <Crown className="w-8 h-8" />
             <div>
@@ -4237,12 +4351,12 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
           </div>
           <div className="mt-4 flex items-center gap-2">
             <span className="relative inline-flex">
-              <Badge className="bg-[#5D3E2A]/10 text-[#2F3A43] border-[#5D3E2A]/25 hover:bg-[#5D3E2A]/15 relative z-10">
+              <Badge className="relative z-10 border-white/25 bg-white/15 text-current hover:bg-white/20">
                 {TIER_ICONS[currentTier]} {TIER_LABELS[currentTier] ?? currentTier}
               </Badge>
               <span className="absolute inset-0 rounded-full animate-ping bg-white/30 z-0" />
             </span>
-            <span className="text-sm text-[#2F3A43]/75">Seu nível atual</span>
+             <span className="text-sm opacity-75">Seu nível atual</span>
           </div>
         </div>
       </Card>
@@ -4253,8 +4367,8 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
           {[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
         </div>
       ) : currentBenefits.length > 0 ? (
-        <Card className={`border ${TIER_COLORS[currentTier]}`}>
-          <CardHeader>
+        <Card className={`rounded-[1.5rem] border bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:bg-slate-900/90 ${TIER_COLORS[currentTier]}`}>
+          <CardHeader className="pb-4">
             <CardTitle className="text-base flex items-center gap-2">
               <span>{TIER_ICONS[currentTier]}</span>
               Seus benefícios — {TIER_LABELS[currentTier] ?? currentTier}
@@ -4281,7 +4395,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
 
       {/* All upper tier previews */}
       {upperTierBenefits.map(({ tier, benefits: tierBs }, idx) => (
-        <Card key={tier} className={`border border-dashed ${TIER_COLORS[tier] ?? ""}`}>
+        <Card key={tier} className={`rounded-[1.5rem] border border-dashed bg-white/80 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:bg-slate-900/80 ${TIER_COLORS[tier] ?? ""}`}>
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
@@ -4313,8 +4427,8 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
       ))}
 
       {/* Ambassador opt-in */}
-      <Card>
-        <CardHeader>
+      <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
           <CardTitle className="text-base flex items-center gap-2">
             <Trophy className="w-4 h-4 text-amber-500" />
             Ranking de Embaixadores
@@ -4326,7 +4440,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
               : ""}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium">
@@ -4359,7 +4473,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
       {/* Ranking leaderboard */}
       {ranking && (ranking.referrers.length > 0 || ranking.travelers.length > 0) && (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Card>
+          <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Share2 className="w-4 h-4 text-muted-foreground" />
@@ -4387,7 +4501,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Plane className="w-4 h-4 text-muted-foreground" />
@@ -4440,29 +4554,20 @@ export default function PerfilPage() {
   const [, navigate] = useLocation();
   const searchStr = useSearch();
   const { data: me } = useGetMe();
-  const [profile, setProfile] = useState<ClientPortalProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data: profile, setData: setProfile, loading, error, reload: reloadProfile } = useAsyncResource(clientPortalApi.getProfile);
 
-  const [activeTab, setActiveTab] = useState(() => {
+  const activeTab = (() => {
     const t = new URLSearchParams(searchStr).get("tab");
     return VALID_PERFIL_TABS.includes(t ?? "") ? t! : "inicio";
-  });
+  })();
   const [reservationFilter, setReservationFilter] = useState<"com-saldo" | null>(null);
   const [loyaltyTxKey, setLoyaltyTxKey] = useState(0);
 
-  useEffect(() => {
-    const t = new URLSearchParams(searchStr).get("tab");
-    if (t && VALID_PERFIL_TABS.includes(t)) setActiveTab(t);
-  }, [searchStr]);
-
-  useEffect(() => {
-    clientPortalApi
-      .getProfile()
-      .then(setProfile)
-      .catch((err) => setError(err.message ?? "Erro ao carregar perfil"))
-      .finally(() => setLoading(false));
-  }, []);
+  function changeTab(tab: string, filter: "com-saldo" | null = null) {
+    if (!VALID_PERFIL_TABS.includes(tab)) return;
+    setReservationFilter(filter);
+    navigate(profileQuery(window.location.search, "tab", tab));
+  }
 
   if (loading) {
     return (
@@ -4474,52 +4579,42 @@ export default function PerfilPage() {
     );
   }
 
-  if (error || !profile) {
+  if (error) {
     return (
       <div className="text-center py-16">
-        <p className="text-muted-foreground">{error ?? "Não foi possível carregar o perfil."}</p>
-        <Button variant="outline" className="mt-4" onClick={() => navigate("/")}>
-          Voltar
-        </Button>
+        <AsyncError error={error} retry={reloadProfile} title="Não foi possível carregar o perfil." />
+        <Button variant="ghost" onClick={() => navigate(me?.tenant?.slug ? `/loja/${me.tenant.slug}` : "/parceiros")}>Voltar para fora do perfil</Button>
       </div>
     );
   }
+  if (!profile) return <AsyncEmpty>Perfil indisponível.</AsyncEmpty>;
 
-  const primaryColor = profile.tenant?.primaryColor ?? "#1E5B8C";
+  const primaryColor = profile.tenant?.primaryColor ?? "#1D4ED8";
 
   return (
     <div className="visite-enter">
-      <div className="relative mb-6 overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] p-5 shadow-[0_10px_28px_rgba(93,62,42,.08)] sm:p-7 dark:border-border dark:bg-card">
-        <div className="pointer-events-none absolute -right-8 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
-        <div className="pointer-events-none absolute bottom-[-5rem] right-44 h-36 w-36 rounded-full border-[12px] border-[#4C8B5F]/15" />
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F] dark:text-emerald-400">Caderno de bordo · {profile.tenant?.name ?? "sua agência"}</p>
-            <h1 className="text-2xl font-semibold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Olá, {profile.client?.name?.split(" ")[0] ?? profile.user?.name?.split(" ")[0] ?? "viajante"}.</h1>
-            <p className="mt-1 max-w-xl text-sm text-[#71808C] dark:text-muted-foreground">Acompanhe suas reservas, benefícios e próximas experiências pelo Cariri.</p>
-          </div>
-          <div className="flex items-center gap-2 rounded-xl border border-[#E8D29B] bg-[#FFF4CF] px-3 py-2 text-xs font-medium text-[#5D3E2A] dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-            <MapPin className="h-4 w-4 text-[#D8A646]" />
-            <span>Seu espaço de viajante</span>
-          </div>
+      <div className="mb-6 flex items-center justify-between gap-3 md:mb-8">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-300">Área do viajante</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Tudo o que você precisa para aproveitar sua próxima experiência.
+          </p>
+        </div>
+        <div className="hidden items-center gap-2 rounded-full border border-teal-100 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700 dark:border-teal-900 dark:bg-teal-950/40 dark:text-teal-200 sm:flex">
+          <ShieldCheck className="h-4 w-4" />
+          Espaço seguro
         </div>
       </div>
       <Tabs
         value={activeTab}
-        onValueChange={(tab) => {
-          if (tab === "reservas") setReservationFilter(null);
-          setActiveTab(tab);
-          const params = new URLSearchParams(searchStr);
-          params.set("tab", tab);
-          navigate(`?${params.toString()}`, { replace: true });
-        }}
+        onValueChange={(tab) => changeTab(tab)}
       >
-        <TabsList className="mb-6 h-auto w-full flex-wrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/90 p-1.5 shadow-sm dark:border-border dark:bg-card sm:w-auto">
-          <TabsTrigger value="inicio" className="flex items-center gap-1.5">
+        <TabsList id="portal-tabs" className="mb-6 flex h-auto w-full max-w-full justify-start gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white/85 p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90 sm:flex-wrap sm:justify-center sm:overflow-visible">
+          <TabsTrigger value="inicio" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-inicio">
             <LayoutDashboard className="w-4 h-4" />
             Início
           </TabsTrigger>
-          <TabsTrigger value="reservas" className="flex items-center gap-1.5">
+          <TabsTrigger value="reservas" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-reservas">
             <CalendarCheck className="w-4 h-4" />
             Reservas
             {profile.reservations.length > 0 && (
@@ -4528,15 +4623,15 @@ export default function PerfilPage() {
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="dados" className="flex items-center gap-1.5">
+          <TabsTrigger value="dados" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-dados">
             <User className="w-4 h-4" />
             Meus Dados
           </TabsTrigger>
-          <TabsTrigger value="indicacoes" className="flex items-center gap-1.5">
+          <TabsTrigger value="indicacoes" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-indicacoes">
             <Share2 className="w-4 h-4" />
             Indicações
           </TabsTrigger>
-          <TabsTrigger value="fidelidade" className="flex items-center gap-1.5">
+          <TabsTrigger value="fidelidade" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-fidelidade">
             <Star className="w-4 h-4" />
             Fidelidade
             {profile.loyalty !== null && (profile.loyalty?.availablePoints ?? 0) > 0 && (
@@ -4545,31 +4640,31 @@ export default function PerfilPage() {
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="preferencias" className="flex items-center gap-1.5">
+          <TabsTrigger value="preferencias" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-preferencias">
             <Heart className="w-4 h-4" />
             Preferências
           </TabsTrigger>
-          <TabsTrigger value="favoritos" className="flex items-center gap-1.5">
+          <TabsTrigger value="favoritos" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-favoritos">
             <Heart className="w-4 h-4 fill-current text-red-400" />
             Favoritos
           </TabsTrigger>
-          <TabsTrigger value="conquistas" className="flex items-center gap-1.5">
+          <TabsTrigger value="conquistas" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-conquistas">
             <Trophy className="w-4 h-4" />
             Conquistas
           </TabsTrigger>
-          <TabsTrigger value="mapa" className="flex items-center gap-1.5">
+          <TabsTrigger value="mapa" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-mapa">
             <Map className="w-4 h-4" />
             Mapa
           </TabsTrigger>
-          <TabsTrigger value="sonhos" className="flex items-center gap-1.5">
+          <TabsTrigger value="sonhos" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-sonhos">
             <Globe className="w-4 h-4" />
             Sonhos
           </TabsTrigger>
-          <TabsTrigger value="memorias" className="flex items-center gap-1.5">
+          <TabsTrigger value="memorias" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-memorias">
             <Camera className="w-4 h-4" />
             Memórias
           </TabsTrigger>
-          <TabsTrigger value="clube" className="flex items-center gap-1.5">
+          <TabsTrigger value="clube" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-clube">
             <Crown className="w-4 h-4" />
             Clube
           </TabsTrigger>
@@ -4579,14 +4674,8 @@ export default function PerfilPage() {
           <InicioTab
             profile={profile}
             primaryColor={primaryColor}
-            onTabChange={(tab) => {
-              if (tab === "reservas") setReservationFilter(null);
-              setActiveTab(tab);
-            }}
-            onGoToReservasFiltered={() => {
-              setReservationFilter("com-saldo");
-              setActiveTab("reservas");
-            }}
+            onTabChange={changeTab}
+            onGoToReservasFiltered={() => changeTab("reservas", "com-saldo")}
           />
         </TabsContent>
 
@@ -4597,7 +4686,7 @@ export default function PerfilPage() {
             onClearFilter={() => setReservationFilter(null)}
             loyalty={profile.loyalty}
             onRefresh={() => {
-              clientPortalApi.getProfile().then(setProfile).catch(() => {});
+               void reloadProfile();
               setLoyaltyTxKey((k) => k + 1);
             }}
           />
@@ -4623,7 +4712,7 @@ export default function PerfilPage() {
             reservations={profile.reservations}
             txRefreshKey={loyaltyTxKey}
             onRefresh={() => {
-              clientPortalApi.getProfile().then(setProfile).catch(() => {});
+               void reloadProfile();
             }}
           />
         </TabsContent>

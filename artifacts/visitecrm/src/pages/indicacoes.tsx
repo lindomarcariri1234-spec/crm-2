@@ -29,7 +29,7 @@ import {
   useReversePaidReferralBonus,
 } from "@workspace/api-client-react";
 import type { Referral, ReferralSettings, ReferralTierConfig, ReferralAnalyticsPeriod, ReferralCampaign } from "@workspace/api-client-react";
-import { REFERRAL_STATUS, ROLES } from "@workspace/permissions";
+import { ACTIONS, hasPermission, REFERRAL_STATUS, RESOURCES, ROLES } from "@workspace/permissions";
 import { getReferralCampaignRewardLabel, getReferralRewardLabel } from "@/lib/referral-labels";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -232,6 +232,15 @@ export default function Indicacoes() {
   const reverseBonus = useReverseReferralBonus();
   const reversePaidBonus = useReversePaidReferralBonus();
   const { data: me } = useGetMe();
+  const role = me?.role ?? "";
+  const canPay = hasPermission(role, RESOURCES.COMMISSIONS, ACTIONS.EDIT);
+  const canReverse = hasPermission(role, RESOURCES.FINANCIAL, ACTIONS.EDIT);
+  const canEditReferral = hasPermission(role, RESOURCES.COMMISSIONS, ACTIONS.EDIT);
+  const canManageNotifications = hasPermission(role, RESOURCES.COMMISSIONS, ACTIONS.MANAGE);
+  const canViewSettings = hasPermission(role, RESOURCES.SETTINGS, ACTIONS.VIEW);
+  const canEditSettings = hasPermission(role, RESOURCES.SETTINGS, ACTIONS.EDIT);
+  // Raw contact exports are restricted to administrators by the API.
+  const canExport = role === ROLES.SUPER_ADMIN || role === ROLES.AGENCY_ADMIN;
   const queryClient = useQueryClient();
 
   async function refreshReferralData() {
@@ -330,12 +339,25 @@ export default function Indicacoes() {
   const [reverseBonusTarget, setReverseBonusTarget] = useState<EnrichedReferral | null>(null);
   const [reverseBonusReason, setReverseBonusReason] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const status = new URLSearchParams(window.location.search).get("status");
+    return ["pending", "completed", "expired", "reversed"].includes(status ?? "") ? status! : "all";
+  });
   const [bonusFilter, setBonusFilter] = useState<"all" | "unpaid">("all");
   const [fraudFilter, setFraudFilter] = useState(false);
   const [bonusNotifiedFilter, setBonusNotifiedFilter] = useState<"all" | "notified" | "not_notified">("all");
   const [referralsPage, setReferralsPage] = useState(1);
   const [selectedBonusIds, setSelectedBonusIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const restoreStatus = () => {
+      const status = new URLSearchParams(window.location.search).get("status");
+      setStatusFilter(["pending", "completed", "expired", "reversed"].includes(status ?? "") ? status! : "all");
+      setBonusFilter("all");
+      setFraudFilter(false);
+    };
+    window.addEventListener("popstate", restoreStatus);
+    return () => window.removeEventListener("popstate", restoreStatus);
+  }, []);
   const [bulkPayDialogOpen, setBulkPayDialogOpen] = useState(false);
   const [bulkPaying, setBulkPaying] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -343,6 +365,9 @@ export default function Indicacoes() {
   const [shareReferral, setShareReferral] = useState<EnrichedReferral | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedMessage, setCopiedMessage] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [lastExportFormat, setLastExportFormat] = useState<"csv" | "xlsx" | "pdf" | null>(null);
 
   const referralListParams = {
     page: referralsPage,
@@ -368,6 +393,7 @@ export default function Indicacoes() {
     isLoading: referralsLoading,
     isFetching: referralsFetching,
     isError: referralsError,
+    refetch: retryReferrals,
   } = useListReferrals(referralListParams);
   const referrals = ((referralsResponse as { data?: EnrichedReferral[] } | undefined)?.data
     ?? (Array.isArray(referralsResponse) ? referralsResponse as EnrichedReferral[] : [])) as EnrichedReferral[];
@@ -383,11 +409,11 @@ export default function Indicacoes() {
   }, [searchQuery, statusFilter, bonusFilter, fraudFilter, bonusNotifiedFilter]);
 
   useEffect(() => {
-    if (referralsPage > 1 && referralsPage > referralPageCount) {
+    if (!referralsLoading && !referralsError && referralsPagination && referralsPage > 1 && referralsPage > referralPageCount) {
       setReferralsPage(referralPageCount);
       setSelectedBonusIds(new Set());
     }
-  }, [referralPageCount, referralsPage]);
+  }, [referralPageCount, referralsPage, referralsLoading, referralsError, referralsPagination]);
 
   useEffect(() => {
     setSelectedBonusIds(new Set());
@@ -422,7 +448,7 @@ export default function Indicacoes() {
     eligiblePartnerIds: "",
   });
   const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
-  const { data: campaigns = [], refetch: refetchCampaigns } = useListReferralCampaigns();
+  const { data: campaigns = [], isLoading: campaignsLoading, isError: campaignsError, refetch: refetchCampaigns } = useListReferralCampaigns();
   const createCampaign = useCreateReferralCampaign();
   const deleteCampaign = useDeleteReferralCampaign();
   const updateCampaign = useUpdateReferralCampaign();
@@ -438,6 +464,7 @@ export default function Indicacoes() {
   const [localSettings, setLocalSettings] = useState<Partial<ReferralSettings>>({});
 
   function openSettings() {
+    if (!canEditSettings) return;
     setLocalSettings({
       isEnabled: settings?.isEnabled ?? true,
       discountType: settings?.discountType ?? "percentage",
@@ -469,6 +496,7 @@ export default function Indicacoes() {
   }
 
   async function saveSettings() {
+    if (!canEditSettings) return;
     try {
       await updateSettings.mutateAsync({
         data: {
@@ -575,6 +603,7 @@ export default function Indicacoes() {
   }
 
   async function handleDeactivate(r: EnrichedReferral) {
+    if (!canEditReferral) return;
     try {
       await updateReferral.mutateAsync({
         id: r.id,
@@ -588,18 +617,20 @@ export default function Indicacoes() {
   }
 
   function openPayBonusDialog(r: EnrichedReferral) {
+    if (!canPay || r.bonusBlocked || r.bonusPaid || r.status !== REFERRAL_STATUS.COMPLETED) return;
     setPayBonusTarget(r);
     setPayBonusDialogOpen(true);
   }
 
   function openReverseBonusDialog(r: EnrichedReferral) {
+    if (!canReverse || r.status !== REFERRAL_STATUS.COMPLETED) return;
     setReverseBonusTarget(r);
     setReverseBonusReason("");
     setReverseBonusDialogOpen(true);
   }
 
   async function confirmReverseBonus() {
-    if (!reverseBonusTarget) return;
+    if (!canReverse || !reverseBonusTarget) return;
     if (!reverseBonusReason.trim()) {
       toast({ title: "Informe o motivo da reversão", variant: "destructive" });
       return;
@@ -634,7 +665,7 @@ export default function Indicacoes() {
   }
 
   async function confirmPayBonus() {
-    if (!payBonusTarget) return;
+    if (!canPay || !payBonusTarget || payBonusTarget.bonusBlocked || payBonusTarget.bonusPaid) return;
     try {
       const updated = await payBonus.mutateAsync({ id: payBonusTarget.id });
       toast({ title: "Bônus marcado como pago! E-mail de confirmação enviado ao indicador." });
@@ -771,6 +802,7 @@ export default function Indicacoes() {
   }
 
   async function handleSaveCampaign() {
+    if (!canEditSettings) return;
     const { name, startsAt, endsAt, bonusType, bonusValue, bannerText, eligibleStoreProductIds, eligibleTierLevels, conversionCap, budgetAmount, shareMessage, materialUrl, publicRanking, eligibleActivitySegments, eligibleChannels, commissionType, commissionValue, commissionRecipientType, eligiblePartnerIds } = campaignFormData;
     if (!name.trim() || !startsAt || !endsAt) {
       toast({ title: "Preencha todos os campos obrigatórios", variant: "destructive" }); return;
@@ -861,6 +893,7 @@ export default function Indicacoes() {
   }
 
   async function handleDeleteCampaign(id: string) {
+    if (!canEditSettings) return;
     try {
       await deleteCampaign.mutateAsync({ id });
       toast({ title: "Campanha excluída" });
@@ -880,10 +913,15 @@ export default function Indicacoes() {
   const activeCampaignAdmin = campaigns.find((c) => getCampaignStatus(c) === "active");
 
   async function confirmBulkPay() {
+    if (!canPay) return;
+    const eligibleIds = new Set(referrals.filter(r =>
+      r.status === REFERRAL_STATUS.COMPLETED && !r.bonusPaid && !r.bonusBlocked
+      && selectedBonusIds.has(r.id)).map(r => r.id));
+    if (!eligibleIds.size) return;
     setBulkPaying(true);
     let successCount = 0;
     let failCount = 0;
-    for (const id of selectedBonusIds) {
+    for (const id of eligibleIds) {
       try {
         await payBonus.mutateAsync({ id });
         successCount++;
@@ -945,10 +983,10 @@ export default function Indicacoes() {
 
   const pendingBonusCount = statsLoading || statsError ? null : (stats?.pendingBonus ?? 0);
 
-  const pendingBonusReferrals = filtered.filter(r => r.status === REFERRAL_STATUS.COMPLETED && !r.bonusPaid);
+  const pendingBonusReferrals = filtered.filter(r => r.status === REFERRAL_STATUS.COMPLETED && !r.bonusPaid && !r.bonusBlocked);
   const allBonusSelected = pendingBonusReferrals.length > 0 && pendingBonusReferrals.every(r => selectedBonusIds.has(r.id));
   const selectedBonusTotal = referrals
-    .filter(r => selectedBonusIds.has(r.id))
+    .filter(r => pendingBonusReferrals.some(eligible => eligible.id === r.id) && selectedBonusIds.has(r.id))
     .reduce((sum, r) => sum + (parseFloat(String(r.bonusAmount ?? "0")) || 0), 0);
 
   // Derive controlled tab value from filter state so the banner CTA is always reflected visually
@@ -958,7 +996,7 @@ export default function Indicacoes() {
     ? "expiringSoon"
     : statusFilter === "completed" && bonusFilter === "unpaid"
     ? "completed-unpaid"
-    : statusFilter === "all" || statusFilter === "pending" || statusFilter === "completed" || statusFilter === "expired"
+    : statusFilter === "all" || statusFilter === "pending" || statusFilter === "completed" || statusFilter === "expired" || statusFilter === "reversed"
     ? statusFilter
     : "all";
 
@@ -974,6 +1012,12 @@ export default function Indicacoes() {
       : tab
     );
     if (tab === "expiringSoon") setSearchQuery("");
+    const url = new URL(window.location.href);
+    const status = ["pending", "completed", "expired", "reversed"].includes(tab) ? tab
+      : tab === "completed-unpaid" ? "completed" : null;
+    if (status) url.searchParams.set("status", status);
+    else url.searchParams.delete("status");
+    window.history.pushState(window.history.state, "", url.pathname + url.search + url.hash);
   }
 
   function buildExportFilters() {
@@ -987,17 +1031,50 @@ export default function Indicacoes() {
     };
   }
 
+  async function downloadExport(format: "csv" | "xlsx") {
+    if (!canExport || exporting) return;
+    setExportError(null);
+    setLastExportFormat(format);
+    if (!referralsLoading && !referralsError && referralTotal === 0) {
+      setExportError("Nenhuma indicação encontrada para exportar com estes filtros.");
+      return;
+    }
+    setExporting(true);
+    try {
+      const url = getReferralExportUrl({ ...buildExportFilters(), format });
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) throw new Error(response.status === 413
+        ? "Há mais de 10.000 indicações. Restrinja os filtros e tente novamente."
+        : "Não foi possível exportar as indicações.");
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `indicacoes-${localToday()}.${format}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Não foi possível exportar as indicações.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function handleExportCsv() {
-    const url = getReferralExportUrl(buildExportFilters());
-    window.open(url, "_blank");
+    void downloadExport("csv");
   }
 
   function handleExportExcel() {
-    const url = getReferralExportUrl({ ...buildExportFilters(), format: "xlsx" });
-    window.open(url, "_blank");
+    void downloadExport("xlsx");
   }
 
   async function handleExportPdf() {
+    if (!canExport || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    setLastExportFormat("pdf");
     const agencyName = (me as { tenant?: { name?: string } } | undefined)?.tenant?.name ?? "Agência";
     const agencyLogo = (me as { tenant?: { logoUrl?: string | null } } | undefined)?.tenant?.logoUrl ?? null;
     const dateStr = localToday();
@@ -1015,14 +1092,23 @@ export default function Indicacoes() {
     try {
       const jsonUrl = getReferralExportUrl({ ...filters, format: "json" });
       const resp = await fetch(jsonUrl, { credentials: "include" });
-      if (!resp.ok) throw new Error("Falha ao buscar dados");
+       if (!resp.ok) throw new Error(resp.status === 413
+         ? "Há mais de 10.000 indicações. Restrinja os filtros e tente novamente."
+         : "Falha ao buscar dados para o PDF.");
       const payload = await resp.json() as { rows: typeof exportRows };
       exportRows = payload.rows;
-    } catch {
-      toast({ title: "Erro ao gerar PDF", variant: "destructive" });
+      if (!Array.isArray(exportRows) || exportRows.length === 0) {
+        setExportError("Nenhuma indicação encontrada para exportar com estes filtros.");
+        setExporting(false);
+        return;
+      }
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Erro ao gerar PDF.");
+      setExporting(false);
       return;
     }
 
+    try {
     const { default: jsPDF } = await import("jspdf");
     const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const pageW = pdf.internal.pageSize.getWidth();
@@ -1112,6 +1198,11 @@ export default function Indicacoes() {
     });
 
     pdf.save(`indicacoes-${dateStr}.pdf`);
+    } catch {
+      setExportError("Não foi possível gerar o PDF. Tente novamente.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   if (referralsLocked) {
@@ -1168,11 +1259,11 @@ export default function Indicacoes() {
               </SelectItem>
             </SelectContent>
           </Select>
-          <DropdownMenu>
+          {canExport && <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline">
+               <Button variant="outline" disabled={exporting}>
                 <Download className="w-4 h-4 mr-2" />
-                Exportar
+                 {exporting ? "Exportando…" : "Exportar"}
                 <ChevronDown className="w-3 h-3 ml-1" />
               </Button>
             </DropdownMenuTrigger>
@@ -1190,18 +1281,25 @@ export default function Indicacoes() {
                 PDF
               </DropdownMenuItem>
             </DropdownMenuContent>
-          </DropdownMenu>
-          <Button variant="outline" onClick={() => { setCampaignsDialogOpen(true); setShowCampaignForm(false); }}>
+          </DropdownMenu>}
+          {canExport && exportError && <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
+            {exportError}
+            <Button variant="outline" size="sm" disabled={exporting} onClick={() => {
+              if (lastExportFormat === "pdf") void handleExportPdf();
+              else if (lastExportFormat) void downloadExport(lastExportFormat);
+            }}>Tentar novamente</Button>
+          </div>}
+          {canViewSettings && <Button variant="outline" onClick={() => { setCampaignsDialogOpen(true); setShowCampaignForm(false); }}>
             <Megaphone className="w-4 h-4 mr-2" />
             Campanhas
             {activeCampaignAdmin && (
               <span className="ml-1.5 w-2 h-2 rounded-full bg-green-500 inline-block" />
             )}
-          </Button>
-          <Button variant="outline" onClick={openSettings}>
+          </Button>}
+          {canEditSettings && <Button variant="outline" onClick={openSettings}>
             <Settings className="w-4 h-4 mr-2" />
             Configurações
-          </Button>
+          </Button>}
         </div>
     </div>
 
@@ -1352,13 +1450,16 @@ export default function Indicacoes() {
         period={analyticsPeriod}
         isLoading={analyticsLoading}
         isError={analyticsError}
-        analyticsExportUrl={getReferralAnalyticsExportUrl(analyticsPeriod)}
+        analyticsExportUrl={canExport ? getReferralAnalyticsExportUrl(analyticsPeriod) : ""}
       />
 
       <ReferralTableSection
         referrals={referrals}
         settingsTiers={settings?.tiersConfig}
-        currentUserRole={me?.role}
+        canPay={canPay}
+        canReverse={canReverse}
+        canDeactivate={canEditReferral}
+        canShare={true}
         activeTab={activeTab}
         searchQuery={searchQuery}
         bonusNotifiedFilter={bonusNotifiedFilter}
@@ -1369,6 +1470,7 @@ export default function Indicacoes() {
         referralsLoading={referralsLoading}
         referralsFetching={referralsFetching}
         referralsError={referralsError}
+        onRetry={() => void retryReferrals()}
         referralTotal={referralTotal}
         referralPageCount={referralPageCount}
         referralsPage={referralsPage}
@@ -1425,7 +1527,7 @@ export default function Indicacoes() {
       <ReferralOperationalDialogs
         bulkOpen={bulkPayDialogOpen}
         onBulkOpenChange={setBulkPayDialogOpen}
-        selectedCount={selectedBonusIds.size}
+        selectedCount={referrals.filter(r => pendingBonusReferrals.includes(r) && selectedBonusIds.has(r.id)).length}
         selectedTotal={selectedBonusTotal}
         bulkPaying={bulkPaying}
         onConfirmBulk={confirmBulkPay}
@@ -1463,18 +1565,19 @@ export default function Indicacoes() {
         }}
         onPay={() => { setDetailModalOpen(false); openPayBonusDialog(selectedReferral!); }}
         onReverse={() => { setDetailModalOpen(false); openReverseBonusDialog(selectedReferral!); }}
-        canReverse={me?.role === ROLES.AGENCY_ADMIN || me?.role === ROLES.AGENCY_MANAGER || me?.role === ROLES.SUPER_ADMIN}
+        canPay={canPay}
+        canReverse={canReverse}
         expiryStatus={expiryEmailStatus}
         bonusStatus={bonusReleaseEmailStatus}
         resendPending={resendWarning.isPending || resendBonus.isPending}
-        onResendExpiry={(kind) => {
+        onResendExpiry={canManageNotifications ? (kind) => {
           if (!selectedReferral) return;
           resendWarning.mutate({ id: selectedReferral.id, params: { window: (kind === "7" ? 7 : 1) as 1 | 7 } });
-        }}
-        onResendBonus={() => {
+        } : undefined}
+        onResendBonus={canManageNotifications ? () => {
           if (!selectedReferral) return;
           resendBonus.mutate({ id: selectedReferral.id });
-        }}
+        } : undefined}
       />
 
       <ReferralSettingsDialog
@@ -1501,6 +1604,10 @@ export default function Indicacoes() {
       open={campaignsDialogOpen}
       onOpenChange={setCampaignsDialogOpen}
       campaigns={campaigns}
+      loading={campaignsLoading}
+      error={campaignsError}
+      onRetry={() => void refetchCampaigns()}
+      canEdit={canEditSettings}
       activeCampaign={activeCampaignAdmin}
       showForm={showCampaignForm}
       setShowForm={setShowCampaignForm}

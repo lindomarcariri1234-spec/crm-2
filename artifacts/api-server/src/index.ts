@@ -27,6 +27,7 @@ import { fileURLToPath } from "url";
 import { runBirthdayCron } from "./lib/birthday";
 import { processNpsDispatch, processInstallmentDueReminders, processTrialExpiryNotifications } from "./workers/reminder.worker";
 import { retryPendingAttendanceReplies } from "./services/whatsapp-attendance";
+import { retryPendingAccountDeletions } from "./services/account-deletion";
 import { runUploadThingOrphanCleanup } from "./lib/uploadthing-orphan-cleanup";
 import { runReferralAttemptLogCleanup } from "./lib/referral-attempt-log-cleanup";
 import { runExpiredReservationsCron } from "./lib/expired-reservations";
@@ -279,6 +280,15 @@ applyMigrations()
     // ── Background: cron + BullMQ workers (non-fatal if Redis is unavailable) ──
     void (async () => {
       // All node-cron work is lease-protected across API replicas.
+      const recoverDeletedAccounts = async () => {
+        try {
+          await retryPendingAccountDeletions();
+        } catch (err) {
+          logger.error({ err }, "[account-deletion] Recovery failed");
+        }
+      };
+      scheduleDistributedCron("account-deletion", "*/5 * * * *", recoverDeletedAccounts);
+      void recoverDeletedAccounts();
       scheduleDistributedCron("birthday", "0 0 * * *", async () => {
         logger.info("[birthday] Daily cron triggered");
         await runBirthdayCron();

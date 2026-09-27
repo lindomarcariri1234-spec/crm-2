@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   updateSettings: { mutateAsync: vi.fn(), isPending: false },
   testWhatsAppMessage: vi.fn(),
   toast: vi.fn(),
+  role: { value: "agencia" },
+  retryReferrals: vi.fn(),
+  retryCampaigns: vi.fn(),
+  campaigns: { loading: false, error: false },
 }));
 
 vi.mock("@workspace/api-client-react", () => ({
@@ -43,8 +47,8 @@ vi.mock("@workspace/api-client-react", () => ({
   useGetReferralShare: () => ({ data: undefined, isLoading: false }),
   useGetReferralExpiryEmailStatus: () => ({ data: undefined, refetch: vi.fn() }),
   useGetReferralBonusReleaseEmailStatus: () => ({ data: undefined, refetch: vi.fn() }),
-  useGetMe: () => ({ data: { role: "agencia", tenant: { name: "Agência Cariri" } } }),
-  useListReferralCampaigns: () => ({ data: [], refetch: vi.fn() }),
+  useGetMe: () => ({ data: { role: mocks.role.value, tenant: { name: "Agência Cariri" } } }),
+  useListReferralCampaigns: () => ({ data: [], isLoading: mocks.campaigns.loading, isError: mocks.campaigns.error, refetch: mocks.retryCampaigns }),
   useCreateReferralCampaign: () => mocks.mutation,
   useDeleteReferralCampaign: () => mocks.mutation,
   useUpdateReferralCampaign: () => mocks.mutation,
@@ -59,6 +63,11 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@workspace/permissions", () => ({
+  ACTIONS: { VIEW: "view", EDIT: "edit", MANAGE: "manage" },
+  RESOURCES: { COMMISSIONS: "commissions", SETTINGS: "settings", FINANCIAL: "financial" },
+  hasPermission: (role: string, resource: string, action: string) =>
+    role === "agencia" || role === "superadmin" ||
+    (role === "gerente" && action === "view"),
   ROLES: {
     SUPER_ADMIN: "superadmin",
     AGENCY_ADMIN: "agencia",
@@ -123,6 +132,9 @@ vi.mock("@/components/referral-table-section", () => ({
     }, "Página 2"),
     createElement("span", { key: "state", "data-testid": "referral-state" },
       `${props.activeTab}|${props.referralsPage}|${props.selectedBonusIds.size}`),
+    createElement("span", { key: "rights", "data-testid": "referral-rights" },
+      `${props.canPay}|${props.canReverse}|${props.canDeactivate}|${props.referralTotal}|${props.referralPageCount}`),
+    createElement("button", { key: "retry", "data-testid": "retry-referrals", onClick: props.onRetry }, "Tentar novamente"),
   ]),
 }));
 vi.mock("@/components/referral-settings-dialog", () => ({
@@ -154,9 +166,12 @@ vi.mock("@/components/referral-settings-dialog", () => ({
     : null,
 }));
 vi.mock("@/components/referral-campaigns-dialog", () => ({
-  ReferralCampaignsDialog: ({ open, onOpenChange }: any) => open
-    ? createElement("div", { "data-testid": "campaigns-dialog" },
-      createElement("button", { onClick: () => onOpenChange(false) }, "Fechar campanhas"))
+  ReferralCampaignsDialog: ({ open, onOpenChange, error, loading, onRetry, canEdit }: any) => open
+    ? createElement("div", { "data-testid": "campaigns-dialog" }, [
+      createElement("span", { key: "state" }, `${error ? "erro" : loading ? "carregando" : "vazio"}|${canEdit}`),
+      createElement("button", { key: "retry", onClick: onRetry }, "Tentar novamente"),
+      createElement("button", { key: "close", onClick: () => onOpenChange(false) }, "Fechar campanhas"),
+    ])
     : null,
 }));
 vi.mock("@/components/referral-operational-dialogs", () => ({ ReferralOperationalDialogs: () => null }));
@@ -248,13 +263,19 @@ function setInputValue(input: HTMLInputElement, value: string) {
 }
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/");
   mocks.useListReferrals.mockReset();
   mocks.useGetReferralStats.mockReset();
   mocks.useQuery.mockReset();
   mocks.testWhatsAppMessage.mockReset();
+  mocks.retryReferrals.mockReset();
+  mocks.retryCampaigns.mockReset();
+  mocks.campaigns.error = false;
+  mocks.campaigns.loading = false;
+  mocks.role.value = "agencia";
   mocks.queryClient.invalidateQueries.mockReset();
   mocks.useListReferrals.mockReturnValue({
-    data: referralResponse, isLoading: false, isFetching: false, isError: false,
+    data: referralResponse, isLoading: false, isFetching: false, isError: false, refetch: mocks.retryReferrals,
   });
   mocks.useGetReferralStats.mockReturnValue({
     data: { suspicious: 0, expiringSoon: 0, pendingBonus: 1 }, isLoading: false, isError: false,
@@ -268,6 +289,63 @@ afterEach(async () => {
 });
 
 describe("orquestração da página de indicações", () => {
+  it.each([
+    ["agencia", "true|true|true", true],
+    ["superadmin", "true|true|true", true],
+    ["gerente", "false|false|false", false],
+    ["suporte", "false|false|false", false],
+  ])("aplica permissões efetivas ao papel %s", async (role, rights, canManage) => {
+    mocks.role.value = role;
+    const { container } = await renderComponent(createElement(Indicacoes));
+    expect(container.querySelector('[data-testid="referral-rights"]')?.textContent).toContain(rights);
+    expect(container.textContent?.includes("Configurações")).toBe(canManage);
+    expect(container.textContent?.includes("Exportar")).toBe(canManage);
+    expect(container.textContent?.includes("Campanhas")).toBe(role !== "suporte");
+  });
+
+  it("preserva o total global, volta da última página vazia e não mascara erros com vazio", async () => {
+    mocks.useListReferrals.mockReturnValue({
+      data: referralResponse, isLoading: false, isFetching: false, isError: false, refetch: mocks.retryReferrals,
+    });
+    const { container } = await renderComponent(createElement(Indicacoes));
+    expect(container.querySelector('[data-testid="referral-rights"]')?.textContent).toContain("|3|3");
+    await flushAct(() => {
+      container.querySelector('[data-testid="referral-page-two"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.querySelector('[data-testid="referral-state"]')?.textContent).toContain("|2|");
+    mocks.useListReferrals.mockReturnValue({
+      data: { data: [], pagination: { page: 2, limit: 100, total: 1, totalPages: 1 } },
+      isLoading: false, isFetching: false, isError: false, refetch: mocks.retryReferrals,
+    });
+    await flushAct(() => {
+      container.querySelector('[data-testid="referral-page-two"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.querySelector('[data-testid="referral-state"]')?.textContent).toContain("|1|");
+    mocks.useListReferrals.mockReturnValue({
+      data: undefined, isLoading: false, isFetching: false, isError: true, refetch: mocks.retryReferrals,
+    });
+    await flushAct(() => {
+      container.querySelector('[data-testid="referral-page-two"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushAct(() => {
+      container.querySelector('[data-testid="retry-referrals"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(mocks.retryReferrals).toHaveBeenCalled();
+  });
+
+  it("mostra erro de campanhas e permite tentar novamente", async () => {
+    mocks.campaigns.error = true;
+    const { container } = await renderComponent(createElement(Indicacoes));
+    await flushAct(() => {
+      Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("Campanhas"))
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.querySelector('[data-testid="campaigns-dialog"]')?.textContent).toContain("erro|true");
+    await flushAct(() => {
+      container.querySelector('[data-testid="campaigns-dialog"] button')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(mocks.retryCampaigns).toHaveBeenCalled();
+  });
   it("envia filtros server-side e reinicia página e seleção ao trocar filtros", async () => {
     const { container } = await renderComponent(createElement(Indicacoes));
     const search = container.querySelector('[data-testid="referral-search"]') as HTMLInputElement;

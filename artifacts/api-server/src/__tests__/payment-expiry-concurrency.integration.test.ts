@@ -55,6 +55,21 @@ vi.mock("../lib/google-calendar/sync-service.js", () => ({
   CalendarSyncService: { syncTrip: vi.fn().mockResolvedValue(undefined), syncPayment: vi.fn().mockResolvedValue(undefined) },
 }));
 vi.mock("../lib/reservation-payments.js", () => ({
+  sumPaidReservationPayments: async (
+    executor: Pick<typeof db, "execute">,
+    reservationId: string,
+    tenantId: string,
+  ) => {
+    const result = await executor.execute(sql`
+      SELECT COALESCE(SUM(amount::numeric), 0) AS total_paid
+      FROM payments
+      WHERE reservation_id = ${reservationId}
+        AND tenant_id = ${tenantId}
+        AND status = ${PAYMENT_STATUS.PAID}
+    `);
+    const row = (result as unknown as { rows: Array<{ total_paid: string }> }).rows[0];
+    return Number(row?.total_paid ?? "0");
+  },
   syncReservationPaymentStatus: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../services/checkout/create-reservations.js", () => ({
@@ -236,22 +251,63 @@ async function readSeats() {
 /**
  * Wait until PostgreSQL itself reports a connection waiting on the fixture
  * row lock. This is an observable DB barrier, rather than a Promise.all race.
+ * Waiters can queue behind one another, so follow the full blocker chain and
+ * allow callers to require multiple waiting connections. Some integration
+ * databases hide query text, so pg_stat_activity.query is only an extra check.
  */
-async function waitForBlockedQuery(blockingBackendPid: number, predicate: (query: string) => boolean) {
+async function waitForBlockedQuery(
+  blockingBackendPid: number,
+  predicate: (query: string) => boolean,
+  expectedCount = 1,
+) {
   const deadline = Date.now() + 8_000;
   while (Date.now() < deadline) {
-    const result = await pool.query<{ query: string }>(`
-      SELECT query
-      FROM pg_stat_activity
-      WHERE datname = current_database()
-        AND pid <> pg_backend_pid()
-        AND wait_event_type = 'Lock'
-        AND ${blockingBackendPid} = ANY(pg_blocking_pids(pid))
-    `);
-    if (result.rows.some((row) => predicate(row.query.toLowerCase()))) return;
+    const result = await pool.query<{ pid: number; query: string; blocker_relations: string }>(`
+      WITH RECURSIVE lock_chain(waiter_pid, blocker_pid, path) AS (
+        SELECT activity.pid, blocker.pid, ARRAY[activity.pid, blocker.pid]
+        FROM pg_stat_activity activity
+        CROSS JOIN LATERAL unnest(pg_blocking_pids(activity.pid)) AS blocker(pid)
+        WHERE activity.datname = current_database()
+          AND activity.pid <> pg_backend_pid()
+          AND activity.wait_event_type = 'Lock'
+        UNION ALL
+        SELECT chain.waiter_pid, blocker.pid, chain.path || blocker.pid
+        FROM lock_chain chain
+        CROSS JOIN LATERAL unnest(pg_blocking_pids(chain.blocker_pid)) AS blocker(pid)
+        WHERE NOT blocker.pid = ANY(chain.path)
+      )
+      SELECT activity.pid, activity.query,
+        COALESCE((
+          SELECT string_agg(DISTINCT relation.relname, ' ')
+          FROM pg_locks blocker_lock
+          JOIN pg_class relation ON relation.oid = blocker_lock.relation
+          WHERE blocker_lock.pid = ANY(pg_blocking_pids(activity.pid))
+        ), '') AS blocker_relations
+      FROM pg_stat_activity activity
+      WHERE activity.datname = current_database()
+        AND activity.pid <> pg_backend_pid()
+        AND activity.wait_event_type = 'Lock'
+        AND EXISTS (
+          SELECT 1
+          FROM lock_chain
+          WHERE lock_chain.waiter_pid = activity.pid
+            AND lock_chain.blocker_pid = $1
+        )
+    `, [blockingBackendPid]);
+    const matchingQueries = result.rows.filter((row) =>
+      !row.query.trim() || predicate(`${row.query} ${row.blocker_relations}`.toLowerCase()),
+    );
+    if (matchingQueries.length >= expectedCount) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("Timed out waiting for the expected PostgreSQL row-lock barrier");
+  const active = await pool.query(`
+    SELECT pid, query, state, wait_event_type, wait_event, pg_blocking_pids(pid) AS blockers
+    FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND pid <> pg_backend_pid()
+      AND state <> 'idle'
+  `);
+  throw new Error(`Timed out waiting for the expected PostgreSQL row-lock barrier: ${JSON.stringify(active.rows)}`);
 }
 
 async function expectRequestFinishesWhileReservationLocked(
@@ -628,5 +684,264 @@ describe("payment and reservation expiry concurrency — real PostgreSQL", () =>
       eq(paymentsTable.reservationId, reservation),
     ));
     expect(remaining).toEqual([{ id: survivingPayment, status: PAYMENT_STATUS.PAID }]);
+  });
+
+  it("revalidates a received payment against the new balance after waiting for a total change", async () => {
+    const reservation = await createReservation("payment-balance-race", {
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const blocker = await pool.connect();
+
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM reservations WHERE id = $1 FOR UPDATE", [reservation]);
+      const [{ pid }] = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows;
+      const app = buildApp();
+      const paymentPromise = request(app).post("/api/payments").send({
+        reservationId: reservation,
+        type: PAYMENT_TYPE.RECEIVABLE,
+        category: "reservation",
+        amount: 75,
+        paymentMethod: "pix",
+        dueDate: new Date().toISOString(),
+        status: PAYMENT_STATUS.PAID,
+        paidAt: new Date().toISOString(),
+      });
+
+      const barrier = waitForBlockedQuery(pid, (query) =>
+        query.includes("reservations") && query.includes("for update"),
+      ).then(
+        () => ({ kind: "blocked" as const }),
+        (error) => ({ kind: "timeout" as const, error }),
+      );
+      const firstOutcome = await Promise.race([
+        barrier,
+        paymentPromise.then((response) => ({ kind: "response" as const, response })),
+      ]);
+      if (firstOutcome.kind === "response") {
+        throw new Error(
+          `Payment request finished before acquiring the reservation lock: ${firstOutcome.response.status} ${JSON.stringify(firstOutcome.response.body)}`,
+        );
+      }
+      if (firstOutcome.kind === "timeout") {
+        throw new Error(
+          `${String(firstOutcome.error)}; PostgreSQL pool total=${pool.totalCount}, idle=${pool.idleCount}, waiting=${pool.waitingCount}`,
+        );
+      }
+      await blocker.query(
+        "UPDATE reservations SET total_value = $1, balance = $2 WHERE id = $3 AND tenant_id = $4",
+        ["50.00", "50.00", reservation, TENANT_ID],
+      );
+      await blocker.query("COMMIT");
+
+      const response = await paymentPromise;
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("PAYMENT_EXCEEDS_BALANCE");
+      expect(response.body.message).toContain("saldo devedor");
+      const storedPayments = await db.select({ id: paymentsTable.id })
+        .from(paymentsTable).where(and(
+          eq(paymentsTable.tenantId, TENANT_ID),
+          eq(paymentsTable.reservationId, reservation),
+        ));
+      expect(storedPayments).toEqual([]);
+      const [updatedReservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(eq(reservationsTable.id, reservation));
+      expect(Number(updatedReservation?.totalValue)).toBe(50);
+      expect(Number(updatedReservation?.balance)).toBe(50);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
+  it("rejects marking an existing payment paid when the reservation total changes while it waits", async () => {
+    const reservation = await createReservation("patch-balance-race", {
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const priorPayment = await createPayment("patch-balance-prior", {
+      reservationId: reservation,
+      status: PAYMENT_STATUS.PAID,
+    });
+    await db.update(paymentsTable)
+      .set({ amount: "40.00" })
+      .where(eq(paymentsTable.id, priorPayment));
+    const payment = await createPayment("patch-balance-pending", { reservationId: reservation });
+    await db.update(paymentsTable)
+      .set({ amount: "55.00" })
+      .where(and(
+        eq(paymentsTable.id, payment),
+        eq(paymentsTable.tenantId, TENANT_ID),
+      ));
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM reservations WHERE id = $1 FOR UPDATE", [reservation]);
+      const [{ pid }] = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows;
+      const paymentPromise = request(buildApp()).patch(`/api/payments/${payment}`).send({
+        status: PAYMENT_STATUS.PAID,
+        paidAt: new Date().toISOString(),
+      });
+
+      const barrier = waitForBlockedQuery(pid, (query) =>
+        query.includes("reservations") && query.includes("for update"),
+      ).then(
+        () => ({ kind: "blocked" as const }),
+        (error) => ({ kind: "timeout" as const, error }),
+      );
+      const firstOutcome = await Promise.race([
+        barrier,
+        paymentPromise.then((response) => ({ kind: "response" as const, response })),
+      ]);
+      if (firstOutcome.kind === "response") {
+        throw new Error(
+          `Payment status update finished before acquiring the reservation lock: ${firstOutcome.response.status} ${JSON.stringify(firstOutcome.response.body)}`,
+        );
+      }
+      if (firstOutcome.kind === "timeout") {
+        throw new Error(
+          `${String(firstOutcome.error)}; PostgreSQL pool total=${pool.totalCount}, idle=${pool.idleCount}, waiting=${pool.waitingCount}`,
+        );
+      }
+
+      await blocker.query(
+        "UPDATE reservations SET total_value = $1, balance = $2 WHERE id = $3 AND tenant_id = $4",
+        ["90.00", "50.00", reservation, TENANT_ID],
+      );
+      await blocker.query("COMMIT");
+
+      const response = await paymentPromise;
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe("PAYMENT_EXCEEDS_BALANCE");
+      expect(response.body.message).toContain("saldo devedor");
+      const [storedPayment] = await db.select({
+        status: paymentsTable.status,
+        amount: paymentsTable.amount,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.id, payment),
+        eq(paymentsTable.tenantId, TENANT_ID),
+      ));
+      expect(storedPayment).toEqual({
+        status: PAYMENT_STATUS.PENDING,
+        amount: "55.00",
+      });
+      const [updatedReservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(eq(reservationsTable.id, reservation));
+      expect(Number(updatedReservation?.totalValue)).toBe(90);
+      expect(Number(updatedReservation?.balance)).toBe(50);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+  });
+
+  it("only accepts one of two simultaneous payments that exceed the reservation balance together", async () => {
+    const order = await createOrder("patch-competing-order");
+    const reservation = await createReservation("patch-competing-payments", {
+      storeOrderNumber: order.orderNumber,
+      expiresAt: new Date(Date.now() + 60 * 60_000),
+    });
+    const firstPayment = await createPayment("patch-competing-first", { reservationId: reservation });
+    const secondPayment = await createPayment("patch-competing-second", { reservationId: reservation });
+    await db.update(paymentsTable)
+      .set({ amount: "60.00" })
+      .where(and(
+        eq(paymentsTable.tenantId, TENANT_ID),
+        eq(paymentsTable.id, firstPayment),
+      ));
+    await db.update(paymentsTable)
+      .set({ amount: "60.00" })
+      .where(and(
+        eq(paymentsTable.tenantId, TENANT_ID),
+        eq(paymentsTable.id, secondPayment),
+      ));
+
+    const blocker = await pool.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("SELECT id FROM reservations WHERE id = $1 FOR UPDATE", [reservation]);
+      const [{ pid }] = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows;
+      const app = buildApp();
+      const firstResponsePromise = request(app).patch(`/api/payments/${firstPayment}`).send({
+        status: PAYMENT_STATUS.PAID,
+        paidAt: new Date().toISOString(),
+      }).then((response) => response);
+      const secondResponsePromise = request(app).patch(`/api/payments/${secondPayment}`).send({
+        status: PAYMENT_STATUS.PAID,
+        paidAt: new Date().toISOString(),
+      }).then((response) => response);
+
+      const barrier = waitForBlockedQuery(
+        pid,
+        (query) =>
+          query.includes("for update")
+          && (query.includes("reservations") || query.includes("store_orders")),
+        2,
+      ).then(
+        () => ({ kind: "both-blocked" as const }),
+        (error) => ({ kind: "timeout" as const, error }),
+      );
+      const firstOutcome = await Promise.race([
+        barrier,
+        firstResponsePromise.then((response) => ({
+          kind: "response" as const,
+          request: "first",
+          response,
+        })),
+        secondResponsePromise.then((response) => ({
+          kind: "response" as const,
+          request: "second",
+          response,
+        })),
+      ]);
+      if (firstOutcome.kind === "response") {
+        throw new Error(
+          `Payment ${firstOutcome.request} finished before both requests reached the reservation lock: ${firstOutcome.response.status} ${JSON.stringify(firstOutcome.response.body)}`,
+        );
+      }
+      if (firstOutcome.kind === "timeout") {
+        throw new Error(
+          `${String(firstOutcome.error)}; PostgreSQL pool total=${pool.totalCount}, idle=${pool.idleCount}, waiting=${pool.waitingCount}`,
+        );
+      }
+
+      await blocker.query("COMMIT");
+      const [firstResponse, secondResponse] = await Promise.all([
+        firstResponsePromise,
+        secondResponsePromise,
+      ]);
+      const responses = [firstResponse, secondResponse];
+      expect(responses.filter((response) => response.status === 200)).toHaveLength(1);
+      const rejectedResponses = responses.filter((response) => response.status === 400);
+      expect(rejectedResponses).toHaveLength(1);
+      expect(rejectedResponses[0]?.body.code).toBe("PAYMENT_EXCEEDS_BALANCE");
+
+      const storedPayments = await db.select({
+        status: paymentsTable.status,
+        amount: paymentsTable.amount,
+      }).from(paymentsTable).where(and(
+        eq(paymentsTable.tenantId, TENANT_ID),
+        eq(paymentsTable.reservationId, reservation),
+      ));
+      const paidPayments = storedPayments.filter((payment) => payment.status === PAYMENT_STATUS.PAID);
+      const totalPaid = paidPayments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+      expect(paidPayments).toHaveLength(1);
+      expect(storedPayments.filter((payment) => payment.status === PAYMENT_STATUS.PENDING)).toHaveLength(1);
+      expect(totalPaid).toBe(60);
+      const [storedReservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+      }).from(reservationsTable).where(and(
+        eq(reservationsTable.id, reservation),
+        eq(reservationsTable.tenantId, TENANT_ID),
+      ));
+      expect(totalPaid).toBeLessThanOrEqual(Number(storedReservation?.totalValue));
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
   });
 });

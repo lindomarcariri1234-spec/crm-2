@@ -5,6 +5,7 @@ export default defineConfig({
     environment: "node",
     testTimeout: 15_000,
     include: [
+      "src/__tests__/client-dream-destinations.integration.test.ts",
       "src/__tests__/ghost-reservation.test.ts",
       "src/__tests__/expired-reservations.test.ts",
       "src/__tests__/loyalty-points-booking.test.ts",

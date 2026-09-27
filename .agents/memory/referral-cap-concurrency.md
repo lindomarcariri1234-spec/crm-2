@@ -3,8 +3,8 @@ name: Referral cap concurrency
 description: The transactional pattern used to enforce max referrals per referrer without allowing concurrent conversions to pass the cap.
 ---
 
-When `maxReferralsPerUser` is active, first perform a conditional no-op update on the referrer row with `successful_referrals < cap`, then increment the counters later in the same transaction.
+Lock the tenant-scoped referrer before reading its conversion count or computing its tier, and retain that lock through the conversion transaction.
 
-**Why:** PostgreSQL keeps the row lock from the conditional update until the checkout transaction commits, so a concurrent conversion rechecks the cap after the first conversion. A plain read followed by an increment allows both conversions to pass.
+**Why:** A conditional no-op update previously protected the cap, but its preceding read could still produce stale tier decisions. Reading under a row lock protects both cap and tier, and real PostgreSQL concurrency tests confirm the limit.
 
-**How to apply:** keep the tenant predicate on both the reservation update and the final counter update; preserve the no-op update shape because conversion unit-test transactions may not expose Drizzle's `.for("update")` chain.
+**How to apply:** Keep tenant predicates on the locked lookup and all final updates. Test doubles must support the locking chain; do not remove a production lock to accommodate mocks.

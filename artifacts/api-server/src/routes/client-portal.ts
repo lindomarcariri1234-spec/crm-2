@@ -1,6 +1,8 @@
 import { Router, type NextFunction } from "express";
 import { computeReferralTier } from "../lib/referral-tiers";
 import { calculateReferralWallet } from "../lib/referral-wallet";
+import { canRedeemForStatus, canSubmitNps, maskReferralName, validBirthDate } from "../lib/client-portal-rules";
+import { insertDreamDestination } from "../lib/client-dream-destinations";
 import { localToday } from "@workspace/shared";
 import { db } from "@workspace/db";
 import {
@@ -818,11 +820,12 @@ router.get("/client/me/loyalty/transactions", async (req, res, next: NextFunctio
           (${member.availablePoints} - COALESCE((
             SELECT SUM(CASE WHEN lt2.type IN ('redeem', 'expire') THEN -lt2.points ELSE lt2.points END)
             FROM loyalty_transactions lt2
-            WHERE lt2.member_id = ${member.id} AND lt2.created_at > t.created_at
+            WHERE lt2.member_id = ${member.id}
+              AND (lt2.created_at, lt2.id) > (t.created_at, t.id)
           ), 0)) AS running_balance
         FROM loyalty_transactions t
         WHERE t.member_id = ${member.id}
-        ORDER BY t.created_at DESC
+        ORDER BY t.created_at DESC, t.id DESC
         LIMIT ${limit} OFFSET ${offset}`
     );
 
@@ -943,8 +946,8 @@ router.post("/client/me/loyalty/redeem", async (req, res, next: NextFunction): P
       return;
     }
 
-    if (reservation.status === RESERVATION_STATUS.CANCELLED) {
-      next(new ValidationError("Não é possível resgatar pontos em reservas canceladas"));
+    if (!canRedeemForStatus(reservation.status)) {
+      next(new ValidationError("Resgate permitido apenas em reservas pendentes ou confirmadas"));
       return;
     }
 
@@ -1017,13 +1020,15 @@ router.post("/client/me/loyalty/redeem", async (req, res, next: NextFunction): P
           totalValue: reservationsTable.totalValue,
           paidValue: reservationsTable.paidValue,
           reservationNumber: reservationsTable.reservationNumber,
+          status: reservationsTable.status,
         })
         .from(reservationsTable)
-        .where(eq(reservationsTable.id, reservation.id))
+        .where(and(eq(reservationsTable.id, reservation.id), eq(reservationsTable.clientId, client.id), eq(reservationsTable.tenantId, me.tenantId)))
         .for("update")
         .limit(1);
 
       if (!lockedReservation) throw new ValidationError("Reserva não encontrada");
+      if (!canRedeemForStatus(lockedReservation.status)) throw new ValidationError("Resgate permitido apenas em reservas pendentes ou confirmadas");
       const currentBalance = Math.max(
         Number(lockedReservation.totalValue) - Number(lockedReservation.paidValue),
         0,
@@ -1049,7 +1054,7 @@ router.post("/client/me/loyalty/redeem", async (req, res, next: NextFunction): P
       await tx
         .update(loyaltyMembersTable)
         .set({ availablePoints: newAvailablePoints })
-        .where(eq(loyaltyMembersTable.id, member.id));
+        .where(and(eq(loyaltyMembersTable.id, member.id), eq(loyaltyMembersTable.tenantId, me.tenantId)));
 
       const txId = generateId();
       await tx.insert(loyaltyTransactionsTable).values({
@@ -1070,7 +1075,7 @@ router.post("/client/me/loyalty/redeem", async (req, res, next: NextFunction): P
           discountLoyaltyPoints: sql`COALESCE(${reservationsTable.discountLoyaltyPoints}, 0) + ${actualPointsRedeemed}`,
           discountLoyaltyAmount: sql`COALESCE(${reservationsTable.discountLoyaltyAmount}, '0') + ${discountAmount}`,
         })
-        .where(eq(reservationsTable.id, reservation.id));
+        .where(and(eq(reservationsTable.id, reservation.id), eq(reservationsTable.tenantId, me.tenantId), eq(reservationsTable.clientId, client.id)));
 
       result = { pointsRedeemed: actualPointsRedeemed, discountAmount, newAvailablePoints };
     });
@@ -1108,8 +1113,9 @@ router.post("/client/nps", async (req, res, next: NextFunction): Promise<void> =
       return;
     }
     const [reservation] = await db
-      .select({ id: reservationsTable.id, tripId: reservationsTable.tripId })
+      .select({ id: reservationsTable.id, tripId: reservationsTable.tripId, status: reservationsTable.status, tripReturnDate: tripsTable.returnDate })
       .from(reservationsTable)
+      .innerJoin(tripsTable, and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, me.tenantId)))
       .where(
         and(
           eq(reservationsTable.id, body.data.reservationId),
@@ -1120,6 +1126,10 @@ router.post("/client/nps", async (req, res, next: NextFunction): Promise<void> =
       .limit(1);
     if (!reservation) {
       next(new NotFoundError("Reserva não encontrada", "NOT_FOUND"));
+      return;
+    }
+    if (!canSubmitNps(reservation.status, reservation.tripReturnDate)) {
+      next(new ValidationError("Avaliação permitida apenas até 30 dias após o retorno de viagem confirmada ou concluída", "NPS_NOT_ELIGIBLE"));
       return;
     }
     const [existing] = await db
@@ -1376,7 +1386,7 @@ const UpdateClientMeBody = z.object({
   name: z.string().min(1).max(200).optional(),
   phone: z.string().max(30).optional().nullable(),
   cpf: z.string().max(20).optional().nullable(),
-  birthDate: z.string().optional().nullable(),
+  birthDate: z.string().refine(validBirthDate, "Data de nascimento inválida").optional().nullable(),
 });
 
 router.patch("/client/me", async (req, res, next: NextFunction): Promise<void> => {
@@ -1416,7 +1426,7 @@ router.patch("/client/me", async (req, res, next: NextFunction): Promise<void> =
           name: data.name,
           email: client.email,
           phone: data.phone,
-          birthDate: data.birthDate ? new Date(data.birthDate) : null,
+          birthDate: data.birthDate ? new Date(`${data.birthDate}T12:00:00-03:00`) : null,
         });
 
         if (identity.clientId && identity.clientId !== client.id) {
@@ -1432,7 +1442,7 @@ router.patch("/client/me", async (req, res, next: NextFunction): Promise<void> =
       if (data.phone !== undefined) updates.phone = data.phone;
       if (normalizedCpf) updates.cpf = normalizedCpf;
       if (data.birthDate !== undefined) {
-        updates.birthDate = data.birthDate ? new Date(data.birthDate) : null;
+        updates.birthDate = data.birthDate ? new Date(`${data.birthDate}T12:00:00-03:00`) : null;
       }
 
       await tx
@@ -1570,11 +1580,12 @@ router.get("/client/me/referrals", async (req, res, next: NextFunction): Promise
           ? new Date(convertedAtDate.getTime() + gracePeriodDays * 24 * 60 * 60 * 1000)
           : null;
         const bonusBlocked =
-          r.status === REFERRAL_STATUS.REVERSED ||
-          (bonusReleasesAt !== null && new Date() < bonusReleasesAt);
+          !(r.status === REFERRAL_STATUS.COMPLETED || r.status === REFERRAL_STATUS.CONVERTED) ||
+          (!r.bonusPaid && bonusReleasesAt !== null && new Date() < bonusReleasesAt) ||
+          (r.expiresAt !== null && (r.expiresAt as Date) <= new Date());
         return {
           id: r.id,
-          referredName: r.referredName ?? null,
+          referredName: maskReferralName(r.referredName),
           referredEmail: r.referredEmail ? maskEmail(r.referredEmail) : null,
           status: r.status,
           convertedAt: convertedAtDate ? convertedAtDate.toISOString() : null,
@@ -1953,17 +1964,34 @@ router.post("/client/me/favorites", async (req, res, next: NextFunction): Promis
     if (!client) { next(new NotFoundError("Perfil de cliente não encontrado", "NOT_FOUND")); return; }
 
     const { itemType, itemId } = parsed.data;
+    const [resource] = itemType === "trip"
+      ? await db.select({ id: tripsTable.id }).from(tripsTable)
+        .innerJoin(storeProductsTable, eq(storeProductsTable.tripId, tripsTable.id))
+        .innerJoin(storesTable, and(eq(storesTable.id, storeProductsTable.storeId), eq(storesTable.tenantId, me.tenantId)))
+        .where(and(eq(tripsTable.id, itemId), eq(tripsTable.tenantId, me.tenantId))).limit(1)
+      : await db.select({ id: storeProductsTable.id }).from(storeProductsTable)
+        .innerJoin(storesTable, and(eq(storesTable.id, storeProductsTable.storeId), eq(storesTable.tenantId, me.tenantId)))
+        .where(eq(storeProductsTable.id, itemId)).limit(1);
+    if (!resource) { next(new NotFoundError("Recurso não encontrado nesta agência", "FAVORITE_NOT_FOUND")); return; }
     const id = generateId();
 
-    await db.insert(clientFavoritesTable).values({
+    const [inserted] = await db.insert(clientFavoritesTable).values({
       id,
       tenantId: me.tenantId,
       clientId: client.id,
       itemType,
       itemId,
-    }).onConflictDoNothing();
+    }).onConflictDoNothing().returning({ id: clientFavoritesTable.id });
 
-    res.status(201).json({ id, itemType, itemId });
+    if (!inserted) {
+      const [existing] = await db.select({ id: clientFavoritesTable.id }).from(clientFavoritesTable)
+        .where(and(eq(clientFavoritesTable.tenantId, me.tenantId), eq(clientFavoritesTable.clientId, client.id),
+          eq(clientFavoritesTable.itemType, itemType), eq(clientFavoritesTable.itemId, itemId))).limit(1);
+      if (!existing) throw new ConflictError("Favorito já cadastrado", "ALREADY_FAVORITED");
+      res.json({ id: existing.id, itemType, itemId, alreadyFavorited: true });
+      return;
+    }
+    res.status(201).json({ id: inserted.id, itemType, itemId, alreadyFavorited: false });
   } catch (err) { next(err); }
 });
 
@@ -2202,12 +2230,11 @@ router.post("/client/me/dream-destinations", async (req, res, next: NextFunction
     if (!client) { next(new NotFoundError("Cliente não encontrado", "CLIENT_NOT_FOUND")); return; }
     const parsed = AddDreamDestinationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
-    const [countResult] = await db.select({ c: count() }).from(clientDreamDestinationsTable)
-      .where(and(eq(clientDreamDestinationsTable.tenantId, me.tenantId), eq(clientDreamDestinationsTable.clientId, client.id)));
-    if ((countResult?.c ?? 0) >= 30) { next(new ValidationError("Limite de 30 destinos atingido", "LIMIT_EXCEEDED")); return; }
     const id = generateId();
-    await db.insert(clientDreamDestinationsTable).values({ id, clientId: client.id, tenantId: me.tenantId, destinationName: parsed.data.destinationName, note: parsed.data.note ?? null });
-    res.status(201).json({ id, destinationName: parsed.data.destinationName, note: parsed.data.note ?? null, createdAt: new Date().toISOString() });
+    const createdAt = await insertDreamDestination({
+      id, clientId: client.id, tenantId: me.tenantId, destinationName: parsed.data.destinationName, note: parsed.data.note ?? null,
+    });
+    res.status(201).json({ id, destinationName: parsed.data.destinationName, note: parsed.data.note ?? null, createdAt: createdAt.toISOString() });
   } catch (err) { next(err); }
 });
 

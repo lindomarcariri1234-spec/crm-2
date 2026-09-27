@@ -6,7 +6,6 @@ import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { FlashSaleCountdown } from "@/components/vitrine/FlashSaleCountdown";
 import {
-  Loader2,
   ChevronLeft,
   ChevronRight,
   CalendarDays,
@@ -115,27 +114,32 @@ export default function VitrineCalendar({
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8">
-      <header className="mb-8 text-center">
+    <div className="mx-auto max-w-6xl px-5 py-10 lg:px-8 lg:py-14">
+      <header className="mb-10 text-center">
         <span
-          className="mb-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide"
+          className="mb-4 inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em]"
           style={{ background: colors.primarySoft, color: colors.primary }}
         >
           <CalendarDays className="h-3.5 w-3.5" />
           Próximas saídas
         </span>
-        <h1 className="text-3xl font-bold md:text-4xl">Calendário de Saídas</h1>
-        <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground md:text-base">
+        <h1 className="text-4xl font-semibold tracking-[-0.045em] md:text-5xl">Calendário de Saídas</h1>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground md:text-base">
           Confira as próximas datas de embarque e garanta a sua vaga.
         </p>
       </header>
 
       {loading ? (
-        <div className="flex justify-center py-20">
-          <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]">
+          <div className="h-[27rem] animate-pulse rounded-[1.5rem] border border-slate-200/80 bg-white" />
+          <div className="space-y-3">
+            <div className="h-7 w-48 animate-pulse rounded bg-slate-200/70" />
+            <div className="h-24 animate-pulse rounded-2xl bg-slate-200/70" />
+            <div className="h-24 animate-pulse rounded-2xl bg-slate-200/70" />
+          </div>
         </div>
       ) : departuresByDate.size === 0 ? (
-        <div className="rounded-2xl border bg-card py-16 text-center text-muted-foreground">
+        <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-white/70 py-16 text-center text-muted-foreground">
           <CalendarDays className="mx-auto mb-4 h-14 w-14 opacity-20" />
           <p className="text-lg">Nenhuma saída programada no momento.</p>
           <button
@@ -147,7 +151,7 @@ export default function VitrineCalendar({
         </div>
       ) : (
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)]">
-          <div className="rounded-2xl border bg-card p-4 shadow-sm">
+          <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_40px_rgba(15,23,42,0.06)] sm:p-6">
             <div className="mb-4 flex items-center justify-between">
               <button
                 onClick={() => goToMonth(-1)}
@@ -156,7 +160,7 @@ export default function VitrineCalendar({
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <h2 className="text-lg font-bold">
+              <h2 className="text-lg font-bold tracking-tight">
                 {MONTHS[month]} {year}
               </h2>
               <button
@@ -191,7 +195,7 @@ export default function VitrineCalendar({
                     disabled={!hasTrips}
                     onClick={() => hasTrips && setSelectedDate(key)}
                     className={cn(
-                      "relative flex aspect-square flex-col items-center justify-center rounded-lg text-sm transition-all",
+                       "relative flex aspect-square flex-col items-center justify-center rounded-xl text-sm transition-all",
                       hasTrips
                         ? "cursor-pointer font-semibold hover:-translate-y-0.5 hover:shadow-sm"
                         : "cursor-default text-muted-foreground/50",
@@ -217,8 +221,8 @@ export default function VitrineCalendar({
                   >
                     <span>{d}</span>
                     {hasTrips && (
-                      <span
-                        className="absolute bottom-1 rounded-full px-1 text-[9px] font-bold leading-tight"
+                       <span
+                         className="absolute bottom-1.5 rounded-full px-1.5 text-[9px] font-bold leading-tight"
                         style={
                           isSelected
                             ? {
@@ -341,7 +345,7 @@ export default function VitrineCalendar({
                 })}
               </div>
             ) : (
-              <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed bg-card/50 py-16 text-center text-muted-foreground">
+              <div className="flex h-full flex-col items-center justify-center rounded-[1.5rem] border border-dashed border-slate-300 bg-white/60 py-16 text-center text-muted-foreground">
                 <CalendarDays className="mb-3 h-12 w-12 opacity-20" />
                 <p className="px-6 text-sm">
                   Selecione um dia destacado para ver as saídas.

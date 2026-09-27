@@ -14,13 +14,14 @@ import {
   CreditCard,
   Copy,
   Check,
+  KeyRound,
 } from "lucide-react";
 import { ROLES } from "@workspace/permissions";
 import { publicStoreApi, PublicApiError, PublicStore, StoreOrder } from "@/lib/storeApi";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { buildVitrineTheme } from "@/lib/vitrineTheme";
+import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { PAYMENT_LABELS } from "@/pages/vitrine/_wizard/constants";
 import { getOrderLookupFromStorage } from "./utils/storage";
 
@@ -124,7 +125,7 @@ function PixQrBlock({ order }: { order: StoreOrder }) {
   return (
     <div className="p-5 bg-teal-50 border border-teal-200 rounded-xl space-y-4">
       <p className="font-semibold text-teal-900 text-base flex items-center gap-2">
-        <span className="text-2xl">🔑</span> Pagamento via PIX
+        <KeyRound className="h-5 w-5" /> Pagamento via PIX
       </p>
       <div className="flex flex-col sm:flex-row gap-6 items-center">
         <div className="flex-shrink-0">
@@ -163,7 +164,7 @@ function PixQrBlock({ order }: { order: StoreOrder }) {
 }
 
 function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }) {
-  const { colors } = buildVitrineTheme(store);
+  const { colors } = useVitrineTheme();
   const summary = order.financialSummary;
   const totalAmt = summary.totalAmount;
   const subtotalAmt = summary.subtotal;
@@ -174,7 +175,7 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border p-6 bg-white shadow-sm">
+      <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <p className="text-xs text-muted-foreground mb-0.5">Número do Pedido</p>
@@ -190,7 +191,7 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
           style={{ background: `linear-gradient(90deg, ${colors.primary}, ${colors.secondary})` }}
         />
 
-        <div className="grid grid-cols-2 gap-3 text-sm mb-4">
+        <div className="mb-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
           <div className="bg-muted/50 rounded-lg p-3">
             <p className="text-xs text-muted-foreground mb-0.5">Cliente</p>
             <p className="font-semibold">{order.customerName}</p>
@@ -360,7 +361,7 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 text-sm">
+      <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
         <div className="text-center p-4 bg-green-50 rounded-xl border border-green-200">
           <p className="text-xs text-muted-foreground mb-1 flex items-center justify-center gap-1">
             <CreditCard className="w-3.5 h-3.5" /> Valor Pago
@@ -406,7 +407,7 @@ export default function VitrineOrderTracking({
 }) {
   const [, navigate] = useLocation();
   const { data: me } = useGetMe();
-  const { colors } = buildVitrineTheme(store ?? { primaryColor: "", secondaryColor: "", accentColor: "" });
+  const { colors } = useVitrineTheme();
 
   const [orderNumber, setOrderNumber] = useState(initialOrderNumber ?? "");
   const [token, setToken] = useState("");
@@ -467,21 +468,22 @@ export default function VitrineOrderTracking({
   const storeData = store as PublicStore | undefined;
 
   return (
-    <div className="max-w-lg mx-auto px-4 py-10">
+    <div className="mx-auto max-w-3xl px-4 py-7 sm:py-10">
       <div className="mb-8 text-center">
         <div
-          className="inline-flex items-center justify-center w-14 h-14 rounded-full mb-4"
-          style={{ backgroundColor: colors.primary + "18" }}
+          className="mx-auto mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl"
+          style={{ backgroundColor: colors.primarySoft }}
         >
           <Package className="w-7 h-7" style={{ color: colors.primary }} />
         </div>
-        <h1 className="text-2xl font-bold mb-1">Consultar Pedido</h1>
-        <p className="text-muted-foreground text-sm">
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.2em]" style={{ color: colors.primary }}>Acompanhe sua viagem</p>
+        <h1 className="mb-1 text-3xl font-semibold tracking-[-0.04em] sm:text-4xl">Consultar Pedido</h1>
+        <p className="text-sm leading-relaxed text-muted-foreground">
           Informe o número do pedido e o código de acesso enviado por e-mail.
         </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4 mb-8">
+      <form onSubmit={handleSubmit} className="mb-8 rounded-[1.5rem] border border-slate-200/80 bg-white p-5 shadow-sm sm:p-6">
         <div className="space-y-1.5">
           <Label htmlFor="orderNumber">Número do Pedido</Label>
           <Input
@@ -509,8 +511,8 @@ export default function VitrineOrderTracking({
         </div>
         <Button
           type="submit"
-          className="w-full h-11 text-white font-semibold"
-          style={{ backgroundColor: colors.primary }}
+           className="h-11 w-full rounded-xl font-semibold"
+           style={{ backgroundColor: colors.primary, color: colors.primaryForeground }}
           disabled={!orderNumber.trim() || !token.trim() || loading}
         >
           {loading ? (
@@ -534,7 +536,7 @@ export default function VitrineOrderTracking({
 
       {order && !storeData && (
         <div className="space-y-4 text-sm">
-          <div className="rounded-xl border p-4 bg-white">
+          <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-4 shadow-sm">
             <p className="font-semibold text-base mb-1">{order.orderNumber}</p>
             <p className="text-muted-foreground mb-3">Cliente: {order.customerName}</p>
             <div className="space-y-1.5 border-t pt-3">

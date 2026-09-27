@@ -5,9 +5,10 @@
  * step-skipping covered in wizard-seat-step-skip.test.ts).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createElement } from "react";
-import { renderComponent, cleanupRoots } from "./eventSourceHarness.js";
+import { createElement, type ReactElement } from "react";
+import { renderComponent as renderBareComponent, cleanupRoots } from "./eventSourceHarness.js";
 import type { PublicStore } from "../lib/storeApi.js";
+import { VitrineThemeProvider } from "../contexts/VitrineThemeContext.js";
 
 // ---------------------------------------------------------------------------
 // Mock useWizardState — controlled per test via mockWizardState.mockReturnValue
@@ -113,6 +114,13 @@ function makeStore(seatMapEnabled?: boolean): PublicStore {
     maintenanceMode: false,
     seatMapEnabled,
   } as unknown as PublicStore;
+}
+
+function renderComponent(element: ReactElement) {
+  const store = (element.props as { store?: PublicStore }).store ?? makeStore();
+  return renderBareComponent(
+    createElement(VitrineThemeProvider, { store }, element),
+  );
 }
 
 beforeEach(() => {

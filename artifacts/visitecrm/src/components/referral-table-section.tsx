@@ -1,6 +1,6 @@
 import { Link } from "wouter";
 import type { Referral, ReferralTierConfig } from "@workspace/api-client-react";
-import { REFERRAL_STATUS, ROLES } from "@workspace/permissions";
+import { REFERRAL_STATUS } from "@workspace/permissions";
 import { formatCurrencyBRL as fmtCurrency, formatDate as _formatDate, formatDateTime as _formatDateTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,7 +52,10 @@ type BonusNotifiedFilter = "all" | "notified" | "not_notified";
 interface ReferralTableSectionProps {
   referrals: ReferralTableRow[];
   settingsTiers?: ReferralTierConfig[] | null;
-  currentUserRole?: string | null;
+  canPay: boolean;
+  canReverse: boolean;
+  canDeactivate: boolean;
+  canShare: boolean;
   activeTab: string;
   searchQuery: string;
   bonusNotifiedFilter: BonusNotifiedFilter;
@@ -60,6 +63,7 @@ interface ReferralTableSectionProps {
   referralsLoading: boolean;
   referralsFetching: boolean;
   referralsError: boolean;
+  onRetry: () => void;
   referralTotal: number;
   referralPageCount: number;
   referralsPage: number;
@@ -145,7 +149,10 @@ function fmtWhatsapp(value: string | null | undefined) {
 export function ReferralTableSection({
   referrals,
   settingsTiers,
-  currentUserRole,
+  canPay,
+  canReverse,
+  canDeactivate,
+  canShare,
   activeTab,
   searchQuery,
   bonusNotifiedFilter,
@@ -153,6 +160,7 @@ export function ReferralTableSection({
   referralsLoading,
   referralsFetching,
   referralsError,
+  onRetry,
   referralTotal,
   referralPageCount,
   referralsPage,
@@ -174,22 +182,19 @@ export function ReferralTableSection({
   onBulkPay,
 }: ReferralTableSectionProps) {
   const pendingBonusReferrals = referrals.filter(
-    (referral) => referral.status === REFERRAL_STATUS.COMPLETED && !referral.bonusPaid,
+    (referral) => referral.status === REFERRAL_STATUS.COMPLETED && !referral.bonusPaid && !referral.bonusBlocked,
   );
   const allBonusSelected = pendingBonusReferrals.length > 0 &&
     pendingBonusReferrals.every((referral) => selectedBonusIds.has(referral.id));
-  const canReverse = currentUserRole === ROLES.AGENCY_ADMIN ||
-    currentUserRole === ROLES.AGENCY_MANAGER ||
-    currentUserRole === ROLES.SUPER_ADMIN;
 
   return (
     <>
       <Tabs value={activeTab} onValueChange={onApplyTab}>
         <div className="flex items-center gap-3 mb-3 flex-wrap">
           <TabsList className="max-w-full overflow-x-auto">
-            <TabsTrigger value="all">Todas</TabsTrigger>
-            <TabsTrigger value="pending">Pendentes</TabsTrigger>
-            <TabsTrigger value="expiringSoon">
+            <TabsTrigger value="all" aria-pressed={activeTab === "all"}>Todas</TabsTrigger>
+            <TabsTrigger value="pending" aria-pressed={activeTab === "pending"}>Pendentes</TabsTrigger>
+            <TabsTrigger value="expiringSoon" aria-pressed={activeTab === "expiringSoon"}>
               <Clock className="w-3.5 h-3.5 mr-1 text-amber-500" />
               Expiram em breve
               {expiringSoonCount !== null && expiringSoonCount > 0 && (
@@ -198,8 +203,8 @@ export function ReferralTableSection({
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="completed">Convertidas</TabsTrigger>
-            <TabsTrigger value="completed-unpaid">
+            <TabsTrigger value="completed" aria-pressed={activeTab === "completed"}>Convertidas</TabsTrigger>
+            <TabsTrigger value="completed-unpaid" aria-pressed={activeTab === "completed-unpaid"}>
               Bônus pendente
               {pendingBonusCount !== null && pendingBonusCount > 0 && (
                 <Badge variant="destructive" className="ml-1.5 px-1.5 py-0 text-xs h-4">
@@ -207,8 +212,9 @@ export function ReferralTableSection({
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="expired">Expiradas</TabsTrigger>
-            <TabsTrigger value="suspicious">
+            <TabsTrigger value="expired" aria-pressed={activeTab === "expired"}>Expiradas</TabsTrigger>
+            <TabsTrigger value="reversed" aria-pressed={activeTab === "reversed"}>Revertidas</TabsTrigger>
+            <TabsTrigger value="suspicious" aria-pressed={activeTab === "suspicious"}>
               <ShieldAlert className="w-3.5 h-3.5 mr-1" />
               Suspeitas
               {suspiciousCount !== null && suspiciousCount > 0 && (
@@ -235,37 +241,36 @@ export function ReferralTableSection({
             bonusNotifiedCount={bonusNotifiedCount}
             bonusNotNotifiedCount={bonusNotNotifiedCount}
           />
-          {activeTab === "completed-unpaid" && selectedBonusIds.size > 0 && (
+           {canPay && activeTab === "completed-unpaid" && pendingBonusReferrals.some(r => selectedBonusIds.has(r.id)) && (
             <Button
               size="sm"
               className="bg-green-600 hover:bg-green-700 shrink-0"
               onClick={onBulkPay}
             >
               <CheckSquare2 className="w-3.5 h-3.5 mr-1.5" />
-              Pagar selecionados ({selectedBonusIds.size})
+               Pagar selecionados ({pendingBonusReferrals.filter(r => selectedBonusIds.has(r.id)).length})
             </Button>
           )}
           <span className="text-sm text-muted-foreground ml-auto">
-            {referralsFetching ? "Atualizando…" : (
+             {referralsFetching && !referralsError ? "Atualizando…" : (
               <>
-                {referrals.length} nesta página{referralTotal > referrals.length ? ` · ${referralTotal} no total` : ""}
+                 {referrals.length} nesta página · {referralTotal} no total
               </>
             )}
           </span>
         </div>
 
-        {["all", "pending", "expiringSoon", "completed", "completed-unpaid", "expired", "suspicious"].map((tabValue) => (
+         {["all", "pending", "expiringSoon", "completed", "completed-unpaid", "expired", "reversed", "suspicious"].map((tabValue) => (
           <TabsContent key={tabValue} value={tabValue}>
-            {referralsLoading ? (
+             {referralsError ? (
+               <Card><CardContent className="py-12 text-center space-y-3" role="alert">
+                 <p>Não foi possível carregar as indicações.</p>
+                 <Button variant="outline" onClick={onRetry}>Tentar novamente</Button>
+               </CardContent></Card>
+             ) : referralsLoading ? (
               <Card>
                 <CardContent className="py-12 text-center text-muted-foreground" role="status" aria-live="polite">
                   Carregando indicações…
-                </CardContent>
-              </Card>
-            ) : referralsError ? (
-              <Card>
-                <CardContent className="py-12 text-center text-muted-foreground" role="alert">
-                  Não foi possível carregar as indicações. Tente atualizar a página.
                 </CardContent>
               </Card>
             ) : referrals.length === 0 ? (
@@ -281,10 +286,11 @@ export function ReferralTableSection({
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        {tabValue === "completed-unpaid" && (
+                         {canPay && tabValue === "completed-unpaid" && (
                           <TableHead className="w-8">
                             <Checkbox
                               checked={allBonusSelected}
+                               disabled={pendingBonusReferrals.length === 0}
                               aria-label="Selecionar todas as indicações com bônus pendente nesta página"
                               onCheckedChange={(checked) => {
                                 onSelectedBonusIdsChange(
@@ -314,14 +320,17 @@ export function ReferralTableSection({
                         <ReferralTableRow
                           key={referral.id}
                           referral={referral}
-                          showSelection={tabValue === "completed-unpaid"}
+                           showSelection={canPay && tabValue === "completed-unpaid"}
                           showFraudReason={tabValue === "suspicious"}
                           selected={selectedBonusIds.has(referral.id)}
                           settingsTiers={settingsTiers}
                           canReverse={canReverse}
+                           canPay={canPay}
+                           canDeactivate={canDeactivate}
+                           canShare={canShare}
                           onSelectedChange={(checked) => {
                             const next = new Set(selectedBonusIds);
-                            if (checked) next.add(referral.id);
+                             if (checked && !referral.bonusBlocked && !referral.bonusPaid && referral.status === REFERRAL_STATUS.COMPLETED) next.add(referral.id);
                             else next.delete(referral.id);
                             onSelectedBonusIdsChange(next);
                           }}
@@ -341,7 +350,7 @@ export function ReferralTableSection({
         ))}
       </Tabs>
 
-      {referralPageCount > 1 && (
+       {!referralsError && !referralsLoading && referralPageCount > 1 && (
         <div className="flex items-center justify-center gap-3 mt-4">
           <Button
             variant="outline"
@@ -353,7 +362,7 @@ export function ReferralTableSection({
             Anterior
           </Button>
           <span className="text-sm text-muted-foreground">
-            Página {referralsPage} de {referralPageCount}
+             Página {referralsPage} de {referralPageCount}
           </span>
           <Button
             variant="outline"
@@ -409,6 +418,9 @@ interface ReferralTableRowProps {
   selected: boolean;
   settingsTiers?: ReferralTierConfig[] | null;
   canReverse: boolean;
+  canPay: boolean;
+  canDeactivate: boolean;
+  canShare: boolean;
   onSelectedChange: (checked: boolean) => void;
   onOpenDetail: (referral: ReferralTableRow) => void;
   onOpenShare: (referral: ReferralTableRow) => void;
@@ -424,6 +436,9 @@ function ReferralTableRow({
   selected,
   settingsTiers,
   canReverse,
+  canPay,
+  canDeactivate,
+  canShare,
   onSelectedChange,
   onOpenDetail,
   onOpenShare,
@@ -444,6 +459,7 @@ function ReferralTableRow({
         <TableCell>
           <Checkbox
             checked={selected}
+            disabled={referral.bonusBlocked}
             aria-label={`Selecionar indicação ${referral.code}`}
             onCheckedChange={(checked) => onSelectedChange(checked === true)}
           />
@@ -528,10 +544,10 @@ function ReferralTableRow({
                 <Check className="w-2.5 h-2.5" />
                 Pago {referral.bonusPaidAt ? `em ${fmtDate(referral.bonusPaidAt)}` : ""}
               </p>
-            ) : referral.bonusBlocked && referral.bonusReleasesAt ? (
+             ) : referral.bonusBlocked ? (
               <p className="text-xs text-slate-500 flex items-center gap-0.5">
                 <Clock className="w-2.5 h-2.5" />
-                Disponível em {fmtDate(referral.bonusReleasesAt)}
+                 Bônus bloqueado · disponível em {fmtDate(referral.bonusReleasesAt)}
               </p>
             ) : (
               <p className="text-xs text-amber-600">Pendente</p>
@@ -600,7 +616,7 @@ function ReferralTableRow({
           >
             <Eye className="w-3 h-3" />
           </Button>
-          <Button
+          {canShare && <Button
             size="sm"
             variant="ghost"
             className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
@@ -609,12 +625,13 @@ function ReferralTableRow({
             aria-label={`Compartilhar indicação ${referral.code}`}
           >
             <Share2 className="w-3 h-3" />
-          </Button>
-          {referral.status === REFERRAL_STATUS.COMPLETED && !referral.bonusPaid && (
+           </Button>}
+           {canPay && referral.status === REFERRAL_STATUS.COMPLETED && !referral.bonusPaid && (
             <Button
               size="sm"
               variant="ghost"
               className={referral.bonusBlocked ? "text-slate-400 cursor-not-allowed" : "text-green-600 hover:text-green-700 hover:bg-green-50"}
+               disabled={referral.bonusBlocked}
               onClick={() => { if (!referral.bonusBlocked) onOpenPayBonus(referral); }}
               title={referral.bonusBlocked && referral.bonusReleasesAt ? `Bônus disponível em ${fmtDate(referral.bonusReleasesAt)}` : "Pagar bônus"}
               aria-label={`Pagar bônus da indicação ${referral.code}`}
@@ -634,7 +651,7 @@ function ReferralTableRow({
               <XCircle className="w-3 h-3" />
             </Button>
           )}
-          {referral.isActive && referral.status === REFERRAL_STATUS.PENDING && (
+           {canDeactivate && referral.isActive && referral.status === REFERRAL_STATUS.PENDING && (
             <Button
               size="sm"
               variant="ghost"

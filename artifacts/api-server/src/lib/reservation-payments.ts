@@ -10,7 +10,7 @@ type ReservationUpdate = Partial<typeof reservationsTable.$inferInsert> & {
   status?: ReservationStatus;
 };
 
-async function sumPaidPayments(
+export async function sumPaidReservationPayments(
   executor: DbExecutor,
   reservationId: string,
   tenantId: string,
@@ -29,17 +29,29 @@ async function sumPaidPayments(
 export async function syncReservationPaymentStatus(
   reservationId: string,
   tenantId: string,
-  executor: DbExecutor = db,
+  executor?: DbExecutor,
 ): Promise<void> {
+  if (!executor) {
+    // Keep the parent lock while aggregating payment rows and writing the
+    // reservation snapshot; standalone callers otherwise have no transaction.
+    await db.transaction(async (tx) => {
+      await syncReservationPaymentStatus(reservationId, tenantId, tx);
+    });
+    return;
+  }
+
+  // Match reservation-total edits: lock the parent before reading its financial
+  // fields so paidValue and balance are based on the latest totalValue.
   const [reservation] = await executor
     .select()
     .from(reservationsTable)
     .where(and(eq(reservationsTable.id, reservationId), eq(reservationsTable.tenantId, tenantId)))
+    .for("update")
     .limit(1);
   if (!reservation) return;
 
   const totalValue = roundMoney(Number(reservation.totalValue));
-  const paidValue = await sumPaidPayments(executor, reservationId, tenantId);
+  const paidValue = await sumPaidReservationPayments(executor, reservationId, tenantId);
   const balance = roundMoney(Math.max(totalValue - paidValue, 0));
 
   if (

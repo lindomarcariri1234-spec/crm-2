@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createElement } from "react";
-import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js";
+import { createElement, type ReactElement } from "react";
+import { cleanupRoots, flushAct, renderComponent as renderBareComponent } from "./eventSourceHarness.js";
 import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "../pages/vitrine/referral-messages.js";
+import { VitrineThemeProvider } from "../contexts/VitrineThemeContext.js";
 
 const mocks = vi.hoisted(() => ({
   getReferralInfo: vi.fn(),
@@ -68,6 +69,12 @@ const store = {
   logoUrl: null,
   referralsEnabled: true,
 } as any;
+
+function renderComponent(element: ReactElement) {
+  return renderBareComponent(
+    createElement(VitrineThemeProvider, { store }, element),
+  );
+}
 
 beforeEach(() => {
   window.history.replaceState({}, "", "/indicacao?code=INDICA10");

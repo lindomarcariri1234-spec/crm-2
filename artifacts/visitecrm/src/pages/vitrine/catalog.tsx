@@ -18,7 +18,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { Loader2, Search, MapPin, SlidersHorizontal, X, ArrowUpDown } from "lucide-react";
+import { Search, MapPin, SlidersHorizontal, X, ArrowUpDown } from "lucide-react";
 import { ProductQuickView } from "@/components/vitrine/ProductQuickView";
 import { PremiumProductCard } from "@/components/vitrine/PremiumProductCard";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
@@ -93,13 +93,14 @@ function FilterPanel({
     !!local.minSeats;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h3 className="font-bold text-base">Filtros</h3>
+        <h3 className="text-base font-bold tracking-tight">Filtros</h3>
         {hasActive && (
           <button
             onClick={reset}
-            className="text-xs text-red-500 flex items-center gap-1 hover:text-red-700"
+             className="flex items-center gap-1 text-xs transition-opacity hover:opacity-70"
+             style={{ color: primaryColor }}
           >
             <X className="w-3 h-3" /> Limpar
           </button>
@@ -409,9 +410,16 @@ export default function VitrineCatalog({
     !!filters.minSeats;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
+    <div className="mx-auto max-w-6xl px-5 py-10 lg:px-8 lg:py-14">
       {pendingOrder && pendingCountdown !== null && !pendingExpired && (
-        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 mb-5">
+        <div
+          className="mb-7 flex items-center gap-3 rounded-2xl border px-4 py-3.5 shadow-sm"
+          style={{
+            backgroundColor: colors.primarySoft,
+            borderColor: `${colors.primary}35`,
+            color: colors.primary,
+          }}
+        >
           <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           <span className="text-sm flex-1">
             Assentos reservados para o pedido{" "}
@@ -424,32 +432,32 @@ export default function VitrineCatalog({
           </button>
         </div>
       )}
-      <div className="mb-6">
+      <div className="mb-8">
         <span
-          className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-[0.18em]"
+          className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.2em]"
           style={{ color: colors.accent }}
         >
           <span
-            className="inline-block h-1.5 w-1.5 rounded-full"
+             className="inline-block h-1.5 w-1.5 rounded-full"
             style={{ background: colors.accent }}
           />
           Catálogo
         </span>
-        <h1 className="mt-1 text-3xl font-bold tracking-tight sm:text-4xl">
+        <h1 className="mt-2 text-4xl font-semibold tracking-[-0.045em] sm:text-5xl">
           Nossos Pacotes
         </h1>
-        <p className="text-muted-foreground text-sm mt-1">
+        <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground">
           {loading
             ? "Carregando pacotes..."
             : `${total} pacote${total !== 1 ? "s" : ""} ${total !== 1 ? "disponíveis" : "disponível"}`}
         </p>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3 mb-5">
+      <div className="mb-6 flex flex-col gap-3 rounded-[1.5rem] border border-slate-200/80 bg-white p-3 shadow-[0_12px_35px_rgba(15,23,42,0.06)] sm:flex-row">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            className="pl-9"
+            className="h-12 rounded-xl border-slate-200 bg-slate-50/70 pl-11 shadow-none focus-visible:ring-2"
             placeholder="Buscar destinos, pacotes..."
             value={filters.search}
             onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
@@ -460,7 +468,7 @@ export default function VitrineCatalog({
           value={filters.sort}
           onValueChange={(v) => setFilters((f) => ({ ...f, sort: v }))}
         >
-          <SelectTrigger className="w-48 shrink-0">
+          <SelectTrigger className="h-12 w-full shrink-0 rounded-xl border-slate-200 bg-slate-50/70 sm:w-48">
             <ArrowUpDown className="w-4 h-4 mr-2 text-muted-foreground" />
             <SelectValue placeholder="Ordenar por" />
           </SelectTrigger>
@@ -476,7 +484,7 @@ export default function VitrineCatalog({
 
         <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
           <SheetTrigger asChild>
-            <Button variant="outline" className="shrink-0 flex items-center gap-2">
+            <Button variant="outline" className="h-12 shrink-0 gap-2 rounded-xl border-slate-200 bg-white px-4">
               <SlidersHorizontal className="w-4 h-4" />
               Filtros
               {hasActiveFilters && (
@@ -487,7 +495,7 @@ export default function VitrineCatalog({
               )}
             </Button>
           </SheetTrigger>
-          <SheetContent side="left" className="w-72">
+           <SheetContent side="left" className="w-80">
             <SheetHeader>
               <SheetTitle>Filtros</SheetTitle>
             </SheetHeader>
@@ -508,11 +516,11 @@ export default function VitrineCatalog({
         </Sheet>
       </div>
 
-      {categories.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-6">
+       {categories.length > 0 && (
+         <div className="mb-8 flex flex-wrap gap-2">
           <button
             onClick={() => setFilters((f) => ({ ...f, category: "all" }))}
-            className={`px-4 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+             className={`rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
               filters.category === "all"
                 ? "border-transparent"
                 : "border-border hover:bg-muted"
@@ -529,7 +537,7 @@ export default function VitrineCatalog({
             <button
               key={cat.id}
               onClick={() => setFilters((f) => ({ ...f, category: cat.id }))}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+               className={`rounded-full border px-4 py-2 text-sm font-semibold transition-colors ${
                 filters.category === cat.id
                   ? "border-transparent"
                   : "border-border hover:bg-muted"
@@ -546,17 +554,27 @@ export default function VitrineCatalog({
         </div>
       )}
 
-      {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-10 h-10 animate-spin text-muted-foreground" />
+       {loading ? (
+         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+           {Array.from({ length: 8 }).map((_, i) => (
+             <div key={i} className="h-[20rem] animate-pulse rounded-[1.35rem] border border-slate-200/70 bg-white">
+               <div className="h-44 rounded-t-[1.35rem] bg-slate-200/70" />
+               <div className="space-y-3 p-4">
+                 <div className="h-4 w-2/3 rounded bg-slate-200/70" />
+                 <div className="h-3 w-1/2 rounded bg-slate-200/70" />
+                 <div className="h-5 w-1/3 rounded bg-slate-200/70" />
+               </div>
+             </div>
+           ))}
         </div>
       ) : products.length === 0 ? (
-        <div className="text-center py-20 text-muted-foreground">
-          <MapPin className="w-16 h-16 mx-auto mb-4 opacity-20" />
-          <p className="text-lg">Nenhum pacote encontrado.</p>
+         <div className="rounded-[1.5rem] border border-dashed border-slate-300 bg-white/70 py-20 text-center text-muted-foreground">
+           <MapPin className="mx-auto mb-4 h-16 w-16 opacity-20" style={{ color: colors.primary }} />
+           <p className="text-lg font-semibold text-foreground">Nenhum pacote encontrado.</p>
           {(filters.search || hasActiveFilters) && (
             <button
-              className="mt-2 text-primary underline text-sm"
+               className="mt-3 text-sm font-semibold underline underline-offset-4"
+               style={{ color: colors.primary }}
               onClick={() => setFilters({ ...EMPTY_FILTERS })}
             >
               Limpar filtros
@@ -565,7 +583,7 @@ export default function VitrineCatalog({
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
             {products.map((product) => (
               <PremiumProductCard
                 key={product.id}
@@ -578,9 +596,10 @@ export default function VitrineCatalog({
           </div>
 
           {totalPages > 1 && (
-            <div className="flex justify-center gap-2 mt-8">
+             <div className="mt-10 flex justify-center gap-2">
               <Button
-                variant="outline"
+                 variant="outline"
+                 className="rounded-xl border-slate-200 bg-white"
                 disabled={page <= 1}
                 onClick={() => setPage((p) => p - 1)}
               >
@@ -590,7 +609,8 @@ export default function VitrineCatalog({
                 {page} / {totalPages}
               </span>
               <Button
-                variant="outline"
+                 variant="outline"
+                 className="rounded-xl border-slate-200 bg-white"
                 disabled={page >= totalPages}
                 onClick={() => setPage((p) => p + 1)}
               >

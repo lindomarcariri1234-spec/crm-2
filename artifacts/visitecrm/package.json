@@ -5,14 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.config.ts --host 0.0.0.0",
+    "dev:visual": "vite --config vite.visual.config.ts --host 127.0.0.1 --port 5190 --strictPort --mode visual",
     "build": "vite build --config vite.config.ts && pnpm run check:bundle-size",
     "check:bundle-size": "node ../../scripts/frontend-bundle-size.mjs dist/public",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:visual": "playwright test --config playwright.config.ts"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
+    "@playwright/test": "^1.63.0",
     "@radix-ui/react-accordion": "^1.2.4",
     "@radix-ui/react-alert-dialog": "^1.1.7",
     "@radix-ui/react-aspect-ratio": "^1.1.3",

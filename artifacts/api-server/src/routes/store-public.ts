@@ -3064,14 +3064,14 @@ router.post("/public/store/:slug/referral/track", async (req, res, next: NextFun
       next(new NotFoundError("Not found", "NOT_FOUND")); return;
     }
     const parsed = z.object({
-      code: z.string().min(1),
-      serverCookieId: z.string().optional(),
-      landingPage: z.string().optional(),
-      utmSource: z.string().optional(),
-      utmMedium: z.string().optional(),
-      utmCampaign: z.string().optional(),
-      utmContent: z.string().optional(),
-      utmTerm: z.string().optional(),
+      code: z.string().trim().min(1).max(80),
+      serverCookieId: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+      landingPage: z.string().max(2048).optional(),
+      utmSource: z.string().max(120).optional(),
+      utmMedium: z.string().max(120).optional(),
+      utmCampaign: z.string().max(120).optional(),
+      utmContent: z.string().max(120).optional(),
+      utmTerm: z.string().max(120).optional(),
     }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
     const code = parsed.data.code.toUpperCase();
