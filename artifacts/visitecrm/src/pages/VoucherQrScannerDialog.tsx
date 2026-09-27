@@ -235,20 +235,21 @@ export function VoucherQrScannerDialog({
       setCameraStatus("qr-unsupported");
       return;
     }
+    const BarcodeDetectorConstructor = Detector as NonNullable<typeof Detector>;
 
     setCameraStatus("requesting");
     const sessionId = ++cameraSessionRef.current;
 
     try {
-      if (Detector?.getSupportedFormats) {
-        const formats = await Detector.getSupportedFormats();
+      if (BarcodeDetectorConstructor.getSupportedFormats) {
+        const formats = await BarcodeDetectorConstructor.getSupportedFormats();
         if (!formats.includes("qr_code")) {
           setCameraStatus("qr-unsupported");
           return;
         }
       }
 
-      const detector = new Detector({ formats: ["qr_code"] });
+      const detector = new BarcodeDetectorConstructor({ formats: ["qr_code"] });
       const stream = await mediaDevices!.getUserMedia({
         audio: false,
         video: { facingMode: { ideal: "environment" } },

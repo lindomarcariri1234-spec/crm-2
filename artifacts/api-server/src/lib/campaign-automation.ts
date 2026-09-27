@@ -2,6 +2,7 @@ import { db, campaignsTable, campaignSendsTable, clientsTable, tenantsTable, res
 import { eq, ne, and, sql, isNotNull, inArray } from "drizzle-orm";
 import { RESERVATION_STATUS, type ReservationStatus } from "@workspace/permissions";
 import { logger } from "./logger";
+import { safeErrorLogFields } from "./safe-error-log";
 import { generateId } from "./id";
 import { sendReminderHtmlEmail, type SendEmailResult } from "@workspace/email";
 import { getCampaignEmailQueue, type CampaignEmailJobData } from "../queues/index";
@@ -425,7 +426,14 @@ async function processTenantCampaign(
         successCount++;
       } else {
         errorCount++;
-        logger.error({ err: sendResult.error, campaignId: campaign.id, clientId: client.id }, "[campaign-automation] Direct send failed");
+        logger.error(
+          {
+            providerError: safeErrorLogFields(sendResult.error),
+            campaignId: campaign.id,
+            clientId: client.id,
+          },
+          "[campaign-automation] Direct send failed",
+        );
         try {
           await db
             .insert(campaignSendsTable)

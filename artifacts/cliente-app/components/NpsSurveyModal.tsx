@@ -1,5 +1,6 @@
-import { useAuth } from "@clerk/clerk-expo";
+import { useAuth } from "@clerk/expo";
 import { useQueryClient } from "@tanstack/react-query";
+import { Feather } from "@expo/vector-icons";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
@@ -25,6 +26,8 @@ type NpsCategories = {
   guide?: boolean;
 } | null | undefined;
 
+type FeatherName = React.ComponentProps<typeof Feather>["name"];
+
 interface NpsSurveyModalProps {
   reservation: ClientPortalReservation;
   onDismiss: () => void;
@@ -33,11 +36,11 @@ interface NpsSurveyModalProps {
 
 const STAR_LABELS = ["Péssimo", "Ruim", "Regular", "Bom", "Excelente"];
 
-const CATEGORY_DEFS: { key: keyof NonNullable<NpsCategories>; label: string; emoji: string }[] = [
-  { key: "transport", label: "Transporte", emoji: "🚌" },
-  { key: "service", label: "Atendimento", emoji: "🤝" },
-  { key: "organization", label: "Organização", emoji: "📋" },
-  { key: "guide", label: "Guia", emoji: "🧭" },
+const CATEGORY_DEFS: { key: keyof NonNullable<NpsCategories>; label: string; icon: FeatherName }[] = [
+  { key: "transport", label: "Transporte", icon: "truck" },
+  { key: "service", label: "Atendimento", icon: "users" },
+  { key: "organization", label: "Organização", icon: "clipboard" },
+  { key: "guide", label: "Guia", icon: "compass" },
 ];
 
 function isCategoryEnabled(categories: NpsCategories, key: keyof NonNullable<NpsCategories>): boolean {
@@ -107,7 +110,7 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
   return (
     <Modal transparent animationType="fade" visible onRequestClose={onDismiss}>
       <KeyboardAvoidingView
-        style={styles.overlay}
+         style={[styles.overlay, { backgroundColor: colors.foreground + "8C" }]}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         <ScrollView
@@ -118,7 +121,9 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
           <View style={[styles.sheet, { backgroundColor: colors.card, shadowColor: colors.foreground }]}>
             {submitted ? (
               <View style={styles.thankYou}>
-                <Text style={styles.thankYouEmoji}>🎉</Text>
+                <View style={[styles.thankYouIcon, { backgroundColor: colors.successLight }]}>
+                  <Feather name="check" size={28} color={colors.success} />
+                </View>
                 <Text style={[styles.thankYouTitle, { color: colors.foreground }]}>
                   Obrigado pela avaliação!
                 </Text>
@@ -149,7 +154,7 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
                       style={styles.starBtn}
                       hitSlop={8}
                     >
-                      <Text style={[styles.star, { color: star <= selectedStar ? "#f59e0b" : colors.border }]}>
+                       <Text style={[styles.star, { color: star <= selectedStar ? colors.amareloSol : colors.border }]}>
                         ★
                       </Text>
                     </Pressable>
@@ -157,7 +162,7 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
                 </View>
 
                 {selectedStar > 0 && (
-                  <Text style={[styles.starLabel, { color: "#f59e0b" }]}>
+                   <Text style={[styles.starLabel, { color: colors.dourado }]}>
                     {STAR_LABELS[selectedStar - 1]}
                   </Text>
                 )}
@@ -167,13 +172,16 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
                     <Text style={[styles.categoriesTitle, { color: colors.mutedForeground }]}>
                       Avalie por categoria (opcional)
                     </Text>
-                    {enabledCategories.map(({ key, label, emoji }) => {
+                    {enabledCategories.map(({ key, label, icon }) => {
                       const score = categoryScores[key] ?? 0;
                       return (
                         <View key={key} style={styles.categoryRow}>
-                          <Text style={[styles.categoryLabel, { color: colors.foreground }]}>
-                            {emoji} {label}
-                          </Text>
+                           <View style={styles.categoryLabelWrap}>
+                             <Feather name={icon} size={15} color={colors.primary} />
+                             <Text style={[styles.categoryLabel, { color: colors.foreground }]}>
+                               {label}
+                             </Text>
+                           </View>
                           <View style={styles.categoryStars}>
                             {[1, 2, 3, 4, 5].map((s) => (
                               <Pressable
@@ -186,7 +194,7 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
                                 }
                                 hitSlop={6}
                               >
-                                <Text style={[styles.catStar, { color: s <= score ? "#f59e0b" : colors.border }]}>
+                                 <Text style={[styles.catStar, { color: s <= score ? colors.amareloSol : colors.border }]}>
                                   ★
                                 </Text>
                               </Pressable>
@@ -218,7 +226,7 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
                 />
 
                 {error ? (
-                  <Text style={styles.errorText}>{error}</Text>
+                  <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
                 ) : null}
 
                 <View style={styles.actions}>
@@ -241,9 +249,9 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
                     disabled={submitting || selectedStar === 0}
                   >
                     {submitting ? (
-                      <ActivityIndicator size="small" color="#fff" />
+                      <ActivityIndicator size="small" color={colors.primaryForeground} />
                     ) : (
-                      <Text style={styles.submitBtnText}>Enviar</Text>
+                      <Text style={[styles.submitBtnText, { color: colors.primaryForeground }]}>Enviar</Text>
                     )}
                   </Pressable>
                 </View>
@@ -259,7 +267,6 @@ export function NpsSurveyModal({ reservation, onDismiss, npsCategories }: NpsSur
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "flex-end",
   },
   sheet: {
@@ -324,7 +331,12 @@ const styles = StyleSheet.create({
   categoryLabel: {
     fontSize: 14,
     fontFamily: "Inter_400Regular",
+  },
+  categoryLabelWrap: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   categoryStars: {
     flexDirection: "row",
@@ -343,7 +355,6 @@ const styles = StyleSheet.create({
     minHeight: 72,
   },
   errorText: {
-    color: "#dc2626",
     fontSize: 13,
     fontFamily: "Inter_400Regular",
     textAlign: "center",
@@ -374,15 +385,18 @@ const styles = StyleSheet.create({
   submitBtnText: {
     fontSize: 15,
     fontFamily: "Inter_700Bold",
-    color: "#fff",
   },
   thankYou: {
     alignItems: "center",
     paddingVertical: 16,
     gap: 8,
   },
-  thankYouEmoji: {
-    fontSize: 48,
+  thankYouIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
   },
   thankYouTitle: {
     fontSize: 20,

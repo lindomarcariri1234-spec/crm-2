@@ -147,34 +147,30 @@ export function ReservationsTable({
 
       <div className="bg-card rounded-lg border overflow-hidden">
         <div className="overflow-x-auto">
-        <Table className="min-w-[1180px]">
+        <Table className="min-w-[1200px]">
           <TableHeader>
             <TableRow>
-              <TableHead>Nº Reserva</TableHead>
-              <TableHead>Cliente</TableHead>
-              <TableHead>Viagem</TableHead>
-              <TableHead>Embarque</TableHead>
-              <TableHead>Assentos</TableHead>
-              <TableHead>Valor Total</TableHead>
-              <TableHead>Desconto</TableHead>
-              <TableHead>Total líquido</TableHead>
-              <TableHead>Pago</TableHead>
-              <TableHead>Saldo devedor</TableHead>
-              <TableHead>Pagamento</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Ações</TableHead>
+              <TableHead className="w-[245px]">Cliente / reserva</TableHead>
+              <TableHead className="w-[165px]">Viagem</TableHead>
+              <TableHead className="w-[150px]">Embarque e assentos</TableHead>
+              <TableHead className="w-[130px]">Valor bruto / desconto</TableHead>
+              <TableHead className="w-[110px]">Total líquido</TableHead>
+              <TableHead className="w-[130px]">Pago / saldo</TableHead>
+              <TableHead className="w-[82px]">Pagamento</TableHead>
+              <TableHead className="w-[95px]">Status</TableHead>
+              <TableHead className="w-[52px] text-right">Ações</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <TableRow key={i}>
-                  {Array.from({ length: 13 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}
+                  {Array.from({ length: 9 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}
                 </TableRow>
               ))
             ) : reservations.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={13} className="text-center py-12 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                   <div className="flex flex-col items-center gap-2">
                     <CalendarCheck className="w-8 h-8 opacity-30" />
                     <p>Nenhuma reserva encontrada</p>
@@ -185,30 +181,15 @@ export function ReservationsTable({
             ) : (
               reservations.map(r => {
                 const financial = getReservationFinancialSummary(r as ReservationWithFinancialLinks);
+                const clientInitials = r.client?.name
+                  ?.split(/\s+/)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map(part => part[0])
+                  .join("")
+                  .toUpperCase() ?? "—";
                 return (
                 <TableRow key={r.id} className="cursor-pointer hover:bg-muted/50">
-                  <TableCell>
-                    <div className="flex flex-col gap-0.5">
-                      <div className="flex items-center gap-1.5">
-                        <Tag className="w-3.5 h-3.5 text-muted-foreground" />
-                        <span className="font-mono text-xs font-semibold">{r.reservationNumber ?? r.voucherCode}</span>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {(r as { storeOrderId?: string | null }).storeOrderId && (
-                          <span title={`Pedido online: #${(r as { storeOrderId?: string | null }).storeOrderId}`} className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700 cursor-default">Loja</span>
-                        )}
-                        {r.hasAutoRetry && (
-                          <Badge className="text-xs bg-purple-50 text-purple-700 border-purple-200" variant="outline">
-                            <RefreshCcw className="w-3 h-3 mr-1" />
-                            Auto-reenviado
-                          </Badge>
-                        )}
-                        {r.isGratuidade && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700 cursor-default">Gratuidade</span>
-                        )}
-                      </div>
-                    </div>
-                  </TableCell>
                   <TableCell>
                     {(() => {
                       type CT = { reservationId: string; tripName: string; departureDate: string; returnDate: string | null };
@@ -216,51 +197,90 @@ export function ReservationsTable({
                       const conflictTitle = conflicts.length > 0
                         ? `Reservas em viagens no mesmo período:\n${conflicts.map(c => `• ${c.tripName} (${new Date(c.departureDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}${c.returnDate ? ` – ${new Date(c.returnDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}` : ""})`).join("\n")}`
                         : undefined;
-                      return r.client?.id ? (
-                        <div className="flex items-start gap-1.5">
-                          <button className="text-left hover:underline flex-1" onClick={() => setClient360Id(r.client!.id)}>
-                            <p className="font-medium text-sm">{r.client?.name ?? "—"}</p>
-                            <p className="text-xs text-muted-foreground">{r.client?.whatsapp}</p>
-                          </button>
-                          {conflictTitle && (
-                            <span title={conflictTitle} className="inline-flex items-center justify-center rounded-full bg-orange-100 text-orange-600 cursor-help shrink-0 mt-0.5 p-0.5" aria-label="Conflito de período">
-                              <AlertTriangle className="w-3.5 h-3.5" />
+                      const storeOrderId = (r as { storeOrderId?: string | null }).storeOrderId;
+                      return (
+                        <div className="flex min-w-[220px] flex-col gap-1.5">
+                          <div className="flex items-start gap-2">
+                            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary" aria-hidden="true">
+                              {clientInitials}
                             </span>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="flex items-start gap-1.5">
-                          <div className="flex-1">
-                            <p className="font-medium text-sm">{r.client?.name ?? "—"}</p>
-                            <p className="text-xs text-muted-foreground">{r.client?.whatsapp}</p>
+                            {r.client?.id ? (
+                              <button className="min-w-0 flex-1 text-left hover:underline" onClick={() => setClient360Id(r.client!.id)}>
+                                <span className="block whitespace-normal text-sm font-semibold leading-5">{r.client?.name ?? "—"}</span>
+                                <span className="mt-0.5 block text-xs text-muted-foreground">{r.client?.whatsapp}</span>
+                              </button>
+                            ) : (
+                              <div className="min-w-0 flex-1">
+                                <p className="whitespace-normal text-sm font-semibold leading-5">{r.client?.name ?? "—"}</p>
+                                <p className="mt-0.5 text-xs text-muted-foreground">{r.client?.whatsapp}</p>
+                              </div>
+                            )}
+                            {conflictTitle && (
+                              <span title={conflictTitle} className="mt-0.5 inline-flex shrink-0 cursor-help items-center justify-center rounded-full bg-orange-100 p-0.5 text-orange-600" aria-label="Conflito de período">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                              </span>
+                            )}
                           </div>
-                          {conflictTitle && (
-                            <span title={conflictTitle} className="inline-flex items-center justify-center rounded-full bg-orange-100 text-orange-600 cursor-help shrink-0 mt-0.5 p-0.5" aria-label="Conflito de período">
-                              <AlertTriangle className="w-3.5 h-3.5" />
+                          <div className="ml-10 flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground" title="Número da reserva">
+                              <Tag className="h-3 w-3" />
+                              <span className="font-mono font-semibold">{r.reservationNumber ?? r.voucherCode}</span>
                             </span>
-                          )}
+                            {storeOrderId && (
+                              <span title={`Pedido online: #${storeOrderId}`} className="inline-flex cursor-default items-center rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700">Loja</span>
+                            )}
+                            {r.hasAutoRetry && (
+                              <Badge className="border-purple-200 bg-purple-50 text-xs text-purple-700" variant="outline">
+                                <RefreshCcw className="mr-1 h-3 w-3" />
+                                Auto-reenviado
+                              </Badge>
+                            )}
+                            {r.isGratuidade && (
+                              <span className="inline-flex cursor-default items-center rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700">Gratuidade</span>
+                            )}
+                          </div>
                         </div>
                       );
                     })()}
                   </TableCell>
                   <TableCell>
-                    <p className="font-medium text-sm truncate max-w-[140px]">{r.trip?.name ?? "—"}</p>
-                    <p className="text-xs text-muted-foreground">{r.trip?.departureDate ? formatDate(r.trip.departureDate) : "—"}</p>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {(r as { boardingLocationId?: string }).boardingLocationId ? boardingMap[(r as { boardingLocationId?: string }).boardingLocationId!] ?? "—" : "—"}
+                    <p className="whitespace-normal text-sm font-medium leading-5">{r.trip?.name ?? "—"}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{r.trip?.departureDate ? formatDate(r.trip.departureDate) : "—"}</p>
                   </TableCell>
                   <TableCell>
-                    <div className="flex flex-wrap gap-0.5">
-                      {r.seats.slice(0, 3).map(s => <span key={s} className="font-mono text-xs bg-muted px-1 py-0.5 rounded">{s}</span>)}
-                      {r.seats.length > 3 && <span className="text-xs text-muted-foreground">+{r.seats.length - 3}</span>}
+                    <div className="flex flex-col gap-1.5">
+                      <p className="whitespace-normal text-sm leading-5 text-muted-foreground">
+                        {(r as { boardingLocationId?: string }).boardingLocationId
+                          ? boardingMap[(r as { boardingLocationId?: string }).boardingLocationId!] ?? "—"
+                          : "—"}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {r.seats.slice(0, 3).map(s => <span key={s} className="rounded border border-primary/10 bg-primary/5 px-1.5 py-0.5 font-mono text-xs font-medium text-primary">{s}</span>)}
+                        {r.seats.length > 3 && <span className="text-xs text-muted-foreground">+{r.seats.length - 3}</span>}
+                      </div>
                     </div>
                   </TableCell>
-                  <TableCell className="font-medium text-sm whitespace-nowrap">{formatCurrency(financial.subtotal)}</TableCell>
-                  <TableCell className="text-sm text-destructive whitespace-nowrap">{financial.discount > 0 ? `− ${formatCurrency(financial.discount)}` : "—"}</TableCell>
-                  <TableCell className="font-medium text-sm whitespace-nowrap">{formatCurrency(financial.total)}</TableCell>
-                  <TableCell className="text-sm text-green-700 whitespace-nowrap">{formatCurrency(financial.paid)}</TableCell>
-                  <TableCell className={`text-sm font-medium whitespace-nowrap ${financial.balance > 0 ? "text-destructive" : "text-green-700"}`}>{formatCurrency(financial.balance)}</TableCell>
+                  <TableCell>
+                    <div className="whitespace-nowrap">
+                      <p className="text-sm font-medium">{formatCurrency(financial.subtotal)}</p>
+                      <p className={`mt-1 text-xs ${financial.discount > 0 ? "text-destructive" : "text-muted-foreground"}`}>
+                        {financial.discount > 0 ? `Desconto − ${formatCurrency(financial.discount)}` : "Sem desconto"}
+                      </p>
+                    </div>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-sm font-semibold text-primary">{formatCurrency(financial.total)}</TableCell>
+                  <TableCell>
+                    <div className="min-w-[125px] space-y-1.5 whitespace-nowrap">
+                      <p className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-muted-foreground">Pago</span>
+                        <span className="font-medium text-green-700">{formatCurrency(financial.paid)}</span>
+                      </p>
+                      <p className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-muted-foreground">Saldo</span>
+                        <span className={`font-semibold ${financial.balance > 0 ? "text-destructive" : "text-green-700"}`}>{formatCurrency(financial.balance)}</span>
+                      </p>
+                    </div>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{METHOD_LABELS[financial.paymentMethod ?? ""] ?? financial.paymentMethod ?? "—"}</TableCell>
                   <TableCell>
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${STATUS_COLORS[r.status] ?? "bg-gray-100 text-gray-800"}`}>

@@ -194,11 +194,11 @@ beforeEach(() => {
   }).mockResolvedValueOnce({
     referral: { creditBalance: "60.00" },
   });
-  validateCouponSpy.mockReset();
   createOrderSpy.mockReset();
   createPaymentIntentSpy.mockReset();
   getOrderSpy.mockReset();
-  validateReferralSpy.mockReset();
+  validateCouponSpy.mockReset();
+  validateReferralSpy.mockReset().mockImplementation(() => new Promise(() => {}));
   confirmPaymentSpy.mockReset().mockResolvedValue({ error: null });
   trackReferralCreditReductionSpy
     .mockReset()

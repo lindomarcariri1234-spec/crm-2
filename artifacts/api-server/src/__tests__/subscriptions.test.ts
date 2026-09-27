@@ -31,6 +31,9 @@ const {
   mockUpdate,
   mockGetUncachableStripeClient,
   mockGetStripePublishableKey,
+  mockPoolConnect,
+  mockLockQuery,
+  mockLockRelease,
 } = vi.hoisted(() => {
   const ME = { id: "user-1", tenantId: "tenant-1", role: "agencia" };
 
@@ -47,6 +50,12 @@ const {
 
   const mockGetUncachableStripeClient = vi.fn();
   const mockGetStripePublishableKey = vi.fn(async () => "pk_test_mocked_environment_key");
+  const mockLockQuery = vi.fn(async () => ({ rows: [] }));
+  const mockLockRelease = vi.fn();
+  const mockPoolConnect = vi.fn(async () => ({
+    query: mockLockQuery,
+    release: mockLockRelease,
+  }));
 
   return {
     mockRequireAuth,
@@ -56,6 +65,9 @@ const {
     mockUpdate,
     mockGetUncachableStripeClient,
     mockGetStripePublishableKey,
+    mockPoolConnect,
+    mockLockQuery,
+    mockLockRelease,
   };
 });
 
@@ -70,6 +82,7 @@ vi.mock("@workspace/db", () => ({
     update: mockUpdate,
     transaction: vi.fn(),
   },
+  pool: { connect: mockPoolConnect },
   plansTable: {},
   tenantsTable: {},
   invoicesTable: {},
@@ -225,6 +238,10 @@ beforeEach(() => {
       list: vi.fn().mockResolvedValue({ data: [] }),
     },
   });
+  mockPoolConnect.mockResolvedValue({
+    query: mockLockQuery,
+    release: mockLockRelease,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -238,6 +255,7 @@ describe("POST /api/subscriptions/upgrade — STRIPE_PRICE_NOT_FOUND guard", () 
     // 2. tenantsTable → tenant found
     // 3. subscriptionsTable (ordered, limit 10) → existing sub with stripeCustomerId
     installSelectQueue([
+      [],
       [PLAN],
       [TENANT],
       [{ id: "sub-old", stripeCustomerId: "cus_existing", createdAt: new Date() }],
@@ -250,10 +268,22 @@ describe("POST /api/subscriptions/upgrade — STRIPE_PRICE_NOT_FOUND guard", () 
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "STRIPE_PRICE_NOT_FOUND" });
+    expect(mockLockQuery).toHaveBeenNthCalledWith(
+      1,
+      "SELECT pg_advisory_lock(hashtextextended($1, 0))",
+      ["visitecrm:subscription-upgrade:tenant-1"],
+    );
+    expect(mockLockQuery).toHaveBeenNthCalledWith(
+      2,
+      "SELECT pg_advisory_unlock(hashtextextended($1, 0))",
+      ["visitecrm:subscription-upgrade:tenant-1"],
+    );
+    expect(mockLockRelease).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT insert an invoice, update tenant, or insert a subscription before returning 400", async () => {
     installSelectQueue([
+      [],
       [PLAN],
       [TENANT],
       [{ id: "sub-old", stripeCustomerId: "cus_existing", createdAt: new Date() }],
@@ -266,6 +296,22 @@ describe("POST /api/subscriptions/upgrade — STRIPE_PRICE_NOT_FOUND guard", () 
 
     expect(mockInsert).not.toHaveBeenCalled();
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects another upgrade while the tenant already has a pending payment", async () => {
+    installSelectQueue([[{ id: "sub-pending" }]]);
+
+    const res = await request(buildApp())
+      .post("/api/subscriptions/upgrade")
+      .send({ planSlug: "pro", billingCycle: "monthly" })
+      .set("Content-Type", "application/json");
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: "SUBSCRIPTION_UPGRADE_PENDING" });
+    expect(mockInsert).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockGetUncachableStripeClient).not.toHaveBeenCalled();
+    expect(mockLockRelease).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -328,6 +374,7 @@ describe("POST /api/subscriptions/upgrade — annual billing cycle creates a rec
     // 3. subscriptionsTable (limit 10) → existing sub with stripeCustomerId
     // 4. invoicesTable (limit 1)       → created invoice re-read for response
     installSelectQueue([
+      [],
       [PLAN],
       [TENANT],
       [{ id: "sub-old", stripeCustomerId: "cus_existing", createdAt: new Date() }],
@@ -378,6 +425,7 @@ describe("POST /api/subscriptions/upgrade — annual billing cycle creates a rec
     });
 
     installSelectQueue([
+      [],
       [PLAN],
       [TENANT],
       [{ id: "sub-old", stripeCustomerId: "cus_existing", createdAt: new Date() }],
@@ -499,6 +547,7 @@ describe("POST /subscriptions/upgrade — annual billing period is stored as 365
     mockGetUncachableStripeClient.mockRejectedValueOnce(new Error("Stripe not configured"));
 
     installSelectQueue([
+      [],
       [PLAN],
       [TENANT],
     ]);
@@ -536,6 +585,7 @@ describe("POST /subscriptions/upgrade — annual billing period is stored as 365
     mockGetUncachableStripeClient.mockRejectedValueOnce(new Error("Stripe not configured"));
 
     installSelectQueue([
+      [],
       [PLAN],
       [TENANT],
     ]);

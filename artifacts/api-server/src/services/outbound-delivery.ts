@@ -62,7 +62,7 @@ export interface OutboundMessageListOptions {
   automationId?: string;
   bounceType?: OutboundBounceType;
   dateFrom?: Date;
-  dateTo?: Date;
+  dateToExclusive?: Date;
   limit?: number;
   maxLimit?: number;
   providerMissing?: boolean;
@@ -689,7 +689,7 @@ export async function listOutboundMessages(tenantId: string, opts?: OutboundMess
     opts?.origin ? eq(outboundMessagesTable.origin, opts.origin) : undefined,
     opts?.eventType ? eq(outboundMessagesTable.eventType, opts.eventType) : undefined,
     opts?.dateFrom ? sql`${outboundMessagesTable.createdAt} >= ${opts.dateFrom}` : undefined,
-    opts?.dateTo ? sql`${outboundMessagesTable.createdAt} <= ${opts.dateTo}` : undefined,
+    opts?.dateToExclusive ? sql`${outboundMessagesTable.createdAt} < ${opts.dateToExclusive}` : undefined,
     opts?.campaignId ? sql`${outboundMessagesTable.metadata}->>'campaignId' = ${opts.campaignId}` : undefined,
     opts?.automationId ? sql`${outboundMessagesTable.metadata}->>'automationId' = ${opts.automationId}` : undefined,
     hasDeliveryFilter
@@ -742,7 +742,7 @@ export async function listOutboundProviderFailureSummary(
     opts?.origin ? eq(outboundMessagesTable.origin, opts.origin) : undefined,
     opts?.eventType ? eq(outboundMessagesTable.eventType, opts.eventType) : undefined,
     opts?.dateFrom ? sql`${outboundMessagesTable.createdAt} >= ${opts.dateFrom}` : undefined,
-    opts?.dateTo ? sql`${outboundMessagesTable.createdAt} <= ${opts.dateTo}` : undefined,
+    opts?.dateToExclusive ? sql`${outboundMessagesTable.createdAt} < ${opts.dateToExclusive}` : undefined,
     opts?.campaignId ? sql`${outboundMessagesTable.metadata}->>'campaignId' = ${opts.campaignId}` : undefined,
     opts?.automationId ? sql`${outboundMessagesTable.metadata}->>'automationId' = ${opts.automationId}` : undefined,
   ];

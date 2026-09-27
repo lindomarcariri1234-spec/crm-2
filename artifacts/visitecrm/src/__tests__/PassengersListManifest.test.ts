@@ -10,7 +10,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@workspace/api-client-react", () => ({}));
 
-import { printPassengersManifest } from "../pages/trips/PassengersListManifest.js";
+import {
+  formatManifestDepartureLabel,
+  printPassengersManifest,
+} from "../pages/trips/PassengersListManifest.js";
 import type { BoardingPassenger, FreePassenger } from "@workspace/api-client-react";
 
 // ---------------------------------------------------------------------------
@@ -226,6 +229,51 @@ describe("printPassengersManifest — totais por categoria e gratuidade", () => 
   });
 });
 
+describe("manifesto — data e horário global de saída", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("combina a data da viagem com o horário explícito, não com o meio-dia sentinela", () => {
+    const departureDate = "2026-09-24T15:00:00.000Z";
+    expect(formatManifestDepartureLabel(departureDate, "20:00"))
+      .toBe("24/09/2026 às 20:00");
+
+    const { getHtml } = setupWindowOpenCapture();
+    printPassengersManifest(
+      { tripName: "Excursão", departureDate },
+      { destinationCity: "João Pessoa", destinationState: "PB", departureTime: "20:00" },
+      [makeAdult()],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+    );
+
+    const html = getHtml();
+    expect(html).toContain("Saída:</label>24/09/2026 às 20:00");
+    expect(html).not.toContain("24/09/2026 às 12:00");
+  });
+
+  it("não inventa um horário quando a viagem não tem horário de saída cadastrado", () => {
+    const departureDate = "2026-09-24T15:00:00.000Z";
+    expect(formatManifestDepartureLabel(departureDate, null)).toBe("24/09/2026");
+
+    const { getHtml } = setupWindowOpenCapture();
+    printPassengersManifest(
+      { tripName: "Excursão", departureDate },
+      { destinationCity: "João Pessoa", destinationState: "PB", departureTime: null },
+      [makeAdult()],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+    );
+
+    const html = getHtml();
+    expect(html).toContain("Saída:</label>24/09/2026</div>");
+    expect(html).not.toContain("24/09/2026 às 12:00");
+  });
+});
+
 describe("printPassengersManifest — badge 'No colo' na coluna de observações", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -435,5 +483,28 @@ describe("printPassengersManifest — colunas financeiras", () => {
     expect(html).toContain('<th class="num">Valor Pago</th>');
     expect(html).toContain('<th class="num">Saldo</th>');
     expect(html.match(/<td class="num">—<\/td>/g)).toHaveLength(3);
+  });
+
+  it("imprime o ponto direto da gratuidade e faz fallback para id removido", () => {
+    const { getHtml } = setupWindowOpenCapture();
+    printPassengersManifest(
+      undefined,
+      undefined,
+      [],
+      noLabel,
+      noCpf,
+      AGE_CATEGORY_LABELS,
+      [
+        makeFreePassenger({ id: "free-known", boardingLocationId: "bp-1" } as FreePassenger & { boardingLocationId: string }),
+        makeFreePassenger({ id: "free-unknown", boardingLocationId: "bp-removed" } as FreePassenger & { boardingLocationId: string }),
+      ],
+      { boardingLocation: true },
+      undefined,
+      [{ id: "bp-1", name: "Centro" }],
+    );
+
+    const html = getHtml();
+    expect(html).toContain(">Centro</td>");
+    expect(html).toContain(">Não definido</td>");
   });
 });

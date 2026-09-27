@@ -44,7 +44,7 @@ import {
   Users,
   FileText,
 } from "lucide-react";
-import { formatCurrencyBRL as fmtCurrency } from "@/lib/utils";
+import { formatCurrencyBRL as fmtCurrency, formatDate } from "@/lib/utils";
 
 const STATUS_LABELS: Record<string, string> = {
   [RESERVATION_STATUS.CONFIRMED]: "Confirmada",
@@ -64,6 +64,54 @@ function paymentStatus(r: Reservation): string {
   if (r.balance <= 0) return STORE_PAYMENT_STATUS.PAID;
   if (r.paidValue > 0) return "partial";
   return STORE_PAYMENT_STATUS.PENDING;
+}
+
+function PassengerIdentity({ reservation }: { reservation: Reservation }) {
+  const details = [
+    reservation.client.whatsapp,
+    reservation.client.cpf ? `CPF ${reservation.client.cpf}` : null,
+  ].filter(Boolean);
+
+  return (
+    <div className="min-w-0">
+      <p className="truncate text-sm font-semibold">{reservation.client.name}</p>
+      {details.length > 0 && (
+        <p className="mt-0.5 break-words text-xs text-muted-foreground">
+          {details.join(" · ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CheckInBadge({ checkedInAt, compact = false }: {
+  checkedInAt: string | null | undefined;
+  compact?: boolean;
+}) {
+  if (!checkedInAt) {
+    return (
+      <Badge variant="outline" className="whitespace-nowrap">
+        <Clock className="mr-1 h-3 w-3" />
+        Aguardando
+      </Badge>
+    );
+  }
+
+  const time = new Intl.DateTimeFormat("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "America/Sao_Paulo",
+  }).format(new Date(checkedInAt));
+
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <Badge className="whitespace-nowrap border-green-200 bg-green-100 text-green-800">
+        <CheckCircle2 className="mr-1 h-3 w-3" />
+        Check-in feito
+      </Badge>
+      {!compact && <span className="pl-1 text-xs text-muted-foreground">às {time}</span>}
+    </div>
+  );
 }
 
 function VoucherCard({ reservation, onDownload }: { reservation: Reservation; onDownload?: (r: Reservation) => void }) {
@@ -88,7 +136,11 @@ function VoucherCard({ reservation, onDownload }: { reservation: Reservation; on
         <div className="flex items-start justify-between">
           <div>
             <CardTitle className="text-base font-bold">{reservation.client.name}</CardTitle>
-            <p className="text-xs text-muted-foreground mt-0.5">{reservation.client.email}</p>
+            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+              {reservation.client.whatsapp && <p>WhatsApp: {reservation.client.whatsapp}</p>}
+              {reservation.client.email && <p>{reservation.client.email}</p>}
+              {reservation.client.cpf && <p>CPF: {reservation.client.cpf}</p>}
+            </div>
           </div>
           {isCheckedIn ? (
             <Badge className="bg-green-100 text-green-700 border-green-200">
@@ -118,6 +170,7 @@ function VoucherCard({ reservation, onDownload }: { reservation: Reservation; on
               <div>
                 <p className="text-xs text-muted-foreground">Viagem</p>
                 <p className="font-medium text-sm">{reservation.trip.name}</p>
+                <p className="text-xs text-muted-foreground">{formatDate(reservation.trip.departureDate)}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -244,8 +297,9 @@ function BulkCheckIn() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
+          <p className="mb-1.5 text-sm font-medium">Viagem para o check-in</p>
           <Select value={selectedTripId} onValueChange={setSelectedTripId}>
             <SelectTrigger>
               <SelectValue placeholder="Selecionar viagem para check-in em massa" />
@@ -263,7 +317,7 @@ function BulkCheckIn() {
         <Button
           onClick={handleBulkCheckIn}
           disabled={pending.length === 0 || processing}
-          className="shrink-0"
+          className="w-full shrink-0 sm:w-auto"
         >
           <CheckCircle2 className="w-4 h-4 mr-2" />
           {processing ? "Processando..." : `Check-in em massa (${pending.length})`}
@@ -271,68 +325,75 @@ function BulkCheckIn() {
       </div>
 
       {selectedTripId !== "__none__" && tripReservations.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex gap-4 text-sm">
-            <span className="text-green-600 font-medium">
-              <CheckCircle2 className="w-4 h-4 inline mr-1" />
-              {checkedIn.length} realizados
-            </span>
-            <span className="text-muted-foreground">
-              <Clock className="w-4 h-4 inline mr-1" />
-              {pending.length} pendentes
-            </span>
-            <span className="text-muted-foreground">
-              Total: {tripReservations.length} passageiros
-            </span>
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Passageiros</p>
+                  <p className="mt-1 text-2xl font-bold">{tripReservations.length}</p>
+                </div>
+                <Users className="h-5 w-5 text-primary" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Check-in realizado</p>
+                  <p className="mt-1 text-2xl font-bold text-green-700">{checkedIn.length}</p>
+                </div>
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Aguardando</p>
+                  <p className="mt-1 text-2xl font-bold text-amber-700">{pending.length}</p>
+                </div>
+                <Clock className="h-5 w-5 text-amber-600" />
+              </CardContent>
+            </Card>
           </div>
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Passageiro</TableHead>
-                  <TableHead>Voucher</TableHead>
-                  <TableHead>Assentos</TableHead>
-                  <TableHead>Status Reserva</TableHead>
-                  <TableHead>Check-in</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tripReservations.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      <p className="font-medium text-sm">{r.client.name}</p>
-                      <p className="text-xs text-muted-foreground">{r.client.cpf ?? ""}</p>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {r.reservationNumber ? (
-                        <span className="text-primary font-bold">{r.reservationNumber}</span>
-                      ) : r.voucherCode}
-                    </TableCell>
-                    <TableCell className="text-sm">{r.seats.join(", ") || "—"}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={r.status === RESERVATION_STATUS.CONFIRMED ? "default" : r.status === RESERVATION_STATUS.CANCELLED ? "destructive" : "secondary"}
-                        className="text-xs"
-                      >
-                        {STATUS_LABELS[r.status] ?? r.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      {r.checkedInAt ? (
-                        <div className="flex items-center gap-1 text-green-600">
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span className="text-xs">
-                            {new Date(r.checkedInAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
-                          </span>
-                        </div>
-                      ) : (
-                        <Clock className="w-4 h-4 text-muted-foreground" />
-                      )}
-                    </TableCell>
+          <div className="overflow-hidden rounded-lg border bg-background">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Passageiro</TableHead>
+                    <TableHead>Voucher / reserva</TableHead>
+                    <TableHead>Assentos</TableHead>
+                    <TableHead>Status da reserva</TableHead>
+                    <TableHead>Check-in</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {tripReservations.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell><PassengerIdentity reservation={r} /></TableCell>
+                      <TableCell>
+                        <p className="font-mono text-xs font-semibold text-primary">
+                          {r.reservationNumber || r.voucherCode}
+                        </p>
+                        {r.reservationNumber && (
+                          <p className="mt-0.5 font-mono text-xs text-muted-foreground">{r.voucherCode}</p>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm">{r.seats.join(", ") || "—"}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={r.status === RESERVATION_STATUS.CONFIRMED ? "default" : r.status === RESERVATION_STATUS.CANCELLED ? "destructive" : "secondary"}
+                          className="text-xs"
+                        >
+                          {STATUS_LABELS[r.status] ?? r.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell><CheckInBadge checkedInAt={r.checkedInAt} /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </div>
       )}
@@ -359,6 +420,8 @@ function VoucherGenerator({ onDownload }: { onDownload?: (r: Reservation) => voi
       r.client.name.toLowerCase().includes(search.toLowerCase()) ||
       r.voucherCode.toLowerCase().includes(search.toLowerCase())
   );
+  const generatedCount = filtered.filter((r) => generated.has(r.id)).length;
+  const readyCount = filtered.filter((r) => !generated.has(r.id)).length;
 
   function handleGenerate(r: Reservation) {
     setGenerated((prev) => new Set([...prev, r.id]));
@@ -376,37 +439,47 @@ function VoucherGenerator({ onDownload }: { onDownload?: (r: Reservation) => voi
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Buscar por nome ou código..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">Vouchers da viagem</h2>
+          <p className="text-xs text-muted-foreground">
+            {filtered.length} reservas confirmadas · {generatedCount} gerados nesta sessão · {readyCount} prontos para gerar
+          </p>
         </div>
-        <Button variant="outline" onClick={handleGenerateAll}>
-          <FileText className="w-4 h-4 mr-2" />
-          Gerar todos os vouchers
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-72 max-w-full">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              className="pl-9"
+              placeholder="Buscar por nome ou código..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <Button variant="outline" onClick={handleGenerateAll}>
+            <FileText className="w-4 h-4 mr-2" />
+            Gerar todos os vouchers
+          </Button>
+        </div>
       </div>
 
-      <div className="rounded-md border">
+      <div className="overflow-hidden rounded-lg border bg-background">
+        <div className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Passageiro</TableHead>
-              <TableHead>Viagem</TableHead>
-              <TableHead>Código do Voucher</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="w-32"></TableHead>
+              <TableHead className="w-[250px]">Passageiro</TableHead>
+              <TableHead className="w-[220px]">Viagem</TableHead>
+              <TableHead>Assentos</TableHead>
+              <TableHead>Voucher</TableHead>
+              <TableHead className="w-[185px]">Acompanhamento</TableHead>
+              <TableHead className="w-36 text-right">Ações</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground py-10">
+                <TableCell colSpan={6} className="text-center text-muted-foreground py-10">
                   Nenhuma reserva confirmada encontrada
                 </TableCell>
               </TableRow>
@@ -414,22 +487,33 @@ function VoucherGenerator({ onDownload }: { onDownload?: (r: Reservation) => voi
               filtered.slice(0, 30).map((r) => (
                 <TableRow key={r.id}>
                   <TableCell>
-                    <p className="font-medium text-sm">{r.client.name}</p>
-                    <p className="text-xs text-muted-foreground">{r.client.cpf ?? ""}</p>
-                  </TableCell>
-                  <TableCell className="text-sm">{r.trip.name}</TableCell>
-                  <TableCell>
-                    <span className="font-mono text-sm font-bold">{r.voucherCode}</span>
+                    <PassengerIdentity reservation={r} />
                   </TableCell>
                   <TableCell>
-                    {generated.has(r.id) ? (
-                      <Badge className="bg-green-100 text-green-700 text-xs">Gerado</Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-xs">Pronto</Badge>
+                    <p className="text-sm font-medium">{r.trip.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{formatDate(r.trip.departureDate)}</p>
+                  </TableCell>
+                  <TableCell className="text-sm">{r.seats.join(", ") || "—"}</TableCell>
+                  <TableCell>
+                    <p className="font-mono text-sm font-bold">{r.voucherCode}</p>
+                    {r.reservationNumber && (
+                      <p className="mt-0.5 text-xs text-muted-foreground">{r.reservationNumber}</p>
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="flex gap-1">
+                    <div className="flex flex-col items-start gap-1.5">
+                      {generated.has(r.id) ? (
+                        <Badge className="border-green-200 bg-green-100 text-green-800">
+                          <CheckCircle2 className="mr-1 h-3 w-3" />Voucher gerado
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">Pronto para gerar</Badge>
+                      )}
+                      <CheckInBadge checkedInAt={r.checkedInAt} compact />
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="inline-flex gap-1">
                       <Button
                         size="sm"
                         variant={generated.has(r.id) ? "outline" : "default"}
@@ -454,6 +538,7 @@ function VoucherGenerator({ onDownload }: { onDownload?: (r: Reservation) => voi
             )}
           </TableBody>
         </Table>
+        </div>
       </div>
     </div>
   );
@@ -513,15 +598,31 @@ export default function Vouchers() {
   });
 
   const checkedIn = reservations.filter((r) => !!r.checkedInAt).length;
+  const checkInProgress = reservations.length === 0
+    ? 0
+    : Math.round((checkedIn / reservations.length) * 100);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Vouchers e Check-in</h1>
-          <p className="text-sm text-muted-foreground">
-            {checkedIn} de {reservations.length} passageiros realizaram check-in
-          </p>
+          <div className="mt-2 flex items-center gap-3">
+            <p className="text-sm text-muted-foreground">
+              {checkedIn} de {reservations.length} passageiros realizaram check-in
+            </p>
+            <span className="text-xs font-medium text-muted-foreground">{checkInProgress}%</span>
+          </div>
+          <div
+            className="mt-1 h-1.5 w-64 max-w-full overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-label="Progresso geral do check-in"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={checkInProgress}
+          >
+            <div className="h-full rounded-full bg-green-600 transition-[width]" style={{ width: `${checkInProgress}%` }} />
+          </div>
         </div>
         <Button variant="outline" onClick={() => setQrScannerOpen(true)}>
           <ScanLine className="w-4 h-4 mr-2" />
@@ -586,69 +687,68 @@ export default function Vouchers() {
           {/* Two column layout: table + card */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* Table */}
-            <div className="lg:col-span-2 rounded-md border bg-background">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Voucher</TableHead>
-                    <TableHead>Passageiro</TableHead>
-                    <TableHead>Viagem</TableHead>
-                    <TableHead>Assentos</TableHead>
-                    <TableHead>Check-in</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.length === 0 ? (
+            <div className="lg:col-span-2 overflow-hidden rounded-lg border bg-background">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-10">
-                        Nenhum voucher encontrado
-                      </TableCell>
+                      <TableHead>Voucher / reserva</TableHead>
+                      <TableHead>Passageiro</TableHead>
+                      <TableHead>Viagem</TableHead>
+                      <TableHead>Assentos</TableHead>
+                      <TableHead>Check-in</TableHead>
+                      <TableHead>Status da reserva</TableHead>
                     </TableRow>
-                  ) : (
-                    filtered.map((r) => (
-                      <TableRow
-                        key={r.id}
-                        className={`cursor-pointer ${
-                          selectedId === r.id ? "bg-primary/5" : "hover:bg-muted/40"
-                        }`}
-                        onClick={() => setSelectedId(r.id)}
-                      >
-                        <TableCell className="font-mono text-sm">{r.voucherCode}</TableCell>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium text-sm">{r.client.name}</p>
-                            <p className="text-xs text-muted-foreground">{r.client.cpf ?? ""}</p>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm">{r.trip.name}</TableCell>
-                        <TableCell className="text-sm">{r.seats.join(", ") || "—"}</TableCell>
-                        <TableCell>
-                          {r.checkedInAt ? (
-                            <CheckCircle2 className="w-4 h-4 text-green-500" />
-                          ) : (
-                            <Clock className="w-4 h-4 text-muted-foreground" />
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              r.status === RESERVATION_STATUS.CONFIRMED
-                                ? "default"
-                                : r.status === RESERVATION_STATUS.CANCELLED
-                                ? "destructive"
-                                : "secondary"
-                            }
-                            className="text-xs"
-                          >
-                            {STATUS_LABELS[r.status] ?? r.status}
-                          </Badge>
+                  </TableHeader>
+                  <TableBody>
+                    {filtered.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                          Nenhum voucher encontrado
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+                    ) : (
+                      filtered.map((r) => (
+                        <TableRow
+                          key={r.id}
+                          className={`cursor-pointer ${
+                            selectedId === r.id ? "bg-primary/5" : "hover:bg-muted/40"
+                          }`}
+                          onClick={() => setSelectedId(r.id)}
+                        >
+                          <TableCell>
+                            <p className="font-mono text-sm font-semibold">{r.reservationNumber || r.voucherCode}</p>
+                            {r.reservationNumber && (
+                              <p className="mt-0.5 font-mono text-xs text-muted-foreground">{r.voucherCode}</p>
+                            )}
+                          </TableCell>
+                          <TableCell><PassengerIdentity reservation={r} /></TableCell>
+                          <TableCell>
+                            <p className="text-sm">{r.trip.name}</p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">{formatDate(r.trip.departureDate)}</p>
+                          </TableCell>
+                          <TableCell className="text-sm">{r.seats.join(", ") || "—"}</TableCell>
+                          <TableCell><CheckInBadge checkedInAt={r.checkedInAt} /></TableCell>
+                          <TableCell>
+                            <Badge
+                              variant={
+                                r.status === RESERVATION_STATUS.CONFIRMED
+                                  ? "default"
+                                  : r.status === RESERVATION_STATUS.CANCELLED
+                                  ? "destructive"
+                                  : "secondary"
+                              }
+                              className="text-xs"
+                            >
+                              {STATUS_LABELS[r.status] ?? r.status}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
 
             {/* Voucher card */}

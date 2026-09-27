@@ -10,8 +10,22 @@ import { ADMIN_ROLES } from '../lib/tenant';
 import { STORE_ORDER_STATUS, STORE_PAYMENT_STATUS } from "@workspace/permissions";
 import { resolveSegment } from "../lib/campaign-segment";
 import { getAIClientForTenant } from "../lib/ai-client";
+import { parseBrazilDateRange } from "../lib/brazil-calendar";
 
 const router = Router();
+
+function requireNpsDateRange(dateFrom?: string, dateTo?: string) {
+  const range = parseBrazilDateRange(dateFrom, dateTo);
+  if (!range.ok) {
+    throw new ValidationError(
+      range.reason === "reversed"
+        ? "A data inicial deve ser anterior ou igual à data final."
+        : "Período inválido.",
+      "VALIDATION_ERROR",
+    );
+  }
+  return range;
+}
 
 const CreateCampaignBody = z.object({
   name: z.string(),
@@ -303,11 +317,12 @@ router.get("/nps/summary", async (req, res, next: NextFunction): Promise<void> =
     const me = await requireAuth(req, res);
     if (!me) return;
     const { tripId, dateFrom, dateTo } = req.query as Record<string, string | undefined>;
+    const dateRange = requireNpsDateRange(dateFrom, dateTo);
 
     const travelConditions = [eq(clientNpsResponsesTable.tenantId, me.tenantId)];
     if (tripId) travelConditions.push(eq(clientNpsResponsesTable.tripId, tripId));
-    if (dateFrom) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} >= ${new Date(dateFrom)}`);
-    if (dateTo) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} <= ${new Date(dateTo + "T23:59:59.999Z")}`);
+    if (dateRange.startInclusive) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} >= ${dateRange.startInclusive}`);
+    if (dateRange.endExclusive) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} < ${dateRange.endExclusive}`);
 
     function categoryAvg(values: (number | null)[]): number | null {
       const valid = values.filter((v): v is number => v !== null);
@@ -350,8 +365,8 @@ router.get("/nps/summary", async (req, res, next: NextFunction): Promise<void> =
     }
 
     const storeConditions = [eq(npsResponsesTable.tenantId, me.tenantId)];
-    if (dateFrom) storeConditions.push(sql`${npsResponsesTable.createdAt} >= ${new Date(dateFrom)}`);
-    if (dateTo) storeConditions.push(sql`${npsResponsesTable.createdAt} <= ${new Date(dateTo + "T23:59:59.999Z")}`);
+    if (dateRange.startInclusive) storeConditions.push(sql`${npsResponsesTable.createdAt} >= ${dateRange.startInclusive}`);
+    if (dateRange.endExclusive) storeConditions.push(sql`${npsResponsesTable.createdAt} < ${dateRange.endExclusive}`);
 
     const [storeResponses, travelResponses] = await Promise.all([
       db.select({ score: npsResponsesTable.score, classification: npsResponsesTable.classification })
@@ -399,15 +414,16 @@ router.get("/nps", async (req, res, next: NextFunction): Promise<void> => {
     const me = await requireAuth(req, res);
     if (!me) return;
     const { classification, tripId, dateFrom, dateTo } = req.query as Record<string, string | undefined>;
+    const dateRange = requireNpsDateRange(dateFrom, dateTo);
 
     const travelConditions = [eq(clientNpsResponsesTable.tenantId, me.tenantId)];
     if (tripId) travelConditions.push(eq(clientNpsResponsesTable.tripId, tripId));
-    if (dateFrom) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} >= ${new Date(dateFrom)}`);
-    if (dateTo) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} <= ${new Date(dateTo + "T23:59:59.999Z")}`);
+    if (dateRange.startInclusive) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} >= ${dateRange.startInclusive}`);
+    if (dateRange.endExclusive) travelConditions.push(sql`${clientNpsResponsesTable.createdAt} < ${dateRange.endExclusive}`);
 
     const storeConditions = [eq(npsResponsesTable.tenantId, me.tenantId)];
-    if (dateFrom) storeConditions.push(sql`${npsResponsesTable.createdAt} >= ${new Date(dateFrom)}`);
-    if (dateTo) storeConditions.push(sql`${npsResponsesTable.createdAt} <= ${new Date(dateTo + "T23:59:59.999Z")}`);
+    if (dateRange.startInclusive) storeConditions.push(sql`${npsResponsesTable.createdAt} >= ${dateRange.startInclusive}`);
+    if (dateRange.endExclusive) storeConditions.push(sql`${npsResponsesTable.createdAt} < ${dateRange.endExclusive}`);
 
     const travelQuery = db
       .select({

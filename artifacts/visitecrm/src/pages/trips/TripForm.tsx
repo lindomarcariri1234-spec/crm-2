@@ -211,6 +211,7 @@ export function TripForm({ tripId }: { tripId?: string }) {
       role: fp.role,
       seatNumber: fp.seatNumber.trim() || null,
       checkedInAt: fp.checkedInAt ?? null,
+      boardingLocationId: fp.boardingLocationId ?? null,
     }));
     try {
       if (tripId) {
@@ -283,6 +284,7 @@ export function TripForm({ tripId }: { tripId?: string }) {
             variableCosts: form.variableCostItems,
             gallery: form.gallery.length ? form.gallery : undefined,
             videos: form.videos.length ? form.videos : undefined,
+            freePassengers: freePassengersPayload,
           },
         });
       }
@@ -644,7 +646,7 @@ export function TripForm({ tripId }: { tripId?: string }) {
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium text-muted-foreground">Ponto {idx + 1}</span>
                       {form.boardingPoints.length > 1 && (
-                        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => setForm(prev => ({ ...prev, boardingPoints: prev.boardingPoints.filter(b => b.id !== bp.id) }))}>
+                        <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" onClick={() => setForm(prev => ({ ...prev, boardingPoints: prev.boardingPoints.filter(b => b.id !== bp.id), freePassengers: prev.freePassengers.map(fp => fp.boardingLocationId === bp.id ? { ...fp, boardingLocationId: null } : fp) }))}>
                           <X className="w-3 h-3" />
                         </Button>
                       )}

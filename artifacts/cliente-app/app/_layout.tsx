@@ -5,11 +5,11 @@ import {
   Inter_700Bold,
   useFonts,
 } from "@expo-google-fonts/inter";
-import { ClerkProvider, useAuth } from "@clerk/clerk-expo";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ClerkProvider, useAuth } from "@clerk/expo";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
+import * as SecureStore from "expo-secure-store";
 import { Stack, router, useSegments } from "expo-router";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
@@ -23,6 +23,10 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import colors from "@/constants/colors";
 import { apiFetch, ApiError } from "@/lib/api";
 import type { ClientPortalProfile } from "@/lib/types";
+import {
+  clearPendingClientSignup,
+  getPendingClientSignup,
+} from "@/lib/pending-client-signup";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -46,18 +50,22 @@ const queryClient = new QueryClient({
 });
 
 const PUBLISHABLE_KEY = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
+const DEFAULT_DENIED_MESSAGE =
+  "Este aplicativo é exclusivo para clientes de agências. Sua conta não possui o perfil necessário.";
+const CLIENT_SIGNUP_DENIED_MESSAGE =
+  "Não foi possível vincular sua conta a um cadastro de cliente. Confira se o e-mail foi confirmado e se os dados correspondem ao cadastro da agência. Se o problema continuar, entre em contato com a agência.";
 
 const tokenCache =
   Platform.OS !== "web"
     ? {
         async getToken(key: string) {
-          return AsyncStorage.getItem(key);
+          return SecureStore.getItemAsync(key);
         },
         async saveToken(key: string, value: string) {
-          return AsyncStorage.setItem(key, value);
+          return SecureStore.setItemAsync(key, value);
         },
         async clearToken(key: string) {
-          return AsyncStorage.removeItem(key);
+          return SecureStore.deleteItemAsync(key);
         },
       }
     : undefined;
@@ -113,10 +121,12 @@ function navigateToDeepLink(url: string): void {
 }
 
 function AuthGate() {
-  const { isLoaded, isSignedIn, getToken, signOut } = useAuth();
+  const { isLoaded, isSignedIn, getToken, signOut, userId } = useAuth();
   const segments = useSegments();
   const [roleStatus, setRoleStatus] = useState<"idle" | "loading" | "ok" | "denied">("idle");
+  const [deniedMessage, setDeniedMessage] = useState(DEFAULT_DENIED_MESSAGE);
   const checkedRef = useRef(false);
+  const pendingSignupSyncRef = useRef(false);
   const pendingDeepLinkRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -151,6 +161,7 @@ function AuthGate() {
 
     if (!isSignedIn) {
       checkedRef.current = false;
+      pendingSignupSyncRef.current = false;
       setRoleStatus("idle");
       // Only redirect if we're not already on a public route (sign-in or sign-up)
       if (!PUBLIC_ROUTES.has(segments[0] as string)) {
@@ -165,8 +176,38 @@ function AuthGate() {
 
     getToken()
       .then(async (tok) => {
+        const pendingSignup = userId
+          ? await getPendingClientSignup(userId)
+          : null;
+        if (pendingSignup) {
+          pendingSignupSyncRef.current = true;
+          const syncedUser = await apiFetch<{ role: string }>(
+            tok,
+            "POST",
+            "/users/me/sync",
+            {
+              clerkId: pendingSignup.clerkId,
+              name: pendingSignup.name,
+              email: pendingSignup.email,
+              avatarUrl: null,
+              cpf: pendingSignup.cpf,
+              clientSignup: true,
+            },
+          );
+          if (syncedUser.role !== "cliente") {
+            throw new ApiError(
+              "Cadastro de cliente não encontrado",
+              403,
+              "CLIENT_PROFILE_NOT_FOUND",
+            );
+          }
+          await clearPendingClientSignup();
+          pendingSignupSyncRef.current = false;
+        }
+
         await apiFetch<ClientPortalProfile>(tok, "GET", "/client/me");
         setRoleStatus("ok");
+        setDeniedMessage(DEFAULT_DENIED_MESSAGE);
         const pendingLink = pendingDeepLinkRef.current;
         pendingDeepLinkRef.current = null;
         if (pendingLink) navigateToDeepLink(pendingLink);
@@ -177,19 +218,25 @@ function AuthGate() {
       })
       .catch((err: unknown) => {
         checkedRef.current = false;
+        if (pendingSignupSyncRef.current) {
+          setDeniedMessage(CLIENT_SIGNUP_DENIED_MESSAGE);
+          setRoleStatus("denied");
+          return;
+        }
         if (err instanceof ApiError && err.status === 403) {
+          setDeniedMessage(DEFAULT_DENIED_MESSAGE);
           setRoleStatus("denied");
         } else {
           setRoleStatus("idle");
           router.replace("/sign-in");
         }
       });
-  }, [isLoaded, isSignedIn, getToken, segments]);
+  }, [isLoaded, isSignedIn, getToken, segments, userId]);
 
   if (!isLoaded || roleStatus === "loading") {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.light.primary} />
+        <ActivityIndicator size="large" color={colors.light.azulChapada} />
       </View>
     );
   }
@@ -198,10 +245,7 @@ function AuthGate() {
     return (
       <View style={styles.center}>
         <Text style={styles.deniedTitle}>Acesso Restrito</Text>
-        <Text style={styles.deniedText}>
-          Este aplicativo é exclusivo para clientes de agências. Sua conta não
-          possui o perfil necessário.
-        </Text>
+        <Text style={styles.deniedText}>{deniedMessage}</Text>
         <Pressable
           style={({ pressed }) => [styles.signOutBtn, { opacity: pressed ? 0.7 : 1 }]}
           onPress={() => {
@@ -291,6 +335,6 @@ const styles = StyleSheet.create({
   signOutText: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
+    color: colors.light.primaryForeground,
   },
 });

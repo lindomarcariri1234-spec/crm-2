@@ -82,6 +82,47 @@ const TripImportRequest = z.object({
 
 type TripQueryExecutor = Pick<typeof db, "select">;
 
+function assertFreePassengerBoardingLocations(
+  freePassengers: readonly Pick<FreePassenger, "id" | "boardingLocationId">[] | undefined,
+  boardingPoints: unknown,
+): void {
+  const validBoardingPointIds = new Set<string>();
+  if (Array.isArray(boardingPoints)) {
+    for (const point of boardingPoints) {
+      if (!point || typeof point !== "object" || !("id" in point)) continue;
+      const id = (point as Record<string, unknown>).id;
+      if (typeof id === "string") validBoardingPointIds.add(id);
+    }
+  }
+
+  const invalidPassenger = freePassengers?.find(
+    passenger => passenger.boardingLocationId != null && !validBoardingPointIds.has(passenger.boardingLocationId),
+  );
+  if (invalidPassenger) {
+    throw new UnprocessableEntityError(
+      "O local de embarque do passageiro gratuito não pertence a esta viagem",
+      "INVALID_FREE_PASSENGER_BOARDING_LOCATION",
+      { freePassengerId: invalidPassenger.id },
+    );
+  }
+}
+
+function assertUniqueFreePassengerSeats(
+  freePassengers: readonly Pick<FreePassenger, "seatNumber">[] | undefined,
+): void {
+  const seats = (freePassengers ?? [])
+    .map(passenger => passenger.seatNumber?.trim() ?? null)
+    .filter((seat): seat is string => seat != null && seat !== "");
+  const duplicateSeats = [...new Set(seats.filter((seat, index) => seats.indexOf(seat) !== index))];
+  if (duplicateSeats.length > 0) {
+    throw new UnprocessableEntityError(
+      "O mesmo assento não pode ser atribuído a mais de um passageiro gratuito",
+      "DUPLICATE_FREE_PASSENGER_SEAT",
+      { conflictingSeats: duplicateSeats },
+    );
+  }
+}
+
 async function buildTripInsertValues(
   parsedData: z.infer<typeof CreateTripBody>,
   me: { tenantId: string; id: string },
@@ -89,6 +130,8 @@ async function buildTripInsertValues(
   id: string,
   isCsvImport: boolean,
 ) {
+  assertFreePassengerBoardingLocations(parsedData.freePassengers, parsedData.boardingPoints);
+  assertUniqueFreePassengerSeats(parsedData.freePassengers);
   const departureDate = parseBrazilDate(parsedData.departureDate);
   const slug = parsedData.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + id.slice(0, 4);
   let seatMap: Record<string, unknown> = {};
@@ -130,6 +173,7 @@ async function buildTripInsertValues(
     .where(or(eq(plansTable.id, tenantPlanId), eq(plansTable.slug, tenantPlanId)))
     .limit(1);
   const planSupportsSeatMap = hasSeatMapFeature((tenantPlanRow?.supportedFeatures ?? []) as string[]);
+  const freePassengers = parsedData.freePassengers ?? [];
 
   return {
     id,
@@ -149,7 +193,7 @@ async function buildTripInsertValues(
     returnDate: parsedData.returnDate ? parseBrazilDate(parsedData.returnDate) : null,
     registrationDeadline: parsedData.registrationDeadline ? parseBrazilDate(parsedData.registrationDeadline) : null,
     totalCapacity,
-    availableSeats: totalCapacity,
+    availableSeats: Math.max(0, totalCapacity - freePassengers.length),
     accommodationId: parsedData.accommodationId ?? null,
     priceAdult: String(parsedData.priceAdult),
     priceChild: parsedData.priceChild != null ? String(parsedData.priceChild) : null,
@@ -177,6 +221,7 @@ async function buildTripInsertValues(
     tripOrganizer: parsedData.tripOrganizer ?? null,
     freeOrganizers: parsedData.freeOrganizers ?? 0,
     freeGuides: parsedData.freeGuides ?? 0,
+    freePassengers,
     originCity: parsedData.originCity ?? null,
     originState: parsedData.originState ?? null,
     departureTime: parseTripTime(parsedData.departureTime, "Horário de saída"),
@@ -832,6 +877,8 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
     if (!hasPermission(me.role, RESOURCES.TRIPS, ACTIONS.CREATE)) { next(new ForbiddenError("Apenas administradores podem criar viagens", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateTripBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+    assertFreePassengerBoardingLocations(parsed.data.freePassengers, parsed.data.boardingPoints);
+    assertUniqueFreePassengerSeats(parsed.data.freePassengers);
     const isTripCsvImport = req.get("x-visitecrm-import") === "trip-csv";
     const departureDate = parseBrazilDate(parsed.data.departureDate);
 
@@ -903,7 +950,7 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
       returnDate: parsed.data.returnDate ? parseBrazilDate(parsed.data.returnDate) : null,
       registrationDeadline: parsed.data.registrationDeadline ? parseBrazilDate(parsed.data.registrationDeadline) : null,
       totalCapacity,
-      availableSeats: totalCapacity,
+      availableSeats: Math.max(0, totalCapacity - (parsed.data.freePassengers?.length ?? 0)),
       accommodationId: parsed.data.accommodationId ?? null,
       priceAdult: String(parsed.data.priceAdult),
       priceChild: parsed.data.priceChild != null ? String(parsed.data.priceChild) : null,
@@ -931,6 +978,7 @@ router.post("/trips", async (req, res, next: NextFunction): Promise<void> => {
       tripOrganizer: parsed.data.tripOrganizer ?? null,
       freeOrganizers: parsed.data.freeOrganizers ?? 0,
       freeGuides: parsed.data.freeGuides ?? 0,
+      freePassengers: parsed.data.freePassengers ?? [],
       originCity: parsed.data.originCity ?? null,
       originState: parsed.data.originState ?? null,
       departureTime: parseTripTime(parsed.data.departureTime, "Horário de saída"),
@@ -1226,23 +1274,27 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
       updates.showSeatMap = parsed.data.showSeatMap;
     }
 
+    let fpCurrentTrip: typeof tripsTable.$inferSelect | null = null;
+    if (parsed.data.freePassengers !== undefined || parsed.data.boardingPoints !== undefined) {
+      const [currentTripForBoarding] = await db.select().from(tripsTable)
+        .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!currentTripForBoarding) { next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND")); return; }
+      fpCurrentTrip = currentTripForBoarding;
+
+      const effectiveFreePassengers = parsed.data.freePassengers
+        ?? (Array.isArray(fpCurrentTrip.freePassengers) ? fpCurrentTrip.freePassengers as FreePassenger[] : []);
+      const effectiveBoardingPoints = parsed.data.boardingPoints ?? fpCurrentTrip.boardingPoints ?? [];
+      assertFreePassengerBoardingLocations(effectiveFreePassengers, effectiveBoardingPoints);
+    }
+
     // Free-passenger seat conflict check
     if (parsed.data.freePassengers !== undefined) {
       const newFpList = parsed.data.freePassengers;
+      assertUniqueFreePassengerSeats(newFpList);
       const fpSeats = newFpList
-        .map(fp => fp.seatNumber?.trim() ?? null)
-        .filter((s): s is string => s != null && s !== "");
-      const duplicateSeats = [...new Set(
-        fpSeats.filter((seat, index) => fpSeats.indexOf(seat) !== index),
-      )];
-      if (duplicateSeats.length > 0) {
-        next(new UnprocessableEntityError(
-          "O mesmo assento não pode ser atribuído a mais de um passageiro gratuito",
-          "DUPLICATE_FREE_PASSENGER_SEAT",
-          { conflictingSeats: duplicateSeats },
-        ));
-        return;
-      }
+        .map(passenger => passenger.seatNumber?.trim() ?? null)
+        .filter((seat): seat is string => seat != null && seat !== "");
       if (fpSeats.length > 0) {
         const activeResRows = await db
           .select({ seats: reservationsTable.seats })
@@ -1260,9 +1312,6 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
         }
       }
       updates.freePassengers = newFpList as FreePassenger[];
-      const [fpCurrentTrip] = await db.select().from(tripsTable)
-        .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
-        .limit(1);
       if (fpCurrentTrip) {
         const newFpCount = newFpList.length;
         updates.availableSeats = Math.max(
@@ -2225,6 +2274,11 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
     const boardingPoints: Array<{ id: string; name: string; time?: string }> =
       Array.isArray(trip.boardingPoints) ? (trip.boardingPoints as Array<{ id: string; name: string; time?: string }>) : [];
     const bpMap = new Map(boardingPoints.map(bp => [bp.id, bp.name]));
+    const freePassengerBoardingName = (id: string | null | undefined) => {
+      if (!id) return "Não definido";
+      const name = bpMap.get(id);
+      return name?.trim() ? name : "Não definido";
+    };
 
     const boardingLocations = await db.select({ id: boardingLocationsTable.id, name: boardingLocationsTable.name })
       .from(boardingLocationsTable)
@@ -2284,7 +2338,7 @@ router.get("/trips/:id/passengers/export", async (req, res, next: NextFunction):
       "",
       "Gratuidade",
       seatWithPosition(fp.seatNumber ?? null, exportNumberingType),
-      "",
+      freePassengerBoardingName(fp.boardingLocationId),
       "—",
       freeRoleLabel[fp.role] ?? fp.role,
       "0.00",
@@ -3089,12 +3143,16 @@ router.get("/trips/:id/boarding-live", async (req, res, next: NextFunction): Pro
       if (fp.checkedInAt) {
         freeCheckedIn++;
       } else {
+        const boardingLocationId = fp.boardingLocationId ?? null;
+        const boardingLocationName = boardingLocationId
+          ? bpMap.get(boardingLocationId)?.name
+          : null;
         absentPassengers.push({
           id: fp.id,
           name: fp.name,
           seatNumber: fp.seatNumber ?? null,
-          boardingLocationId: null,
-          boardingLocationName: null,
+          boardingLocationId,
+          boardingLocationName: boardingLocationName?.trim() ? boardingLocationName : "Não definido",
           isFree: true,
         });
       }

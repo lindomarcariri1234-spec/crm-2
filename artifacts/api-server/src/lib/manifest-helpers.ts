@@ -190,6 +190,11 @@ export function generateManifestHtml(p: ManifestPanel): string {
 
   const bpMap = new Map(p.boardingPoints.map(bp => [bp.id, bp.name]));
   const getBpName = (id: string | null | undefined) => (id ? bpMap.get(id) ?? id : "—");
+  const getFreePassengerBpName = (id: string | null | undefined) => {
+    if (!id) return "Não definido";
+    const name = bpMap.get(id);
+    return name?.trim() ? name : "Não definido";
+  };
 
   const rows = p.passengers.map((pass, i) => {
     const nome = e(pass.name);
@@ -218,12 +223,14 @@ export function generateManifestHtml(p: ManifestPanel): string {
     const cpfStr = e(formatCpfServer(fp.cpf));
     const role = e(ROLE_LABEL[fp.role] ?? fp.role);
     const seat = e(seatWithPosition(fp.seatNumber ?? null, p.numberingType));
+    const boardingPoint = e(getFreePassengerBpName(fp.boardingLocationId));
     return `<tr>
       <td class="num">${String(i + 1).padStart(2, "0")}</td>
       <td>${nome}</td>
       <td>${cpfStr}</td>
       <td>${role}</td>
       <td class="seat">${seat}</td>
+      <td>${boardingPoint}</td>
     </tr>`;
   }).join("");
 
@@ -238,6 +245,7 @@ export function generateManifestHtml(p: ManifestPanel): string {
         <th>CPF</th>
         <th>Função</th>
         <th class="seat">Assento</th>
+        <th>Local de Embarque</th>
       </tr>
     </thead>
     <tbody>${freeRows}</tbody>

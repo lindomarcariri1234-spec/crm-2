@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useAuth, useUser } from "@clerk/clerk-expo";
+import { useAuth, useUser } from "@clerk/expo";
 import { SkeletonBox } from "@/components/Skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
@@ -183,18 +183,18 @@ export default function PerfilScreen() {
       <View style={[styles.headerCard, { backgroundColor: colors.primary }]}>
         <View style={styles.headerDecor} />
         <View style={[styles.avatar, { backgroundColor: "rgba(255,255,255,0.2)" }]}>
-          <Text style={styles.avatarInitial}>
+           <Text style={[styles.avatarInitial, { color: colors.primaryForeground }]}>
             {displayName.charAt(0).toUpperCase()}
           </Text>
         </View>
-        <Text style={styles.headerName}>{displayName}</Text>
+         <Text style={[styles.headerName, { color: colors.primaryForeground }]}>{displayName}</Text>
         {email ? (
-          <Text style={styles.headerEmail}>{email}</Text>
+           <Text style={[styles.headerEmail, { color: colors.primaryForeground + "BF" }]}>{email}</Text>
         ) : null}
         {tenantName ? (
           <View style={[styles.agencyBadge, { backgroundColor: "rgba(255,255,255,0.18)" }]}>
-            <Feather name="briefcase" size={12} color="rgba(255,255,255,0.85)" />
-            <Text style={styles.agencyBadgeText}>{tenantName}</Text>
+             <Feather name="briefcase" size={12} color={colors.primaryForeground + "D9"} />
+             <Text style={[styles.agencyBadgeText, { color: colors.primaryForeground + "D9" }]}>{tenantName}</Text>
           </View>
         ) : null}
       </View>
@@ -315,9 +315,9 @@ export default function PerfilScreen() {
               disabled={saving}
             >
               {saving ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color={colors.primaryForeground} />
               ) : (
-                <Text style={styles.saveBtnText}>Salvar</Text>
+                <Text style={[styles.saveBtnText, { color: colors.primaryForeground }]}>Salvar</Text>
               )}
             </Pressable>
           </View>
@@ -371,7 +371,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   headerCard: {
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 24,
     alignItems: "center",
     gap: 8,
@@ -397,17 +397,14 @@ const styles = StyleSheet.create({
   avatarInitial: {
     fontSize: 32,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
   },
   headerName: {
     fontSize: 22,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
   },
   headerEmail: {
     fontSize: 14,
     fontFamily: "Inter_400Regular",
-    color: "rgba(255,255,255,0.75)",
   },
   agencyBadge: {
     flexDirection: "row",
@@ -415,16 +412,15 @@ const styles = StyleSheet.create({
     gap: 5,
     paddingHorizontal: 12,
     paddingVertical: 5,
-    borderRadius: 20,
+    borderRadius: 8,
     marginTop: 4,
   },
   agencyBadgeText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
-    color: "rgba(255,255,255,0.85)",
   },
   infoCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
     gap: 2,
@@ -512,10 +508,9 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
   },
   statsCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
     flexDirection: "row",
@@ -545,7 +540,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     marginTop: 4,
   },

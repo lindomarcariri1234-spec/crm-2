@@ -2,6 +2,7 @@ import { SignUp } from "@clerk/react";
 import { PublicStore } from "@/lib/storeApi";
 import { cleanCpf, formatCpf, isValidCpf } from "@workspace/shared";
 import { useState } from "react";
+import { saveSignupCpfHandoff } from "@/lib/signup-cpf-handoff";
 
 export default function VitrineSignUp({
   store,
@@ -13,11 +14,35 @@ export default function VitrineSignUp({
   const [cpfError, setCpfError] = useState("");
   const cpfDigits = cleanCpf(cpf);
 
-  function handleSubmitCapture(event: React.FormEvent) {
+  function saveCpfForSignup(): boolean {
     if (!isValidCpf(cpfDigits)) {
+      setCpfError("Informe um CPF válido para vincular sua conta ao cadastro da agência.");
+      return false;
+    }
+
+    try {
+      saveSignupCpfHandoff(window.sessionStorage, store.slug, cpfDigits);
+      setCpfError("");
+      return true;
+    } catch {
+      setCpfError("Não foi possível guardar o CPF temporariamente. Ative o armazenamento da sessão e tente novamente.");
+      return false;
+    }
+  }
+
+  function handleSubmitCapture(event: React.FormEvent) {
+    if (!saveCpfForSignup()) {
       event.preventDefault();
       event.stopPropagation();
-      setCpfError("Informe um CPF válido para vincular sua conta ao cadastro da agência.");
+    }
+  }
+
+  function handleClickCapture(event: React.MouseEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (!(target instanceof Element) || !target.closest("button")) return;
+    if (!saveCpfForSignup()) {
+      event.preventDefault();
+      event.stopPropagation();
     }
   }
 
@@ -52,7 +77,7 @@ export default function VitrineSignUp({
           <p className="text-sm text-muted-foreground text-center mb-4">
             Cadastre-se para acompanhar suas reservas e receber novidades.
           </p>
-          <div onSubmitCapture={handleSubmitCapture}>
+          <div onSubmitCapture={handleSubmitCapture} onClickCapture={handleClickCapture}>
             <div className="space-y-2 mb-4">
               <label htmlFor="store-signup-cpf" className="text-sm font-medium">
                 CPF
@@ -85,7 +110,6 @@ export default function VitrineSignUp({
               routing="hash"
               signInUrl={`/loja/${store.slug}/entrar`}
               forceRedirectUrl={`/loja/${store.slug}/entrar?novoCliente=1`}
-              unsafeMetadata={{ cpf: cpfDigits }}
               appearance={{
                 elements: {
                   rootBox: "w-full",

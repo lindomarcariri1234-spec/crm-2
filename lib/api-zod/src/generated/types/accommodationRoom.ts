@@ -26,6 +26,7 @@ export interface AccommodationRoom {
   floor?: string | null;
   currency?: string;
   isActive?: boolean;
+  /** @nullable */
   pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;

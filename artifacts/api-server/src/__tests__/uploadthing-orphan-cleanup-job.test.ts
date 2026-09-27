@@ -320,7 +320,7 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(result.errors).toBe(1);
       expect(mockDeleteFiles).not.toHaveBeenCalled();
       expect(mockLogError).toHaveBeenCalledWith(
-        expect.objectContaining({ err: expect.any(Error) }),
+        expect.objectContaining({ error: { kind: "Error" } }),
         expect.stringContaining("Per-batch re-check failed"),
       );
     });
@@ -346,8 +346,9 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
 
     it("aborts scan and stages any found candidates when listFiles throws mid-pagination", async () => {
       const KEY = "key-before-error";
+      const marker = "SYNTHETIC_UPLOADTHING_LIST_SECRET_418";
       const secretMarker = "uploadthing-test-secret-not-for-logs";
-      const providerError = Object.assign(new Error("UploadThing API unreachable"), {
+      const providerError = Object.assign(new Error(`UploadThing API unreachable ${marker}`), {
         request: { headers: { "x-uploadthing-api-key": secretMarker } },
       });
       mockStagingEmpty();
@@ -362,14 +363,19 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(mockDeleteFiles).not.toHaveBeenCalled();
       expect(mockLogError).toHaveBeenCalledTimes(1);
       expect(mockLogError).toHaveBeenCalledWith(
-        { offset: 500 },
+        expect.objectContaining({
+          providerError: { kind: "Error" },
+          offset: 500,
+        }),
         expect.stringContaining("Failed to list files"),
       );
-      expect(JSON.stringify(mockLogError.mock.calls[0])).not.toContain(secretMarker);
+      expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(marker);
+      expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(secretMarker);
     });
 
     it("keeps keys in staging for retry when a deletion batch fails", async () => {
       const KEY = "delete-fail-key";
+      const marker = "SYNTHETIC_UPLOADTHING_DELETE_SECRET_418";
       const secretMarker = "uploadthing-delete-test-secret-not-for-logs";
       const providerError = Object.assign(new Error("UploadThing delete failed"), {
         request: { headers: { "x-uploadthing-api-key": secretMarker } },
@@ -380,6 +386,7 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       mockCollectReferenced
         .mockResolvedValueOnce(new Set())
         .mockResolvedValueOnce(new Set());  // per-batch re-check
+      providerError.message = `UploadThing delete failed ${marker}`;
       mockDeleteFiles.mockRejectedValueOnce(providerError);
 
       const result = await runUploadThingOrphanCleanup();
@@ -388,10 +395,15 @@ describe("runUploadThingOrphanCleanup() — two-run staging design", () => {
       expect(result.errors).toBe(1);
       expect(mockLogError).toHaveBeenCalledTimes(1);
       expect(mockLogError).toHaveBeenCalledWith(
-        { batchStart: 0, batchSize: 1 },
+        expect.objectContaining({
+          providerError: { kind: "Error" },
+          batchStart: 0,
+          batchSize: 1,
+        }),
         expect.stringContaining("Batch deletion failed"),
       );
-      expect(JSON.stringify(mockLogError.mock.calls[0])).not.toContain(secretMarker);
+      expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(marker);
+      expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(secretMarker);
       // Key should be retained in staging for retry
       const written = writtenStaging();
       expect(written.find((c: { key: string }) => c.key === KEY)).toBeDefined();

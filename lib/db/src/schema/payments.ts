@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, numeric, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, numeric, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -7,6 +7,7 @@ import { tenantsTable } from "./tenants";
 import { reservationsTable } from "./reservations";
 import { clientsTable } from "./clients";
 import { tripsTable } from "./trips";
+import { tripCostsTable } from "./trip-costs";
 import { usersTable } from "./users";
 
 export const paymentsTable = pgTable("payments", {
@@ -54,6 +55,7 @@ export const expensesTable = pgTable("expenses", {
   id: text("id").primaryKey(),
   tenantId: text("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
   tripId: text("trip_id").references(() => tripsTable.id),
+  linkedTripCostId: text("linked_trip_cost_id").references(() => tripCostsTable.id, { onDelete: "set null" }),
   category: text("category").notNull(),
   description: text("description").notNull(),
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
@@ -70,6 +72,7 @@ export const expensesTable = pgTable("expenses", {
 }, (t) => [
   index("expenses_tenant_id_created_at_idx").on(t.tenantId, t.createdAt),
   index("expenses_trip_id_idx").on(t.tripId),
+  uniqueIndex("expenses_linked_trip_cost_id_unique").on(t.linkedTripCostId),
   index("expenses_financial_due_idx").on(t.tenantId, t.status, t.dueDate),
   index("expenses_financial_paid_idx").on(t.tenantId, t.status, t.paymentDate),
 ]);
@@ -81,5 +84,6 @@ export type Expense = typeof expensesTable.$inferSelect;
 export const expensesRelations = relations(expensesTable, ({ one }) => ({
   tenant: one(tenantsTable, { fields: [expensesTable.tenantId], references: [tenantsTable.id] }),
   trip: one(tripsTable, { fields: [expensesTable.tripId], references: [tripsTable.id] }),
+  linkedTripCost: one(tripCostsTable, { fields: [expensesTable.linkedTripCostId], references: [tripCostsTable.id] }),
   createdBy: one(usersTable, { fields: [expensesTable.createdById], references: [usersTable.id] }),
 }));

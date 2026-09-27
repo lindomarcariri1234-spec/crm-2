@@ -284,6 +284,11 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
 
     const { name, avatarUrl } = parsed.data;
     let normalizedCpf = normalizeCpfInput(parsed.data.cpf);
+    const isClientSignup = parsed.data.clientSignup === true;
+    if (isClientSignup && !normalizedCpf) {
+      next(new ValidationError("Informe um CPF válido para vincular seu cadastro de cliente.", "CLIENT_CPF_REQUIRED"));
+      return;
+    }
 
     let canonicalEmail = parsed.data.email;
     let inviteIdFromMeta: string | undefined;
@@ -297,13 +302,6 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
         canonicalEmail = primaryEmail.emailAddress;
         canonicalEmailVerified = primaryEmail.verification?.status === "verified";
       }
-      // The public storefront and mobile client collect CPF before Clerk
-      // finishes the account flow and store it as unsafe metadata. It is only
-      // a hint; the server still validates it and scopes every match by tenant.
-      if (!normalizedCpf) {
-        const metadataCpf = (clerkUser.unsafeMetadata as Record<string, unknown> | undefined)?.cpf;
-        if (typeof metadataCpf === "string") normalizedCpf = normalizeCpfInput(metadataCpf);
-      }
       inviteIdFromMeta = (clerkUser.publicMetadata as Record<string, string> | undefined)?.inviteId;
     } catch (clerkErr) {
       req.log.warn({ clerkErr, clerkId }, "Failed to fetch Clerk user; using client-supplied email for profile update only (no invite reconciliation)");
@@ -311,6 +309,27 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
     }
 
     const [existing] = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkId)).limit(1);
+    if (
+      isClientSignup
+      && (!canonicalEmailVerified || clerkFetchFailed)
+    ) {
+      next(new ForbiddenError(
+        "Confirme o e-mail antes de vincular o cadastro de cliente.",
+        "CLIENT_EMAIL_VERIFICATION_REQUIRED",
+      ));
+      return;
+    }
+    if (
+      isClientSignup
+      && existing
+      && (existing.role !== ROLES.CLIENT || !existing.tenantId)
+    ) {
+      next(new ForbiddenError(
+        "Esta conta não pode ser convertida em um cadastro de cliente.",
+        "CLIENT_ACCOUNT_ROLE_CONFLICT",
+      ));
+      return;
+    }
 
     if (!existing) {
     const userId = generateId();
@@ -332,6 +351,27 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       let linkedTenantIsInviteTarget = Boolean(pendingInvite);
       const superadminClerkId = process.env.SUPERADMIN_CLERK_ID;
       let assignedRole = (superadminClerkId && clerkId === superadminClerkId) ? ROLES.SUPER_ADMIN : (pendingInvite?.role ?? ROLES.AGENCY_ADMIN);
+
+      if (isClientSignup) {
+        if (pendingInvite || assignedRole === ROLES.SUPER_ADMIN) {
+          next(new ForbiddenError(
+            "Esta conta possui um vínculo de acesso diferente e não pode ser cadastrada como cliente.",
+            "CLIENT_ACCOUNT_ROLE_CONFLICT",
+          ));
+          return;
+        }
+        clientCandidate = await resolveClientLoginCandidate(canonicalEmail);
+        if (!clientCandidate) {
+          next(new NotFoundError(
+            "Não encontramos um cadastro de cliente para o e-mail confirmado.",
+            "CLIENT_PROFILE_NOT_FOUND",
+          ));
+          return;
+        }
+        linkedTenantId = clientCandidate.tenantId;
+        linkedTenantIsInviteTarget = false;
+        assignedRole = ROLES.CLIENT;
+      }
 
       // When a storeSlug is provided and there is no pending invite, register the
       // new user as a CLIENT of that agency.  Skip for superadmin clerkIds and
@@ -399,7 +439,7 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
       if (clientCandidate || (assignedRole === ROLES.CLIENT && linkedTenantId)) {
         await db.transaction(async (tx) => {
           await tx.insert(usersTable).values(userValues);
-          await reconcileClientIdentity(tx, {
+          const identity = await reconcileClientIdentity(tx, {
             tenantId: linkedTenantId!,
             userId,
             cpf: normalizedCpf,
@@ -408,6 +448,15 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
             createdById: userId,
             createIfMissing: assignedRole === ROLES.CLIENT,
           });
+          if (
+            isClientSignup
+            && (!clientCandidate || identity.clientId !== clientCandidate.id)
+          ) {
+            throw new ConflictError(
+              "O CPF e o e-mail informados correspondem a cadastros diferentes.",
+              "CLIENT_IDENTITY_CONFLICT",
+            );
+          }
         });
       } else {
         await db.insert(usersTable).values(userValues);

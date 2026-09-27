@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@clerk/clerk-expo";
+import { useAuth } from "@clerk/expo";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import React from "react";
@@ -124,7 +124,7 @@ export default function NotificacoesScreen() {
           accessibilityRole={destination ? "button" : undefined}
         >
           <View style={[styles.icon, { backgroundColor: notification.readAt ? colors.accent : colors.primary }]}>
-            <Feather name={destination ? "gift" : "bell"} size={17} color={notification.readAt ? colors.primary : "#fff"} />
+            <Feather name={destination ? "gift" : "bell"} size={17} color={notification.readAt ? colors.primary : colors.primaryForeground} />
           </View>
           <View style={styles.copy}>
             <Text style={[styles.itemTitle, { color: colors.foreground }]}>{notificationTitle(notification)}</Text>
@@ -147,8 +147,8 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontFamily: "Inter_700Bold" },
   subtitle: { fontSize: 13, fontFamily: "Inter_400Regular", marginTop: 3 },
   readAll: { fontSize: 12, fontFamily: "Inter_600SemiBold" },
-  item: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderRadius: 14, padding: 14, gap: 12 },
-  icon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  item: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderRadius: 8, padding: 14, gap: 12 },
+  icon: { width: 38, height: 38, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   copy: { flex: 1, gap: 4 },
   itemTitle: { fontSize: 14, fontFamily: "Inter_600SemiBold" },
   itemDescription: { fontSize: 12, fontFamily: "Inter_400Regular", lineHeight: 17 },

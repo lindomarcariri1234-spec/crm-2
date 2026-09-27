@@ -1,7 +1,7 @@
 import { Router, type NextFunction } from "express";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { db } from "@workspace/db";
-import { clientsTable, notesTable, reservationsTable, tripsTable, npsResponsesTable, referralsTable, usersTable, paymentsTable, dealsTable, storeOrdersTable, storeReviewsTable, clientScoresTable, loyaltyMembersTable, tenantsTable, referralAttemptLogsTable, calendarEventsTable, campaignSendsTable, clientNpsResponsesTable } from "@workspace/db";
+import { clientsTable, notesTable, reservationsTable, tripsTable, npsResponsesTable, referralsTable, usersTable, paymentsTable, dealsTable, storeOrdersTable, storeReviewsTable, storesTable, clientScoresTable, loyaltyMembersTable, tenantsTable, referralAttemptLogsTable, calendarEventsTable, campaignSendsTable, clientNpsResponsesTable } from "@workspace/db";
 import { eq, and, ilike, or, sql, desc, asc, inArray, count } from "drizzle-orm";
 import { generateId, generateReferralCode } from "../lib/id";
 import { generateAndAssignReferralCode } from "../lib/referral-code";
@@ -1268,38 +1268,61 @@ router.post("/clients/:id/merge", async (req, res, next: NextFunction): Promise<
       next(new ValidationError("O cliente primário e secundário não podem ser o mesmo", "VALIDATION_ERROR")); return;
     }
 
-    const [[primary], [secondary]] = await Promise.all([
-      db.select().from(clientsTable).where(and(eq(clientsTable.id, primaryId), eq(clientsTable.tenantId, me.tenantId))).limit(1),
-      db.select().from(clientsTable).where(and(eq(clientsTable.id, secondaryId), eq(clientsTable.tenantId, me.tenantId))).limit(1),
-    ]);
-    if (!primary) { next(new NotFoundError("Cliente primário não encontrado", "NOT_FOUND")); return; }
-    if (!secondary) { next(new NotFoundError("Cliente secundário não encontrado", "NOT_FOUND")); return; }
-    if (secondary.status === "merged") { next(new ValidationError("Este cliente já foi mesclado anteriormente", "VALIDATION_ERROR")); return; }
+    const primary = await db.transaction(async (tx) => {
+      // Lock both records in a stable order, then re-check their tenant and
+      // merge status inside the transaction. This prevents concurrent merges
+      // from moving the same references twice or merging an already-merged row.
+      const lockedClients = await tx.select().from(clientsTable)
+        .where(and(
+          eq(clientsTable.tenantId, me.tenantId),
+          inArray(clientsTable.id, [primaryId, secondaryId]),
+        ))
+        .orderBy(asc(clientsTable.id))
+        .for("update");
+      const lockedPrimary = lockedClients.find((client) => client.id === primaryId);
+      const lockedSecondary = lockedClients.find((client) => client.id === secondaryId);
+      if (!lockedPrimary) throw new NotFoundError("Cliente primário não encontrado", "NOT_FOUND");
+      if (!lockedSecondary) throw new NotFoundError("Cliente secundário não encontrado", "NOT_FOUND");
+      if (lockedPrimary.status === "merged") {
+        throw new ValidationError("O cliente primário já foi mesclado anteriormente", "VALIDATION_ERROR");
+      }
+      if (lockedSecondary.status === "merged") {
+        throw new ValidationError("Este cliente já foi mesclado anteriormente", "VALIDATION_ERROR");
+      }
 
-    await db.transaction(async (tx) => {
       await Promise.all([
         tx.delete(clientScoresTable).where(and(eq(clientScoresTable.clientId, secondaryId), eq(clientScoresTable.tenantId, me.tenantId))),
-        tx.delete(campaignSendsTable).where(eq(campaignSendsTable.clientId, secondaryId)),
+        tx.delete(campaignSendsTable).where(and(eq(campaignSendsTable.clientId, secondaryId), eq(campaignSendsTable.tenantId, me.tenantId))),
       ]);
 
       await Promise.all([
         tx.update(reservationsTable).set({ clientId: primaryId }).where(and(eq(reservationsTable.clientId, secondaryId), eq(reservationsTable.tenantId, me.tenantId))),
-        tx.update(paymentsTable).set({ clientId: primaryId }).where(eq(paymentsTable.clientId, secondaryId)),
+        tx.update(paymentsTable).set({ clientId: primaryId }).where(and(eq(paymentsTable.clientId, secondaryId), eq(paymentsTable.tenantId, me.tenantId))),
         tx.update(dealsTable).set({ clientId: primaryId }).where(and(eq(dealsTable.clientId, secondaryId), eq(dealsTable.tenantId, me.tenantId))),
-        tx.update(storeOrdersTable).set({ clientId: primaryId }).where(eq(storeOrdersTable.clientId, secondaryId)),
-        tx.update(storeReviewsTable).set({ clientId: primaryId }).where(eq(storeReviewsTable.clientId, secondaryId)),
+        tx.update(storeOrdersTable).set({ clientId: primaryId }).where(and(eq(storeOrdersTable.clientId, secondaryId), eq(storeOrdersTable.tenantId, me.tenantId))),
+        tx.update(storeReviewsTable).set({ clientId: primaryId }).where(and(
+          eq(storeReviewsTable.clientId, secondaryId),
+          sql`EXISTS (
+            SELECT 1 FROM ${storesTable}
+            WHERE ${storesTable.id} = ${storeReviewsTable.storeId}
+              AND ${storesTable.tenantId} = ${me.tenantId}
+          )`,
+        )),
+        // Notes do not have a tenant column; their globally unique clientId is
+        // the ownership link, and the secondary client was locked tenant-locally above.
         tx.update(notesTable).set({ clientId: primaryId }).where(eq(notesTable.clientId, secondaryId)),
-        tx.update(calendarEventsTable).set({ clientId: primaryId }).where(eq(calendarEventsTable.clientId, secondaryId)),
+        tx.update(calendarEventsTable).set({ clientId: primaryId }).where(and(eq(calendarEventsTable.clientId, secondaryId), eq(calendarEventsTable.tenantId, me.tenantId))),
         tx.update(referralsTable).set({ referrerId: primaryId }).where(and(eq(referralsTable.referrerId, secondaryId), eq(referralsTable.tenantId, me.tenantId))),
+        tx.update(referralsTable).set({ referredId: primaryId }).where(and(eq(referralsTable.referredId, secondaryId), eq(referralsTable.tenantId, me.tenantId))),
         tx.update(loyaltyMembersTable).set({ clientId: primaryId }).where(and(eq(loyaltyMembersTable.clientId, secondaryId), eq(loyaltyMembersTable.tenantId, me.tenantId))),
-        tx.update(clientNpsResponsesTable).set({ clientId: primaryId }).where(eq(clientNpsResponsesTable.clientId, secondaryId)),
+        tx.update(clientNpsResponsesTable).set({ clientId: primaryId }).where(and(eq(clientNpsResponsesTable.clientId, secondaryId), eq(clientNpsResponsesTable.tenantId, me.tenantId))),
       ]);
 
       await tx.insert(notesTable).values({
         id: generateId(),
         clientId: primaryId,
         type: "merge",
-        content: `Registros mesclados: cadastro duplicado de "${secondary.name}" (ID: ${secondaryId}) foi incorporado a este perfil por ${me.id} em ${new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`,
+        content: `Registros mesclados: cadastro duplicado de "${lockedSecondary.name}" (ID: ${secondaryId}) foi incorporado a este perfil por ${me.id} em ${new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`,
         createdById: me.id,
         isPrivate: true,
       });
@@ -1308,17 +1331,14 @@ router.post("/clients/:id/merge", async (req, res, next: NextFunction): Promise<
         .set({
           status: "merged",
           cpf: null,
-          observations: `[MESCLADO em ${new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}] Incorporado ao cliente ${primary.name} (ID: ${primaryId}). ${secondary.observations ?? ""}`.trim(),
+          observations: `[MESCLADO em ${new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}] Incorporado ao cliente ${lockedPrimary.name} (ID: ${primaryId}). ${lockedSecondary.observations ?? ""}`.trim(),
           updatedAt: new Date(),
         })
         .where(and(eq(clientsTable.id, secondaryId), eq(clientsTable.tenantId, me.tenantId)));
+
+      return lockedPrimary;
     });
-
-    const [updatedPrimary] = await db.select().from(clientsTable)
-      .where(and(eq(clientsTable.id, primaryId), eq(clientsTable.tenantId, me.tenantId)))
-      .limit(1);
-
-    res.json({ success: true, client: formatClient(updatedPrimary!) });
+    res.json({ success: true, client: formatClient(primary) });
   } catch (err) {
     next(err);
   }

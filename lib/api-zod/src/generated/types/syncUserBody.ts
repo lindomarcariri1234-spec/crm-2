@@ -20,4 +20,6 @@ export interface SyncUserBody {
   cpf?: string | null;
   /** When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users. */
   storeSlug?: string;
+  /** When true, only provisions a new client account by linking a verified email to one existing client record. */
+  clientSignup?: boolean;
 }

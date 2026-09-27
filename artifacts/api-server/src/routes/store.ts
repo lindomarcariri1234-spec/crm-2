@@ -16,6 +16,7 @@ import {
   referralsTable,
   partnerProductsTable,
   priceAlertSubscriptionsTable,
+  tripsTable,
 } from "@workspace/db";
 import { eq, and, desc, asc, count, ilike, or, sql, ne, inArray } from "drizzle-orm";
 import { z } from "zod/v4";
@@ -564,6 +565,20 @@ router.post("/store/products", async (req, res, next: NextFunction): Promise<voi
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
     const id = generateId();
     const data = parsed.data;
+    if (data.tripId !== undefined) {
+      const [trip] = await db.select({ id: tripsTable.id })
+        .from(tripsTable)
+        .where(and(eq(tripsTable.id, data.tripId), eq(tripsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!trip) { next(new ValidationError("Excursão não encontrada", "VALIDATION_ERROR")); return; }
+    }
+    if (data.categoryId !== undefined) {
+      const [category] = await db.select({ id: storeCategoriesTable.id })
+        .from(storeCategoriesTable)
+        .where(and(eq(storeCategoriesTable.id, data.categoryId), eq(storeCategoriesTable.storeId, store.id)))
+        .limit(1);
+      if (!category) { next(new ValidationError("Categoria não encontrada", "VALIDATION_ERROR")); return; }
+    }
     if (data.partnerProductId) {
       const [pp] = await db.select({ id: partnerProductsTable.id })
         .from(partnerProductsTable)
@@ -638,6 +653,20 @@ router.put("/store/products/:id", async (req, res, next: NextFunction): Promise<
     const [existingProduct] = await db.select().from(storeProductsTable)
       .where(and(eq(storeProductsTable.id, req.params.id), eq(storeProductsTable.storeId, store.id))).limit(1);
     if (!existingProduct) { next(new NotFoundError("Product not found", "NOT_FOUND")); return; }
+    if (parsed.data.tripId !== undefined) {
+      const [trip] = await db.select({ id: tripsTable.id })
+        .from(tripsTable)
+        .where(and(eq(tripsTable.id, parsed.data.tripId), eq(tripsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!trip) { next(new ValidationError("Excursão não encontrada", "VALIDATION_ERROR")); return; }
+    }
+    if (parsed.data.categoryId !== undefined) {
+      const [category] = await db.select({ id: storeCategoriesTable.id })
+        .from(storeCategoriesTable)
+        .where(and(eq(storeCategoriesTable.id, parsed.data.categoryId), eq(storeCategoriesTable.storeId, store.id)))
+        .limit(1);
+      if (!category) { next(new ValidationError("Categoria não encontrada", "VALIDATION_ERROR")); return; }
+    }
     if (parsed.data.partnerProductId) {
       const [pp] = await db.select({ id: partnerProductsTable.id })
         .from(partnerProductsTable)

@@ -414,7 +414,7 @@ function buildTxMock(capturedSetData: Record<string, unknown>[]) {
       set: vi.fn((data: Record<string, unknown>) => {
         capturedSetData.push(data);
         return {
-          where: vi.fn(() => ({
+          where: vi.fn(() => Object.assign(Promise.resolve([UPDATED_RESERVATION]), {
             returning: vi.fn().mockResolvedValue([UPDATED_RESERVATION]),
           })),
         };

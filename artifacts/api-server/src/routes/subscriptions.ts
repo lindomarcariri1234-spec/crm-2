@@ -13,6 +13,7 @@ import { ROLES, INVOICE_STATUS, TENANT_STATUS, SUBSCRIPTION_STATUS } from "@work
 import { getUncachableStripeClient, getStripePublishableKey } from "../lib/stripeClient";
 import { handleStripeWebhook } from "../lib/stripeWebhookHandler";
 import { hasSeatMapFeature } from "../lib/plan-features";
+import { acquireSubscriptionUpgradeLock } from "../lib/subscription-upgrade-lock";
 
 const router = Router();
 
@@ -93,6 +94,7 @@ const UpgradeBody = z.object({
 }).refine(d => d.planId || d.planSlug, { message: "planId or planSlug is required" });
 
 router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Promise<void> => {
+  let releaseUpgradeLock: (() => Promise<void>) | undefined;
   try {
     const me = await requireAuth(req, res, { skipTenantStatusCheck: true });
     if (!me) return;
@@ -103,6 +105,25 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
 
     const parsed = UpgradeBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
+
+    releaseUpgradeLock = await acquireSubscriptionUpgradeLock(me.tenantId);
+
+    const [pendingSubscription] = await db
+      .select({ id: subscriptionsTable.id })
+      .from(subscriptionsTable)
+      .where(and(
+        eq(subscriptionsTable.tenantId, me.tenantId),
+        eq(subscriptionsTable.status, SUBSCRIPTION_STATUS.PENDING_PAYMENT),
+      ))
+      .limit(1);
+    if (pendingSubscription) {
+      next(new AppError(
+        "Já existe uma atualização de plano aguardando pagamento. Conclua o pagamento pendente antes de solicitar outra atualização.",
+        409,
+        "SUBSCRIPTION_UPGRADE_PENDING",
+      ));
+      return;
+    }
 
     const planConditions = [
       ...(parsed.data.planId ? [eq(plansTable.id, parsed.data.planId)] : []),
@@ -539,6 +560,14 @@ router.post("/subscriptions/upgrade", async (req, res, next: NextFunction): Prom
     res.json({ upgraded: false, pendingInvoice: true, plan: newPlan, invoice });
   } catch (err) {
     next(err);
+  } finally {
+    if (releaseUpgradeLock) {
+      try {
+        await releaseUpgradeLock();
+      } catch (err) {
+        logger.error({ err }, "[subscriptions/upgrade] Failed to release tenant advisory lock");
+      }
+    }
   }
 });
 

@@ -11,6 +11,7 @@ export interface SystemConfig {
   id: string;
   tenantId: string;
   key: string;
+  /** @nullable */
   value?: SystemConfigValue;
   /** @nullable */
   updatedById?: string | null;

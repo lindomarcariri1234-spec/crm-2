@@ -101,6 +101,7 @@ vi.mock("@workspace/db", () => ({
   dealsTable:            { _table: "deals" },
   storeOrdersTable:      { _table: "storeOrders" },
   storeReviewsTable:     { _table: "storeReviews" },
+  storesTable:           { _table: "stores" },
   clientScoresTable:     { _table: "clientScores" },
   loyaltyMembersTable:   { _table: "loyaltyMembers" },
   tenantsTable:          { _table: "tenants" },
@@ -132,7 +133,7 @@ vi.mock("../lib/tenant.js", () => ({
   requireAuth: vi.fn(),
   getTenantUser: vi.fn(),
   ADMIN_ROLES: ["admin", "agencia"],
-  MANAGEMENT_ROLES: ["admin", "manager"],
+  MANAGEMENT_ROLES: ["admin", "manager", "agencia", "gerente"],
 }));
 
 vi.mock("../lib/id.js", () => ({
@@ -299,6 +300,11 @@ function buildTxMock() {
   const txWhere = vi.fn().mockResolvedValue([]);
   const txUpdateSet = vi.fn(() => ({ where: txWhere }));
   const txUpdate = vi.fn(() => ({ set: txUpdateSet }));
+  const txForUpdate = vi.fn();
+  const txOrderBy = vi.fn(() => ({ for: txForUpdate }));
+  const txSelectWhere = vi.fn(() => ({ orderBy: txOrderBy }));
+  const txSelectFrom = vi.fn(() => ({ where: txSelectWhere }));
+  const txSelect = vi.fn(() => ({ from: txSelectFrom }));
   const txDeleteWhere = vi.fn().mockResolvedValue([]);
   const txDelete = vi.fn(() => ({ where: txDeleteWhere }));
   const txInsertValues = vi.fn().mockImplementation((vals: Record<string, unknown>) => {
@@ -306,7 +312,22 @@ function buildTxMock() {
     return Promise.resolve([]);
   });
   const txInsert = vi.fn(() => ({ values: txInsertValues }));
-  return { update: txUpdate, delete: txDelete, insert: txInsert };
+  return {
+    select: txSelect,
+    update: txUpdate,
+    delete: txDelete,
+    insert: txInsert,
+    forUpdate: txForUpdate,
+  };
+}
+
+function mockMergeTransaction(lockedClients: Record<string, unknown>[] = [PRIMARY, SECONDARY]) {
+  const tx = buildTxMock();
+  tx.forUpdate.mockResolvedValue(lockedClients);
+  mockTransaction.mockImplementation(
+    async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx),
+  );
+  return tx;
 }
 
 // Helper: returns the _table sentinel names passed to tx.update(table) in call order.
@@ -479,9 +500,7 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
   });
 
   it("returns 404 when the primary client is not found in the tenant", async () => {
-    mockLimit
-      .mockResolvedValueOnce([])          // primary → not found
-      .mockResolvedValueOnce([SECONDARY]); // secondary → found
+    mockMergeTransaction([SECONDARY]);
 
     const res = await request(buildApp())
       .post("/api/clients/nonexistent/merge")
@@ -492,9 +511,7 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
   });
 
   it("returns 404 when the secondary client is not found in the tenant", async () => {
-    mockLimit
-      .mockResolvedValueOnce([PRIMARY])
-      .mockResolvedValueOnce([]);
+    mockMergeTransaction([PRIMARY]);
 
     const res = await request(buildApp())
       .post("/api/clients/client-001/merge")
@@ -505,9 +522,7 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
   });
 
   it("returns 400 when the secondary client has already been merged", async () => {
-    mockLimit
-      .mockResolvedValueOnce([PRIMARY])
-      .mockResolvedValueOnce([SECONDARY_MERGED]);
+    const tx = mockMergeTransaction([PRIMARY, SECONDARY_MERGED]);
 
     const res = await request(buildApp())
       .post("/api/clients/client-001/merge")
@@ -515,18 +530,12 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(tx.update).not.toHaveBeenCalled();
+    expect(tx.delete).not.toHaveBeenCalled();
   });
 
   it("executes the transaction and reassigns all FK tables to the primary client", async () => {
-    const tx = buildTxMock();
-    mockTransaction.mockImplementation(
-      async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx),
-    );
-
-    mockLimit
-      .mockResolvedValueOnce([PRIMARY])    // primary lookup
-      .mockResolvedValueOnce([SECONDARY])  // secondary lookup
-      .mockResolvedValueOnce([PRIMARY]);    // final re-fetch
+    const tx = mockMergeTransaction();
 
     const res = await request(buildApp())
       .post("/api/clients/client-001/merge")
@@ -535,11 +544,12 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.client.id).toBe("client-001");
+    expect(tx.forUpdate).toHaveBeenCalledWith("update");
 
     // Both clientScores and campaignSends must be deleted for secondary
     expect(tx.delete).toHaveBeenCalledTimes(2);
 
-    // Verify all expected FK tables are updated (10 FK updates + 1 status update = 11 total)
+    // Verify all expected FK tables are updated (11 FK updates + 1 status update = 12 total)
     const tables = updatedTables(tx.update);
     const EXPECTED_FK_TABLES = [
       "reservations",
@@ -560,20 +570,15 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
     // The secondary client's status must be updated to "merged"
     expect(tables).toContain("clients");
 
-    // Exactly 11 update calls (10 FK + 1 status)
-    expect(tx.update).toHaveBeenCalledTimes(11);
+    // Referral relationships are updated independently for referrer and referred client.
+    expect(tables.filter((table) => table === "referrals")).toHaveLength(2);
+
+    // Exactly 12 update calls (11 FK + 1 status)
+    expect(tx.update).toHaveBeenCalledTimes(12);
   });
 
   it("inserts an audit note on the primary client during the merge transaction", async () => {
-    const tx = buildTxMock();
-    mockTransaction.mockImplementation(
-      async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx),
-    );
-
-    mockLimit
-      .mockResolvedValueOnce([PRIMARY])
-      .mockResolvedValueOnce([SECONDARY])
-      .mockResolvedValueOnce([PRIMARY]);
+    const tx = mockMergeTransaction();
 
     await request(buildApp())
       .post("/api/clients/client-001/merge")
@@ -593,16 +598,28 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
     );
   });
 
-  it("returns 404 and does not start the transaction when secondary is from another tenant", async () => {
-    mockLimit
-      .mockResolvedValueOnce([PRIMARY])
-      .mockResolvedValueOnce([]); // cross-tenant secondary absent in this tenant
+  it("returns 404 without writing when secondary is from another tenant", async () => {
+    mockMergeTransaction([PRIMARY]);
 
     const res = await request(buildApp())
       .post("/api/clients/client-001/merge")
       .send({ secondaryId: "other-tenant-client" });
 
     expect(res.status).toBe(404);
-    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not merge into a primary record that was already merged", async () => {
+    const mergedPrimary = makeFakeClient({ ...PRIMARY, status: "merged" });
+    const tx = mockMergeTransaction([mergedPrimary, SECONDARY]);
+
+    const res = await request(buildApp())
+      .post("/api/clients/client-001/merge")
+      .send({ secondaryId: "client-002" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(tx.update).not.toHaveBeenCalled();
+    expect(tx.delete).not.toHaveBeenCalled();
   });
 });

@@ -77,6 +77,7 @@ vi.mock("@workspace/db", () => ({
   storesTable: { id: "id", tenantId: "tenantId", email: "email" },
   usersTable: { id: "id", tenantId: "tenantId", email: "email", role: "role", isActive: "isActive" },
   paymentsTable: { id: "id", status: "status", type: "type", dueDate: "dueDate", paidAt: "paidAt", amount: "amount", reservationId: "reservationId" },
+  pipelineStagesTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({

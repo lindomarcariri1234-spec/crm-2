@@ -55,6 +55,10 @@ export default function AdminMetricsPage() {
         <p className="text-sm text-muted-foreground mt-1">Análise de crescimento, receita e churn dos últimos 12 meses</p>
       </div>
 
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-muted-foreground">
+        Para contas existentes, os meses anteriores ao início do registro usam um estado inicial estimado na implantação; alterações antigas de status ou plano não podem ser reconstruídas.
+      </div>
+
       {anyError && (
         <div className="flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           <AlertCircle className="w-4 h-4 shrink-0" />

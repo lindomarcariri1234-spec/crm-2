@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,6 +42,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -56,6 +59,9 @@ jobs:
 
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify API contract code generation is current
+        run: pnpm run api:codegen:check
 
       - name: Validate database schema statically
         run: |
@@ -92,6 +98,12 @@ jobs:
       - name: Test frontend suite
         run: pnpm --filter @workspace/visitecrm run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
 
+      - name: Test publication verification
+        run: node --test scripts/verify-publication.test.mjs scripts/verify-publication-chunks.test.mjs scripts/verify-referral-publication.test.mjs scripts/frontend-bundle-size.test.mjs
+
+      - name: Check protected publication route coverage
+        run: node scripts/verify-publication-chunks.mjs --check-route-coverage
+
       - name: Type-check mobile artifacts
         run: |
           pnpm --filter @workspace/cliente-app run typecheck
@@ -100,5 +112,64 @@ jobs:
       - name: Build API for production
         run: pnpm --filter @workspace/api-server run build
 
-      - name: Build VisiteCRM frontend for production
+      - name: Build VisiteCRM frontend and publish bundle budget summary
+        env:
+          PUBLICATION_VERSION: ${{ github.sha }}
         run: pnpm --filter @workspace/visitecrm run build
+
+      - name: Verify built storefront publication marker
+        run: node scripts/publication-marker.mjs artifacts/visitecrm/dist/public/index.html ${{ github.sha }}
+
+      - name: Verify deployed Vercel canonical domain
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          PUBLICATION_SMOKE_URL: https://visitecrm.com
+          PUBLICATION_CANONICAL_URL: https://visitecrm.com
+          # Compare the marker served by Vercel with the exact main commit
+          # that triggered this workflow; a previous deployment must fail.
+          PUBLICATION_EXPECTED_VERSION: ${{ github.sha }}
+          # Vercel's Git deployment can finish after the CI build; retry while DNS/CDN propagates.
+          PUBLICATION_SMOKE_ATTEMPTS: "18"
+          PUBLICATION_SMOKE_RETRY_DELAY_MS: "10000"
+        run: node scripts/verify-publication.mjs
+
+      - name: Install Chromium for browser chunk verification
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends chromium
+      - name: Verify published JavaScript chunks
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        env:
+          PUBLICATION_CHUNK_URL: https://visitecrm.com
+          # Use one short-lived session per role so role-specific lazy chunks
+          # are exercised instead of relying on a single shared session.
+          PUBLICATION_CHUNK_SELLER_PATHS: /meu-painel,/vouchers
+          PUBLICATION_CHUNK_SUPERADMIN_PATHS: /admin,/admin/tenants
+          PUBLICATION_CHUNK_CLIENT_PATHS: /perfil
+          PUBLICATION_CHUNK_INTERACTION_SELECTORS: '[role="tab"],button[aria-haspopup="menu"]'
+          # These sessions are issued manually by signing in as the dedicated
+          # seller, superadmin, and client accounts in the Clerk instance used
+          # by the published portal. CI does not create or renew them.
+          #
+          # Rotation procedure (before the recorded expiry):
+          # 1. Sign out and sign in again for each account, then copy its
+          #    Cookie or Authorization value from the browser request.
+          # 2. Replace the matching GitHub Actions secret below, and update
+          #    the matching repository Actions variable with the new ISO-8601
+          #    expiry timestamp (PUBLICATION_CHUNK_*_EXPIRES_AT).
+          # 3. Use Actions > CI > Run workflow to validate all three profiles.
+          #    The manual trigger is intentional so rotation does not require
+          #    a code change or a new publication.
+          #
+          # Values are passed only through the process environment; the
+          # verifier never prints or persists credentials.
+          PUBLICATION_CHUNK_SESSION_RENEWAL_WINDOW_HOURS: "72"
+          PUBLICATION_CHUNK_SELLER_AUTHORIZATION: ${{ secrets.PUBLICATION_CHUNK_SELLER_AUTHORIZATION }}
+          PUBLICATION_CHUNK_SELLER_COOKIE: ${{ secrets.PUBLICATION_CHUNK_SELLER_COOKIE }}
+          PUBLICATION_CHUNK_SELLER_EXPIRES_AT: ${{ vars.PUBLICATION_CHUNK_SELLER_EXPIRES_AT }}
+          PUBLICATION_CHUNK_SUPERADMIN_AUTHORIZATION: ${{ secrets.PUBLICATION_CHUNK_SUPERADMIN_AUTHORIZATION }}
+          PUBLICATION_CHUNK_SUPERADMIN_COOKIE: ${{ secrets.PUBLICATION_CHUNK_SUPERADMIN_COOKIE }}
+          PUBLICATION_CHUNK_SUPERADMIN_EXPIRES_AT: ${{ vars.PUBLICATION_CHUNK_SUPERADMIN_EXPIRES_AT }}
+          PUBLICATION_CHUNK_CLIENT_AUTHORIZATION: ${{ secrets.PUBLICATION_CHUNK_CLIENT_AUTHORIZATION }}
+          PUBLICATION_CHUNK_CLIENT_COOKIE: ${{ secrets.PUBLICATION_CHUNK_CLIENT_COOKIE }}
+          PUBLICATION_CHUNK_CLIENT_EXPIRES_AT: ${{ vars.PUBLICATION_CHUNK_CLIENT_EXPIRES_AT }}
+        run: node scripts/verify-publication-chunks.mjs

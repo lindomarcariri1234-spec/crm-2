@@ -587,11 +587,11 @@ export async function initStripeSync(): Promise<void> {
     // Step 3: syncBackfill() — backfill recent subscriptions into the sync tables
     try {
       const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
-      const result = await _stripeSyncInstance.syncBackfill({
+      await _stripeSyncInstance.syncBackfill({
         created: { gte: thirtyDaysAgo },
         object: "subscription",
       });
-      logger.info({ result }, "[stripe-sync] syncBackfill complete");
+      logger.info("[stripe-sync] syncBackfill complete");
     } catch (err) {
       logger.warn({ err }, "[stripe-sync] syncBackfill failed — will retry on next startup");
     }

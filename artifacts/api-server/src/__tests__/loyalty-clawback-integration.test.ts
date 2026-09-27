@@ -52,7 +52,7 @@ vi.mock("../lib/realtime.js", () => ({
 vi.mock("../lib/tenant.js", () => ({
   requireAuth: vi.fn(),
   getTenantUser: vi.fn(),
-  ADMIN_ROLES: ["admin"],
+  ADMIN_ROLES: ["admin", "agencia"],
   MANAGEMENT_ROLES: ["admin", "gerente"],
 }));
 
@@ -108,6 +108,8 @@ vi.mock("../lib/passenger.js", () => ({
 
 import { requireAuth } from "../lib/tenant.js";
 import reservationsRouter from "../routes/reservations.js";
+import loyaltyRouter from "../routes/loyalty.js";
+import adminRouter from "../routes/admin.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
 
 // ---------------------------------------------------------------------------
@@ -143,6 +145,8 @@ function buildApp() {
     next();
   });
   app.use("/api", reservationsRouter);
+  app.use("/api", loyaltyRouter);
+  app.use("/api", adminRouter);
   app.use(errorHandler);
   return app;
 }
@@ -367,5 +371,85 @@ describe("Loyalty clawback — real DB end-to-end lifecycle", () => {
     // Member's available points remain at 0 — no double-deduction
     const memberAfterSecondCancel = await getMember();
     expect(memberAfterSecondCancel.availablePoints).toBe(0);
+  });
+});
+
+describe("Loyalty route tenant and points guards", () => {
+  it("rejects CLIENT users on all client-document methods", async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      id: USER_ID, tenantId: TENANT_ID, role: ROLES.CLIENT,
+      name: "Client", email: "client@example.com",
+    } as never);
+
+    const list = await request(buildApp()).get(`/api/admin/clients/${CLIENT_ID}/documents`);
+    const create = await request(buildApp()).post(`/api/admin/clients/${CLIENT_ID}/documents`)
+      .send({ name: "doc", url: "https://example.com/doc.pdf" });
+    const remove = await request(buildApp()).delete(`/api/admin/clients/${CLIENT_ID}/documents/doc-id`);
+
+    expect(list.status).toBe(403);
+    expect(create.status).toBe(403);
+    expect(remove.status).toBe(403);
+    vi.mocked(requireAuth).mockResolvedValue({
+      id: USER_ID, tenantId: TENANT_ID, role: ROLES.AGENCY_ADMIN,
+      name: "Integration Tester", email: `tester-${RUN}@example.com`,
+    } as never);
+  });
+
+  it("rejects non-positive points and leaves the member unchanged", async () => {
+    const before = await getMember();
+    const txBefore = await db.select().from(loyaltyTransactionsTable)
+      .where(eq(loyaltyTransactionsTable.memberId, MEMBER_ID));
+
+    const zero = await request(buildApp()).post("/api/loyalty-transactions").send({
+      memberId: MEMBER_ID, programId: PROGRAM_ID, type: "earn", points: 0,
+    });
+    const negative = await request(buildApp()).post("/api/loyalty-transactions").send({
+      memberId: MEMBER_ID, programId: PROGRAM_ID, type: "redeem", points: -1,
+    });
+
+    expect(zero.status).toBe(400);
+    expect(negative.status).toBe(400);
+    expect(await getMember()).toEqual(before);
+    expect(await db.select().from(loyaltyTransactionsTable)
+      .where(eq(loyaltyTransactionsTable.memberId, MEMBER_ID))).toHaveLength(txBefore.length);
+  });
+
+  it("rejects a mismatched program without changing transactions or balance", async () => {
+    const before = await getMember();
+    const txBefore = await db.select().from(loyaltyTransactionsTable)
+      .where(eq(loyaltyTransactionsTable.memberId, MEMBER_ID));
+
+    const response = await request(buildApp()).post("/api/loyalty-transactions").send({
+      memberId: MEMBER_ID, programId: `foreign-program-${RUN}`, type: "earn", points: 10,
+    });
+
+    expect(response.status).toBe(404);
+    expect(await getMember()).toEqual(before);
+    expect(await db.select().from(loyaltyTransactionsTable)
+      .where(eq(loyaltyTransactionsTable.memberId, MEMBER_ID))).toHaveLength(txBefore.length);
+  });
+
+  it("rejects a member whose client/program are not in the caller tenant", async () => {
+    const response = await request(buildApp()).post("/api/loyalty-members").send({
+      memberId: `foreign-member-${RUN}`,
+      clientId: `foreign-client-${RUN}`,
+      programId: `foreign-program-${RUN}`,
+    });
+
+    expect(response.status).toBe(404);
+    const foreignMembers = await db.select().from(loyaltyMembersTable)
+      .where(eq(loyaltyMembersTable.id, `foreign-member-${RUN}`));
+    expect(foreignMembers).toHaveLength(0);
+  });
+
+  it("keeps the valid transaction path working", async () => {
+    const response = await request(buildApp()).post("/api/loyalty-transactions").send({
+      memberId: MEMBER_ID, programId: PROGRAM_ID, type: "earn", points: 5,
+      description: "regression test",
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.memberId).toBe(MEMBER_ID);
+    expect((await getMember()).availablePoints).toBe(SEEDED_POINTS + 5);
   });
 });

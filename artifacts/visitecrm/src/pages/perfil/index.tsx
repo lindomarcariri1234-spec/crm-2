@@ -313,10 +313,10 @@ const CARD_TIER_BG: Record<string, string> = {
 };
 
 const CARD_TIER_ICONS: Record<string, string> = {
-  bronze:  "🥉",
-  silver:  "🥈",
-  gold:    "🥇",
-  diamond: "💎",
+  bronze:  "",
+  silver:  "",
+  gold:    "",
+  diamond: "",
 };
 
 const CARD_TIER_LABELS: Record<string, string> = {
@@ -333,6 +333,24 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
     g: parseInt(clean.slice(2, 4), 16) || 130,
     b: parseInt(clean.slice(4, 6), 16) || 246,
   };
+}
+
+function readablePortalText(hex: string): string {
+  const { r, g, b } = hexToRgb(hex);
+  const channel = (value: number) => {
+    const normalized = value / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : Math.pow((normalized + 0.055) / 1.055, 2.4);
+  };
+  const luminance = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  const contrast = (foreground: number) => {
+    const lighter = Math.max(luminance, foreground);
+    const darker = Math.min(luminance, foreground);
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+  const darkLuminance = 0.2126 * channel(47) + 0.7152 * channel(58) + 0.0722 * channel(67);
+  return contrast(darkLuminance) >= contrast(1) ? "#2F3A43" : "#FFFFFF";
 }
 
 function getCardBg(primaryColor: string, tierLevel: string | null): string {
@@ -491,7 +509,7 @@ function ClienteCard({
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
                   <div className="text-right leading-none">
                     <p className="text-[7px] text-white/50 uppercase tracking-widest">Cartão do</p>
-                    <p className="text-[10px] font-extrabold text-white uppercase tracking-wide">Viajante ✈</p>
+                     <p className="text-[10px] font-extrabold text-white uppercase tracking-wide">Viajante</p>
                   </div>
                   {/* EMV chip */}
                   <svg width="30" height="23" viewBox="0 0 36 28" className="opacity-90" aria-hidden="true">
@@ -785,7 +803,7 @@ function NpsCard({
                     : "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
                   : i <= 8
                   ? isSelected
-                    ? "bg-yellow-500 text-white border-yellow-500"
+                    ? "bg-[#F2C14E] text-[#2F3A43] border-[#D8A646]"
                     : "bg-yellow-50 text-yellow-700 border-yellow-200 hover:bg-yellow-100"
                   : isSelected
                   ? "bg-green-500 text-white border-green-500"
@@ -814,28 +832,28 @@ function NpsCard({
               <StarRating
                 value={scoreTransport}
                 onChange={setScoreTransport}
-                label="🚌 Transporte/Ônibus"
+                 label="Transporte/Ônibus"
               />
             )}
             {showService && (
               <StarRating
                 value={scoreService}
                 onChange={setScoreService}
-                label="👥 Atendimento da equipe"
+                 label="Atendimento da equipe"
               />
             )}
             {showOrganization && (
               <StarRating
                 value={scoreOrganization}
                 onChange={setScoreOrganization}
-                label="📋 Organização da viagem"
+                label="Organização da viagem"
               />
             )}
             {showGuide && (
               <StarRating
                 value={scoreGuide}
                 onChange={setScoreGuide}
-                label="🎤 Guia/Monitoria"
+                label="Guia/Monitoria"
               />
             )}
           </div>
@@ -877,16 +895,16 @@ function BirthdayBonusCard({
   return (
     <div className="rounded-xl overflow-hidden shadow-md">
       <div
-        className="p-4 text-white"
+        className="p-4 text-[#2F3A43]"
         style={{ background: "linear-gradient(135deg, #ec4899, #f59e0b)" }}
       >
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
-            <Gift className="w-5 h-5 text-white" />
+            <Gift className="w-5 h-5 text-[#5D3E2A]" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-bold text-base leading-tight">🎉 Seu aniversário está chegando!</p>
-            <p className="text-sm text-white/90 mt-0.5">
+            <p className="font-bold text-base leading-tight">Seu aniversário está chegando</p>
+            <p className="text-sm text-[#2F3A43]/85 mt-0.5">
               {daysLeft === 1
                 ? "Falta apenas 1 dia"
                 : `Faltam apenas ${daysLeft} dias`}{" "}
@@ -896,8 +914,8 @@ function BirthdayBonusCard({
         </div>
 
         <div className="mt-3 rounded-lg bg-white/15 border border-white/25 p-3">
-          <p className="text-sm font-semibold">🎁 Bônus de Aniversário Exclusivo</p>
-          <p className="text-xs text-white/85 mt-1 leading-relaxed">
+           <p className="text-sm font-semibold">Bônus de aniversário exclusivo</p>
+          <p className="text-xs text-[#2F3A43]/80 mt-1 leading-relaxed">
             Aproveite benefícios e vantagens especiais para celebrar essa data com uma viagem
             inesquecível. Fique atento às próximas novidades e garanta sua próxima experiência com
             condições exclusivas.
@@ -908,7 +926,7 @@ function BirthdayBonusCard({
           <Button
             size="sm"
             variant="outline"
-            className="mt-3 w-full border-white/50 text-white bg-white/10 hover:bg-white/20 hover:text-white"
+            className="mt-3 w-full border-[#5D3E2A]/35 text-[#2F3A43] bg-white/55 hover:bg-white/80 hover:text-[#2F3A43]"
             onClick={() => (window.location.href = storeUrl)}
           >
             Ver Pacotes Especiais
@@ -930,16 +948,16 @@ function BirthdayTodayCard({
   return (
     <div className="rounded-xl overflow-hidden shadow-md">
       <div
-        className="p-4 text-white"
+        className="p-4 text-[#2F3A43]"
         style={{ background: "linear-gradient(135deg, #ec4899, #f59e0b)" }}
       >
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0 text-xl leading-none">
-            🎂
+            <Gift className="h-5 w-5 text-[#5D3E2A]" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-bold text-base leading-tight">Feliz Aniversário! 🎉</p>
-            <p className="text-sm text-white/90 mt-0.5">
+            <p className="font-bold text-base leading-tight">Feliz aniversário</p>
+            <p className="text-sm text-[#2F3A43]/85 mt-0.5">
               Hoje é o seu dia, <span className="font-semibold">{firstName}</span>! Que seja um
               dia incrível, repleto de alegria, amor e novas aventuras pelo mundo.
             </p>
@@ -947,8 +965,8 @@ function BirthdayTodayCard({
         </div>
 
         <div className="mt-3 rounded-lg bg-white/15 border border-white/25 p-3">
-          <p className="text-sm font-semibold">🎁 Bônus de Aniversário Exclusivo</p>
-          <p className="text-xs text-white/85 mt-1 leading-relaxed">
+           <p className="text-sm font-semibold">Bônus de aniversário exclusivo</p>
+          <p className="text-xs text-[#2F3A43]/80 mt-1 leading-relaxed">
             Preparamos condições especiais para você celebrar esse momento com uma viagem
             inesquecível. Aproveite os benefícios exclusivos de aniversariante e garanta sua
             próxima experiência com vantagens únicas.
@@ -959,7 +977,7 @@ function BirthdayTodayCard({
           <Button
             size="sm"
             variant="outline"
-            className="mt-3 w-full border-white/50 text-white bg-white/10 hover:bg-white/20 hover:text-white"
+            className="mt-3 w-full border-[#5D3E2A]/35 text-[#2F3A43] bg-white/55 hover:bg-white/80 hover:text-[#2F3A43]"
             onClick={() => (window.location.href = storeUrl)}
           >
             Ver Pacotes Especiais
@@ -981,25 +999,25 @@ function BirthdayGreetingCard({
   return (
     <div className="rounded-xl overflow-hidden shadow-md">
       <div
-        className="p-4 text-white"
+        className="p-4 text-[#2F3A43]"
         style={{ background: "linear-gradient(135deg, #ec4899, #f59e0b)" }}
       >
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0 text-xl leading-none">
-            🥳
+            <Gift className="h-5 w-5 text-[#5D3E2A]" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="font-bold text-base leading-tight">Amanhã é seu dia!</p>
-            <p className="text-sm text-white/90 mt-0.5">
-              Parabéns antecipado, <span className="font-semibold">{firstName}</span>! 🎉
+            <p className="text-sm text-[#2F3A43]/85 mt-0.5">
+              Parabéns antecipado, <span className="font-semibold">{firstName}</span>!
               Que seu aniversário seja repleto de alegria e novas aventuras.
             </p>
           </div>
         </div>
 
         <div className="mt-3 rounded-lg bg-white/15 border border-white/25 p-3">
-          <p className="text-sm font-semibold">🎁 Bônus de Aniversário Exclusivo</p>
-          <p className="text-xs text-white/85 mt-1 leading-relaxed">
+         <p className="text-sm font-semibold">Bônus de aniversário exclusivo</p>
+          <p className="text-xs text-[#2F3A43]/80 mt-1 leading-relaxed">
             Preparamos condições especiais para você celebrar essa data com uma viagem
             inesquecível. Fique atento às próximas novidades e garanta sua próxima experiência com
             benefícios exclusivos de aniversariante.
@@ -1010,7 +1028,7 @@ function BirthdayGreetingCard({
           <Button
             size="sm"
             variant="outline"
-            className="mt-3 w-full border-white/50 text-white bg-white/10 hover:bg-white/20 hover:text-white"
+            className="mt-3 w-full border-[#5D3E2A]/35 text-[#2F3A43] bg-white/55 hover:bg-white/80 hover:text-[#2F3A43]"
             onClick={() => (window.location.href = storeUrl)}
           >
             Ver Pacotes Especiais
@@ -1236,7 +1254,7 @@ function InicioTab({
               <span>
                 {" "}
                 {days === 0
-                  ? "Sua próxima viagem é hoje! 🎉"
+                  ? "Sua próxima viagem é hoje"
                   : days === 1
                   ? "Sua próxima viagem é amanhã!"
                   : `Sua próxima viagem começa em ${days} dias.`}
@@ -1391,7 +1409,7 @@ function ReservasTab({
   const [redeemPoints, setRedeemPoints] = useState("");
   const [redeemLoading, setRedeemLoading] = useState(false);
 
-  const primaryColor = profile.tenant?.primaryColor ?? "#3B82F6";
+  const primaryColor = profile.tenant?.primaryColor ?? "#1E5B8C";
 
   function openRedeem(reservationId: string, balance: number) {
     if (!loyalty) return;
@@ -2037,7 +2055,7 @@ function ReferralRow({ r, primaryColor }: { r: ClientReferral; primaryColor: str
         <p className="text-xs text-muted-foreground mt-0.5">{dateLabel}</p>
         {r.status === REFERRAL_STATUS.REVERSED && bonusValue > 0 && (
           <p className="text-xs mt-1 font-medium text-red-500">
-            ✕ Bônus de {formatBRL(bonusValue)} revertido
+            <><XCircle className="mr-1 inline-block h-3.5 w-3.5 align-[-2px]" />Bônus de {formatBRL(bonusValue)} revertido</>
           </p>
         )}
         {r.status === REFERRAL_STATUS.REVERSED && r.reversalReason && (
@@ -2058,13 +2076,13 @@ function ReferralRow({ r, primaryColor }: { r: ClientReferral; primaryColor: str
             {r.bonusCreditUsedAt
               ? (() => {
                   const usedAmt = r.bonusCreditUsedAmount ? parseFloat(r.bonusCreditUsedAmount) : bonusValue;
-                  return `✓ Cashback de ${formatBRL(usedAmt)} usado no checkout`;
+                  return `Cashback de ${formatBRL(usedAmt)} usado no checkout`;
                 })()
               : r.bonusPaid
-              ? `✓ Bônus de ${formatBRL(bonusValue)} pago`
+              ? `Bônus de ${formatBRL(bonusValue)} pago`
               : r.bonusBlocked && r.bonusReleasesAt
-              ? `🔒 Bônus de ${formatBRL(bonusValue)} disponível em ${new Date(r.bonusReleasesAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
-              : `⏳ Bônus de ${formatBRL(bonusValue)} aguardando pagamento`}
+              ? `Bônus de ${formatBRL(bonusValue)} disponível em ${new Date(r.bonusReleasesAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}`
+              : `Bônus de ${formatBRL(bonusValue)} aguardando pagamento`}
           </p>
         )}
         {(r.status === REFERRAL_STATUS.COMPLETED || r.status === REFERRAL_STATUS.CONVERTED) && r.loyaltyPoints != null && r.loyaltyPoints > 0 && (
@@ -2122,6 +2140,7 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
     ? `${window.location.origin}/loja/${tenant.slug}/indicacao?code=${code}`
     : null;
   const primaryColor = tenant?.primaryColor ?? "#3B82F6";
+  const primaryForeground = readablePortalText(primaryColor);
   const tenantLogoUrl = tenant?.logoUrl ?? null;
 
   const shareMessage = referral.shareMessage ?? "Use meu código e ganhe desconto na sua viagem!";
@@ -2195,7 +2214,7 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
     }
     if (!prevHasBonusRef.current && hasBonus) {
       toast({
-        title: "🎉 Primeiro bônus desbloqueado!",
+        title: "Primeiro bônus desbloqueado",
         description: "Sua indicação foi confirmada e você ganhou seu primeiro bônus. Parabéns!",
       });
     }
@@ -2334,11 +2353,11 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       {/* Campaign banner */}
       {activeCampaign && countdown && (
         <div
-          className="rounded-xl p-4 text-white text-center shadow-md animate-in fade-in slide-in-from-top-2 duration-500"
-          style={{ background: `linear-gradient(135deg, ${primaryColor}dd, ${primaryColor}bb)` }}
+          className="rounded-xl p-4 text-center shadow-md animate-in fade-in slide-in-from-top-2 duration-500"
+          style={{ background: `linear-gradient(135deg, ${primaryColor}dd, ${primaryColor}bb)`, color: primaryForeground }}
         >
           <div className="flex items-center justify-center gap-2 font-bold text-base mb-1">
-            <span className="text-lg">🔥</span>
+            <Sparkles className="h-4 w-4 text-[#D8A646]" />
             <span>
               {activeCampaign.bannerText
                 ? activeCampaign.bannerText
@@ -2347,9 +2366,9 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                   : `Bônus extra de R$ ${Number(activeCampaign.bonusValue).toFixed(2).replace(".", ",")} nesta campanha!`}
             </span>
           </div>
-          <p className="text-white/80 text-xs">
+          <p className="text-xs opacity-80">
             Termina em{" "}
-            <span className="font-mono font-semibold text-white bg-black/20 px-1.5 py-0.5 rounded">
+            <span className="font-mono font-semibold bg-black/20 px-1.5 py-0.5 rounded">
               {countdown}
             </span>
           </p>
@@ -2357,28 +2376,28 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       )}
 
       <div
-        className="rounded-2xl p-6 text-white"
-        style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)` }}
+        className="rounded-2xl p-6"
+        style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)`, color: primaryForeground }}
       >
         <div className="flex items-center gap-3 mb-3">
           {tenantLogoUrl ? (
             <img src={tenantLogoUrl} alt="Logo" className="w-10 h-10 rounded-full object-contain bg-white/20 p-1" />
           ) : (
             <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
-              <Gift className="w-5 h-5 text-white" />
+              <Gift className="w-5 h-5" />
             </div>
           )}
           <div>
-            <p className="text-white font-semibold text-sm">Programa de Indicação</p>
-            <p className="text-white/70 text-xs">{tenant?.name ?? "VisiteCRM"}</p>
+            <p className="font-semibold text-sm">Programa de Indicação</p>
+            <p className="text-xs opacity-70">{tenant?.name ?? "VisiteCRM"}</p>
           </div>
         </div>
 
-        <p className="text-white/80 text-sm mb-1">Seu código de indicação</p>
+        <p className="text-sm opacity-80 mb-1">Seu código de indicação</p>
         <div className="flex items-center gap-3 mb-1">
           <span
             className="text-2xl font-mono font-extrabold tracking-widest"
-            style={{ color: isCodeActive ? "#ffffff" : "#9ca3af" }}
+            style={{ color: isCodeActive ? primaryForeground : "#9ca3af" }}
           >
             {code}
           </span>
@@ -2397,7 +2416,7 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
             </span>
           )}
         </div>
-        <p className="text-white/70 text-sm mb-4">
+        <p className="text-sm opacity-70 mb-4">
           Compartilhe com amigos e ganhe bônus a cada indicação confirmada.
         </p>
 
@@ -2813,7 +2832,7 @@ const TIER_BENEFITS_DEFAULT: Record<string, string[]> = {
 };
 
 const TIER_DISPLAY_ICONS: Record<string, string> = {
-  bronze: "🥉", silver: "🥈", gold: "🥇", diamond: "💎",
+  bronze: "", silver: "", gold: "", diamond: "",
 };
 
 function FidelidadeTab({
@@ -2830,6 +2849,7 @@ function FidelidadeTab({
   txRefreshKey?: number;
 }) {
   const { toast } = useToast();
+  const primaryForeground = readablePortalText(primaryColor);
   const [txItems, setTxItems] = useState<ClientLoyaltyTransaction[]>([]);
   const [txPage, setTxPage] = useState(1);
   const [txHasMore, setTxHasMore] = useState(false);
@@ -2935,21 +2955,21 @@ function FidelidadeTab({
     <div className="space-y-4">
       {/* Hero card */}
       <div
-        className="rounded-2xl p-6 text-white"
-        style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)` }}
+        className="rounded-2xl p-6"
+        style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)`, color: primaryForeground }}
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-white/80 text-sm mb-1">Pontos disponíveis</p>
+            <p className="text-sm opacity-80 mb-1">Pontos disponíveis</p>
             <p className="text-4xl font-extrabold leading-none">
               {loyalty.availablePoints.toLocaleString("pt-BR")}
             </p>
-            <p className="text-white/70 text-sm mt-1">≈ {equivalentValue} em valor</p>
+            <p className="text-sm opacity-70 mt-1">≈ {equivalentValue} em valor</p>
           </div>
           <TierBadge tier={loyalty.tier} />
         </div>
         <div className="mt-4">
-          <div className="flex justify-between text-white/80 text-xs mb-1.5">
+          <div className="flex justify-between text-xs opacity-80 mb-1.5">
             <span>{tierLabel(loyalty.tier)}</span>
             {nextTierName && <span>{nextTierName}</span>}
           </div>
@@ -2957,11 +2977,11 @@ function FidelidadeTab({
             <div className="h-full rounded-full bg-white/80 transition-all duration-700" style={{ width: `${progress}%` }} />
           </div>
           {nextTierName && pointsToNext > 0 && (
-            <p className="text-white/70 text-xs mt-1.5">
+            <p className="text-xs opacity-70 mt-1.5">
               Faltam {pointsToNext.toLocaleString("pt-BR")} pontos para {nextTierName}
             </p>
           )}
-          {!nextTierName && <p className="text-white/70 text-xs mt-1.5">Você está no nível máximo!</p>}
+          {!nextTierName && <p className="text-xs opacity-70 mt-1.5">Você está no nível máximo!</p>}
         </div>
       </div>
 
@@ -3283,7 +3303,7 @@ function PreferenciasTab({
 
       <div className="grid gap-5">
         <div className="space-y-1.5">
-          <Label htmlFor="musicalPreferences">🎵 Música ou estilo musical favorito</Label>
+          <Label htmlFor="musicalPreferences">Música ou estilo musical favorito</Label>
           <Input
             id="musicalPreferences"
             placeholder="Ex: Sertanejo, MPB, Rock…"
@@ -3294,7 +3314,7 @@ function PreferenciasTab({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="favoriteDrink">🥤 Bebida favorita</Label>
+          <Label htmlFor="favoriteDrink">Bebida favorita</Label>
           <Input
             id="favoriteDrink"
             placeholder="Ex: Suco de laranja, Café, Vinho…"
@@ -3305,7 +3325,7 @@ function PreferenciasTab({
         </div>
 
         <div className="space-y-1.5">
-          <Label>🌎 Destinos dos seus sonhos</Label>
+          <Label>Destinos dos seus sonhos</Label>
           <div className="flex gap-2">
             <Input
               placeholder="Ex: Paris, Fernando de Noronha…"
@@ -3346,7 +3366,7 @@ function PreferenciasTab({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="foodPreferences">🍽️ Comida favorita</Label>
+           <Label htmlFor="foodPreferences">Comida favorita</Label>
           <Input
             id="foodPreferences"
             placeholder="Ex: Churrasco, Frutos do mar, Pizza…"
@@ -3357,7 +3377,7 @@ function PreferenciasTab({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="birthDate">🎂 Data de aniversário</Label>
+           <Label htmlFor="birthDate">Data de aniversário</Label>
           <Input
             id="birthDate"
             type="date"
@@ -3369,7 +3389,7 @@ function PreferenciasTab({
 
         <div className="space-y-2">
           <Label>
-            🏖️ Tipo de destino preferido{" "}
+             Tipo de destino preferido{" "}
             <span className="text-muted-foreground text-xs font-normal">(pode escolher mais de um)</span>
           </Label>
           <div className="flex flex-wrap gap-2">
@@ -3392,7 +3412,7 @@ function PreferenciasTab({
 
         <div className="space-y-2">
           <Label>
-            🎯 Principais interesses durante a viagem{" "}
+            Principais interesses durante a viagem{" "}
             <span className="text-muted-foreground text-xs font-normal">(pode escolher mais de um)</span>
           </Label>
           <div className="flex flex-wrap gap-2">
@@ -3414,7 +3434,7 @@ function PreferenciasTab({
         </div>
 
         <div className="space-y-2">
-          <Label>📸 Você gosta de registrar suas viagens com fotos e vídeos?</Label>
+          <Label>Você gosta de registrar suas viagens com fotos e vídeos?</Label>
           <div className="flex gap-2">
             {([true, false] as const).map((val) => (
               <button
@@ -3434,7 +3454,7 @@ function PreferenciasTab({
         </div>
 
         <div className="space-y-2">
-          <Label>🚌 Como você prefere viajar?</Label>
+          <Label>Como você prefere viajar?</Label>
           <div className="flex flex-wrap gap-2">
             {TRAVEL_STYLES.map((style) => (
               <button
@@ -3594,7 +3614,7 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
         <Heart className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
         <h3 className="font-semibold text-lg mb-1">Nenhum favorito ainda</h3>
         <p className="text-muted-foreground text-sm max-w-xs mx-auto">
-          Toque no ❤ nos cards da loja para guardar suas viagens preferidas aqui.
+              Toque no botão de favorito nos cards da loja para guardar suas viagens preferidas aqui.
         </p>
       </div>
     );
@@ -3631,14 +3651,14 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
 }
 
 const BADGE_META: Record<string, { name: string; description: string; emoji: string; earnedClass: string }> = {
-  primeira_viagem:    { name: "Primeira Viagem",      description: "Realizou sua primeira viagem conosco",    emoji: "✈️", earnedClass: "bg-blue-50 border-blue-200" },
-  viajante_frequente: { name: "Viajante Frequente",   description: "5 ou mais viagens confirmadas",           emoji: "⭐", earnedClass: "bg-yellow-50 border-yellow-200" },
-  explorador:         { name: "Explorador",            description: "10 ou mais viagens realizadas",           emoji: "🗺️", earnedClass: "bg-green-50 border-green-200" },
-  grande_aventureiro: { name: "Grande Aventureiro",   description: "20 ou mais viagens realizadas",           emoji: "🏆", earnedClass: "bg-purple-50 border-purple-200" },
-  explorador_brasil:  { name: "Explorador do Brasil", description: "Visitou 5 ou mais estados brasileiros",   emoji: "🇧🇷", earnedClass: "bg-emerald-50 border-emerald-200" },
-  embaixador:         { name: "Embaixador",            description: "Indicou 3 ou mais amigos com sucesso",   emoji: "👥", earnedClass: "bg-pink-50 border-pink-200" },
-  aniversariante:     { name: "Aniversariante do Mês",description: "Parabéns pelo seu aniversário neste mês!",emoji: "🎂", earnedClass: "bg-orange-50 border-orange-200" },
-  cliente_fiel:       { name: "Cliente Fiel",         description: "Membro ativo do programa de fidelidade", emoji: "💎", earnedClass: "bg-indigo-50 border-indigo-200" },
+  primeira_viagem:    { name: "Primeira Viagem",      description: "Realizou sua primeira viagem conosco",    emoji: "01", earnedClass: "bg-blue-50 border-blue-200" },
+  viajante_frequente: { name: "Viajante Frequente",   description: "5 ou mais viagens confirmadas",           emoji: "05", earnedClass: "bg-yellow-50 border-yellow-200" },
+  explorador:         { name: "Explorador",            description: "10 ou mais viagens realizadas",           emoji: "10", earnedClass: "bg-green-50 border-green-200" },
+  grande_aventureiro: { name: "Grande Aventureiro",   description: "20 ou mais viagens realizadas",           emoji: "20", earnedClass: "bg-purple-50 border-purple-200" },
+  explorador_brasil:  { name: "Explorador do Brasil", description: "Visitou 5 ou mais estados brasileiros",   emoji: "BR", earnedClass: "bg-emerald-50 border-emerald-200" },
+  embaixador:         { name: "Embaixador",            description: "Indicou 3 ou mais amigos com sucesso",   emoji: "03", earnedClass: "bg-pink-50 border-pink-200" },
+  aniversariante:     { name: "Aniversariante do Mês",description: "Parabéns pelo seu aniversário neste mês!",emoji: "MÊS", earnedClass: "bg-orange-50 border-orange-200" },
+  cliente_fiel:       { name: "Cliente Fiel",         description: "Membro ativo do programa de fidelidade", emoji: "VIP", earnedClass: "bg-indigo-50 border-indigo-200" },
 };
 
 function ConquistasTab() {
@@ -3669,7 +3689,7 @@ function ConquistasTab() {
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {earned.map(badge => {
-              const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "🏅", earnedClass: "bg-yellow-50 border-yellow-200" };
+              const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "NOVO", earnedClass: "bg-yellow-50 border-yellow-200" };
               return (
                 <div key={badge.key} className={`rounded-xl border-2 p-4 text-center space-y-1.5 shadow-sm ${meta.earnedClass}`}>
                   <div className="text-3xl">{meta.emoji}</div>
@@ -3699,7 +3719,7 @@ function ConquistasTab() {
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {locked.map(badge => {
-              const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "🔒", earnedClass: "" };
+              const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "BLOQUEADO", earnedClass: "" };
               return (
                 <div key={badge.key} className="rounded-xl border-2 border-dashed border-muted p-4 text-center space-y-1.5 bg-muted/30 opacity-60">
                   <div className="text-3xl grayscale">{meta.emoji}</div>
@@ -3921,7 +3941,7 @@ function SonhosTab() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold mb-1">🌎 Quero Conhecer</h2>
+        <h2 className="text-lg font-semibold mb-1">Quero conhecer</h2>
         <p className="text-sm text-muted-foreground">
           Salve os destinos dos seus sonhos. Usamos essas informações para criar ofertas personalizadas para você.
         </p>
@@ -4134,7 +4154,7 @@ function maskDisplayName(name: string): string {
 }
 
 const TIER_LABELS: Record<string, string> = { bronze: "Bronze", silver: "Prata", gold: "Ouro", diamond: "Diamante" };
-const TIER_ICONS: Record<string, string> = { bronze: "🥉", silver: "🥈", gold: "🥇", diamond: "💎" };
+const TIER_ICONS: Record<string, string> = { bronze: "", silver: "", gold: "", diamond: "" };
 const TIER_COLORS: Record<string, string> = {
   bronze: "border-amber-200 bg-amber-50",
   silver: "border-slate-200 bg-slate-50",
@@ -4205,7 +4225,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
     <div className="space-y-6">
       {/* Club header */}
       <Card className="overflow-hidden">
-        <div className="bg-gradient-to-r from-amber-500 to-yellow-400 p-6 text-white">
+        <div className="bg-gradient-to-r from-[#D8A646] to-[#F2C14E] p-6 text-[#2F3A43]">
           <div className="flex items-center gap-3">
             <Crown className="w-8 h-8" />
             <div>
@@ -4217,12 +4237,12 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
           </div>
           <div className="mt-4 flex items-center gap-2">
             <span className="relative inline-flex">
-              <Badge className="bg-white/20 text-white border-white/30 hover:bg-white/30 relative z-10">
+              <Badge className="bg-[#5D3E2A]/10 text-[#2F3A43] border-[#5D3E2A]/25 hover:bg-[#5D3E2A]/15 relative z-10">
                 {TIER_ICONS[currentTier]} {TIER_LABELS[currentTier] ?? currentTier}
               </Badge>
               <span className="absolute inset-0 rounded-full animate-ping bg-white/30 z-0" />
             </span>
-            <span className="text-sm opacity-75">Seu nível atual</span>
+            <span className="text-sm text-[#2F3A43]/75">Seu nível atual</span>
           </div>
         </div>
       </Card>
@@ -4354,7 +4374,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
                   {ranking.referrers.map((r) => (
                     <div key={r.rank} className="flex items-center gap-3 px-4 py-2.5">
                       <span className="text-base w-6 text-center shrink-0">
-                        {r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `#${r.rank}`}
+                        {`#${r.rank}`}
                       </span>
                       <span className="flex-1 text-sm font-medium truncate">{r.name}</span>
                       <Badge variant="secondary" className="text-xs tabular-nums shrink-0">
@@ -4382,7 +4402,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
                   {ranking.travelers.map((r) => (
                     <div key={r.rank} className="flex items-center gap-3 px-4 py-2.5">
                       <span className="text-base w-6 text-center shrink-0">
-                        {r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `#${r.rank}`}
+                        {`#${r.rank}`}
                       </span>
                       <span className="flex-1 text-sm font-medium truncate">{r.name}</span>
                       <Badge variant="secondary" className="text-xs tabular-nums shrink-0">
@@ -4465,10 +4485,25 @@ export default function PerfilPage() {
     );
   }
 
-  const primaryColor = profile.tenant?.primaryColor ?? "#3B82F6";
+  const primaryColor = profile.tenant?.primaryColor ?? "#1E5B8C";
 
   return (
-    <div>
+    <div className="visite-enter">
+      <div className="relative mb-6 overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] p-5 shadow-[0_10px_28px_rgba(93,62,42,.08)] sm:p-7 dark:border-border dark:bg-card">
+        <div className="pointer-events-none absolute -right-8 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
+        <div className="pointer-events-none absolute bottom-[-5rem] right-44 h-36 w-36 rounded-full border-[12px] border-[#4C8B5F]/15" />
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F] dark:text-emerald-400">Caderno de bordo · {profile.tenant?.name ?? "sua agência"}</p>
+            <h1 className="text-2xl font-semibold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Olá, {profile.client?.name?.split(" ")[0] ?? profile.user?.name?.split(" ")[0] ?? "viajante"}.</h1>
+            <p className="mt-1 max-w-xl text-sm text-[#71808C] dark:text-muted-foreground">Acompanhe suas reservas, benefícios e próximas experiências pelo Cariri.</p>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl border border-[#E8D29B] bg-[#FFF4CF] px-3 py-2 text-xs font-medium text-[#5D3E2A] dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            <MapPin className="h-4 w-4 text-[#D8A646]" />
+            <span>Seu espaço de viajante</span>
+          </div>
+        </div>
+      </div>
       <Tabs
         value={activeTab}
         onValueChange={(tab) => {
@@ -4479,7 +4514,7 @@ export default function PerfilPage() {
           navigate(`?${params.toString()}`, { replace: true });
         }}
       >
-        <TabsList className="mb-6 w-full sm:w-auto flex-wrap h-auto gap-1">
+        <TabsList className="mb-6 h-auto w-full flex-wrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/90 p-1.5 shadow-sm dark:border-border dark:bg-card sm:w-auto">
           <TabsTrigger value="inicio" className="flex items-center gap-1.5">
             <LayoutDashboard className="w-4 h-4" />
             Início

@@ -39,8 +39,12 @@ describe("unlinkClientFromTrips", () => {
     vi.clearAllMocks();
     mockUpdate.mockReturnValue({ set: mockSet });
     mockSet.mockReturnValue({ where: mockWhere });
-    mockWhere.mockReturnValue({
-      returning: vi.fn().mockResolvedValue([{ id: "reservation-transitioned" }]),
+    mockWhere.mockImplementation(() => {
+      const result = Promise.resolve([{ id: "reservation-1" }]);
+      Object.assign(result, {
+        returning: vi.fn().mockResolvedValue([{ id: "reservation-1" }]),
+      });
+      return result;
     });
     mockSelect.mockReturnValue({
       from: () => ({
@@ -101,9 +105,13 @@ describe("unlinkClientFromTrips", () => {
       }),
     });
     mockWhere
-      .mockImplementationOnce(() => ({
-        returning: vi.fn().mockResolvedValue([{ id: "reservation-transitioned" }]),
-      }))
+      .mockImplementationOnce(() => {
+        const result = Promise.resolve([{ id: "reservation-1" }]);
+        Object.assign(result, {
+          returning: vi.fn().mockResolvedValue([{ id: "reservation-1" }]),
+        });
+        return result;
+      })
       .mockRejectedValueOnce(new Error("trip update failed"));
 
     await expect(

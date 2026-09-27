@@ -13,7 +13,9 @@ export interface AutomationLog {
   automationId: string;
   tenantId: string;
   status: string;
+  /** @nullable */
   triggerData?: AutomationLogTriggerData;
+  /** @nullable */
   result?: AutomationLogResult;
   /** @nullable */
   errorMessage?: string | null;

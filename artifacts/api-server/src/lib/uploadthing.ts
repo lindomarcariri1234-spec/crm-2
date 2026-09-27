@@ -1,6 +1,7 @@
 import type { UTApi as UTApiType } from "uploadthing/server";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { safeErrorLogFields } from "./safe-error-log";
 
 /**
  * UploadThing API wrapper.
@@ -158,14 +159,20 @@ export async function deleteOrphanedFile(
         return;
       }
     } catch (checkErr) {
-      log.warn({ err: checkErr, fileKey: key }, "Cross-tenant ownership check failed; skipping file deletion as a precaution");
+      log.warn(
+        { error: safeErrorLogFields(checkErr), fileKey: key },
+        "Cross-tenant ownership check failed; skipping file deletion as a precaution",
+      );
       return;
     }
   }
   try {
     await utapi.deleteFiles(key);
   } catch (err) {
-    log.warn({ err, fileKey: key }, "Failed to delete orphaned file from UploadThing");
+    log.warn(
+      { providerError: safeErrorLogFields(err), fileKey: key },
+      "Failed to delete orphaned file from UploadThing",
+    );
   }
 }
 

@@ -1,11 +1,11 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
 import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
-import { eq, and, sql, desc, inArray, gte, lt } from "drizzle-orm";
+import { eq, and, sql, desc, inArray, isNull, gte, lt } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
-import { CreatePaymentBody, UpdatePaymentBody, CreateExpenseBody, UpdateExpenseBody } from "@workspace/api-zod";
+import { CreatePaymentBody, UpdatePaymentBody, CreateExpenseBody, UpdateExpenseBody, LinkExpenseToTripCostBody } from "@workspace/api-zod";
 import { writeClientActivity } from "../lib/activities";
 import { loyaltyAwardPoints, loyaltyAwardPointsForReservation, loyaltyReverseEarnedPoints } from "../lib/loyalty-helpers";
 import { roundMoney } from "../lib/pricing";
@@ -31,6 +31,7 @@ import {
   syncStoreOrderFromReservationPayment,
 } from "../services/reservation-order-payment-sync";
 import { recalculateClientFinancials as recalculateClientFinancialsFromPayments } from "../services/client-financials";
+import { areExpenseAndTripCostLinkable } from "../services/expense-trip-cost-link";
 
 const router = Router();
 
@@ -334,7 +335,8 @@ function formatPayment(p: typeof paymentsTable.$inferSelect) {
 
 function formatExpense(e: typeof expensesTable.$inferSelect) {
   return {
-    id: e.id, tripId: e.tripId, category: e.category, description: e.description,
+    id: e.id, tripId: e.tripId, linkedTripCostId: e.linkedTripCostId ?? null,
+    category: e.category, description: e.description,
     amount: Number(e.amount), supplierId: e.supplierId, paymentMethod: e.paymentMethod,
     paymentDate: e.paymentDate?.toISOString() ?? null, dueDate: e.dueDate.toISOString(),
     status: e.status, notes: e.notes, createdAt: e.createdAt.toISOString(),
@@ -568,17 +570,21 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       return;
     }
 
-    const createdPaymentEvents: Array<{ id: string; amount: number }> = [];
     const totalCents = Math.round(parsed.data.amount * 100);
     const installmentBaseCents = Math.floor(totalCents / installments);
     const installmentRemainderCents = totalCents - installmentBaseCents * installments;
+    // Keep all installment rows in one transaction. In particular, a failure
+    // inserting a later installment must roll back rows already inserted.
+    // Events are returned only after the transaction commits so post-commit
+    // reconciliation cannot observe a partially-created payment.
+    const createdPaymentEvents = await db.transaction(async (tx) => {
+      const events: Array<{ id: string; amount: number }> = [];
 
-    // A payment for a storefront reservation must share the order lock with
-    // expiry and gateway confirmation. Otherwise the insert could happen after
-    // the expiry transaction cancelled the reservation, leaving a paid row on a
-    // released seat. The reservation re-check also rejects a late manual
-    // payment that reaches this endpoint after the hold has already elapsed.
-    await db.transaction(async (tx) => {
+      // A payment for a storefront reservation must share the order lock with
+      // expiry and gateway confirmation. Otherwise the insert could happen after
+      // the expiry transaction cancelled the reservation, leaving a paid row on a
+      // released seat. The reservation re-check also rejects a late manual
+      // payment that reaches this endpoint after the hold has already elapsed.
       if (parsed.data.reservationId) {
         // Match the expiry/gateway lock order: store order first, reservation
         // second. The initial read is only used to locate the order; all
@@ -643,7 +649,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
         dueDate.setMonth(dueDate.getMonth() + (i - 1));
         const installmentCents = installmentBaseCents + (i <= installmentRemainderCents ? 1 : 0);
         const paymentId = i === 1 ? id : generateId();
-        createdPaymentEvents.push({ id: paymentId, amount: installmentCents / 100 });
+        events.push({ id: paymentId, amount: installmentCents / 100 });
         await tx.insert(paymentsTable).values({
           id: paymentId,
           tenantId: me.tenantId,
@@ -666,6 +672,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
             : {}),
         });
       }
+      return events;
     });
 
     const [payment] = await db.select().from(paymentsTable)
@@ -813,16 +820,123 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
     if (parsed.data.status != null) updates.status = parsePaymentStatus(parsed.data.status);
     if (parsed.data.paidAt !== undefined) updates.paidAt = parsed.data.paidAt ? new Date(parsed.data.paidAt) : null;
     if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
-    // Keep the payment mutation and the referral reversal decision in one
-    // transaction. Both the refund callback and payment deletion acquire
-    // the payment lock before the reservation/referral locks, so they cannot
-    // make the same completed referral look reversible twice.
+    // A new paid receivable must serialize with storefront expiry/refunds and
+    // orderless expiry before the payment is changed. The locator reads below
+    // only identify rows to lock; all mutable state is checked again under lock.
+    // Other updates retain payment -> reservation ordering for referral reversal.
     const result = await db.transaction(async (tx) => {
+      const [locator] = updates.status === PAYMENT_STATUS.PAID
+        ? await tx.select({
+          type: paymentsTable.type,
+          reservationId: paymentsTable.reservationId,
+          orderId: paymentsTable.orderId,
+        }).from(paymentsTable)
+          .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
+          .limit(1)
+        : [];
+      let locatedStoreOrderId: string | null = null;
+      let lockedOrder: Pick<typeof storeOrdersTable.$inferSelect, "id" | "orderNumber" | "status" | "paymentStatus"> | undefined;
+      if (locator?.type === PAYMENT_TYPE.RECEIVABLE) {
+        if (locator.reservationId) {
+          const [reservationLocator] = await tx.select({ storeOrderId: reservationsTable.storeOrderId })
+            .from(reservationsTable)
+            .where(and(eq(reservationsTable.id, locator.reservationId), eq(reservationsTable.tenantId, me.tenantId)))
+            .limit(1);
+          if (!reservationLocator) throw new NotFoundError("Reservation not found or not in tenant", "RESERVATION_NOT_FOUND");
+          locatedStoreOrderId = reservationLocator.storeOrderId;
+        }
+        if (locator.orderId || locatedStoreOrderId) {
+          const [order] = await tx.select({
+            id: storeOrdersTable.id,
+            orderNumber: storeOrdersTable.orderNumber,
+            status: storeOrdersTable.status,
+            paymentStatus: storeOrdersTable.paymentStatus,
+          }).from(storeOrdersTable)
+            .where(and(
+              eq(storeOrdersTable.tenantId, me.tenantId),
+              locator.orderId
+                ? eq(storeOrdersTable.id, locator.orderId)
+                : eq(storeOrdersTable.orderNumber, locatedStoreOrderId!),
+            ))
+            .for("update")
+            .limit(1);
+          if (!order || (locatedStoreOrderId && order.orderNumber !== locatedStoreOrderId)) {
+            throw new ConflictError("O pedido associado ao pagamento mudou ou não existe", "PAYMENT_ORDER_CHANGED");
+          }
+          lockedOrder = order;
+        }
+      }
+
       const [existingPayment] = await tx.select().from(paymentsTable)
         .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
         .for("update")
         .limit(1);
       if (!existingPayment) return { payment: null, reversal: null, previousStatus: null };
+
+      if (updates.status === PAYMENT_STATUS.PAID) {
+        if (
+          !locator
+          || locator.type !== existingPayment.type
+          || locator.reservationId !== existingPayment.reservationId
+          || locator.orderId !== existingPayment.orderId
+        ) {
+          throw new ConflictError("O pagamento mudou durante a confirmação. Tente novamente.", "PAYMENT_CHANGED");
+        }
+        if (existingPayment.type === PAYMENT_TYPE.RECEIVABLE) {
+          if (
+            lockedOrder?.status === "cancelled"
+            || lockedOrder?.paymentStatus === "refunded"
+          ) {
+            throw new ConflictError("Não é possível receber pagamento de um pedido encerrado", "ORDER_CLOSED");
+          }
+          // A PAID -> PAID edit must not lock the reservation: DELETE locks
+          // payment -> reservation -> other eligible PAID payments for reversal.
+          if (existingPayment.status !== PAYMENT_STATUS.PAID) {
+            const assertOpen = (reservation: { status: string; expiresAt: Date | null }) => {
+              if (["cancelled", "failed", "refunded"].includes(reservation.status)) {
+                throw new ConflictError("Não é possível receber pagamento de uma reserva encerrada", "RESERVATION_CLOSED");
+              }
+              if (
+                reservation.status === RESERVATION_STATUS.PENDING
+                && reservation.expiresAt
+                && reservation.expiresAt <= new Date()
+              ) {
+                throw new ConflictError("O prazo para pagamento desta reserva expirou", "RESERVATION_EXPIRED");
+              }
+            };
+            if (existingPayment.reservationId) {
+              const [reservation] = await tx.select({
+                status: reservationsTable.status,
+                storeOrderId: reservationsTable.storeOrderId,
+                expiresAt: reservationsTable.expiresAt,
+              }).from(reservationsTable)
+                .where(and(
+                  eq(reservationsTable.id, existingPayment.reservationId),
+                  eq(reservationsTable.tenantId, me.tenantId),
+                ))
+                .for("update")
+                .limit(1);
+              if (!reservation) throw new NotFoundError("Reservation not found or not in tenant", "RESERVATION_NOT_FOUND");
+              if (reservation.storeOrderId !== locatedStoreOrderId) {
+                throw new ConflictError("O pedido da reserva mudou durante a confirmação", "PAYMENT_ORDER_CHANGED");
+              }
+              assertOpen(reservation);
+            } else if (lockedOrder) {
+              const reservations = await tx.select({
+                status: reservationsTable.status,
+                expiresAt: reservationsTable.expiresAt,
+              }).from(reservationsTable)
+                .where(and(
+                  eq(reservationsTable.tenantId, me.tenantId),
+                  eq(reservationsTable.storeOrderId, lockedOrder.orderNumber),
+                ))
+                .orderBy(reservationsTable.id)
+                .for("update");
+              for (const reservation of reservations) assertOpen(reservation);
+            }
+          }
+        }
+      }
 
       await tx.update(paymentsTable).set(updates)
         .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)));
@@ -1192,16 +1306,23 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
         db.select().from(expensesTable).where(eq(expensesTable.tenantId, me.tenantId)),
         db.select().from(tripCostsTable).where(eq(tripCostsTable.tenantId, me.tenantId)),
       ]);
+      const linkedTripCostIds = new Set(allExpenses
+        .map(expense => expense.linkedTripCostId)
+        .filter((id): id is string => Boolean(id)));
       const consolidated = [
         ...expenses.map(formatExpense),
-        ...tripCosts.map(formatTripCost),
+        ...tripCosts
+          .filter(cost => !linkedTripCostIds.has(cost.id))
+          .map(formatTripCost),
       ].sort((a, b) => {
         const byDueDate = new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime();
         return byDueDate || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
       const allConsolidated = [
         ...allExpenses.map(formatExpense),
-        ...allTripCosts.map(formatTripCost),
+        ...allTripCosts
+          .filter(cost => !linkedTripCostIds.has(cost.id))
+          .map(formatTripCost),
       ];
 
       res.json({
@@ -1273,20 +1394,130 @@ router.patch("/expenses/:id", async (req, res, next: NextFunction): Promise<void
     if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdateExpenseBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
-    const updates: Partial<typeof expensesTable.$inferInsert> = {};
-    if (parsed.data.status != null) updates.status = parseExpenseStatus(parsed.data.status);
-    if (parsed.data.paymentDate !== undefined) updates.paymentDate = parsed.data.paymentDate ? new Date(parsed.data.paymentDate) : null;
-    if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
-    if (parsed.data.amount != null) updates.amount = String(parsed.data.amount);
-    await db.update(expensesTable).set(updates)
-      .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)));
-    const [expense] = await db.select().from(expensesTable)
-      .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
-      .limit(1);
-    if (!expense) { next(new NotFoundError("Expense not found", "NOT_FOUND")); return; }
+    const expense = await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(expensesTable)
+        .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
+        .for("update").limit(1);
+      if (!existing) throw new NotFoundError("Expense not found", "NOT_FOUND");
+
+      const updates: Partial<typeof expensesTable.$inferInsert> = {};
+      if (parsed.data.status != null) updates.status = parseExpenseStatus(parsed.data.status);
+      if (parsed.data.paymentDate !== undefined) updates.paymentDate = parsed.data.paymentDate ? new Date(parsed.data.paymentDate) : null;
+      if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
+      if (parsed.data.amount != null) updates.amount = String(parsed.data.amount);
+
+      if (existing.linkedTripCostId) {
+        const [linkedCost] = await tx.select().from(tripCostsTable)
+          .where(and(
+            eq(tripCostsTable.id, existing.linkedTripCostId),
+            eq(tripCostsTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+        if (!linkedCost || !areExpenseAndTripCostLinkable({
+          tripId: existing.tripId,
+          amount: updates.amount ?? existing.amount,
+          status: updates.status ?? existing.status,
+        }, linkedCost)) {
+          throw new AppError("Desvincule os registros antes de alterar valor ou status.", 409, "LINKED_EXPENSE_MISMATCH");
+        }
+      }
+
+      await tx.update(expensesTable).set(updates)
+        .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)));
+      const [updated] = await tx.select().from(expensesTable)
+        .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!updated) throw new NotFoundError("Expense not found", "NOT_FOUND");
+      return updated;
+    });
     res.json(formatExpense(expense));
   } catch (err) {
     req.log.error({ err }, "Error updating expense");
+    next(err);
+  }
+});
+
+router.post("/expenses/:id/trip-cost-link", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+    }
+    const parsed = LinkExpenseToTripCostBody.safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(parsed.error.issues[0]?.message ?? "Dados inválidos", "VALIDATION_ERROR")); return;
+    }
+
+    await db.transaction(async (tx) => {
+      const [expense] = await tx.select().from(expensesTable)
+        .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
+        .for("update").limit(1);
+      if (!expense) throw new NotFoundError("Expense not found", "NOT_FOUND");
+
+      const [cost] = await tx.select().from(tripCostsTable)
+        .where(and(
+          eq(tripCostsTable.id, parsed.data.tripCostId),
+          eq(tripCostsTable.tenantId, me.tenantId),
+        ))
+        .for("update").limit(1);
+      if (!cost) throw new NotFoundError("Custo da viagem não encontrado", "NOT_FOUND");
+
+      if (expense.linkedTripCostId === cost.id) return;
+      if (expense.linkedTripCostId) {
+        throw new AppError("Esta despesa já está vinculada a outro custo.", 409, "EXPENSE_ALREADY_LINKED");
+      }
+      if (!areExpenseAndTripCostLinkable(expense, cost)) {
+        throw new AppError("Só é possível vincular registros da mesma viagem com valor e status iguais.", 409, "EXPENSE_TRIP_COST_MISMATCH");
+      }
+
+      const [existingLink] = await tx.select({ id: expensesTable.id })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.tenantId, me.tenantId),
+          eq(expensesTable.linkedTripCostId, cost.id),
+        ))
+        .limit(1);
+      if (existingLink) {
+        throw new AppError("Este custo já está vinculado a outra despesa.", 409, "TRIP_COST_ALREADY_LINKED");
+      }
+
+      const [updated] = await tx.update(expensesTable)
+        .set({ linkedTripCostId: cost.id })
+        .where(and(
+          eq(expensesTable.id, expense.id),
+          eq(expensesTable.tenantId, me.tenantId),
+          isNull(expensesTable.linkedTripCostId),
+        ))
+        .returning({ id: expensesTable.id });
+      if (!updated) throw new AppError("Não foi possível vincular os registros.", 409, "EXPENSE_LINK_CONFLICT");
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    if (typeof err === "object" && err !== null && "code" in err && err.code === "23505") {
+      next(new AppError("Este custo já está vinculado a outra despesa.", 409, "TRIP_COST_ALREADY_LINKED"));
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete("/expenses/:id/trip-cost-link", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+    }
+
+    const [expense] = await db.update(expensesTable)
+      .set({ linkedTripCostId: null })
+      .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
+      .returning({ id: expensesTable.id });
+    if (!expense) { next(new NotFoundError("Expense not found", "NOT_FOUND")); return; }
+    res.json({ success: true });
+  } catch (err) {
     next(err);
   }
 });

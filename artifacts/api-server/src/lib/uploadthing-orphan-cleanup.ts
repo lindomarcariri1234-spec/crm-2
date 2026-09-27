@@ -43,6 +43,7 @@ import { utapi } from "./uploadthing";
 import { collectReferencedUploadThingKeys } from "./collectReferencedUploadThingKeys";
 import { generateId } from "./id";
 import { logger } from "./logger";
+import { safeErrorLogFields } from "./safe-error-log";
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -149,7 +150,7 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
         page = await utapi.listFiles({ limit: PAGE_SIZE, offset });
       } catch (listErr) {
         logger.error(
-          { offset },
+          { providerError: safeErrorLogFields(listErr), offset },
           "[uploadthing-orphan] Failed to list files from UploadThing — aborting scan",
         );
         break;
@@ -211,7 +212,7 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
           freshKeys = await collectReferencedUploadThingKeys();
         } catch (recheckErr) {
           logger.error(
-            { err: recheckErr, batchStart: i },
+            { error: safeErrorLogFields(recheckErr), batchStart: i },
             "[uploadthing-orphan] Per-batch re-check failed — skipping batch to be safe",
           );
           result.errors += batch.length;
@@ -244,7 +245,11 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
             updatedStaging.push({ key, stagedAt: existingStagedMap.get(key) ?? now });
           }
           logger.error(
-            { batchStart: i, batchSize: confirmedBatch.length },
+            {
+              providerError: safeErrorLogFields(batchErr),
+              batchStart: i,
+              batchSize: confirmedBatch.length,
+            },
             "[uploadthing-orphan] Batch deletion failed — retaining in staging for next run",
           );
         }
@@ -255,11 +260,17 @@ export async function runUploadThingOrphanCleanup(): Promise<UploadThingOrphanCl
     try {
       await writeStagedCandidates(updatedStaging);
     } catch (writeErr) {
-      logger.error({ err: writeErr }, "[uploadthing-orphan] Failed to persist updated staging — next run will re-discover candidates");
+      logger.error(
+        { error: safeErrorLogFields(writeErr) },
+        "[uploadthing-orphan] Failed to persist updated staging — next run will re-discover candidates",
+      );
     }
 
   } catch (err) {
-    logger.error({ err }, "[uploadthing-orphan] Unexpected error during orphan cleanup — run aborted");
+    logger.error(
+      { error: safeErrorLogFields(err) },
+      "[uploadthing-orphan] Unexpected error during orphan cleanup — run aborted",
+    );
   }
 
   logger.info(

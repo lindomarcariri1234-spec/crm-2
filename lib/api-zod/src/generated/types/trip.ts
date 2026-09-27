@@ -100,6 +100,7 @@ export interface Trip {
    * @nullable
    */
   freeGuides?: number | null;
+  /** @nullable */
   freePassengers?: FreePassenger[] | null;
   /** @nullable */
   layoutId?: string | null;

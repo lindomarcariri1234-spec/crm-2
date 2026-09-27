@@ -5,9 +5,11 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import {
+  getListExpensesQueryKey,
   useListTripCosts, useCreateTripCost, useUpdateTripCost, useDeleteTripCost,
+  useListExpenses, useLinkExpenseToTripCost, useUnlinkExpenseFromTripCost,
 } from "@workspace/api-client-react";
-import type { TripCost, LayoutCell } from "@workspace/api-client-react";
+import type { Expense, TripCost, LayoutCell } from "@workspace/api-client-react";
 import { EXPENSE_STATUS } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Plus, AlertCircle, Loader2, Pencil, Trash2, Wallet, Receipt, Banknote,
-  TrendingUp, TrendingDown, PiggyBank,
+  TrendingUp, TrendingDown, PiggyBank, Link2, Unlink,
 } from "lucide-react";
 import { CELL_COLORS, COST_CATEGORIES, COST_STATUS_MAP } from "./constants";
 import { formatCurrency, formatDate } from "./utils";
@@ -66,6 +68,7 @@ const costFormSchema = z.object({
 });
 
 type CostFormValues = z.infer<typeof costFormSchema>;
+const amountInCents = (value: number | string) => Math.round((Number(value) + Number.EPSILON) * 100);
 
 const AGENCY_CATEGORY_LABELS: Record<string, string> = {
   transport: "Transporte",
@@ -90,6 +93,8 @@ type DisplayCost = {
   createdAt: string;
   source: "trip" | "agency";
   sourceLabel: string;
+  linkedExpenseId?: string | null;
+  linkedExpenseDescription?: string | null;
 };
 
 function getAgencyCategoryLabel(category: string) {
@@ -190,7 +195,7 @@ function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
                 name="status"
                 control={control}
                 render={({ field }) => (
-                  <Select value={field.value} onValueChange={field.onChange}>
+                  <Select value={field.value} onValueChange={field.onChange} disabled={Boolean(cost?.linkedExpenseId)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="pending">Pendente</SelectItem>
@@ -200,6 +205,7 @@ function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
                   </Select>
                 )}
               />
+              {cost?.linkedExpenseId && <p className="text-[10px] text-muted-foreground">Desvincule a despesa para alterar o status.</p>}
             </div>
           </div>
           <div className="space-y-1">
@@ -225,11 +231,13 @@ function TripCostModal({ tripId, cost, open, onClose, onSaved }: {
                     placeholder="0,00"
                     className={errors.amount ? "border-destructive" : ""}
                     value={field.value ?? ""}
+                    disabled={Boolean(cost?.linkedExpenseId)}
                     onChange={e => field.onChange(parseFloat(e.target.value) || 0)}
                   />
                 )}
               />
               {errors.amount && <p className="text-[10px] text-destructive">{errors.amount.message}</p>}
+              {cost?.linkedExpenseId && <p className="text-[10px] text-muted-foreground">Desvincule a despesa para alterar o valor.</p>}
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Vencimento</Label>
@@ -262,9 +270,21 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
   const { data, isLoading, isError, refetch } = useListTripCosts(tripId, {
     query: { queryKey: ["trip-costs", tripId], enabled: !!tripId },
   });
+  const { data: tripExpenses, isLoading: isLoadingTripExpenses, refetch: refetchExpenses } = useListExpenses(
+    { tripId, limit: 500 },
+    {
+      query: {
+        queryKey: getListExpensesQueryKey({ tripId, limit: 500 }),
+        enabled: Boolean(tripId),
+      },
+    },
+  );
   const deleteCost = useDeleteTripCost();
+  const linkExpense = useLinkExpenseToTripCost();
+  const unlinkExpense = useUnlinkExpenseFromTripCost();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCost, setEditingCost] = useState<TripCost | null>(null);
+  const [linkingCost, setLinkingCost] = useState<DisplayCost | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -274,6 +294,13 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
   const plannedCosts = data?.plannedCosts ?? [];
   const summary = data?.summary;
   const pricing = data?.pricing;
+  const matchingExpenses = linkingCost
+    ? (tripExpenses?.data ?? []).filter(expense =>
+      !expense.linkedTripCostId
+      && amountInCents(expense.amount) === amountInCents(linkingCost.amount)
+      && expense.status === linkingCost.status,
+    )
+    : [];
 
   const mergedCosts: DisplayCost[] = [
     ...costs.map((cost): DisplayCost => ({
@@ -289,6 +316,8 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
       createdAt: cost.createdAt,
       source: "trip",
       sourceLabel: "Custo da viagem",
+      linkedExpenseId: cost.linkedExpenseId,
+      linkedExpenseDescription: cost.linkedExpenseDescription,
     })),
     ...agencyExpenses.map((expense): DisplayCost => ({
       id: expense.id,
@@ -312,17 +341,26 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     return true;
   });
 
-  const handleDelete = async (id: string) => {
-    if (!confirm("Remover este custo?")) return;
-    setDeletingId(id);
+  const refreshFinancialViews = async () => {
+    await Promise.all([
+      refetch(),
+      refetchExpenses(),
+      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+    ]);
+  };
+
+  const handleDelete = async (cost: DisplayCost) => {
+    if (cost.source !== "trip") return;
+    const message = cost.linkedExpenseId
+      ? "Remover este custo e desvincular a despesa associada?"
+      : "Remover este custo?";
+    if (!confirm(message)) return;
+    setDeletingId(cost.id);
     try {
-      await deleteCost.mutateAsync({ id: tripId, costId: id });
+      await deleteCost.mutateAsync({ id: tripId, costId: cost.id });
       toast({ title: "Custo removido" });
-      await Promise.all([
-        refetch(),
-        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
-        queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
-      ]);
+      await refreshFinancialViews();
     } catch {
       toast({ title: "Erro ao remover custo", variant: "destructive" });
     } finally {
@@ -330,13 +368,31 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     }
   };
 
-  const refreshFinancialViews = async () => {
-    await Promise.all([
-      refetch(),
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
-    ]);
+  const handleLinkExpense = async (expense: Expense) => {
+    if (!linkingCost) return;
+    try {
+      await linkExpense.mutateAsync({
+        id: expense.id,
+        data: { tripCostId: linkingCost.id },
+      });
+      toast({ title: "Despesa vinculada ao custo da viagem" });
+      setLinkingCost(null);
+      await refreshFinancialViews();
+    } catch {
+      toast({ title: "Não foi possível vincular os registros", variant: "destructive" });
+    }
   };
+
+  const handleUnlinkExpense = async (expenseId: string) => {
+    try {
+      await unlinkExpense.mutateAsync({ id: expenseId });
+      toast({ title: "Vínculo removido" });
+      await refreshFinancialViews();
+    } catch {
+      toast({ title: "Não foi possível remover o vínculo", variant: "destructive" });
+    }
+  };
+
 
   return (
     <div className="space-y-6">
@@ -388,7 +444,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
       )}
 
       <FinancialConsolidationView
-        actualRows={mergedCosts}
+        actualRows={mergedCosts.filter(cost => cost.source !== "trip" || !cost.linkedExpenseId)}
         plannedRows={plannedCosts}
         pricing={pricing}
         actualSummary={summary ? {
@@ -489,13 +545,37 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                       {cost.paidAt && <span>Pago em: {formatDate(cost.paidAt)}</span>}
                       {cost.notes && <span className="italic truncate max-w-[200px]">{cost.notes}</span>}
                     </div>
+                    {cost.source !== "trip" ? null : cost.linkedExpenseId ? (
+                      <div className="mt-1 flex items-center gap-2 text-xs text-primary">
+                        <Link2 className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">Despesa vinculada: {cost.linkedExpenseDescription ?? cost.linkedExpenseId}</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-1.5 text-xs"
+                          onClick={() => handleUnlinkExpense(cost.linkedExpenseId!)}
+                          disabled={unlinkExpense.isPending}
+                        >
+                          <Unlink className="mr-1 h-3 w-3" /> Desvincular
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="mt-1 h-6 px-1.5 text-xs text-muted-foreground"
+                        onClick={() => setLinkingCost(cost)}
+                      >
+                        <Link2 className="mr-1 h-3 w-3" /> Vincular despesa
+                      </Button>
+                    )}
                   </div>
                   <div className="text-right shrink-0">
                     <p className={`font-bold text-sm ${cost.status === EXPENSE_STATUS.PAID ? "text-green-700" : cost.status === EXPENSE_STATUS.OVERDUE ? "text-red-600" : ""}`}>
                       {formatCurrency(cost.amount)}
                     </p>
                   </div>
-                   {cost.source === "trip" && (
+                  {cost.source === "trip" && (
                      <div className="flex items-center gap-1 shrink-0">
                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0"
                          onClick={() => {
@@ -509,7 +589,7 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                        </Button>
                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive hover:text-destructive"
                          disabled={deletingId === cost.id}
-                         onClick={() => handleDelete(cost.id)}>
+                         onClick={() => handleDelete(cost)}>
                          {deletingId === cost.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
                        </Button>
                      </div>
@@ -527,8 +607,53 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
         cost={editingCost}
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-         onSaved={() => { void refreshFinancialViews(); }}
+        onSaved={() => { void refreshFinancialViews(); }}
       />
+      <Dialog open={Boolean(linkingCost)} onOpenChange={open => { if (!open) setLinkingCost(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Vincular uma despesa</DialogTitle>
+          </DialogHeader>
+          {linkingCost && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Só aparecem despesas desta viagem com valor e status iguais a {linkingCost.description}.
+              </p>
+              {isLoadingTripExpenses ? (
+                <Skeleton className="h-16 w-full" />
+              ) : (tripExpenses?.data ?? []).length === 0 ? (
+                <p className="rounded-md border p-4 text-sm text-muted-foreground">
+                  Não há despesas registradas nesta viagem.
+                </p>
+              ) : matchingExpenses.length === 0 ? (
+                <p className="rounded-md border p-4 text-sm text-muted-foreground">
+                  Nenhuma despesa disponível corresponde a este custo.
+                </p>
+              ) : (
+                <div className="max-h-72 space-y-2 overflow-auto">
+                  {matchingExpenses.map(expense => (
+                    <div key={expense.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{expense.description}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatCurrency(expense.amount)} · {expense.status}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => handleLinkExpense(expense)}
+                        disabled={linkExpense.isPending}
+                      >
+                        Vincular
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

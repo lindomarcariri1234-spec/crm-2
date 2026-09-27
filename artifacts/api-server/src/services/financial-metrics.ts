@@ -1,4 +1,4 @@
-import { and, eq, gte, ilike, inArray, isNotNull, lt, ne, notInArray, or, sql } from "drizzle-orm";
+import { and, eq, gte, ilike, inArray, isNotNull, lt, ne, notExists, notInArray, or, sql } from "drizzle-orm";
 import {
   db, commissionsTable, expensesTable, financialLedgerEntriesTable, paymentsTable,
   pmsPaymentAdjustmentsTable, pmsReservationsTable, referralCommissionsTable, referralsTable,
@@ -29,17 +29,17 @@ export const FINANCIAL_METRIC_CONTRACTS = {
   sellerCommissionsPaid: "Seller commissions paid in the period, dated by paidAt.",
   referralCommissions: "Accrued, non-cancelled referral commissions created in the period.",
   referralCommissionsPaid: "Referral commissions paid in the period, dated by paidAt.",
-  expenses: "Incurred, non-cancelled general expenses due or created in the period.",
+  expenses: "Incurred, non-cancelled general expenses due or created in the period; explicitly linked trip costs are represented by this expense.",
   expensesPaid: "General expenses paid in the period, dated by paymentDate.",
-  tripCosts: "Incurred, non-cancelled trip costs due or created in the period.",
-  tripCostsPaid: "Trip costs paid in the period, dated by paidAt.",
+  tripCosts: "Incurred, non-cancelled, unlinked trip costs due or created in the period.",
+  tripCostsPaid: "Unlinked trip costs paid in the period, dated by paidAt.",
   userReferralBalance: "Current tenant user referral-balance snapshot; it is not filtered by period and is not revenue.",
   userDebt: "Current agency liability to users: referral balances plus unpaid seller and referral commissions.",
-  operatingCostsPaid: "Paid general expenses plus paid trip costs. Both sources remain separate and cross-source similarities are diagnostic only.",
+  operatingCostsPaid: "Paid general expenses plus paid unlinked trip costs. A linked pair is counted once through the expense and uses the expense payment date.",
   profit: "Cash profit: receivedRevenue minus operatingCostsPaid, paid seller/referral commissions, and client referral bonuses paid.",
   margin: "profit / receivedRevenue * 100 (zero when no received revenue).",
-  deduplication: "Rows are de-duplicated only by their immutable id within their own source. Expenses and trip costs are source-distinct and both count; no unsafe amount/date heuristic is used. Ledger entries and PMS payment adjustments are disclosed but not folded into totals to avoid double counting their originating financial rows.",
   pmsPaymentAdjustments: "Administrative PMS payment corrections created in the period; disclosed separately and never added to receivedRevenue or bookedRevenue.",
+  deduplication: "Rows are de-duplicated by immutable id within each source. An explicit one-to-one expense/trip-cost link counts only the expense using expense dates; no amount/date/description heuristic is used. Ledger entries and PMS payment adjustments are disclosed but not folded into totals to avoid double counting their originating financial rows.",
 } as const;
 
 export type FinancialPeriod = { start: Date; end: Date; label: string; asOf?: Date };
@@ -224,6 +224,12 @@ export function buildFinancialMetricFilters(
     tripCosts: and(
       eq(tripCostsTable.tenantId, tenantId),
       sql`${tripCostsTable.status} not in ('cancelled', 'refunded', 'failed', 'charged_back')`,
+      notExists(db.select({ id: expensesTable.id })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.tenantId, tenantId),
+          eq(expensesTable.linkedTripCostId, tripCostsTable.id),
+        ))),
       periodExpenseOrPaidRows(tripCostsTable, tripCostsTable.paidAt),
     ),
     commissions: and(

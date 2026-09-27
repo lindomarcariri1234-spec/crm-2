@@ -1994,7 +1994,7 @@ export const GetSalesCycleResponse = zod.object({
       origin: zod
         .string()
         .describe(
-          'Acquisition channel name (COALESCE\'d to \"Outros\" when null)',
+          'Acquisition channel name (COALESCE\'d to "Outros" when null)',
         ),
       clients: zod.number().int(),
       avgDaysToPayment: zod.number().nullish(),
@@ -3132,6 +3132,7 @@ export const ListTripsResponse = zod.object({
             role: zod.enum(["organizer", "guide"]),
             seatNumber: zod.string().nullable(),
             checkedInAt: zod.string().nullish(),
+            boardingLocationId: zod.string().nullish(),
           }),
         )
         .nullish(),
@@ -3239,6 +3240,20 @@ export const CreateTripBody = zod.object({
     .min(createTripBodyFreeGuidesMin)
     .max(createTripBodyFreeGuidesMax)
     .nullish(),
+  freePassengers: zod
+    .array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        cpf: zod.string(),
+        whatsapp: zod.string(),
+        role: zod.enum(["organizer", "guide"]),
+        seatNumber: zod.string().nullable(),
+        checkedInAt: zod.string().nullish(),
+        boardingLocationId: zod.string().nullish(),
+      }),
+    )
+    .optional(),
   manifestNumber: zod.string().nullish(),
   cancellationPolicy: zod.string().nullish(),
   metaTitle: zod.string().nullish(),
@@ -3337,6 +3352,7 @@ export const CreateTripResponse = zod.object({
         role: zod.enum(["organizer", "guide"]),
         seatNumber: zod.string().nullable(),
         checkedInAt: zod.string().nullish(),
+        boardingLocationId: zod.string().nullish(),
       }),
     )
     .nullish(),
@@ -3443,6 +3459,7 @@ export const GetTripResponse = zod.object({
         role: zod.enum(["organizer", "guide"]),
         seatNumber: zod.string().nullable(),
         checkedInAt: zod.string().nullish(),
+        boardingLocationId: zod.string().nullish(),
       }),
     )
     .nullish(),
@@ -3533,6 +3550,7 @@ export const UpdateTripBody = zod.object({
         role: zod.enum(["organizer", "guide"]),
         seatNumber: zod.string().nullable(),
         checkedInAt: zod.string().nullish(),
+        boardingLocationId: zod.string().nullish(),
       }),
     )
     .optional(),
@@ -3627,6 +3645,7 @@ export const UpdateTripResponse = zod.object({
         role: zod.enum(["organizer", "guide"]),
         seatNumber: zod.string().nullable(),
         checkedInAt: zod.string().nullish(),
+        boardingLocationId: zod.string().nullish(),
       }),
     )
     .nullish(),
@@ -3819,6 +3838,7 @@ export const GetTripBoardingPanelResponse = zod.object({
       role: zod.enum(["organizer", "guide"]),
       seatNumber: zod.string().nullable(),
       checkedInAt: zod.string().nullish(),
+      boardingLocationId: zod.string().nullish(),
     }),
   ),
 });
@@ -3865,12 +3885,15 @@ export const ListTripCostsResponse = zod.object({
       paidAt: zod.string().nullable(),
       notes: zod.string().nullable(),
       createdAt: zod.string(),
+      linkedExpenseId: zod.string().nullable(),
+      linkedExpenseDescription: zod.string().nullable(),
     }),
   ),
   agencyExpenses: zod.array(
     zod.object({
       id: zod.string(),
       tripId: zod.string().nullish(),
+      linkedTripCostId: zod.string().nullish(),
       category: zod.string(),
       description: zod.string(),
       amount: zod.number(),
@@ -3882,7 +3905,7 @@ export const ListTripCostsResponse = zod.object({
       status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
       notes: zod.string().nullish(),
       createdAt: zod.string(),
-      source: zod.enum(["agency", "trip"]).optional(),
+      source: zod.enum(["agency", "trip"]),
     }),
   ),
   plannedCosts: zod.array(
@@ -3965,6 +3988,8 @@ export const CreateTripCostResponse = zod.object({
   paidAt: zod.string().nullable(),
   notes: zod.string().nullable(),
   createdAt: zod.string(),
+  linkedExpenseId: zod.string().nullable(),
+  linkedExpenseDescription: zod.string().nullable(),
 });
 
 /**
@@ -4019,6 +4044,8 @@ export const UpdateTripCostResponse = zod.object({
   paidAt: zod.string().nullable(),
   notes: zod.string().nullable(),
   createdAt: zod.string(),
+  linkedExpenseId: zod.string().nullable(),
+  linkedExpenseDescription: zod.string().nullable(),
 });
 
 /**
@@ -4186,21 +4213,24 @@ export const ListReservationsResponse = zod.object({
         birthDate: zod.string().nullish(),
       }),
       linkedOrder: zod
-        .object({
-          id: zod.string(),
-          orderNumber: zod.string(),
-          status: zod.string(),
-          paymentStatus: zod.string(),
-          subtotal: zod.number(),
-          discountAmount: zod.number(),
-          totalAmount: zod.number(),
-          depositAmount: zod.number().nullish(),
-          paidAmount: zod.number(),
-          amountRemaining: zod.number(),
-          paymentMethod: zod.string().nullish(),
-          installments: zod.number().int().nullish(),
-        })
-        .nullish(),
+        .union([
+          zod.object({
+            id: zod.string(),
+            orderNumber: zod.string(),
+            status: zod.string(),
+            paymentStatus: zod.string(),
+            subtotal: zod.number(),
+            discountAmount: zod.number(),
+            totalAmount: zod.number(),
+            depositAmount: zod.number().nullish(),
+            paidAmount: zod.number(),
+            amountRemaining: zod.number(),
+            paymentMethod: zod.string().nullish(),
+            installments: zod.number().int().nullish(),
+          }),
+          zod.null(),
+        ])
+        .optional(),
       linkedReservations: zod
         .array(
           zod.object({
@@ -4217,16 +4247,19 @@ export const ListReservationsResponse = zod.object({
         )
         .optional(),
       linkedReferral: zod
-        .object({
-          id: zod.string(),
-          code: zod.string(),
-          status: zod.string(),
-          referrerId: zod.string(),
-          referrerName: zod.string().nullish(),
-          discountAmount: zod.number(),
-          bonusAmount: zod.number(),
-        })
-        .nullish(),
+        .union([
+          zod.object({
+            id: zod.string(),
+            code: zod.string(),
+            status: zod.string(),
+            referrerId: zod.string(),
+            referrerName: zod.string().nullish(),
+            discountAmount: zod.number(),
+            bonusAmount: zod.number(),
+          }),
+          zod.null(),
+        ])
+        .optional(),
       linkedDeals: zod
         .array(
           zod.object({
@@ -4278,7 +4311,7 @@ export const CreateReservationBody = zod.object({
   sellerId: zod
     .string()
     .nullish()
-    .describe("ID of the seller\/consultant responsible for this reservation"),
+    .describe("ID of the seller/consultant responsible for this reservation"),
   paidValue: zod
     .number()
     .optional()
@@ -4391,21 +4424,24 @@ export const CreateReservationResponse = zod.object({
     birthDate: zod.string().nullish(),
   }),
   linkedOrder: zod
-    .object({
-      id: zod.string(),
-      orderNumber: zod.string(),
-      status: zod.string(),
-      paymentStatus: zod.string(),
-      subtotal: zod.number(),
-      discountAmount: zod.number(),
-      totalAmount: zod.number(),
-      depositAmount: zod.number().nullish(),
-      paidAmount: zod.number(),
-      amountRemaining: zod.number(),
-      paymentMethod: zod.string().nullish(),
-      installments: zod.number().int().nullish(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        orderNumber: zod.string(),
+        status: zod.string(),
+        paymentStatus: zod.string(),
+        subtotal: zod.number(),
+        discountAmount: zod.number(),
+        totalAmount: zod.number(),
+        depositAmount: zod.number().nullish(),
+        paidAmount: zod.number(),
+        amountRemaining: zod.number(),
+        paymentMethod: zod.string().nullish(),
+        installments: zod.number().int().nullish(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedReservations: zod
     .array(
       zod.object({
@@ -4422,16 +4458,19 @@ export const CreateReservationResponse = zod.object({
     )
     .optional(),
   linkedReferral: zod
-    .object({
-      id: zod.string(),
-      code: zod.string(),
-      status: zod.string(),
-      referrerId: zod.string(),
-      referrerName: zod.string().nullish(),
-      discountAmount: zod.number(),
-      bonusAmount: zod.number(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        code: zod.string(),
+        status: zod.string(),
+        referrerId: zod.string(),
+        referrerName: zod.string().nullish(),
+        discountAmount: zod.number(),
+        bonusAmount: zod.number(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedDeals: zod
     .array(
       zod.object({
@@ -4547,21 +4586,24 @@ export const GetReservationResponse = zod.object({
     birthDate: zod.string().nullish(),
   }),
   linkedOrder: zod
-    .object({
-      id: zod.string(),
-      orderNumber: zod.string(),
-      status: zod.string(),
-      paymentStatus: zod.string(),
-      subtotal: zod.number(),
-      discountAmount: zod.number(),
-      totalAmount: zod.number(),
-      depositAmount: zod.number().nullish(),
-      paidAmount: zod.number(),
-      amountRemaining: zod.number(),
-      paymentMethod: zod.string().nullish(),
-      installments: zod.number().int().nullish(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        orderNumber: zod.string(),
+        status: zod.string(),
+        paymentStatus: zod.string(),
+        subtotal: zod.number(),
+        discountAmount: zod.number(),
+        totalAmount: zod.number(),
+        depositAmount: zod.number().nullish(),
+        paidAmount: zod.number(),
+        amountRemaining: zod.number(),
+        paymentMethod: zod.string().nullish(),
+        installments: zod.number().int().nullish(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedReservations: zod
     .array(
       zod.object({
@@ -4578,16 +4620,19 @@ export const GetReservationResponse = zod.object({
     )
     .optional(),
   linkedReferral: zod
-    .object({
-      id: zod.string(),
-      code: zod.string(),
-      status: zod.string(),
-      referrerId: zod.string(),
-      referrerName: zod.string().nullish(),
-      discountAmount: zod.number(),
-      bonusAmount: zod.number(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        code: zod.string(),
+        status: zod.string(),
+        referrerId: zod.string(),
+        referrerName: zod.string().nullish(),
+        discountAmount: zod.number(),
+        bonusAmount: zod.number(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedDeals: zod
     .array(
       zod.object({
@@ -4643,7 +4688,7 @@ export const UpdateReservationBody = zod.object({
   sellerId: zod
     .string()
     .nullish()
-    .describe("ID of the seller\/consultant responsible for this reservation"),
+    .describe("ID of the seller/consultant responsible for this reservation"),
   clientId: zod
     .string()
     .nullish()
@@ -4740,21 +4785,24 @@ export const UpdateReservationResponse = zod.object({
     birthDate: zod.string().nullish(),
   }),
   linkedOrder: zod
-    .object({
-      id: zod.string(),
-      orderNumber: zod.string(),
-      status: zod.string(),
-      paymentStatus: zod.string(),
-      subtotal: zod.number(),
-      discountAmount: zod.number(),
-      totalAmount: zod.number(),
-      depositAmount: zod.number().nullish(),
-      paidAmount: zod.number(),
-      amountRemaining: zod.number(),
-      paymentMethod: zod.string().nullish(),
-      installments: zod.number().int().nullish(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        orderNumber: zod.string(),
+        status: zod.string(),
+        paymentStatus: zod.string(),
+        subtotal: zod.number(),
+        discountAmount: zod.number(),
+        totalAmount: zod.number(),
+        depositAmount: zod.number().nullish(),
+        paidAmount: zod.number(),
+        amountRemaining: zod.number(),
+        paymentMethod: zod.string().nullish(),
+        installments: zod.number().int().nullish(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedReservations: zod
     .array(
       zod.object({
@@ -4771,16 +4819,19 @@ export const UpdateReservationResponse = zod.object({
     )
     .optional(),
   linkedReferral: zod
-    .object({
-      id: zod.string(),
-      code: zod.string(),
-      status: zod.string(),
-      referrerId: zod.string(),
-      referrerName: zod.string().nullish(),
-      discountAmount: zod.number(),
-      bonusAmount: zod.number(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        code: zod.string(),
+        status: zod.string(),
+        referrerId: zod.string(),
+        referrerName: zod.string().nullish(),
+        discountAmount: zod.number(),
+        bonusAmount: zod.number(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedDeals: zod
     .array(
       zod.object({
@@ -4892,21 +4943,24 @@ export const CheckInReservationResponse = zod.object({
     birthDate: zod.string().nullish(),
   }),
   linkedOrder: zod
-    .object({
-      id: zod.string(),
-      orderNumber: zod.string(),
-      status: zod.string(),
-      paymentStatus: zod.string(),
-      subtotal: zod.number(),
-      discountAmount: zod.number(),
-      totalAmount: zod.number(),
-      depositAmount: zod.number().nullish(),
-      paidAmount: zod.number(),
-      amountRemaining: zod.number(),
-      paymentMethod: zod.string().nullish(),
-      installments: zod.number().int().nullish(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        orderNumber: zod.string(),
+        status: zod.string(),
+        paymentStatus: zod.string(),
+        subtotal: zod.number(),
+        discountAmount: zod.number(),
+        totalAmount: zod.number(),
+        depositAmount: zod.number().nullish(),
+        paidAmount: zod.number(),
+        amountRemaining: zod.number(),
+        paymentMethod: zod.string().nullish(),
+        installments: zod.number().int().nullish(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedReservations: zod
     .array(
       zod.object({
@@ -4923,16 +4977,19 @@ export const CheckInReservationResponse = zod.object({
     )
     .optional(),
   linkedReferral: zod
-    .object({
-      id: zod.string(),
-      code: zod.string(),
-      status: zod.string(),
-      referrerId: zod.string(),
-      referrerName: zod.string().nullish(),
-      discountAmount: zod.number(),
-      bonusAmount: zod.number(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        code: zod.string(),
+        status: zod.string(),
+        referrerId: zod.string(),
+        referrerName: zod.string().nullish(),
+        discountAmount: zod.number(),
+        bonusAmount: zod.number(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   linkedDeals: zod
     .array(
       zod.object({
@@ -4957,26 +5014,29 @@ export const GetReservationRoomAssignmentsParams = zod.object({
 
 export const GetReservationRoomAssignmentsResponse = zod.object({
   accommodation: zod
-    .object({
-      id: zod.string(),
-      name: zod.string(),
-      type: zod.string(),
-      address: zod.string().nullish(),
-      city: zod.string().nullish(),
-      state: zod.string().nullish(),
-      contactName: zod.string().nullish(),
-      phone: zod.string().nullish(),
-      email: zod.string().nullish(),
-      totalRooms: zod.number().int().nullish(),
-      amenities: zod.array(zod.string()),
-      pricePerNight: zod.number().nullish(),
-      coverImage: zod.string().nullish(),
-      rating: zod.number().nullish(),
-      gallery: zod.array(zod.string()).nullish(),
-      status: zod.string(),
-      createdAt: zod.string(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        type: zod.string(),
+        address: zod.string().nullish(),
+        city: zod.string().nullish(),
+        state: zod.string().nullish(),
+        contactName: zod.string().nullish(),
+        phone: zod.string().nullish(),
+        email: zod.string().nullish(),
+        totalRooms: zod.number().int().nullish(),
+        amenities: zod.array(zod.string()),
+        pricePerNight: zod.number().nullish(),
+        coverImage: zod.string().nullish(),
+        rating: zod.number().nullish(),
+        gallery: zod.array(zod.string()).nullish(),
+        status: zod.string(),
+        createdAt: zod.string(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   rooms: zod.array(
     zod.object({
       id: zod.string(),
@@ -5047,26 +5107,29 @@ export const UpdateReservationRoomAssignmentsBody = zod.object({
 
 export const UpdateReservationRoomAssignmentsResponse = zod.object({
   accommodation: zod
-    .object({
-      id: zod.string(),
-      name: zod.string(),
-      type: zod.string(),
-      address: zod.string().nullish(),
-      city: zod.string().nullish(),
-      state: zod.string().nullish(),
-      contactName: zod.string().nullish(),
-      phone: zod.string().nullish(),
-      email: zod.string().nullish(),
-      totalRooms: zod.number().int().nullish(),
-      amenities: zod.array(zod.string()),
-      pricePerNight: zod.number().nullish(),
-      coverImage: zod.string().nullish(),
-      rating: zod.number().nullish(),
-      gallery: zod.array(zod.string()).nullish(),
-      status: zod.string(),
-      createdAt: zod.string(),
-    })
-    .nullish(),
+    .union([
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        type: zod.string(),
+        address: zod.string().nullish(),
+        city: zod.string().nullish(),
+        state: zod.string().nullish(),
+        contactName: zod.string().nullish(),
+        phone: zod.string().nullish(),
+        email: zod.string().nullish(),
+        totalRooms: zod.number().int().nullish(),
+        amenities: zod.array(zod.string()),
+        pricePerNight: zod.number().nullish(),
+        coverImage: zod.string().nullish(),
+        rating: zod.number().nullish(),
+        gallery: zod.array(zod.string()).nullish(),
+        status: zod.string(),
+        createdAt: zod.string(),
+      }),
+      zod.null(),
+    ])
+    .optional(),
   rooms: zod.array(
     zod.object({
       id: zod.string(),
@@ -5515,6 +5578,7 @@ export const ListExpensesResponse = zod.object({
     zod.object({
       id: zod.string(),
       tripId: zod.string().nullish(),
+      linkedTripCostId: zod.string().nullish(),
       category: zod.string(),
       description: zod.string(),
       amount: zod.number(),
@@ -5526,7 +5590,7 @@ export const ListExpensesResponse = zod.object({
       status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
       notes: zod.string().nullish(),
       createdAt: zod.string(),
-      source: zod.enum(["agency", "trip"]).optional(),
+      source: zod.enum(["agency", "trip"]),
     }),
   ),
   total: zod.number().int(),
@@ -5566,6 +5630,7 @@ export const CreateExpenseBody = zod.object({
 export const CreateExpenseResponse = zod.object({
   id: zod.string(),
   tripId: zod.string().nullish(),
+  linkedTripCostId: zod.string().nullish(),
   category: zod.string(),
   description: zod.string(),
   amount: zod.number(),
@@ -5577,7 +5642,7 @@ export const CreateExpenseResponse = zod.object({
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
-  source: zod.enum(["agency", "trip"]).optional(),
+  source: zod.enum(["agency", "trip"]),
 });
 
 /**
@@ -5599,6 +5664,7 @@ export const UpdateExpenseBody = zod.object({
 export const UpdateExpenseResponse = zod.object({
   id: zod.string(),
   tripId: zod.string().nullish(),
+  linkedTripCostId: zod.string().nullish(),
   category: zod.string(),
   description: zod.string(),
   amount: zod.number(),
@@ -5610,7 +5676,7 @@ export const UpdateExpenseResponse = zod.object({
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
-  source: zod.enum(["agency", "trip"]).optional(),
+  source: zod.enum(["agency", "trip"]),
 });
 
 /**
@@ -5621,6 +5687,32 @@ export const DeleteExpenseParams = zod.object({
 });
 
 export const DeleteExpenseResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
+ * @summary Link an expense to a matching trip cost
+ */
+export const LinkExpenseToTripCostParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const LinkExpenseToTripCostBody = zod.object({
+  tripCostId: zod.string(),
+});
+
+export const LinkExpenseToTripCostResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
+ * @summary Remove the link between an expense and a trip cost
+ */
+export const UnlinkExpenseFromTripCostParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UnlinkExpenseFromTripCostResponse = zod.object({
   success: zod.boolean(),
 });
 
@@ -7117,6 +7209,7 @@ export const UpdateTripAccommodationResponse = zod.object({
         role: zod.enum(["organizer", "guide"]),
         seatNumber: zod.string().nullable(),
         checkedInAt: zod.string().nullish(),
+        boardingLocationId: zod.string().nullish(),
       }),
     )
     .nullish(),
@@ -7681,6 +7774,12 @@ export const SyncMeBody = zod.object({
     .optional()
     .describe(
       "When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users.",
+    ),
+  clientSignup: zod
+    .boolean()
+    .optional()
+    .describe(
+      "When true, only provisions a new client account by linking a verified email to one existing client record.",
     ),
 });
 
@@ -10198,6 +10297,7 @@ export const RegenerateTripSeatMapResponse = zod.object({
         role: zod.enum(["organizer", "guide"]),
         seatNumber: zod.string().nullable(),
         checkedInAt: zod.string().nullish(),
+        boardingLocationId: zod.string().nullish(),
       }),
     )
     .nullish(),

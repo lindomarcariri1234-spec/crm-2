@@ -210,6 +210,33 @@ describe("BoardingPanelModal — actual component SSE auto-refresh wiring", () =
     expect(passengerName?.parentElement?.textContent).toContain("Gratuidade");
   });
 
+  it("renders the free passenger's direct boarding point and Não definido for unknown ids", async () => {
+    mockGetTripBoardingPanel.mockReturnValue({
+      data: {
+        ...gratuityPanelData().data,
+        totalPassengers: 2,
+        passengers: [],
+        boardingPoints: [{ id: "bp-center", name: "Centro" }],
+        freePassengers: [
+          {
+            id: "free-known", name: "Guia Centro", role: "guide", seatNumber: "1",
+            checkedInAt: null, boardingLocationId: "bp-center",
+          },
+          {
+            id: "free-unknown", name: "Guia Antigo", role: "guide", seatNumber: "2",
+            checkedInAt: null, boardingLocationId: "bp-removed",
+          },
+        ],
+      },
+      isLoading: false,
+      refetch: mockRefetch,
+    });
+
+    const { container } = await renderModal("trip-1", true);
+    expect(container.textContent).toContain("Centro");
+    expect(container.textContent).toContain("Não definido");
+  });
+
   it("calls refetch() once when the first SSE event arrives while the modal is open", async () => {
     await renderModal("trip-1", true);
 

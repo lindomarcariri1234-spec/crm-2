@@ -1,6 +1,7 @@
 - [CJS require vitest mock bypass](cjs-require-vitest-mock.md) — vi.mock("pkg") intercepts ESM imports but NOT CJS require(); use inline handler in a parent mock instead of mocking the SDK directly
 - [Checkout now synchronous](persist-order-no-client.md) — client/reservation/deal/portal-account creation moved from post-payment to checkout time (idempotent); referral crediting still deferred to post-payment
 - [logger warn vs console warn in tests](logger-warn-test-spy.md) — production code uses logger.warn (src/lib/logger); tests spying on console.warn will miss it; add vi.mock("../lib/logger.js") with a mockLogWarn vi.fn() closure
+- [Pino HTTP error serializers](pino-http-error-serializers.md) — apply safe error serializers to both base Pino and pino-http request loggers; pino-http can otherwise emit raw error messages
 - [api-zod-manual-edits](api-zod-manual-edits.md) — orval-generated files in lib/api-zod are hand-edited; must update both TS types AND Zod schemas in api.ts together
 - [api-zod-duplicate-export](api-zod-duplicate-export.md) — index.ts must only export ./generated/api (superset); adding ./generated/types causes ~200 TS2308 duplicate-export errors
 - [Workspace lib TypeScript build](db-ts-build.md) — Consumers read lib dist/*.d.ts via project references; rebuild with `tsc --build` after a schema column change OR after adding a new exported file (e.g. api-client-react), else TS2305/missing-property.
@@ -23,14 +24,14 @@
 - [Calendar dedup not-found pattern](calendar-dedup.md) — updateEvent returns boolean|"not-found"; "not-found"=404 means event deleted externally; upsertCalendarEvent deletes stale DB record and recreates. isEventNotFoundError exported from calendar-service.ts.
 - [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
 - [STORE_ORDER_STATUS PROCESSING](store-order-status.md) — STORE_ORDER_STATUS in permissions has PENDING/CONFIRMED/PROCESSING/COMPLETED/CANCELLED; PROCESSING was added when pedidos.tsx was migrated to typed constants.
-- [Migration journal timestamps](migration-journal-timestamps.md) — squash baseline + validate-coverage CI: 0000 must be kept complete (updated June 2026); run `pnpm --filter @workspace/db validate-coverage` after any ADD COLUMN migration.
+- [Migration journal timestamps](migration-journal-timestamps.md) — reconcile live-only columns with additive DDL above both watermarks; never replay historical backfills over populated data.
 - [Host-header token links](host-header-token-links.md) — public/anonymous email links carrying secret tokens must use trusted `STORE_PUBLIC_BASE`, never req Host header (phishing/token-capture).
 - [Brazil timezone formatting patterns](brazil-tz-patterns.md) — canonical patterns for Brazil date display: frontend uses Intl.DateTimeFormat+America/Sao_Paulo; backend uses formatDateBRServer helper; day-window queries use brazilDayWindow(n) for UTC-correct midnight boundaries; never toISOString().slice or toLocaleDateString on server.
 - [Vitrine local date](vitrine-local-date.md) — Brazil-facing storefront "today" must use local Y-M-D (getFullYear/Month/Date), never toISOString().slice(0,10) (UTC → off-by-one at night).
 - [Vitrine preview & screenshot quirks](vitrine-preview-screenshots.md) — app_preview loads localhost:5000 (not public domain); vite needs an /api→8080 proxy or storefront 404s; Clerk CORS noise is expected for public pages.
 - [Vitrine per-tenant theming](vitrine-theming.md) — storefront re-skins via VitrineThemeProvider CSS vars; Cariri palette fallback when store colors == DB defaults; theme inline colors via useVitrineTheme().colors, never raw store.primaryColor.
 - [Referral email status lookup](referral-email-status-lookup.md) — expiry/bonus-release email delivery status filters email_logs by referralId + subject ILIKE (no email-type column); fragile to subject/locale changes; add a type column when schema next changes.
-- [Referral CHECK constraint gap](referral-check-constraint-gap.md) — referrals_crm_requires_reservation_id is in live DBs but missing from Drizzle schema + squash baseline; fresh DBs would silently lack it.
+- [Referral CHECK constraint gap](referral-check-constraint-gap.md) — Drizzle schema/squash omit the CHECK; a journaled idempotent migration restores it after the baseline.
 - [Frontend SSE component tests](frontend-sse-component-tests.md) — shared eventSourceHarness.ts stubs EventSource; mocked hooks (useToast/wouter) MUST return stable refs or effects loop & act() hangs; vitest needs esbuild jsx:automatic for .tsx.
 - [Endpoint test db mock exports](endpoint-test-db-mock-exports.md) — endpoints.test.ts mocks @workspace/db with a hand-listed table set; a handler touching an unlisted table throws → 500 (not the expected 4xx). Add the table when a positive control reaches new DB reads.
 - [Drizzle query rejection mocks](drizzle-query-rejection-mocks.md) — to exercise a handler catch around a query, let select().from() build normally and reject from the terminal where/execute promise.
@@ -59,6 +60,7 @@
 - [broadcastSeatUpdate dual-query mock](broadcast-seat-update-dual-query.md) — realtime.ts makes 2 db.select() calls (reservations then trip freePassengers); use mock.calls.length to route different chains per call.
 - [SSL sslmode strip pattern](ssl-sslmode-strip.md) — explicit ssl option alongside sslmode=require in connectionString does NOT suppress pg-connection-string warning; must strip sslmode from URL before passing to Pool.
 - [Test suite batching](test-suite-batching.md) — 76 backend + 16 frontend test files; full run exceeds 120s bash limit; run backend in batches of ~20 files (a-c/d-l/m-r/s-z+workers); frontend in batches of 8 files.
+- [API integration-test isolation](vitest-db-integration-isolation.md) — keep real-DB suites out of the default runner and independently filter manual Vitest file batches before execution.
 - [Vitest mock call typing](vitest-mock-call-typing.md) — strict TypeScript infers vi.fn() calls as zero-argument tuples; type mocks or cast call arrays before inspecting arguments.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
@@ -118,8 +120,16 @@
 - [Referral credit reservation](referral-credit-reservation.md) — reserve cashback atomically at checkout; payment confirms it and unpaid orders release it.
 - [Stripe 3DS checkout recovery](stripe-3ds-checkout-recovery.md) — redirected card returns have an empty cart; restore by token and retain the server-applied cashback snapshot.
 - [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
+- [GitHub workflow permission](github-workflow-permission.md) — repo write access may not permit editing .github/workflows; the separate workflow scope is required.
+- [Vercel monorepo framework](vercel-monorepo-framework.md) — linked monorepos may be classified as Express despite vercel.json; set the Vercel project framework explicitly to Vite.
+- [Vercel canceled Git deployments](vercel-canceled-git-deployments.md) — if an auto deployment cancels before build, create a fresh production deployment from the verified Git SHA.
+- [Temporary worktree package resolution](temporary-worktree-package-resolution.md) — keep pnpm workspace links in scratch worktrees resolving to that worktree, not the primary checkout.
+- [Mockup sandbox routing isolation](mockup-sandbox-routing-isolation.md) — direct wouter imports can trigger invalid hooks in isolated previews; use a local hash-navigation shim.
+- [Expo watcher pressure from sandbox builds](expo-watcher-pressure-from-sandbox-builds.md) — generated sandbox dist can amplify Metro ENOSPC failures; cleaning it helps, but broader watch limits may persist.
+- [Workspace-scoped package installs](package-management-workspace-scope.md) — if Replit's package tool hits ERR_PNPM_ADDING_TO_ROOT, scope pnpm add/remove to the target artifact.
 - [Vercel CLI firewall fallback](vercel-cli-firewall-fallback.md) — if pnpm dlx is blocked on a transitive download, reuse an already extracted CLI from the pnpm cache
-- [Manual table migration snapshots](manual-table-snapshot-sync.md) — hand-written table migrations need a later consolidated snapshot for live schema verification
+- [Manual table migration snapshots](manual-table-snapshot-sync.md) — preserve the published snapshot chain when merging branches; never replay DDL already applied by hand-written migrations.
+- [Clerk React/shared compatibility](clerk-react-shared-compat.md) — a newer React SDK can compile yet fail Vite linking against the shared override; upgrade the pair together.
 - [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
 - [Audit failure log hygiene](audit-failure-logging.md) — audit-write failures log only operational identifiers and error type; never snapshots or raw exception details
 - [PMS legacy projection](pms-legacy-projection.md) — keep legacy accommodations as the source and idempotently project new records before PMS reads

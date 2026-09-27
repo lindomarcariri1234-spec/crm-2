@@ -29,5 +29,6 @@ export interface UserProfile {
   /** @nullable */
   trialDaysLeft?: number | null;
   createdAt: string;
+  /** @nullable */
   tenant?: UserProfileTenant;
 }

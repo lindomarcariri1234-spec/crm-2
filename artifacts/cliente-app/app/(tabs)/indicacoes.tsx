@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@clerk/clerk-expo";
+import { useAuth } from "@clerk/expo";
 import { useQuery } from "@tanstack/react-query";
 import { SkeletonBox } from "@/components/Skeleton";
 import * as Clipboard from "expo-clipboard";
@@ -35,14 +35,6 @@ const REFERRAL_STATUS_LABELS: Record<string, string> = {
   reversed: "Revertido",
 };
 
-const REFERRAL_STATUS_COLORS: Record<string, string> = {
-  pending: "#d97706",
-  completed: "#16a34a",
-  converted: "#16a34a",
-  expired: "#6b7280",
-  reversed: "#6b7280",
-};
-
 function formatCurrency(value: number | string): string {
   return `R$ ${Number(value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -69,9 +61,11 @@ function getDaysUntilExpiry(expiresAt: string | null): number | null {
 function ExpiryBadge({
   expiresAt,
   status,
+  colors,
 }: {
   expiresAt: string | null;
   status: string;
+  colors: ReturnType<typeof useColors>;
 }) {
   const days = getDaysUntilExpiry(expiresAt);
   if (days === null) return null;
@@ -79,22 +73,22 @@ function ExpiryBadge({
 
   if (days < 0) {
     return (
-      <View style={[styles.expiryPill, { backgroundColor: "#f3f4f6" }]}>
-        <Feather name="clock" size={11} color="#6b7280" />
-        <Text style={[styles.expiryText, { color: "#6b7280" }]}>Expirou</Text>
+        <View style={[styles.expiryPill, { backgroundColor: colors.muted }]}>
+          <Feather name="clock" size={11} color={colors.mutedForeground} />
+          <Text style={[styles.expiryText, { color: colors.mutedForeground }]}>Expirou</Text>
       </View>
     );
   }
   if (days === 0) {
     return (
-      <View style={[styles.expiryPill, { backgroundColor: "#fef2f2" }]}>
-        <Feather name="alert-circle" size={11} color="#dc2626" />
-        <Text style={[styles.expiryText, { color: "#dc2626" }]}>Expira hoje</Text>
+        <View style={[styles.expiryPill, { backgroundColor: colors.destructive + "18" }]}>
+          <Feather name="alert-circle" size={11} color={colors.destructive} />
+          <Text style={[styles.expiryText, { color: colors.destructive }]}>Expira hoje</Text>
       </View>
     );
   }
-  const color = days <= 7 ? "#d97706" : "#6b7280";
-  const bg = days <= 7 ? "#fffbeb" : "#f3f4f6";
+   const color = days <= 7 ? colors.warning : colors.mutedForeground;
+   const bg = days <= 7 ? colors.accent : colors.muted;
   return (
     <View style={[styles.expiryPill, { backgroundColor: bg }]}>
       <Feather name="clock" size={11} color={color} />
@@ -113,7 +107,12 @@ function ReferralItem({
   colors: ReturnType<typeof useColors>;
 }) {
   const statusLabel = REFERRAL_STATUS_LABELS[r.status] ?? r.status;
-  const statusColor = REFERRAL_STATUS_COLORS[r.status] ?? colors.mutedForeground;
+  const statusColor =
+    r.status === "completed" || r.status === "converted"
+      ? colors.success
+      : r.status === "pending"
+      ? colors.warning
+      : colors.mutedForeground;
   const date = new Date(r.createdAt).toLocaleDateString("pt-BR", {
     day: "2-digit",
     month: "short",
@@ -130,7 +129,7 @@ function ReferralItem({
           {r.referredName ?? "Indicado"}
         </Text>
         <Text style={[styles.referralDate, { color: colors.mutedForeground }]}>{date}</Text>
-        <ExpiryBadge expiresAt={r.expiresAt} status={r.status} />
+        <ExpiryBadge expiresAt={r.expiresAt} status={r.status} colors={colors} />
       </View>
       <View style={[styles.statusPill, { backgroundColor: statusColor + "18" }]}>
         <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
@@ -267,8 +266,8 @@ export default function IndicacoesScreen() {
       {/* Code card */}
       <View style={[styles.codeCard, { backgroundColor: colors.primary }]}>
         <View style={styles.codeCardDecor} />
-        <Text style={styles.codeCardLabel}>Seu código de indicação</Text>
-        <Text style={styles.codeValue}>{code ?? "Indisponível"}</Text>
+         <Text style={[styles.codeCardLabel, { color: colors.primaryForeground + "BF" }]}>Seu código de indicação</Text>
+         <Text style={[styles.codeValue, { color: colors.primaryForeground }]}>{code ?? "Indisponível"}</Text>
         <View style={styles.codeActions}>
           {/* Copy button */}
           <Pressable
@@ -279,8 +278,8 @@ export default function IndicacoesScreen() {
             onPress={handleCopy}
             disabled={!code}
           >
-            <Feather name={copied ? "check" : "copy"} size={16} color="#fff" />
-            <Text style={styles.codeBtnText}>{copied ? "Copiado!" : "Copiar"}</Text>
+             <Feather name={copied ? "check" : "copy"} size={16} color={colors.primaryForeground} />
+             <Text style={[styles.codeBtnText, { color: colors.primaryForeground }]}>{copied ? "Copiado!" : "Copiar"}</Text>
           </Pressable>
 
           {/* WhatsApp button */}
@@ -292,8 +291,8 @@ export default function IndicacoesScreen() {
             onPress={handleWhatsApp}
             disabled={!code}
           >
-            <Feather name="message-circle" size={16} color="#fff" />
-            <Text style={styles.codeBtnText}>WhatsApp</Text>
+             <Feather name="message-circle" size={16} color={colors.primaryForeground} />
+             <Text style={[styles.codeBtnText, { color: colors.primaryForeground }]}>WhatsApp</Text>
           </Pressable>
 
           {/* Generic share */}
@@ -305,8 +304,8 @@ export default function IndicacoesScreen() {
             onPress={handleShare}
             disabled={!code}
           >
-            <Feather name="share-2" size={16} color="#fff" />
-            <Text style={styles.codeBtnText}>Compartilhar</Text>
+             <Feather name="share-2" size={16} color={colors.primaryForeground} />
+             <Text style={[styles.codeBtnText, { color: colors.primaryForeground }]}>Compartilhar</Text>
           </Pressable>
 
             <Pressable
@@ -317,21 +316,21 @@ export default function IndicacoesScreen() {
               onPress={handleCopyLink}
               disabled={!shareLink}
             >
-              <Feather name="link" size={16} color="#fff" />
-              <Text style={styles.codeBtnText}>Link</Text>
+               <Feather name="link" size={16} color={colors.primaryForeground} />
+               <Text style={[styles.codeBtnText, { color: colors.primaryForeground }]}>Link</Text>
             </Pressable>
         </View>
       </View>
 
       {/* Blocked code alert */}
       {isCodeBlocked ? (
-        <View style={[styles.blockedBanner, { backgroundColor: "#fef2f2", borderColor: "#fca5a5" }]}>
-          <Feather name="alert-triangle" size={18} color="#dc2626" />
+           <View style={[styles.blockedBanner, { backgroundColor: colors.destructive + "12", borderColor: colors.destructive + "55" }]}>
+          <Feather name="alert-triangle" size={18} color={colors.destructive} />
           <View style={styles.blockedBannerText}>
-            <Text style={[styles.blockedBannerTitle, { color: "#dc2626" }]}>
+             <Text style={[styles.blockedBannerTitle, { color: colors.destructive }]}>
               Código temporariamente bloqueado
             </Text>
-            <Text style={[styles.blockedBannerBody, { color: "#7f1d1d" }]}>
+             <Text style={[styles.blockedBannerBody, { color: colors.foreground }]}>
               Seu código de indicação está inativo no momento. Entre em contato com a agência para reativá-lo.
             </Text>
           </View>
@@ -361,7 +360,7 @@ export default function IndicacoesScreen() {
       {activeCampaign ? (
         <View style={[styles.campaignCard, { backgroundColor: colors.accent, borderColor: colors.border }]}>
           <View style={[styles.campaignIcon, { backgroundColor: colors.primary }]}>
-            <Feather name="zap" size={18} color="#fff" />
+             <Feather name="zap" size={18} color={colors.primaryForeground} />
           </View>
           <View style={styles.campaignCopy}>
             <Text style={[styles.campaignEyebrow, { color: colors.primary }]}>Campanha ativa</Text>
@@ -485,9 +484,9 @@ export default function IndicacoesScreen() {
             </Text>
           </View>
           {referral.wallet.expiringCredit > 0 && referral.wallet.expiringOn ? (
-            <View style={styles.expiryNotice}>
-              <Feather name="alert-circle" size={14} color="#b45309" />
-              <Text style={styles.expiryNoticeText}>
+               <View style={[styles.expiryNotice, { backgroundColor: colors.accent }]}>
+               <Feather name="alert-circle" size={14} color={colors.warning} />
+               <Text style={[styles.expiryNoticeText, { color: colors.warning }]}>
                 {formatCurrency(referral.wallet.expiringCredit)} expiram em {new Date(referral.wallet.expiringOn).toLocaleDateString("pt-BR")}.
               </Text>
             </View>
@@ -540,7 +539,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   codeCard: {
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 24,
     gap: 8,
     overflow: "hidden",
@@ -558,14 +557,12 @@ const styles = StyleSheet.create({
   codeCardLabel: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
-    color: "rgba(255,255,255,0.75)",
     textTransform: "uppercase",
     letterSpacing: 0.8,
   },
   codeValue: {
     fontSize: 34,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
     letterSpacing: 6,
     textAlign: "center",
   },
@@ -587,7 +584,6 @@ const styles = StyleSheet.create({
   codeBtnText: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
   },
   statsRow: {
     flexDirection: "row",
@@ -595,7 +591,7 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 12,
     alignItems: "center",
@@ -611,7 +607,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   earningsCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
   },
@@ -619,7 +615,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
   },
@@ -635,20 +631,19 @@ const styles = StyleSheet.create({
   qrFrame: {
     padding: 8,
     borderRadius: 10,
-    backgroundColor: "#ffffff",
   },
   campaignCard: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 12,
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
   },
   campaignIcon: {
     width: 38,
     height: 38,
-    borderRadius: 12,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -677,13 +672,13 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
   },
   progressCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
     gap: 10,
   },
   milestonesCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
   },
@@ -769,18 +764,16 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: 12,
     padding: 10,
-    backgroundColor: "#fffbeb",
     borderRadius: 8,
   },
   expiryNoticeText: {
     flex: 1,
-    color: "#92400e",
     fontSize: 12,
     fontFamily: "Inter_500Medium",
     lineHeight: 17,
   },
   listCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
     gap: 4,
@@ -855,7 +848,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 10,
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 14,
   },
   blockedBannerText: {

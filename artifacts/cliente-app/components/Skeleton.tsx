@@ -1,5 +1,7 @@
 import React, { useEffect, useRef } from "react";
-import { Animated, StyleSheet, ViewStyle } from "react-native";
+import { Animated, ViewStyle } from "react-native";
+
+import { useColors } from "@/hooks/useColors";
 
 interface SkeletonBoxProps {
   width?: number | `${number}%` | "100%";
@@ -9,6 +11,7 @@ interface SkeletonBoxProps {
 }
 
 export function SkeletonBox({ width = "100%", height = 16, borderRadius = 6, style }: SkeletonBoxProps) {
+  const colors = useColors();
   const opacity = useRef(new Animated.Value(0.4)).current;
 
   useEffect(() => {
@@ -25,16 +28,9 @@ export function SkeletonBox({ width = "100%", height = 16, borderRadius = 6, sty
   return (
     <Animated.View
       style={[
-        styles.base,
-        { width: width as number, height, borderRadius, opacity },
+        { width: width as number, height, borderRadius, opacity, backgroundColor: colors.muted },
         style,
       ]}
     />
   );
 }
-
-const styles = StyleSheet.create({
-  base: {
-    backgroundColor: "#e5e7eb",
-  },
-});

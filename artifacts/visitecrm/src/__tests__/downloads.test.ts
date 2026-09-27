@@ -22,7 +22,7 @@ import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js
 // Downloads page component mocks
 // --------------------------------------------------------------------------
 const downloadsApiMocks = vi.hoisted(() => ({
-  useGetMe: vi.fn(() => ({ data: null })),
+  useGetMe: vi.fn(() => ({ data: { role: "agency_admin" } })),
   useListAuditLogs: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
   useListReferrals: vi.fn(() => ({ data: { data: [] } })),
   useListCommissions: vi.fn(() => ({ data: [] })),

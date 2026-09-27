@@ -34,8 +34,8 @@ export async function runExpiredReservationsCron(): Promise<void> {
     // Payment confirmation locks the same order row. Taking these locks first
     // gives expiry and payment a single winner instead of allowing seats to be
     // returned while the order is concurrently promoted to paid.
-    await tx.execute(sql`
-      SELECT id
+    const lockedOrdersResult = await tx.execute(sql`
+      SELECT id, order_number
       FROM store_orders
       WHERE order_number IN (
         SELECT DISTINCT store_order_id
@@ -48,6 +48,27 @@ export async function runExpiredReservationsCron(): Promise<void> {
       ORDER BY id
       FOR UPDATE
     `);
+    const lockedOrderNumbers = (lockedOrdersResult as unknown as {
+      rows: Array<{ order_number: string }>;
+    }).rows.map((row) => row.order_number);
+
+    // Orderless reservations have no shared order lock. Lock the rows first,
+    // then run the paid-receipt test in a separate READ COMMITTED statement.
+    // An UPDATE that waits on a row lock could otherwise use an older snapshot
+    // for NOT EXISTS and cancel a reservation whose payment just committed.
+    const lockedOrderlessResult = await tx.execute(sql`
+      SELECT id
+      FROM reservations
+      WHERE store_order_id IS NULL
+        AND status = ${RESERVATION_STATUS.PENDING}
+        AND expires_at IS NOT NULL
+        AND expires_at < ${now}
+      ORDER BY id
+      FOR UPDATE
+    `);
+    const lockedOrderlessIds = (lockedOrderlessResult as unknown as {
+      rows: Array<{ id: string }>;
+    }).rows.map((row) => row.id);
 
     // Cancel all expired pending reservations atomically and get the affected rows.
     // Only a real receivable payment protects a reservation from expiry. Pending,
@@ -64,15 +85,19 @@ export async function runExpiredReservationsCron(): Promise<void> {
           status     = ${RESERVATION_STATUS.PENDING}
           AND expires_at IS NOT NULL
           AND expires_at < ${now}
-          AND (
-            store_order_id IS NULL
-            OR EXISTS (
+           AND (
+              (store_order_id IS NULL AND id IN (
+                SELECT value FROM jsonb_array_elements_text(${JSON.stringify(lockedOrderlessIds)}::jsonb)
+              ))
+              OR (store_order_id IN (
+                SELECT value FROM jsonb_array_elements_text(${JSON.stringify(lockedOrderNumbers)}::jsonb)
+              ) AND EXISTS (
               SELECT 1
               FROM store_orders
               WHERE store_orders.order_number = reservations.store_order_id
                 AND store_orders.status = 'pending'
                 AND store_orders.payment_status <> 'paid'
-            )
+             ))
           )
           AND NOT EXISTS (
             SELECT 1

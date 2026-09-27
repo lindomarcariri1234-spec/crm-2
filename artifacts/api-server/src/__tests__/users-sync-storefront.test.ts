@@ -816,4 +816,128 @@ describe("POST /api/users/me/sync — storeSlug storefront registration", () => 
     expect(mockInsertValues).toHaveBeenCalledTimes(1);
     expect(mockUpdateSet).not.toHaveBeenCalledWith({ userId: "gen-user-id" });
   });
+
+  it("stores the CPF and links a client-app signup only to its verified email match", async () => {
+    stubVerifiedClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: {
+        ...BASE_BODY,
+        cpf: "529.982.247-25",
+        clientSignup: true,
+      },
+    });
+
+    const client = {
+      id: "client-001",
+      tenantId: "tenant-client",
+      userId: null,
+    };
+    const newUserRow = {
+      id: "gen-user-id",
+      clerkId: "clerk_new_user",
+      tenantId: "tenant-client",
+      name: "Ana Viajante",
+      email: "traveller@example.com",
+      role: ROLES.CLIENT,
+      avatarUrl: null,
+      isActive: true,
+      referralCode: "CLI123",
+      referralBalance: "0",
+      createdAt: new Date(),
+    };
+
+    mockReconcileClientIdentity.mockResolvedValueOnce({
+      clientId: client.id,
+      created: false,
+      linked: true,
+    });
+    mockLimit
+      .mockResolvedValueOnce([]) // no existing user
+      .mockResolvedValueOnce([]) // no pending invite
+      .mockResolvedValueOnce([client]) // unique verified-email match
+      .mockResolvedValueOnce([newUserRow]); // response user
+
+    const res = await request(buildApp())
+      .post("/api/users/me/sync")
+      .send({ ...BASE_BODY, cpf: "529.982.247-25", clientSignup: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.role).toBe(ROLES.CLIENT);
+    expect(res.body.tenantId).toBe("tenant-client");
+    expect(mockInsertValues).toHaveBeenCalledOnce();
+    expect(mockInsertValues.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        cpf: "52998224725",
+        role: ROLES.CLIENT,
+        tenantId: "tenant-client",
+      }),
+    );
+    expect(mockReconcileClientIdentity).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        tenantId: "tenant-client",
+        cpf: "52998224725",
+        email: "traveller@example.com",
+      }),
+    );
+  });
+
+  it("does not create an administrator when a client-app signup has no CRM match", async () => {
+    stubVerifiedClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: {
+        ...BASE_BODY,
+        cpf: "529.982.247-25",
+        clientSignup: true,
+      },
+    });
+    mockLimit
+      .mockResolvedValueOnce([]) // no existing user
+      .mockResolvedValueOnce([]) // no pending invite
+      .mockResolvedValueOnce([]); // no client matches the verified email
+
+    const res = await request(buildApp())
+      .post("/api/users/me/sync")
+      .send({ ...BASE_BODY, cpf: "529.982.247-25", clientSignup: true });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("CLIENT_PROFILE_NOT_FOUND");
+    expect(mockInsertValues).not.toHaveBeenCalled();
+    expect(mockCheckTenantAccess).not.toHaveBeenCalled();
+  });
+
+  it("rolls back signup if CPF reconciliation resolves to a different client", async () => {
+    stubVerifiedClerkUser();
+    mockSyncMeBodySafeParse.mockReturnValue({
+      success: true,
+      data: {
+        ...BASE_BODY,
+        cpf: "529.982.247-25",
+        clientSignup: true,
+      },
+    });
+    mockLimit
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: "client-email",
+        tenantId: "tenant-client",
+        userId: null,
+      }]);
+    mockReconcileClientIdentity.mockResolvedValueOnce({
+      clientId: "different-client-cpf",
+      created: false,
+      linked: true,
+    });
+
+    const res = await request(buildApp())
+      .post("/api/users/me/sync")
+      .send({ ...BASE_BODY, cpf: "529.982.247-25", clientSignup: true });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("CLIENT_IDENTITY_CONFLICT");
+    expect(mockTransaction).toHaveBeenCalledOnce();
+  });
 });

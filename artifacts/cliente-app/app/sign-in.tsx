@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useSignIn, useAuth } from "@clerk/clerk-expo";
+import { useSignIn, useAuth } from "@clerk/expo";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
@@ -23,8 +23,8 @@ import colors from "@/constants/colors";
 const s = colors.light;
 
 export default function SignInScreen() {
-  const { isSignedIn } = useAuth();
-  const { signIn, setActive, isLoaded } = useSignIn();
+  const { isSignedIn, isLoaded } = useAuth();
+  const { signIn } = useSignIn();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -61,12 +61,18 @@ export default function SignInScreen() {
     setError("");
     Keyboard.dismiss();
     try {
-      const result = await signIn.create({
+      const { error: signInError } = await signIn.password({
         identifier: cleanEmail,
         password,
       });
-      if (result.status === "complete") {
-        await setActive({ session: result.createdSessionId });
+      if (signInError) {
+        throw new Error(signInError.message);
+      }
+      if (signIn.status === "complete") {
+        const { error: finalizeError } = await signIn.finalize();
+        if (finalizeError) {
+          throw new Error(finalizeError.message);
+        }
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.replace("/(tabs)/reservas");
       } else {
@@ -164,11 +170,11 @@ export default function SignInScreen() {
             disabled={submitting}
           >
             {submitting ? (
-              <ActivityIndicator size="small" color="#fff" />
+             <ActivityIndicator size="small" color={s.primaryForeground} />
             ) : (
               <>
-                <Ionicons name="log-in-outline" size={20} color="#fff" />
-                <Text style={styles.buttonText}>Entrar</Text>
+                 <Ionicons name="log-in-outline" size={20} color={s.primaryForeground} />
+                 <Text style={[styles.buttonText, { color: s.primaryForeground }]}>Entrar</Text>
               </>
             )}
           </Pressable>
@@ -231,7 +237,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 24,
     gap: 14,
-    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06,
     shadowRadius: 8,
@@ -293,7 +298,6 @@ const styles = StyleSheet.create({
   buttonText: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
-    color: "#fff",
   },
   hint: {
     fontSize: 12,

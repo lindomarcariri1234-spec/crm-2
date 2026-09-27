@@ -1,4 +1,4 @@
-import { useSignUp } from "@clerk/clerk-expo";
+import { useAuth, useSignUp } from "@clerk/expo";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import {
@@ -16,11 +16,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
 import { cleanCpf, formatCpf, isValidCpf } from "@/lib/cpf";
+import { savePendingClientSignup } from "@/lib/pending-client-signup";
 
 export default function SignUpScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { isLoaded, signUp, setActive } = useSignUp();
+  const { isLoaded } = useAuth();
+  const { signUp } = useSignUp();
 
   const [step, setStep] = useState<"form" | "verify">("form");
   const [firstName, setFirstName] = useState("");
@@ -42,14 +44,19 @@ export default function SignUpScreen() {
     }
     setLoading(true);
     try {
-      await signUp.create({
+      const { error: passwordError } = await signUp.password({
         firstName: firstName.trim() || undefined,
         lastName: lastName.trim() || undefined,
         emailAddress: email.trim(),
         password,
-        unsafeMetadata: { cpf: normalizedCpf },
       });
-      await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
+      if (passwordError) {
+        throw new Error(passwordError.message);
+      }
+      const { error: sendCodeError } = await signUp.verifications.sendEmailCode();
+      if (sendCodeError) {
+        throw new Error(sendCodeError.message);
+      }
       setStep("verify");
     } catch (e: unknown) {
       const msg =
@@ -66,11 +73,25 @@ export default function SignUpScreen() {
     setError(null);
     setLoading(true);
     try {
-      const result = await signUp.attemptEmailAddressVerification({ code });
-      if (result.status === "complete") {
-        await setActive({ session: result.createdSessionId });
-      } else {
+      const { error: verificationError } = await signUp.verifications.verifyEmailCode({ code });
+      if (verificationError) {
+        throw new Error(verificationError.message);
+      }
+      if (signUp.status !== "complete" || !signUp.createdUserId) {
         setError("Verificação incompleta. Tente novamente.");
+        return;
+      }
+      await savePendingClientSignup({
+        clerkId: signUp.createdUserId,
+        name: [firstName.trim(), lastName.trim()].filter(Boolean).join(" ")
+          || email.trim().split("@")[0]
+          || "Cliente",
+        email: email.trim(),
+        cpf: cleanCpf(cpf),
+      });
+      const { error: finalizeError } = await signUp.finalize();
+      if (finalizeError) {
+        throw new Error(finalizeError.message);
       }
     } catch (e: unknown) {
       const msg =
@@ -189,9 +210,9 @@ export default function SignUpScreen() {
               disabled={loading || !email || !password}
             >
               {loading ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color={colors.primaryForeground} />
               ) : (
-                <Text style={styles.primaryBtnText}>Criar conta</Text>
+                <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>Criar conta</Text>
               )}
             </Pressable>
           </View>
@@ -232,9 +253,9 @@ export default function SignUpScreen() {
               disabled={loading || code.length < 6}
             >
               {loading ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator size="small" color={colors.primaryForeground} />
               ) : (
-                <Text style={styles.primaryBtnText}>Verificar</Text>
+                <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>Verificar</Text>
               )}
             </Pressable>
 
@@ -339,7 +360,6 @@ const styles = StyleSheet.create({
   primaryBtnText: {
     fontSize: 16,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
   },
   backLink: {
     alignItems: "center",

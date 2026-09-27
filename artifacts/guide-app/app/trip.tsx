@@ -158,7 +158,29 @@ export default function TripScreen() {
         AsyncStorage.setItem(cacheKey, JSON.stringify({ data, cachedAt: now })).catch(() => {});
         await flushPending();
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof GuideApiError) {
+        if (err.status === 401 || err.status === 403) {
+          // An authenticated response must never fall back to passenger data
+          // from a previous session. Clear it before ending this session.
+          setTrip(null);
+          setPassengers([]);
+          setIsOffline(false);
+          setCachedAt(null);
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+          try {
+            await logout();
+          } finally {
+            router.replace("/");
+          }
+        }
+        return;
+      }
+
+      // Only transport failures are eligible for the offline passenger cache.
       setIsOffline(true);
       if (!silent) {
         try {

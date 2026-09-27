@@ -1,11 +1,13 @@
 import { db } from "@workspace/db";
 import { dealsTable, pipelineStagesTable, tripsTable, reservationsTable } from "@workspace/db";
 import { eq, and, desc, ne, inArray, lte, gte, isNotNull, max, sql } from "drizzle-orm";
-import { DEAL_STATUS } from "@workspace/permissions";
+import { alias } from "drizzle-orm/pg-core";
+import { ACTIVE_RESERVATION_STATUSES, DEAL_STATUS } from "@workspace/permissions";
 import { logger } from "../lib/logger";
 import { generateId } from "../lib/id";
 
 type PipelineExecutor = Pick<typeof db, "select" | "update">;
+const departureTargetStages = alias(pipelineStagesTable, "departure_target_stages");
 
 export async function moveDealToStage({
   tenantId,
@@ -342,4 +344,157 @@ export async function runPipelineTripEndedCron(): Promise<void> {
   }
 
   logger.info({ moved }, "[pipeline-automation] Trip-ended cron complete");
+}
+
+const saoPauloDateFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const saoPauloDateTimeFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function formattedParts(formatter: Intl.DateTimeFormat, date: Date): Record<string, string> {
+  return Object.fromEntries(formatter.formatToParts(date).map(({ type, value }) => [type, value]));
+}
+
+/**
+ * Trip dates are stored at noon in the Brazil timezone to preserve the local
+ * calendar date. The optional departureTime is a separate local wall-clock
+ * value, so compare both in America/Sao_Paulo rather than treating the stored
+ * date timestamp as the actual departure instant.
+ */
+export function isTripDepartureReached(
+  departureDate: Date,
+  departureTime: string | null,
+  now: Date,
+): boolean {
+  if (!Number.isFinite(departureDate.getTime()) || !Number.isFinite(now.getTime()) || !departureTime) {
+    return false;
+  }
+
+  const timeMatch = /^([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?$/.exec(departureTime.trim());
+  if (!timeMatch) return false;
+
+  const tripDate = formattedParts(saoPauloDateFormatter, departureDate);
+  const current = formattedParts(saoPauloDateTimeFormatter, now);
+  const departureKey = `${tripDate.year}-${tripDate.month}-${tripDate.day}T${timeMatch[1].padStart(2, "0")}:${timeMatch[2]}`;
+  const currentKey = `${current.year}-${current.month}-${current.day}T${current.hour}:${current.minute}`;
+  return currentKey >= departureKey;
+}
+
+/**
+ * Advances only open pipeline cards attached to the exact active, fully-paid
+ * reservation for a trip whose local departure date and time have passed.
+ * Reservation status and payment records are deliberately left unchanged.
+ */
+export async function runPipelineTripDepartureCron(): Promise<void> {
+  const now = new Date();
+  // departure_date represents local noon, while departure_time can be earlier
+  // on the same date. Include a lookback for short outages and a forward buffer
+  // so today's date is in the DB range before its stored noon timestamp.
+  const from = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
+  const through = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+
+  const candidates = await db
+    .select({
+      dealId: dealsTable.id,
+      tenantId: tripsTable.tenantId,
+      departureDate: tripsTable.departureDate,
+      departureTime: tripsTable.departureTime,
+      pipelineId: pipelineStagesTable.pipelineId,
+      currentStageOrder: pipelineStagesTable.order,
+      targetStageId: departureTargetStages.id,
+      targetStageOrder: departureTargetStages.order,
+    })
+    .from(tripsTable)
+    .innerJoin(
+      reservationsTable,
+      and(
+        eq(reservationsTable.tripId, tripsTable.id),
+        eq(reservationsTable.tenantId, tripsTable.tenantId),
+      ),
+    )
+    .innerJoin(
+      dealsTable,
+      and(
+        eq(dealsTable.reservationId, reservationsTable.id),
+        eq(dealsTable.tripId, tripsTable.id),
+        eq(dealsTable.clientId, reservationsTable.clientId),
+        eq(dealsTable.tenantId, tripsTable.tenantId),
+        eq(dealsTable.status, DEAL_STATUS.OPEN),
+      ),
+    )
+    .innerJoin(
+      pipelineStagesTable,
+      and(
+        eq(pipelineStagesTable.id, dealsTable.stageId),
+        eq(pipelineStagesTable.tenantId, tripsTable.tenantId),
+      ),
+    )
+    .leftJoin(
+      departureTargetStages,
+      and(
+        eq(departureTargetStages.pipelineId, pipelineStagesTable.pipelineId),
+        eq(departureTargetStages.tenantId, tripsTable.tenantId),
+        eq(departureTargetStages.name, "Em Viagem"),
+      ),
+    )
+    .where(
+      and(
+        gte(tripsTable.departureDate, from),
+        lte(tripsTable.departureDate, through),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+        lte(reservationsTable.balance, "0"),
+      ),
+    );
+
+  const dueDeals = new Map<string, (typeof candidates)[number]>();
+  let skippedWithoutTime = 0;
+  const missingTargetStagePipelines = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate.departureTime) {
+      skippedWithoutTime++;
+      continue;
+    }
+    if (!isTripDepartureReached(candidate.departureDate, candidate.departureTime, now)) continue;
+    if (!candidate.targetStageId || candidate.targetStageOrder == null) {
+      missingTargetStagePipelines.add(candidate.pipelineId);
+      continue;
+    }
+    // The current stage itself is the idempotency marker: don't query or move
+    // cards again after they have reached "Em Viagem" or any later stage.
+    if (candidate.currentStageOrder >= candidate.targetStageOrder) continue;
+    dueDeals.set(candidate.dealId, candidate);
+  }
+
+  for (const pipelineId of missingTargetStagePipelines) {
+    logger.warn(
+      { pipelineId, targetStageName: "Em Viagem" },
+      "[pipeline-automation] Target stage not found in pipeline — skipping departure moves",
+    );
+  }
+
+  for (const candidate of dueDeals.values()) {
+    await moveDealToStage({
+      tenantId: candidate.tenantId,
+      dealId: candidate.dealId,
+      targetStageName: "Em Viagem",
+      forwardOnly: true,
+    });
+  }
+
+  logger.info(
+    { candidates: candidates.length, due: dueDeals.size, skippedWithoutTime },
+    "[pipeline-automation] Trip-departure cron complete",
+  );
 }

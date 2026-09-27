@@ -150,10 +150,10 @@ function rowsFor(table: unknown, condition: unknown): object[] {
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
       .map((row) => ({
         id: row.id,
-        status: row.status,
         bonusAmount: row.bonusAmount.toFixed(2),
-        bonusPaid: row.bonusPaid,
         bonusCreditUsedAmount: row.bonusCreditUsedAmount.toFixed(2),
+        status: row.status,
+        bonusPaid: row.bonusPaid,
         convertedAt: row.convertedAt,
         expiresAt: row.expiresAt,
       }));

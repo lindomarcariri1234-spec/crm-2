@@ -2,13 +2,17 @@ import { useState, useMemo, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
+  getListTripCostsQueryKey,
   useListExpenses,
   useCreateExpense,
   useUpdateExpense,
   useListTrips,
-  useListSuppliers,
   useListTripCosts,
+  useLinkExpenseToTripCost,
+  useUnlinkExpenseFromTripCost,
+  useListSuppliers,
 } from "@workspace/api-client-react";
+import type { Expense } from "@workspace/api-client-react";
 import { EXPENSE_STATUS } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,12 +25,15 @@ import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle, ChevronLeft, Chevr
 import { formatCurrency } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS as CATEGORY_LABELS } from "@/lib/labels";
 import { ListLoadErrorRow } from "@/components/list-load-error";
+import { useToast } from "@/hooks/use-toast";
+import { Link2, Unlink } from "lucide-react";
 import {
   FinancialConsolidationView,
   normalizeFinancialCategory,
 } from "@/components/financial-consolidation-view";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
+const amountInCents = (value: number | string) => Math.round((Number(value) + Number.EPSILON) * 100);
 const EXPENSE_PAGE_SIZE = 50;
 type TripPlanningRecord = {
   id: string;
@@ -49,6 +56,10 @@ export default function Expenses() {
   const [createCategory, setCreateCategory] = useState("transport");
   const [createSupplierId, setCreateSupplierId] = useState("none");
   const [createTripId, setCreateTripId] = useState("none");
+  const [linkingExpense, setLinkingExpense] = useState<Expense | null>(null);
+  const { toast } = useToast();
+
+  const { refetch: refetchAllExpenses } = useListExpenses({ limit: 500 });
   const queryClient = useQueryClient();
 
   const { data: expensesData, isLoading, isError, refetch } = useListExpenses({
@@ -65,6 +76,15 @@ export default function Expenses() {
   });
   const { data: tripsData } = useListTrips({ limit: 500 });
   const { data: suppliersRaw } = useListSuppliers();
+  const { data: tripCostsToLink, isLoading: isLoadingTripCostsToLink } = useListTripCosts(
+    linkingExpense?.tripId ?? "",
+    {
+      query: {
+        queryKey: getListTripCostsQueryKey(linkingExpense?.tripId ?? ""),
+        enabled: Boolean(linkingExpense?.tripId),
+      },
+    },
+  );
   const { data: selectedTripFinancialData } = useListTripCosts(tripFilter, {
     query: {
       enabled: !!tripFilter,
@@ -73,6 +93,17 @@ export default function Expenses() {
   });
   const createExpense = useCreateExpense();
   const updateExpense = useUpdateExpense();
+  const linkExpense = useLinkExpenseToTripCost();
+  const unlinkExpense = useUnlinkExpenseFromTripCost();
+
+  const matchingTripCosts = useMemo(() => {
+    if (!linkingExpense) return [];
+    return (tripCostsToLink?.costs ?? []).filter(cost =>
+      !cost.linkedExpenseId
+      && amountInCents(cost.amount) === amountInCents(linkingExpense.amount)
+      && cost.status === linkingExpense.status,
+    );
+  }, [linkingExpense, tripCostsToLink]);
 
   const expenses = expensesData?.data ?? [];
   const kpis = expensesData?.summary ?? {
@@ -108,7 +139,7 @@ export default function Expenses() {
   const selectedTripActualRows = useMemo(() => {
     if (!selectedTripFinancialData) return [];
     return [
-      ...(selectedTripFinancialData.costs ?? []).map(cost => ({
+      ...(selectedTripFinancialData.costs ?? []).filter(cost => !cost.linkedExpenseId).map(cost => ({
         id: cost.id,
         category: cost.category,
         amount: cost.amount,
@@ -125,13 +156,15 @@ export default function Expenses() {
     ];
   }, [selectedTripFinancialData]);
 
-  const financialRows = selectedTripActualRows.length > 0 ? selectedTripActualRows : expenses;
-  const financialSummary = selectedTripFinancialData?.summary
-    ? {
-        totalRealCosts: selectedTripFinancialData.summary.totalRealCosts,
-        totalPaidCosts: selectedTripFinancialData.summary.totalPaidCosts,
-        totalPendingCosts: selectedTripFinancialData.summary.totalPendingCosts,
-      }
+  const financialRows = tripFilter ? selectedTripActualRows : expenses;
+  const financialSummary = tripFilter
+    ? selectedTripFinancialData?.summary
+      ? {
+          totalRealCosts: selectedTripFinancialData.summary.totalRealCosts,
+          totalPaidCosts: selectedTripFinancialData.summary.totalPaidCosts,
+          totalPendingCosts: selectedTripFinancialData.summary.totalPendingCosts,
+        }
+      : undefined
     : {
         total: kpis.total,
         paid: kpis.paid,
@@ -164,6 +197,40 @@ export default function Expenses() {
       queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
       queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
     ]);
+  };
+
+  const handleLinkToTripCost = async (tripCostId: string) => {
+    if (!linkingExpense) return;
+    try {
+      await linkExpense.mutateAsync({ id: linkingExpense.id, data: { tripCostId } });
+      toast({ title: "Despesa vinculada ao custo da viagem" });
+      setLinkingExpense(null);
+      await Promise.all([
+        refetch(),
+        refetchAllExpenses(),
+        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+      ]);
+    } catch {
+      toast({ title: "Não foi possível vincular os registros", variant: "destructive" });
+    }
+  };
+
+  const handleUnlinkFromTripCost = async (expenseId: string) => {
+    try {
+      await unlinkExpense.mutateAsync({ id: expenseId });
+      toast({ title: "Vínculo removido" });
+      await Promise.all([
+        refetch(),
+        refetchAllExpenses(),
+        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+      ]);
+    } catch {
+      toast({ title: "Não foi possível remover o vínculo", variant: "destructive" });
+    }
   };
 
   const handleCreate = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -257,7 +324,7 @@ export default function Expenses() {
 
       <FinancialConsolidationView
         actualRows={financialRows}
-        plannedRows={selectedTripFinancialData?.plannedCosts ?? globalPlannedRows}
+        plannedRows={tripFilter ? selectedTripFinancialData?.plannedCosts ?? [] : globalPlannedRows}
         pricing={selectedTripFinancialData?.pricing}
         actualSummary={financialSummary}
         actualCategoryTotals={tripFilter ? undefined : categoryBreakdown.map(item => ({
@@ -339,23 +406,24 @@ export default function Expenses() {
               <TableHead>Valor</TableHead>
               <TableHead>Forma</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Vínculo</TableHead>
               <TableHead className="text-right">Ações</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={i}>{Array.from({ length: 10 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                <TableRow key={i}>{Array.from({ length: 11 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
               ))
             ) : isError ? (
               <ListLoadErrorRow
-                 colSpan={10}
+                colSpan={11}
                 onRetry={refetch}
                 message="Não foi possível carregar as despesas."
               />
             ) : expenses.length === 0 ? (
               <TableRow>
-                 <TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
+                <TableCell colSpan={11} className="text-center py-10 text-muted-foreground">
                   {hasFilters ? "Nenhuma despesa com os filtros selecionados." : "Nenhuma despesa registrada."}
                 </TableCell>
               </TableRow>
@@ -391,8 +459,30 @@ export default function Expenses() {
                     {STATUS_LABELS[e.status] ?? e.status}
                   </span>
                 </TableCell>
+                <TableCell className="text-sm">
+                  {e.linkedTripCostId ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-primary">
+                      <Link2 className="w-3.5 h-3.5" />
+                      Custo {e.linkedTripCostId.slice(0, 8)}…
+                    </span>
+                  ) : e.tripId && e.source !== "trip" ? (
+                    <Button size="sm" variant="outline" onClick={() => setLinkingExpense(e)}>
+                      <Link2 className="w-3.5 h-3.5 mr-1" /> Vincular
+                    </Button>
+                  ) : <span className="text-muted-foreground">—</span>}
+                </TableCell>
                 <TableCell className="text-right">
-                   {e.source !== "trip" && e.status !== EXPENSE_STATUS.PAID && e.status !== EXPENSE_STATUS.CANCELLED && (
+                  {e.linkedTripCostId ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleUnlinkFromTripCost(e.id)}
+                      disabled={unlinkExpense.isPending}
+                      title="Desvincular para alterar valor ou status"
+                    >
+                      <Unlink className="w-4 h-4 mr-1" /> Desvincular
+                    </Button>
+                  ) : e.source !== "trip" && e.status !== EXPENSE_STATUS.PAID && e.status !== EXPENSE_STATUS.CANCELLED && (
                     <Button size="sm" variant="outline" onClick={() => handleMarkPaid(e.id)}>
                       <CheckCircle className="w-4 h-4 mr-1" /> Pago
                     </Button>
@@ -503,6 +593,48 @@ export default function Expenses() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(linkingExpense)} onOpenChange={open => { if (!open) setLinkingExpense(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Vincular a um custo da viagem</DialogTitle>
+          </DialogHeader>
+          {linkingExpense && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Só aparecem custos da mesma viagem com valor e status iguais a {linkingExpense.description}.
+              </p>
+              {isLoadingTripCostsToLink ? (
+                <Skeleton className="h-16 w-full" />
+              ) : matchingTripCosts.length === 0 ? (
+                <p className="rounded-md border p-4 text-sm text-muted-foreground">
+                  Nenhum custo disponível corresponde a esta despesa.
+                </p>
+              ) : (
+                <div className="max-h-72 space-y-2 overflow-auto">
+                  {matchingTripCosts.map(cost => (
+                    <div key={cost.id} className="flex items-center justify-between gap-3 rounded-md border p-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{cost.description}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {fmt(cost.amount)} · {STATUS_LABELS[cost.status] ?? cost.status}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => handleLinkToTripCost(cost.id)}
+                        disabled={linkExpense.isPending}
+                      >
+                        Vincular
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

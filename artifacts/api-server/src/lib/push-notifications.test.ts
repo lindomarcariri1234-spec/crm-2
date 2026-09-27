@@ -105,6 +105,31 @@ describe("sendPushNotification", () => {
     expect(mockLogError).toHaveBeenCalledTimes(1);
   });
 
+  it("logs only the provider error category and status", async () => {
+    const marker = "SYNTHETIC_EXPO_PROVIDER_SECRET_418";
+    const providerError = Object.assign(new Error(`Expo response contained ${marker}`), {
+      response: {
+        status: 503,
+        data: { token: marker },
+        config: { headers: { authorization: `Bearer ${marker}` } },
+      },
+    });
+    const mockFetch = vi.fn().mockRejectedValue(providerError);
+    vi.stubGlobal("fetch", mockFetch);
+
+    await expect(sendPushNotification({
+      to: VALID_TOKEN,
+      title: "Title",
+      body: "Body",
+    })).resolves.toEqual({ ok: false });
+
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.objectContaining({ providerError: { kind: "Error", status: 503 } }),
+      "[push] Failed to send push notification",
+    );
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(marker);
+  });
+
   it("returns { ok: false } when the Expo API responds with a non-OK status", async () => {
     const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 400 });
     vi.stubGlobal("fetch", mockFetch);

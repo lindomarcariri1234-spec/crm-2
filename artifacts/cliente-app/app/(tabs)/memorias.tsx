@@ -9,7 +9,7 @@
  */
 
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@clerk/clerk-expo";
+import { useAuth } from "@clerk/expo";
 import { SkeletonBox } from "@/components/Skeleton";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
@@ -222,7 +222,7 @@ function VideoCard({
         style={[
           styles.videoCard,
           {
-            backgroundColor: pressing ? "#111827" : "#1f2937",
+            backgroundColor: pressing ? colors.mediaSurfacePressed : colors.mediaSurface,
             opacity: pressing ? 0.85 : 1,
           },
         ]}
@@ -240,19 +240,19 @@ function VideoCard({
             ) : null}
             <View style={styles.videoThumbnailShade} />
             <View style={styles.videoPlayCircle}>
-              <Feather name="play" size={20} color="#ffffff" />
+              <Feather name="play" size={20} color={colors.primaryForeground} />
             </View>
           </View>
         ) : (
           <View style={styles.videoPlayCircle}>
-            <Feather name="play" size={20} color="#ffffff" />
+            <Feather name="play" size={20} color={colors.primaryForeground} />
           </View>
         )}
         <View style={{ flex: 1 }}>
-          <Text style={styles.videoCardName} numberOfLines={1}>
+           <Text style={[styles.videoCardName, { color: colors.primaryForeground }]} numberOfLines={1}>
             {displayName}
           </Text>
-          <Text style={styles.videoCardHint}>
+           <Text style={[styles.videoCardHint, { color: colors.primaryForeground + "80" }]}>
             {embeddedVideo ? "Toque para assistir aqui" : "Toque para reproduzir"}
           </Text>
         </View>
@@ -464,7 +464,7 @@ export default function MemoriasScreen() {
           style={[styles.retryBtn, { backgroundColor: colors.primary }]}
           onPress={() => refetch()}
         >
-          <Text style={styles.retryBtnText}>Tentar novamente</Text>
+           <Text style={[styles.retryBtnText, { color: colors.primaryForeground }]}>Tentar novamente</Text>
         </Pressable>
       </View>
     );
@@ -520,10 +520,9 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   card: {
-    borderRadius: 16,
+    borderRadius: 8,
     borderWidth: 1,
     overflow: "hidden",
-    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 6,
@@ -602,7 +601,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   videoCard: {
-    borderRadius: 12,
+    borderRadius: 8,
     overflow: "hidden",
     minHeight: 68,
     paddingRight: 12,
@@ -613,7 +612,7 @@ const styles = StyleSheet.create({
   videoThumbnail: {
     width: 104,
     height: 68,
-    backgroundColor: "#111827",
+    backgroundColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -627,7 +626,7 @@ const styles = StyleSheet.create({
   videoPlayCircle: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 8,
     backgroundColor: "rgba(255,255,255,0.15)",
     alignItems: "center",
     justifyContent: "center",
@@ -674,13 +673,11 @@ const styles = StyleSheet.create({
   videoCardName: {
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
     marginBottom: 2,
   },
   videoCardHint: {
     fontSize: 11,
     fontFamily: "Inter_400Regular",
-    color: "rgba(255,255,255,0.5)",
   },
   emptyTitle: {
     fontSize: 18,
@@ -702,6 +699,5 @@ const styles = StyleSheet.create({
   retryBtnText: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
   },
 });

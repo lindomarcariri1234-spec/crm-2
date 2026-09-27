@@ -74,6 +74,7 @@ export function useWizardState({
   const [product, setProduct] = useState<StoreProduct | null>(null);
   const [loadingProduct, setLoadingProduct] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const productRequestGenerationRef = useRef(0);
 
   const [step, setStepState] = useState<Step>("dados");
   const [submitting, setSubmitting] = useState(false);
@@ -173,12 +174,39 @@ export function useWizardState({
   const [referralCreditBalanceError, setReferralCreditBalanceError] = useState<string | null>(null);
 
   useEffect(() => {
+    const requestGeneration = ++productRequestGenerationRef.current;
+
+    // A new URL must not render, or submit with, the previous product while
+    // its replacement is being fetched.
+    setProduct(null);
+    setNotFound(false);
     setLoadingProduct(true);
+    setSelectedVariant(null);
+    setCouponResult(null);
+    setPartnerInfo(null);
+    setSelectedSeats([]);
+    setLayoutSeats([]);
+    setLayoutSeatMap(null);
+    setSelectedBoardingPointId("");
+    checkoutIdempotencyKeyRef.current = null;
+
     publicStoreApi
       .getProduct(slug, productSlug)
-      .then((p) => setProduct(p))
-      .catch(() => setNotFound(true))
-      .finally(() => setLoadingProduct(false));
+      .then((p) => {
+        if (requestGeneration === productRequestGenerationRef.current) {
+          setProduct(p);
+        }
+      })
+      .catch(() => {
+        if (requestGeneration === productRequestGenerationRef.current) {
+          setNotFound(true);
+        }
+      })
+      .finally(() => {
+        if (requestGeneration === productRequestGenerationRef.current) {
+          setLoadingProduct(false);
+        }
+      });
   }, [slug, productSlug]);
 
   useEffect(() => {
@@ -233,23 +261,48 @@ export function useWizardState({
 
   useEffect(() => {
     if (!product?.partnerProductId) { setPartnerInfo(null); return; }
+    const requestGeneration = productRequestGenerationRef.current;
+    const productId = product.id;
     publicStoreApi
       .getPartnerInfo(slug, productSlug)
-      .then((info) => setPartnerInfo(info))
-      .catch(() => setPartnerInfo(null));
+      .then((info) => {
+        if (requestGeneration === productRequestGenerationRef.current && product?.id === productId) {
+          setPartnerInfo(info);
+        }
+      })
+      .catch(() => {
+        if (requestGeneration === productRequestGenerationRef.current && product?.id === productId) {
+          setPartnerInfo(null);
+        }
+      });
   }, [product?.partnerProductId, slug, productSlug]);
 
   useEffect(() => {
     if (!product?.tripId) {
       setLayoutSeatMap(null);
+      setLoadingLayoutMap(false);
       return;
     }
+    const requestGeneration = productRequestGenerationRef.current;
+    const tripId = product.tripId;
     setLoadingLayoutMap(true);
     publicStoreApi
-      .getTripSeatMap(slug, product.tripId)
-      .then((data) => setLayoutSeatMap(data))
-      .catch(() => setLayoutSeatMap(null))
-      .finally(() => setLoadingLayoutMap(false));
+      .getTripSeatMap(slug, tripId)
+      .then((data) => {
+        if (requestGeneration === productRequestGenerationRef.current && product?.tripId === tripId) {
+          setLayoutSeatMap(data);
+        }
+      })
+      .catch(() => {
+        if (requestGeneration === productRequestGenerationRef.current && product?.tripId === tripId) {
+          setLayoutSeatMap(null);
+        }
+      })
+      .finally(() => {
+        if (requestGeneration === productRequestGenerationRef.current && product?.tripId === tripId) {
+          setLoadingLayoutMap(false);
+        }
+      });
   }, [slug, product?.tripId]);
 
   useEffect(() => {

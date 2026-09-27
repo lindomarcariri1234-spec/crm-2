@@ -7,6 +7,9 @@
  */
 import type { UserProfileTenantSettings } from "./userProfileTenantSettings";
 
+/**
+ * @nullable
+ */
 export type UserProfileTenant = {
   id: string;
   name: string;

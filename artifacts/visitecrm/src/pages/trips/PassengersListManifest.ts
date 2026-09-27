@@ -12,11 +12,14 @@ function formatDateBR(d: string): string {
   }).format(dt);
 }
 
-function formatTimeBR(d: string): string {
-  const dt = new Date(d);
-  return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: BRAZIL_TZ, hour: "2-digit", minute: "2-digit",
-  }).format(dt);
+export function formatManifestDepartureLabel(
+  departureDate?: string | null,
+  departureTime?: string | null,
+): string {
+  if (!departureDate) return "";
+  const date = formatDateBR(departureDate);
+  const time = departureTime?.trim();
+  return `${date}${time ? ` às ${time}` : ""}`;
 }
 
 export interface ManifestPanel {
@@ -45,7 +48,10 @@ export interface ManifestPanel {
 export interface ManifestTrip {
   destinationCity?: string;
   destinationState?: string;
+  departureTime?: string | null;
 }
+
+export interface ManifestBoardingPoint { id: string; name: string; time?: string | null }
 
 function escapeHtml(str: string): string {
   return str
@@ -66,17 +72,19 @@ export function printPassengersManifest(
   freePassengers: FreePassenger[] = [],
   visibleCols: Record<string, boolean> = {},
   totalCapacity?: number,
+  boardingPoints: ManifestBoardingPoint[] = [],
 ) {
   const show = (col: string) => visibleCols[col] !== false;
+  const boardingPointName = (id: string | null | undefined) => {
+    if (!id) return "Não definido";
+    const name = boardingPoints.find(bp => bp.id === id)?.name;
+    return name?.trim() ? name : "Não definido";
+  };
 
   const p = panel;
   const tripName = escapeHtml(p?.tripName ?? "");
   const destination = trip ? escapeHtml(`${trip.destinationCity}/${trip.destinationState}`) : "";
-  const depDate = p?.departureDate ? escapeHtml(formatDateBR(p.departureDate)) : "";
-  const depTimeRaw = p?.departureDate && p.departureDate.length > 10
-    ? formatTimeBR(p.departureDate)
-    : "";
-  const depTime = depTimeRaw && depTimeRaw !== "00:00" ? escapeHtml(depTimeRaw) : "";
+  const departureLabel = escapeHtml(formatManifestDepartureLabel(p?.departureDate, trip?.departureTime));
   const emitidoEm = escapeHtml(new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }));
   const organizador = escapeHtml(p?.tenantName ?? "");
   const cnpj = escapeHtml(p?.tenantCnpj ?? "");
@@ -160,13 +168,14 @@ export function printPassengersManifest(
     const poltrona = escapeHtml(fp.seatNumber ?? "—");
     const fpWhatsapp = escapeHtml(fp.whatsapp ?? "—");
     const fpCheckedInAt = fp.checkedInAt ? "Embarcado" : "Pendente";
+    const fpBoarding = escapeHtml(boardingPointName(fp.boardingLocationId));
     return `<tr class="free-row">
       ${show("seatNumber") ? `<td class="seat">${poltrona}</td>` : ""}
       ${show("nome") ? `<td>${nome}</td>` : ""}
       ${show("cpf") ? `<td>${cpfStr}</td>` : ""}
       ${show("birthDate") ? `<td>—</td>` : ""}
       ${show("ageCategory") ? `<td>Gratuidade<br><span class="free-role">${roleStr}</span></td>` : ""}
-      ${show("boardingLocation") ? `<td>—</td>` : ""}
+      ${show("boardingLocation") ? `<td>${fpBoarding}</td>` : ""}
       ${show("whatsapp") ? `<td>${fpWhatsapp}</td>` : ""}
       ${show("checkedInAt") ? `<td>${fpCheckedInAt}</td>` : ""}
       ${show("totalValue") ? `<td class="num">—</td>` : ""}
@@ -380,7 +389,7 @@ export function printPassengersManifest(
   <div class="meta-grid">
     <div class="meta-item"><label>Excursão:</label>${tripName}</div>
     ${destination ? `<div class="meta-item"><label>Destino:</label>${destination}</div>` : ""}
-    <div class="meta-item"><label>Saída:</label>${depDate}${depTime ? ` às ${depTime}` : ""}</div>
+    <div class="meta-item"><label>Saída:</label>${departureLabel}</div>
     <div class="meta-item"><label>Organizador:</label>${organizador}</div>
     ${cnpj ? `<div class="meta-item"><label>CNPJ:</label>${cnpj}</div>` : ""}
     ${vehicleType || vehiclePlate ? `<div class="meta-item"><label>Veículo:</label>${vehicleType}${vehiclePlate ? ` — ${vehiclePlate}` : ""}</div>` : ""}

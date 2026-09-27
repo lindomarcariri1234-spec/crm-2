@@ -121,11 +121,17 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
 
   // Derived balance from current state
   const currentBalance = Math.max(0, (parseFloat(totalValue) || 0) - (parseFloat(paidValue) || 0));
-  const requestedDeposit = financialSummary?.depositRequested ?? Number(data?.depositAmount ?? 0);
-  const receivedAmount = financialSummary?.paidAmount ?? Number(data?.paidValue ?? 0);
-  const remainingAmount = financialSummary?.amountRemaining ?? Number(data?.balance ?? 0);
+  // Keep the minimum-deposit summary visible for older reservation responses
+  // that predate financialSummary, while preferring the canonical summary.
+  const legacyDepositAmount = Number((data as { depositAmount?: number | string | null } | undefined)?.depositAmount ?? 0);
+  const requestedDeposit = financialSummary?.depositRequested ?? legacyDepositAmount;
+  const legacyTotalAmount = Number(data?.totalValue ?? 0);
+  const legacyPaidAmount = Number(data?.paidValue ?? 0);
+  const paidAmount = financialSummary?.paidAmount ?? legacyPaidAmount;
+  const amountRemaining = financialSummary?.amountRemaining
+    ?? Number(data?.balance ?? Math.max(0, legacyTotalAmount - legacyPaidAmount));
   const isDepositOnly = financialSummary?.states.payment === "partially_paid"
-    || (requestedDeposit > 0 && receivedAmount > 0 && remainingAmount > 0);
+    || (requestedDeposit > 0 && paidAmount > 0 && amountRemaining > 0);
 
   // Load existing data when modal opens / data refreshes
   useEffect(() => {
@@ -294,7 +300,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
                 </div>
                 {isDepositOnly && (
                   <p className="mt-1.5 text-xs text-amber-800">
-                    Entrada: {fmt(requestedDeposit)} · Restante: {fmt(remainingAmount)}
+                    Entrada: {fmt(requestedDeposit || paidAmount)} · Restante: {fmt(amountRemaining)}
                   </p>
                 )}
               </div>

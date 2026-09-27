@@ -296,6 +296,7 @@ describe("GET /api/trips/:id/costs — cancelled expenses", () => {
     mockSelect
       .mockImplementationOnce(() => selectResult([{ id: "trip-001" }]))
       .mockImplementationOnce(() => selectResult([activeTripCost, cancelledTripCost]))
+      .mockImplementationOnce(() => selectResult([]))
       .mockImplementationOnce(() => selectResult([activeAgencyExpense, cancelledAgencyExpense]))
       .mockImplementationOnce(() => selectResult([tripRow]))
       .mockImplementationOnce(() => selectResult([{ total: 2 }]));

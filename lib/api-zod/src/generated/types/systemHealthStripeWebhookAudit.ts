@@ -12,5 +12,6 @@ export interface SystemHealthStripeWebhookAudit {
   status: SystemHealthStripeWebhookAuditStatus;
   duplicateCount: number;
   endpoints: SystemHealthStripeWebhookAuditEndpoint[];
+  /** @nullable */
   checkedAt: string | null;
 }

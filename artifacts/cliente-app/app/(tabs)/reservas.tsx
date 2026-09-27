@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@clerk/clerk-expo";
+import { useAuth } from "@clerk/expo";
 import { SkeletonBox } from "@/components/Skeleton";
 import { useQuery } from "@tanstack/react-query";
 import * as FileSystem from "expo-file-system/legacy";
@@ -30,14 +30,6 @@ const STATUS_LABELS: Record<string, string> = {
   completed: "Concluído",
   cancelled: "Cancelado",
   processing: "Processando",
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: "#d97706",
-  confirmed: "#2563eb",
-  completed: "#16a34a",
-  cancelled: "#dc2626",
-  processing: "#7c3aed",
 };
 
 const ACTIVE_RESERVATION_STATUSES = new Set(["pending", "confirmed"]);
@@ -96,7 +88,16 @@ export function findOverlappingReservations(
 
 function StatusBadge({ status, colors }: { status: string; colors: ReturnType<typeof useColors> }) {
   const label = STATUS_LABELS[status] ?? status;
-  const color = STATUS_COLORS[status] ?? colors.mutedForeground;
+  const color =
+    status === "confirmed"
+      ? colors.primary
+      : status === "completed"
+      ? colors.success
+      : status === "cancelled"
+      ? colors.destructive
+      : status === "processing"
+      ? colors.marromCariri
+      : colors.warning;
   return (
     <View style={[styles.badge, { backgroundColor: color + "18", borderColor: color + "40" }]}>
       <Text style={[styles.badgeText, { color }]}>{label}</Text>
@@ -106,7 +107,7 @@ function StatusBadge({ status, colors }: { status: string; colors: ReturnType<ty
 
 async function shareReservationText(r: ClientPortalReservation) {
   const lines: string[] = [
-    `🎟️ Comprovante de Reserva`,
+    `Comprovante de Reserva`,
     `Viagem: ${r.tripName}`,
     r.tripDestination ? `Destino: ${r.tripDestination}` : null,
     r.tripDepartureDate ? `Partida: ${fmtDate(r.tripDepartureDate)}` : null,
@@ -310,9 +311,9 @@ function ReservationCard({
             </View>
           ) : null}
           {r.balance > 0 ? (
-            <View style={[styles.tag, { backgroundColor: "#fef3c7", borderColor: "#fde68a", borderWidth: 1 }]}>
-              <Feather name="alert-circle" size={11} color="#d97706" />
-              <Text style={[styles.tagText, { color: "#d97706" }]}>
+            <View style={[styles.tag, { backgroundColor: colors.accent, borderColor: colors.dourado, borderWidth: 1 }]}>
+              <Feather name="alert-circle" size={11} color={colors.warning} />
+              <Text style={[styles.tagText, { color: colors.warning }]}>
                 Saldo: {fmtCurrency(r.balance)}
               </Text>
             </View>
@@ -551,7 +552,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   overlapNotice: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 14,
     gap: 10,
@@ -595,11 +596,10 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
   },
   card: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 14,
     gap: 10,
-    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.04,
     shadowRadius: 4,

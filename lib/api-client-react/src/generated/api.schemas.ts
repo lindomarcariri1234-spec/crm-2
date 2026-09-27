@@ -1081,6 +1081,8 @@ export interface FreePassenger {
   seatNumber: string | null;
   /** @nullable */
   checkedInAt?: string | null;
+  /** @nullable */
+  boardingLocationId?: string | null;
 }
 
 export interface Trip {
@@ -1174,6 +1176,7 @@ export interface Trip {
    * @nullable
    */
   freeGuides?: number | null;
+  /** @nullable */
   freePassengers?: FreePassenger[] | null;
   /** @nullable */
   layoutId?: string | null;
@@ -1314,6 +1317,10 @@ export interface TripCost {
   /** @nullable */
   notes: string | null;
   createdAt: string;
+  /** @nullable */
+  linkedExpenseId: string | null;
+  /** @nullable */
+  linkedExpenseDescription: string | null;
 }
 
 export interface TripCostSummary {
@@ -1368,6 +1375,8 @@ export interface Expense {
   id: string;
   /** @nullable */
   tripId?: string | null;
+  /** @nullable */
+  linkedTripCostId?: string | null;
   category: string;
   description: string;
   amount: number;
@@ -1384,7 +1393,7 @@ export interface Expense {
   /** @nullable */
   notes?: string | null;
   createdAt: string;
-  source?: ExpenseSource;
+  source: ExpenseSource;
 }
 
 export interface ListTripCostsResponse {
@@ -1545,6 +1554,7 @@ export interface CreateTripBody {
    * @nullable
    */
   freeGuides?: number | null;
+  freePassengers?: FreePassenger[];
   /** @nullable */
   manifestNumber?: string | null;
   /** @nullable */
@@ -1920,8 +1930,11 @@ export type RoomAllocationSummaryRowsItem = {
   roomCount: number;
   guestsPerRoom: number;
   totalGuests: number;
+  /** @nullable */
   pricePerNight: number | null;
+  /** @nullable */
   packageValue: number | null;
+  /** @nullable */
   subtotal: number | null;
 };
 
@@ -1930,9 +1943,13 @@ export interface RoomAllocationSummary {
   rows: RoomAllocationSummaryRowsItem[];
   totalRooms: number;
   totalGuests: number;
+  /** @nullable */
   totalValue: number | null;
 }
 
+/**
+ * @nullable
+ */
 export type TripRoomAllocationSummaryResponseAccommodation = {
   id: string;
   name: string;
@@ -1966,6 +1983,7 @@ export interface AccommodationRoom {
   floor?: string | null;
   currency?: string;
   isActive?: boolean;
+  /** @nullable */
   pricePerNight: number | null;
   status: AccommodationRoomStatus;
   occupied: number;
@@ -1975,6 +1993,7 @@ export interface AccommodationRoom {
 }
 
 export interface TripRoomAllocationSummaryResponse {
+  /** @nullable */
   accommodation: TripRoomAllocationSummaryResponseAccommodation;
   rooms: AccommodationRoom[];
   allocationSummary: RoomAllocationSummary;
@@ -2007,6 +2026,7 @@ export interface Accommodation {
   coverImage?: string | null;
   /** @nullable */
   rating?: number | null;
+  /** @nullable */
   gallery?: string[] | null;
   status: string;
   createdAt: string;
@@ -2361,6 +2381,10 @@ export interface FinancialSummary {
   overduePayable: number;
   collectedThisMonth: number;
   paidThisMonth: number;
+}
+
+export interface LinkExpenseTripCostBody {
+  tripCostId: string;
 }
 
 export type ExpenseListSummaryCategoryBreakdownItem = {
@@ -3081,14 +3105,24 @@ export interface CreateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity: number;
+  /** @nullable */
   description?: string | null;
-  /** @minimum 1 */
+  /**
+   * @minimum 1
+   * @nullable
+   */
   standardOccupancy?: number | null;
+  /** @nullable */
   bedConfiguration?: string | null;
+  /** @nullable */
   bathroomType?: string | null;
+  /** @nullable */
   floor?: string | null;
   currency?: string;
-  /** @minimum 0 */
+  /**
+   * @minimum 0
+   * @nullable
+   */
   pricePerNight?: number | null;
 }
 
@@ -3105,14 +3139,24 @@ export interface UpdateAccommodationRoomBody {
   category?: string;
   /** @minimum 1 */
   capacity?: number;
+  /** @nullable */
   description?: string | null;
-  /** @minimum 1 */
+  /**
+   * @minimum 1
+   * @nullable
+   */
   standardOccupancy?: number | null;
+  /** @nullable */
   bedConfiguration?: string | null;
+  /** @nullable */
   bathroomType?: string | null;
+  /** @nullable */
   floor?: string | null;
   currency?: string;
-  /** @minimum 0 */
+  /**
+   * @minimum 0
+   * @nullable
+   */
   pricePerNight?: number | null;
   status?: UpdateAccommodationRoomBodyStatus;
   isActive?: boolean;
@@ -3461,6 +3505,9 @@ export interface NpsSummary {
  */
 export type UserProfileTenantSettings = { [key: string]: unknown } | null;
 
+/**
+ * @nullable
+ */
 export type UserProfileTenant = {
   id: string;
   name: string;
@@ -3500,6 +3547,7 @@ export interface UserProfile {
   /** @nullable */
   trialDaysLeft?: number | null;
   createdAt: string;
+  /** @nullable */
   tenant?: UserProfileTenant;
 }
 
@@ -3517,6 +3565,8 @@ export interface SyncUserBody {
   cpf?: string | null;
   /** When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users. */
   storeSlug?: string;
+  /** When true, only provisions a new client account by linking a verified email to one existing client record. */
+  clientSignup?: boolean;
 }
 
 export interface CreateUserBody {
@@ -3660,6 +3710,7 @@ export interface SystemHealthStripeWebhookAudit {
   status: SystemHealthStripeWebhookAuditStatus;
   duplicateCount: number;
   endpoints: SystemHealthStripeWebhookAuditEndpoint[];
+  /** @nullable */
   checkedAt: string | null;
 }
 
@@ -4218,8 +4269,14 @@ export interface CreateChatbotMessageBody {
   isBot?: boolean;
 }
 
+/**
+ * @nullable
+ */
 export type AuditLogBefore = { [key: string]: unknown } | null;
 
+/**
+ * @nullable
+ */
 export type AuditLogAfter = { [key: string]: unknown } | null;
 
 export interface AuditLog {
@@ -4230,7 +4287,9 @@ export interface AuditLog {
   action: string;
   entityType: string;
   entityId: string;
+  /** @nullable */
   before?: AuditLogBefore;
+  /** @nullable */
   after?: AuditLogAfter;
   /** @nullable */
   ipAddress?: string | null;
@@ -4239,12 +4298,16 @@ export interface AuditLog {
   createdAt: string;
 }
 
+/**
+ * @nullable
+ */
 export type SystemConfigValue = { [key: string]: unknown } | null;
 
 export interface SystemConfig {
   id: string;
   tenantId: string;
   key: string;
+  /** @nullable */
   value?: SystemConfigValue;
   /** @nullable */
   updatedById?: string | null;
@@ -4353,8 +4416,14 @@ export interface CreateAutomationActionBody {
   isActive?: boolean;
 }
 
+/**
+ * @nullable
+ */
 export type AutomationLogTriggerData = { [key: string]: unknown } | null;
 
+/**
+ * @nullable
+ */
 export type AutomationLogResult = { [key: string]: unknown } | null;
 
 export interface AutomationLog {
@@ -4362,7 +4431,9 @@ export interface AutomationLog {
   automationId: string;
   tenantId: string;
   status: string;
+  /** @nullable */
   triggerData?: AutomationLogTriggerData;
+  /** @nullable */
   result?: AutomationLogResult;
   /** @nullable */
   errorMessage?: string | null;
@@ -4604,8 +4675,14 @@ export interface AdminUserItem {
   createdAt: string;
 }
 
+/**
+ * @nullable
+ */
 export type AuditLogWithTenantBefore = { [key: string]: unknown } | null;
 
+/**
+ * @nullable
+ */
 export type AuditLogWithTenantAfter = { [key: string]: unknown } | null;
 
 export interface AuditLogWithTenant {
@@ -4616,7 +4693,9 @@ export interface AuditLogWithTenant {
   action: string;
   entityType: string;
   entityId: string;
+  /** @nullable */
   before?: AuditLogWithTenantBefore;
+  /** @nullable */
   after?: AuditLogWithTenantAfter;
   /** @nullable */
   ipAddress?: string | null;

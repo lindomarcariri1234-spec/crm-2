@@ -8,6 +8,7 @@ import { getClientIp } from "../lib/get-client-ip";
 import { ADMIN_ROLES, requireAuth } from "../lib/tenant";
 import { AppError, ValidationError } from "../lib/errors";
 import { MAX_EXPORT_ROWS } from "../lib/list-limits";
+import { parseBrazilDateRange } from "../lib/brazil-calendar";
 import {
   dispatchOutboundMessage,
   listOutboundMessages,
@@ -227,17 +228,14 @@ function parseOutboundFilters(req: { query: Record<string, unknown> }) {
     : undefined;
   if (rawBounceType && !bounceType) throw new ValidationError("Classificação do bounce inválida.", "VALIDATION_ERROR");
 
-  const dateFrom = typeof req.query.dateFrom === "string"
-    ? new Date(`${req.query.dateFrom}T00:00:00.000Z`)
-    : undefined;
-  const dateTo = typeof req.query.dateTo === "string"
-    ? new Date(`${req.query.dateTo}T23:59:59.999Z`)
-    : undefined;
-  if ((dateFrom && Number.isNaN(dateFrom.getTime())) || (dateTo && Number.isNaN(dateTo.getTime()))) {
-    throw new ValidationError("Período inválido.", "VALIDATION_ERROR");
-  }
-  if (dateFrom && dateTo && dateFrom > dateTo) {
-    throw new ValidationError("A data inicial deve ser anterior ou igual à data final.", "VALIDATION_ERROR");
+  const dateRange = parseBrazilDateRange(req.query.dateFrom, req.query.dateTo);
+  if (!dateRange.ok) {
+    throw new ValidationError(
+      dateRange.reason === "reversed"
+        ? "A data inicial deve ser anterior ou igual à data final."
+        : "Período inválido.",
+      "VALIDATION_ERROR",
+    );
   }
 
   return {
@@ -252,8 +250,8 @@ function parseOutboundFilters(req: { query: Record<string, unknown> }) {
     campaignId: typeof req.query.campaignId === "string" ? req.query.campaignId : undefined,
     automationId: typeof req.query.automationId === "string" ? req.query.automationId : undefined,
     bounceType,
-    dateFrom,
-    dateTo,
+    dateFrom: dateRange.startInclusive,
+    dateToExclusive: dateRange.endExclusive,
   };
 }
 
@@ -345,7 +343,7 @@ router.get("/outbound-messages/export", async (req, res, next: NextFunction): Pr
     "Motivo ignorado",
     "Classificação do bounce",
     ];
-    const period = filters.dateFrom || filters.dateTo
+    const period = filters.dateFrom || filters.dateToExclusive
       ? `${formatQueryDate(req.query.dateFrom) || "início"} a ${formatQueryDate(req.query.dateTo) || "hoje"}`
       : "todos os registros filtrados";
     const slug = new Date().toLocaleDateString("sv-SE", { timeZone: BRAZIL_TZ }).replaceAll("-", "");

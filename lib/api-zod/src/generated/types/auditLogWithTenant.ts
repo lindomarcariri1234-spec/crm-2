@@ -16,7 +16,9 @@ export interface AuditLogWithTenant {
   action: string;
   entityType: string;
   entityId: string;
+  /** @nullable */
   before?: AuditLogWithTenantBefore;
+  /** @nullable */
   after?: AuditLogWithTenantAfter;
   /** @nullable */
   ipAddress?: string | null;

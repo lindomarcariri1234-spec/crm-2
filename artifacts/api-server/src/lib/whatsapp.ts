@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { safeErrorLogFields } from "./safe-error-log";
 import { db, tenantIntegrationsTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { decryptCredential } from "./crypto";
@@ -58,8 +59,7 @@ export async function sendWhatsAppMessage(
     });
 
     if (!resp.ok) {
-      const body = await resp.text().catch(() => "");
-      logger.warn({ phone: e164, status: resp.status, body }, "[whatsapp] Z-API error");
+      logger.warn({ phone: e164, status: resp.status }, "[whatsapp] Z-API error");
       return { success: false, error: `zapi_${resp.status}`, provider: "z-api" };
     }
 
@@ -74,7 +74,7 @@ export async function sendWhatsAppMessage(
     return { success: true, provider: "z-api", externalId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn({ phone: e164, err: msg }, "[whatsapp] Network error");
+    logger.warn({ phone: e164, providerError: safeErrorLogFields(err) }, "[whatsapp] Network error");
     // Z-API's send-text endpoint does not document a native idempotency key.
     // A timeout therefore cannot be retried safely: the provider may have
     // accepted the message before the response was lost.
@@ -138,7 +138,10 @@ export async function sendTenantWhatsAppMessage(
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          logger.warn({ phone: e164, tenantId, err: msg }, "[whatsapp] Evolution API network error");
+          logger.warn(
+            { phone: e164, tenantId, providerError: safeErrorLogFields(err) },
+            "[whatsapp] Evolution API network error",
+          );
           // Evolution's sendText endpoint does not document a native
           // idempotency key. Do not fall back to Z-API after the request may
           // already have reached Evolution.
@@ -173,7 +176,10 @@ export async function sendTenantWhatsAppMessage(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ phone, tenantId, err: msg }, "[whatsapp] Evolution API configuration unavailable, falling back");
+      logger.warn(
+        { phone, tenantId, providerError: safeErrorLogFields(err) },
+        "[whatsapp] Evolution API configuration unavailable, falling back",
+      );
     }
   }
 
@@ -341,8 +347,10 @@ export async function reconcileTenantWhatsAppMessage(
       detail: "provider_message_found",
     };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    logger.warn({ tenantId, provider, err: detail }, "[whatsapp] Evolution reconciliation unavailable");
+    logger.warn(
+      { tenantId, provider, providerError: safeErrorLogFields(error) },
+      "[whatsapp] Evolution reconciliation unavailable",
+    );
     return {
       outcome: "inconclusive",
       provider: "evolution",

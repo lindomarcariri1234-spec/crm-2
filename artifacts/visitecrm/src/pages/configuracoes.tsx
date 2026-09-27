@@ -4430,14 +4430,18 @@ export default function Configuracoes() {
   const isAgencyAdmin = me?.role === ROLES.AGENCY_ADMIN;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Configurações</h1>
-        <p className="text-sm text-muted-foreground">Gerencie as configurações da sua agência</p>
+    <div className="visite-enter mx-auto max-w-[1440px] space-y-6">
+      <div className="relative overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] px-5 py-6 shadow-[0_10px_28px_rgba(93,62,42,.07)] sm:px-7 dark:border-border dark:bg-card">
+        <div className="pointer-events-none absolute -right-10 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
+        <div className="relative">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F]">Bastidores da agência · Cariri</p>
+          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Configurações</h1>
+          <p className="mt-1 max-w-2xl text-sm text-[#71808C] dark:text-muted-foreground">Deixe a operação com a sua cara e mantenha os serviços essenciais prontos para a próxima saída.</p>
+        </div>
       </div>
 
       <Tabs defaultValue={new URLSearchParams(window.location.search).get("tab") ?? "agency"}>
-        <TabsList className="flex flex-wrap gap-1 h-auto">
+        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/85 p-1.5 shadow-sm dark:border-border dark:bg-card">
           <TabsTrigger value="agency" className="flex items-center gap-1.5">
             <Building2 className="w-3.5 h-3.5" />
             Agência
@@ -4494,7 +4498,7 @@ export default function Configuracoes() {
 
         <div className="mt-4">
           <TabsContent value="agency">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Perfil da Agência</CardTitle>
                 <CardDescription>
@@ -4508,7 +4512,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="plan">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Plano e Faturamento</CardTitle>
                 <CardDescription>Gerencie seu plano e veja o uso dos recursos</CardDescription>
@@ -4520,7 +4524,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="integrations">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Integrações</CardTitle>
                 <CardDescription>
@@ -4534,7 +4538,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="notifications">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Preferências de Notificação</CardTitle>
                 <CardDescription>Escolha quais alertas você deseja receber</CardDescription>
@@ -4546,7 +4550,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="customization">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Personalização</CardTitle>
                 <CardDescription>
@@ -4560,7 +4564,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="team">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Equipe da Agência</CardTitle>
                 <CardDescription>
@@ -4574,7 +4578,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="apikeys">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Chaves de API</CardTitle>
                 <CardDescription>
@@ -4588,7 +4592,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="features">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle>Funcionalidades</CardTitle>
                 <CardDescription>
@@ -4611,7 +4615,7 @@ export default function Configuracoes() {
           )}
 
           <TabsContent value="clube">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Crown className="w-4 h-4 text-amber-500" />
@@ -4628,7 +4632,7 @@ export default function Configuracoes() {
           </TabsContent>
 
           <TabsContent value="pipelines">
-            <Card>
+            <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)]">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <GitBranch className="w-4 h-4" />
@@ -4646,7 +4650,7 @@ export default function Configuracoes() {
 
           {isAgencyAdmin && (
             <TabsContent value="backup">
-              <Card>
+              <Card className="overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_7px_22px_rgba(47,58,67,.05)] dark:border-border dark:bg-card">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <DatabaseBackup className="w-4 h-4" />

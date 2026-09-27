@@ -29,7 +29,7 @@ async function main(): Promise<void> {
 
   console.log(`=== Reconciliação de vendedor (${apply ? "APLICAR" : "DRY-RUN"}) ===`);
   console.log(`Tenant: ${tenantId}`);
-  console.log(`E-mail: ${email}\n`);
+  console.log("E-mail alvo: [redigido]\n");
 
   const accounts = await db.select({
     id: usersTable.id,

@@ -17,4 +17,6 @@ export interface FreePassenger {
   seatNumber: string | null;
   /** @nullable */
   checkedInAt?: string | null;
+  /** @nullable */
+  boardingLocationId?: string | null;
 }

@@ -28,6 +28,8 @@ const {
   mockOrderBy,
   mockWhere,
   mockFrom,
+  mockInnerJoin,
+  mockLeftJoin,
   mockSelect,
   mockUpdateWhere,
   mockUpdateSet,
@@ -38,7 +40,9 @@ const {
   const mockLimit       = vi.fn();
   const mockOrderBy     = vi.fn();
   const mockWhere       = vi.fn();
-  const mockFrom        = vi.fn(() => ({ where: mockWhere }));
+  const mockInnerJoin   = vi.fn();
+  const mockLeftJoin    = vi.fn();
+  const mockFrom        = vi.fn(() => ({ where: mockWhere, innerJoin: mockInnerJoin }));
   const mockSelect      = vi.fn(() => ({ from: mockFrom }));
   const mockUpdateWhere = vi.fn().mockResolvedValue([]);
   const mockUpdateSet   = vi.fn(() => ({ where: mockUpdateWhere }));
@@ -46,7 +50,7 @@ const {
   const mockLoggerWarn  = vi.fn();
   const mockLoggerError = vi.fn();
   return {
-    mockLimit, mockOrderBy, mockWhere, mockFrom, mockSelect,
+    mockLimit, mockOrderBy, mockWhere, mockFrom, mockInnerJoin, mockLeftJoin, mockSelect,
     mockUpdateWhere, mockUpdateSet, mockUpdate,
     mockLoggerWarn, mockLoggerError,
   };
@@ -80,6 +84,10 @@ vi.mock("drizzle-orm", () => ({
   sql:       vi.fn(() => "sql"),
 }));
 
+vi.mock("drizzle-orm/pg-core", () => ({
+  alias: vi.fn(() => ({ _table: "pipelineStagesAlias" })),
+}));
+
 vi.mock("../lib/logger.js", () => ({
   logger: {
     warn:  mockLoggerWarn,
@@ -90,13 +98,19 @@ vi.mock("../lib/logger.js", () => ({
 
 vi.mock("@workspace/permissions", () => ({
   DEAL_STATUS: { OPEN: "open", CLOSED: "closed", LOST: "lost" },
+  ACTIVE_RESERVATION_STATUSES: ["pending", "confirmed"],
 }));
 
 // ---------------------------------------------------------------------------
 // Import under test AFTER all mocks
 // ---------------------------------------------------------------------------
 
-import { moveDealToStage, cancelDealOnReservationCancellation } from "../services/pipeline-automation.js";
+import {
+  isTripDepartureReached,
+  moveDealToStage,
+  cancelDealOnReservationCancellation,
+  runPipelineTripDepartureCron,
+} from "../services/pipeline-automation.js";
 
 // ---------------------------------------------------------------------------
 // Mock-chain helpers
@@ -142,7 +156,17 @@ function makeTargetStage(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.resetAllMocks();
 
-  mockFrom.mockReturnValue({ where: mockWhere });
+  mockInnerJoin.mockImplementation(() => ({
+    innerJoin: mockInnerJoin,
+    leftJoin: mockLeftJoin,
+    where: mockWhere,
+  }));
+  mockLeftJoin.mockImplementation(() => ({
+    innerJoin: mockInnerJoin,
+    leftJoin: mockLeftJoin,
+    where: mockWhere,
+  }));
+  mockFrom.mockReturnValue({ where: mockWhere, innerJoin: mockInnerJoin });
   mockSelect.mockReturnValue({ from: mockFrom });
   mockUpdateWhere.mockResolvedValue([]);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
@@ -527,5 +551,92 @@ describe("cancelDealOnReservationCancellation", () => {
 
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockLoggerError).not.toHaveBeenCalled();
+  });
+});
+
+describe("runPipelineTripDepartureCron", () => {
+  it("compares the trip's Brazil calendar date and local departure time", () => {
+    // departureDate is persisted at 12:00 in Brazil (15:00 UTC); departureTime
+    // is an independent local time and must drive the actual transition.
+    const departureDate = new Date("2026-09-25T15:00:00.000Z");
+    expect(isTripDepartureReached(departureDate, "08:30", new Date("2026-09-25T11:29:00.000Z"))).toBe(false);
+    expect(isTripDepartureReached(departureDate, "08:30", new Date("2026-09-25T11:30:00.000Z"))).toBe(true);
+    expect(isTripDepartureReached(departureDate, "08:30", new Date("2026-09-25T12:00:00.000Z"))).toBe(true);
+  });
+
+  it("does not guess when departure time is missing or malformed", () => {
+    const departureDate = new Date("2026-09-25T15:00:00.000Z");
+    const afterDepartureDate = new Date("2026-09-26T15:00:00.000Z");
+    expect(isTripDepartureReached(departureDate, null, afterDepartureDate)).toBe(false);
+    expect(isTripDepartureReached(departureDate, "25:10", afterDepartureDate)).toBe(false);
+  });
+
+  it("moves only due candidates forward to Em Viagem", async () => {
+    const now = new Date();
+    const dueDeal = {
+      dealId: "deal-departing",
+      tenantId: "tenant-1",
+      departureDate: now,
+      departureTime: "00:00",
+      pipelineId: "pipeline-a",
+      currentStageOrder: 2,
+      targetStageId: "stage-em-viagem",
+      targetStageOrder: 3,
+    };
+    const currentStage = makeCurrentStage({ order: 2 });
+    const travelStage = makeTargetStage({ id: "stage-em-viagem", order: 3 });
+
+    // Candidate join query. It is filtered in SQL to active reservations with
+    // zero balance and exact reservation/trip/client-linked open deals.
+    mockWhere.mockImplementationOnce(() => wv([dueDeal]));
+
+    // moveDealToStage: find exact deal, current stage, then "Em Viagem".
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([makeDeal({ id: dueDeal.dealId })]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([currentStage]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([travelStage]);
+
+    await runPipelineTripDepartureCron();
+
+    expect(mockInnerJoin).toHaveBeenCalledTimes(3);
+    expect(mockLeftJoin).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).toHaveBeenCalledWith({ stageId: travelStage.id });
+    expect(mockLoggerError).not.toHaveBeenCalled();
+  });
+
+  it("does not move a candidate before its local departure time", async () => {
+    const now = new Date();
+    const dueTomorrow = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+    const candidate = {
+      dealId: "deal-not-yet",
+      tenantId: "tenant-1",
+      departureDate: dueTomorrow,
+      departureTime: "23:59",
+    };
+    mockWhere.mockImplementationOnce(() => wv([candidate]));
+
+    await runPipelineTripDepartureCron();
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not retry cards already at or beyond Em Viagem", async () => {
+    mockWhere.mockImplementationOnce(() => wv([{
+      dealId: "deal-already-advanced",
+      tenantId: "tenant-1",
+      departureDate: new Date(),
+      departureTime: "00:00",
+      pipelineId: "pipeline-a",
+      currentStageOrder: 4,
+      targetStageId: "stage-em-viagem",
+      targetStageOrder: 3,
+    }]));
+
+    await runPipelineTripDepartureCron();
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockSelect).toHaveBeenCalledTimes(1);
   });
 });

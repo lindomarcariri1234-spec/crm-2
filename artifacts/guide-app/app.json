@@ -42,7 +42,8 @@
         {
           "locationWhenInUsePermission": "Para compartilhar sua localização com a central de controle durante o embarque."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

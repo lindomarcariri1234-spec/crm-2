@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@clerk/clerk-expo";
+import { useAuth } from "@clerk/expo";
 import { SkeletonBox } from "@/components/Skeleton";
 import { NpsSurveyModal } from "@/components/NpsSurveyModal";
 import { useQuery } from "@tanstack/react-query";
@@ -39,7 +39,6 @@ function TravelerCard({
   const tierLabel = loyalty?.tier
     ? TIER_LABELS[loyalty.tier] ?? loyalty.tier
     : null;
-  const tierIcon = loyalty?.tier ? TIER_ICONS[loyalty.tier] ?? null : null;
   const initials = name
     .split(" ")
     .slice(0, 2)
@@ -70,8 +69,8 @@ function TravelerCard({
   return (
     <Pressable onPressIn={handlePressIn} onPressOut={handlePressOut}>
       <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-        <LinearGradient
-          colors={["#1a3a6e", "#2563eb", "#3b82f6"]}
+          <LinearGradient
+          colors={[colors.marromCariri, colors.azulChapada, colors.primary]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.card}
@@ -82,20 +81,20 @@ function TravelerCard({
 
           <View style={styles.cardHeader}>
             <View style={styles.avatarCircle}>
-              <Text style={styles.avatarText}>{initials}</Text>
+              <Text style={[styles.avatarText, { color: colors.primaryForeground }]}>{initials}</Text>
             </View>
             <View style={styles.cardHeaderText}>
-              <Text style={styles.cardName} numberOfLines={1}>
+              <Text style={[styles.cardName, { color: colors.primaryForeground }]} numberOfLines={1}>
                 {name}
               </Text>
-              <Text style={styles.cardEmail} numberOfLines={1}>
+              <Text style={[styles.cardEmail, { color: colors.primaryForeground + "B3" }]} numberOfLines={1}>
                 {email}
               </Text>
             </View>
-            {tierLabel ? (
+             {tierLabel ? (
               <View style={styles.tierBadge}>
-                <Text style={styles.tierBadgeText}>
-                  {tierIcon} {tierLabel}
+                <Text style={[styles.tierBadgeText, { color: colors.primaryForeground }]}>
+                  {tierLabel}
                 </Text>
               </View>
             ) : null}
@@ -105,26 +104,26 @@ function TravelerCard({
 
           <View style={styles.cardFooter}>
             <View style={styles.cardFooterItem}>
-              <Text style={styles.cardFooterLabel}>Agência</Text>
-              <Text style={styles.cardFooterValue} numberOfLines={1}>
+              <Text style={[styles.cardFooterLabel, { color: colors.primaryForeground + "99" }]}>Agência</Text>
+              <Text style={[styles.cardFooterValue, { color: colors.primaryForeground }]} numberOfLines={1}>
                 {agency || "—"}
               </Text>
             </View>
             {customerCode ? (
               <View style={styles.cardFooterItem}>
-                <Text style={styles.cardFooterLabel}>Código</Text>
-                <Text style={styles.cardFooterValue}>{customerCode}</Text>
+                <Text style={[styles.cardFooterLabel, { color: colors.primaryForeground + "99" }]}>Código</Text>
+                <Text style={[styles.cardFooterValue, { color: colors.primaryForeground }]}>{customerCode}</Text>
               </View>
             ) : referralCode ? (
               <View style={styles.cardFooterItem}>
-                <Text style={styles.cardFooterLabel}>Indicação</Text>
-                <Text style={styles.cardFooterValue}>{referralCode}</Text>
+                <Text style={[styles.cardFooterLabel, { color: colors.primaryForeground + "99" }]}>Indicação</Text>
+                <Text style={[styles.cardFooterValue, { color: colors.primaryForeground }]}>{referralCode}</Text>
               </View>
             ) : null}
             {loyalty ? (
               <View style={styles.cardFooterItem}>
-                <Text style={styles.cardFooterLabel}>Pontos</Text>
-                <Text style={styles.cardFooterValue}>
+                <Text style={[styles.cardFooterLabel, { color: colors.primaryForeground + "99" }]}>Pontos</Text>
+                <Text style={[styles.cardFooterValue, { color: colors.primaryForeground }]}>
                   {loyalty.availablePoints.toLocaleString("pt-BR")}
                 </Text>
               </View>
@@ -137,8 +136,9 @@ function TravelerCard({
 }
 
 function TravelerCardSkeleton() {
+  const colors = useColors();
   return (
-    <View style={[styles.card, { backgroundColor: "#1a3a6e" }]}>
+    <View style={[styles.card, { backgroundColor: colors.marromCariri }]}>
       <View style={styles.cardHeader}>
         <SkeletonBox width={52} height={52} borderRadius={26} />
         <View style={{ flex: 1, gap: 6 }}>
@@ -196,13 +196,13 @@ function NextTripBanner({
         <Feather
           name={isToday ? "check-circle" : "calendar"}
           size={20}
-          color="#fff"
+          color={colors.primaryForeground}
         />
         <View style={{ flex: 1 }}>
-          <Text style={styles.nextTripTitle} numberOfLines={1}>
+          <Text style={[styles.nextTripTitle, { color: colors.primaryForeground }]} numberOfLines={1}>
             {next.tripName}
           </Text>
-          <Text style={styles.nextTripSub}>
+          <Text style={[styles.nextTripSub, { color: colors.primaryForeground + "CC" }]}>
             {isToday
               ? "Sua viagem é hoje!"
               : days === 1
@@ -371,7 +371,7 @@ function UpcomingReservations({
                   styles.tripDayNum,
                   {
                     color: isToday
-                      ? "#fff"
+                      ? colors.primaryForeground
                       : isClose
                       ? colors.warning
                       : colors.primary,
@@ -419,38 +419,38 @@ function LoyaltySummary({
 
   const tier = loyalty.tier ?? "bronze";
   const tierLabel = TIER_LABELS[tier] ?? tier;
-  const tierIcon = TIER_ICONS[tier] ?? "⭐";
-  const [tierFg, tierBg] = TIER_COLORS[tier] ?? [colors.primary, colors.accent];
+  const tierFg = colors.accentForeground;
+  const tierBg = colors.accent;
 
   return (
     <LinearGradient
-      colors={["#0f2d5a", "#1e4d9e"]}
+      colors={[colors.marromCariri, colors.azulChapada]}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={styles.loyaltyCard}
     >
       <View style={styles.loyaltyCardDecor} />
       <View style={styles.loyaltyLeft}>
-        <Text style={styles.loyaltyProgram}>{loyalty.programName || "Programa de Pontos"}</Text>
-        <Text style={styles.loyaltyPoints}>
+        <Text style={[styles.loyaltyProgram, { color: colors.primaryForeground + "B3" }]}>{loyalty.programName || "Programa de Pontos"}</Text>
+        <Text style={[styles.loyaltyPoints, { color: colors.primaryForeground }]}>
           {loyalty.availablePoints.toLocaleString("pt-BR")}
           <Text style={styles.loyaltyPts}> pts</Text>
         </Text>
         <View style={[styles.loyaltyTierBadge, { backgroundColor: tierBg }]}>
           <Text style={[styles.loyaltyTierText, { color: tierFg }]}>
-            {tierIcon} {tierLabel}
+            {tierLabel}
           </Text>
         </View>
       </View>
       <View style={styles.loyaltyRight}>
-        <Text style={styles.loyaltyMiniLabel}>Total acumulado</Text>
-        <Text style={styles.loyaltyMiniValue}>
+          <Text style={[styles.loyaltyMiniLabel, { color: colors.primaryForeground + "99" }]}>Total acumulado</Text>
+          <Text style={[styles.loyaltyMiniValue, { color: colors.primaryForeground }]}>
           {loyalty.totalPoints.toLocaleString("pt-BR")} pts
         </Text>
-        <Text style={[styles.loyaltyMiniLabel, { marginTop: 8 }]}>
+        <Text style={[styles.loyaltyMiniLabel, { marginTop: 8, color: colors.primaryForeground + "99" }]}>
           Pts por R$1
         </Text>
-        <Text style={styles.loyaltyMiniValue}>{loyalty.pointsPerReal}x</Text>
+        <Text style={[styles.loyaltyMiniValue, { color: colors.primaryForeground }]}>{loyalty.pointsPerReal}x</Text>
       </View>
     </LinearGradient>
   );
@@ -463,21 +463,6 @@ const TIER_LABELS: Record<string, string> = {
   platinum: "Platina",
   diamond: "Diamante",
 };
-const TIER_ICONS: Record<string, string> = {
-  bronze: "🥉",
-  silver: "🥈",
-  gold: "🥇",
-  platinum: "💎",
-  diamond: "💎",
-};
-const TIER_COLORS: Record<string, [string, string]> = {
-  bronze: ["#92400e", "#fef3c7"],
-  silver: ["#374151", "#f3f4f6"],
-  gold: ["#92400e", "#fef9c3"],
-  platinum: ["#1e40af", "#dbeafe"],
-  diamond: ["#6d28d9", "#ede9fe"],
-};
-
 function pickNpsPendingReservation(
   reservations: ClientPortalReservation[],
 ): ClientPortalReservation | null {
@@ -564,7 +549,7 @@ export default function HomeScreen() {
           style={[styles.retryBtn, { backgroundColor: colors.primary }]}
           onPress={() => refetch()}
         >
-          <Text style={styles.retryBtnText}>Tentar novamente</Text>
+          <Text style={[styles.retryBtnText, { color: colors.primaryForeground }]}>Tentar novamente</Text>
         </Pressable>
       </View>
     );
@@ -652,11 +637,10 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
   },
   card: {
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 20,
     gap: 14,
     overflow: "hidden",
-    shadowColor: "#1a3a6e",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.3,
     shadowRadius: 16,
@@ -707,7 +691,6 @@ const styles = StyleSheet.create({
   avatarText: {
     fontSize: 20,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
   },
   cardHeaderText: {
     flex: 1,
@@ -716,25 +699,22 @@ const styles = StyleSheet.create({
   cardName: {
     fontSize: 18,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
   },
   cardEmail: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: "rgba(255,255,255,0.7)",
   },
   tierBadge: {
     backgroundColor: "rgba(255,255,255,0.18)",
     paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 20,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.25)",
   },
   tierBadgeText: {
     fontSize: 11,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
   },
   cardDivider: {
     height: 1,
@@ -752,17 +732,15 @@ const styles = StyleSheet.create({
   cardFooterLabel: {
     fontSize: 10,
     fontFamily: "Inter_500Medium",
-    color: "rgba(255,255,255,0.6)",
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   cardFooterValue: {
     fontSize: 14,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
   },
   nextTripBanner: {
-    borderRadius: 14,
+    borderRadius: 8,
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
@@ -777,13 +755,11 @@ const styles = StyleSheet.create({
   nextTripTitle: {
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
     marginBottom: 1,
   },
   nextTripSub: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: "rgba(255,255,255,0.8)",
   },
   statsRow: {
     flexDirection: "row",
@@ -791,7 +767,7 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 12,
     alignItems: "center",
@@ -808,7 +784,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   sectionCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
     gap: 4,
@@ -837,7 +813,7 @@ const styles = StyleSheet.create({
   tripDayBadge: {
     width: 44,
     height: 44,
-    borderRadius: 12,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -859,7 +835,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
   },
   loyaltyCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     padding: 20,
     flexDirection: "row",
     alignItems: "center",
@@ -886,14 +862,12 @@ const styles = StyleSheet.create({
   loyaltyProgram: {
     fontSize: 11,
     fontFamily: "Inter_500Medium",
-    color: "rgba(255,255,255,0.7)",
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
   loyaltyPoints: {
     fontSize: 36,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
     lineHeight: 42,
   },
   loyaltyPts: {
@@ -904,7 +878,7 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 20,
+    borderRadius: 8,
   },
   loyaltyTierText: {
     fontSize: 12,
@@ -913,14 +887,12 @@ const styles = StyleSheet.create({
   loyaltyMiniLabel: {
     fontSize: 10,
     fontFamily: "Inter_400Regular",
-    color: "rgba(255,255,255,0.6)",
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
   loyaltyMiniValue: {
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
   },
   errorTitle: {
     fontSize: 18,
@@ -942,6 +914,5 @@ const styles = StyleSheet.create({
   retryBtnText: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: "#ffffff",
   },
 });

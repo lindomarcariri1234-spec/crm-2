@@ -6,4 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
+/**
+ * @nullable
+ */
 export type AuditLogWithTenantAfter = { [key: string]: unknown } | null;

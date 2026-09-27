@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
 
 export const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
   ? `https://${process.env.EXPO_PUBLIC_DOMAIN}`
@@ -13,6 +14,7 @@ export class GuideApiError extends Error {
 }
 
 const AUTH_KEY = "guide_auth_v1";
+const TOKEN_KEY = "guide_auth_token_v1";
 
 export interface GuideAuth {
   token: string;
@@ -29,6 +31,8 @@ interface AuthContextType {
   logout: () => Promise<void>;
 }
 
+type GuideAuthMetadata = Omit<GuideAuth, "token">;
+
 const AuthContext = createContext<AuthContextType>({
   auth: null,
   isLoading: true,
@@ -41,27 +45,97 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    AsyncStorage.getItem(AUTH_KEY)
-      .then((raw) => {
-        if (!raw) return;
-        const parsed = JSON.parse(raw) as GuideAuth;
-        if (new Date(parsed.expiresAt) > new Date()) {
-          setAuth(parsed);
-        } else {
-          AsyncStorage.removeItem(AUTH_KEY);
+    async function restoreAuth() {
+      const [rawMetadata, secureToken] = await Promise.all([
+        AsyncStorage.getItem(AUTH_KEY),
+        SecureStore.getItemAsync(TOKEN_KEY),
+      ]);
+      if (!rawMetadata) {
+        // A token without its metadata cannot identify a valid guide session.
+        if (secureToken) await SecureStore.deleteItemAsync(TOKEN_KEY);
+        return;
+      }
+
+      let metadata: GuideAuthMetadata;
+      try {
+        const parsed = JSON.parse(rawMetadata) as Partial<GuideAuth>;
+        if (
+          typeof parsed.tripId !== "string" ||
+          typeof parsed.tenantId !== "string" ||
+          typeof parsed.guideName !== "string" ||
+          typeof parsed.expiresAt !== "string"
+        ) {
+          throw new Error("Invalid guide auth metadata");
         }
-      })
+        metadata = {
+          tripId: parsed.tripId,
+          tenantId: parsed.tenantId,
+          guideName: parsed.guideName,
+          expiresAt: parsed.expiresAt,
+        };
+      } catch {
+        await Promise.all([
+          AsyncStorage.removeItem(AUTH_KEY),
+          SecureStore.deleteItemAsync(TOKEN_KEY),
+        ]);
+        return;
+      }
+
+      const expiresAt = new Date(metadata.expiresAt);
+      if (!secureToken || Number.isNaN(expiresAt.getTime()) || expiresAt <= new Date()) {
+        await Promise.all([
+          AsyncStorage.removeItem(AUTH_KEY),
+          SecureStore.deleteItemAsync(TOKEN_KEY),
+        ]);
+        return;
+      }
+      setAuth({ ...metadata, token: secureToken });
+    }
+
+    async function migrateOrRestoreAuth() {
+      const raw = await AsyncStorage.getItem(AUTH_KEY);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as Partial<GuideAuth>;
+          // Version 1 stored the bearer token alongside metadata. Move it to
+          // SecureStore before deleting the legacy AsyncStorage record.
+          if (typeof parsed.token === "string" && parsed.token.length > 0) {
+            await SecureStore.setItemAsync(TOKEN_KEY, parsed.token);
+            const metadata = {
+              tripId: parsed.tripId,
+              tenantId: parsed.tenantId,
+              guideName: parsed.guideName,
+              expiresAt: parsed.expiresAt,
+            };
+            await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(metadata));
+          }
+        } catch {
+          await Promise.all([
+            AsyncStorage.removeItem(AUTH_KEY),
+            SecureStore.deleteItemAsync(TOKEN_KEY),
+          ]);
+        }
+      }
+      await restoreAuth();
+    }
+
+    migrateOrRestoreAuth()
       .catch(() => {})
       .finally(() => setIsLoading(false));
   }, []);
 
   async function login(newAuth: GuideAuth) {
-    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(newAuth));
+    const { token, ...metadata } = newAuth;
+    await SecureStore.setItemAsync(TOKEN_KEY, token);
+    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(metadata));
     setAuth(newAuth);
   }
 
   async function logout() {
-    await AsyncStorage.removeItem(AUTH_KEY);
+    await Promise.all([
+      AsyncStorage.removeItem(AUTH_KEY),
+      SecureStore.deleteItemAsync(TOKEN_KEY),
+    ]);
     setAuth(null);
   }
 

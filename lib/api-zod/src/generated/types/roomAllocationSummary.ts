@@ -12,5 +12,6 @@ export interface RoomAllocationSummary {
   rows: RoomAllocationSummaryRowsItem[];
   totalRooms: number;
   totalGuests: number;
+  /** @nullable */
   totalValue: number | null;
 }

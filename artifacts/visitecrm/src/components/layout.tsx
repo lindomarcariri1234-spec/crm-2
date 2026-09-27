@@ -425,9 +425,10 @@ function TenantBrand({
   tenantPrimaryColor: string;
 }) {
   return (
-    <div className="px-4 py-3 flex items-center gap-3 border-b border-sidebar-border">
+    <div className="relative px-4 py-4 flex items-center gap-3 border-b border-sidebar-border bg-sidebar">
+      <div className="absolute left-0 top-0 h-1 w-full bg-gradient-to-r from-[#1E5B8C] via-[#4C8B5F] to-[#D8A646]" />
       <div
-        className="w-8 h-8 rounded-md flex items-center justify-center text-white font-bold text-sm shrink-0 overflow-hidden"
+        className="w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-sm shrink-0 overflow-hidden ring-1 ring-white/15 shadow-md"
         style={{ background: tenantPrimaryColor }}
       >
         {tenantLogoUrl ? (
@@ -438,7 +439,7 @@ function TenantBrand({
       </div>
       <div className="flex flex-col min-w-0">
         <span className="font-bold text-sm text-sidebar-foreground truncate">{tenantName}</span>
-        <span className="text-xs text-sidebar-foreground/50">CRM Turismo</span>
+        <span className="text-[10px] uppercase tracking-[0.16em] text-sidebar-foreground/50">Operação turística</span>
       </div>
     </div>
   );
@@ -477,20 +478,20 @@ export default function Layout({ children }: { children: ReactNode }) {
   const { current: currentSection, parent: parentSection } = getNavigationContext(navItems, location);
 
   return (
-    <div className="flex h-screen bg-muted/30">
-      <aside className="hidden w-64 bg-sidebar border-r md:flex flex-col shrink-0">
+    <div className="flex min-h-[100dvh] bg-background">
+      <aside className="hidden w-[17rem] bg-sidebar border-r border-sidebar-border md:flex flex-col shrink-0">
         <TenantBrand
           tenantName={tenantName}
           tenantLogoUrl={tenantLogoUrl}
           tenantPrimaryColor={tenantPrimaryColor}
         />
 
-        <div className="flex-1 overflow-y-auto py-3 px-2">
+         <div className="flex-1 overflow-y-auto py-4 px-3">
           <NavigationMenu items={navItems} location={location} userRole={userRole} />
         </div>
 
         {/* User block */}
-        <div className="p-3 border-t border-sidebar-border">
+        <div className="p-3 border-t border-sidebar-border bg-black/5">
           <div className="flex items-center gap-2 px-2">
             <Avatar className="w-7 h-7 shrink-0">
               <AvatarImage src={user?.imageUrl} alt="" />
@@ -543,10 +544,10 @@ export default function Layout({ children }: { children: ReactNode }) {
       </Sheet>
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex min-w-0 flex-col overflow-hidden">
         {/* Top bar */}
         <header
-          className="min-h-[52px] bg-background border-b px-4 py-2 md:px-6 flex items-center justify-between gap-3 shrink-0"
+          className="min-h-[60px] bg-background/95 backdrop-blur border-b px-3 py-2.5 md:px-7 flex items-center justify-between gap-3 shrink-0"
         >
           {/* Current section / breadcrumb */}
           <div className="flex min-w-0 flex-1 items-center gap-2 text-sm">
@@ -650,7 +651,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         <TrialExpiryBanner trialDaysLeft={me?.trialDaysLeft} userRole={userRole} />
 
         {/* Main content */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto bg-[hsl(var(--background))] p-4 md:p-7">{children}</main>
       </div>
     </div>
   );

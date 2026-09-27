@@ -35,3 +35,9 @@ pnpm exec vitest run src/__tests__/FileA.test.ts ... src/__tests__/FileH.test.ts
 ```
 
 Batches 2 & 3 (backend) and the two frontend batches can be launched in parallel since they hit independent DB schemas/namespaces and don't share state.
+
+Do not adopt a Vitest major upgrade without a compatibility pass. A trial of Vitest 4.1.11 surfaced widespread backend test failures across mocks and integration fixtures; some failures also exposed existing local schema/test-data issues, so they were not all attributable to the runner.
+
+**Why:** The workspace has test doubles and database-backed tests that can depend on runner behavior and local schema state; a major bump cannot be treated as a drop-in patch.
+
+**How to apply:** Before adopting a patched major, establish a green baseline, migrate affected mocks/fixtures in batches, and rerun the relevant suite. Keep dependency scanner findings visible until that migration is safe.

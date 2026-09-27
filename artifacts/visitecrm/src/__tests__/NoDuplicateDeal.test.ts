@@ -27,20 +27,34 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createElement } from "react";
+import type { Client } from "@workspace/api-client-react";
 import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js";
 
 // ---------------------------------------------------------------------------
 // Spies — hoisted so vi.mock factories can close over them
 // ---------------------------------------------------------------------------
-const createClientMock = vi.hoisted(() => vi.fn());
-const updateClientMock = vi.hoisted(() => vi.fn());
+const createClientMock = vi.hoisted(() =>
+  vi.fn(async (_input: { data: Record<string, unknown> }) => ({ id: "client-123", isNew: true })),
+);
+const updateClientMock = vi.hoisted(() =>
+  vi.fn(async (_input: { id: string; data: Record<string, unknown> }) => ({ id: "client-123" })),
+);
 const createReservationMock = vi.hoisted(() => vi.fn());
 const updateReservationMock = vi.hoisted(() => vi.fn());
 const createDealMock = vi.hoisted(() => vi.fn());
 const updateReservationRoomAssignmentsMock = vi.hoisted(() => vi.fn());
 const calculateCommissionMock = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => vi.fn());
-const roomQueryState = vi.hoisted(() => ({ passengersLoading: false, roomTwoAvailable: 2 }));
+const createClientActivityMock = vi.hoisted(() => vi.fn());
+const client360Fixture = vi.hoisted(() => ({
+  client: null as unknown,
+  reservations: [] as unknown[],
+}));
+const roomQueryState = vi.hoisted(() => ({
+  passengersLoading: false,
+  roomTwoAvailable: 2,
+  existingReservation: false,
+}));
 
 // Stable data fixtures — MUST be hoisted and reused across renders.
 // If useListTrips() returns a new array object on every render, then
@@ -95,7 +109,7 @@ vi.mock("@workspace/api-client-react", () => ({
   useListUsers: () => USERS_FIXTURE,
   useGetMe: () => ({ data: { id: "user-1", role: "admin" } }),
   useCreateClient: () => ({ mutateAsync: createClientMock, isPending: false }),
-   useUpdateClient: () => ({ mutateAsync: updateClientMock, isPending: false }),
+  useUpdateClient: () => ({ mutateAsync: updateClientMock, isPending: false }),
   useCreateDeal: () => ({ mutateAsync: createDealMock, isPending: false }),
   useCreateReservation: () => ({ mutateAsync: createReservationMock, isPending: false }),
   useUpdateReservation: () => ({ mutateAsync: updateReservationMock, isPending: false }),
@@ -111,8 +125,14 @@ vi.mock("@workspace/api-client-react", () => ({
     },
     isLoading: false,
   }),
-  useListReservations: () => ({
-    data: { data: [{ id: "reservation-existing", status: "confirmed" }] },
+  useListReservations: (_params: unknown, options: { query?: { queryKey?: unknown[] } } = {}) => ({
+    data: {
+      data: options.query?.queryKey?.[0] === "client-modal-reservations"
+        ? roomQueryState.existingReservation
+          ? [{ id: "reservation-existing", status: "confirmed" }]
+          : []
+        : client360Fixture.reservations,
+    },
     isLoading: false,
   }),
   useListPassengers: () => ({
@@ -145,6 +165,23 @@ vi.mock("@workspace/api-client-react", () => ({
   },
   useListPayments: () => ({ data: { data: [] }, isLoading: false }),
   useDeleteClient: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  getListClientActivitiesQueryKey: (...args: unknown[]) => ["client-activities", ...args],
+  getGetClientReferralQueryKey: (...args: unknown[]) => ["client-referral", ...args],
+  getGetClientQueryKey: (...args: unknown[]) => ["client", ...args],
+  getListReservationsQueryKey: (...args: unknown[]) => ["reservations", ...args],
+  getListPaymentsQueryKey: (...args: unknown[]) => ["payments", ...args],
+  getGetClientLoyaltyQueryKey: (...args: unknown[]) => ["client-loyalty", ...args],
+  getListLoyaltyMembersQueryKey: (...args: unknown[]) => ["loyalty-members", ...args],
+  getListLoyaltyTransactionsQueryKey: (...args: unknown[]) => ["loyalty-transactions", ...args],
+  useGetClient: () => ({ data: client360Fixture.client, isLoading: false }),
+  useGetClientLoyalty: () => ({ data: null }),
+  useListLoyaltyMembers: () => ({ data: [] }),
+  useListLoyaltyTransactions: () => ({ data: [] }),
+  useListClientActivities: () => ({ data: { data: [] }, isLoading: false }),
+  useCreateClientActivity: () => ({ mutateAsync: createClientActivityMock, isPending: false }),
+  useGetClientReferral: () => ({ data: null, isLoading: false }),
+  useGenerateClientReferralCode: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useListOutboundMessages: () => ({ data: { data: [] }, isLoading: false }),
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
@@ -155,13 +192,29 @@ vi.mock("@/components/SeatMapPicker", () => ({
   SeatMapPicker: () => null,
 }));
 
+vi.mock("@/hooks/use-upload", () => ({
+  useUploadDocument: () => ({ uploadDocument: vi.fn(), isUploading: false }),
+}));
+
 vi.mock("@/components/plan-limit-wall", () => ({
   PlanLimitWall: () => null,
   usePlanLimitError: () => ({ isLimitError: false }),
 }));
 
-vi.mock("@/components/client360-modal", () => ({
-  Client360Modal: () => null,
+vi.mock("@/pages/reservations/financial", () => ({
+  getReservationFinancialSummary: (reservation: {
+    subtotal?: number;
+    discount?: number;
+    total?: number;
+    paid?: number;
+    balance?: number;
+  }) => ({
+    subtotal: reservation.subtotal ?? 0,
+    discount: reservation.discount ?? 0,
+    total: reservation.total ?? 0,
+    paid: reservation.paid ?? 0,
+    balance: reservation.balance ?? 0,
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -312,6 +365,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     onClick?: () => void;
   }) =>
     createElement("button", { type: "button", onClick }, children as never),
+  DropdownMenuSeparator: () => createElement("hr"),
+  DropdownMenuLabel: ({ children }: { children: unknown }) =>
+    createElement("div", null, children as never),
   DropdownMenuTrigger: ({ children }: { children: unknown }) =>
     createElement("div", null, children as never),
 }));
@@ -361,6 +417,7 @@ vi.mock("wouter", () => ({
 // Import the component under test — must come AFTER all vi.mock calls
 // ---------------------------------------------------------------------------
 import { ClientModal } from "../pages/clients.js";
+import { Client360Modal } from "../components/client360-modal.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -383,6 +440,50 @@ function setNativeInputValue(input: HTMLInputElement, value: string): void {
 /** A valid Brazilian CPF that passes isValidCPF(). */
 const VALID_CPF_DIGITS = "11144477735"; // 111.444.777-35 after maskCPF
 
+function clientFixture(overrides: Record<string, unknown> = {}): Client {
+  return {
+    id: "client-123",
+    name: "Maria Silva",
+    email: "maria@example.com",
+    whatsapp: "+5531999999999",
+    phone: "31999999999",
+    cpf: VALID_CPF_DIGITS,
+    rg: "MG1234567",
+    birthDate: "1990-10-15T00:00:00.000Z",
+    gender: "female",
+    addressCity: "Recife",
+    addressState: "PE",
+    instagram: "@mariaSilva",
+    pipelineStage: "Lead",
+    classification: "lead",
+    status: "active",
+    origin: "Indicação",
+    maritalStatus: "Casada",
+    observations: "Prefere contato pela manhã.",
+    tags: ["vip", "família"],
+    dreamDestinations: ["Chapada Diamantina"],
+    professionalArea: "Educação",
+    favoriteDrink: "Café",
+    musicalPreferences: "MPB",
+    foodPreferences: "Vegetariana",
+    internalRating: 4,
+    companyFeedback: "Atendimento excelente.",
+    companyNps: 9,
+    travelInterests: ["Natureza"],
+    ambassadorOptIn: true,
+    totalSpent: 950,
+    outstandingBalance: 650,
+    ...overrides,
+  } as unknown as Client;
+}
+
+function inputByPlaceholder(container: HTMLElement, placeholder: string): HTMLInputElement {
+  const input = Array.from(container.querySelectorAll<HTMLInputElement>("input"))
+    .find(candidate => candidate.placeholder === placeholder);
+  if (!input) throw new Error(`Expected input with placeholder: ${placeholder}`);
+  return input;
+}
+
 // ---------------------------------------------------------------------------
 // Setup / teardown
 // ---------------------------------------------------------------------------
@@ -390,6 +491,10 @@ const VALID_CPF_DIGITS = "11144477735"; // 111.444.777-35 after maskCPF
 beforeEach(() => {
   vi.clearAllMocks();
   selectRegistry.reset();
+  updateClientMock.mockReset();
+  updateClientMock.mockResolvedValue({ id: "client-123" });
+  client360Fixture.client = null;
+  client360Fixture.reservations = [];
   // createClient always resolves with a fresh client id
   createClientMock.mockResolvedValue({ id: "client-123", isNew: true });
   updateClientMock.mockReset().mockResolvedValue({});
@@ -402,11 +507,13 @@ beforeEach(() => {
   updateReservationRoomAssignmentsMock.mockResolvedValue({});
   roomQueryState.passengersLoading = false;
   roomQueryState.roomTwoAvailable = 2;
+  roomQueryState.existingReservation = false;
   calculateCommissionMock.mockClear();
 });
 
 afterEach(async () => {
   await cleanupRoots();
+  vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
@@ -490,6 +597,55 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
       (b) => b.textContent?.includes("Criar"),
     );
     expect(submitBtn?.disabled).toBe(false);
+  });
+
+  it("shows a CPF conflict as a readable inline warning instead of a destructive toast", async () => {
+    const serverMessage = "O WhatsApp informado já está associado a um cadastro com outro CPF nesta agência. A unificação automática foi bloqueada para evitar mesclar pessoas diferentes.";
+    createClientMock.mockRejectedValueOnce({
+      data: { code: "CLIENT_CPF_CONFLICT", error: serverMessage },
+    });
+
+    const { container } = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose: vi.fn(),
+        editClient: null,
+        onSave: vi.fn(),
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
+    const nameInput = inputs.find((input) => input.placeholder?.includes("Maria"));
+    const whatsappInput = inputs.find((input) => input.placeholder?.includes("+55"));
+    const cpfInput = inputs.find((input) => input.placeholder?.includes("000.000.000"));
+    const emailInput = inputs.find((input) => input.type === "email");
+    const submitButton = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Criar Cliente"));
+
+    await flushAct(() => {
+      if (nameInput) setNativeInputValue(nameInput, "Maria Silva");
+      if (whatsappInput) setNativeInputValue(whatsappInput, "31999999999");
+      if (cpfInput) setNativeInputValue(cpfInput, VALID_CPF_DIGITS);
+      if (emailInput) setNativeInputValue(emailInput, "maria@example.com");
+    });
+    expect(submitButton).toBeDefined();
+
+    await flushAct(async () => {
+      submitButton?.click();
+    });
+
+    const warning = container.querySelector('[data-testid="status-client-cpf-conflict"]');
+    expect(warning?.textContent).toContain("Unificação automática bloqueada");
+    expect(warning?.textContent).toContain(serverMessage);
+    expect(warning?.textContent).toContain("Nenhum dado foi mesclado");
+    expect(toastMock).not.toHaveBeenCalled();
+
+    await flushAct(() => {
+      if (cpfInput) setNativeInputValue(cpfInput, "52998224725");
+    });
+    expect(container.querySelector('[data-testid="status-client-cpf-conflict"]')).toBeNull();
   });
 
   /**
@@ -775,6 +931,7 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
   });
 
   it("replaces the active reservation room assignments without creating another reservation", async () => {
+    roomQueryState.existingReservation = true;
     const { container } = await renderComponent(
       createElement(ClientModal, {
         open: true,
@@ -827,6 +984,7 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
   });
 
   it("shows the capacity warning and keeps the selected room available for retry", async () => {
+    roomQueryState.existingReservation = true;
     updateReservationRoomAssignmentsMock.mockRejectedValueOnce({
       data: {
         code: "ROOM_CAPACITY_EXCEEDED",
@@ -900,6 +1058,7 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
   });
 
   it("keeps edited client data and the previous room assignment when availability changes before save", async () => {
+    roomQueryState.existingReservation = true;
     let persistedRoomId: string | null = "room-1";
     updateReservationRoomAssignmentsMock.mockImplementationOnce(
       async ({ data }: { data: { assignments: Array<{ roomId: string | null }> } }) => {
@@ -985,6 +1144,7 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
   });
 
   it("keeps editing disabled until the existing reservation passengers finish loading", async () => {
+    roomQueryState.existingReservation = true;
     roomQueryState.passengersLoading = true;
 
     const { container } = await renderComponent(
@@ -1019,5 +1179,349 @@ describe("ClientModal — no-duplicate Pipeline card guard (if !createdReservati
 
     expect(updateReservationRoomAssignmentsMock).not.toHaveBeenCalled();
     expect(createReservationMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("client record persistence", () => {
+  it("saves representative client and reservation data, then reloads it in both client views", async () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    const modal = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose,
+        editClient: null,
+        onSave,
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    const tripHandler = selectRegistry.handlers[4];
+    const travelTypeHandler = selectRegistry.handlers[5];
+    const roomTypeHandler = selectRegistry.handlers[6];
+    const paymentMethodHandler = selectRegistry.handlers[8];
+    const consultantHandler = selectRegistry.handlers[9];
+    expect(tripHandler).toBeDefined();
+    expect(paymentMethodHandler).toBeDefined();
+    expect(consultantHandler).toBeDefined();
+
+    await flushAct(() => {
+      setNativeInputValue(inputByPlaceholder(modal.container, "Maria Silva"), "Ana Costa");
+      setNativeInputValue(inputByPlaceholder(modal.container, "+55 31 99999-9999"), "+5531999999999");
+      setNativeInputValue(inputByPlaceholder(modal.container, "000.000.000-00"), VALID_CPF_DIGITS);
+      setNativeInputValue(inputByPlaceholder(modal.container, "maria@email.com"), "ana@example.com");
+      setNativeInputValue(inputByPlaceholder(modal.container, "@mariaSilva"), "@anaCosta");
+      setNativeInputValue(inputByPlaceholder(modal.container, "Belo Horizonte"), "Recife");
+
+      const birthDate = modal.container.querySelector<HTMLInputElement>('input[type="date"]');
+      if (!birthDate) throw new Error("Expected a birth-date input");
+      setNativeInputValue(birthDate, "1992-04-16");
+    });
+
+    await flushAct(() => {
+      setNativeInputValue(inputByPlaceholder(modal.container, "Ex: Saúde, Tecnologia..."), "Tecnologia");
+      setNativeInputValue(inputByPlaceholder(modal.container, "Ex: Vinho, Cerveja artesanal..."), "Café");
+      setNativeInputValue(inputByPlaceholder(modal.container, "Ex: Sertanejo, Rock, MPB..."), "MPB");
+      setNativeInputValue(inputByPlaceholder(modal.container, "Ex: Frutos do mar, Vegetariano..."), "Vegetariana");
+      setNativeInputValue(
+        inputByPlaceholder(modal.container, "Arraial do Cabo, Morro de São Paulo, Fernando de Noronha"),
+        "Chapada Diamantina, Lençóis Maranhenses",
+      );
+      setNativeInputValue(inputByPlaceholder(modal.container, "vip, família, aventura, praia"), "vip, família");
+    });
+
+    const interestButtons = Array.from(modal.container.querySelectorAll("button"));
+    for (const interest of ["Natureza", "Cultura e história"]) {
+      const button = interestButtons.find(candidate => candidate.textContent?.trim() === interest);
+      expect(button, `travel interest button ${interest}`).toBeDefined();
+      await flushAct(() => button?.click());
+    }
+
+    await flushAct(() => {
+      tripHandler?.("trip-1");
+      travelTypeHandler?.("Excursão");
+      roomTypeHandler?.("Quarto Casal");
+      paymentMethodHandler?.("PIX");
+      consultantHandler?.("seller-1");
+    });
+
+    const numberInputs = () =>
+      Array.from(modal.container.querySelectorAll<HTMLInputElement>('input[type="number"]'));
+    const currencyInputs = numberInputs().filter(input => input.placeholder === "0,00");
+    const quantityInput = numberInputs().find(input => input.placeholder === "1");
+    const installmentsInput = numberInputs().find(input => input.max === "12");
+    expect(currencyInputs).toHaveLength(4);
+    expect(quantityInput).toBeDefined();
+    expect(installmentsInput).toBeDefined();
+
+    await flushAct(() => {
+      setNativeInputValue(currencyInputs[1]!, "50");
+      setNativeInputValue(currencyInputs[2]!, "300");
+      setNativeInputValue(currencyInputs[3]!, "40");
+      if (quantityInput) setNativeInputValue(quantityInput, "2");
+      if (installmentsInput) setNativeInputValue(installmentsInput, "3");
+    });
+
+    const submitButton = Array.from(modal.container.querySelectorAll("button"))
+      .find(button => button.textContent?.includes("Criar Cliente"));
+    expect(submitButton).toBeDefined();
+    await flushAct(async () => submitButton?.click());
+
+    expect(createClientMock).toHaveBeenCalledOnce();
+    const createdData = createClientMock.mock.calls[0]?.[0].data;
+    expect(createdData).toMatchObject({
+      name: "Ana Costa",
+      email: "ana@example.com",
+      whatsapp: "+5531999999999",
+      cpf: VALID_CPF_DIGITS,
+      instagram: "@anaCosta",
+      addressCity: "Recife",
+      professionalArea: "Tecnologia",
+      favoriteDrink: "Café",
+      musicalPreferences: "MPB",
+      foodPreferences: "Vegetariana",
+      dreamDestinations: ["Chapada Diamantina", "Lençóis Maranhenses"],
+      tags: ["vip", "família"],
+      travelInterests: ["Natureza", "Cultura e história"],
+    });
+    expect(createdData?.birthDate).toEqual(expect.stringContaining("1992-04-16"));
+
+    expect(createReservationMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tripId: "trip-1",
+        clientId: "client-123",
+        totalValue: 950,
+        paidValue: 300,
+        discountTotal: 50,
+        paymentMethod: "pix",
+        installments: 3,
+        commissionAmount: 40,
+        sellerId: "seller-1",
+      }),
+    });
+    expect(onSave).toHaveBeenCalledWith(false, "client-123");
+    expect(onClose).toHaveBeenCalledOnce();
+
+    const savedClient = clientFixture({
+      ...createdData,
+      id: "client-123",
+      totalSpent: 950,
+      outstandingBalance: 650,
+    });
+    await modal.rerender(
+      createElement(ClientModal, {
+        open: false,
+        onClose,
+        editClient: savedClient,
+        onSave,
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+    await modal.rerender(
+      createElement(ClientModal, {
+        open: true,
+        onClose,
+        editClient: savedClient,
+        onSave,
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    expect(inputByPlaceholder(modal.container, "Maria Silva").value).toBe("Ana Costa");
+    expect(inputByPlaceholder(modal.container, "maria@email.com").value).toBe("ana@example.com");
+    expect(inputByPlaceholder(modal.container, "Belo Horizonte").value).toBe("Recife");
+    expect(inputByPlaceholder(modal.container, "vip, família, aventura, praia").value).toBe("vip, família");
+    const reopenedNatureButton = Array.from(modal.container.querySelectorAll("button"))
+      .find(button => button.textContent?.trim() === "Natureza");
+    expect(reopenedNatureButton?.className).toContain("bg-primary");
+
+    client360Fixture.client = savedClient;
+    client360Fixture.reservations = [{
+      id: "res-456",
+      status: "confirmed",
+      client: savedClient,
+      trip: { id: "trip-1", name: "Circuito da Chapada", departureDate: "2026-11-01T12:00:00.000Z" },
+      seats: ["12"],
+      subtotal: 1000,
+      discount: 50,
+      total: 950,
+      paid: 300,
+      balance: 650,
+    }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [] }),
+    }));
+
+    const details = await renderComponent(
+      createElement(Client360Modal, {
+        open: true,
+        onClose: vi.fn(),
+        clientId: "client-123",
+      }),
+    );
+    const detailText = details.container.textContent ?? "";
+    expect(detailText).toContain("Ana Costa");
+    expect(detailText).toContain("ana@example.com");
+    expect(detailText).toContain("Chapada Diamantina");
+    expect(detailText).toContain("Natureza");
+    expect(detailText).toContain("Circuito da Chapada");
+    expect(detailText).toContain("950,00");
+    expect(detailText).toContain("300,00");
+    expect(detailText).toContain("650,00");
+  });
+
+  it("preserves edited personal and preference values when the client form is reopened", async () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    const originalClient = clientFixture();
+    const modal = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose,
+        editClient: originalClient,
+        onSave,
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+    const tripHandler = selectRegistry.handlers[4];
+    const paymentMethodHandler = selectRegistry.handlers[8];
+    const consultantHandler = selectRegistry.handlers[9];
+
+    await flushAct(() => {
+      setNativeInputValue(inputByPlaceholder(modal.container, "Maria Silva"), "Maria Nogueira");
+      setNativeInputValue(inputByPlaceholder(modal.container, "Ex: Saúde, Tecnologia..."), "Tecnologia");
+      setNativeInputValue(
+        inputByPlaceholder(modal.container, "Arraial do Cabo, Morro de São Paulo, Fernando de Noronha"),
+        "Chapada Diamantina, Lençóis Maranhenses",
+      );
+      setNativeInputValue(inputByPlaceholder(modal.container, "vip, família, aventura, praia"), "premium, aventura");
+    });
+
+    const adventureButton = Array.from(modal.container.querySelectorAll("button"))
+      .find(button => button.textContent?.trim() === "Aventura");
+    expect(adventureButton).toBeDefined();
+    await flushAct(() => adventureButton?.click());
+
+    await flushAct(() => {
+      tripHandler?.("trip-1");
+      paymentMethodHandler?.("PIX");
+      consultantHandler?.("seller-1");
+    });
+    const financialInputs = Array.from(
+      modal.container.querySelectorAll<HTMLInputElement>('input[type="number"]'),
+    ).filter(input => input.placeholder === "0,00");
+    const installmentsInput = Array.from(
+      modal.container.querySelectorAll<HTMLInputElement>('input[type="number"]'),
+    ).find(input => input.max === "12");
+    expect(financialInputs).toHaveLength(4);
+    expect(installmentsInput).toBeDefined();
+    await flushAct(() => {
+      setNativeInputValue(financialInputs[1]!, "50");
+      setNativeInputValue(financialInputs[2]!, "200");
+      setNativeInputValue(financialInputs[3]!, "15");
+      if (installmentsInput) setNativeInputValue(installmentsInput, "2");
+    });
+
+    const saveButton = Array.from(modal.container.querySelectorAll("button"))
+      .find(button => button.textContent?.includes("Salvar Alterações"));
+    expect(saveButton).toBeDefined();
+    await flushAct(async () => saveButton?.click());
+
+    expect(updateClientMock).toHaveBeenCalledOnce();
+    const update = updateClientMock.mock.calls[0]?.[0];
+    expect(update?.id).toBe("client-123");
+    expect(update?.data).toMatchObject({
+      name: "Maria Nogueira",
+      professionalArea: "Tecnologia",
+      dreamDestinations: ["Chapada Diamantina", "Lençóis Maranhenses"],
+      tags: ["premium", "aventura"],
+      travelInterests: ["Natureza", "Aventura"],
+    });
+    expect(createReservationMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tripId: "trip-1",
+        clientId: "client-123",
+        totalValue: 450,
+        paidValue: 200,
+        discountTotal: 50,
+        paymentMethod: "pix",
+        installments: 2,
+        commissionAmount: 15,
+        sellerId: "seller-1",
+      }),
+    });
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+
+    const savedClient = clientFixture({ ...originalClient, ...update?.data });
+    await modal.rerender(
+      createElement(ClientModal, {
+        open: false,
+        onClose,
+        editClient: originalClient,
+        onSave,
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+    await modal.rerender(
+      createElement(ClientModal, {
+        open: true,
+        onClose,
+        editClient: savedClient,
+        onSave,
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+
+    expect(inputByPlaceholder(modal.container, "Maria Silva").value).toBe("Maria Nogueira");
+    expect(inputByPlaceholder(modal.container, "Ex: Saúde, Tecnologia...").value).toBe("Tecnologia");
+    expect(
+      inputByPlaceholder(
+        modal.container,
+        "Arraial do Cabo, Morro de São Paulo, Fernando de Noronha",
+      ).value,
+    ).toBe("Chapada Diamantina, Lençóis Maranhenses");
+    expect(inputByPlaceholder(modal.container, "vip, família, aventura, praia").value).toBe("premium, aventura");
+    const reopenedAdventureButton = Array.from(modal.container.querySelectorAll("button"))
+      .find(button => button.textContent?.trim() === "Aventura");
+    expect(reopenedAdventureButton?.className).toContain("bg-primary");
+  });
+
+  it("shows a destructive save error and keeps the edit form open when updating fails", async () => {
+    updateClientMock.mockRejectedValue(new Error("Falha ao salvar o cadastro"));
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    const modal = await renderComponent(
+      createElement(ClientModal, {
+        open: true,
+        onClose,
+        editClient: clientFixture(),
+        onSave,
+        defaultStageId: "stage-lead",
+        pipelineId: "pipe-1",
+      }),
+    );
+    await flushAct(() => {
+      setNativeInputValue(inputByPlaceholder(modal.container, "Maria Silva"), "Maria Alterada");
+    });
+
+    const saveButton = Array.from(modal.container.querySelectorAll("button"))
+      .find(button => button.textContent?.includes("Salvar Alterações"));
+    expect(saveButton).toBeDefined();
+    await flushAct(async () => saveButton?.click());
+
+    expect(updateClientMock).toHaveBeenCalledOnce();
+    expect(toastMock).toHaveBeenCalledOnce();
+    expect(toastMock.mock.calls[0]?.[0]).toMatchObject({ variant: "destructive" });
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(modal.container.querySelector('[data-testid="dialog"]')).not.toBeNull();
   });
 });

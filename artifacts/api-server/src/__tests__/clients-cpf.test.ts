@@ -511,6 +511,38 @@ describe("POST /api/clients — CPF upsert / deduplication", () => {
     expect(mockTransaction).not.toHaveBeenCalled();
   });
 
+  it("explains when a WhatsApp match has a different CPF and does not alter the existing record", async () => {
+    const existingClient = makeFakeClient({
+      id: "existing-client-id",
+      name: "Ana Heloisa Oliveira Lopes Tavares",
+      email: "",
+      cpf: "11144477735",
+      whatsapp: "5511999999999",
+    });
+    const txUpdate = vi.fn();
+    const txInsert = vi.fn();
+
+    mockTransaction.mockImplementationOnce(
+      async (cb: (tx: unknown) => Promise<unknown>) => {
+        // The CPF and email do not match; the normalized WhatsApp finds the
+        // existing record, whose different CPF must block automatic merging.
+        const txSelectResults = [[], [], [existingClient]];
+        const txSelect = vi.fn(() => makeChain(txSelectResults.shift() ?? []));
+        const txExecute = vi.fn().mockResolvedValue([]);
+        return cb({ select: txSelect, update: txUpdate, insert: txInsert, execute: txExecute });
+      },
+    );
+
+    const res = await request(app).post("/api/clients").send(VALID_BODY);
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("CLIENT_CPF_CONFLICT");
+    expect(res.body.error).toContain("WhatsApp informado");
+    expect(res.body.error).toContain("outro CPF");
+    expect(txUpdate).not.toHaveBeenCalled();
+    expect(txInsert).not.toHaveBeenCalled();
+  });
+
   it("creates the client when CPF is absent and missing-data permission is enabled", async () => {
     const { cpf: _omit, ...bodyWithoutCpf } = VALID_BODY;
     const newClient = makeFakeClient({ id: "gen-id", cpf: null });

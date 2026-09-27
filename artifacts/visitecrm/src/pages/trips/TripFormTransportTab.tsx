@@ -276,6 +276,21 @@ export function TripFormTransportTab({ form, setForm, conflictingSeats = [], sea
                         </p>
                       )}
                     </div>
+                    <div className="space-y-1 col-span-2">
+                      <Label className="text-xs">Ponto de embarque</Label>
+                      <Select
+                        value={fp.boardingLocationId || "__none__"}
+                        onValueChange={v => updateFP(fp.id, { boardingLocationId: v === "__none__" ? null : v })}
+                      >
+                        <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Não definido</SelectItem>
+                          {form.boardingPoints.filter(bp => bp.name.trim()).map(bp => (
+                            <SelectItem key={bp.id} value={bp.id}>{bp.name}{bp.time ? ` (${bp.time})` : ""}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 </div>
               );

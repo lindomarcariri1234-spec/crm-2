@@ -86,6 +86,7 @@ vi.mock("@workspace/db", () => ({
     stripeWebhookSecret: "storesTable.stripeWebhookSecret",
   },
   tripsTable: {},
+  pipelineStagesTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -135,6 +136,7 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 vi.mock("../services/checkout/post-booking.js", () => ({
   runDeferredOrderAccounting: vi.fn().mockResolvedValue(undefined),
   runPostPaymentSideEffects: vi.fn().mockResolvedValue(undefined),
+  runDeferredOrderAccounting: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../services/checkout/persist-order.js", () => ({

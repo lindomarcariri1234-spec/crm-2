@@ -31,6 +31,7 @@ export interface Accommodation {
   coverImage?: string | null;
   /** @nullable */
   rating?: number | null;
+  /** @nullable */
   gallery?: string[] | null;
   status: string;
   createdAt: string;

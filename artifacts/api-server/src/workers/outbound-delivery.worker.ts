@@ -2,6 +2,7 @@ import { Worker } from "bullmq";
 import { getRedisConnection } from "../lib/redis";
 import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
+import { safeErrorLogFields } from "../lib/safe-error-log";
 import type { OutboundDeliveryJobData } from "../queues";
 import { processOutboundDelivery } from "../services/outbound-delivery";
 
@@ -25,7 +26,10 @@ export function startOutboundDeliveryWorker(): Worker<OutboundDeliveryJobData> |
       : { connection, concurrency: 5, stalledInterval: 15_000 },
   );
   worker.on("failed", (job, error) => {
-    logger.warn({ jobId: job?.id, error: error.message }, "[outbound-delivery-worker] Job failed; ledger recovery will retry it");
+    logger.warn(
+      { jobId: job?.id, providerError: safeErrorLogFields(error) },
+      "[outbound-delivery-worker] Job failed; ledger recovery will retry it",
+    );
   });
   attachCircuitBreaker(worker, "outbound-delivery-worker");
   return worker;

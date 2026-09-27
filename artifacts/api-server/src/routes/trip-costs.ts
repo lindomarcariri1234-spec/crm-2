@@ -1,13 +1,14 @@
-import { Router, type NextFunction } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { tripCostsTable, tripsTable, reservationsTable, expensesTable } from "@workspace/db";
 import { eq, and, count, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
-import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
+import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { EXPENSE_STATUS, RESERVATION_STATUS, hasPermission, RESOURCES, ACTIONS } from "@workspace/permissions";
 import { z } from "zod/v4";
+import { areExpenseAndTripCostLinkable } from "../services/expense-trip-cost-link";
 
 const router = Router();
 
@@ -92,7 +93,10 @@ export function calculatePlannedCosts(
   };
 }
 
-function formatCost(c: typeof tripCostsTable.$inferSelect) {
+function formatCost(
+  c: typeof tripCostsTable.$inferSelect,
+  linkedExpense: { id: string; description: string } | null = null,
+) {
   return {
     id: c.id,
     tripId: c.tripId,
@@ -106,6 +110,8 @@ function formatCost(c: typeof tripCostsTable.$inferSelect) {
     paidAt: c.paidAt?.toISOString() ?? null,
     notes: c.notes ?? null,
     createdAt: c.createdAt.toISOString(),
+    linkedExpenseId: linkedExpense?.id ?? null,
+    linkedExpenseDescription: linkedExpense?.description ?? null,
   };
 }
 
@@ -142,6 +148,21 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
       .from(tripCostsTable)
       .where(and(eq(tripCostsTable.tripId, req.params.id), eq(tripCostsTable.tenantId, me.tenantId)))
       .orderBy(tripCostsTable.createdAt);
+    const linkedExpenses = costs.length > 0
+      ? await db.select({
+        id: expensesTable.id,
+        description: expensesTable.description,
+        linkedTripCostId: expensesTable.linkedTripCostId,
+      })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.tenantId, me.tenantId),
+          inArray(expensesTable.linkedTripCostId, costs.map(cost => cost.id)),
+        ))
+      : [];
+    const linkedExpenseByCostId = new Map(
+      linkedExpenses.map(expense => [expense.linkedTripCostId!, expense]),
+    );
 
     const agencyExpenses = await db.select()
       .from(expensesTable)
@@ -170,7 +191,12 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
         inArray(reservationsTable.status, [RESERVATION_STATUS.CONFIRMED]),
       ));
 
-    const activeTripCosts = costs.filter(c => c.status !== "cancelled");
+    // A linked cost is represented by its expense in totals, matching the
+    // canonical financial report. Keep the cost row in the response so clients
+    // can still display the explicit relationship.
+    const activeTripCosts = costs.filter(
+      c => c.status !== "cancelled" && !linkedExpenseByCostId.has(c.id),
+    );
     const totalTripCosts = activeTripCosts.reduce((s, c) => s + Number(c.amount), 0);
     const activeAgencyExpenses = agencyExpenses.filter(e => e.status !== "cancelled");
     const totalAgencyExpenses = activeAgencyExpenses.reduce((s, e) => s + Number(e.amount), 0);
@@ -202,7 +228,7 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
     );
 
     res.json({
-      costs: costs.map(formatCost),
+      costs: costs.map(cost => formatCost(cost, linkedExpenseByCostId.get(cost.id) ?? null)),
       agencyExpenses: agencyExpenses.map(formatAgencyExpense),
       plannedCosts,
       pricing: {
@@ -272,7 +298,11 @@ router.post("/trips/:id/costs", async (req, res, next: NextFunction): Promise<vo
   }
 });
 
-router.put("/trips/:id/costs/:costId", async (req, res, next: NextFunction): Promise<void> => {
+const updateTripCost = async (
+  req: Request<{ id: string; costId: string }>,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
@@ -280,41 +310,107 @@ router.put("/trips/:id/costs/:costId", async (req, res, next: NextFunction): Pro
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 
-    const [existing] = await db.select()
-      .from(tripCostsTable)
-      .where(and(
-        eq(tripCostsTable.id, req.params.costId),
-        eq(tripCostsTable.tripId, req.params.id),
-        eq(tripCostsTable.tenantId, me.tenantId),
-      ))
-      .limit(1);
-    if (!existing) { next(new NotFoundError("Custo não encontrado", "NOT_FOUND")); return; }
-
     const parsed = UpdateTripCostBody.safeParse(req.body);
     if (!parsed.success) {
       next(new ValidationError(parsed.error.issues[0]?.message ?? "Dados inválidos", "VALIDATION_ERROR")); return;
     }
-    const { category, description, supplierName, amount, status, dueDate, paidAt, notes } = parsed.data;
-    const updates: Partial<typeof tripCostsTable.$inferInsert> = {};
-    if (category !== undefined) updates.category = category;
-    if (description !== undefined) updates.description = description;
-    if (supplierName !== undefined) updates.supplierName = supplierName || null;
-    if (amount !== undefined) updates.amount = String(amount);
-    if (status !== undefined) updates.status = status;
-    if (dueDate !== undefined) updates.dueDate = dueDate ? new Date(dueDate) : null;
-    if (paidAt !== undefined) updates.paidAt = paidAt ? new Date(paidAt) : null;
-    else if (status === EXPENSE_STATUS.PAID && !existing.paidAt) updates.paidAt = new Date();
-    if (notes !== undefined) updates.notes = notes || null;
+    const responseCost = await db.transaction(async (tx) => {
+      const [costSnapshot] = await tx.select({ id: tripCostsTable.id })
+        .from(tripCostsTable)
+        .where(and(
+          eq(tripCostsTable.id, req.params.costId),
+          eq(tripCostsTable.tripId, req.params.id),
+          eq(tripCostsTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if (!costSnapshot) throw new NotFoundError("Custo não encontrado", "NOT_FOUND");
 
-    await db.update(tripCostsTable).set(updates)
-      .where(and(eq(tripCostsTable.id, req.params.costId), eq(tripCostsTable.tenantId, me.tenantId)));
+      // Always lock the linked expense before the trip cost, matching the lock
+      // order used by expense updates and link/unlink operations.
+      const [linkedExpenseSnapshot] = await tx.select({ id: expensesTable.id })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.linkedTripCostId, costSnapshot.id),
+          eq(expensesTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      let lockedExpense: typeof expensesTable.$inferSelect | undefined;
+      if (linkedExpenseSnapshot) {
+        [lockedExpense] = await tx.select().from(expensesTable)
+          .where(and(
+            eq(expensesTable.id, linkedExpenseSnapshot.id),
+            eq(expensesTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+      }
 
-    const [cost] = await db.select().from(tripCostsTable).where(and(eq(tripCostsTable.id, req.params.costId), eq(tripCostsTable.tenantId, me.tenantId))).limit(1);
-    res.json(formatCost(cost!));
+      const [existing] = await tx.select()
+        .from(tripCostsTable)
+        .where(and(
+          eq(tripCostsTable.id, req.params.costId),
+          eq(tripCostsTable.tripId, req.params.id),
+          eq(tripCostsTable.tenantId, me.tenantId),
+        ))
+        .for("update").limit(1);
+      if (!existing) throw new NotFoundError("Custo não encontrado", "NOT_FOUND");
+
+      const [currentLinkedExpense] = await tx.select({ id: expensesTable.id })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.linkedTripCostId, existing.id),
+          eq(expensesTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if ((lockedExpense?.id ?? null) !== (currentLinkedExpense?.id ?? null)) {
+        throw new AppError("O vínculo mudou durante a edição. Tente novamente.", 409, "EXPENSE_LINK_CHANGED");
+      }
+
+      const { category, description, supplierName, amount, status, dueDate, paidAt, notes } = parsed.data;
+      const updates: Partial<typeof tripCostsTable.$inferInsert> = {};
+      if (category !== undefined) updates.category = category;
+      if (description !== undefined) updates.description = description;
+      if (supplierName !== undefined) updates.supplierName = supplierName || null;
+      if (amount !== undefined) updates.amount = String(amount);
+      if (status !== undefined) updates.status = status;
+      if (dueDate !== undefined) updates.dueDate = dueDate ? new Date(dueDate) : null;
+      if (paidAt !== undefined) updates.paidAt = paidAt ? new Date(paidAt) : null;
+      else if (status === EXPENSE_STATUS.PAID && !existing.paidAt) updates.paidAt = new Date();
+      if (notes !== undefined) updates.notes = notes || null;
+
+      if (lockedExpense && !areExpenseAndTripCostLinkable(lockedExpense, {
+        tripId: existing.tripId,
+        amount: updates.amount ?? existing.amount,
+        status: updates.status ?? existing.status,
+      })) {
+        throw new AppError("Desvincule os registros antes de alterar valor ou status.", 409, "LINKED_EXPENSE_MISMATCH");
+      }
+
+      await tx.update(tripCostsTable).set(updates)
+        .where(and(eq(tripCostsTable.id, existing.id), eq(tripCostsTable.tenantId, me.tenantId)));
+
+      const [updatedCost] = await tx.select().from(tripCostsTable)
+        .where(and(eq(tripCostsTable.id, existing.id), eq(tripCostsTable.tenantId, me.tenantId)))
+        .limit(1);
+      const [updatedExpense] = await tx.select({
+        id: expensesTable.id,
+        description: expensesTable.description,
+      }).from(expensesTable)
+        .where(and(
+          eq(expensesTable.linkedTripCostId, existing.id),
+          eq(expensesTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if (!updatedCost) throw new NotFoundError("Custo não encontrado", "NOT_FOUND");
+      return formatCost(updatedCost, updatedExpense ?? null);
+    });
+    res.json(responseCost);
   } catch (err) {
     next(err);
   }
-});
+};
+
+router.put("/trips/:id/costs/:costId", updateTripCost);
+router.patch("/trips/:id/costs/:costId", updateTripCost);
 
 router.delete("/trips/:id/costs/:costId", async (req, res, next: NextFunction): Promise<void> => {
   try {
@@ -324,18 +420,50 @@ router.delete("/trips/:id/costs/:costId", async (req, res, next: NextFunction): 
       next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
     }
 
-    const [existing] = await db.select({ id: tripCostsTable.id })
-      .from(tripCostsTable)
-      .where(and(
+    await db.transaction(async (tx) => {
+      const costFilter = and(
         eq(tripCostsTable.id, req.params.costId),
         eq(tripCostsTable.tripId, req.params.id),
         eq(tripCostsTable.tenantId, me.tenantId),
-      ))
-      .limit(1);
-    if (!existing) { next(new NotFoundError("Custo não encontrado", "NOT_FOUND")); return; }
+      );
+      const [costSnapshot] = await tx.select({ id: tripCostsTable.id })
+        .from(tripCostsTable).where(costFilter).limit(1);
+      if (!costSnapshot) throw new NotFoundError("Custo não encontrado", "NOT_FOUND");
 
-    await db.delete(tripCostsTable)
-      .where(and(eq(tripCostsTable.id, req.params.costId), eq(tripCostsTable.tenantId, me.tenantId)));
+      const [linkedExpenseSnapshot] = await tx.select({ id: expensesTable.id })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.linkedTripCostId, costSnapshot.id),
+          eq(expensesTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if (linkedExpenseSnapshot) {
+        await tx.select({ id: expensesTable.id }).from(expensesTable)
+          .where(and(
+            eq(expensesTable.id, linkedExpenseSnapshot.id),
+            eq(expensesTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+      }
+
+      const [existing] = await tx.select({ id: tripCostsTable.id })
+        .from(tripCostsTable).where(costFilter).for("update").limit(1);
+      if (!existing) throw new NotFoundError("Custo não encontrado", "NOT_FOUND");
+
+      const [currentLinkedExpense] = await tx.select({ id: expensesTable.id })
+        .from(expensesTable)
+        .where(and(
+          eq(expensesTable.linkedTripCostId, existing.id),
+          eq(expensesTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if ((linkedExpenseSnapshot?.id ?? null) !== (currentLinkedExpense?.id ?? null)) {
+        throw new AppError("O vínculo mudou durante a exclusão. Tente novamente.", 409, "EXPENSE_LINK_CHANGED");
+      }
+
+      await tx.delete(tripCostsTable)
+        .where(and(eq(tripCostsTable.id, req.params.costId), eq(tripCostsTable.tenantId, me.tenantId)));
+    });
 
     res.json({ success: true });
   } catch (err) {

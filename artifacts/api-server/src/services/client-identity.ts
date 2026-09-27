@@ -147,6 +147,8 @@ export async function reconcileClientIdentity(
   }
 
   let client = cpfOwner ?? currentClient;
+  let matchedBy: "cpf" | "user" | "email" | "whatsapp" | null =
+    cpfOwner ? "cpf" : currentClient ? "user" : null;
 
   if (!client && input.email) {
     const emailMatches = await tx
@@ -162,6 +164,7 @@ export async function reconcileClientIdentity(
     // CPF/email cannot safely identify the same person.
     if (emailMatches.length === 1 && !emailMatches[0].userId) {
       client = emailMatches[0];
+      matchedBy = "email";
     } else if (emailMatches.length > 1) {
       throw new ConflictError(
         "O e-mail corresponde a mais de um cadastro de cliente nesta agência.",
@@ -195,6 +198,7 @@ export async function reconcileClientIdentity(
       }
       if (phoneMatches.length === 1 && !phoneMatches[0].userId) {
         client = phoneMatches[0];
+        matchedBy = "whatsapp";
       } else if (phoneMatches.length === 1 && phoneMatches[0].userId && input.userId !== phoneMatches[0].userId) {
         throw new ConflictError(
           "O telefone já está vinculado a outra conta de cliente nesta agência.",
@@ -256,8 +260,13 @@ export async function reconcileClientIdentity(
   const updates: Record<string, unknown> = {};
   if (!client.userId && input.userId) updates.userId = input.userId;
   if (cpf && client.cpf && client.cpf !== cpf) {
+    const conflictMessage = matchedBy === "whatsapp"
+      ? "O WhatsApp informado já está associado a um cadastro com outro CPF nesta agência. A unificação automática foi bloqueada para evitar mesclar pessoas diferentes."
+      : matchedBy === "email"
+        ? "O e-mail informado já está associado a um cadastro com outro CPF nesta agência. A unificação automática foi bloqueada."
+        : "Este cadastro já possui outro CPF nesta agência. A unificação automática foi bloqueada.";
     throw new ConflictError(
-      "Este cadastro já possui outro CPF nesta agência. A unificação automática foi bloqueada.",
+      conflictMessage,
       "CLIENT_CPF_CONFLICT",
     );
   }

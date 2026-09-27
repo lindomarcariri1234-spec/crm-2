@@ -10,6 +10,7 @@ import type { RoomAllocationSummary } from "./roomAllocationSummary";
 import type { TripRoomAllocationSummaryResponseAccommodation } from "./tripRoomAllocationSummaryResponseAccommodation";
 
 export interface TripRoomAllocationSummaryResponse {
+  /** @nullable */
   accommodation: TripRoomAllocationSummaryResponseAccommodation;
   rooms: AccommodationRoom[];
   allocationSummary: RoomAllocationSummary;

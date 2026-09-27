@@ -665,6 +665,57 @@ describe("GET /api/client/me", () => {
 
     // reservations: innerJoin(...).where(...).orderBy(...)
     mockOrderBy.mockResolvedValueOnce([fakeReservationRow]);
+    // Canonical payment query: the financial guard expects a paid R$600
+    // receivable for the reservation.
+    mockWhere
+      .mockReturnValueOnce(Object.assign(Promise.resolve([{
+        id: "payment-001",
+        orderId: null,
+        reservationId: "res-001",
+        amount: "600.00",
+        status: "paid",
+        type: "receivable",
+      }]), {
+        limit: mockLimit,
+        groupBy: mockGroupBy,
+        orderBy: mockOrderBy,
+      }))
+      .mockReturnValueOnce(Object.assign(Promise.resolve([{
+        id: "payment-001",
+        orderId: null,
+        reservationId: "res-001",
+        amount: "600.00",
+        status: "paid",
+        type: "receivable",
+      }]), {
+        limit: mockLimit,
+        groupBy: mockGroupBy,
+        orderBy: mockOrderBy,
+      }))
+      .mockReturnValueOnce(Object.assign(Promise.resolve([{
+        id: "payment-001",
+        orderId: null,
+        reservationId: "res-001",
+        amount: "600.00",
+        status: "paid",
+        type: "receivable",
+      }]), {
+        limit: mockLimit,
+        groupBy: mockGroupBy,
+        orderBy: mockOrderBy,
+      }));
+    mockWhere.mockImplementation(() => Object.assign(Promise.resolve([{
+      id: "payment-001",
+      orderId: null,
+      reservationId: "res-001",
+      amount: "600.00",
+      status: "paid",
+      type: "receivable",
+    }]), {
+      limit: mockLimit,
+      groupBy: mockGroupBy,
+      orderBy: mockOrderBy,
+    }));
     // referrals: where(...).groupBy(...)
     mockGroupBy.mockResolvedValueOnce([fakeReferralRow]);
 
@@ -1099,7 +1150,7 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
     reservationNumber: "AG-EX-202507-0001",
     status: "confirmed",
     voucherCode: "VCHR-0001",
-    totalValue: "1200.00",
+    totalValue: "600.00",
     paidValue: "600.00",
     balance: "600.00",
     depositAmount: "600.00",
@@ -1189,9 +1240,12 @@ describe("GET /api/client/reservations/:id/voucher — lapChildCount", () => {
     ];
     for (const rows of limitResults) mockLimit.mockResolvedValueOnce(rows);
 
+    // The reservation lookup uses `mockInnerJoinWhere`, not `mockWhere`.
+    // `.where()` results awaited directly (payments, sibling reservations,
+    // and passengers) must stay distinct from queries that chain `.limit()`.
     const whereResults = [
-      [],
-      ...(order ? [[order], [{ id: "res-001", totalValue: "1200.00" }]] : []),
+      [], // findClientRecord; chains into mockLimit
+      ...(order ? [[], [{ id: "res-001", totalValue: "1200.00" }]] : []),
       [payment],
       [],
       [],

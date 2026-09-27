@@ -175,6 +175,15 @@ describe("canonical financial metrics", () => {
     ]);
   });
 
+  it("excludes explicitly linked trip costs from metric source filters", () => {
+    const tenantId = "tenant-linked-expense";
+    const filters = buildFinancialMetricFilters(tenantId, period, date("2025-03-01T03:00:00Z"));
+    const query = new PgDialect().sqlToQuery(filters.tripCosts!);
+
+    expect(query.sql).toMatch(/not exists/i);
+    expect(query.params).toContain(tenantId);
+  });
+
   it("scopes every PostgreSQL source filter to the requested tenant", () => {
     const tenantId = "tenant-under-test";
     const dialect = new PgDialect();

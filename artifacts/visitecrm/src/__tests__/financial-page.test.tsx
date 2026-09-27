@@ -1,0 +1,193 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { cleanupRoots, renderComponent } from "./eventSourceHarness.js";
+import type { FinancialMetricsResponse } from "../lib/financial-metrics-api.js";
+
+const mocks = vi.hoisted(() => ({
+  useGetPaymentsSummary: vi.fn(),
+  useListPayments: vi.fn(),
+  useListExpenses: vi.fn(),
+  useListCommissions: vi.fn(),
+  useListCommissionRules: vi.fn(),
+  useCreatePayment: vi.fn(),
+  useUpdatePayment: vi.fn(),
+  useCreateExpense: vi.fn(),
+  useUpdateExpense: vi.fn(),
+  useUpdateCommission: vi.fn(),
+  useCreateCommissionRule: vi.fn(),
+  useUpdateCommissionRule: vi.fn(),
+  useDeleteCommissionRule: vi.fn(),
+  useGetDashboardRevenueChart: vi.fn(),
+  useListClients: vi.fn(),
+  useFinancialMetrics: vi.fn(),
+  navigate: vi.fn(),
+}));
+
+vi.mock("@workspace/api-client-react", () => ({
+  useGetPaymentsSummary: mocks.useGetPaymentsSummary,
+  useListPayments: mocks.useListPayments,
+  useListExpenses: mocks.useListExpenses,
+  useListCommissions: mocks.useListCommissions,
+  useListCommissionRules: mocks.useListCommissionRules,
+  useCreatePayment: mocks.useCreatePayment,
+  useUpdatePayment: mocks.useUpdatePayment,
+  useCreateExpense: mocks.useCreateExpense,
+  useUpdateExpense: mocks.useUpdateExpense,
+  useUpdateCommission: mocks.useUpdateCommission,
+  useCreateCommissionRule: mocks.useCreateCommissionRule,
+  useUpdateCommissionRule: mocks.useUpdateCommissionRule,
+  useDeleteCommissionRule: mocks.useDeleteCommissionRule,
+  useGetDashboardRevenueChart: mocks.useGetDashboardRevenueChart,
+  useListClients: mocks.useListClients,
+}));
+
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({
+    invalidateQueries: vi.fn(),
+  }),
+}));
+
+vi.mock("wouter", () => ({
+  Link: ({ href, children }: { href: string; children: unknown }) =>
+    createElement("a", { href }, children as never),
+  useSearch: () => "",
+  useLocation: () => ["/financeiro", mocks.navigate],
+}));
+
+vi.mock("../lib/financial-metrics-api", () => ({
+  useFinancialMetrics: mocks.useFinancialMetrics,
+}));
+
+vi.mock("../components/financial-metrics-overview", () => ({
+  FinancialMetricsOverview: () =>
+    createElement("section", null, "Visão financeira consolidada"),
+}));
+
+import Financial from "../pages/financial.js";
+
+const emptyTotals: FinancialMetricsResponse["totals"] = {
+  grossBookedRevenue: 0,
+  bookedRevenue: 0,
+  receivedRevenue: 0,
+  receivable: 0,
+  overdueReceivable: 0,
+  payable: 0,
+  overduePayable: 0,
+  discounts: 0,
+  clientReferralBonuses: 0,
+  clientReferralCredits: 0,
+  sellerCommissions: 0,
+  sellerCommissionsPaid: 0,
+  referralCommissions: 0,
+  referralCommissionsPaid: 0,
+  expenses: 0,
+  expensesPaid: 0,
+  tripCosts: 0,
+  tripCostsPaid: 0,
+  userReferralBalance: 0,
+  userDebt: 0,
+  operatingCostsPaid: 0,
+  profit: 0,
+  margin: 0,
+};
+
+function financialMetrics(
+  pmsPaymentAdjustments?: NonNullable<FinancialMetricsResponse["pmsPaymentAdjustments"]>,
+): FinancialMetricsResponse {
+  const response: FinancialMetricsResponse = {
+    period: { start: "2026-09-01", end: "2026-09-30", label: "2026-09", asOf: "2026-09-26" },
+    timezone: "America/Sao_Paulo",
+    contracts: {},
+    totals: emptyTotals,
+    byTrip: [],
+    byUser: [],
+    diagnostics: {
+      sourceRows: {},
+      excluded: {},
+      duplicateIdsIgnored: 0,
+      unallocatedPaymentIds: [],
+      ledgerEntriesNotIncludedInTotals: 0,
+      potentialCrossSourceDuplicates: [],
+    },
+  };
+  return pmsPaymentAdjustments === undefined
+    ? response
+    : { ...response, pmsPaymentAdjustments };
+}
+
+function setSuccessfulQueries() {
+  const query = { data: { data: [] }, isLoading: false, refetch: vi.fn() };
+  const mutation = { mutateAsync: vi.fn(), isPending: false };
+
+  mocks.useGetPaymentsSummary.mockReturnValue({ refetch: vi.fn() });
+  mocks.useListPayments.mockReturnValue(query);
+  mocks.useListExpenses.mockReturnValue(query);
+  mocks.useListCommissions.mockReturnValue({ data: [], isLoading: false, refetch: vi.fn() });
+  mocks.useListCommissionRules.mockReturnValue({ data: [], isLoading: false, refetch: vi.fn() });
+  mocks.useCreatePayment.mockReturnValue(mutation);
+  mocks.useUpdatePayment.mockReturnValue(mutation);
+  mocks.useCreateExpense.mockReturnValue(mutation);
+  mocks.useUpdateExpense.mockReturnValue(mutation);
+  mocks.useUpdateCommission.mockReturnValue(mutation);
+  mocks.useCreateCommissionRule.mockReturnValue(mutation);
+  mocks.useUpdateCommissionRule.mockReturnValue(mutation);
+  mocks.useDeleteCommissionRule.mockReturnValue(mutation);
+  mocks.useGetDashboardRevenueChart.mockReturnValue({ data: [] });
+  mocks.useListClients.mockReturnValue({ data: { data: [] } });
+}
+
+beforeEach(() => {
+  setSuccessfulQueries();
+  mocks.useFinancialMetrics.mockReturnValue({
+    data: financialMetrics(),
+    isLoading: false,
+  });
+});
+
+afterEach(async () => {
+  await cleanupRoots();
+  vi.clearAllMocks();
+});
+
+describe("Financial page PMS payment adjustments", () => {
+  it("keeps the financial page visible when the response omits the optional adjustment list", async () => {
+    mocks.useFinancialMetrics.mockReturnValue({
+      data: financialMetrics(),
+      isLoading: false,
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(handle.container.textContent).toContain("Financeiro");
+    expect(handle.container.textContent).toContain("Visão financeira consolidada");
+    expect(handle.container.textContent).toContain("Resultado Financeiro");
+    expect(handle.container.textContent).toContain("A Receber");
+    expect(handle.container.querySelector('[data-testid="section-pms-payment-adjustments"]')).not.toBeNull();
+    expect(handle.container.querySelector('[data-testid="status-pms-adjustments-empty"]')).not.toBeNull();
+  });
+
+  it("renders adjustment rows when the response includes PMS payment adjustments", async () => {
+    mocks.useFinancialMetrics.mockReturnValue({
+      data: financialMetrics([{
+        id: "adjustment-1",
+        reservationId: "reservation-1",
+        reservationNumber: "PMS-204",
+        previousPaidAmount: 180,
+        newPaidAmount: 150,
+        deltaAmount: -30,
+        reason: "Correção de pagamento",
+        adjustedByName: "Ana",
+        createdAt: "2026-09-12T15:30:00.000Z",
+      }]),
+      isLoading: false,
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    const row = handle.container.querySelector('[data-testid="row-pms-payment-adjustment-adjustment-1"]');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain("PMS-204");
+    expect(row?.textContent).toContain("Correção de pagamento");
+    expect(row?.textContent).toContain("Ana");
+  });
+});

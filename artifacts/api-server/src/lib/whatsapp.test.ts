@@ -5,11 +5,13 @@ const {
   mockDecryptCredential,
   mockSafeFetch,
   mockFetch,
+  mockLogWarn,
 } = vi.hoisted(() => ({
   mockDbSelect: vi.fn(),
   mockDecryptCredential: vi.fn(),
   mockSafeFetch: vi.fn(),
   mockFetch: vi.fn(),
+  mockLogWarn: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
@@ -34,7 +36,7 @@ vi.mock("./ssrf", () => ({
 }));
 
 vi.mock("./logger", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  logger: { info: vi.fn(), warn: mockLogWarn, error: vi.fn(), debug: vi.fn() },
 }));
 
 import { reconcileTenantWhatsAppMessage, sendTenantWhatsAppMessage } from "./whatsapp";
@@ -130,6 +132,25 @@ describe("WhatsApp transport contracts", () => {
         body: JSON.stringify({ phone: "5511999990001", message: "Olá" }),
       }),
     );
+  });
+
+  it("does not log Z-API response bodies on provider errors", async () => {
+    mockDbSelect.mockReturnValue(makeSelectQuery([]));
+    const marker = "SYNTHETIC_ZAPI_RESPONSE_SECRET_418";
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({ error: marker }), { status: 503 }));
+
+    await expect(sendTenantWhatsAppMessage("tenant-a", "+5511999990001", "Olá"))
+      .resolves.toEqual({
+        success: false,
+        error: "zapi_503",
+        provider: "z-api",
+      });
+
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      { phone: "5511999990001", status: 503 },
+      "[whatsapp] Z-API error",
+    );
+    expect(JSON.stringify(mockLogWarn.mock.calls)).not.toContain(marker);
   });
 
   it("accepts a successful Z-API response and preserves its external id", async () => {

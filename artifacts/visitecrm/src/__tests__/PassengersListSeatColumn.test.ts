@@ -235,7 +235,9 @@ function panelData(
     whatsapp: string | null;
     role: string;
     seatNumber: string | null;
+    boardingLocationId?: string | null;
   }> = [],
+  boardingPoints: Array<{ id: string; name: string; time?: string }> = [],
 ) {
   return {
     data: {
@@ -245,7 +247,7 @@ function panelData(
       totalPassengers: passengers.length,
       passengers,
       freePassengers,
-      boardingPoints: [],
+      boardingPoints,
     },
     isLoading: false,
     refetch: mockRefetch,
@@ -423,6 +425,41 @@ describe("PassengersList — exportação CSV da coluna Gratuidade", () => {
     expect(parseCsvLine(lines[1])[gratitudeIndex]).toBe("Sim");
     expect(parseCsvLine(lines[2])[gratitudeIndex]).toBe("");
     expect(parseCsvLine(lines[3])[gratitudeIndex]).toBe("Sim");
+  });
+
+  it("exporta o ponto direto da gratuidade e usa Não definido para id ausente/desconhecido", async () => {
+    const freePassengers = [
+      {
+        id: "free-guide-known", name: "Guia no Centro", cpf: null, whatsapp: null,
+        role: "guide", seatNumber: "1A", boardingLocationId: "bp-center",
+      },
+      {
+        id: "free-guide-unknown", name: "Guia sem ponto", cpf: null, whatsapp: null,
+        role: "guide", seatNumber: "1B", boardingLocationId: "bp-removed",
+      },
+    ];
+    mockGetTripBoardingPanel.mockReturnValue(
+      panelData([makeLapPassenger()], freePassengers, [{ id: "bp-center", name: "Centro" }]),
+    );
+
+    const { container } = await renderComponent(
+      createElement(PassengersList, { tripId: "trip-1" }),
+    );
+    const boardingCheckbox = Array.from(container.querySelectorAll("label")).find(
+      label => label.textContent?.includes("Ponto de Embarque"),
+    )?.querySelector("input") as HTMLInputElement | undefined;
+    expect(boardingCheckbox).toBeTruthy();
+    await act(async () => { boardingCheckbox!.click(); });
+
+    const csvButton = Array.from(container.querySelectorAll("button")).find(
+      button => button.textContent?.trim() === "CSV",
+    );
+    await act(async () => { csvButton!.click(); });
+    const csv = (await readBlobAsText(mockCreateObjectURL.mock.calls[0][0] as Blob)).replace(/^\uFEFF/, "");
+    const lines = csv.split("\n").map(parseCsvLine);
+    const boardingIndex = lines[0].indexOf("Ponto de Embarque");
+    expect(lines[2][boardingIndex]).toBe("Centro");
+    expect(lines[3][boardingIndex]).toBe("Não definido");
   });
 });
 

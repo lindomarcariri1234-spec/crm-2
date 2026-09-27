@@ -31,7 +31,7 @@ const CreateTransactionBody = z.object({
   memberId: z.string(),
   programId: z.string(),
   type: z.enum(["earn", "redeem", "expire", "bonus"]),
-  points: z.number().int(),
+  points: z.number().int().positive(),
   description: z.string().default(""),
   referenceId: z.string().optional(),
   referenceType: z.string().optional(),
@@ -122,7 +122,10 @@ router.get("/clients/:clientId/loyalty", async (req, res, next: NextFunction): P
     }
 
     const [program] = await db.select().from(loyaltyProgramsTable)
-      .where(eq(loyaltyProgramsTable.id, member.programId)).limit(1);
+      .where(and(
+        eq(loyaltyProgramsTable.id, member.programId),
+        eq(loyaltyProgramsTable.tenantId, me.tenantId),
+      )).limit(1);
 
     if (!program) {
       next(new NotFoundError("Loyalty program not found", "PROGRAM_NOT_FOUND"));
@@ -168,9 +171,29 @@ router.post("/loyalty-members", async (req, res, next: NextFunction): Promise<vo
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateMemberBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+    const [client] = await db.select({ id: clientsTable.id })
+      .from(clientsTable)
+      .where(and(
+        eq(clientsTable.id, parsed.data.clientId),
+        eq(clientsTable.tenantId, me.tenantId),
+      )).limit(1);
+    const [program] = await db.select({ id: loyaltyProgramsTable.id })
+      .from(loyaltyProgramsTable)
+      .where(and(
+        eq(loyaltyProgramsTable.id, parsed.data.programId),
+        eq(loyaltyProgramsTable.tenantId, me.tenantId),
+      )).limit(1);
+    if (!client || !program) {
+      next(new NotFoundError("Client or loyalty program not found", "NOT_FOUND"));
+      return;
+    }
     const id = generateId();
     await db.insert(loyaltyMembersTable).values({ id, tenantId: me.tenantId, ...parsed.data });
-    const [member] = await db.select().from(loyaltyMembersTable).where(eq(loyaltyMembersTable.id, id)).limit(1);
+    const [member] = await db.select().from(loyaltyMembersTable)
+      .where(and(
+        eq(loyaltyMembersTable.id, id),
+        eq(loyaltyMembersTable.tenantId, me.tenantId),
+      )).limit(1);
     res.status(201).json(member);
   } catch (err) {
     next(err);
@@ -197,35 +220,69 @@ router.post("/loyalty-transactions", async (req, res, next: NextFunction): Promi
     if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = CreateTransactionBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
-    const id = generateId();
-    await db.insert(loyaltyTransactionsTable).values({ id, tenantId: me.tenantId, ...parsed.data });
-    const [tx] = await db.select().from(loyaltyTransactionsTable).where(eq(loyaltyTransactionsTable.id, id)).limit(1);
+    const { tx, memberBefore, totalPoints, newTier } = await db.transaction(async (trx) => {
+      // Lock the member while inserting and recomputing, preventing concurrent
+      // transactions from overwriting each other's totals.
+      const [member] = await trx
+        .select()
+        .from(loyaltyMembersTable)
+        .where(and(
+          eq(loyaltyMembersTable.id, parsed.data.memberId),
+          eq(loyaltyMembersTable.tenantId, me.tenantId),
+        ))
+        .for("update")
+        .limit(1);
+      if (!member) throw new NotFoundError("Loyalty member not found", "MEMBER_NOT_FOUND");
 
-    // Capture old tier BEFORE recomputing so we can detect an upgrade.
-    const [memberBefore] = await db
-      .select({ tier: loyaltyMembersTable.tier, clientId: loyaltyMembersTable.clientId })
-      .from(loyaltyMembersTable)
-      .where(eq(loyaltyMembersTable.id, parsed.data.memberId))
-      .limit(1);
+      const [client] = await trx.select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(and(
+          eq(clientsTable.id, member.clientId),
+          eq(clientsTable.tenantId, me.tenantId),
+        )).limit(1);
+      const [program] = await trx.select({ id: loyaltyProgramsTable.id })
+        .from(loyaltyProgramsTable)
+        .where(and(
+          eq(loyaltyProgramsTable.id, parsed.data.programId),
+          eq(loyaltyProgramsTable.tenantId, me.tenantId),
+        )).limit(1);
+      if (!client || !program || member.programId !== program.id) {
+        throw new NotFoundError("Loyalty member, client, or program not found", "NOT_FOUND");
+      }
 
-    // Recompute member totals from all transactions so the tier on the
-    // Cartão do Viajante reflects the change immediately (no manual sync needed).
-    const allTx = await db
-      .select({ type: loyaltyTransactionsTable.type, points: loyaltyTransactionsTable.points })
-      .from(loyaltyTransactionsTable)
-      .where(eq(loyaltyTransactionsTable.memberId, parsed.data.memberId));
-    const totalPoints = allTx
-      .filter((t) => t.type === "earn" || t.type === "bonus")
-      .reduce((s, t) => s + t.points, 0);
-    const spentPoints = allTx
-      .filter((t) => t.type === "redeem" || t.type === "expire")
-      .reduce((s, t) => s + t.points, 0);
-    const availablePoints = Math.max(0, totalPoints - spentPoints);
-    const newTier = calculateTier(totalPoints);
-    await db
-      .update(loyaltyMembersTable)
-      .set({ totalPoints, availablePoints, tier: newTier, lastActivityAt: new Date() })
-      .where(eq(loyaltyMembersTable.id, parsed.data.memberId));
+      const id = generateId();
+      await trx.insert(loyaltyTransactionsTable).values({ id, tenantId: me.tenantId, ...parsed.data });
+      const [createdTx] = await trx.select().from(loyaltyTransactionsTable)
+        .where(and(
+          eq(loyaltyTransactionsTable.id, id),
+          eq(loyaltyTransactionsTable.tenantId, me.tenantId),
+          eq(loyaltyTransactionsTable.memberId, parsed.data.memberId),
+        )).limit(1);
+
+      const allTx = await trx
+        .select({ type: loyaltyTransactionsTable.type, points: loyaltyTransactionsTable.points })
+        .from(loyaltyTransactionsTable)
+        .where(and(
+          eq(loyaltyTransactionsTable.tenantId, me.tenantId),
+          eq(loyaltyTransactionsTable.memberId, parsed.data.memberId),
+        ));
+      const totalPoints = allTx
+        .filter((t) => t.type === "earn" || t.type === "bonus")
+        .reduce((s, t) => s + t.points, 0);
+      const spentPoints = allTx
+        .filter((t) => t.type === "redeem" || t.type === "expire")
+        .reduce((s, t) => s + t.points, 0);
+      const availablePoints = Math.max(0, totalPoints - spentPoints);
+      const newTier = calculateTier(totalPoints);
+      await trx
+        .update(loyaltyMembersTable)
+        .set({ totalPoints, availablePoints, tier: newTier, lastActivityAt: new Date() })
+        .where(and(
+          eq(loyaltyMembersTable.id, parsed.data.memberId),
+          eq(loyaltyMembersTable.tenantId, me.tenantId),
+        ));
+      return { tx: createdTx, memberBefore: { tier: member.tier, clientId: member.clientId }, totalPoints, newTier };
+    });
 
     // Notify the client if they moved up a tier (fire-and-forget).
     if (memberBefore && isTierUpgrade(memberBefore.tier, newTier)) {

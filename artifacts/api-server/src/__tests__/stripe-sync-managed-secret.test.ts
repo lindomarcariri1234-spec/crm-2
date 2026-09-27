@@ -24,6 +24,7 @@ const h = vi.hoisted(() => {
     secret: "whsec_managed_boot",
   }));
   const syncBackfill = vi.fn(async () => ({ synced: 0 }));
+  const loggerInfo = vi.fn();
   class StripeSyncMock {
     postgresClient = { query };
     findOrCreateManagedWebhook = findOrCreateManagedWebhook;
@@ -31,7 +32,7 @@ const h = vi.hoisted(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     constructor(_opts: any) {}
   }
-  return { query, findOrCreateManagedWebhook, syncBackfill, StripeSyncMock };
+  return { query, findOrCreateManagedWebhook, syncBackfill, loggerInfo, StripeSyncMock };
 });
 
 vi.mock("stripe-replit-sync", () => ({
@@ -44,7 +45,7 @@ vi.mock("../lib/stripeClient", () => ({
 }));
 
 vi.mock("../lib/logger", () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  logger: { info: h.loggerInfo, warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { getManagedWebhookSigningSecret, initStripeSync } from "../lib/stripeSync";
@@ -53,6 +54,8 @@ describe("getManagedWebhookSigningSecret — boot-window backoff", () => {
   it("returns the secret once it becomes cached during the backoff window", async () => {
     process.env["DATABASE_URL"] = "postgres://localhost/test";
     process.env["FRONTEND_URL"] = "https://app.test.example";
+    const marker = "SYNTHETIC_STRIPE_BACKFILL_SECRET_418";
+    h.syncBackfill.mockResolvedValueOnce({ synced: 0, customer: marker } as never);
 
     // Start the lookup BEFORE init has cached anything. With no cached secret,
     // no instance, and init not complete, it enters the backoff loop and waits.
@@ -64,6 +67,8 @@ describe("getManagedWebhookSigningSecret — boot-window backoff", () => {
 
     await expect(pending).resolves.toBe("whsec_managed_boot");
     expect(h.findOrCreateManagedWebhook).toHaveBeenCalledOnce();
+    expect(h.loggerInfo).toHaveBeenCalledWith("[stripe-sync] syncBackfill complete");
+    expect(JSON.stringify(h.loggerInfo.mock.calls)).not.toContain(marker);
   });
 
   it("returns the cached secret immediately on subsequent calls", async () => {

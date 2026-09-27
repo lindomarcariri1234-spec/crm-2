@@ -2456,6 +2456,48 @@ paths:
               schema:
                 $ref: "#/components/schemas/SuccessResponse"
 
+  /expenses/{id}/trip-cost-link:
+    post:
+      operationId: linkExpenseToTripCost
+      tags: [expenses]
+      summary: Link an expense to a matching trip cost
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkExpenseTripCostBody"
+      responses:
+        "200":
+          description: Linked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+    delete:
+      operationId: unlinkExpenseFromTripCost
+      tags: [expenses]
+      summary: Remove the link between an expense and a trip cost
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Unlinked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
   # ─── DEALS/PIPELINE ───────────────────────────────────────────────
   /deals:
     get:
@@ -7584,7 +7626,11 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
-      required: [id, tripId, category, description, supplierId, supplierName, amount, status, dueDate, paidAt, notes, createdAt]
+        linkedExpenseId:
+          type: ["string", "null"]
+        linkedExpenseDescription:
+          type: ["string", "null"]
+      required: [id, tripId, category, description, supplierId, supplierName, amount, status, dueDate, paidAt, notes, createdAt, linkedExpenseId, linkedExpenseDescription]
 
     TripCostSummary:
       type: object
@@ -7839,6 +7885,10 @@ components:
           type: ["integer", "null"]
           minimum: 0
           maximum: 2
+        freePassengers:
+          type: array
+          items:
+            $ref: "#/components/schemas/FreePassenger"
         manifestNumber:
           type: ["string", "null"]
         cancellationPolicy:
@@ -8725,6 +8775,8 @@ components:
           type: ["string", "null"]
         checkedInAt:
           type: ["string", "null"]
+        boardingLocationId:
+          type: ["string", "null"]
       required: [id, name, cpf, whatsapp, role, seatNumber]
 
     UpdatePassengerBoardingBody:
@@ -8938,6 +8990,8 @@ components:
           type: string
         tripId:
           type: ["string", "null"]
+        linkedTripCostId:
+          type: ["string", "null"]
         category:
           type: string
         description:
@@ -8963,7 +9017,14 @@ components:
         source:
           type: string
           enum: [agency, trip]
-      required: [id, category, description, amount, dueDate, status, createdAt]
+      required: [id, category, description, amount, dueDate, status, createdAt, source]
+
+    LinkExpenseTripCostBody:
+      type: object
+      properties:
+        tripCostId:
+          type: string
+      required: [tripCostId]
 
     ExpenseListResponse:
       type: object
@@ -10411,6 +10472,9 @@ components:
         storeSlug:
           type: string
           description: When present on a brand-new account, links the user to the agency store as a CLIENT. Ignored for existing users.
+        clientSignup:
+          type: boolean
+          description: When true, only provisions a new client account by linking a verified email to one existing client record.
       required: [clerkId, name, email]
 
     CreateUserBody:

@@ -389,7 +389,11 @@ describe("Seat bucket counters — status transition paths", () => {
         update: vi.fn().mockImplementation(() => ({
           set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
             capturedSets.push(setArg);
-            return { where: vi.fn().mockResolvedValue([]) };
+            return {
+              where: vi.fn(() => Object.assign(Promise.resolve([{ id: "reservation-1" }]), {
+                returning: vi.fn().mockResolvedValue([{ id: "reservation-1" }]),
+              })),
+            };
           }),
         })),
         delete: vi.fn().mockImplementation(() => ({
@@ -425,7 +429,11 @@ describe("Seat bucket counters — status transition paths", () => {
         update: vi.fn().mockImplementation(() => ({
           set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
             capturedSets.push(setArg);
-            return { where: vi.fn().mockResolvedValue([]) };
+            return {
+              where: vi.fn(() => Object.assign(Promise.resolve([{ id: "reservation-1" }]), {
+                returning: vi.fn().mockResolvedValue([{ id: "reservation-1" }]),
+              })),
+            };
           }),
         })),
         delete: vi.fn().mockImplementation(() => ({
@@ -462,7 +470,11 @@ describe("Seat bucket counters — status transition paths", () => {
         update: vi.fn().mockImplementation(() => ({
           set: vi.fn().mockImplementation((setArg: Record<string, unknown>) => {
             capturedSets.push(setArg);
-            return { where: vi.fn().mockResolvedValue([]) };
+            return {
+              where: vi.fn(() => Object.assign(Promise.resolve([{ id: "reservation-1" }]), {
+                returning: vi.fn().mockResolvedValue([{ id: "reservation-1" }]),
+              })),
+            };
           }),
         })),
         delete: vi.fn().mockImplementation(() => ({

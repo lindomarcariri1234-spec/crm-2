@@ -102,6 +102,7 @@ vi.mock("@workspace/db", () => ({
     stripeWebhookSecret: "storesTable.stripeWebhookSecret",
   },
   tripsTable: {},
+  pipelineStagesTable: {},
 }));
 
 vi.mock("drizzle-orm", async () => {

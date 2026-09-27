@@ -430,6 +430,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const [hasSeatMap, setHasSeatMap] = useState<boolean | null>(null);
   const [limitError, setLimitError] = useState<{ resource: string; current?: number; limit?: number } | null>(null);
   const [duplicateConflict, setDuplicateConflict] = useState<{ id: string; name: string; code: string | null; whatsapp: string } | null>(null);
+  const [cpfConflictWarning, setCpfConflictWarning] = useState<string | null>(null);
   const [roomAssignmentError, setRoomAssignmentError] = useState<string | null>(null);
   const { toast } = useToast();
   const { data: allStages } = useListPipelineStages();
@@ -461,6 +462,7 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
       setSelectedSeats(formData.seatNumber ? [formData.seatNumber] : []);
       setHasSeatMap(null);
       setDuplicateConflict(null);
+      setCpfConflictWarning(null);
       setRoomAssignmentError(null);
     }
   }, [open, editClient]);
@@ -474,7 +476,12 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
     followup: { title: "Preferências", description: "Guarde interesses, destinos desejados, gostos pessoais e tags para próximos contatos." },
     agency: { title: "Relacionamento", description: "Acompanhe a avaliação da agência, feedback e participação como embaixador." },
   };
-  const set = (key: keyof ClientFormData) => (val: string) => setForm(prev => ({ ...prev, [key]: val }));
+  const set = (key: keyof ClientFormData) => (val: string) => {
+    setForm(prev => ({ ...prev, [key]: val }));
+    if (key === "cpf" || key === "email" || key === "whatsapp") {
+      setCpfConflictWarning(null);
+    }
+  };
   const whatsappHasInvalidFormat =
     form.whatsapp.length > 0 && !isValidBrazilWhatsAppPhone(form.whatsapp);
 
@@ -823,6 +830,13 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
         const ec = responseData["existingClient"] as { id: string; name: string; code: string | null; whatsapp: string } | undefined;
         if (ec) { setDuplicateConflict(ec); return; }
       }
+      if (responseData["code"] === "CLIENT_CPF_CONFLICT") {
+        setCpfConflictWarning(
+          (responseData["error"] as string)
+          || "Este cadastro já possui outro CPF nesta agência. A unificação automática foi bloqueada.",
+        );
+        return;
+      }
       const msg = (responseData["error"] as string)
         || (err as { message?: string })?.message
         || "Erro ao salvar cliente";
@@ -863,6 +877,23 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
             Organize o cadastro por etapas. Você pode salvar sem preencher as seções que não se aplicam.
           </DialogDescription>
         </DialogHeader>
+
+        {cpfConflictWarning && (
+          <div
+            role="alert"
+            data-testid="status-client-cpf-conflict"
+            className="mb-2 flex min-w-0 items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+          >
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden="true" />
+            <div className="min-w-0 space-y-1">
+              <p className="text-sm font-semibold leading-5">Unificação automática bloqueada</p>
+              <p className="break-words text-sm leading-relaxed">{cpfConflictWarning}</p>
+              <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+                Nenhum dado foi mesclado. Confira o CPF do cadastro existente antes de tentar novamente.
+              </p>
+            </div>
+          </div>
+        )}
 
         {limitError && (
           <PlanLimitWall

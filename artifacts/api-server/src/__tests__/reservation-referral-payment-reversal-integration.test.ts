@@ -193,6 +193,7 @@ async function resetFixture() {
     referredId: REFERRED_ID,
     code: `RRPI-CODE-${RUN}`,
     status: REFERRAL_STATUS.COMPLETED,
+    convertedAt: new Date("2026-08-01T12:00:00.000Z"),
     bonusAmount: "25.00",
     reservationId: RESERVATION_ID,
   });

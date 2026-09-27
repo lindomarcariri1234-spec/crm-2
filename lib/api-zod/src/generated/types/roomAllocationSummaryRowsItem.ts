@@ -11,7 +11,10 @@ export type RoomAllocationSummaryRowsItem = {
   roomCount: number;
   guestsPerRoom: number;
   totalGuests: number;
+  /** @nullable */
   pricePerNight: number | null;
+  /** @nullable */
   packageValue: number | null;
+  /** @nullable */
   subtotal: number | null;
 };

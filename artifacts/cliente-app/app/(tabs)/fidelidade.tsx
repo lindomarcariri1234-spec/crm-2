@@ -1,5 +1,5 @@
 import { Feather } from "@expo/vector-icons";
-import { useAuth } from "@clerk/clerk-expo";
+import { useAuth } from "@clerk/expo";
 import { SkeletonBox } from "@/components/Skeleton";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
@@ -24,20 +24,6 @@ const TIER_LABELS: Record<string, string> = {
   diamond: "Diamante",
 };
 
-const TIER_ICONS: Record<string, string> = {
-  bronze: "🥉",
-  silver: "🥈",
-  gold: "🥇",
-  diamond: "💎",
-};
-
-const TIER_COLORS: Record<string, [string, string]> = {
-  bronze: ["#92400e", "#fef3c7"],
-  silver: ["#374151", "#f3f4f6"],
-  gold: ["#92400e", "#fef9c3"],
-  diamond: ["#0e7490", "#ecfeff"],
-};
-
 function TransactionItem({
   tx,
   colors,
@@ -56,7 +42,7 @@ function TransactionItem({
     <View style={[styles.txItem, { borderBottomColor: colors.border }]}>
       <View style={[
         styles.txIcon,
-        { backgroundColor: isPositive ? colors.successLight : "#fee2e2" },
+        { backgroundColor: isPositive ? colors.successLight : colors.destructive + "18" },
       ]}>
         <Feather
           name={isPositive ? "arrow-up-right" : "arrow-down-left"}
@@ -93,7 +79,7 @@ function TierProgressBar({
   if (!loyalty.nextTier || loyalty.pointsToNext === 0) {
     return (
       <View style={[styles.progressCard, { backgroundColor: "rgba(255,255,255,0.14)" }]}>
-        <Text style={styles.progressText}>🏆 Nível máximo alcançado!</Text>
+        <Text style={[styles.progressText, { color: colors.primaryForeground }]}>Nível máximo alcançado</Text>
       </View>
     );
   }
@@ -105,17 +91,17 @@ function TierProgressBar({
   return (
     <View style={[styles.progressCard, { backgroundColor: "rgba(255,255,255,0.14)" }]}>
       <View style={styles.progressHeader}>
-        <Text style={styles.progressText}>
+        <Text style={[styles.progressText, { color: colors.primaryForeground }]}>
           Faltam{" "}
           <Text style={{ fontFamily: "Inter_700Bold" }}>
             {loyalty.pointsToNext.toLocaleString("pt-BR")} pts
           </Text>{" "}
           para {loyalty.nextTier}
         </Text>
-        <Text style={styles.progressPct}>{progressPct}%</Text>
+        <Text style={[styles.progressPct, { color: colors.primaryForeground }]}>{progressPct}%</Text>
       </View>
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+      <View style={[styles.progressTrack, { backgroundColor: colors.primaryForeground + "40" }]}>
+        <View style={[styles.progressFill, { width: `${progressPct}%`, backgroundColor: colors.primaryForeground }]} />
       </View>
     </View>
   );
@@ -153,8 +139,8 @@ export default function FidelidadeScreen() {
 
   const tier = loyalty?.tier ?? "bronze";
   const tierLabel = TIER_LABELS[tier] ?? tier;
-  const tierIcon = TIER_ICONS[tier] ?? "⭐";
-  const [tierFg, tierBg] = TIER_COLORS[tier] ?? [colors.primary, colors.secondary];
+  const tierFg = colors.accentForeground;
+  const tierBg = colors.accent;
 
   if (isLoading) {
     return (
@@ -209,16 +195,16 @@ export default function FidelidadeScreen() {
       <View style={[styles.pointsCard, { backgroundColor: colors.primary }]}>
         <View style={styles.pointsCardDecor1} />
         <View style={styles.pointsCardDecor2} />
-        <Text style={styles.pointsLabel}>
+        <Text style={[styles.pointsLabel, { color: colors.primaryForeground + "BF" }]}>
           {loyalty.programName || "Pontos disponíveis"}
         </Text>
-        <Text style={styles.pointsValue}>
+        <Text style={[styles.pointsValue, { color: colors.primaryForeground }]}>
           {loyalty.availablePoints.toLocaleString("pt-BR")}
           <Text style={styles.pointsPts}> PTS</Text>
         </Text>
         <View style={[styles.tierBadge, { backgroundColor: tierBg }]}>
           <Text style={[styles.tierBadgeText, { color: tierFg }]}>
-            {tierIcon} {tierLabel}
+            {tierLabel}
           </Text>
         </View>
 
@@ -279,7 +265,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   pointsCard: {
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 24,
     overflow: "hidden",
     gap: 8,
@@ -306,14 +292,12 @@ const styles = StyleSheet.create({
   pointsLabel: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
-    color: "rgba(255,255,255,0.75)",
     textTransform: "uppercase",
     letterSpacing: 0.8,
   },
   pointsValue: {
     fontSize: 44,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
     lineHeight: 52,
   },
   pointsPts: {
@@ -323,7 +307,7 @@ const styles = StyleSheet.create({
   tierBadge: {
     paddingHorizontal: 14,
     paddingVertical: 6,
-    borderRadius: 20,
+    borderRadius: 8,
     marginTop: 4,
   },
   tierBadgeText: {
@@ -332,7 +316,7 @@ const styles = StyleSheet.create({
   },
   progressCard: {
     width: "100%",
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 14,
     marginTop: 4,
     gap: 8,
@@ -345,25 +329,21 @@ const styles = StyleSheet.create({
   progressText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
-    color: "rgba(255,255,255,0.9)",
     flex: 1,
     flexWrap: "wrap",
   },
   progressPct: {
     fontSize: 13,
     fontFamily: "Inter_700Bold",
-    color: "#ffffff",
     marginLeft: 8,
   },
   progressTrack: {
     height: 6,
-    backgroundColor: "rgba(255,255,255,0.25)",
     borderRadius: 3,
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    backgroundColor: "#ffffff",
     borderRadius: 3,
   },
   statsRow: {
@@ -372,7 +352,7 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 12,
     alignItems: "center",
@@ -388,7 +368,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   txCard: {
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
     padding: 16,
     gap: 4,

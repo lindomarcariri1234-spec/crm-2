@@ -23,6 +23,7 @@ vi.mock("@workspace/db", () => ({
     whatsapp: "whatsapp",
     createdById: "created_by_id",
   },
+  usersTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -57,16 +58,19 @@ function makeMockTx(selectQueue: object[][]) {
   const mockSetFn = vi.fn().mockReturnValue({ where: mockUpdateWhereFn });
   const mockUpdateFn = vi.fn().mockReturnValue({ set: mockSetFn });
 
-  const mockInsertValuesFn = vi.fn().mockImplementation((values: Record<string, unknown>) => ({
-    returning: vi.fn().mockResolvedValue([{ ...values }]),
-  }));
+  const mockExecuteFn = vi.fn().mockResolvedValue({});
+  const mockInsertReturningFn = vi.fn();
+  const mockInsertValuesFn = vi.fn().mockImplementation((values: Record<string, unknown>) => {
+    mockInsertReturningFn.mockResolvedValue([{ ...values }]);
+    return { returning: mockInsertReturningFn };
+  });
   const mockInsertFn = vi.fn().mockReturnValue({ values: mockInsertValuesFn });
 
   const tx = {
     select: mockSelectFn,
     update: mockUpdateFn,
     insert: mockInsertFn,
-    execute: vi.fn().mockResolvedValue({ rows: [] }),
+    execute: mockExecuteFn,
   } as unknown as Tx;
 
   const spies = {
@@ -74,8 +78,10 @@ function makeMockTx(selectQueue: object[][]) {
     update: mockUpdateFn,
     insert: mockInsertFn,
     insertValues: mockInsertValuesFn,
+    insertReturning: mockInsertReturningFn,
     updateSet: mockSetFn,
     updateWhere: mockUpdateWhereFn,
+    execute: mockExecuteFn,
   };
 
   return { tx, spies };
@@ -87,7 +93,7 @@ const BASE_ARGS = {
   name: "Maria Silva",
   phone: "+55 11 99999-1234",
   createdById: "user-001",
-  cpf: "52998224725",
+  cpf: "529.982.247-25",
   birthDate: new Date("1990-05-15T12:00:00Z"),
 };
 
@@ -99,10 +105,9 @@ describe("upsertCheckoutClient", () => {
   it("creates a new client when the email is not found in the tenant", async () => {
     // No existing client by email, no CPF match either, no CPF collision
     const { tx, spies } = makeMockTx([
-      [], // existing client lookup by email → none found
-      [], // CPF fallback lookup → none found
+      [], // CPF lookup → none found
+      [], // email lookup → none found
       [], // WhatsApp fallback lookup → none found
-      [], // CPF uniqueness check → not taken
     ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
@@ -118,7 +123,7 @@ describe("upsertCheckoutClient", () => {
         email: BASE_ARGS.email,
         name: BASE_ARGS.name,
         createdById: BASE_ARGS.createdById,
-        cpf: BASE_ARGS.cpf,
+        cpf: "52998224725",
         birthDate: BASE_ARGS.birthDate,
       }),
     );
@@ -127,8 +132,7 @@ describe("upsertCheckoutClient", () => {
 
   it("returns existing client found by CPF when email does not match and enriches empty email", async () => {
     const { tx, spies } = makeMockTx([
-      [], // email lookup → none found
-      [{ id: "cpf-client-id", email: "", cpf: BASE_ARGS.cpf, birthDate: null }], // CPF fallback → found
+      [{ id: "cpf-client-id", email: "", cpf: "52998224725", birthDate: null }], // CPF lookup → found
     ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
@@ -146,7 +150,8 @@ describe("upsertCheckoutClient", () => {
   it("returns isNew=false and enriches birthDate when the existing client has birthDate=null", async () => {
     const existingClient = { id: "existing-001", email: BASE_ARGS.email, cpf: null, birthDate: null };
     const { tx, spies } = makeMockTx([
-      [existingClient], // existing client lookup → found
+      [], // CPF lookup → none found
+      [existingClient], // email lookup → found
     ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
@@ -190,8 +195,8 @@ describe("upsertCheckoutClient", () => {
       birthDate: new Date("1985-03-20T12:00:00Z"),
     };
     const { tx, spies } = makeMockTx([
-      [existingClient], // existing client lookup → found, no cpf → triggers CPF check
-      [], // CPF uniqueness check → not taken
+      [], // CPF lookup → none found
+      [existingClient], // email lookup → found, no cpf
     ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
@@ -209,8 +214,8 @@ describe("upsertCheckoutClient", () => {
   it("enriches CPF on an existing client when the CPF slot is null and no other owner exists", async () => {
     const existingClient = { id: "existing-003", email: BASE_ARGS.email, cpf: null, birthDate: new Date("1990-01-01T00:00:00Z") };
     const { tx, spies } = makeMockTx([
-      [existingClient], // existing client lookup
-      [], // CPF uniqueness check → not taken
+      [], // CPF lookup → none found
+      [existingClient], // email lookup
     ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
@@ -220,14 +225,27 @@ describe("upsertCheckoutClient", () => {
 
     expect(spies.update).toHaveBeenCalledTimes(1);
     expect(spies.updateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ cpf: BASE_ARGS.cpf }),
+      expect.objectContaining({ cpf: "52998224725" }),
     );
     expect(spies.insert).not.toHaveBeenCalled();
   });
 
+  it("does NOT assign CPF when another client in the tenant already owns it", async () => {
+    const existingClient = { id: "existing-004", email: BASE_ARGS.email, cpf: "11144477735", birthDate: null };
+    const { tx, spies } = makeMockTx([
+      [], // CPF lookup → none found
+      [existingClient], // email lookup → existing client with another CPF
+    ]);
+
+    await expect(upsertCheckoutClient(tx, BASE_ARGS)).rejects.toMatchObject({
+      code: "CLIENT_CPF_CONFLICT",
+    });
+    expect(spies.update).not.toHaveBeenCalled();
+  });
+
   it("prefers the existing client that owns the CPF over an email match", async () => {
     const { tx, spies } = makeMockTx([
-      [{ id: "other-owner-id", email: "other@example.com", cpf: BASE_ARGS.cpf, birthDate: BASE_ARGS.birthDate }],
+      [{ id: "other-owner-id", email: "other@example.com", cpf: "52998224725", birthDate: BASE_ARGS.birthDate }],
     ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
@@ -244,10 +262,13 @@ describe("upsertCheckoutClient", () => {
       name: BASE_ARGS.name,
       whatsapp: BASE_ARGS.phone,
       phone: BASE_ARGS.phone,
-      cpf: BASE_ARGS.cpf,
+      cpf: "52998224725",
       birthDate: new Date("1988-12-01T00:00:00Z"),
     };
-    const { tx, spies } = makeMockTx([[existingClient]]);
+    const { tx, spies } = makeMockTx([
+      [], // CPF lookup → none found
+      [existingClient], // email lookup → found
+    ]);
 
     const result = await upsertCheckoutClient(tx, BASE_ARGS);
 

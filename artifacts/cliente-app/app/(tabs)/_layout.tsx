@@ -10,8 +10,14 @@ import { Platform, StyleSheet, View, useColorScheme } from "react-native";
 import { useColors } from "@/hooks/useColors";
 
 function NativeTabLayout() {
+  const colors = useColors();
   return (
-    <NativeTabs>
+    <NativeTabs
+      tintColor={colors.primary}
+      backgroundColor={colors.card}
+      rippleColor={colors.accent}
+      shadowColor={colors.border}
+    >
       <NativeTabs.Trigger name="index">
         <Icon sf={{ default: "house", selected: "house.fill" }} />
         <Label>Início</Label>
@@ -56,14 +62,14 @@ function ClassicTabLayout() {
       screenOptions={{
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.mutedForeground,
-        headerShown: true,
-        tabBarStyle: {
+         headerShown: true,
+         tabBarStyle: {
           position: "absolute",
-          backgroundColor: isIOS ? "transparent" : colors.background,
+           backgroundColor: isIOS ? "transparent" : colors.card,
           borderTopWidth: isWeb ? 1 : 0,
           borderTopColor: colors.border,
           elevation: 0,
-          ...(isWeb ? { height: 84 } : {}),
+           ...(isWeb ? { height: 84, paddingTop: 7 } : {}),
         },
         tabBarBackground: () =>
           isIOS ? (
@@ -73,13 +79,11 @@ function ClassicTabLayout() {
               style={StyleSheet.absoluteFill}
             />
           ) : isWeb ? (
-            <View
-              style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]}
-            />
+             <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.card }]} />
           ) : null,
-        headerStyle: { backgroundColor: colors.background },
+         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.foreground,
-        headerTitleStyle: { fontFamily: "Inter_600SemiBold" },
+         headerTitleStyle: { fontFamily: "Inter_700Bold", fontSize: 17 },
         headerShadowVisible: false,
       }}
     >

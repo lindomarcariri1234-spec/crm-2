@@ -35,7 +35,7 @@ export interface FinancialMetricsResponse {
   totals: FinancialMetricTotals;
   byTrip: Array<{ tripId: string } & FinancialMetricTotals>;
   byUser: Array<{ userId: string } & FinancialMetricTotals>;
-  pmsPaymentAdjustments: Array<{
+  pmsPaymentAdjustments?: Array<{
     id: string;
     reservationId: string;
     reservationNumber: string;

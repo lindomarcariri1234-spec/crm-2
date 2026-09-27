@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import { PublicStore } from "@/lib/storeApi";
 import { useSyncMe } from "@workspace/api-client-react";
 import { getSafeRedirectTarget } from "@/lib/safe-redirect";
+import { clearSignupCpfHandoff, consumeSignupCpfHandoff } from "@/lib/signup-cpf-handoff";
 
 export default function VitrineSignIn({
   store,
@@ -27,8 +28,15 @@ export default function VitrineSignIn({
 
     if (isNewClient && !syncStartedRef.current) {
       // New client just registered via the storefront: sync with storeSlug so
-      // the backend assigns role=CLIENT and tenantId of this agency.
+      // the backend assigns role=CLIENT and tenantId of this agency. The CPF is
+      // handed off once through short-lived sessionStorage, never Clerk metadata.
       syncStartedRef.current = true;
+      let cpf: string | undefined;
+      try {
+        cpf = consumeSignupCpfHandoff(window.sessionStorage, store.slug);
+      } catch {
+        cpf = undefined;
+      }
       syncMe.mutate(
         {
           data: {
@@ -37,6 +45,7 @@ export default function VitrineSignIn({
             email: user.primaryEmailAddress?.emailAddress ?? "",
             avatarUrl: user.imageUrl ?? undefined,
             storeSlug: store.slug,
+            ...(cpf ? { cpf } : {}),
           },
         },
         {
@@ -46,6 +55,11 @@ export default function VitrineSignIn({
         },
       );
     } else if (!isNewClient) {
+      try {
+        clearSignupCpfHandoff(window.sessionStorage);
+      } catch {
+        // Session storage may be disabled; the normal sign-in flow can proceed.
+      }
       navigate(redirectTarget, { replace: true });
     }
   }, [isSignedIn, user?.id]);

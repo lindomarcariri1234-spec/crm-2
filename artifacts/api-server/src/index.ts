@@ -30,7 +30,7 @@ import { retryPendingAttendanceReplies } from "./services/whatsapp-attendance";
 import { runUploadThingOrphanCleanup } from "./lib/uploadthing-orphan-cleanup";
 import { runReferralAttemptLogCleanup } from "./lib/referral-attempt-log-cleanup";
 import { runExpiredReservationsCron } from "./lib/expired-reservations";
-import { runPipelineTripEndedCron } from "./services/pipeline-automation";
+import { runPipelineTripDepartureCron, runPipelineTripEndedCron } from "./services/pipeline-automation";
 import { calculateScoresForAllTenants } from "./lib/client-scores";
 import { runCampaignAutomationCron } from "./lib/campaign-automation";
 import { runGemeoAlertsCron, runGemeoOpportunitiesCron } from "./lib/gemeo-cron";
@@ -287,6 +287,10 @@ applyMigrations()
       scheduleDistributedCron("pipeline-trip-ended", "0 2 * * *", async () => {
         logger.info("[pipeline-trip-ended] Daily cron triggered");
         await runPipelineTripEndedCron();
+      }, { timezone: "America/Sao_Paulo" });
+
+      scheduleDistributedCron("pipeline-trip-departure", "* * * * *", async () => {
+        await runPipelineTripDepartureCron();
       }, { timezone: "America/Sao_Paulo" });
 
       scheduleDistributedCron("client-scores", "0 3 * * *", async () => {

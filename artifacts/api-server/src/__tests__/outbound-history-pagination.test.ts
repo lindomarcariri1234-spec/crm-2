@@ -8,12 +8,47 @@ const {
   mockReconcileOutboundDelivery,
   mockRetryUnknownOutboundDelivery,
   mockRequireAuth,
-} = vi.hoisted(() => ({
-  mockListOutboundMessages: vi.fn(),
-  mockListOutboundProviderFailureSummary: vi.fn(),
-  mockReconcileOutboundDelivery: vi.fn(),
-  mockRetryUnknownOutboundDelivery: vi.fn(),
-  mockRequireAuth: vi.fn(),
+  mockDbInsert,
+  mockAuditInsertValues,
+  mockPdfText,
+} = vi.hoisted(() => {
+  const mockAuditInsertValues = vi.fn();
+  return {
+    mockListOutboundMessages: vi.fn(),
+    mockListOutboundProviderFailureSummary: vi.fn(),
+    mockReconcileOutboundDelivery: vi.fn(),
+    mockRetryUnknownOutboundDelivery: vi.fn(),
+    mockRequireAuth: vi.fn(),
+    mockDbInsert: vi.fn(() => ({ values: mockAuditInsertValues })),
+    mockAuditInsertValues,
+    mockPdfText: vi.fn(),
+  };
+});
+
+vi.mock("jspdf", () => ({
+  jsPDF: class MockJsPDF {
+    setFontSize() {}
+    setFont() {}
+    text(...args: unknown[]) {
+      mockPdfText(...args);
+    }
+    autoTable() {}
+    output() {
+      return new ArrayBuffer(0);
+    }
+  },
+}));
+
+vi.mock("jspdf-autotable", () => ({
+  applyPlugin: vi.fn(),
+}));
+
+vi.mock("@workspace/db", () => ({
+  db: {
+    insert: mockDbInsert,
+  },
+  auditLogsTable: {},
+  OUTBOUND_BOUNCE_TYPES: ["permanent", "temporary"],
 }));
 
 vi.mock("../lib/tenant.js", () => ({
@@ -36,12 +71,12 @@ function makeApp() {
   const app = express();
   app.use(outboundMessagesRouter);
   app.use((
-    error: Error & { status?: number },
+    error: Error & { status?: number; statusCode?: number },
     _req: express.Request,
     res: express.Response,
     _next: express.NextFunction,
   ) => {
-    res.status(error.status ?? 500).json({ error: error.message });
+    res.status(error.statusCode ?? error.status ?? 500).json({ error: error.message });
   });
   return app;
 }
@@ -121,6 +156,8 @@ describe("GET /outbound-messages filtered pagination", () => {
       channel?: string;
       deliveryStatus?: string;
       limit?: number;
+      dateFrom?: Date;
+      dateToExclusive?: Date;
     }) => {
       expect(tenantId).toBe("tenant-a");
       expect(options).toEqual(expect.objectContaining({
@@ -128,6 +165,8 @@ describe("GET /outbound-messages filtered pagination", () => {
         channel: "email",
         deliveryStatus: "failed",
         limit: 200,
+        dateFrom: new Date("2026-08-01T03:00:00.000Z"),
+        dateToExclusive: new Date("2026-09-01T03:00:00.000Z"),
       }));
       return allRows.filter((row) => row.message.id === "partial-failure");
     });
@@ -139,6 +178,8 @@ describe("GET /outbound-messages filtered pagination", () => {
         provider: "resend",
         channel: "email",
         deliveryStatus: "failed",
+        dateFrom: "2026-08-01",
+        dateTo: "2026-08-31",
       });
 
     expect(response.status).toBe(200);
@@ -147,6 +188,8 @@ describe("GET /outbound-messages filtered pagination", () => {
       channel: "email",
       deliveryStatus: "failed",
       limit: 200,
+      dateFrom: new Date("2026-08-01T03:00:00.000Z"),
+      dateToExclusive: new Date("2026-09-01T03:00:00.000Z"),
     }));
     expect(response.body).toHaveLength(1);
     expect(response.body[0].id).toBe("partial-failure");
@@ -156,6 +199,194 @@ describe("GET /outbound-messages filtered pagination", () => {
     expect(response.body).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "other-tenant" }),
     ]));
+  });
+});
+
+describe("GET /outbound-messages/export", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireAuth.mockResolvedValue({
+      id: "user-a",
+      tenantId: "tenant-a",
+      role: "agencia",
+    });
+    mockAuditInsertValues.mockResolvedValue(undefined);
+  });
+
+  it("exports the inclusive Brasília start through the exclusive next midnight and audits the original civil dates", async () => {
+    const at = (id: string, createdAt: string) => {
+      const row = historyRow(id, "tenant-a", "failed", "failed");
+      row.message.createdAt = new Date(createdAt);
+      return row;
+    };
+    const rows = [
+      at("before-start", "2026-08-01T02:59:59.999Z"),
+      at("at-start", "2026-08-01T03:00:00.000Z"),
+      at("inside-period", "2026-08-15T12:00:00.000Z"),
+      at("before-exclusive-end", "2026-09-01T02:59:59.999Z"),
+      at("at-exclusive-end", "2026-09-01T03:00:00.000Z"),
+    ];
+
+    mockListOutboundMessages.mockImplementation(async (
+      tenantId: string,
+      options: { dateFrom?: Date; dateToExclusive?: Date },
+    ) => {
+      expect(tenantId).toBe("tenant-a");
+      expect(options).toEqual(expect.objectContaining({
+        dateFrom: new Date("2026-08-01T03:00:00.000Z"),
+        dateToExclusive: new Date("2026-09-01T03:00:00.000Z"),
+      }));
+      return rows.filter((row) => (
+        (!options.dateFrom || row.message.createdAt >= options.dateFrom)
+        && (!options.dateToExclusive || row.message.createdAt < options.dateToExclusive)
+      ));
+    });
+
+    const response = await request(makeApp())
+      .get("/outbound-messages/export")
+      .query({
+        format: "csv",
+        dateFrom: "2026-08-01",
+        dateTo: "2026-08-31",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/csv");
+    expect(mockListOutboundMessages).toHaveBeenCalledWith("tenant-a", expect.objectContaining({
+      dateFrom: new Date("2026-08-01T03:00:00.000Z"),
+      dateToExclusive: new Date("2026-09-01T03:00:00.000Z"),
+    }));
+    expect(response.text).toContain("at-start");
+    expect(response.text).toContain("inside-period");
+    expect(response.text).toContain("before-exclusive-end");
+    expect(response.text).not.toContain("before-start");
+    expect(response.text).not.toContain("at-exclusive-end");
+
+    expect(mockAuditInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      action: "export_outbound_messages",
+      after: expect.objectContaining({
+        format: "csv",
+        rowCount: 3,
+        filters: expect.objectContaining({
+          dateFrom: "2026-08-01",
+          dateTo: "2026-08-31",
+        }),
+      }),
+    }));
+  });
+
+  it("uses the same Brasília date window and original audit dates for PDF exports", async () => {
+    mockListOutboundMessages.mockResolvedValue([
+      historyRow("pdf-period", "tenant-a", "failed", "failed"),
+    ]);
+    const response = await request(makeApp())
+      .get("/outbound-messages/export")
+      .query({
+        format: "pdf",
+        dateFrom: "2026-08-01",
+        dateTo: "2026-08-31",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(mockListOutboundMessages).toHaveBeenCalledWith("tenant-a", expect.objectContaining({
+      dateFrom: new Date("2026-08-01T03:00:00.000Z"),
+      dateToExclusive: new Date("2026-09-01T03:00:00.000Z"),
+    }));
+    expect(mockPdfText).toHaveBeenCalledWith("Período: 01/08/2026 a 31/08/2026", 14, 25);
+    expect(mockAuditInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+      action: "export_outbound_messages",
+      after: expect.objectContaining({
+        format: "pdf",
+        filters: expect.objectContaining({
+          dateFrom: "2026-08-01",
+          dateTo: "2026-08-31",
+        }),
+      }),
+    }));
+  });
+
+  it.each([
+    {
+      filter: "start",
+      query: { dateFrom: "2026-08-01" },
+      serviceOptions: {
+        dateFrom: new Date("2026-08-01T03:00:00.000Z"),
+        dateToExclusive: undefined,
+      },
+      period: "Período: 01/08/2026 a hoje",
+    },
+    {
+      filter: "end",
+      query: { dateTo: "2026-08-31" },
+      serviceOptions: {
+        dateFrom: undefined,
+        dateToExclusive: new Date("2026-09-01T03:00:00.000Z"),
+      },
+      period: "Período: início a 31/08/2026",
+    },
+  ])("prints the correct PDF period with only the $filter date", async ({
+    query,
+    serviceOptions,
+    period,
+  }) => {
+    mockListOutboundMessages.mockResolvedValue([
+      historyRow("partial-pdf-period", "tenant-a", "failed", "failed"),
+    ]);
+
+    const response = await request(makeApp())
+      .get("/outbound-messages/export")
+      .query({ format: "pdf", ...query });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/pdf");
+    expect(mockListOutboundMessages).toHaveBeenCalledWith(
+      "tenant-a",
+      expect.objectContaining(serviceOptions),
+    );
+    expect(mockPdfText).toHaveBeenCalledWith(period, 14, 25);
+  });
+
+  it.each([
+    {
+      format: "csv",
+      dateFrom: "2026-02-30",
+      dateTo: "2026-03-01",
+      message: "Período inválido.",
+    },
+    {
+      format: "pdf",
+      dateFrom: "2026-02-30",
+      dateTo: "2026-03-01",
+      message: "Período inválido.",
+    },
+    {
+      format: "csv",
+      dateFrom: "2026-09-01",
+      dateTo: "2026-08-31",
+      message: "A data inicial deve ser anterior ou igual à data final.",
+    },
+    {
+      format: "pdf",
+      dateFrom: "2026-09-01",
+      dateTo: "2026-08-31",
+      message: "A data inicial deve ser anterior ou igual à data final.",
+    },
+  ])("rejects $format exports with invalid dates before listing or auditing", async ({
+    format,
+    dateFrom,
+    dateTo,
+    message,
+  }) => {
+    const response = await request(makeApp())
+      .get("/outbound-messages/export")
+      .query({ format, dateFrom, dateTo });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: message });
+    expect(mockListOutboundMessages).not.toHaveBeenCalled();
+    expect(mockDbInsert).not.toHaveBeenCalled();
+    expect(mockAuditInsertValues).not.toHaveBeenCalled();
   });
 });
 
@@ -220,8 +451,8 @@ describe("GET /outbound-messages/provider-failure-summary", () => {
         campaignId: "campaign-a",
         automationId: "automation-a",
         bounceType: "permanent",
-        dateFrom: new Date("2026-08-01T00:00:00.000Z"),
-        dateTo: new Date("2026-08-31T23:59:59.999Z"),
+        dateFrom: new Date("2026-08-01T03:00:00.000Z"),
+        dateToExclusive: new Date("2026-09-01T03:00:00.000Z"),
       }),
     );
   });

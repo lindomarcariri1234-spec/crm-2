@@ -26,4 +26,8 @@ export interface TripCost {
   /** @nullable */
   notes: string | null;
   createdAt: string;
+  /** @nullable */
+  linkedExpenseId: string | null;
+  /** @nullable */
+  linkedExpenseDescription: string | null;
 }

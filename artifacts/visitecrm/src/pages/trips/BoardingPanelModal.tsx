@@ -19,6 +19,8 @@ import { Client360Modal } from "@/components/client360-modal";
 import { PassengerObsModal } from "./PassengerObsModal";
 import type { BoardingPoint } from "./types";
 
+type FreePassengerWithBoarding = FreePassenger & { boardingLocationId?: string | null };
+
 function seatPositionLabel(seatNumber: string, numberingType?: string): string {
   if (!numberingType?.includes("brazilian_standard")) return "";
   const num = parseInt(seatNumber, 10);
@@ -149,7 +151,7 @@ export function BoardingPanelModal({ tripId, tripName, open, onClose }: { tripId
 
   const boardingPoints: BoardingPoint[] = panel?.boardingPoints ?? [];
   const passengers = panel?.passengers ?? [];
-  const freePassengers = panel?.freePassengers ?? [];
+  const freePassengers = (panel?.freePassengers ?? []) as FreePassengerWithBoarding[];
 
   const bpMap = useMemo(() => new Map(boardingPoints.map(bp => [bp.id, bp])), [boardingPoints]);
 
@@ -184,10 +186,14 @@ export function BoardingPanelModal({ tripId, tripName, open, onClose }: { tripId
       );
     }
     if (boardingFilter !== "__all__") {
-      list = boardingFilter === "__none__" ? list : [];
+      list = list.filter(fp =>
+        boardingFilter === "__none__"
+          ? !fp.boardingLocationId || !bpMap.has(fp.boardingLocationId)
+          : fp.boardingLocationId === boardingFilter
+      );
     }
     return list;
-  }, [freePassengers, search, boardingFilter]);
+  }, [freePassengers, search, boardingFilter, bpMap]);
 
   const combinedList = useMemo(() => {
     const rows: ({ kind: "paid"; p: BoardingPassenger } | { kind: "free"; fp: FreePassenger })[] = [
@@ -215,8 +221,12 @@ export function BoardingPanelModal({ tripId, tripName, open, onClose }: { tripId
       const key = p.boardingLocationId ?? "__none__";
       map.set(key, (map.get(key) ?? 0) + 1);
     }
+    for (const fp of freePassengers) {
+      const key = fp.boardingLocationId && bpMap.has(fp.boardingLocationId) ? fp.boardingLocationId : "__none__";
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
     return map;
-  }, [passengers]);
+  }, [passengers, freePassengers, bpMap]);
 
   const boardingPointStats = useMemo(() => {
     const map = new Map<string, { total: number; checkedIn: number }>();
@@ -225,8 +235,13 @@ export function BoardingPanelModal({ tripId, tripName, open, onClose }: { tripId
       const cur = map.get(key) ?? { total: 0, checkedIn: 0 };
       map.set(key, { total: cur.total + 1, checkedIn: cur.checkedIn + (p.checkedInAt ? 1 : 0) });
     }
+    for (const fp of freePassengers) {
+      const key = fp.boardingLocationId && bpMap.has(fp.boardingLocationId) ? fp.boardingLocationId : "__none__";
+      const cur = map.get(key) ?? { total: 0, checkedIn: 0 };
+      map.set(key, { total: cur.total + 1, checkedIn: cur.checkedIn + (fp.checkedInAt ? 1 : 0) });
+    }
     return map;
-  }, [passengers]);
+  }, [passengers, freePassengers, bpMap]);
 
   const pct = panel && panel.totalPassengers > 0
     ? Math.round((panel.checkedIn / panel.totalPassengers) * 100)
@@ -397,7 +412,7 @@ export function BoardingPanelModal({ tripId, tripName, open, onClose }: { tripId
               ) : (<>
               {combinedList.map(row => {
                 if (row.kind === "free") {
-                  const fp = row.fp;
+                  const fp = row.fp as FreePassengerWithBoarding;
                   const roleLabel = fp.role === "organizer" ? "Organizador" : fp.role === "guide" ? "Guia" : fp.role;
                   const isFreeCheckedIn = !!fp.checkedInAt;
                   return (
@@ -423,6 +438,12 @@ export function BoardingPanelModal({ tripId, tripName, open, onClose }: { tripId
                           <div className="flex gap-3 mt-0.5 flex-wrap text-xs text-muted-foreground">
                             {fp.cpf && <span>CPF: {fp.cpf}</span>}
                             <span>{roleLabel}</span>
+                            <span className="inline-flex items-center gap-1 text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 font-medium">
+                              <MapPin className="w-3 h-3" />
+                              {fp.boardingLocationId && bpMap.get(fp.boardingLocationId)
+                                ? `${bpMap.get(fp.boardingLocationId)!.name}${bpMap.get(fp.boardingLocationId)!.time ? ` · ${bpMap.get(fp.boardingLocationId)!.time}` : ""}`
+                                : "Não definido"}
+                            </span>
                           </div>
                         </div>
                         <div className="shrink-0 ml-2">

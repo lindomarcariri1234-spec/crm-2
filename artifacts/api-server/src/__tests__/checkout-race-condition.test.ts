@@ -534,6 +534,12 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
       quantityByProductId: new Map([["prod-001", 1]]),
       tripLinkedProducts: new Map(),
     };
+    const orders = [
+      { ...FAKE_ORDER_ROW, totalAmount: "20.00" },
+      { ...FAKE_ORDER_ROW, totalAmount: "40.00" },
+    ];
+    const persistedOrderRows: typeof orders = [];
+
     const mockOrderBy = vi.fn(() => {
       const creditRows = [{
         id: "credit-001",
@@ -556,15 +562,14 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
     // safely use this row: it has the client identity needed by the cashback
     // guard and the order fields needed by the response projection.
     const universalLookupRow = {
-      ...FAKE_ORDER_ROW,
+      ...orders[0],
       id: "client-001",
       gracePeriodDays: 30,
-      totalAmount: "50.00",
     };
     mockLimit
       .mockResolvedValueOnce([FAKE_STORE]) // request A — store lookup
       .mockResolvedValueOnce([FAKE_STORE]) // request B — store lookup
-      .mockResolvedValue([universalLookupRow]);
+      .mockImplementation(async () => [persistedOrderRows.shift() ?? universalLookupRow]);
 
     vi.mocked(getTenantUser).mockResolvedValue({
       id: "user-001",
@@ -586,6 +591,7 @@ describe("POST /api/public/store/:slug/orders — cross-tab race (same client, n
       referralCreditClientId?: string;
     }) => {
       persistenceCalls.push(args);
+      persistedOrderRows.push(orders[persistenceCalls.length - 1]);
       const appliedCreditAmount = persistenceCalls.length === 1 ? 30 : 10;
       return { appliedCreditAmount, totalAmount: 50 - appliedCreditAmount };
     });

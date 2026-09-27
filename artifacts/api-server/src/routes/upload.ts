@@ -6,9 +6,12 @@ import { db } from "@workspace/db";
 import { tripsTable, tripMediaTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { generateId } from "../lib/id";
+import { safeErrorLogFields } from "../lib/safe-error-log";
 
 const router = Router();
 const MAX_MULTI_IMAGE_COUNT = 10;
+const UPLOAD_PROVIDER_ERROR_MESSAGE = "Não foi possível enviar o arquivo. Tente novamente.";
+const MULTI_UPLOAD_PROVIDER_ERROR_MESSAGE = "Não foi possível enviar os arquivos. Tente novamente.";
 
 const imageUpload = multer({
   storage: memoryStorage(),
@@ -112,8 +115,11 @@ router.post("/image", imageUpload.single("file"), async (req, res, next: NextFun
     const result = await utapi.uploadFiles(file);
 
     if (result.error) {
-      req.log?.error({ err: result.error }, "[upload] utapi.uploadFiles failed (image)");
-      res.status(500).json({ error: result.error.message });
+      req.log?.error(
+        { providerError: safeErrorLogFields(result.error) },
+        "[upload] utapi.uploadFiles failed (image)",
+      );
+      res.status(500).json({ error: UPLOAD_PROVIDER_ERROR_MESSAGE });
       return;
     }
 
@@ -210,7 +216,7 @@ router.post("/images", imageUpload.array("files", MAX_MULTI_IMAGE_COUNT), async 
 
     const errors = results.filter((r) => r.error);
     if (errors.length > 0) {
-      res.status(500).json({ error: errors[0].error?.message ?? "Upload falhou" });
+      res.status(500).json({ error: MULTI_UPLOAD_PROVIDER_ERROR_MESSAGE });
       return;
     }
 
@@ -262,8 +268,11 @@ router.post("/video", videoUpload.single("file"), async (req, res, next: NextFun
     const result = await utapi.uploadFiles(file);
 
     if (result.error) {
-      req.log?.error({ err: result.error }, "[upload] utapi.uploadFiles failed (video)");
-      res.status(500).json({ error: result.error.message });
+      req.log?.error(
+        { providerError: safeErrorLogFields(result.error) },
+        "[upload] utapi.uploadFiles failed (video)",
+      );
+      res.status(500).json({ error: UPLOAD_PROVIDER_ERROR_MESSAGE });
       return;
     }
 
@@ -346,8 +355,11 @@ router.post("/document", documentUpload.single("file"), async (req, res, next: N
     const result = await utapi.uploadFiles(file);
 
     if (result.error) {
-      req.log?.error({ err: result.error }, "[upload] utapi.uploadFiles failed (document)");
-      res.status(500).json({ error: result.error.message });
+      req.log?.error(
+        { providerError: safeErrorLogFields(result.error) },
+        "[upload] utapi.uploadFiles failed (document)",
+      );
+      res.status(500).json({ error: UPLOAD_PROVIDER_ERROR_MESSAGE });
       return;
     }
 

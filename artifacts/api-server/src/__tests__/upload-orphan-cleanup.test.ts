@@ -247,6 +247,25 @@ describe("POST /upload/image with tripId — orphan cleanup", () => {
     expect(res.status).toBe(200);
     expect(res.body.url).toBe(FILE_URL);
   });
+
+  it("returns a generic response when UploadThing fails an image upload", async () => {
+    const marker = "SYNTHETIC_UPLOADTHING_RESPONSE_SECRET_418";
+    mockUploadFiles.mockResolvedValueOnce({
+      data: null,
+      error: { message: `UploadThing failed: ${marker}` },
+    });
+
+    const res = await request(app)
+      .post("/upload/image")
+      .attach("file", Buffer.from("fake-image-bytes"), {
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+      });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("Não foi possível enviar o arquivo. Tente novamente.");
+    expect(JSON.stringify(res.body)).not.toContain(marker);
+  });
 });
 
 describe("POST /upload/images — gallery uploads", () => {
@@ -365,9 +384,10 @@ describe("POST /upload/images — gallery uploads", () => {
     expect(mockUploadFiles).not.toHaveBeenCalled();
   });
 
-  it("returns the UploadThing error instead of a successful gallery payload", async () => {
+  it("returns a generic error instead of exposing UploadThing response details", async () => {
+    const marker = "SYNTHETIC_UPLOADTHING_GALLERY_RESPONSE_SECRET_418";
     mockUploadFiles.mockResolvedValueOnce([
-      { data: null, error: { message: "UploadThing indisponível" } },
+      { data: null, error: { message: `UploadThing indisponível: ${marker}` } },
     ]);
 
     const res = await request(app)
@@ -378,7 +398,8 @@ describe("POST /upload/images — gallery uploads", () => {
       });
 
     expect(res.status).toBe(500);
-    expect(res.body.error).toBe("UploadThing indisponível");
+    expect(res.body.error).toBe("Não foi possível enviar os arquivos. Tente novamente.");
+    expect(JSON.stringify(res.body)).not.toContain(marker);
   });
 });
 

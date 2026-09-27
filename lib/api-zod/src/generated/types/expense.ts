@@ -12,6 +12,8 @@ export interface Expense {
   id: string;
   /** @nullable */
   tripId?: string | null;
+  /** @nullable */
+  linkedTripCostId?: string | null;
   category: string;
   description: string;
   amount: number;
@@ -28,5 +30,5 @@ export interface Expense {
   /** @nullable */
   notes?: string | null;
   createdAt: string;
-  source?: ExpenseSource;
+  source: ExpenseSource;
 }

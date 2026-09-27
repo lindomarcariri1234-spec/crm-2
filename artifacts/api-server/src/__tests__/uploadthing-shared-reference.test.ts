@@ -54,4 +54,21 @@ describe("deleteOrphanedFile shared-reference protection", () => {
 
     expect(deleteFiles).toHaveBeenCalledWith("shared-file-key");
   });
+
+  it("does not log raw UploadThing deletion errors", async () => {
+    const marker = "SYNTHETIC_UPLOADTHING_DELETE_SECRET_418";
+    const providerError = Object.assign(new Error(`UploadThing failed: ${marker}`), {
+      statusCode: 502,
+      response: { data: { token: marker } },
+    });
+    vi.spyOn(utapi, "deleteFiles").mockRejectedValueOnce(providerError);
+
+    await deleteOrphanedFile(FILE_URL, null, log);
+
+    expect(log.warn).toHaveBeenCalledWith(
+      { providerError: { kind: "Error", status: 502 }, fileKey: "shared-file-key" },
+      "Failed to delete orphaned file from UploadThing",
+    );
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(marker);
+  });
 });

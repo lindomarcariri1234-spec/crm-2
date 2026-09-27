@@ -12,7 +12,7 @@ import { db, storeProductsTable, storesTable, tripsTable } from "@workspace/db";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
 import { requestId, errorHandler } from "./middlewares/errorHandler";
 import router from "./routes";
-import { logger } from "./lib/logger";
+import { logger, SAFE_ERROR_LOG_SERIALIZERS } from "./lib/logger";
 import { NotFoundError } from "./lib/errors";
 import { handleStripeWebhook } from "./lib/stripeWebhookHandler";
 import {
@@ -101,6 +101,7 @@ app.use(
   pinoHttp({
     logger,
     serializers: {
+      ...SAFE_ERROR_LOG_SERIALIZERS,
       req(req) {
         return {
           id: req.id,
@@ -526,6 +527,7 @@ if (!isDev) {
       const [store] = await db
         .select({
           id: storesTable.id,
+           tenantId: storesTable.tenantId,
           name: storesTable.name,
           slug: storesTable.slug,
           tagline: storesTable.tagline,
@@ -571,7 +573,13 @@ if (!isDev) {
             departureDate: tripsTable.departureDate,
           })
           .from(storeProductsTable)
-          .leftJoin(tripsTable, eq(storeProductsTable.tripId, tripsTable.id))
+          .leftJoin(
+            tripsTable,
+            and(
+              eq(storeProductsTable.tripId, tripsTable.id),
+              eq(tripsTable.tenantId, store.tenantId),
+            ),
+          )
           .where(and(
             eq(storeProductsTable.storeId, store.id),
             eq(storeProductsTable.slug, productSlug),

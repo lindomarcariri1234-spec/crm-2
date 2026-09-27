@@ -24,10 +24,10 @@ history skip it, while empty DBs (no watermark) apply it. Verified: fresh DB →
 93 tables; existing DB → skipped, untouched; idempotent on push-only DBs.
 
 **How to apply going forward:**
-- Keep `0000_squash_baseline` aligned with the current schema so a fresh
-  database is complete, and add the same change through a new idx 1+
-  incremental migration for existing databases. Do not change the baseline's
-  `when`.
+- Treat `0000_squash_baseline` as an immutable historical snapshot. Put future
+  schema changes only in new incremental migrations; fresh databases replay the
+  baseline and then every later migration. Never rewrite the baseline after a
+  database may have applied it. Do not change the baseline's `when`.
 - A truly empty DB never occurs in normal Replit use (checkpoints carry schema
   forward); to test fresh-rebuild, `CREATE DATABASE` a throwaway DB and point
   `DATABASE_URL` at it (build URL via bash param-expansion, don't print secret).
@@ -51,20 +51,20 @@ it as already-applied and skipped it. `drizzle-kit migrate` reported "applied
 successfully" while doing nothing. (It was later applied by other means — as of
 the squash audit the constraint DOES exist in dev and prod.)
 
-**Watermark, not just previous entry:** existing DBs carry a migration watermark
-of ~`1.782e12` (the legacy chain's inflated timestamps), which is HIGHER than
-`Date.now()` in 2026. A new migration whose `when` is below that watermark is
-silently skipped on already-migrated DBs even though it clears the previous
-journal entry. The corrective migration `0001_referrals_crm_check` deliberately
-uses `when=1800000000000` (above the watermark) so it runs everywhere AND raises
-the journal running-max so the guard test now also forces future migrations
-above the watermark.
+**Watermark, not just previous entry:** an existing database can have a migration
+watermark newer than both the current clock and the checked-in journal. A new
+migration whose `when` is below that database watermark is silently skipped on
+already-migrated DBs even if it clears the journal's previous entry. The journal
+ordering test guards the checked-in running maximum, but it cannot inspect every
+database's applied watermark.
 
 **How to apply:**
 - When hand-writing a migration + journal entry, set its `when` strictly greater
-  than BOTH the previous entry AND the ~1.78e12 DB watermark (not real epoch-now,
-  which is currently lower). The MEMORY entry "manual-migration" covers the
-  write-SQL + update-journal flow.
+  than BOTH the previous entry and the latest applied migration timestamp in
+  the target development database. Do not assume the latest journal entry is the
+  database watermark; verify `drizzle.__drizzle_migrations` if boot reports
+  success but the new table or column is absent. The MEMORY entry
+  "manual-migration" covers the write-SQL + update-journal flow.
 
 # A squash regenerated from schema TS silently drops manual-migration-only objects
 
@@ -95,3 +95,22 @@ so future regenerations keep them.
   `drizzle.__drizzle_migrations` ordering.
 - `pnpm --filter @workspace/db check` (schema drift) does NOT catch this — it
   compares schema files to migration SQL, not what's actually applied.
+
+# Reconciling columns from a later published branch
+
+When the checked-out schema is behind a published branch and live databases
+already contain the later columns, inspect the original migration SQL and live
+values before restoring the schema. Reconcile with a new migration using
+idempotent additive DDL; do not replay historical backfills or merge unrelated
+branch history. Preserve verified indexes and foreign-key behavior.
+
+**Why:** Existing deployments may contain non-null values written by historical
+backfills. Re-running an old `UPDATE` can misclassify or overwrite populated
+data, while a newer branch may have migration tags that conflict with the
+current squashed journal.
+
+**How to apply:** Read-only query the relevant development and production
+columns, indexes, constraints, value distributions, and migration watermarks.
+Choose a unique migration tag and a timestamp above both active watermarks.
+Use `IF NOT EXISTS` for additive objects and include data updates only when
+separately justified and explicitly scoped.

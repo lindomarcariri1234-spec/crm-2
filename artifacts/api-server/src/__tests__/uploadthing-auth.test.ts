@@ -73,6 +73,7 @@ vi.mock("../lib/stripeWebhookHandler.js", () => ({
 
 // Logger: suppress startup info messages from uploadthing.ts and app.ts.
 vi.mock("../lib/logger.js", () => ({
+  SAFE_ERROR_LOG_SERIALIZERS: {},
   logger: {
     info: vi.fn(),
     error: vi.fn(),

@@ -5,19 +5,20 @@ import request from "supertest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
-const { selectQueue, mockSelect, mockUpdate, mockDispatchTripRestorationNotification } = vi.hoisted(() => {
+const { selectQueue, mockSelect, mockUpdate, mockInsert, mockDispatchTripRestorationNotification } = vi.hoisted(() => {
   const selectQueue: unknown[][] = [];
   const mockSelect = vi.fn();
   const mockUpdate = vi.fn();
+  const mockInsert = vi.fn();
   const mockDispatchTripRestorationNotification = vi.fn().mockResolvedValue(undefined);
-  return { selectQueue, mockSelect, mockUpdate, mockDispatchTripRestorationNotification };
+  return { selectQueue, mockSelect, mockUpdate, mockInsert, mockDispatchTripRestorationNotification };
 });
 
 vi.mock("@workspace/db", () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
-    insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
+    insert: mockInsert,
     delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
     transaction: vi.fn(),
   },
@@ -50,6 +51,8 @@ vi.mock("@workspace/db", () => ({
   vehicleLayoutsTable: {},
   auditLogsTable: {},
   boardingLocationsTable: {},
+  tripCheckinsTable: { tripId: "tripCheckinsTable.tripId", tenantId: "tripCheckinsTable.tenantId", passengerId: "tripCheckinsTable.passengerId" },
+  tripGuideLocationsTable: { tripId: "tripGuideLocationsTable.tripId", tenantId: "tripGuideLocationsTable.tenantId" },
 }));
 
 vi.mock("drizzle-orm", async () => {
@@ -85,6 +88,15 @@ vi.mock("../lib/google-calendar/sync-service.js", () => ({
     syncTrip: vi.fn().mockResolvedValue(undefined),
     deleteEventsForTrip: vi.fn().mockResolvedValue(undefined),
   },
+}));
+
+vi.mock("../lib/google-calendar/schedule-sync.js", () => ({
+  scheduleCalendarSyncTrip: vi.fn().mockResolvedValue(undefined),
+  scheduleCalendarDeleteEventsForTrip: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../lib/google-calendar/schedule-sync", () => ({
+  scheduleCalendarSyncTrip: vi.fn().mockResolvedValue(undefined),
+  scheduleCalendarDeleteEventsForTrip: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../lib/uploadthing.js", () => ({
@@ -250,6 +262,7 @@ const FAKE_TRIP = {
   freeOrganizers: null,
   freeGuides: null,
   freePassengers: [],
+  seats: [],
   originCity: null,
   originState: null,
   departureTime: null,
@@ -272,10 +285,18 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
     vi.clearAllMocks();
     selectQueue.length = 0;
     requireAuthMock.mockResolvedValue(FAKE_USER as never);
-    mockSelect.mockImplementation(() => makeChain(selectQueue.shift() ?? []));
+    mockSelect.mockImplementation(() => makeChain(selectQueue.shift() ?? [FAKE_TRIP]));
     mockUpdate.mockReturnValue({
       set: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue([]),
+      }),
+    });
+    mockInsert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: "gen-id" }]),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: "gen-id" }]),
+        }),
       }),
     });
   });
@@ -286,6 +307,7 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
     selectQueue.push(
       [TENANT_ROW],
       [PLAN_ROW],
+      [FAKE_TRIP],
       [{ seats: ["5", "6"] }],
     );
 
@@ -309,6 +331,7 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
     selectQueue.push(
       [TENANT_ROW],
       [PLAN_ROW],
+      [FAKE_TRIP],
       [{ seats: ["10"] }, { seats: ["12"] }],
     );
 
@@ -331,6 +354,7 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
     selectQueue.push(
       [TENANT_ROW],
       [PLAN_ROW],
+      [FAKE_TRIP],
     );
 
     const res = await request(app)
@@ -354,8 +378,8 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
     selectQueue.push(
       [TENANT_ROW],
       [PLAN_ROW],
-      [{ seats: ["1", "2"] }],
       [FAKE_TRIP],
+      [{ seats: ["1", "2"] }],
       [FAKE_TRIP],
     );
 
@@ -377,6 +401,7 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
     selectQueue.push(
       [TENANT_ROW],
       [PLAN_ROW],
+      [FAKE_TRIP],
       [],
       [FAKE_TRIP],
       [FAKE_TRIP],
@@ -515,6 +540,247 @@ describe("PATCH /api/trips/:id — free passenger seat conflict rule", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe("trip-001");
+  });
+
+  it("rejects a free passenger whose boarding location is not a trip boarding point", async () => {
+    const app = buildApp();
+
+    selectQueue.push([TENANT_ROW], [PLAN_ROW], [{
+      ...FAKE_TRIP,
+      boardingPoints: [{ id: "boarding-1", name: "Centro", time: "08:00", address: "Rua A" }],
+      freePassengers: [],
+    }]);
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({
+        freePassengers: [{
+          id: "fp-invalid-location",
+          name: "Passageiro",
+          cpf: "111.222.333-44",
+          whatsapp: "11999990000",
+          role: "guide",
+          seatNumber: null,
+          boardingLocationId: "boarding-missing",
+        }],
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("INVALID_FREE_PASSENGER_BOARDING_LOCATION");
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects removing a boarding point still referenced by existing free passengers", async () => {
+    const app = buildApp();
+
+    selectQueue.push([TENANT_ROW], [PLAN_ROW], [{
+      ...FAKE_TRIP,
+      boardingPoints: [{ id: "boarding-1", name: "Centro", time: "08:00", address: "Rua A" }],
+      freePassengers: [{
+        id: "fp-existing",
+        name: "Passageiro",
+        cpf: "111.222.333-44",
+        whatsapp: "11999990000",
+        role: "guide",
+        seatNumber: null,
+        boardingLocationId: "boarding-1",
+      }],
+    }]);
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({ boardingPoints: [] });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("INVALID_FREE_PASSENGER_BOARDING_LOCATION");
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts a nullable or valid boarding location on update and persists freePassengers", async () => {
+    const app = buildApp();
+    const boardingPoints = [{ id: "boarding-1", name: "Centro", time: "08:00", address: "Rua A" }];
+    const freePassengers = [{
+      id: "fp-valid-location",
+      name: "Passageiro",
+      cpf: "111.222.333-44",
+      whatsapp: "11999990000",
+      role: "guide",
+      seatNumber: null,
+      boardingLocationId: "boarding-1",
+    }];
+
+    selectQueue.push(
+      [TENANT_ROW],
+      [PLAN_ROW],
+      [{ ...FAKE_TRIP, boardingPoints, freePassengers: [] }],
+      [{ ...FAKE_TRIP, boardingPoints, freePassengers }],
+      [{ ...FAKE_TRIP, boardingPoints, freePassengers }],
+    );
+
+    const res = await request(app)
+      .patch("/api/trips/trip-001")
+      .send({ boardingPoints, freePassengers });
+
+    expect(res.status).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledOnce();
+    expect(mockUpdate.mock.results[0]?.value.set).toHaveBeenCalledWith(
+      expect.objectContaining({ boardingPoints, freePassengers }),
+    );
+  });
+});
+
+describe("POST /api/trips — free passenger boarding locations", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectQueue.length = 0;
+    requireAuthMock.mockResolvedValue(FAKE_USER as never);
+    mockSelect.mockImplementation(() => makeChain(selectQueue.shift() ?? [FAKE_TRIP]));
+    mockInsert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: "gen-id" }]),
+      }),
+    });
+  });
+
+  it("rejects an invalid boarding location with the contract error code", async () => {
+    const res = await request(buildApp())
+      .post("/api/trips")
+      .send({
+        name: "Excursão Nordeste",
+        destination: "Fortaleza, CE",
+        destinationCity: "Fortaleza",
+        destinationState: "CE",
+        type: "excursao",
+        category: "standard",
+        departureDate: "2025-07-10",
+        totalCapacity: 46,
+        priceAdult: 350,
+        boardingPoints: [{ id: "boarding-1", name: "Centro", time: "08:00", address: "Rua A" }],
+        freePassengers: [{
+          id: "fp-invalid-create",
+          name: "Passageiro",
+          cpf: "111.222.333-44",
+          whatsapp: "11999990000",
+          role: "guide",
+          seatNumber: null,
+          boardingLocationId: "boarding-missing",
+        }],
+      });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("INVALID_FREE_PASSENGER_BOARDING_LOCATION");
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("stores freePassengers with a valid boarding location on create", async () => {
+    const boardingPoints = [{ id: "boarding-1", name: "Centro", time: "08:00", address: "Rua A" }];
+    const freePassengers = [{
+      id: "fp-created",
+      name: "Passageiro",
+      cpf: "111.222.333-44",
+      whatsapp: "11999990000",
+      role: "guide",
+      seatNumber: null,
+      boardingLocationId: "boarding-1",
+    }];
+    selectQueue.push([{ ...FAKE_TRIP, boardingPoints, freePassengers }], [{ ...FAKE_TRIP, boardingPoints, freePassengers }]);
+
+    const res = await request(buildApp())
+      .post("/api/trips")
+      .send({
+        name: "Excursão Nordeste",
+        destination: "Fortaleza, CE",
+        destinationCity: "Fortaleza",
+        destinationState: "CE",
+        type: "excursao",
+        category: "standard",
+        departureDate: "2025-07-10",
+        totalCapacity: 46,
+        priceAdult: 350,
+        boardingPoints,
+        freePassengers,
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockInsert).toHaveBeenCalledOnce();
+    expect(mockInsert.mock.results[0]?.value.values).toHaveBeenCalledWith(
+      expect.objectContaining({ boardingPoints, freePassengers }),
+    );
+  });
+});
+
+describe("GET /api/trips/:id/boarding-live — free passenger boarding locations", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    selectQueue.length = 0;
+    requireAuthMock.mockResolvedValue(FAKE_USER as never);
+    mockSelect.mockImplementation(() => makeChain(selectQueue.shift() ?? []));
+  });
+
+  it("shows the directly assigned trip point and labels missing or unknown points", async () => {
+    const boardingPoints = [{ id: "boarding-1", name: "Centro", time: "08:00" }];
+    const trip = {
+      ...FAKE_TRIP,
+      boardingPoints,
+      freePassengers: [
+        {
+          id: "fp-assigned",
+          name: "Guia com ponto",
+          cpf: "111.222.333-44",
+          whatsapp: "11999990000",
+          role: "guide",
+          seatNumber: "45",
+          boardingLocationId: "boarding-1",
+        },
+        {
+          id: "fp-legacy",
+          name: "Organizadora sem ponto",
+          cpf: "222.333.444-55",
+          whatsapp: "11988880000",
+          role: "organizer",
+          seatNumber: "46",
+        },
+        {
+          id: "fp-stale",
+          name: "Guia com ponto removido",
+          cpf: "333.444.555-66",
+          whatsapp: "11977770000",
+          role: "guide",
+          seatNumber: "47",
+          boardingLocationId: "boarding-removed",
+        },
+      ],
+    };
+    // Trip, reservations, check-ins, tenant boarding locations, guide location.
+    selectQueue.push([trip], [], [], [], []);
+
+    const res = await request(buildApp()).get("/api/trips/trip-001/boarding-live");
+
+    expect(res.status).toBe(200);
+    expect(res.body.absentPassengers).toEqual([
+      expect.objectContaining({
+        id: "fp-assigned",
+        boardingLocationId: "boarding-1",
+        boardingLocationName: "Centro",
+        isFree: true,
+      }),
+      expect.objectContaining({
+        id: "fp-legacy",
+        boardingLocationId: null,
+        boardingLocationName: "Não definido",
+        isFree: true,
+      }),
+      expect.objectContaining({
+        id: "fp-stale",
+        boardingLocationId: "boarding-removed",
+        boardingLocationName: "Não definido",
+        isFree: true,
+      }),
+    ]);
   });
 });
 

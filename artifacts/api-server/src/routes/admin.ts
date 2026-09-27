@@ -3,7 +3,7 @@ import { db, tenantsTable, usersTable, auditLogsTable, plansTable, invoicesTable
 import { eq, desc, asc, count, sql, and, gte, lte, ne, isNull, isNotNull } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
-import { requireAuth } from "../lib/tenant";
+import { requireAuth, MANAGEMENT_ROLES } from "../lib/tenant";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { getAuth } from "@clerk/express";
 import { utapi, extractVerifiedUploadThingKey, deleteOrphanedFile } from "../lib/uploadthing";
@@ -346,112 +346,6 @@ router.delete("/admin/feature-flags/:id", async (req, res, next: NextFunction): 
     if (!requireSuperAdmin(me.role, res, next)) return;
     await db.delete(featureFlagsTable).where(eq(featureFlagsTable.id, req.params.id));
     res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ─── METRICS HISTÓRICAS ────────────────────────────────────────────────────────
-
-router.get("/admin/metrics/growth", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
-    if (!requireSuperAdmin(me.role, res, next)) return;
-
-    const months: { month: string; label: string; new_tenants: number; active: number }[] = [];
-    const now = new Date();
-
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const start = new Date(d.getFullYear(), d.getMonth(), 1);
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-      const label = d.toLocaleDateString("pt-BR", { month: "short", year: "2-digit", timeZone: "America/Sao_Paulo" });
-
-      const [newRow] = await db
-        .select({ cnt: count() })
-        .from(tenantsTable)
-        .where(and(gte(tenantsTable.createdAt, start), lte(tenantsTable.createdAt, end)));
-
-      const [activeRow] = await db
-        .select({ cnt: count() })
-        .from(tenantsTable)
-        .where(and(eq(tenantsTable.status, "active"), lte(tenantsTable.createdAt, end)));
-
-      months.push({
-        month: start.toISOString().slice(0, 7),
-        label,
-        new_tenants: newRow?.cnt ?? 0,
-        active: activeRow?.cnt ?? 0,
-      });
-    }
-
-    res.json(months);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get("/admin/metrics/mrr", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
-    if (!requireSuperAdmin(me.role, res, next)) return;
-
-    const PLAN_MRR: Record<string, number> = { starter: 0, pro: 297, enterprise: 997 };
-    const months: { month: string; label: string; mrr: number }[] = [];
-    const now = new Date();
-
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-      const label = d.toLocaleDateString("pt-BR", { month: "short", year: "2-digit", timeZone: "America/Sao_Paulo" });
-
-      const tenants = await db.select({ planId: tenantsTable.planId, status: tenantsTable.status })
-        .from(tenantsTable)
-        .where(and(eq(tenantsTable.status, "active"), lte(tenantsTable.createdAt, end)));
-
-      const mrr = tenants.reduce((sum, t) => sum + (PLAN_MRR[t.planId] ?? 0), 0);
-      months.push({ month: d.toISOString().slice(0, 7), label, mrr });
-    }
-
-    res.json(months);
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get("/admin/metrics/churn", async (req, res, next: NextFunction): Promise<void> => {
-  try {
-    const me = await requireAuth(req, res);
-    if (!me) return;
-    if (!requireSuperAdmin(me.role, res, next)) return;
-
-    const months: { month: string; label: string; suspended: number; churnRate: number }[] = [];
-    const now = new Date();
-
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const start = new Date(d.getFullYear(), d.getMonth(), 1);
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-      const label = d.toLocaleDateString("pt-BR", { month: "short", year: "2-digit", timeZone: "America/Sao_Paulo" });
-
-      const [suspRow] = await db
-        .select({ cnt: count() })
-        .from(tenantsTable)
-        .where(and(eq(tenantsTable.status, "suspended"), gte(tenantsTable.suspendedAt!, start), lte(tenantsTable.suspendedAt!, end)));
-
-      const [totalRow] = await db
-        .select({ cnt: count() })
-        .from(tenantsTable)
-        .where(lte(tenantsTable.createdAt, end));
-
-      const suspended = suspRow?.cnt ?? 0;
-      const total = totalRow?.cnt ?? 1;
-      months.push({ month: d.toISOString().slice(0, 7), label, suspended, churnRate: Number(((suspended / total) * 100).toFixed(2)) });
-    }
-
-    res.json(months);
   } catch (err) {
     next(err);
   }
@@ -920,6 +814,7 @@ router.get("/admin/clients/:clientId/documents", async (req, res, next: NextFunc
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const docs = await db.select().from(documentsTable)
       .where(and(
         eq(documentsTable.tenantId, me.tenantId),
@@ -946,6 +841,7 @@ router.post("/admin/clients/:clientId/documents", async (req, res, next: NextFun
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     // Verify the clientId belongs to the caller's tenant before creating the document
     const [clientRow] = await db.select({ id: clientsTable.id })
       .from(clientsTable)
@@ -973,7 +869,12 @@ router.post("/admin/clients/:clientId/documents", async (req, res, next: NextFun
       entityId: req.params.clientId,
       uploadedById: me.id,
     });
-    const [doc] = await db.select().from(documentsTable).where(eq(documentsTable.id, id)).limit(1);
+    const [doc] = await db.select().from(documentsTable).where(and(
+      eq(documentsTable.id, id),
+      eq(documentsTable.tenantId, me.tenantId),
+      eq(documentsTable.entityType, "client"),
+      eq(documentsTable.entityId, req.params.clientId),
+    )).limit(1);
     if (!doc) { next(new AppError("Failed to create document", 500, "DOC_CREATE_FAILED")); return; }
     res.status(201).json({
       id: doc.id,
@@ -994,6 +895,7 @@ router.delete("/admin/clients/:clientId/documents/:docId", async (req, res, next
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
+    if (!MANAGEMENT_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const [doc] = await db.select().from(documentsTable)
       .where(and(
         eq(documentsTable.id, req.params.docId),
@@ -1005,7 +907,12 @@ router.delete("/admin/clients/:clientId/documents/:docId", async (req, res, next
     if (!doc) { next(new NotFoundError("Document not found", "DOC_NOT_FOUND")); return; }
     // Route through deleteOrphanedFile so the cross-tenant ownership guard runs
     await deleteOrphanedFile(doc.url, null, req.log ?? console, me.tenantId);
-    await db.delete(documentsTable).where(eq(documentsTable.id, doc.id));
+    await db.delete(documentsTable).where(and(
+      eq(documentsTable.id, doc.id),
+      eq(documentsTable.tenantId, me.tenantId),
+      eq(documentsTable.entityType, "client"),
+      eq(documentsTable.entityId, req.params.clientId),
+    ));
     res.json({ success: true });
   } catch (err) {
     next(err);

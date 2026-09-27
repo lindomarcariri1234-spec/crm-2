@@ -114,27 +114,29 @@ function TasksCard() {
   );
 }
 
-const DONUT_COLORS = ["#3B82F6", "#8B5CF6", "#10B981", "#F59E0B", "#EF4444", "#6B7280", "#EC4899", "#14B8A6"];
+const DONUT_COLORS = ["#1E5B8C", "#4C8B5F", "#D8A646", "#E07B39", "#5D3E2A", "#6C8798", "#C4874C", "#78A98A"];
 
 function KpiCard({ title, value, sub, icon: Icon, loading, color = "text-primary", highlight }: {
   title: string; value: string | number; sub?: string; icon: ElementType; loading: boolean; color?: string; highlight?: "green" | "red" | "yellow";
 }) {
-  const highlightClass = highlight === "green" ? "border-green-200 bg-green-50/50 dark:bg-green-950/20" :
-    highlight === "red" ? "border-red-200 bg-red-50/50 dark:bg-red-950/20" :
-    highlight === "yellow" ? "border-yellow-200 bg-yellow-50/50 dark:bg-yellow-950/20" : "";
+  const highlightClass = highlight === "green" ? "border-[#BFD9C5] bg-[#F3F8F2] dark:border-emerald-900/70 dark:bg-emerald-950/30" :
+    highlight === "red" ? "border-[#E9C7BD] bg-[#FBF2EF] dark:border-red-900/70 dark:bg-red-950/30" :
+    highlight === "yellow" ? "border-[#E8D29B] bg-[#FFF9E8] dark:border-yellow-900/70 dark:bg-yellow-950/30" : "";
 
   return (
-    <Card className={highlightClass}>
+    <Card className={`group overflow-hidden rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_5px_18px_rgba(47,58,67,.05)] transition-all duration-200 hover:-translate-y-0.5 hover:border-[#B5C7D2] hover:shadow-[0_10px_24px_rgba(47,58,67,.09)] dark:border-border dark:bg-card dark:hover:border-muted-foreground/40 ${highlightClass}`}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
-        <Icon className={`h-4 w-4 ${color}`} />
+        <CardTitle className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#71808C] dark:text-muted-foreground">{title}</CardTitle>
+        <span className="rounded-xl bg-[#F1F5F6] p-2 dark:bg-muted">
+          <Icon className={`h-4 w-4 ${color}`} />
+        </span>
       </CardHeader>
       <CardContent>
         {loading ? (
           <><Skeleton className="h-8 w-24 mb-1" /><Skeleton className="h-4 w-36" /></>
         ) : (
           <>
-            <div className="text-2xl font-bold">{value}</div>
+            <div className="text-2xl font-bold tracking-tight text-[#2F3A43] dark:text-card-foreground">{value}</div>
             {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
           </>
         )}
@@ -152,12 +154,12 @@ const STATUS_LABELS: Record<string, string> = {
 
 function SectionTitle({ icon: Icon, title, description }: { icon: ElementType; title: string; description?: string }) {
   return (
-    <div className="flex items-center gap-3 mb-4">
-      <div className="p-2 rounded-lg bg-primary/10">
-        <Icon className="w-5 h-5 text-primary" />
+      <div className="flex items-center gap-3 mb-4">
+      <div className="rounded-xl bg-[#EAF2F5] p-2.5 dark:bg-secondary">
+        <Icon className="w-5 h-5 text-primary dark:text-primary" />
       </div>
       <div>
-        <h2 className="text-lg font-semibold">{title}</h2>
+        <h2 className="text-lg font-semibold tracking-tight text-[#2F3A43] dark:text-foreground">{title}</h2>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
       </div>
     </div>
@@ -292,7 +294,7 @@ function AgencyDashboard() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="visite-enter relative mx-auto max-w-[1600px] space-y-7">
       {/* Setup reminder banner — shown only for agencies that skipped onboarding */}
       {showSetupBanner && (
         <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
@@ -318,25 +320,28 @@ function AgencyDashboard() {
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+        <div className="relative flex flex-col gap-5 overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] p-5 shadow-[0_10px_28px_rgba(93,62,42,.08)] sm:flex-row sm:items-center sm:justify-between sm:p-7 dark:border-border dark:bg-card">
+        <div className="pointer-events-none absolute -right-12 -top-20 h-52 w-52 rounded-full border-[18px] border-[#D8A646]/20" />
+        <div className="pointer-events-none absolute -bottom-28 right-20 h-44 w-44 rounded-full border-[14px] border-[#4C8B5F]/15" />
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground text-sm">Visão analítica completa da sua agência de turismo.</p>
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F] dark:text-emerald-400">Centro de operações · Cariri</p>
+          <h1 className="text-2xl font-bold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Bom trabalho, equipe.</h1>
+           <p className="text-muted-foreground text-sm">Acompanhe vendas, viagens e caixa em um só lugar.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex rounded-md border overflow-hidden text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex overflow-hidden rounded-xl border border-[#DCE3E8] bg-[#F5F7FA] text-xs dark:border-border dark:bg-muted">
             {(["3m", "6m", "12m"] as const).map(p => (
               <button
                 key={p}
                 onClick={() => setChartPeriod(p)}
-                className={`px-3 py-1.5 font-medium transition-colors ${chartPeriod === p ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                 className={`px-3 py-2 font-semibold transition-colors ${chartPeriod === p ? "bg-[#1E5B8C] text-white" : "text-[#71808C] hover:bg-white hover:text-[#1E5B8C]"}`}
               >
                 {p === "3m" ? "3M" : p === "6m" ? "6M" : "12M"}
               </button>
             ))}
           </div>
-          <Link href="/clients"><Button variant="outline" size="sm"><Plus className="w-4 h-4 mr-1" /> Novo Cliente</Button></Link>
-          <Link href="/trips"><Button size="sm"><Plus className="w-4 h-4 mr-1" /> Nova Viagem</Button></Link>
+           <Link href="/clients"><Button variant="outline" size="sm" className="border-[#C9D8E2] bg-white hover:border-[#1E5B8C] hover:bg-[#F1F7FB] dark:border-border dark:bg-card dark:hover:bg-muted"><Plus className="w-4 h-4 mr-1" /> Novo Cliente</Button></Link>
+           <Link href="/trips"><Button size="sm" className="bg-[#5D3E2A] text-white shadow-sm hover:bg-[#49301F]"><Plus className="w-4 h-4 mr-1" /> Nova Viagem</Button></Link>
         </div>
       </div>
 
@@ -372,10 +377,10 @@ function AgencyDashboard() {
       {/* ═══ SEÇÃO 1: KPIs em 4 grupos ═══ */}
       <div className="space-y-6">
         {/* FINANCEIRO */}
-        <section className="rounded-xl border border-emerald-100 bg-gradient-to-br from-emerald-50/60 to-teal-50/30 dark:from-emerald-950/20 dark:to-teal-950/10 dark:border-emerald-900/30 p-4">
+        <section className="rounded-2xl border border-[#CFE3D4] bg-gradient-to-br from-[#F0F7F1] to-[#F8FBF8] p-4 shadow-[0_4px_16px_rgba(76,139,95,.05)] md:p-5">
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-2 h-5 rounded-full bg-emerald-500" />
-            <h2 className="text-sm font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wide">Financeiro</h2>
+             <div className="w-2 h-5 rounded-full bg-[#4C8B5F]" />
+             <h2 className="text-sm font-semibold text-[#356B46] uppercase tracking-wide">Financeiro</h2>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub="Caixa recebido no mês atual (BRT)" icon={TrendingUp} loading={loadingFinancialMetrics} color="text-emerald-600" highlight="green" />
@@ -397,7 +402,7 @@ function AgencyDashboard() {
               loading={loadingFinancialMetrics}
               color={(financialMetrics?.totals.margin ?? 0) >= 20 ? "text-emerald-600" : (financialMetrics?.totals.margin ?? 0) >= 10 ? "text-yellow-600" : "text-red-600"}
             />
-            <KpiCard title="Ticket Médio" value={formatCurrency(summary?.avgTicket ?? 0)} sub="Por reserva confirmada" icon={Target} loading={loadingSummary} color="text-purple-600" />
+             <KpiCard title="Ticket Médio" value={formatCurrency(summary?.avgTicket ?? 0)} sub="Por reserva confirmada" icon={Target} loading={loadingSummary} color="text-[#5D3E2A]" />
             <KpiCard
               title="Contas Vencidas"
               value={formatCurrency(financialMetrics?.totals.overdueReceivable ?? 0)}
@@ -412,10 +417,10 @@ function AgencyDashboard() {
         <FinancialMetricsOverview />
 
         {/* VENDAS */}
-        <section className="rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50/60 to-indigo-50/30 dark:from-blue-950/20 dark:to-indigo-950/10 dark:border-blue-900/30 p-4">
+        <section className="rounded-2xl border border-[#C9DCE9] bg-gradient-to-br from-[#F0F6FA] to-[#FAFCFD] p-4 shadow-[0_4px_16px_rgba(30,91,140,.05)] md:p-5">
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-2 h-5 rounded-full bg-blue-500" />
-            <h2 className="text-sm font-semibold text-blue-700 dark:text-blue-400 uppercase tracking-wide">Vendas</h2>
+             <div className="w-2 h-5 rounded-full bg-[#1E5B8C]" />
+             <h2 className="text-sm font-semibold text-[#1E5B8C] uppercase tracking-wide">Vendas</h2>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <KpiCard title="Total de Reservas" value={summary?.totalReservations ?? 0} sub={`${summary?.cancelledReservations ?? 0} canceladas`} icon={CalendarCheck} loading={loadingSummary} color="text-blue-600" />
@@ -428,20 +433,20 @@ function AgencyDashboard() {
               loading={loadingSummary}
               color={(summary?.conversionRate ?? 0) >= 30 ? "text-emerald-600" : "text-blue-600"}
             />
-            <KpiCard title="Leads no Pipeline" value={summary?.pipelineLeads ?? summary?.openDeals ?? 0} sub={`Valor: ${formatCurrency(summary?.dealsPipelineValue ?? 0)}`} icon={Briefcase} loading={loadingSummary} color="text-indigo-600" />
+             <KpiCard title="Leads no Pipeline" value={summary?.pipelineLeads ?? summary?.openDeals ?? 0} sub={`Valor: ${formatCurrency(summary?.dealsPipelineValue ?? 0)}`} icon={Briefcase} loading={loadingSummary} color="text-[#1E5B8C]" />
             <KpiCard title="Vendas Este Mês" value={summary?.salesThisMonth ?? 0} sub="Reservas confirmadas no mês" icon={Zap} loading={loadingSummary} color="text-emerald-600" highlight={(summary?.salesThisMonth ?? 0) > 0 ? "green" : undefined} />
           </div>
         </section>
 
         {/* CLIENTES */}
-        <section className="rounded-xl border border-purple-100 bg-gradient-to-br from-purple-50/60 to-violet-50/30 dark:from-purple-950/20 dark:to-violet-950/10 dark:border-purple-900/30 p-4">
+        <section className="rounded-2xl border border-[#E8DCCF] bg-gradient-to-br from-[#FBF6F0] to-[#FDFBF8] p-4 shadow-[0_4px_16px_rgba(93,62,42,.05)] md:p-5">
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-2 h-5 rounded-full bg-purple-500" />
-            <h2 className="text-sm font-semibold text-purple-700 dark:text-purple-400 uppercase tracking-wide">Clientes</h2>
+             <div className="w-2 h-5 rounded-full bg-[#D8A646]" />
+             <h2 className="text-sm font-semibold text-[#8B6420] uppercase tracking-wide">Clientes</h2>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <KpiCard title="Total de Clientes" value={summary?.totalClients ?? 0} sub="Base total cadastrada" icon={Users} loading={loadingSummary} color="text-purple-600" />
-            <KpiCard title="Novos Este Mês" value={summary?.newClientsThisMonth ?? 0} sub="Cadastrados no mês atual" icon={Users} loading={loadingSummary} color="text-purple-500" highlight={(summary?.newClientsThisMonth ?? 0) > 0 ? "green" : undefined} />
+             <KpiCard title="Total de Clientes" value={summary?.totalClients ?? 0} sub="Base total cadastrada" icon={Users} loading={loadingSummary} color="text-[#5D3E2A]" />
+             <KpiCard title="Novos Este Mês" value={summary?.newClientsThisMonth ?? 0} sub="Cadastrados no mês atual" icon={Users} loading={loadingSummary} color="text-[#8B6420]" highlight={(summary?.newClientsThisMonth ?? 0) > 0 ? "green" : undefined} />
             <KpiCard
               title="Taxa de Retenção"
               value={`${(summary?.retentionRate ?? 0).toFixed(1)}%`}
@@ -470,10 +475,10 @@ function AgencyDashboard() {
         </section>
 
         {/* OPERACIONAL */}
-        <section className="rounded-xl border border-orange-100 bg-gradient-to-br from-orange-50/60 to-amber-50/30 dark:from-orange-950/20 dark:to-amber-950/10 dark:border-orange-900/30 p-4">
+        <section className="rounded-2xl border border-[#F0D9C5] bg-gradient-to-br from-[#FFF7F0] to-[#FFFBF7] p-4 shadow-[0_4px_16px_rgba(224,123,57,.05)] md:p-5">
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-2 h-5 rounded-full bg-orange-500" />
-            <h2 className="text-sm font-semibold text-orange-700 dark:text-orange-400 uppercase tracking-wide">Operacional</h2>
+             <div className="w-2 h-5 rounded-full bg-[#E07B39]" />
+             <h2 className="text-sm font-semibold text-[#B45C26] uppercase tracking-wide">Operacional</h2>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <KpiCard title="Viagens Ativas" value={summary?.activeTrips ?? 0} sub={`${summary?.totalTrips ?? 0} viagens no total`} icon={Map} loading={loadingSummary} color="text-orange-600" />
@@ -505,7 +510,7 @@ function AgencyDashboard() {
 
         {/* Chart 1 & 2: Revenue vs Expenses + Client Origin */}
         <div className="grid gap-4 lg:grid-cols-7 mb-4">
-          <Card className="lg:col-span-4">
+          <Card className="rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_5px_18px_rgba(47,58,67,.05)] dark:border-border dark:bg-card lg:col-span-4">
             <CardHeader>
               <CardTitle className="text-base">Receita vs Despesas</CardTitle>
               <CardDescription>Últimos {chartPeriod === "3m" ? "3" : chartPeriod === "6m" ? "6" : "12"} meses</CardDescription>
@@ -535,7 +540,7 @@ function AgencyDashboard() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-3">
+          <Card className="rounded-2xl border-[#DCE3E8] bg-white/90 shadow-[0_5px_18px_rgba(47,58,67,.05)] dark:border-border dark:bg-card lg:col-span-3">
             <CardHeader>
               <CardTitle className="text-base">Origem dos Clientes</CardTitle>
               <CardDescription>Por canal de captação</CardDescription>

@@ -2,6 +2,7 @@ import { Worker } from "bullmq";
 import { getRedisConnection } from "../lib/redis";
 import { attachCircuitBreaker } from "../lib/worker-circuit-breaker";
 import { logger } from "../lib/logger";
+import { safeErrorLogFields } from "../lib/safe-error-log";
 import type { WhatsAppNotificationJobData, WhatsAppMessageJobData } from "../queues/index";
 import { deliverReservationConfirmedWhatsApp } from "../services/checkout/reservation-confirmation-outbox";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
@@ -51,7 +52,10 @@ export function startWhatsAppWorker(): Worker<WhatsAppNotificationJobData> | nul
   );
 
   _worker.on("failed", (job, err) => {
-    logger.warn({ jobId: job?.id, err: err.message }, "[whatsapp-worker] Job failed");
+    logger.warn(
+      { jobId: job?.id, providerError: safeErrorLogFields(err) },
+      "[whatsapp-worker] Job failed",
+    );
   });
 
   attachCircuitBreaker(_worker, "whatsapp-worker");

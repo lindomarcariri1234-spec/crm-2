@@ -42,6 +42,7 @@ import { addClientSseConnection, removeClientSseConnection } from "../lib/client
 import { getRecentNotifications, getUnreadCount, markAllRead } from "../lib/client-notifications";
 import { areWorkersEnabled } from "../lib/redis";
 import { logger } from "../lib/logger";
+import { safeErrorLogFields } from "../lib/safe-error-log";
 import { expireClientBenefits, getClientBenefitBalances } from "../services/settlements/financial-ledger";
 import { clerkClient } from "@clerk/express";
 import { normalizeCpfInput, reconcileClientIdentity } from "../services/client-identity";
@@ -101,7 +102,10 @@ async function findClientRecord(
         verifiedEmail = primaryEmail.emailAddress;
       }
     } catch (error) {
-      logger.warn({ error, clerkId }, "Could not verify Clerk email for client fallback");
+      logger.warn(
+        { providerError: safeErrorLogFields(error), clerkId },
+        "Could not verify Clerk email for client fallback",
+      );
     }
 
     if (

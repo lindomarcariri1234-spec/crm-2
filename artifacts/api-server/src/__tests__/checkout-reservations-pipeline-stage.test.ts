@@ -173,7 +173,7 @@ describe("createReservationsForOrder — storefront Pipeline stage", () => {
           available_seats: 10,
           total_capacity: 10,
           show_seat_map: true,
-           seat_map: { "1": { status: "available" } },
+          seat_map: { "1": { status: "available" } },
           type: "excursao",
         }],
       })

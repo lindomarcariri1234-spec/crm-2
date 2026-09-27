@@ -6,33 +6,10 @@ import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ROLES } from "@workspace/permissions";
 import { LIST_SAFETY_CAP } from "../lib/list-limits";
+import { getBrazilMonthBuckets } from "../lib/brazil-calendar";
+import { buildTenantMetricsSeries, loadTenantStateHistoryForMetrics } from "../lib/tenant-state-metrics.js";
 
 const router = Router();
-
-async function buildPlanPriceMap(): Promise<Record<string, number>> {
-  const plans = await db.select({ id: plansTable.id, slug: plansTable.slug, monthlyPrice: plansTable.monthlyPrice }).from(plansTable);
-  const map: Record<string, number> = {};
-  for (const p of plans) {
-    const price = Number(p.monthlyPrice) || 0;
-    map[p.id] = price;
-    if (p.slug) map[p.slug] = price;
-  }
-  return map;
-}
-
-function getMonthBuckets(months = 12) {
-  const buckets = [];
-  const now = new Date();
-  for (let i = months - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    buckets.push({
-      label: d.toLocaleDateString("pt-BR", { month: "short", year: "2-digit", timeZone: "America/Sao_Paulo" }),
-      year: d.getFullYear(),
-      month: d.getMonth() + 1,
-    });
-  }
-  return buckets;
-}
 
 router.get("/admin/metrics/mrr", async (req, res, next: NextFunction): Promise<void> => {
   try {
@@ -40,28 +17,9 @@ router.get("/admin/metrics/mrr", async (req, res, next: NextFunction): Promise<v
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
-    const [tenants, planPriceMap] = await Promise.all([
-      db.select().from(tenantsTable),
-      buildPlanPriceMap(),
-    ]);
-    const buckets = getMonthBuckets(12);
-
-    const series = buckets.map(({ label, year, month }) => {
-      let mrr = 0;
-      for (const t of tenants) {
-        const created = new Date(t.createdAt);
-        const cYear = created.getFullYear();
-        const cMonth = created.getMonth() + 1;
-        if (cYear < year || (cYear === year && cMonth <= month)) {
-          if (t.status === "active") {
-            mrr += planPriceMap[t.planId] ?? 0;
-          }
-        }
-      }
-      return { label, value: mrr };
-    });
-
-    res.json(series);
+    const buckets = getBrazilMonthBuckets(12);
+    const history = await loadTenantStateHistoryForMetrics(buckets);
+    res.json(buildTenantMetricsSeries(buckets, history).mrr);
   } catch (err) {
     next(err);
   }
@@ -73,26 +31,9 @@ router.get("/admin/metrics/churn", async (req, res, next: NextFunction): Promise
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
-    const tenants = await db.select().from(tenantsTable);
-    const buckets = getMonthBuckets(12);
-
-    const series = buckets.map(({ label, year, month }) => {
-      let total = 0;
-      let suspended = 0;
-      for (const t of tenants) {
-        const created = new Date(t.createdAt);
-        const cYear = created.getFullYear();
-        const cMonth = created.getMonth() + 1;
-        if (cYear < year || (cYear === year && cMonth <= month)) {
-          total++;
-          if (t.status === "suspended") suspended++;
-        }
-      }
-      const rate = total > 0 ? Math.round((suspended / total) * 100 * 10) / 10 : 0;
-      return { label, value: rate };
-    });
-
-    res.json(series);
+    const buckets = getBrazilMonthBuckets(12);
+    const history = await loadTenantStateHistoryForMetrics(buckets);
+    res.json(buildTenantMetricsSeries(buckets, history).churn);
   } catch (err) {
     next(err);
   }
@@ -104,25 +45,9 @@ router.get("/admin/metrics/growth", async (req, res, next: NextFunction): Promis
     if (!me) return;
     if (me.role !== ROLES.SUPER_ADMIN) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
 
-    const tenants = await db.select().from(tenantsTable);
-    const buckets = getMonthBuckets(12);
-
-    const series = buckets.map(({ label, year, month }) => {
-      let active = 0;
-      for (const t of tenants) {
-        const created = new Date(t.createdAt);
-        const cYear = created.getFullYear();
-        const cMonth = created.getMonth() + 1;
-        if (cYear < year || (cYear === year && cMonth <= month)) {
-          if (t.status === "active") {
-            active++;
-          }
-        }
-      }
-      return { label, value: active };
-    });
-
-    res.json(series);
+    const buckets = getBrazilMonthBuckets(12);
+    const history = await loadTenantStateHistoryForMetrics(buckets);
+    res.json(buildTenantMetricsSeries(buckets, history).growth);
   } catch (err) {
     next(err);
   }

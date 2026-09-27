@@ -4,18 +4,15 @@ description: referrals_crm_requires_reservation_id exists in live DBs but is abs
 ---
 The CHECK constraint `referrals_crm_requires_reservation_id`
 (`CHECK (source IS DISTINCT FROM 'crm' OR reservation_id IS NOT NULL)`) is
-present and correct in BOTH the development and production databases (verified
-via pg_constraint). It was originally created by a raw-SQL migration (the old
-0071) that got squashed away.
+present in live databases. It is absent from the Drizzle schema and the squash
+baseline, but `0001_referrals_crm_check.sql` is journaled after the baseline and
+recreates it idempotently on rebuilt databases.
 
-**Gap:** The constraint is NOT defined in the Drizzle schema
-(`lib/db/src/schema/referrals.ts` — `source` is just a nullable text column with
-no `.check()`), and it is NOT in `lib/db/drizzle/0000_squash_baseline.sql`
-(the baseline only has FK constraints, no referrals CHECK). So a freshly-built
-database (new env, local reset) would silently lack this safeguard, and there is
-no migration to recreate it.
+**Why:** Schema generation or a future squash can omit an invariant that is
+represented only by raw SQL. The corrective migration protects rebuilt
+databases, but the TypeScript schema still does not describe the rule.
 
-**Why it matters:** Live data integrity is currently fine, but the code path
-that builds new databases has lost the constraint. Fixing requires adding it to
-the schema as a table-level check AND/OR a new numbered idempotent migration
-(idx 1+) so fresh builds get it.
+**How to apply:** Keep the journaled migration after the baseline, and preserve
+the exception for product-only orders and pending invitations. If the schema is
+later taught this CHECK directly, retain compatible migration behavior for
+already-migrated databases.

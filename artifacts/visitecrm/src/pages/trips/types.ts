@@ -14,6 +14,7 @@ export interface FreePassengerFormItem {
   role: "organizer" | "guide";
   seatNumber: string;
   checkedInAt?: string | null;
+  boardingLocationId?: string | null;
 }
 
 export interface TripFormData {
@@ -61,7 +62,7 @@ export interface TripFinancialReport {
 export const newBP = (): BoardingPoint => ({ id: crypto.randomUUID(), name: "", time: "", address: "" });
 export const newDay = (day: number): ItineraryDay => ({ day, title: "", description: "" });
 export const newFreePassenger = (): FreePassengerFormItem => ({
-  id: crypto.randomUUID(), name: "", cpf: "", whatsapp: "", role: "organizer", seatNumber: "",
+  id: crypto.randomUUID(), name: "", cpf: "", whatsapp: "", role: "organizer", seatNumber: "", boardingLocationId: null,
 });
 
 export const EMPTY_FORM: TripFormData = {
@@ -132,7 +133,7 @@ export const toTripFormData = (trip: Trip): TripFormData => ({
   gallery: trip.gallery ?? [],
   videos: (trip as unknown as { videos?: string[] }).videos ?? [],
   freePassengers: Array.isArray(trip.freePassengers)
-    ? (trip.freePassengers as Array<{ id: string; name: string; cpf: string; whatsapp: string; role: "organizer" | "guide"; seatNumber: string | null; checkedInAt?: string | null }>).map(fp => ({
+    ? (trip.freePassengers as Array<{ id: string; name: string; cpf: string; whatsapp: string; role: "organizer" | "guide"; seatNumber: string | null; checkedInAt?: string | null; boardingLocationId?: string | null }>).map(fp => ({
         id: fp.id,
         name: fp.name ?? "",
         cpf: fp.cpf ?? "",
@@ -140,6 +141,7 @@ export const toTripFormData = (trip: Trip): TripFormData => ({
         role: fp.role,
         seatNumber: fp.seatNumber ?? "",
         checkedInAt: fp.checkedInAt,
+        boardingLocationId: fp.boardingLocationId ?? null,
       }))
     : [],
 });

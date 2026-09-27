@@ -8,9 +8,13 @@ export default defineConfig({
     // `pnpm test:integration` when DATABASE_URL is available.
     exclude: [
       "src/**/*integration.test.ts",
+      "src/__tests__/ghost-reservation.test.ts",
+      "src/__tests__/expired-reservations.test.ts",
+      "src/__tests__/loyalty-points-booking.test.ts",
       "src/__tests__/referral-reversal-gaps.test.ts",
       "src/__tests__/referral-source-constraint.test.ts",
       "src/__tests__/reservation-patch-deal-sync.test.ts",
+      "src/__tests__/backup-import.test.ts",
     ],
   },
 });

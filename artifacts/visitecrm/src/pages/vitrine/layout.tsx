@@ -23,6 +23,7 @@ import {
 import { NotificationBell } from "@/components/vitrine/NotificationBell";
 import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 import { applyStorefrontMetadata } from "@/lib/storefrontMetadata";
+import { getSafeSocialUrl } from "@/lib/safe-social-url";
 import { publicStoreApi } from "@/lib/storeApi";
 import {
   captureStorefrontAttribution,
@@ -155,6 +156,9 @@ export default function VitrineLayout({
     navigate(`/loja/${slug}/produtos?search=${encodeURIComponent(searchQuery.trim())}`);
     setSearchQuery("");
   }
+
+  const facebookUrl = getSafeSocialUrl(store.socialFacebook);
+  const youtubeUrl = getSafeSocialUrl(store.socialYoutube);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -442,9 +446,9 @@ export default function VitrineLayout({
                   <Instagram className="w-5 h-5" />
                 </a>
               )}
-              {store.socialFacebook && (
+              {facebookUrl && (
                 <a
-                  href={store.socialFacebook}
+                  href={facebookUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="hover:text-white"
@@ -452,9 +456,9 @@ export default function VitrineLayout({
                   <Facebook className="w-5 h-5" />
                 </a>
               )}
-              {store.socialYoutube && (
+              {youtubeUrl && (
                 <a
-                  href={store.socialYoutube}
+                  href={youtubeUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="hover:text-white"

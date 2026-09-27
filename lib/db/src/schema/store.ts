@@ -201,7 +201,9 @@ export const storeProductsTable = pgTable("store_products", {
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
-});
+}, (table) => [
+  index("store_products_accommodation_id_idx").on(table.accommodationId),
+]);
 
 export const insertStoreProductSchema = createInsertSchema(storeProductsTable).omit({ createdAt: true, updatedAt: true });
 export type InsertStoreProduct = z.infer<typeof insertStoreProductSchema>;

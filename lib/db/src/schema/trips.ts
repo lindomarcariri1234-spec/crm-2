@@ -8,7 +8,7 @@ import { accommodationsTable } from "./registrations";
 
 export interface FixedCostItem { id: string; category: string; description: string; value: number; }
 export interface VariableCostItem { id: string; category: string; description: string; valuePax: number; }
-export interface FreePassenger { id: string; name: string; cpf: string; whatsapp: string; role: "organizer" | "guide"; seatNumber: string | null; checkedInAt?: string | null; }
+export interface FreePassenger { id: string; name: string; cpf: string; whatsapp: string; role: "organizer" | "guide"; seatNumber: string | null; checkedInAt?: string | null; boardingLocationId?: string | null; }
 
 export const tripsTable = pgTable("trips", {
   id: text("id").primaryKey(),

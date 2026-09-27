@@ -66,6 +66,7 @@ vi.mock("@workspace/db", () => {
       status: "status",
     },
     commissionRulesTable: { tenantId: "tenantId", isActive: "isActive", appliesTo: "appliesTo", tripId: "tripId" },
+    pipelineStagesTable: {},
   };
 });
 

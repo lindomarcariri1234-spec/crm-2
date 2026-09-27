@@ -34,6 +34,7 @@ vi.mock("@workspace/db", () => ({
   reservationsTable: {},
   tripsTable: {},
   clientsTable: {},
+  pipelineStagesTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({

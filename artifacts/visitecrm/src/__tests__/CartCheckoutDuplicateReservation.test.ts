@@ -21,7 +21,8 @@ vi.mock("wouter", () => ({
 
 vi.mock("@clerk/react", () => ({
   useUser: () => ({ isSignedIn: false }),
-  SignInButton: ({ children }: { children: unknown }) => children,
+  SignInButton: ({ children }: { children?: unknown }) =>
+    createElement("div", null, children),
 }));
 
 vi.mock("@/lib/clientPortalApi", () => ({

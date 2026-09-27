@@ -1,8 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { RESERVATION_STATUS } from "@workspace/permissions";
 import { useToast } from "@/hooks/use-toast";
-import { format, parseISO } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { format } from "date-fns";
 import {
   useGetTrip, useGetTripBoardingPanel, useCheckInPassenger, useUndoCheckInPassenger,
   useSyncTripPassengers, useUpdatePassengerBoarding,
@@ -24,7 +23,7 @@ import {
 } from "lucide-react";
 import { PassengerObsModal } from "./PassengerObsModal";
 import type { BoardingPoint } from "./types";
-import { printPassengersManifest } from "./PassengersListManifest";
+import { formatManifestDepartureLabel, printPassengersManifest } from "./PassengersListManifest";
 import { sumPassengerFinancials } from "./passengerFinancials";
 import { PassengersListShareDialog } from "./PassengersListShareDialog";
 import { WhatsAppBroadcastModal } from "./WhatsAppBroadcastModal";
@@ -163,8 +162,9 @@ export function PassengersList({ tripId }: { tripId: string }) {
   const boardingPoints: BoardingPoint[] = panel?.boardingPoints ?? [];
 
   const getBoardingPointName = (id: string | null | undefined) => {
-    if (!id) return "";
-    return boardingPoints.find(bp => bp.id === id)?.name ?? id;
+    if (!id) return "Não definido";
+    const name = boardingPoints.find(bp => bp.id === id)?.name;
+    return name?.trim() ? name : "Não definido";
   };
 
   const handleBoardingLocationChange = async (p: BoardingPassenger, locationId: string | null) => {
@@ -277,7 +277,7 @@ export function PassengersList({ tripId }: { tripId: string }) {
           case "birthDate": values.push(""); break;
           case "seatNumber": values.push(fp.seatNumber ?? ""); break;
           case "ageCategory": values.push(`Gratuidade — ${freeRoleLabel[fp.role] ?? fp.role}`); break;
-          case "boardingLocation": values.push(""); break;
+          case "boardingLocation": values.push(getBoardingPointName(fp.boardingLocationId)); break;
           case "whatsapp": values.push(fp.whatsapp ?? ""); break;
           case "checkedInAt": values.push("—"); break;
           case "totalValue": values.push("—"); break;
@@ -306,7 +306,7 @@ export function PassengersList({ tripId }: { tripId: string }) {
   };
 
   const handlePdfPrint = () => {
-    printPassengersManifest(panel as never, trip as never, allPassengers, getBoardingPointName, formatCpf, AGE_CATEGORY_LABELS, panel?.freePassengers ?? [], visibleCols, trip?.totalCapacity);
+    printPassengersManifest(panel as never, trip as never, allPassengers, getBoardingPointName, formatCpf, AGE_CATEGORY_LABELS, panel?.freePassengers ?? [], visibleCols, trip?.totalCapacity, boardingPoints);
   };
 
   const CATEGORY_LABELS: Record<string, string> = { all: "Todas as categorias", ...AGE_CATEGORY_LABELS };
@@ -325,13 +325,13 @@ export function PassengersList({ tripId }: { tripId: string }) {
           <p className="text-muted-foreground text-sm">
             {panel?.tripName ?? "Carregando..."}
             {trip && <span> · <MapPin className="inline w-3 h-3 mr-0.5" />{trip.destinationCity}, {trip.destinationState}</span>}
-            {panel?.departureDate && (() => {
-              const d = parseISO(panel.departureDate);
-              const timeStr = format(d, "HH:mm");
-              return (
-                <span> · <Calendar className="inline w-3 h-3 mr-0.5" />{format(d, "dd/MM/yyyy", { locale: ptBR })}{timeStr !== "00:00" ? ` às ${timeStr}` : ""}</span>
-              );
-            })()}
+            {panel?.departureDate && (
+              <span>
+                {" · "}
+                <Calendar className="inline w-3 h-3 mr-0.5" />
+                {formatManifestDepartureLabel(panel.departureDate, trip?.departureTime)}
+              </span>
+            )}
             {panel && (
               <span className="ml-3 font-medium text-foreground">{checkedInCount}/{panel.totalPassengers} embarcados</span>
             )}

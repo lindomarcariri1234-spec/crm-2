@@ -223,6 +223,7 @@ export * from "./linkedDealSummary";
 export * from "./linkedOrderSummary";
 export * from "./linkedReferralSummary";
 export * from "./linkedReservationSummary";
+export * from "./linkExpenseTripCostBody";
 export * from "./listAdminAuditLogsParams";
 export * from "./listAdminInvoicesParams";
 export * from "./listAdminUsersParams";

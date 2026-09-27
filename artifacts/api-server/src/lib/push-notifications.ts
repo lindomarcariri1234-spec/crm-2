@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { safeErrorLogFields } from "./safe-error-log";
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const PUSH_TIMEOUT_MS = 8000;
@@ -44,7 +45,10 @@ export async function sendPushNotification(opts: {
 
     return { ok: true };
   } catch (err) {
-    logger.error({ err, to: redactToken(to) }, "[push] Failed to send push notification");
+    logger.error(
+      { providerError: safeErrorLogFields(err), to: redactToken(to) },
+      "[push] Failed to send push notification",
+    );
     return { ok: false };
   }
 }
