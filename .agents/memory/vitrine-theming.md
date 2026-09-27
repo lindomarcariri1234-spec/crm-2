@@ -35,3 +35,12 @@ Dourado `#D8A646` (→ accent). Customized stores keep their own colors.
   `ProductQuickView` and was fixed by binding it to the hook).
 - Tailwind classes that read `--primary` (e.g. `bg-primary`) auto-pick up the
   themed value because the provider overrides that token on the wrapper.
+
+## Component test context
+Tests that render a storefront component using `useVitrineTheme()` directly
+must wrap it in `VitrineThemeProvider` with the same mocked store used by the
+component.
+**Why:** production mounts the provider around every Vitrine route, so a direct
+component render without it throws before the test can verify the page behavior.
+**How to apply:** wrap isolated storefront-page tests in the provider; do not
+remove the provider requirement or fall back to reading raw store color fields.

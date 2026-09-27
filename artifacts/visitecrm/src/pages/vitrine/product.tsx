@@ -35,6 +35,7 @@ import {
   ShieldCheck,
   Heart,
   Video,
+  Users,
 } from "lucide-react";
 import { useFavorites } from "@/contexts/FavoritesContext";
 import { applyStorefrontMetadata } from "@/lib/storefrontMetadata";
@@ -493,19 +494,19 @@ export default function VitrineProduct({
       (product.trackInventory && product.stockQuantity != null));
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 pb-28 lg:pb-12">
+    <div className="mx-auto max-w-6xl px-5 py-8 pb-28 lg:px-8 lg:py-12 lg:pb-14">
       {/* Top bar */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="mb-7 flex items-center justify-between">
         <button
           onClick={() => navigate(`/loja/${slug}/produtos`)}
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
         >
           <ChevronLeft className="w-4 h-4" />
           Voltar ao Catálogo
         </button>
         <button
           onClick={handleShare}
-          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
           title="Compartilhar"
         >
           {copied ? (
@@ -527,7 +528,7 @@ export default function VitrineProduct({
         <div>
           {/* Hero carousel */}
           <div
-            className="relative rounded-2xl overflow-hidden bg-muted h-72 sm:h-96"
+            className="relative h-72 overflow-hidden rounded-[1.5rem] border border-slate-200/70 bg-muted shadow-[0_18px_45px_rgba(15,23,42,0.08)] sm:h-96"
             onTouchStart={(e) => { heroTouchStartX.current = e.touches[0].clientX; }}
             onTouchEnd={(e) => {
               if (heroTouchStartX.current === null || images.length <= 1) return;
@@ -591,12 +592,12 @@ export default function VitrineProduct({
 
           {/* Thumbnails */}
           {images.length > 1 && (
-            <div className="flex gap-2 mt-4 overflow-x-auto">
+            <div className="mt-4 flex gap-2 overflow-x-auto">
               {images.map((img, i) => (
                 <button
                   key={i}
                   onClick={() => setImgIndex(i)}
-                  className={`w-16 h-16 rounded-lg border-2 overflow-hidden shrink-0 transition-colors ${
+                  className={`h-16 w-16 shrink-0 overflow-hidden rounded-xl border-2 transition-colors ${
                     i === imgIndex ? "border-primary" : "border-transparent hover:border-muted-foreground/30"
                   }`}
                 >
@@ -609,12 +610,12 @@ export default function VitrineProduct({
           {/* Gallery grid */}
           {allImages.length > 0 && (
             <div className="mt-8">
-              <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+              <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold tracking-tight">
                 <Images className="w-5 h-5 text-muted-foreground" />
                 Galeria de Fotos
                 <span className="text-sm font-normal text-muted-foreground">({allImages.length} foto{allImages.length !== 1 ? "s" : ""})</span>
               </h2>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                 {allImages.map((img, i) => (
                   <GalleryThumb
                     key={i}
@@ -640,7 +641,7 @@ export default function VitrineProduct({
                   const embedUrl = getTripVideoEmbedUrl(url);
                   if (embedUrl) {
                     return (
-                      <div key={i} className="w-full aspect-video overflow-hidden rounded-xl border bg-black">
+                      <div key={i} className="aspect-video w-full overflow-hidden rounded-2xl border bg-slate-950">
                         <iframe
                           src={embedUrl}
                           title={`Vídeo da viagem ${i + 1}`}
@@ -659,7 +660,7 @@ export default function VitrineProduct({
                       src={url}
                       controls
                       preload="metadata"
-                      className="w-full rounded-xl border bg-black"
+                      className="w-full rounded-2xl border bg-slate-950"
                       style={{ maxHeight: "280px" }}
                     />
                   );
@@ -671,7 +672,7 @@ export default function VitrineProduct({
 
         {/* RIGHT: purchase card */}
         <div>
-          <div className="lg:sticky lg:top-6 space-y-5 rounded-2xl border bg-card p-6 shadow-sm">
+          <div className="space-y-5 rounded-[1.5rem] border border-slate-200/80 bg-white p-6 shadow-[0_18px_45px_rgba(15,23,42,0.07)] lg:sticky lg:top-6">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="outline">{typeLabel}</Badge>
               {product.isFeatured && (
@@ -709,7 +710,7 @@ export default function VitrineProduct({
             )}
 
             {(product.sellerName || partnerInfo?.seller) && (
-              <div className="rounded-xl border bg-muted/30 p-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5">
                 <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Vendido por</p>
                 <div className="flex items-center gap-2 mt-1">
                   {partnerInfo?.seller?.logo && <img src={partnerInfo.seller.logo} alt="" className="w-7 h-7 rounded-full object-cover border" />}
@@ -720,7 +721,7 @@ export default function VitrineProduct({
             )}
 
             {partnerInfo?.availability && partnerInfo.availability.length > 0 && (
-              <div className="rounded-xl border bg-muted/30 p-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5">
                 <p className="text-[11px] text-muted-foreground uppercase tracking-wide mb-2">Próximas disponibilidades</p>
                 <div className="flex flex-wrap gap-1.5">
                   {partnerInfo.availability.slice(0, 4).map((slot) => (
@@ -736,7 +737,7 @@ export default function VitrineProduct({
             {hasInfoGrid && (
               <div className="grid grid-cols-2 gap-3">
                 {(product.departureDate ?? product.startDate) && (
-                  <div className="flex items-center gap-2 rounded-xl border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
                     <Calendar className="w-5 h-5 shrink-0" style={{ color: colors.primary }} />
                     <div>
                       <p className="text-[11px] text-muted-foreground">Saída</p>
@@ -750,7 +751,7 @@ export default function VitrineProduct({
                   </div>
                 )}
                 {(product.originCity || product.originState) && (
-                  <div className="flex items-center gap-2 rounded-xl border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
                     <MapPin className="w-5 h-5 shrink-0" style={{ color: colors.primary }} />
                     <div>
                       <p className="text-[11px] text-muted-foreground">Origem</p>
@@ -759,7 +760,7 @@ export default function VitrineProduct({
                   </div>
                 )}
                 {(product.returnDate ?? product.endDate) && (
-                  <div className="flex items-center gap-2 rounded-xl border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
                     <Calendar className="w-5 h-5 shrink-0" style={{ color: colors.primary }} />
                     <div>
                       <p className="text-[11px] text-muted-foreground">Retorno</p>
@@ -790,7 +791,7 @@ export default function VitrineProduct({
                     );
                   }
                   return dur ? (
-                    <div className="flex items-center gap-2 rounded-xl border bg-muted/30 p-3">
+                    <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
                       <Clock className="w-5 h-5 shrink-0" style={{ color: colors.primary }} />
                       <div>
                         <p className="text-[11px] text-muted-foreground">Duração</p>
@@ -809,7 +810,7 @@ export default function VitrineProduct({
                   const low = !soldOut && seats <= 10;
                   return (
                     <div className={`flex items-center gap-2 p-3 rounded-xl border ${soldOut ? "bg-red-50" : low ? "bg-orange-50" : "bg-green-50"}`}>
-                      <span className={`text-lg shrink-0 ${soldOut ? "text-red-600" : low ? "text-orange-600" : "text-green-600"}`}>👥</span>
+                      <Users className={`h-5 w-5 shrink-0 ${soldOut ? "text-red-600" : low ? "text-orange-600" : "text-green-600"}`} />
                       <div>
                         <p className="text-[11px] text-muted-foreground">Vagas</p>
                         <p className={`text-xs font-semibold ${soldOut ? "text-red-600" : low ? "text-orange-600" : ""}`}>
@@ -849,7 +850,7 @@ export default function VitrineProduct({
             )}
 
             {/* Price */}
-            <div className="rounded-xl border bg-muted/30 p-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
               <div className="flex items-baseline gap-2 flex-wrap">
                 {product.salePrice && (
                   <span className="text-base text-muted-foreground line-through">
@@ -868,7 +869,7 @@ export default function VitrineProduct({
             {/* CTA */}
             <div className="flex gap-2">
               <Button
-                className="flex-1 h-12 text-base font-bold"
+                className="h-12 flex-1 rounded-xl text-base font-bold"
                 style={{ backgroundColor: colors.accent, color: colors.accentForeground }}
                 onClick={handleReserveNow}
                 disabled={isSoldOut}
@@ -879,7 +880,7 @@ export default function VitrineProduct({
               <button
                 aria-label={isFav ? "Remover dos favoritos" : "Adicionar aos favoritos"}
                 onClick={() => toggleFavorite(favItemType, favItemId)}
-                className={`h-12 w-12 shrink-0 flex items-center justify-center rounded-lg border transition-colors ${
+                className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border transition-colors ${
                   isFav
                     ? "bg-red-500 border-red-500 text-white"
                     : "border-border text-muted-foreground hover:border-red-400 hover:text-red-500"
@@ -892,7 +893,7 @@ export default function VitrineProduct({
             {store.contactWhatsapp && (
               <Button
                 variant="outline"
-                className="w-full h-11 font-semibold border-green-500 text-green-600 hover:bg-green-50"
+                className="h-11 w-full rounded-xl border-green-500 font-semibold text-green-600 hover:bg-green-50"
                 onClick={handleWhatsApp}
               >
                 <MessageCircle className="w-5 h-5 mr-2" />
@@ -1095,7 +1096,7 @@ export default function VitrineProduct({
 
       {/* Mobile sticky purchase bar */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t shadow-lg lg:hidden"
+        className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white/95 shadow-[0_-12px_30px_rgba(15,23,42,0.1)] lg:hidden"
         style={{ backdropFilter: "blur(8px)" }}
       >
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
@@ -1113,7 +1114,7 @@ export default function VitrineProduct({
             </div>
           </div>
           <Button
-            className="h-11 px-6 font-bold"
+            className="h-11 rounded-xl px-6 font-bold"
             style={{ backgroundColor: colors.accent, color: colors.accentForeground }}
             onClick={handleReserveNow}
             disabled={isSoldOut}

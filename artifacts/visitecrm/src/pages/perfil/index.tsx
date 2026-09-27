@@ -1581,15 +1581,17 @@ export function ReservasTab({
 
   if (!all.length) {
     return (
-      <div className="text-center py-16">
-        <CalendarCheck className="w-14 h-14 mx-auto mb-4 text-muted-foreground/30" />
-        <h3 className="font-semibold text-lg mb-1">Nenhuma reserva encontrada</h3>
-        <p className="text-muted-foreground text-sm">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <CalendarCheck className="h-7 w-7" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhuma reserva encontrada</h3>
+        <p className="text-sm leading-6 text-muted-foreground">
           Suas reservas aparecerão aqui após a compra de um pacote.
         </p>
         {profile.tenant?.slug && (
           <Button
-            className="mt-4"
+            className="mt-5 rounded-full px-5"
             onClick={() => (window.location.href = `/loja/${profile.tenant!.slug}/produtos`)}
             style={{ backgroundColor: profile.tenant.primaryColor }}
           >
@@ -1671,18 +1673,20 @@ export function ReservasTab({
     );
     return (
       <>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/75 px-4 py-3 dark:border-amber-900/60 dark:bg-amber-950/25">
             <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-orange-500" />
-              <span className="text-sm font-semibold text-orange-800">
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/75 text-orange-500 shadow-sm dark:bg-slate-900/50">
+                <AlertCircle className="h-4 w-4" />
+              </span>
+              <span className="text-sm font-semibold text-orange-800 dark:text-orange-200">
                 {withBalance.length} reserva{withBalance.length !== 1 ? "s" : ""} com pagamento pendente
               </span>
             </div>
             <Button
               variant="ghost"
               size="sm"
-              className="text-xs text-muted-foreground"
+              className="rounded-full text-xs text-muted-foreground"
               onClick={onClearFilter}
             >
               Ver todas
@@ -1690,8 +1694,8 @@ export function ReservasTab({
             </Button>
           </div>
           {withBalance.length === 0 ? (
-            <div className="text-center py-10">
-              <CheckCircle className="w-12 h-12 mx-auto mb-3 text-green-400" />
+            <div className="rounded-2xl border border-dashed border-teal-200 bg-teal-50/40 py-12 text-center dark:border-teal-900/60 dark:bg-teal-950/20">
+              <CheckCircle className="mx-auto mb-3 h-12 w-12 text-teal-400" />
               <p className="text-muted-foreground text-sm">Nenhuma reserva com saldo pendente.</p>
             </div>
           ) : (
@@ -1712,10 +1716,11 @@ export function ReservasTab({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-7">
       {upcoming.length > 0 && (
         <section>
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h2 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-sky-700 dark:text-sky-300">
+            <span className="h-2 w-2 rounded-full bg-teal-400" />
             Próximas Viagens
           </h2>
           <div className="space-y-3">
@@ -1732,7 +1737,8 @@ export function ReservasTab({
 
       {past.length > 0 && (
         <section>
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h2 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            <span className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600" />
             Histórico
           </h2>
           <div className="space-y-3">
@@ -1835,15 +1841,15 @@ function SegurancaSection({ email }: { email: string }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
+    <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+      <CardHeader className="border-b border-slate-100 bg-sky-50/45 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+        <CardTitle className="flex items-center gap-2 text-base tracking-tight">
           <ShieldCheck className="w-4 h-4" />
           Segurança
         </CardTitle>
-        <CardDescription>Gerencie o acesso à sua conta.</CardDescription>
+        <CardDescription className="mt-1 leading-5">Gerencie o acesso à sua conta.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-5">
+      <CardContent className="space-y-5 p-5 sm:p-6">
         <div className="flex items-start gap-3">
           <Mail className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
           <div>
@@ -2044,13 +2050,13 @@ function DadosTab({ profile, onUpdated }: { profile: ClientPortalProfile; onUpda
   const email = client?.email ?? user?.email ?? "";
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Informações Pessoais</CardTitle>
-          <CardDescription>Mantenha seus dados atualizados para facilitar suas reservas.</CardDescription>
+    <div className="space-y-5">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-gradient-to-r from-sky-50/70 to-teal-50/45 pb-4 dark:border-slate-800 dark:from-sky-950/25 dark:to-teal-950/15">
+          <CardTitle className="text-base tracking-tight">Informações Pessoais</CardTitle>
+          <CardDescription className="mt-1 leading-5">Mantenha seus dados atualizados para facilitar suas reservas.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5 sm:p-6">
           <form onSubmit={handleSave} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -2068,7 +2074,7 @@ function DadosTab({ profile, onUpdated }: { profile: ClientPortalProfile; onUpda
                   id="portal-email"
                   value={email}
                   disabled
-                  className="bg-muted"
+                   className="bg-slate-50/80 dark:bg-slate-800/70"
                 />
               </div>
               <div className="space-y-1.5">
@@ -2411,10 +2417,12 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
 
   if (!code) {
     return (
-      <div className="text-center py-16">
-        <Gift className="w-14 h-14 mx-auto mb-4 text-muted-foreground/30" />
-        <h3 className="font-semibold text-lg mb-1">Código de indicação não disponível</h3>
-        <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <Gift className="h-7 w-7" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Código de indicação não disponível</h3>
+        <p className="mx-auto max-w-sm text-sm leading-6 text-muted-foreground">
           Seu código de indicação será gerado automaticamente após a confirmação da sua primeira reserva.
         </p>
       </div>
@@ -2422,11 +2430,13 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Suspended code banner */}
       {!isCodeActive && (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50/75 p-4 dark:border-amber-900/60 dark:bg-amber-950/25">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/75 text-amber-600 shadow-sm dark:bg-slate-900/50">
+            <AlertTriangle className="h-5 w-5" />
+          </span>
           <div>
             <p className="text-sm font-semibold text-amber-800">
               {referralCodeStatus === "blocked" ? "Código bloqueado" : "Código cancelado"}
@@ -2445,7 +2455,7 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
         <AsyncError error={campaignError} retry={retryCampaign} title="Não foi possível carregar a campanha." />
       ) : activeCampaign && countdown ? (
         <div
-          className="rounded-xl p-4 text-center shadow-md animate-in fade-in slide-in-from-top-2 duration-500"
+          className="rounded-2xl border border-white/20 p-4 text-center shadow-[0_14px_34px_rgba(15,23,42,0.12)] animate-in fade-in slide-in-from-top-2 duration-500"
           style={{ background: `linear-gradient(135deg, ${primaryColor}dd, ${primaryColor}bb)`, color: primaryForeground }}
         >
           <div className="flex items-center justify-center gap-2 font-bold text-base mb-1">
@@ -2468,10 +2478,10 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       ) : <p className="text-xs text-muted-foreground">Nenhuma campanha ativa no momento.</p>}
 
       <div
-        className="rounded-2xl p-6"
+        className="relative overflow-hidden rounded-[1.75rem] p-6 shadow-[0_18px_45px_rgba(15,23,42,0.14)] sm:p-7"
         style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)`, color: primaryForeground }}
       >
-        <div className="flex items-center gap-3 mb-3">
+          <div className="mb-4 flex items-center gap-3">
           {tenantLogoUrl ? (
             <img src={tenantLogoUrl} alt="Logo" className="w-10 h-10 rounded-full object-contain bg-white/20 p-1" />
           ) : (
@@ -2540,8 +2550,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       </div>
 
       {shareLink && (
-        <Card>
-          <CardContent className="pt-4">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 sm:p-5">
             <Label className="text-sm font-medium">Link de indicação</Label>
             <div className="flex gap-2 mt-2">
               <Input value={shareLink} readOnly className="font-mono text-xs bg-muted" />
@@ -2570,8 +2580,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
         const tc = TIER_COLORS[tierLevel] ?? TIER_COLORS.bronze;
         const completed = referral.completedReferrals;
         return (
-          <Card>
-            <CardContent className="pt-4 pb-4">
+          <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+            <CardContent className="p-4">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <div>
                   <p className="text-xs text-muted-foreground mb-0.5">Seu nível de indicador</p>
@@ -2632,8 +2642,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
         </Card>
         {hasBonus ? (
           <>
-            <Card>
-              <CardContent className="pt-4 pb-3 text-center">
+            <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+              <CardContent className="p-4 text-center">
                 <Clock className="w-5 h-5 mx-auto mb-1.5 text-orange-400" />
                 <p className="text-xl font-bold text-orange-500">
                   {formatBRL(pendingBonus)}
@@ -2641,8 +2651,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
                 <p className="text-xs text-muted-foreground">Bônus a receber</p>
               </CardContent>
             </Card>
-            <Card>
-              <CardContent className="pt-4 pb-3 text-center">
+            <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+              <CardContent className="p-4 text-center">
                 <Wallet className="w-5 h-5 mx-auto mb-1.5 text-green-500" />
                 <p className="text-xl font-bold text-green-600">
                   {formatBRL(paidBonus)}
@@ -2652,8 +2662,8 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
             </Card>
           </>
         ) : (
-          <Card className="col-span-2">
-            <CardContent className="pt-4 pb-4 px-4">
+          <Card className="col-span-2 rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+            <CardContent className="p-4">
               <div className="flex items-start gap-3 mb-3">
                 <Gift className="w-5 h-5 shrink-0 text-muted-foreground/40 mt-0.5" />
                 <div>
@@ -2697,11 +2707,11 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       </div>
 
       {/* "Como funciona" explainer */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Como funciona</CardTitle>
+      <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+          <CardTitle className="text-base tracking-tight">Como funciona</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-3 p-5">
           {[
             { step: "1", text: "Compartilhe seu código ou link com amigos" },
             { step: "2", text: "Seu amigo acessa a loja e faz uma compra usando seu código" },
@@ -2721,11 +2731,11 @@ function IndicacoesTab({ profile }: { profile: ClientPortalProfile }) {
       </Card>
 
       {/* Referral list card */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Minhas Indicações</CardTitle>
+      <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+          <CardTitle className="text-base tracking-tight">Minhas Indicações</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5">
           {/* Bonus summary pills */}
           {!loadingReferrals && hasBonus && (
             <div className="flex gap-2 flex-wrap mb-4">
@@ -3027,10 +3037,12 @@ function FidelidadeTab({
 
   if (!loyalty) {
     return (
-      <div className="text-center py-16">
-        <Coins className="w-14 h-14 mx-auto mb-4 text-muted-foreground/30" />
-        <h3 className="font-semibold text-lg mb-1">Programa de fidelidade não ativo</h3>
-        <p className="text-muted-foreground text-sm max-w-sm mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <Coins className="h-7 w-7" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Programa de fidelidade não ativo</h3>
+        <p className="mx-auto max-w-sm text-sm leading-6 text-muted-foreground">
           Esta agência ainda não possui um programa de fidelidade. Fique atento às novidades!
         </p>
       </div>
@@ -3064,10 +3076,10 @@ function FidelidadeTab({
     <div className="space-y-4">
       {/* Hero card */}
       <div
-        className="rounded-2xl p-6"
+        className="relative overflow-hidden rounded-[1.75rem] p-6 shadow-[0_18px_45px_rgba(15,23,42,0.14)] sm:p-7"
         style={{ background: `linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc)`, color: primaryForeground }}
       >
-        <div className="flex items-start justify-between gap-4">
+        <div className="relative flex items-start justify-between gap-4">
           <div>
             <p className="text-sm opacity-80 mb-1">Pontos disponíveis</p>
             <p className="text-4xl font-extrabold leading-none">
@@ -3095,21 +3107,21 @@ function FidelidadeTab({
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Card>
-          <CardContent className="pt-4 pb-3 text-center">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <p className="text-xs text-muted-foreground mb-1">Pontos acumulados</p>
             <p className="text-xl font-bold">{loyalty.totalPoints.toLocaleString("pt-BR")}</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <p className="text-xs text-muted-foreground mb-1">Acúmulo</p>
             <p className="text-xl font-bold">{loyalty.pointsPerReal} pts/R$</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-3 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <p className="text-xs text-muted-foreground mb-1">Mínimo para resgate</p>
             <p className="text-xl font-bold">{loyalty.minRedeemPoints.toLocaleString("pt-BR")} pts</p>
           </CardContent>
@@ -3117,8 +3129,8 @@ function FidelidadeTab({
       </div>
 
       {/* Tier Benefits */}
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
           <CardTitle className="text-base flex items-center gap-2">
             <Star className="w-4 h-4" style={{ color: primaryColor }} />
             Benefícios por nível
@@ -3162,8 +3174,8 @@ function FidelidadeTab({
 
       {/* Redeem Points */}
       {pendingReservations.length > 0 && loyalty.availablePoints >= loyalty.minRedeemPoints && (
-        <Card>
-          <CardHeader className="pb-3">
+        <Card className="overflow-hidden rounded-[1.5rem] border-amber-200/80 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-amber-900/60 dark:bg-slate-900/90">
+          <CardHeader className="border-b border-amber-100 bg-amber-50/50 pb-4 dark:border-amber-900/40 dark:bg-amber-950/20">
             <CardTitle className="text-base flex items-center gap-2">
               <Coins className="w-4 h-4" style={{ color: primaryColor }} />
               Usar pontos em reservas
@@ -3175,7 +3187,7 @@ function FidelidadeTab({
           <CardContent>
             <div className="space-y-2">
               {pendingReservations.map((r) => (
-                <div key={r.id} className="flex items-center justify-between gap-3 p-3 rounded-lg border bg-muted/30">
+                  <div key={r.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-700 dark:bg-slate-800/60">
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{r.tripName}</p>
                     <p className="text-xs text-muted-foreground">
@@ -3261,8 +3273,8 @@ function FidelidadeTab({
       </Dialog>
 
       {/* Transaction History */}
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
           <CardTitle className="text-base">Extrato de pontos</CardTitle>
           <CardDescription>{loyalty.programName}</CardDescription>
         </CardHeader>
@@ -3406,16 +3418,17 @@ function PreferenciasTab({
   }
 
   return (
-    <div className="space-y-6 max-w-xl">
-      <div>
-        <h3 className="font-semibold text-base">Suas preferências de viagem</h3>
-        <p className="text-sm text-muted-foreground mt-0.5">
+    <div className="max-w-3xl space-y-6 rounded-[1.5rem] border border-sky-100 bg-white/85 p-5 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/85 sm:p-7">
+      <div className="border-b border-slate-100 pb-5 dark:border-slate-800">
+        <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-teal-600 dark:text-teal-300">Seu jeito de viajar</p>
+        <h3 className="text-xl font-bold tracking-tight">Suas preferências de viagem</h3>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">
           Essas informações nos ajudam a criar experiências mais personalizadas para você.
         </p>
       </div>
 
-      <div className="grid gap-5">
-        <div className="space-y-1.5">
+      <div className="grid gap-5 sm:grid-cols-2">
+        <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="musicalPreferences">Música ou estilo musical favorito</Label>
           <Input
             id="musicalPreferences"
@@ -3426,7 +3439,7 @@ function PreferenciasTab({
           />
         </div>
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="favoriteDrink">Bebida favorita</Label>
           <Input
             id="favoriteDrink"
@@ -3461,7 +3474,7 @@ function PreferenciasTab({
               {dreamDestinations.map((dest, i) => (
                 <span
                   key={i}
-                  className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-3 py-0.5 text-sm"
+                  className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-0.5 text-sm text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"
                 >
                   {dest}
                   <button
@@ -3478,7 +3491,7 @@ function PreferenciasTab({
           )}
         </div>
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
            <Label htmlFor="foodPreferences">Comida favorita</Label>
           <Input
             id="foodPreferences"
@@ -3489,7 +3502,7 @@ function PreferenciasTab({
           />
         </div>
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 sm:col-span-2">
            <Label htmlFor="birthDate">Data de aniversário</Label>
           <Input
             id="birthDate"
@@ -3500,7 +3513,7 @@ function PreferenciasTab({
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>
              Tipo de destino preferido{" "}
             <span className="text-muted-foreground text-xs font-normal">(pode escolher mais de um)</span>
@@ -3523,7 +3536,7 @@ function PreferenciasTab({
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>
             Principais interesses durante a viagem{" "}
             <span className="text-muted-foreground text-xs font-normal">(pode escolher mais de um)</span>
@@ -3546,7 +3559,7 @@ function PreferenciasTab({
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>Você gosta de registrar suas viagens com fotos e vídeos?</Label>
           <div className="flex gap-2">
             {([true, false] as const).map((val) => (
@@ -3566,7 +3579,7 @@ function PreferenciasTab({
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-2 sm:col-span-2">
           <Label>Como você prefere viajar?</Label>
           <div className="flex flex-wrap gap-2">
             {TRAVEL_STYLES.map((style) => (
@@ -3587,7 +3600,7 @@ function PreferenciasTab({
         </div>
       </div>
 
-      <Button onClick={handleSave} disabled={saving} className="w-full sm:w-auto">
+      <Button onClick={handleSave} disabled={saving} className="w-full rounded-full px-5 sm:w-auto">
         {saving ? (
           <>
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -3623,15 +3636,15 @@ function FavoriteCard({
   const hasDiscount = !!salePrice;
 
   return (
-    <Card>
+    <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] transition-all hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-[0_16px_36px_rgba(14,165,233,0.10)] dark:border-slate-700 dark:bg-slate-900/90">
       <CardContent className="p-0">
-        <div className="flex gap-3 p-3">
-          <div className="w-20 h-20 shrink-0 rounded-lg overflow-hidden bg-gradient-to-br from-blue-100 to-blue-200">
+        <div className="flex gap-3 p-3.5 sm:p-4">
+          <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-gradient-to-br from-sky-100 to-teal-100 dark:from-sky-950/70 dark:to-teal-950/50">
             {imageUrl ? (
               <img src={imageUrl} alt={name} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center">
-                <MapPin className="w-6 h-6 text-blue-300" />
+                <MapPin className="h-6 w-6 text-sky-400" />
               </div>
             )}
           </div>
@@ -3715,10 +3728,12 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
 
   if (total === 0) {
     return (
-      <div className="text-center py-16">
-        <Heart className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-        <h3 className="font-semibold text-lg mb-1">Nenhum favorito ainda</h3>
-        <p className="text-muted-foreground text-sm max-w-xs mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center shadow-[0_14px_34px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-50 text-rose-400 dark:bg-rose-950/30 dark:text-rose-300">
+          <Heart className="h-6 w-6" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhum favorito ainda</h3>
+        <p className="mx-auto max-w-xs text-sm leading-6 text-muted-foreground">
               Toque no botão de favorito nos cards da loja para guardar suas viagens preferidas aqui.
         </p>
       </div>
@@ -3726,7 +3741,7 @@ function FavoritosTab({ tenantSlug }: { tenantSlug: string | null }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       {data?.trips.map((trip) => (
         <FavoriteCard
           key={trip.favoriteId}
@@ -3783,18 +3798,19 @@ function ConquistasTab() {
   const locked = (data?.badges ?? []).filter(b => !b.earned);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       {earned.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h3 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-teal-700 dark:text-teal-300">
+            <span className="h-2 w-2 rounded-full bg-teal-400" />
             Conquistas desbloqueadas ({earned.length})
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {earned.map(badge => {
               const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "NOVO", earnedClass: "bg-yellow-50 border-yellow-200" };
               return (
-                <div key={badge.key} className={`rounded-xl border-2 p-4 text-center space-y-1.5 shadow-sm ${meta.earnedClass}`}>
-                  <div className="text-3xl">{meta.emoji}</div>
+                <div key={badge.key} className={`rounded-[1.25rem] border-2 p-4 text-center space-y-1.5 shadow-[0_10px_24px_rgba(15,23,42,0.05)] transition-transform hover:-translate-y-0.5 ${meta.earnedClass}`}>
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/70 text-sm font-bold tracking-wide shadow-sm">{meta.emoji}</div>
                   <div className="font-semibold text-sm leading-tight">{meta.name}</div>
                   <div className="text-xs text-muted-foreground leading-tight">{meta.description}</div>
                   {badge.earnedAt && (
@@ -3816,15 +3832,16 @@ function ConquistasTab() {
 
       {locked.length > 0 && (
         <div>
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+          <h3 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+            <span className="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600" />
             Ainda por desbloquear ({locked.length})
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {locked.map(badge => {
               const meta = BADGE_META[badge.key] ?? { name: badge.name, description: badge.description, emoji: "BLOQUEADO", earnedClass: "" };
               return (
-                <div key={badge.key} className="rounded-xl border-2 border-dashed border-muted p-4 text-center space-y-1.5 bg-muted/30 opacity-60">
-                  <div className="text-3xl grayscale">{meta.emoji}</div>
+                <div key={badge.key} className="rounded-[1.25rem] border-2 border-dashed border-slate-200 bg-slate-50/70 p-4 text-center space-y-1.5 opacity-60 dark:border-slate-700 dark:bg-slate-800/40">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-sm font-bold tracking-wide grayscale dark:bg-slate-800">{meta.emoji}</div>
                   <div className="font-semibold text-sm leading-tight text-muted-foreground">{meta.name}</div>
                   <div className="text-xs text-muted-foreground leading-tight">{meta.description}</div>
                   {badge.target != null && (
@@ -3843,10 +3860,12 @@ function ConquistasTab() {
       )}
 
       {earned.length === 0 && locked.length === 0 && (
-        <div className="text-center py-16">
-          <Trophy className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-          <h3 className="font-semibold text-lg mb-1">Nenhuma conquista ainda</h3>
-          <p className="text-muted-foreground text-sm">Faça sua primeira viagem para começar a desbloquear conquistas!</p>
+        <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center dark:border-slate-700 dark:bg-slate-900/70">
+          <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50 text-amber-500 dark:bg-amber-950/30 dark:text-amber-300">
+            <Trophy className="h-6 w-6" />
+          </span>
+          <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhuma conquista ainda</h3>
+          <p className="text-sm leading-6 text-muted-foreground">Faça sua primeira viagem para começar a desbloquear conquistas!</p>
         </div>
       )}
     </div>
@@ -3894,31 +3913,31 @@ function MapaTab() {
   const visitedCount = visitedStates.size;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="grid grid-cols-3 gap-3">
-        <Card>
-          <CardContent className="pt-4 pb-4 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <div className="text-2xl font-bold text-primary">{totalTrips}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Viagens realizadas</div>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-4 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <div className="text-2xl font-bold text-primary">{visitedCount}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Estados visitados</div>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="pt-4 pb-4 text-center">
+        <Card className="rounded-[1.25rem] border-sky-100 bg-white/90 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:border-slate-700 dark:bg-slate-900/90">
+          <CardContent className="p-4 text-center">
             <div className="text-2xl font-bold text-primary">{data?.stats.uniqueDestinations.length ?? 0}</div>
             <div className="text-xs text-muted-foreground mt-0.5">Destinos únicos</div>
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
+      <Card className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
+          <CardTitle className="flex items-center gap-2 text-base tracking-tight">
             <Map className="w-4 h-4" />
             Brasil — estados visitados
           </CardTitle>
@@ -3928,8 +3947,8 @@ function MapaTab() {
         </CardHeader>
         <CardContent className="pb-4">
           <div
-            className="grid gap-1 w-full"
-            style={{ gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gridTemplateRows: "repeat(8, 2rem)" }}
+            className="grid w-full gap-1 sm:gap-1.5"
+            style={{ gridTemplateColumns: "repeat(10, minmax(0, 1fr))", gridTemplateRows: "repeat(8, minmax(1.65rem, 2rem))" }}
           >
             {BRAZIL_STATE_GRID.map(state => {
               const visited = visitedStates.has(state.uf);
@@ -3939,7 +3958,7 @@ function MapaTab() {
                   title={state.name}
                   style={{ gridColumn: state.col, gridRow: state.row }}
                   className={[
-                    "flex items-center justify-center rounded text-xs font-bold cursor-default select-none transition-all",
+                    "flex min-w-0 items-center justify-center rounded-lg text-[10px] font-bold cursor-default select-none transition-all sm:text-xs",
                     visited
                       ? "bg-primary text-primary-foreground shadow-sm"
                       : "bg-muted text-muted-foreground",
@@ -3964,7 +3983,7 @@ function MapaTab() {
       </Card>
 
       {visitedCount > 0 && (
-        <Card>
+        <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Estados que você conheceu</CardTitle>
           </CardHeader>
@@ -4026,22 +4045,23 @@ function SonhosTab() {
   };
 
   if (loading) return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
     </div>
   );
   if (error) return <AsyncError error={error} retry={reload} title="Não foi possível carregar os destinos." />;
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-semibold mb-1">Quero conhecer</h2>
-        <p className="text-sm text-muted-foreground">
+    <div className="space-y-6">
+      <div className="rounded-[1.5rem] border border-sky-100 bg-gradient-to-br from-sky-50/80 via-white to-teal-50/50 p-5 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:from-sky-950/35 dark:via-slate-900 dark:to-teal-950/20 sm:p-7">
+        <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.18em] text-teal-600 dark:text-teal-300">A sua lista de amanhã</p>
+        <h2 className="text-2xl font-bold tracking-tight">Quero conhecer</h2>
+        <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
           Salve os destinos dos seus sonhos. Usamos essas informações para criar ofertas personalizadas para você.
         </p>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white/75 p-2 shadow-sm dark:border-slate-700 dark:bg-slate-900/70 sm:flex-row">
         <Input
           placeholder="Ex: Fernando de Noronha, Bariloche, Paris…"
           value={input}
@@ -4049,7 +4069,7 @@ function SonhosTab() {
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addDestination(); } }}
           maxLength={200}
           disabled={saving}
-          className="flex-1"
+          className="h-11 flex-1 border-0 bg-transparent shadow-none focus-visible:ring-0"
         />
         <Button type="button" onClick={addDestination} disabled={!input.trim() || saving || items.length >= 30} size="sm" className="shrink-0">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Adicionar"}
@@ -4057,18 +4077,22 @@ function SonhosTab() {
       </div>
 
       {items.length === 0 ? (
-        <div className="text-center py-14 border-2 border-dashed border-muted rounded-xl">
-          <Globe className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-          <h3 className="font-semibold text-base mb-1">Sua lista está vazia</h3>
-          <p className="text-muted-foreground text-sm">Adicione destinos que você sonha em conhecer!</p>
+        <div className="rounded-[1.5rem] border-2 border-dashed border-sky-200 bg-white/70 py-14 text-center dark:border-slate-700 dark:bg-slate-900/60">
+          <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-50 text-sky-500 dark:bg-sky-950/40 dark:text-sky-300">
+            <Globe className="h-6 w-6" />
+          </span>
+          <h3 className="mb-1 text-base font-semibold tracking-tight">Sua lista está vazia</h3>
+          <p className="text-sm leading-6 text-muted-foreground">Adicione destinos que você sonha em conhecer!</p>
         </div>
       ) : (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">{items.length} destino{items.length !== 1 ? "s" : ""} na lista</p>
           {items.map((dest) => (
-            <div key={dest.id} className="flex items-center justify-between rounded-lg border bg-card px-4 py-3 group hover:bg-muted/30 transition-colors">
+            <div key={dest.id} className="group flex items-center justify-between rounded-2xl border border-sky-100 bg-white/90 px-4 py-3.5 shadow-sm transition-colors hover:border-sky-200 hover:bg-sky-50/40 dark:border-slate-700 dark:bg-slate-900/90 dark:hover:bg-sky-950/20">
               <div className="flex items-center gap-2.5">
-                <MapPin className="w-4 h-4 text-muted-foreground shrink-0" />
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+                  <MapPin className="h-4 w-4" />
+                </span>
                 <span className="font-medium text-sm">{dest.destinationName}</span>
               </div>
               <Button
@@ -4104,8 +4128,8 @@ function MemoryCertificate({ memory }: { memory: ClientMemoriesResponse["memorie
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
           onClick={() => setOpen(false)}
         >
-          <div
-            className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8 text-center space-y-4 border-4 border-amber-300"
+           <div
+             className="w-full max-w-sm space-y-4 rounded-[1.5rem] border-4 border-amber-300 bg-white p-8 text-center shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Trophy className="w-12 h-12 mx-auto text-amber-500" />
@@ -4150,10 +4174,12 @@ function MemoriasTab() {
 
   if (memories.length === 0) {
     return (
-      <div className="text-center py-16">
-        <Camera className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-        <h3 className="font-semibold text-lg mb-1">Nenhuma memória ainda</h3>
-        <p className="text-muted-foreground text-sm max-w-xs mx-auto">
+      <div className="rounded-[1.5rem] border border-dashed border-sky-200 bg-white/75 px-5 py-16 text-center dark:border-slate-700 dark:bg-slate-900/70">
+        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-300">
+          <Camera className="h-6 w-6" />
+        </span>
+        <h3 className="mb-1 text-lg font-semibold tracking-tight">Nenhuma memória ainda</h3>
+        <p className="mx-auto max-w-xs text-sm leading-6 text-muted-foreground">
           Suas viagens passadas aparecerão aqui com fotos e recordações.
         </p>
       </div>
@@ -4161,13 +4187,13 @@ function MemoriasTab() {
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">{memories.length} viagem{memories.length !== 1 ? "s" : ""} na sua história</p>
+    <div className="space-y-5">
+      <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-teal-700 dark:text-teal-300">{memories.length} viagem{memories.length !== 1 ? "s" : ""} na sua história</p>
       {memories.map(memory => (
-        <Card key={memory.reservationId} className="overflow-hidden">
+        <Card key={memory.reservationId} className="overflow-hidden rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
           <div className="flex">
             {memory.tripCoverImage ? (
-              <div className="w-24 sm:w-32 shrink-0 overflow-hidden bg-muted">
+                <div className="w-24 shrink-0 overflow-hidden bg-sky-50 dark:bg-sky-950/40 sm:w-40">
                 <img
                   src={memory.tripCoverImage}
                   alt={memory.tripName}
@@ -4177,8 +4203,8 @@ function MemoriasTab() {
                 />
               </div>
             ) : (
-              <div className="w-24 sm:w-32 shrink-0 bg-muted flex items-center justify-center min-h-28">
-                <Plane className="w-8 h-8 text-muted-foreground/30" />
+              <div className="flex min-h-28 w-24 shrink-0 items-center justify-center bg-sky-50 dark:bg-sky-950/40 sm:w-40">
+                <Plane className="h-8 w-8 text-sky-300" />
               </div>
             )}
             <div className="flex-1 p-4 space-y-2 min-w-0">
@@ -4285,6 +4311,8 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
   }
 
   const currentTier = profile.loyalty?.tier ?? "bronze";
+  const clubPrimaryColor = profile.tenant?.primaryColor ?? "#1D4ED8";
+  const clubPrimaryForeground = readablePortalText(clubPrimaryColor);
   const tierIndex = TIER_ORDER.indexOf(currentTier);
   const upperTiers = TIER_ORDER.slice(tierIndex + 1);
   const currentBenefits = benefits.filter((b) => b.tier === currentTier);
@@ -4303,8 +4331,15 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
   return (
     <div className="space-y-6">
       {/* Club header */}
-      <Card className="overflow-hidden">
-        <div className="bg-gradient-to-r from-[#D8A646] to-[#F2C14E] p-6 text-[#2F3A43]">
+      <Card className="overflow-hidden rounded-[1.75rem] border-sky-100 bg-white/90 shadow-[0_16px_38px_rgba(15,23,42,0.07)] dark:border-slate-700 dark:bg-slate-900/90">
+        <div
+          className="relative overflow-hidden p-6 sm:p-7"
+          style={{
+            background: `linear-gradient(110deg, ${clubPrimaryColor} 0%, ${clubPrimaryColor}d9 62%, #0EA5E9 140%)`,
+            color: clubPrimaryForeground,
+          }}
+        >
+          <div className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full border-[16px] border-white/10" aria-hidden="true" />
           <div className="flex items-center gap-3">
             <Crown className="w-8 h-8" />
             <div>
@@ -4316,12 +4351,12 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
           </div>
           <div className="mt-4 flex items-center gap-2">
             <span className="relative inline-flex">
-              <Badge className="bg-[#5D3E2A]/10 text-[#2F3A43] border-[#5D3E2A]/25 hover:bg-[#5D3E2A]/15 relative z-10">
+              <Badge className="relative z-10 border-white/25 bg-white/15 text-current hover:bg-white/20">
                 {TIER_ICONS[currentTier]} {TIER_LABELS[currentTier] ?? currentTier}
               </Badge>
               <span className="absolute inset-0 rounded-full animate-ping bg-white/30 z-0" />
             </span>
-            <span className="text-sm text-[#2F3A43]/75">Seu nível atual</span>
+             <span className="text-sm opacity-75">Seu nível atual</span>
           </div>
         </div>
       </Card>
@@ -4332,8 +4367,8 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
           {[0, 1, 2].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
         </div>
       ) : currentBenefits.length > 0 ? (
-        <Card className={`border ${TIER_COLORS[currentTier]}`}>
-          <CardHeader>
+        <Card className={`rounded-[1.5rem] border bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:bg-slate-900/90 ${TIER_COLORS[currentTier]}`}>
+          <CardHeader className="pb-4">
             <CardTitle className="text-base flex items-center gap-2">
               <span>{TIER_ICONS[currentTier]}</span>
               Seus benefícios — {TIER_LABELS[currentTier] ?? currentTier}
@@ -4360,7 +4395,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
 
       {/* All upper tier previews */}
       {upperTierBenefits.map(({ tier, benefits: tierBs }, idx) => (
-        <Card key={tier} className={`border border-dashed ${TIER_COLORS[tier] ?? ""}`}>
+        <Card key={tier} className={`rounded-[1.5rem] border border-dashed bg-white/80 shadow-[0_10px_26px_rgba(15,23,42,0.04)] dark:bg-slate-900/80 ${TIER_COLORS[tier] ?? ""}`}>
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
@@ -4392,8 +4427,8 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
       ))}
 
       {/* Ambassador opt-in */}
-      <Card>
-        <CardHeader>
+      <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
+        <CardHeader className="border-b border-slate-100 bg-sky-50/40 pb-4 dark:border-slate-800 dark:bg-sky-950/20">
           <CardTitle className="text-base flex items-center gap-2">
             <Trophy className="w-4 h-4 text-amber-500" />
             Ranking de Embaixadores
@@ -4405,7 +4440,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
               : ""}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium">
@@ -4438,7 +4473,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
       {/* Ranking leaderboard */}
       {ranking && (ranking.referrers.length > 0 || ranking.travelers.length > 0) && (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Card>
+          <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Share2 className="w-4 h-4 text-muted-foreground" />
@@ -4466,7 +4501,7 @@ function ClubeTab({ profile }: { profile: ClientPortalProfile }) {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="rounded-[1.5rem] border-sky-100 bg-white/90 shadow-[0_14px_34px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <Plane className="w-4 h-4 text-muted-foreground" />

@@ -6,6 +6,7 @@ import { PublicStore } from "@/lib/storeApi";
 import { useSyncMe } from "@workspace/api-client-react";
 import { getSafeRedirectTarget } from "@/lib/safe-redirect";
 import { clearSignupCpfHandoff, consumeSignupCpfHandoff } from "@/lib/signup-cpf-handoff";
+import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 
 export default function VitrineSignIn({
   store,
@@ -14,6 +15,7 @@ export default function VitrineSignIn({
   store: PublicStore;
 }) {
   const { isSignedIn, user } = useUser();
+  const { colors } = useVitrineTheme();
   const [, navigate] = useLocation();
   const redirectTarget = getSafeRedirectTarget(window.location.search, "redirect", "/perfil");
   const syncMe = useSyncMe();
@@ -65,34 +67,35 @@ export default function VitrineSignIn({
   }, [isSignedIn, user?.id]);
 
   return (
-    <div className="min-h-[calc(100vh-64px)] flex items-start justify-center pt-10 pb-16 px-4 bg-gray-50">
+    <div className="flex min-h-[calc(100dvh-4.5rem)] items-start justify-center bg-slate-50 px-4 pb-16 pt-8 sm:pt-12">
       <div className="w-full max-w-md space-y-6">
         <div
-          className="rounded-2xl p-8 text-white text-center"
-          style={{
-            background: `linear-gradient(135deg, ${store.primaryColor}, ${store.secondaryColor || store.primaryColor}cc)`,
-          }}
+          className="relative overflow-hidden rounded-[1.75rem] p-8 text-center text-white shadow-xl sm:p-10"
+          style={{ background: colors.gradientHero }}
         >
+          <div className="pointer-events-none absolute -right-16 -top-20 h-48 w-48 rounded-full border border-white/15" />
+          <div className="pointer-events-none absolute -bottom-24 -left-16 h-48 w-48 rounded-full border border-white/10" />
           {store.logoUrl ? (
             <img
               src={store.logoUrl}
               alt={store.name}
-              className="h-16 w-16 mx-auto mb-3 rounded-xl object-contain bg-white/10 p-2"
+              className="mx-auto mb-4 h-16 w-16 rounded-2xl bg-white/95 object-contain p-2 shadow-lg"
             />
           ) : (
             <div
-              className="h-16 w-16 mx-auto mb-3 rounded-xl bg-white/20 flex items-center justify-center font-bold text-2xl"
+              className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/15 text-2xl font-bold"
             >
               {store.name.charAt(0)}
             </div>
           )}
-          <h1 className="text-2xl font-bold">{store.name}</h1>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.2em] text-white/70">Área do viajante</p>
+          <h1 className="text-3xl font-semibold tracking-[-0.04em]">{store.name}</h1>
           <p className="text-white/80 text-sm mt-1">
             Acesse sua Área do Cliente
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border p-6">
+        <div className="rounded-[1.5rem] border border-slate-200/80 bg-white p-6 shadow-sm sm:p-7">
           <p className="text-sm text-muted-foreground text-center mb-4">
             Entre com o e-mail e a senha da sua conta de viajante.
           </p>
@@ -112,7 +115,7 @@ export default function VitrineSignIn({
                 footerAction: "hidden",
               },
               variables: {
-                colorPrimary: store.primaryColor,
+                 colorPrimary: colors.primary,
               },
             }}
           />

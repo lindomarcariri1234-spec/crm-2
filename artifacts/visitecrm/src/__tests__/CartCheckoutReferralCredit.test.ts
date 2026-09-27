@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createElement } from "react";
-import { flushAct, renderComponent, cleanupRoots } from "./eventSourceHarness.js";
+import { createElement, type ReactElement } from "react";
+import { flushAct, renderComponent as renderBareComponent, cleanupRoots } from "./eventSourceHarness.js";
 import type { PublicStore } from "../lib/storeApi.js";
 import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "../pages/vitrine/referral-messages.js";
+import { VitrineThemeProvider } from "../contexts/VitrineThemeContext.js";
 
 const {
   createOrderSpy,
@@ -109,6 +110,13 @@ function makeStore(overrides: Partial<PublicStore> = {}): PublicStore {
     referralsEnabled: true,
     ...overrides,
   } as unknown as PublicStore;
+}
+
+function renderComponent(element: ReactElement) {
+  const store = (element.props as { store?: PublicStore }).store ?? makeStore();
+  return renderBareComponent(
+    createElement(VitrineThemeProvider, { store }, element),
+  );
 }
 
 function makeOrder(totalAmount: string, referralCreditApplied: number) {

@@ -46,6 +46,7 @@ import {
 } from "./utils/storage";
 import { trackReferralCreditReduction } from "@/lib/analytics";
 import { FIRST_PURCHASE_REFERRAL_MESSAGE } from "./referral-messages";
+import { useVitrineTheme } from "@/contexts/VitrineThemeContext";
 
 type Step = "dados" | "revisao" | "pagamento" | "confirmado";
 
@@ -467,6 +468,7 @@ export default function VitrineCheckout({
   store: PublicStore;
 }) {
   const [, navigate] = useLocation();
+  const { colors } = useVitrineTheme();
   const { isLoaded: clerkIsLoaded, isSignedIn } = useUser();
   const isAuthLoaded = clerkIsLoaded ?? true;
   const { items, total, clearCart } = useCart();
@@ -1165,8 +1167,7 @@ export default function VitrineCheckout({
           </Button>
           <Button
             onClick={() => navigate(`/loja/${slug}/produtos`)}
-            style={{ backgroundColor: store.primaryColor }}
-            className="text-white"
+            style={{ backgroundColor: colors.primary, color: colors.primaryForeground }}
           >
             Tentar novamente
           </Button>
@@ -1357,8 +1358,7 @@ export default function VitrineCheckout({
           </Button>
           <Button
             onClick={() => navigate(`/loja/${slug}`)}
-            style={{ backgroundColor: store.primaryColor }}
-            className="text-white"
+            style={{ backgroundColor: colors.primary, color: colors.primaryForeground }}
           >
             Voltar à Loja
           </Button>
@@ -1368,7 +1368,7 @@ export default function VitrineCheckout({
   }
 
   const OrderSummary = () => (
-    <Card className="sticky top-20">
+    <Card className="sticky top-24 rounded-[1.5rem] border-slate-200/80 bg-white shadow-sm">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Resumo do Pedido</CardTitle>
       </CardHeader>
@@ -1418,7 +1418,7 @@ export default function VitrineCheckout({
           )}
           <div className="flex justify-between font-bold text-lg border-t pt-2 mt-1">
             <span>Total</span>
-            <span style={{ color: store.primaryColor }}>R$ {checkoutFinalTotal.toFixed(2)}</span>
+            <span style={{ color: colors.primary }}>R$ {checkoutFinalTotal.toFixed(2)}</span>
           </div>
         </div>
 
@@ -1512,34 +1512,38 @@ export default function VitrineCheckout({
     : ["pix"];
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
+    <div className="mx-auto max-w-6xl px-4 py-7 sm:py-10">
       <button
         onClick={() => {
           if (step === "dados") navigate(`/loja/${slug}/produtos`);
           else if (step === "revisao") setStep("dados");
           else if (step === "pagamento") setStep("revisao");
         }}
-        className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-6"
+        className="mb-7 flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-semibold text-muted-foreground transition-colors hover:bg-slate-100 hover:text-foreground"
       >
         <ChevronLeft className="w-4 h-4" />
         {step === "dados" ? "Continuar Comprando" : "Voltar"}
       </button>
 
-      <h1 className="text-2xl font-bold mb-6">Finalizar Pedido</h1>
+      <div className="mb-7">
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.2em]" style={{ color: colors.primary }}>Última etapa</p>
+        <h1 className="text-3xl font-semibold tracking-[-0.04em] sm:text-4xl">Finalizar Pedido</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Revise seus dados e conclua sua reserva com tranquilidade.</p>
+      </div>
       <StepIndicator current={step} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-5">
           {step === "dados" && (
             <>
-              <Card>
+              <Card className="rounded-[1.5rem] border-slate-200/80 bg-white shadow-sm">
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     <User className="w-4 h-4" /> Seus Dados
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1 col-span-2">
+                <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="col-span-1 space-y-1 sm:col-span-2">
                     <Label>
                       Nome Completo <span className="text-red-500">*</span>
                     </Label>
@@ -1576,7 +1580,7 @@ export default function VitrineCheckout({
                       placeholder="000.000.000-00"
                     />
                   </div>
-                  <div className="space-y-1 col-span-2">
+                  <div className="col-span-1 space-y-1 sm:col-span-2">
                     <Label>Observações</Label>
                     <Input
                       value={form.notes}
@@ -1588,8 +1592,8 @@ export default function VitrineCheckout({
               </Card>
 
               <Button
-                className="w-full h-11 text-white font-bold"
-                style={{ backgroundColor: store.primaryColor }}
+                className="w-full h-11 rounded-xl font-bold"
+                style={{ backgroundColor: colors.primary, color: colors.primaryForeground }}
                 disabled={!canGoNextFromDados()}
                 onClick={() => setStep("revisao")}
               >
@@ -1601,7 +1605,7 @@ export default function VitrineCheckout({
 
           {step === "revisao" && (
             <>
-              <Card>
+              <Card className="rounded-[1.5rem] border-slate-200/80 bg-white shadow-sm">
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     <ShoppingBag className="w-4 h-4" /> Revisão dos Itens
@@ -1638,7 +1642,7 @@ export default function VitrineCheckout({
               </Card>
 
               {store.couponsEnabled !== false && (
-              <Card>
+              <Card className="rounded-[1.5rem] border-slate-200/80 bg-white shadow-sm">
                 <CardHeader>
                   <CardTitle className="text-base flex items-center gap-2">
                     <Tag className="w-4 h-4" /> Cupom de Desconto
@@ -1751,8 +1755,8 @@ export default function VitrineCheckout({
               )}
 
               <Button
-                className="w-full h-11 text-white font-bold"
-                style={{ backgroundColor: store.primaryColor }}
+                className="w-full h-11 rounded-xl font-bold"
+                style={{ backgroundColor: colors.primary, color: colors.primaryForeground }}
                 onClick={() => setStep("pagamento")}
               >
                 Ir para Pagamento
@@ -1763,7 +1767,7 @@ export default function VitrineCheckout({
 
           {step === "pagamento" && (
             <>
-              <Card>
+              <Card className="rounded-[1.5rem] border-slate-200/80 bg-white shadow-sm">
                   <CardHeader>
                     <CardTitle className="text-base flex items-center gap-2">
                       <CreditCard className="w-4 h-4" /> Forma de Pagamento
@@ -1868,15 +1872,15 @@ export default function VitrineCheckout({
                     <p className="font-semibold mb-0.5">Reserva não concluída</p>
                     <p>{submitError}</p>
                   </div>
-                  <button aria-label="Fechar" onClick={() => setSubmitError(null)} className="shrink-0 text-amber-500 hover:text-amber-700">✕</button>
+                  <button aria-label="Fechar" onClick={() => setSubmitError(null)} className="shrink-0 text-amber-500 hover:text-amber-700"><X className="h-4 w-4" /></button>
                 </div>
               )}
 
               {!stripeState && (
                 <>
                   <Button
-                    className="w-full h-11 text-white font-bold"
-                    style={{ backgroundColor: store.primaryColor }}
+                    className="w-full h-11 rounded-xl font-bold"
+                    style={{ backgroundColor: colors.primary, color: colors.primaryForeground }}
                     onClick={submit}
                     disabled={loading}
                   >
