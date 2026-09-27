@@ -34,6 +34,7 @@ import {
   tripsTable,
   clientsTable,
   reservationsTable,
+  reservationInstallmentsTable,
   passengersTable,
   calendarEventsTable,
 } from "@workspace/db";
@@ -790,6 +791,57 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
       .get(`/api/reservations/trip-overlap?clientId=${OTHER_CLIENT_ID}&tripId=${TRIP_ID}`);
 
     expect(response.status).toBe(404);
+  });
+
+  it("keeps the parent balance correct when two installments are paid concurrently", async () => {
+    const installmentAId = `pds-installment-a-${RUN}`;
+    const installmentBId = `pds-installment-b-${RUN}`;
+    await db.insert(reservationInstallmentsTable).values([
+      {
+        id: installmentAId,
+        reservationId: RES_ID,
+        tenantId: TENANT_ID,
+        installmentNumber: 1,
+        dueDate: new Date("2028-01-01T12:00:00Z"),
+        amount: "600.00",
+      },
+      {
+        id: installmentBId,
+        reservationId: RES_ID,
+        tenantId: TENANT_ID,
+        installmentNumber: 2,
+        dueDate: new Date("2028-02-01T12:00:00Z"),
+        amount: "600.00",
+      },
+    ]);
+
+    const app = buildApp();
+    const responses = await Promise.all([
+      request(app).patch(`/api/reservations/installments/${installmentAId}`).send({ paidAmount: 100 }),
+      request(app).patch(`/api/reservations/installments/${installmentBId}`).send({ paidAmount: 200 }),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    const noteUpdate = await request(app)
+      .patch(`/api/reservations/installments/${installmentAId}`)
+      .send({ notes: "Pagamento confirmado" });
+    expect(noteUpdate.status).toBe(200);
+
+    const [reservation] = await db.select({
+      totalValue: reservationsTable.totalValue,
+      paidValue: reservationsTable.paidValue,
+      balance: reservationsTable.balance,
+    }).from(reservationsTable).where(eq(reservationsTable.id, RES_ID)).limit(1);
+    const installments = await db.select().from(reservationInstallmentsTable)
+      .where(eq(reservationInstallmentsTable.reservationId, RES_ID));
+    const expectedPaid = installments.reduce(
+      (sum, installment) => sum + (installment.paidAt ? Number(installment.paidAmount ?? installment.amount) : 0),
+      0,
+    );
+
+    expect(expectedPaid).toBe(300);
+    expect(Number(reservation.paidValue)).toBe(expectedPaid);
+    expect(Number(reservation.balance)).toBe(Math.max(0, Number(reservation.totalValue) - expectedPaid));
   });
 
 });

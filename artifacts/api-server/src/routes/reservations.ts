@@ -2829,45 +2829,88 @@ router.patch("/reservations/installments/:id", async (req, res, next: NextFuncti
     // Ensure the caller has access to the parent reservation
     await requireReservationAccess(me, installment.reservationId);
 
-    const updates: Partial<typeof reservationInstallmentsTable.$inferInsert> = {};
-    if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
-    if (parsed.data.dueDate !== undefined && parsed.data.dueDate) {
-      const d = new Date(`${parsed.data.dueDate}T12:00:00Z`);
-      if (!isNaN(d.getTime())) updates.dueDate = d;
-    }
-    if (parsed.data.paidAmount !== undefined) {
-      updates.paidAmount = parsed.data.paidAmount != null ? String(parsed.data.paidAmount) : null;
-    }
-    if (parsed.data.paidAt !== undefined) {
-      updates.paidAt = parsed.data.paidAt ? new Date(parsed.data.paidAt) : null;
-    }
-    if (parsed.data.paidAmount != null && !parsed.data.paidAt && !installment.paidAt) {
-      updates.paidAt = new Date();
-    }
+    const updated = await db.transaction(async (tx) => {
+      // Serialize every installment mutation for this reservation. Re-read the
+      // installment only after acquiring the parent lock so concurrent PATCHes
+      // cannot calculate a balance from stale sibling rows.
+      const [reservation] = await tx.select({
+        id: reservationsTable.id,
+        totalValue: reservationsTable.totalValue,
+      }).from(reservationsTable)
+        .where(and(
+          eq(reservationsTable.id, installment.reservationId),
+          eq(reservationsTable.tenantId, me.tenantId),
+        ))
+        .limit(1)
+        .for("update");
+      if (!reservation) {
+        throw new NotFoundError("Reservation not found", "RESERVATION_NOT_FOUND");
+      }
 
-    await db.update(reservationInstallmentsTable)
-      .set(updates)
-      .where(eq(reservationInstallmentsTable.id, req.params.id));
+      const [currentInstallment] = await tx.select().from(reservationInstallmentsTable)
+        .where(and(
+          eq(reservationInstallmentsTable.id, req.params.id),
+          eq(reservationInstallmentsTable.reservationId, installment.reservationId),
+          eq(reservationInstallmentsTable.tenantId, me.tenantId),
+        ))
+        .limit(1);
+      if (!currentInstallment) {
+        throw new NotFoundError("Installment not found", "NOT_FOUND");
+      }
 
-    const allInstallments = await db.select().from(reservationInstallmentsTable)
-      .where(eq(reservationInstallmentsTable.reservationId, installment.reservationId));
-    const totalPaid = allInstallments.reduce((sum, r) => {
-      const pa = r.id === req.params.id ? (parsed.data.paidAmount ?? (updates.paidAt ? Number(r.amount) : null)) : (r.paidAt ? Number(r.paidAmount ?? r.amount) : null);
-      return sum + (pa ?? 0);
-    }, 0);
+      const updates: Partial<typeof reservationInstallmentsTable.$inferInsert> = {};
+      if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
+      if (parsed.data.dueDate !== undefined && parsed.data.dueDate) {
+        const d = new Date(`${parsed.data.dueDate}T12:00:00Z`);
+        if (!isNaN(d.getTime())) updates.dueDate = d;
+      }
+      if (parsed.data.paidAmount !== undefined) {
+        updates.paidAmount = parsed.data.paidAmount != null ? String(parsed.data.paidAmount) : null;
+      }
+      if (parsed.data.paidAt !== undefined) {
+        updates.paidAt = parsed.data.paidAt ? new Date(parsed.data.paidAt) : null;
+      }
+      if (parsed.data.paidAmount != null && !parsed.data.paidAt && !currentInstallment.paidAt) {
+        updates.paidAt = new Date();
+      }
 
-    const [reservation] = await db.select({ totalValue: reservationsTable.totalValue })
-      .from(reservationsTable).where(eq(reservationsTable.id, installment.reservationId)).limit(1);
-    if (reservation) {
+      const [updatedInstallment] = Object.keys(updates).length > 0
+        ? await tx.update(reservationInstallmentsTable)
+            .set(updates)
+            .where(and(
+              eq(reservationInstallmentsTable.id, req.params.id),
+              eq(reservationInstallmentsTable.reservationId, installment.reservationId),
+              eq(reservationInstallmentsTable.tenantId, me.tenantId),
+            ))
+            .returning()
+        : [currentInstallment];
+      if (!updatedInstallment) {
+        throw new NotFoundError("Installment not found", "NOT_FOUND");
+      }
+
+      const allInstallments = await tx.select().from(reservationInstallmentsTable)
+        .where(and(
+          eq(reservationInstallmentsTable.reservationId, installment.reservationId),
+          eq(reservationInstallmentsTable.tenantId, me.tenantId),
+        ));
+      const totalPaid = allInstallments.reduce(
+        (sum, row) => sum + (row.paidAt ? Number(row.paidAmount ?? row.amount) : 0),
+        0,
+      );
       const total = Number(reservation.totalValue);
-      const newBalance = Math.max(0, total - totalPaid);
-      await db.update(reservationsTable)
-        .set({ paidValue: totalPaid.toFixed(2), balance: newBalance.toFixed(2) })
-        .where(eq(reservationsTable.id, installment.reservationId));
-    }
+      await tx.update(reservationsTable)
+        .set({
+          paidValue: totalPaid.toFixed(2),
+          balance: Math.max(0, total - totalPaid).toFixed(2),
+        })
+        .where(and(
+          eq(reservationsTable.id, reservation.id),
+          eq(reservationsTable.tenantId, me.tenantId),
+        ));
 
-    const [updated] = await db.select().from(reservationInstallmentsTable)
-      .where(eq(reservationInstallmentsTable.id, req.params.id)).limit(1);
+      return updatedInstallment;
+    });
+
     const now = new Date();
     res.json({
       id: updated.id,
