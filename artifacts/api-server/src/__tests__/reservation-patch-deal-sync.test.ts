@@ -26,7 +26,7 @@ import { randomUUID } from "crypto";
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   db,
   tenantsTable,
@@ -842,6 +842,97 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
     expect(expectedPaid).toBe(300);
     expect(Number(reservation.paidValue)).toBe(expectedPaid);
     expect(Number(reservation.balance)).toBe(Math.max(0, Number(reservation.totalValue) - expectedPaid));
+  });
+
+  it("uses the latest paid value when reservation total and installment payment race", async () => {
+    const reservationId = `pdsr-total-race-${RUN}`;
+    const installmentId = `pds-total-race-installment-${RUN}`;
+    const raceClientId = `pds-total-race-client-${RUN}`;
+    const suffix = RUN.replace(/[^a-zA-Z0-9]/g, "");
+    const triggerName = `pds_total_race_${suffix}`;
+    const functionName = `${triggerName}_fn`;
+    await db.insert(clientsTable).values({
+      id: raceClientId,
+      tenantId: TENANT_ID,
+      name: "Total race client",
+      email: `total-race-${RUN}@test.com`,
+      whatsapp: `719${RUN.replace(/[^0-9]/g, "").slice(-8)}`,
+      createdById: USER_ID,
+    });
+    await db.insert(reservationsTable).values({
+      id: reservationId,
+      tenantId: TENANT_ID,
+      tripId: TRIP_ID,
+      clientId: raceClientId,
+      createdById: USER_ID,
+      status: RESERVATION_STATUS.PENDING,
+      totalValue: "1200.00",
+      paidValue: "0.00",
+      balance: "1200.00",
+      seats: [],
+      tripType: "excursao",
+      voucherCode: `VCH-RACE-${RUN.toUpperCase()}`,
+      qrCode: `QR-RACE-${RUN.toUpperCase()}`,
+    });
+    await db.insert(reservationInstallmentsTable).values({
+      id: installmentId,
+      reservationId,
+      tenantId: TENANT_ID,
+      installmentNumber: 1,
+      dueDate: new Date("2028-01-01T12:00:00Z"),
+      amount: "1200.00",
+    });
+
+    // Hold the installment transaction after it updates the parent, giving
+    // the total-value PATCH time to read the old paidValue before it waits.
+    try {
+      await db.execute(sql.raw(`
+        CREATE FUNCTION public."${functionName}"() RETURNS trigger
+        LANGUAGE plpgsql AS $body$
+        BEGIN
+          IF NEW.id = '${reservationId}' AND NEW.paid_value = 200.00 THEN
+            PERFORM pg_sleep(1.5);
+          END IF;
+          RETURN NEW;
+        END;
+        $body$
+      `));
+      await db.execute(sql.raw(`
+        CREATE TRIGGER "${triggerName}"
+        BEFORE UPDATE OF paid_value ON reservations
+        FOR EACH ROW EXECUTE FUNCTION public."${functionName}"()
+      `));
+
+      const app = buildApp();
+      const paymentPromise = request(app)
+        .patch(`/api/reservations/installments/${installmentId}`)
+        .send({ paidAmount: 200 })
+        .then((response) => response);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const totalPromise = request(app)
+        .patch(`/api/reservations/${reservationId}`)
+        .send({ totalValue: 1600 })
+        .then((response) => response);
+      const [paymentResponse, totalResponse] = await Promise.all([paymentPromise, totalPromise]);
+
+      expect(paymentResponse.status).toBe(200);
+      expect(totalResponse.status).toBe(200);
+      const [reservation] = await db.select({
+        totalValue: reservationsTable.totalValue,
+        paidValue: reservationsTable.paidValue,
+        balance: reservationsTable.balance,
+      }).from(reservationsTable).where(eq(reservationsTable.id, reservationId)).limit(1);
+      const [installment] = await db.select().from(reservationInstallmentsTable)
+        .where(eq(reservationInstallmentsTable.id, installmentId)).limit(1);
+      const expectedPaid = installment.paidAt ? Number(installment.paidAmount ?? installment.amount) : 0;
+
+      expect(expectedPaid).toBe(200);
+      expect(Number(reservation.paidValue)).toBe(expectedPaid);
+      expect(Number(reservation.balance)).toBe(Math.max(0, Number(reservation.totalValue) - expectedPaid));
+    } finally {
+      await db.execute(sql.raw(`DROP TRIGGER IF EXISTS "${triggerName}" ON reservations`));
+      await db.execute(sql.raw(`DROP FUNCTION IF EXISTS public."${functionName}"()`));
+    }
   });
 
 });

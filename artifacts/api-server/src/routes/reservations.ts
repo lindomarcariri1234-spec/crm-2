@@ -1804,10 +1804,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     if (parsed.data.installments != null) updates.installments = parsed.data.installments;
     if (parsed.data.boardingLocationId !== undefined) updates.boardingLocationId = parsed.data.boardingLocationId ?? null;
     if (parsed.data.totalValue != null) {
-      const newTotal = String(parsed.data.totalValue);
-      const paidValue = Number(existing.paidValue);
-      updates.totalValue = newTotal;
-      updates.balance = String(computeBalance(parsed.data.totalValue, paidValue));
+      updates.totalValue = String(parsed.data.totalValue);
     }
     if (parsed.data.commissionAmount !== undefined) updates.commissionAmount = parsed.data.commissionAmount != null ? String(parsed.data.commissionAmount) : null;
     if (parsed.data.sellerId !== undefined) {
@@ -1856,6 +1853,27 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     let cancellationApplied = false;
 
     const reservation = await db.transaction(async (tx) => {
+      if (parsed.data.totalValue != null) {
+        // Match installment updates' reservation-first lock order. The
+        // pre-transaction `existing` row may have an outdated paidValue if a
+        // concurrent installment update commits while this request waits.
+        const [lockedFinancials] = await tx.select({
+          id: reservationsTable.id,
+          paidValue: reservationsTable.paidValue,
+        }).from(reservationsTable)
+          .where(and(
+            eq(reservationsTable.id, req.params.id),
+            eq(reservationsTable.tenantId, me.tenantId),
+          ))
+          .limit(1)
+          .for("update");
+        if (!lockedFinancials) return null;
+        updates.balance = String(computeBalance(
+          parsed.data.totalValue,
+          Number(lockedFinancials.paidValue),
+        ));
+      }
+
       let lockedReservation: LockedReservationCapacityRow | undefined;
       if (requiresCapacityTransitionLock) {
         lockedReservation = await lockReservationForCancellation(tx, me.tenantId, req.params.id);
