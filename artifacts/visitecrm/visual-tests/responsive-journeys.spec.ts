@@ -18,11 +18,63 @@ const storefrontScenarios = [
   "indicacao",
 ] as const;
 
+const syntheticCustomer = {
+  name: "Viajante de Teste",
+  email: "checkout@example.invalid",
+  phone: "(11) 99999-9999",
+  cpf: "52998224725",
+};
+
 async function openFixture(page: Page, scenario: string, width: number, height: number) {
   await page.setViewportSize({ width, height });
   await page.goto(`/visual-tests/index.html?scenario=${scenario}`);
   await expect(page.locator("#visual-test-root")).toBeVisible();
   await expect(page.locator("#visual-test-root")).not.toContainText("Cenário de teste desconhecido.");
+}
+
+async function clickFlowButton(page: Page, label: string) {
+  const button = page.getByRole("button", { name: label, exact: true });
+  await expect(button, `${label} should be visible and enabled`).toBeVisible();
+  await expect(button).toBeEnabled();
+  await button.scrollIntoViewIfNeeded();
+  await expect(button, `${label} should fit in the viewport`).toBeInViewport();
+  await button.click();
+}
+
+async function assertDisplayedTripTotal(page: Page, stage: string) {
+  const totalLabel = page.getByText("Total", { exact: true }).last();
+  await expect(totalLabel, `${stage} should show a total`).toBeVisible();
+  await expect(totalLabel.locator(".."), `${stage} should preserve the fixture total`).toContainText(
+    /2\.650,00|2650\.00/,
+  );
+}
+
+async function assertSyntheticOrderRequest(page: Page) {
+  const request = await page.evaluate(() => {
+    const raw = window.sessionStorage.getItem("visual-test:last-order-request");
+    return raw ? JSON.parse(raw) : null;
+  }) as {
+    customerName?: string;
+    customerEmail?: string;
+    customerPhone?: string;
+    paymentMethod?: string;
+    items?: Array<{ productId?: string; productName?: string; quantity?: number; unitPrice?: number }>;
+  } | null;
+
+  expect(request, "the mocked order endpoint should capture the synthetic submission").not.toBeNull();
+  expect(request).toMatchObject({
+    customerName: syntheticCustomer.name,
+    customerEmail: syntheticCustomer.email,
+    customerPhone: syntheticCustomer.phone,
+    paymentMethod: "pix",
+  });
+  expect(request?.items).toHaveLength(1);
+  expect(request?.items?.[0]).toMatchObject({
+    productId: "visual-product-fixture",
+    productName: "Rota dos Geossítios do Araripe",
+    quantity: 1,
+    unitPrice: 2650,
+  });
 }
 
 async function assertNoDocumentOverflow(page: Page, scenario: string) {
@@ -135,6 +187,59 @@ for (const viewport of widths) {
       ).toBe(true);
       await assertNoDocumentOverflow(page, `portal ${tab}`);
     }
+  });
+
+  test(`reservation flow completes with synthetic details at ${viewport.label} width`, async ({ page }) => {
+    await openFixture(page, "reserva", viewport.width, viewport.height);
+    await page.locator("#name").fill(syntheticCustomer.name);
+    await page.locator("#email").fill(syntheticCustomer.email);
+    await page.locator("#phone").fill(syntheticCustomer.phone);
+    await page.locator("#cpf").fill(syntheticCustomer.cpf);
+    await assertNoDocumentOverflow(page, `reservation details at ${viewport.label}`);
+
+    await clickFlowButton(page, "Continuar");
+    await expect(page.getByRole("heading", { name: "Revisão do Pedido" })).toBeVisible();
+    await expect(page.getByText("Rota dos Geossítios do Araripe").first()).toBeVisible();
+    await assertDisplayedTripTotal(page, `reservation review at ${viewport.label}`);
+
+    await clickFlowButton(page, "Continuar");
+    await expect(page.getByRole("heading", { name: "Forma de Pagamento" })).toBeVisible();
+    await page.locator('input[name="payment_method"][value="pix"]').check();
+    await assertDisplayedTripTotal(page, `reservation payment at ${viewport.label}`);
+    await assertNoDocumentOverflow(page, `reservation payment at ${viewport.label}`);
+
+    await clickFlowButton(page, "Confirmar Reserva");
+    await expect(page.getByRole("heading", { name: /Pedido Realizado!/ })).toBeVisible();
+    await expect(page.getByText("VIS-TESTE-001", { exact: true }).first()).toBeVisible();
+    await assertSyntheticOrderRequest(page);
+    await assertNoDocumentOverflow(page, `reservation confirmation at ${viewport.label}`);
+  });
+
+  test(`checkout flow completes with synthetic details at ${viewport.label} width`, async ({ page }) => {
+    await openFixture(page, "checkout", viewport.width, viewport.height);
+    await page.getByPlaceholder("Seu nome completo").fill(syntheticCustomer.name);
+    await page.getByPlaceholder("seu@email.com").fill(syntheticCustomer.email);
+    await page.getByPlaceholder("(11) 99999-9999").fill(syntheticCustomer.phone);
+    await assertNoDocumentOverflow(page, `checkout details at ${viewport.label}`);
+
+    await clickFlowButton(page, "Continuar");
+    await expect(page.getByText("Revisão dos Itens", { exact: true })).toBeVisible();
+    await expect(page.getByText("Rota dos Geossítios do Araripe").first()).toBeVisible();
+    await assertDisplayedTripTotal(page, `checkout review at ${viewport.label}`);
+
+    await clickFlowButton(page, "Ir para Pagamento");
+    await expect(page.getByText("Forma de Pagamento", { exact: false }).first()).toBeVisible();
+    await assertDisplayedTripTotal(page, `checkout payment at ${viewport.label}`);
+    await assertNoDocumentOverflow(page, `checkout payment at ${viewport.label}`);
+
+    await clickFlowButton(page, "Confirmar Pedido");
+    await expect(page.getByRole("heading", { name: /Pedido Confirmado!/ })).toBeVisible();
+    await expect(
+      page.getByText(new RegExp(`Obrigado pela sua compra, ${syntheticCustomer.name}!`)),
+    ).toBeVisible();
+    await expect(page.getByText("VIS-TESTE-001", { exact: true }).first()).toBeVisible();
+    await assertSyntheticOrderRequest(page);
+    await assertNoDocumentOverflow(page, `checkout confirmation at ${viewport.label}`);
   });
 
   for (const scenario of storefrontScenarios) {

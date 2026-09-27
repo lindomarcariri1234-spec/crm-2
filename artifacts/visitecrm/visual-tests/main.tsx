@@ -19,6 +19,7 @@ import { FavoritesProvider } from "../src/contexts/FavoritesContext";
 import { VitrineThemeProvider } from "../src/contexts/VitrineThemeContext";
 import {
   visualCategory,
+  visualCreatedOrder,
   visualOrder,
   visualProduct,
   visualProfile,
@@ -139,7 +140,7 @@ function payloadFor(pathname: string, method: string): unknown {
   }
   if (pathname === `${storePrefix}/reviews`) return [];
   if (pathname.startsWith(`${storePrefix}/orders/`) && method === "GET") return visualOrder;
-  if (pathname === `${storePrefix}/orders` && method === "POST") return visualOrder;
+  if (pathname === `${storePrefix}/orders` && method === "POST") return visualCreatedOrder;
   if (pathname.startsWith(`${storePrefix}/trips/`) && pathname.endsWith("/seat-map")) {
     return {
       tripId: visualProduct.tripId,
@@ -171,14 +172,36 @@ function payloadFor(pathname: string, method: string): unknown {
   return {};
 }
 
+async function readJsonRequestBody(input: RequestInfo | URL, init?: RequestInit): Promise<unknown> {
+  if (typeof init?.body === "string") {
+    try {
+      return JSON.parse(init.body);
+    } catch {
+      return null;
+    }
+  }
+  if (input instanceof Request) {
+    try {
+      return await input.clone().json();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function installFixtureFetch() {
   const nativeFetch = window.fetch.bind(window);
-  window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const inputUrl = input instanceof Request ? input.url : String(input);
     const url = new URL(inputUrl, window.location.href);
     if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-      return Promise.resolve(jsonResponse(payloadFor(url.pathname, method)));
+      if (url.pathname === `/api/public/store/${visualStore.slug}/orders` && method === "POST") {
+        const body = await readJsonRequestBody(input, init);
+        window.sessionStorage.setItem("visual-test:last-order-request", JSON.stringify(body));
+      }
+      return jsonResponse(payloadFor(url.pathname, method));
     }
     return nativeFetch(input, init);
   }) as typeof window.fetch;
@@ -203,6 +226,7 @@ const scenario = new URLSearchParams(window.location.search).get("scenario") ?? 
 const rootElement = document.getElementById("visual-test-root");
 if (!rootElement) throw new Error("Elemento raiz dos testes visuais não encontrado.");
 installFixtureFetch();
+sessionStorage.removeItem("visual-test:last-order-request");
 
 localStorage.setItem(
   `cart_${visualStore.slug}`,

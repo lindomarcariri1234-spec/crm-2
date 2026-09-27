@@ -276,6 +276,34 @@ export const visualOrder = {
   paymentToken: "visual-payment-token",
 };
 
+export const visualCreatedOrder = {
+  ...visualOrder,
+  amountPaid: "0.00",
+  amountRemaining: "2650.00",
+  depositAmount: null,
+  financialSummary: {
+    source: "order" as const,
+    subtotal: 2650,
+    discountAmount: 0,
+    totalAmount: 2650,
+    depositRequested: 0,
+    paidAmount: 0,
+    amountRemaining: 2650,
+    minimumRequired: 0,
+    reservationValid: false,
+    states: {
+      order: "pending",
+      reservation: "pending",
+      payment: "pending" as const,
+    },
+    diagnostics: {
+      hasLegacyDivergence: false,
+      issues: [],
+      legacy: null,
+    },
+  },
+};
+
 export const visualCategory = {
   id: "visual-category-fixture",
   storeId: visualStore.id,
