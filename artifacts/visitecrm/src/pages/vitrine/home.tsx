@@ -93,7 +93,8 @@ function ReferralWelcomeBanner({
 
   return (
     <div
-      className="relative text-white px-4 py-4 flex items-center gap-3 shadow-lg"
+      data-testid="banner-referral-welcome"
+      className="relative flex items-center gap-3 border-b border-white/10 px-4 py-3.5 text-white shadow-lg"
       style={{
         background: `linear-gradient(135deg, ${primaryColor} 0%, ${primaryColor}cc 100%)`,
       }}
@@ -117,7 +118,8 @@ function ReferralWelcomeBanner({
       </div>
       <button
         onClick={() => setVisible(false)}
-        className="shrink-0 p-1 rounded-full hover:bg-white/20 transition-colors"
+        data-testid="button-dismiss-referral"
+        className="shrink-0 rounded-full p-2 transition-colors hover:bg-white/20"
         aria-label="Fechar"
       >
         <X className="w-4 h-4" />
@@ -272,13 +274,16 @@ export default function VitrineHome({
   }
 
   return (
-    <div>
+    <div className="min-h-[100dvh] overflow-hidden bg-slate-50 text-slate-900">
       {store.referralsEnabled !== false && (
         <ReferralWelcomeBanner slug={slug} primaryColor={colors.primary} />
       )}
 
       {/* Hero */}
-      <section className="relative overflow-hidden">
+      <section
+        data-testid="section-hero"
+        className="relative isolate overflow-visible"
+      >
         {store.bannerUrl ? (
           <>
             {/* Desktop banner (≥640 px) — always rendered */}
@@ -311,43 +316,50 @@ export default function VitrineHome({
           }}
         />
 
-        <div className="relative mx-auto flex min-h-[460px] max-w-5xl flex-col items-center justify-center px-4 py-20 text-center text-white md:min-h-[540px]">
+        <div className="relative mx-auto flex min-h-[550px] max-w-6xl flex-col items-center justify-center px-5 py-20 text-center text-white sm:min-h-[590px] md:items-start md:text-left lg:px-8">
           {store.logoUrl && (
             <img
               src={store.logoUrl}
               alt={store.name}
-              className="mb-6 h-20 w-auto rounded-2xl bg-white/95 p-2 shadow-lg"
+              data-testid="img-store-logo-hero"
+              className="mb-6 h-16 w-auto rounded-2xl bg-white/95 p-2 shadow-xl sm:h-20"
             />
           )}
-          <span className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] backdrop-blur">
+          <span className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/15 px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] backdrop-blur-md">
             <MapPin className="h-3.5 w-3.5" />
             Viagens & Excursões
           </span>
-          <h1 className="max-w-3xl text-4xl font-bold leading-tight drop-shadow-md md:text-6xl">
+          <h1 data-testid="text-store-seo-title" className="max-w-3xl text-5xl font-semibold leading-[0.98] tracking-[-0.055em] drop-shadow-md sm:text-6xl md:text-7xl">
             {store.seoTitle ?? store.name}
           </h1>
           {store.description && (
-            <p className="mt-4 max-w-2xl text-base text-white/90 drop-shadow md:text-xl">
+            <p data-testid="text-store-description" className="mt-5 max-w-xl text-base leading-relaxed text-white/90 drop-shadow sm:text-lg">
               {store.description}
             </p>
           )}
 
           <form
+            data-testid="form-smart-search"
             onSubmit={submitSmartSearch}
-            className="mt-8 w-full max-w-3xl rounded-3xl bg-white/95 p-3 text-left shadow-2xl backdrop-blur md:rounded-full md:p-2"
+            className="mt-8 w-full max-w-5xl rounded-[1.75rem] border border-white/70 bg-white p-3 text-left shadow-[0_24px_70px_rgba(15,23,42,0.24)] sm:p-4 md:mt-10"
           >
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-0">
-              <label className="flex flex-1 items-center gap-2 px-3 py-2 md:py-1">
-                <MapPin className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <div className="mb-3 flex flex-col gap-1 px-2 sm:flex-row sm:items-baseline sm:justify-between sm:px-3">
+              <strong className="text-sm tracking-[-0.01em] text-slate-900">Encontre seu próximo destino</strong>
+              <span className="text-xs text-slate-500">Use os filtros para planejar com mais tranquilidade.</span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6 lg:items-stretch">
+              <label className="flex min-h-14 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 focus-within:border-slate-400 lg:border-0 lg:border-r lg:rounded-none">
+                <MapPin className="h-5 w-5 shrink-0" style={{ color: colors.primary }} />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
                     Destino
                   </span>
                   {hasDestinations ? (
                     <select
+                      data-testid="select-search-destination"
                       value={destino}
                       onChange={(e) => setDestino(e.target.value)}
-                      className="min-w-0 bg-transparent text-sm text-foreground outline-none"
+                      className="min-w-0 bg-transparent text-sm font-semibold text-slate-800 outline-none"
                     >
                       <option value="">Todos os destinos</option>
                       {destinations.map((d) => (
@@ -358,45 +370,44 @@ export default function VitrineHome({
                     </select>
                   ) : (
                     <input
+                      data-testid="input-search-destination"
                       value={destino}
                       onChange={(e) => setDestino(e.target.value)}
                       placeholder="Para onde você quer viajar?"
-                      className="min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                      className="min-w-0 bg-transparent text-sm font-semibold text-slate-800 outline-none placeholder:text-slate-400"
                     />
                   )}
                 </span>
               </label>
 
-              <span className="hidden h-9 w-px bg-border md:block" />
-
-              <label className="flex items-center gap-2 px-3 py-2 md:py-1">
-                <Calendar className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <label className="flex min-h-14 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 focus-within:border-slate-400 lg:border-0 lg:border-r lg:rounded-none">
+                <Calendar className="h-5 w-5 shrink-0" style={{ color: colors.primary }} />
                 <span className="flex flex-col">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
                     Data de ida
                   </span>
                   <input
+                    data-testid="input-search-date"
                     type="date"
                     value={dataIda}
                     min={todayStr}
                     onChange={(e) => setDataIda(e.target.value)}
-                    className="bg-transparent text-sm text-foreground outline-none"
+                    className="bg-transparent text-sm font-semibold text-slate-800 outline-none"
                   />
                 </span>
               </label>
 
-              <span className="hidden h-9 w-px bg-border lg:block" />
-
-              <label className="flex items-center gap-2 px-3 py-2 md:py-1">
-                <Sparkles className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <label className="flex min-h-14 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 focus-within:border-slate-400 lg:border-0 lg:border-r lg:rounded-none">
+                <Sparkles className="h-5 w-5 shrink-0" style={{ color: colors.primary }} />
                 <span className="flex flex-col">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
                     Experiência
                   </span>
                   <select
+                    data-testid="select-search-type"
                     value={tipo}
                     onChange={(e) => setTipo(e.target.value)}
-                    className="bg-transparent text-sm text-foreground outline-none"
+                    className="bg-transparent text-sm font-semibold text-slate-800 outline-none"
                   >
                     <option value="">Todos os tipos</option>
                     <option value="package">Pacotes</option>
@@ -408,18 +419,17 @@ export default function VitrineHome({
                 </span>
               </label>
 
-              <span className="hidden h-9 w-px bg-border lg:block" />
-
-              <label className="flex items-center gap-2 px-3 py-2 md:py-1">
-                <CreditCard className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <label className="flex min-h-14 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 focus-within:border-slate-400 lg:border-0 lg:border-r lg:rounded-none">
+                <CreditCard className="h-5 w-5 shrink-0" style={{ color: colors.accent }} />
                 <span className="flex flex-col">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
                     Orçamento
                   </span>
                   <select
+                    data-testid="select-search-budget"
                     value={orcamento}
                     onChange={(e) => setOrcamento(e.target.value)}
-                    className="bg-transparent text-sm text-foreground outline-none"
+                    className="bg-transparent text-sm font-semibold text-slate-800 outline-none"
                   >
                     <option value="">Qualquer valor</option>
                     <option value="500">Até R$ 500</option>
@@ -430,18 +440,17 @@ export default function VitrineHome({
                 </span>
               </label>
 
-              <span className="hidden h-9 w-px bg-border md:block" />
-
-              <label className="flex items-center gap-2 px-3 py-2 md:py-1">
-                <Users className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <label className="flex min-h-14 items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 focus-within:border-slate-400 lg:border-0 lg:border-r lg:rounded-none">
+                <Users className="h-5 w-5 shrink-0" style={{ color: colors.primary }} />
                 <span className="flex flex-col">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
                     Passageiros
                   </span>
                   <select
+                    data-testid="select-search-passengers"
                     value={passageiros}
                     onChange={(e) => setPassageiros(e.target.value)}
-                    className="bg-transparent text-sm text-foreground outline-none"
+                    className="bg-transparent text-sm font-semibold text-slate-800 outline-none"
                   >
                     <option value="">Qualquer</option>
                     {Array.from({ length: 8 }, (_, i) => i + 1).map((n) => (
@@ -454,9 +463,10 @@ export default function VitrineHome({
               </label>
 
               <Button
+                data-testid="button-smart-search"
                 type="submit"
                 size="lg"
-                className="shrink-0 gap-1.5 rounded-full font-semibold md:ml-1"
+                className="min-h-14 shrink-0 gap-1.5 rounded-xl font-semibold shadow-sm lg:col-span-1"
                 style={{
                   background: colors.primary,
                   color: colors.primaryForeground,
@@ -469,8 +479,9 @@ export default function VitrineHome({
           </form>
 
           <button
+            data-testid="button-view-all-hero"
             onClick={() => navigate(`/loja/${slug}/produtos`)}
-            className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-white/90 underline-offset-4 hover:underline"
+            className="mt-6 inline-flex items-center gap-1.5 text-sm font-semibold text-white/90 underline-offset-4 transition-transform hover:translate-x-1 hover:underline"
           >
             Ver todos os pacotes
             <ArrowRight className="h-4 w-4" />
@@ -478,6 +489,7 @@ export default function VitrineHome({
 
           {store.contactWhatsapp && (
             <a
+              data-testid="link-whatsapp-hero"
               href={`https://wa.me/${store.contactWhatsapp.replace(/\D/g, "")}?text=${encodeURIComponent("Olá! Quero ajuda para escolher uma experiência de viagem.")}`}
               target="_blank"
               rel="noopener noreferrer"
@@ -512,12 +524,12 @@ export default function VitrineHome({
       </section>
 
       {/* Trust strip */}
-      <section className="border-b bg-white">
-        <div className="mx-auto grid max-w-6xl grid-cols-2 gap-4 px-4 py-8 lg:grid-cols-4">
+      <section data-testid="section-trust" className="border-b border-slate-200 bg-white">
+        <div className="mx-auto grid max-w-6xl grid-cols-2 gap-x-5 gap-y-7 px-5 py-9 lg:grid-cols-4 lg:px-8">
           {TRUST_ITEMS.map(({ icon: Icon, title, desc }) => (
             <div key={title} className="flex items-start gap-3">
               <span
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
                 style={{ background: colors.primarySoft, color: colors.primary }}
               >
                 <Icon className="h-5 w-5" />
@@ -531,18 +543,20 @@ export default function VitrineHome({
         </div>
       </section>
 
-      <div className="mx-auto max-w-6xl space-y-16 px-4 py-14">
+      <div data-testid="content-storefront" className="mx-auto max-w-6xl space-y-20 px-5 py-16 lg:px-8 lg:py-20">
         {flashSales.length > 0 && (
-          <section>
+          <section data-testid="section-flash-sales">
             <SectionHeader
               eyebrow="Ofertas"
               title="Ofertas Relâmpago"
               subtitle="Promoções por tempo limitado — aproveite antes que terminem."
               action={
                 <Button
+                  data-testid="button-view-all-sales"
                   variant="ghost"
                   onClick={() => navigate(`/loja/${slug}/produtos`)}
-                  className="gap-1"
+                  className="gap-1 rounded-full"
+                  style={{ color: colors.primary }}
                 >
                   Ver todos
                   <ChevronRight className="h-4 w-4" />
@@ -553,10 +567,10 @@ export default function VitrineHome({
               <FlashSaleCountdown
                 endsAt={soonestSaleEnd}
                 variant="banner"
-                className="mb-6"
+                className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 text-orange-900"
               />
             )}
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {flashSales.slice(0, 6).map((product) => (
                 <PremiumProductCard
                   key={product.id}
@@ -570,20 +584,21 @@ export default function VitrineHome({
         )}
 
         {categories.length > 0 && (
-          <section>
+          <section data-testid="section-categories">
             <SectionHeader
               eyebrow="Explore"
               title="Categorias"
               subtitle="Encontre a experiência perfeita para a sua próxima viagem."
             />
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 lg:gap-4">
               {categories.map((cat) => (
                 <button
                   key={cat.id}
+                  data-testid={`button-category-${cat.id}`}
                   onClick={() =>
                     navigate(`/loja/${slug}/produtos?categoryId=${cat.id}`)
                   }
-                  className="group relative flex h-32 items-end overflow-hidden rounded-2xl border border-black/5 p-4 text-left shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg"
+                  className="group relative flex h-40 items-end overflow-hidden rounded-[1.35rem] border border-slate-200/70 p-4 text-left shadow-sm transition-all hover:-translate-y-1 hover:shadow-xl sm:h-48"
                   style={
                     cat.imageUrl
                       ? undefined
@@ -595,12 +610,13 @@ export default function VitrineHome({
                       <img
                         src={cat.imageUrl}
                         alt={cat.name}
-                        className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
                       />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
                     </>
                   )}
-                  <span className="relative flex w-full items-center justify-between font-semibold text-white">
+                  <span className="relative flex w-full items-center justify-between text-sm font-bold text-white sm:text-base">
                     {cat.name}
                     <ChevronRight className="h-4 w-4 opacity-80 transition-transform group-hover:translate-x-1" />
                   </span>
@@ -611,16 +627,18 @@ export default function VitrineHome({
         )}
 
         {(loading || featured.length > 0) && (
-          <section>
+          <section data-testid="section-featured-products">
             <SectionHeader
               eyebrow="Imperdível"
               title="Pacotes em Destaque"
               subtitle="As experiências mais procuradas, escolhidas para você."
               action={
                 <Button
+                  data-testid="button-view-all-featured"
                   variant="ghost"
                   onClick={() => navigate(`/loja/${slug}/produtos`)}
-                  className="gap-1"
+                  className="gap-1 rounded-full"
+                  style={{ color: colors.primary }}
                 >
                   Ver todos
                   <ChevronRight className="h-4 w-4" />
@@ -628,7 +646,7 @@ export default function VitrineHome({
               }
             />
             {loading ? (
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 {Array.from({ length: 3 }).map((_, i) => (
                   <div
                     key={i}
@@ -637,7 +655,7 @@ export default function VitrineHome({
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
                 {featured.map((product) => (
                   <PremiumProductCard
                     key={product.id}
@@ -652,22 +670,23 @@ export default function VitrineHome({
         )}
 
         {destinationGroups.length > 0 && (
-          <section>
+          <section data-testid="section-destinations">
             <SectionHeader
               eyebrow="Tendências"
               title="Destinos mais procurados"
               subtitle="Os lugares preferidos dos nossos viajantes."
             />
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 lg:gap-4">
               {destinationGroups.map((g) => (
                 <button
                   key={g.destination}
+                  data-testid={`button-destination-${g.destination}`}
                   onClick={() =>
                     navigate(
                       `/loja/${slug}/produtos?destination=${encodeURIComponent(g.destination)}`,
                     )
                   }
-                  className="group relative flex h-52 items-end overflow-hidden rounded-2xl border border-black/5 text-left shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg"
+                  className="group relative flex h-52 items-end overflow-hidden rounded-[1.35rem] border border-slate-200/70 text-left shadow-sm transition-all hover:-translate-y-1 hover:shadow-xl first:col-span-2 md:first:col-span-2 md:first:row-span-2"
                   style={
                     g.image ? undefined : { background: colors.gradientHero }
                   }
@@ -676,10 +695,11 @@ export default function VitrineHome({
                     <img
                       src={g.image}
                       alt={g.destination}
+                        loading="lazy"
                       className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
                     />
                   )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/25 to-transparent" />
+                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-900/25 to-transparent" />
                   <div className="relative w-full p-4 text-white">
                     <div className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-white/80">
                       <MapPin className="h-3.5 w-3.5" />
@@ -716,19 +736,20 @@ export default function VitrineHome({
         )}
 
         {!loading && allProducts.length === 0 && (
-          <section className="flex flex-col items-center py-12 text-center">
+          <section data-testid="state-empty-products" className="flex flex-col items-center rounded-[1.75rem] border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
             <div
-              className="flex h-20 w-20 items-center justify-center rounded-full mb-6"
+              className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl"
               style={{ background: colors.primarySoft }}
             >
               <Sparkles className="h-10 w-10" style={{ color: colors.primary }} />
             </div>
-            <h2 className="text-2xl font-bold mb-3">Em breve, novidades!</h2>
-            <p className="text-muted-foreground max-w-sm mb-6">
+             <h2 className="mb-3 text-3xl font-semibold tracking-tight">Em breve, novidades!</h2>
+             <p className="mb-6 max-w-sm text-sm leading-relaxed text-slate-500">
               Estamos preparando pacotes incríveis para você. Fique de olho — novidades chegam em breve!
             </p>
             {store.contactWhatsapp && (
               <a
+                data-testid="link-whatsapp-empty-state"
                 href={`https://wa.me/${store.contactWhatsapp.replace(/\D/g, "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -742,20 +763,21 @@ export default function VitrineHome({
         )}
 
         {reviews.length > 0 && (
-          <section>
+          <section data-testid="section-reviews">
             <SectionHeader
               eyebrow="Depoimentos"
               title="O que dizem nossos clientes"
               subtitle="Avaliações reais de viajantes satisfeitos."
             />
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {reviews.map((review) => (
                 <div
                   key={review.id}
-                  className="flex flex-col gap-3 rounded-2xl border border-black/5 bg-card p-6 shadow-sm transition-shadow hover:shadow-md"
+                  data-testid={`card-review-${review.id}`}
+                  className="flex min-h-56 flex-col gap-3 rounded-[1.35rem] border border-slate-200 bg-white p-6 shadow-sm transition-all hover:-translate-y-1 hover:shadow-lg"
                 >
                   <Quote
-                    className="h-7 w-7 shrink-0"
+                     className="h-7 w-7 shrink-0"
                     style={{ color: colors.accent }}
                   />
                   <p className="line-clamp-4 text-sm leading-relaxed text-muted-foreground">
@@ -765,10 +787,11 @@ export default function VitrineHome({
                     {Array.from({ length: 5 }).map((_, i) => (
                       <Star
                         key={i}
-                        className={`h-3.5 w-3.5 ${
+                         style={{ color: colors.accent }}
+                         className={`h-3.5 w-3.5 ${
                           i < review.rating
                             ? "fill-yellow-400 text-yellow-400"
-                            : "fill-gray-200 text-gray-200"
+                             : "fill-slate-200 text-slate-200"
                         }`}
                       />
                     ))}
@@ -804,30 +827,46 @@ export default function VitrineHome({
 
         {/* CTA */}
         <section
-          className="relative overflow-hidden rounded-3xl px-6 py-12 text-center text-white shadow-xl"
+          data-testid="section-storefront-cta"
+          className="relative overflow-hidden rounded-[1.75rem] px-6 py-14 text-center text-white shadow-xl sm:px-10"
           style={{ background: colors.gradientCta }}
         >
-          <h3 className="text-2xl font-bold md:text-3xl">
+          <div className="relative z-10">
+          <span className="text-xs font-bold uppercase tracking-[0.2em] text-white/70">Planeje com confiança</span>
+          <h3 className="mt-3 text-3xl font-semibold tracking-tight md:text-5xl">
             Pronto para a próxima aventura?
           </h3>
-          <p className="mx-auto mt-2 max-w-xl text-sm text-white/90 md:text-base">
-            Descubra nossos roteiros e garanta a sua vaga com facilidade e
-            segurança.
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-white/85 md:text-base">
+            Descubra nossos roteiros e garanta a sua vaga com facilidade e segurança.
           </p>
           <Button
+            data-testid="button-explore-products-cta"
             size="lg"
             onClick={() => navigate(`/loja/${slug}/produtos`)}
-            className="mt-6 rounded-full bg-white font-bold hover:bg-white/90"
+            className="mt-7 rounded-full bg-white px-6 font-bold shadow-lg hover:bg-white/90"
             style={{ color: colors.primary }}
           >
             Explorar pacotes
             <ArrowRight className="ml-2 h-5 w-5" />
           </Button>
+          {store.contactWhatsapp && (
+            <a
+              data-testid="link-whatsapp-cta"
+              href={`https://wa.me/${store.contactWhatsapp.replace(/\D/g, "")}?text=${encodeURIComponent("Olá! Quero ajuda para escolher uma experiência de viagem.")}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-4 inline-flex items-center gap-1.5 text-sm font-semibold text-white/85 underline-offset-4 hover:text-white hover:underline"
+            >
+              <Headphones className="h-4 w-4" />
+              Conversar com a equipe local
+            </a>
+          )}
+          </div>
         </section>
 
         {store.paymentMethods.length > 0 && (
-          <section className="rounded-2xl bg-muted/40 p-8 text-center">
-            <h3 className="mb-3 text-lg font-bold">Formas de Pagamento</h3>
+          <section data-testid="section-payment-methods" className="rounded-[1.35rem] border border-slate-200 bg-white p-7 text-center">
+            <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.12em] text-slate-600">Formas de pagamento disponíveis</h3>
             <div className="flex flex-wrap justify-center gap-3">
               {store.paymentMethods.map((m) => (
                 <Badge

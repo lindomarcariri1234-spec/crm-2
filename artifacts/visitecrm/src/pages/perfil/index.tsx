@@ -1074,17 +1074,17 @@ function PreferencesSummaryCard({
     return (
       <button
         type="button"
-        className="w-full text-left flex items-start gap-3 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 hover:bg-violet-100 transition-colors"
+        className="w-full text-left flex items-start gap-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 transition-colors hover:bg-sky-100 dark:border-sky-900 dark:bg-sky-950/40 dark:hover:bg-sky-950/60"
         onClick={onGoToPreferences}
       >
-        <Sparkles className="w-5 h-5 text-violet-500 shrink-0 mt-0.5" />
+        <Sparkles className="w-5 h-5 text-sky-600 shrink-0 mt-0.5 dark:text-sky-300" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-violet-800">Personalize sua experiência</p>
-          <p className="text-xs text-violet-600 mt-0.5">
+          <p className="text-sm font-semibold text-sky-900 dark:text-sky-100">Personalize sua experiência</p>
+          <p className="text-xs text-sky-700 mt-0.5 dark:text-sky-300">
             Conte-nos seus destinos dos sonhos e preferências de viagem para recomendações personalizadas.
           </p>
         </div>
-        <ArrowRight className="w-4 h-4 text-violet-500 shrink-0 mt-0.5" />
+        <ArrowRight className="w-4 h-4 text-sky-600 shrink-0 mt-0.5 dark:text-sky-300" />
       </button>
     );
   }
@@ -1100,39 +1100,39 @@ function PreferencesSummaryCard({
   return (
     <button
       type="button"
-      className="w-full text-left rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 hover:bg-violet-100 transition-colors"
+      className="w-full text-left rounded-2xl border border-sky-100 bg-sky-50 px-4 py-3 transition-colors hover:bg-sky-100 dark:border-sky-900 dark:bg-sky-950/40 dark:hover:bg-sky-950/60"
       onClick={onGoToPreferences}
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-violet-500 shrink-0" />
-          <p className="text-sm font-semibold text-violet-800">Suas preferências</p>
+          <Sparkles className="w-4 h-4 text-sky-600 shrink-0 dark:text-sky-300" />
+          <p className="text-sm font-semibold text-sky-900 dark:text-sky-100">Suas preferências</p>
         </div>
-        <span className="text-xs text-violet-500 flex items-center gap-0.5">
+        <span className="text-xs text-sky-700 flex items-center gap-0.5 dark:text-sky-300">
           Editar <ArrowRight className="w-3 h-3" />
         </span>
       </div>
       <div className="space-y-1.5">
         {visibleDestinations.length > 0 && (
           <div className="flex flex-wrap gap-1.5 items-center">
-            <span className="text-xs text-violet-600 shrink-0">
+            <span className="text-xs text-sky-700 shrink-0 dark:text-sky-300">
               <Globe className="w-3 h-3 inline mr-0.5" />
               Sonhos:
             </span>
             {visibleDestinations.map((d) => (
               <span
                 key={d}
-                className="inline-flex items-center px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 text-xs font-medium border border-violet-200"
+                className="inline-flex items-center px-2 py-0.5 rounded-full bg-white text-sky-700 text-xs font-medium border border-sky-200 dark:bg-slate-800 dark:text-sky-200 dark:border-sky-800"
               >
                 {d}
               </span>
             ))}
             {extraDestinations > 0 && (
-              <span className="text-xs text-violet-500">+{extraDestinations}</span>
+              <span className="text-xs text-sky-600 dark:text-sky-300">+{extraDestinations}</span>
             )}
           </div>
         )}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-violet-600">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-sky-700 dark:text-sky-300">
           {travelPreference && (
             <span className="flex items-center gap-1">
               <Users className="w-3 h-3" />
@@ -1226,8 +1226,8 @@ function InicioTab({
       label: "Total Gasto",
       value: fmtCurrency(profile.stats?.totalSpent ?? 0),
       sub: `em ${profile.reservations.filter(r => r.status === RESERVATION_STATUS.CONFIRMED || r.status === RESERVATION_STATUS.COMPLETED).length} reserva(s)`,
-      color: "text-green-600",
-      bg: "bg-green-50",
+      color: "text-teal-600",
+      bg: "bg-teal-50",
       onClick: () => onTabChange("reservas"),
     },
     {
@@ -1235,8 +1235,8 @@ function InicioTab({
       label: "Pontos de Fidelidade",
       value: loyaltyPoints !== null ? loyaltyPoints.toLocaleString("pt-BR") : "—",
       sub: loyaltyPoints !== null ? "pontos disponíveis" : "Sem programa ativo",
-      color: "text-amber-600",
-      bg: "bg-amber-50",
+      color: "text-orange-600",
+      bg: "bg-orange-50",
       onClick: () => loyaltyPoints !== null && onTabChange("fidelidade"),
     },
     {
@@ -1244,64 +1244,161 @@ function InicioTab({
       label: "Indicações",
       value: totalReferrals.toString(),
       sub: `${profile.referral.completedReferrals} confirmada(s)`,
-      color: "text-purple-600",
-      bg: "bg-purple-50",
+      color: "text-sky-700",
+      bg: "bg-sky-50",
       onClick: () => onTabChange("indicacoes"),
     },
   ];
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <ClienteCard profile={profile} primaryColor={primaryColor} />
-        <div className="px-1">
-          <p className="text-sm text-muted-foreground">
-            Bem-vindo(a) de volta, <span className="font-semibold text-foreground">{firstName}</span>!
-            {nextTrip && days !== null && days >= 0 && (
-              <span>
-                {" "}
-                {days === 0
-                  ? "Sua próxima viagem é hoje"
-                  : days === 1
-                  ? "Sua próxima viagem é amanhã!"
-                  : `Sua próxima viagem começa em ${days} dias.`}
-              </span>
+    <div className="space-y-6 sm:space-y-8">
+      <section
+        className="relative overflow-hidden rounded-[2rem] border border-sky-100 bg-white shadow-[0_18px_55px_rgba(14,165,233,0.10)] dark:border-slate-700 dark:bg-slate-900"
+        data-testid="section-portal-welcome"
+      >
+        <div
+          className="absolute inset-y-0 right-0 w-2/3 opacity-90"
+          style={{
+            background: `radial-gradient(circle at 72% 25%, ${primaryColor}34, transparent 36%), radial-gradient(circle at 95% 90%, #14B8A633, transparent 42%), linear-gradient(125deg, transparent 20%, ${primaryColor}10 100%)`,
+          }}
+          aria-hidden="true"
+        />
+        <div className="absolute -right-12 -top-16 h-44 w-44 rounded-full border-[18px] border-sky-100/70 dark:border-sky-800/30" aria-hidden="true" />
+        <div className="absolute -bottom-16 right-28 h-40 w-40 rounded-full border-[14px] border-teal-100/70 dark:border-teal-800/30" aria-hidden="true" />
+        <div className="relative grid gap-7 p-6 sm:p-8 lg:grid-cols-[1fr_auto] lg:items-end lg:p-10">
+          <div className="max-w-2xl">
+            <div className="mb-4 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em]" style={{ color: primaryColor }}>
+              <span className="h-2 w-2 rounded-full bg-teal-400" />
+              Seu espaço de viajante
+              <span className="text-slate-400">·</span>
+              {profile.tenant?.name ?? "sua agência"}
+            </div>
+            <h1 className="text-3xl font-bold tracking-[-0.04em] text-slate-950 dark:text-white sm:text-5xl">
+              Oi, {firstName}.
+              <span className="mt-1 block text-sky-600 dark:text-sky-300">Tem mundo te esperando.</span>
+            </h1>
+            <p className="mt-4 max-w-xl text-sm leading-6 text-slate-600 dark:text-slate-300 sm:text-base">
+              Acompanhe suas reservas, benefícios e os próximos passos para viajar do seu jeito.
+              {nextTrip && days !== null && days >= 0 && (
+                <span className="font-semibold text-slate-900 dark:text-white">
+                  {" "}
+                  {days === 0
+                    ? "Sua próxima viagem é hoje."
+                    : days === 1
+                    ? "Sua próxima viagem é amanhã."
+                    : `Sua próxima viagem começa em ${days} dias.`}
+                </span>
+              )}
+            </p>
+            {!nextTrip && profile.tenant?.slug && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-5 rounded-full border-sky-200 bg-white/80 px-4 text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:bg-slate-900/80 dark:text-sky-200"
+                onClick={() => (window.location.href = `/loja/${profile.tenant!.slug}/produtos`)}
+                data-testid="button-browse-packages-welcome"
+              >
+                Encontrar uma viagem
+                <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+              </Button>
             )}
-          </p>
-          {!nextTrip && profile.tenant?.slug && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              onClick={() => (window.location.href = `/loja/${profile.tenant!.slug}/produtos`)}
-            >
-              Ver Pacotes
-              <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
-            </Button>
-          )}
+          </div>
+          <div className="flex items-center gap-3 self-start rounded-2xl border border-white/80 bg-white/75 px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-800/75 dark:text-slate-200 lg:self-end">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700 dark:bg-sky-900/70 dark:text-sky-200">
+              <MapPin className="h-4 w-4" />
+            </span>
+            Feito para a sua jornada
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {nextTrip && (
+        <section
+          className="relative overflow-hidden rounded-[1.75rem] p-6 text-white shadow-[0_18px_45px_rgba(29,78,216,0.20)] sm:p-8"
+          style={{ background: `linear-gradient(120deg, ${primaryColor} 0%, #1D4ED8 62%, #0EA5E9 140%)` }}
+          data-testid="section-next-trip"
+        >
+          <div className="pointer-events-none absolute -right-10 -top-14 h-48 w-48 rounded-full border-[20px] border-white/10" aria-hidden="true" />
+          <div className="pointer-events-none absolute bottom-[-5rem] right-40 h-36 w-36 rounded-full border-[14px] border-teal-200/15" aria-hidden="true" />
+          <div className="relative grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-white/75">
+                <Plane className="h-4 w-4" />
+                Sua próxima viagem
+              </div>
+              <h2 className="mt-4 max-w-xl text-3xl font-bold tracking-[-0.03em] sm:text-4xl" data-testid="text-next-trip-name">
+                {nextTrip.tripName}
+              </h2>
+              <p className="mt-2 flex items-center gap-1.5 text-sm text-white/80" data-testid="text-next-trip-destination">
+                <MapPin className="h-4 w-4" />
+                {nextTrip.tripDestination}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-end gap-6 lg:justify-end">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-white/65">Embarque</p>
+                <p className="mt-1 text-lg font-semibold">{fmtDate(nextTrip.tripDepartureDate)}</p>
+              </div>
+              {days !== null && days >= 0 && (
+                <div className="rounded-2xl bg-white/15 px-5 py-3 text-center backdrop-blur-sm" data-testid="text-next-trip-countdown">
+                  <strong className="block text-3xl font-bold leading-none">{days}</strong>
+                  <span className="mt-1 block text-[11px] font-medium uppercase tracking-wide text-white/75">
+                    {days === 1 ? "dia para embarcar" : "dias para embarcar"}
+                  </span>
+                </div>
+              )}
+              <Button
+                type="button"
+                variant="secondary"
+                className="rounded-full bg-white text-blue-700 shadow-sm hover:bg-sky-50"
+                onClick={() => onTabChange("reservas")}
+                data-testid="button-open-next-trip"
+              >
+                Ver reserva
+                <ArrowRight className="ml-1.5 h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {kpis.map((k) => (
           <button
             key={k.label}
             type="button"
-            className="text-left rounded-xl border bg-card text-card-foreground shadow-sm cursor-pointer hover:shadow-md transition-shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="group rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition-all hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-[0_12px_30px_rgba(14,165,233,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-sky-700"
             onClick={k.onClick}
             aria-label={`${k.label}: ${k.value}. Ver ${k.label}`}
+            data-testid={`button-kpi-${k.label.toLowerCase().replace(/\s+/g, "-")}`}
           >
-            <CardContent className="p-4">
-              <div className={`w-9 h-9 rounded-lg ${k.bg} ${k.color} flex items-center justify-center mb-3`}>
-                {k.icon}
-              </div>
-              <p className="text-xs text-muted-foreground mb-0.5">{k.label}</p>
-              <p className="text-xl font-bold leading-tight">{k.value}</p>
-              <p className="text-xs text-muted-foreground mt-0.5 truncate">{k.sub}</p>
-            </CardContent>
+            <div className={`mb-4 flex h-10 w-10 items-center justify-center rounded-xl ${k.bg} ${k.color}`}>
+              {k.icon}
+            </div>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">{k.label}</p>
+            <p className="mt-1 text-xl font-bold tracking-tight text-slate-900 dark:text-white" data-testid={`text-kpi-${k.label.toLowerCase().replace(/\s+/g, "-")}`}>{k.value}</p>
+            <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{k.sub}</p>
           </button>
         ))}
       </div>
+
+      <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,420px)] lg:items-start" data-testid="section-traveler-card">
+        <div className="rounded-[1.75rem] border border-sky-100 bg-gradient-to-br from-sky-50 via-white to-teal-50 p-6 dark:border-slate-700 dark:from-sky-950/40 dark:via-slate-900 dark:to-teal-950/30 sm:p-7">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-sky-600 shadow-sm dark:bg-slate-800 dark:text-sky-300">
+              <ShieldCheck className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-teal-600 dark:text-teal-300">Seu cartão do viajante</p>
+              <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-900 dark:text-white">Leve sua jornada com você</h2>
+              <p className="mt-2 max-w-lg text-sm leading-6 text-slate-600 dark:text-slate-300">
+                Consulte seu cartão, código de cliente e benefícios sempre que precisar. As ações de copiar, baixar e compartilhar continuam disponíveis no cartão.
+              </p>
+            </div>
+          </div>
+        </div>
+        <ClienteCard profile={profile} primaryColor={primaryColor} />
+      </section>
 
       {bdDays === 0 && (
         <BirthdayTodayCard
@@ -1360,12 +1457,19 @@ function InicioTab({
       />
 
       {nextTrip && (
-        <div>
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-            Próxima Viagem
-          </h3>
+        <section>
+          <div className="mb-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-teal-600 dark:text-teal-300">Detalhes importantes</p>
+              <h3 className="mt-1 text-xl font-bold tracking-tight text-slate-900 dark:text-white">Sua reserva em um só lugar</h3>
+            </div>
+            <Button variant="ghost" size="sm" className="hidden gap-1 text-sky-700 hover:text-sky-800 dark:text-sky-300 sm:flex" onClick={() => onTabChange("reservas")}>
+              Ver todas
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
           <ReservationCard r={nextTrip} compact={false} />
-        </div>
+        </section>
       )}
 
       {upcoming.length > 1 && (
@@ -4450,35 +4554,32 @@ export default function PerfilPage() {
   }
   if (!profile) return <AsyncEmpty>Perfil indisponível.</AsyncEmpty>;
 
-  const primaryColor = profile.tenant?.primaryColor ?? "#1E5B8C";
+  const primaryColor = profile.tenant?.primaryColor ?? "#1D4ED8";
 
   return (
     <div className="visite-enter">
-      <div className="relative mb-6 overflow-hidden rounded-3xl border border-[#D9CBBE] bg-[#FFF9F0] p-5 shadow-[0_10px_28px_rgba(93,62,42,.08)] sm:p-7 dark:border-border dark:bg-card">
-        <div className="pointer-events-none absolute -right-8 -top-16 h-44 w-44 rounded-full border-[16px] border-[#D8A646]/20" />
-        <div className="pointer-events-none absolute bottom-[-5rem] right-44 h-36 w-36 rounded-full border-[12px] border-[#4C8B5F]/15" />
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-[#4C8B5F] dark:text-emerald-400">Caderno de bordo · {profile.tenant?.name ?? "sua agência"}</p>
-            <h1 className="text-2xl font-semibold tracking-tight text-[#5D3E2A] sm:text-3xl dark:text-foreground">Olá, {profile.client?.name?.split(" ")[0] ?? profile.user?.name?.split(" ")[0] ?? "viajante"}.</h1>
-            <p className="mt-1 max-w-xl text-sm text-[#71808C] dark:text-muted-foreground">Acompanhe suas reservas, benefícios e próximas experiências pelo Cariri.</p>
-          </div>
-          <div className="flex items-center gap-2 rounded-xl border border-[#E8D29B] bg-[#FFF4CF] px-3 py-2 text-xs font-medium text-[#5D3E2A] dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-            <MapPin className="h-4 w-4 text-[#D8A646]" />
-            <span>Seu espaço de viajante</span>
-          </div>
+      <div className="mb-6 flex items-center justify-between gap-3 md:mb-8">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-sky-600 dark:text-sky-300">Área do viajante</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Tudo o que você precisa para aproveitar sua próxima experiência.
+          </p>
+        </div>
+        <div className="hidden items-center gap-2 rounded-full border border-teal-100 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700 dark:border-teal-900 dark:bg-teal-950/40 dark:text-teal-200 sm:flex">
+          <ShieldCheck className="h-4 w-4" />
+          Espaço seguro
         </div>
       </div>
       <Tabs
         value={activeTab}
         onValueChange={(tab) => changeTab(tab)}
       >
-        <TabsList className="mb-6 h-auto w-full flex-wrap justify-start gap-1 rounded-2xl border border-[#DCE3E8] bg-white/90 p-1.5 shadow-sm dark:border-border dark:bg-card sm:w-auto">
-          <TabsTrigger value="inicio" className="flex items-center gap-1.5">
+        <TabsList id="portal-tabs" className="mb-6 flex h-auto w-full max-w-full gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white/85 p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90 sm:flex-wrap sm:overflow-visible">
+          <TabsTrigger value="inicio" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-inicio">
             <LayoutDashboard className="w-4 h-4" />
             Início
           </TabsTrigger>
-          <TabsTrigger value="reservas" className="flex items-center gap-1.5">
+          <TabsTrigger value="reservas" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-reservas">
             <CalendarCheck className="w-4 h-4" />
             Reservas
             {profile.reservations.length > 0 && (
@@ -4487,15 +4588,15 @@ export default function PerfilPage() {
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="dados" className="flex items-center gap-1.5">
+          <TabsTrigger value="dados" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-dados">
             <User className="w-4 h-4" />
             Meus Dados
           </TabsTrigger>
-          <TabsTrigger value="indicacoes" className="flex items-center gap-1.5">
+          <TabsTrigger value="indicacoes" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-indicacoes">
             <Share2 className="w-4 h-4" />
             Indicações
           </TabsTrigger>
-          <TabsTrigger value="fidelidade" className="flex items-center gap-1.5">
+          <TabsTrigger value="fidelidade" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-fidelidade">
             <Star className="w-4 h-4" />
             Fidelidade
             {profile.loyalty !== null && (profile.loyalty?.availablePoints ?? 0) > 0 && (
@@ -4504,31 +4605,31 @@ export default function PerfilPage() {
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="preferencias" className="flex items-center gap-1.5">
+          <TabsTrigger value="preferencias" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-preferencias">
             <Heart className="w-4 h-4" />
             Preferências
           </TabsTrigger>
-          <TabsTrigger value="favoritos" className="flex items-center gap-1.5">
+          <TabsTrigger value="favoritos" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-favoritos">
             <Heart className="w-4 h-4 fill-current text-red-400" />
             Favoritos
           </TabsTrigger>
-          <TabsTrigger value="conquistas" className="flex items-center gap-1.5">
+          <TabsTrigger value="conquistas" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-conquistas">
             <Trophy className="w-4 h-4" />
             Conquistas
           </TabsTrigger>
-          <TabsTrigger value="mapa" className="flex items-center gap-1.5">
+          <TabsTrigger value="mapa" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-mapa">
             <Map className="w-4 h-4" />
             Mapa
           </TabsTrigger>
-          <TabsTrigger value="sonhos" className="flex items-center gap-1.5">
+          <TabsTrigger value="sonhos" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-sonhos">
             <Globe className="w-4 h-4" />
             Sonhos
           </TabsTrigger>
-          <TabsTrigger value="memorias" className="flex items-center gap-1.5">
+          <TabsTrigger value="memorias" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-memorias">
             <Camera className="w-4 h-4" />
             Memórias
           </TabsTrigger>
-          <TabsTrigger value="clube" className="flex items-center gap-1.5">
+          <TabsTrigger value="clube" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-clube">
             <Crown className="w-4 h-4" />
             Clube
           </TabsTrigger>

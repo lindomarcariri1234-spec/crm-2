@@ -10,86 +10,98 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const tenant = me?.tenant;
-  const primaryColor = tenant?.primaryColor ?? "#1E5B8C";
+  const primaryColor = tenant?.primaryColor ?? "#1D4ED8";
 
   return (
-    <div className="min-h-[100dvh] bg-[#F5F7FA] flex flex-col text-[#2F3A43]">
+    <div className="flex min-h-[100dvh] flex-col bg-[#F8FAFC] text-[#0F172A] dark:bg-slate-950 dark:text-slate-100">
       <header
-        className="sticky top-0 z-40 border-b border-[#17486F] shadow-[0_8px_28px_rgba(27,68,103,.16)]"
-        style={{ background: `linear-gradient(110deg, ${primaryColor} 0%, #17486F 72%, #5D3E2A 140%)` }}
+        className="sticky top-0 z-40 border-b border-white/15 shadow-[0_8px_28px_rgba(15,23,42,.14)]"
+        style={{ background: `linear-gradient(110deg, ${primaryColor} 0%, #1D4ED8 68%, #0F4C81 130%)` }}
       >
-        <div className="max-w-6xl mx-auto px-4 h-[4.5rem] flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="mx-auto flex h-[4.75rem] w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          <div className="flex min-w-0 items-center gap-3">
             {tenant?.logoUrl ? (
               <img
                 src={tenant.logoUrl}
                 alt={tenant.name ?? ""}
-                className="h-10 w-10 rounded-xl object-contain bg-[#FFF9F0] p-1.5 ring-1 ring-white/25"
+                className="h-10 w-10 rounded-2xl bg-white p-1.5 object-contain shadow-sm ring-1 ring-white/25"
+                data-testid="img-tenant-logo"
               />
             ) : (
-                <div className="h-10 w-10 rounded-xl bg-[#D8A646] flex items-center justify-center font-bold text-[#5D3E2A] text-base ring-1 ring-white/20">
+              <div
+                className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/15 text-base font-bold text-white ring-1 ring-white/25"
+                style={{ backgroundColor: `${primaryColor}cc` }}
+                data-testid="avatar-tenant-fallback"
+              >
                 {tenant?.name?.charAt(0) ?? "V"}
               </div>
             )}
-            <div className="hidden sm:block">
-              <span className="text-white font-semibold text-base block">
+            <div className="hidden min-w-0 sm:block">
+              <span className="block truncate text-base font-bold tracking-tight text-white" data-testid="text-tenant-name">
                 {tenant?.name ?? "VisiteCRM"}
               </span>
-              <span className="text-white/60 text-[10px] uppercase tracking-[0.18em]">Área do viajante</span>
+              <span className="text-[10px] uppercase tracking-[0.18em] text-white/65">Área do viajante</span>
             </div>
-            <div className="sm:hidden text-white font-semibold text-base">
+            <div className="truncate text-base font-bold text-white sm:hidden" data-testid="text-tenant-name-mobile">
               {tenant?.name ?? "VisiteCRM"}
             </div>
           </div>
 
           {tenant?.slug && (
-            <nav className="hidden md:flex items-center gap-1 rounded-2xl bg-black/10 p-1">
+            <nav className="hidden items-center gap-1 rounded-2xl bg-black/10 p-1 md:flex" aria-label="Navegação da agência">
               <a
                 href={`/loja/${tenant.slug}`}
-                className="rounded-xl px-3 py-2 text-white/80 hover:bg-white/10 hover:text-white text-sm font-medium transition-colors"
+                className="rounded-xl px-3 py-2 text-sm font-semibold text-white/75 transition-colors hover:bg-white/12 hover:text-white"
+                data-testid="link-store-home"
               >
                 Início
               </a>
               <a
                 href={`/loja/${tenant.slug}/produtos`}
-                className="rounded-full px-3 py-2 text-white/80 hover:bg-white/10 hover:text-white text-sm font-medium transition-colors"
+                className="rounded-xl px-3 py-2 text-sm font-semibold text-white/75 transition-colors hover:bg-white/12 hover:text-white"
+                data-testid="link-store-packages"
               >
                 Pacotes
               </a>
               <a
                 href={`/loja/${tenant.slug}/calendario`}
-                className="rounded-full px-3 py-2 text-white/80 hover:bg-white/10 hover:text-white text-sm font-medium transition-colors"
+                className="rounded-xl px-3 py-2 text-sm font-semibold text-white/75 transition-colors hover:bg-white/12 hover:text-white"
+                data-testid="link-store-calendar"
               >
                 Calendário
               </a>
               <a
                 href={`/loja/${tenant.slug}/consultar-pedido`}
-                className="rounded-full px-3 py-2 text-white/80 hover:bg-white/10 hover:text-white text-sm font-medium transition-colors"
+                className="rounded-xl px-3 py-2 text-sm font-semibold text-white/75 transition-colors hover:bg-white/12 hover:text-white"
+                data-testid="link-store-order"
               >
                 Meu Pedido
               </a>
             </nav>
           )}
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 text-white/90">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-2 text-white/90">
               <UserCircle className="w-4 h-4" />
-              <span className="text-sm font-medium hidden sm:block">Meu Perfil</span>
+              <span className="hidden text-sm font-semibold sm:block">Meu Perfil</span>
             </div>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => signOut({ redirectUrl: tenant?.slug ? `/loja/${tenant.slug}` : "/" })}
-              className={`text-white/80 hover:text-white hover:bg-white/20 gap-1.5 ${tenant?.slug ? "hidden md:flex" : "flex"}`}
+              className={`gap-1.5 rounded-full text-white/80 hover:bg-white/15 hover:text-white ${tenant?.slug ? "hidden md:flex" : "flex"}`}
+              data-testid="button-sign-out"
             >
               <LogOut className="w-4 h-4" />
               <span className="hidden sm:block">Sair</span>
             </Button>
             {tenant?.slug && (
               <button
+                type="button"
                 onClick={() => setMobileMenuOpen((v) => !v)}
-                className="md:hidden flex items-center justify-center w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 text-white"
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 text-white transition-colors hover:bg-white/20 md:hidden"
                 aria-label={mobileMenuOpen ? "Fechar menu" : "Abrir menu"}
+                data-testid="button-toggle-mobile-menu"
               >
                 {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </button>
@@ -98,42 +110,48 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
         </div>
 
         {mobileMenuOpen && tenant?.slug && (
-          <div className="md:hidden border-t border-white/10 px-4 py-3 space-y-1">
+          <div className="space-y-1 border-t border-white/10 px-4 py-4 md:hidden" data-testid="menu-mobile-navigation">
             <a
               href={`/loja/${tenant.slug}`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-2"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
+              data-testid="link-mobile-store-home"
             >
               Início
             </a>
             <a
               href={`/loja/${tenant.slug}/produtos`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-2"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
+              data-testid="link-mobile-store-packages"
             >
               Pacotes
             </a>
             <a
               href={`/loja/${tenant.slug}/calendario`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-2"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
+              data-testid="link-mobile-store-calendar"
             >
               Calendário
             </a>
             <a
               href={`/loja/${tenant.slug}/consultar-pedido`}
-              className="block text-white/90 hover:text-white text-sm font-medium py-2"
+              className="block rounded-xl px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 hover:text-white"
               onClick={() => setMobileMenuOpen(false)}
+              data-testid="link-mobile-store-order"
             >
               Meu Pedido
             </a>
-            <div className="border-t border-white/10 pt-2 mt-1">
+            <div className="mt-2 border-t border-white/10 pt-2">
               <button
+                type="button"
                 onClick={() => {
                   setMobileMenuOpen(false);
                   signOut({ redirectUrl: `/loja/${tenant.slug}` });
                 }}
-                className="flex items-center gap-2 text-white/80 hover:text-white text-sm font-medium py-2 w-full"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-white/80 hover:bg-white/10 hover:text-white"
+                data-testid="button-mobile-sign-out"
               >
                 <LogOut className="w-4 h-4" />
                 Sair
@@ -143,13 +161,13 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
         )}
       </header>
 
-      <main className="relative flex-1 max-w-6xl mx-auto w-full px-4 py-6 md:py-9">
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-52 bg-[radial-gradient(circle_at_12%_0%,rgba(216,166,70,.16),transparent_45%),radial-gradient(circle_at_90%_10%,rgba(76,139,95,.12),transparent_40%)]" />
+      <main className="relative mx-auto w-full max-w-7xl flex-1 px-4 py-6 md:px-6 md:py-9 lg:px-8">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-[radial-gradient(circle_at_12%_0%,rgba(14,165,233,.10),transparent_44%),radial-gradient(circle_at_92%_8%,rgba(20,184,166,.08),transparent_38%)] dark:bg-[radial-gradient(circle_at_12%_0%,rgba(14,165,233,.10),transparent_44%),radial-gradient(circle_at_92%_8%,rgba(20,184,166,.06),transparent_38%)]" />
         <div className="relative">{children}</div>
       </main>
 
-      <footer className="border-t border-[#DCE3E8] bg-[#FFF9F0] text-[#71808C] py-5 text-center text-xs dark:border-border dark:bg-card dark:text-muted-foreground">
-        {tenant?.name} · Área segura do viajante · VisiteCRM
+      <footer className="border-t border-slate-200 bg-white/75 px-4 py-6 text-center text-xs text-slate-500 backdrop-blur dark:border-slate-800 dark:bg-slate-900/75 dark:text-slate-400">
+        <span data-testid="text-portal-footer">{tenant?.name ?? "VisiteCRM"} · Área segura do viajante · VisiteCRM</span>
       </footer>
     </div>
   );
