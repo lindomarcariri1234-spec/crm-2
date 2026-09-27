@@ -4609,7 +4609,7 @@ export default function PerfilPage() {
         value={activeTab}
         onValueChange={(tab) => changeTab(tab)}
       >
-        <TabsList id="portal-tabs" className="mb-6 flex h-auto w-full max-w-full gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white/85 p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90 sm:flex-wrap sm:overflow-visible">
+        <TabsList id="portal-tabs" className="mb-6 flex h-auto w-full max-w-full justify-start gap-1 overflow-x-auto rounded-2xl border border-slate-200 bg-white/85 p-1.5 shadow-[0_8px_24px_rgba(15,23,42,0.05)] dark:border-slate-700 dark:bg-slate-900/90 sm:flex-wrap sm:justify-center sm:overflow-visible">
           <TabsTrigger value="inicio" className="flex shrink-0 items-center gap-1.5 rounded-xl data-[state=active]:bg-sky-600 data-[state=active]:text-white" data-testid="tab-inicio">
             <LayoutDashboard className="w-4 h-4" />
             Início

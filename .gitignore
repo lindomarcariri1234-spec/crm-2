@@ -61,3 +61,5 @@ Thumbs.db
 !.env.example
 attached_assets/Pasted-*.txt
 attached_assets/image_1787494266688.png
+/artifacts/visitecrm/test-results/
+/artifacts/visitecrm/playwright-report/

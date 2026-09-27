@@ -138,6 +138,7 @@
 - [PMS schema verification](pms-schema-verification.md) — after PMS column migrations, verify the live database separately; an apparently successful migrate can still leave schema drift
 - [Concurrent audit snapshot tests](concurrent-audit-snapshot-tests.md) — assert concurrent event order through before/after snapshot chaining, not timestamps that may tie
 - [Radix form test harness](radix-form-test-harness.md) — mock scrollIntoView and use the native input value setter when testing controlled inputs and Radix Select in the DOM harness
+- [Scrollable Radix tabs](radix-tab-scroll-alignment.md) — mobile overflow rails inherit centered alignment; use start alignment so leading tabs remain reachable
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md) — mocks instantiated with `new` need constructable function/class shapes after the Vitest 4 upgrade
 - [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
