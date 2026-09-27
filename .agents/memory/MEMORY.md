@@ -129,6 +129,7 @@
 - [Expo watcher pressure from sandbox builds](expo-watcher-pressure-from-sandbox-builds.md) — generated sandbox dist can amplify Metro ENOSPC failures; cleaning it helps, but broader watch limits may persist.
 - [Workspace-scoped package installs](package-management-workspace-scope.md) — if Replit's package tool hits ERR_PNPM_ADDING_TO_ROOT, scope pnpm add/remove to the target artifact.
 - [Vercel CLI firewall fallback](vercel-cli-firewall-fallback.md) — if pnpm dlx is blocked on a transitive download, reuse an already extracted CLI from the pnpm cache
+- [Vercel runtime logs](vercel-runtime-logs.md) — broad log queries may hit a five-minute limit; prefer deployment, status, time, and text filters.
 - [Manual table migration snapshots](manual-table-snapshot-sync.md) — preserve the published snapshot chain when merging branches; never replay DDL already applied by hand-written migrations.
 - [Clerk React/shared compatibility](clerk-react-shared-compat.md) — a newer React SDK can compile yet fail Vite linking against the shared override; upgrade the pair together.
 - [GitHub API blob uploads](github-api-blob-uploads.md) — encode raw workspace file content inside the authenticated API call; shell base64 output can corrupt large blobs
