@@ -183,6 +183,9 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
 
         {form.paymentMethod === "transfer" && (
           <div className="mt-2 p-4 bg-orange-50 border border-orange-200 rounded-xl">
+            <p className="mb-2 text-sm font-medium text-orange-900">
+              A reserva fica ativa por 30 minutos. Conclua a transferência dentro desse prazo para manter sua vaga.
+            </p>
             <p className="text-sm text-orange-900 font-medium mb-2">
               Dados para transferência (TED/DOC/PIX):
             </p>
@@ -215,9 +218,9 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           <div className="mt-2 p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800 space-y-1">
             <p className="font-medium">Instruções:</p>
             <ul className="list-disc list-inside space-y-0.5">
-              <li>O boleto tem vencimento em 3 dias úteis</li>
+              <li>A vaga fica reservada por 30 minutos após a criação do pedido, mesmo que o boleto vença em 3 dias úteis</li>
               <li>Pode ser pago em qualquer banco, lotérica ou internet banking</li>
-              <li>Sua reserva será confirmada após a identificação do pagamento</li>
+              <li>O pagamento precisa ser confirmado dentro dos 30 minutos para manter a reserva</li>
             </ul>
           </div>
         )}
@@ -226,7 +229,7 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
           <div className="mt-2 p-4 bg-green-50 border border-green-200 rounded-xl text-sm text-green-900">
             <p className="flex items-start gap-1.5">
               <Info className="w-4 h-4 mt-0.5 shrink-0" />
-              Pagamento em dinheiro deve ser realizado na agência até 48h antes da viagem.
+              A reserva fica ativa por 30 minutos. Pague em dinheiro na agência dentro desse prazo para manter sua vaga.
             </p>
             {store.contactAddress && (
               <p className="mt-2 font-medium">📍 {store.contactAddress}</p>

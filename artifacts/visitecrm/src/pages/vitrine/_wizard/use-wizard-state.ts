@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useUser } from "@clerk/react";
 import { publicStoreApi, PublicStore, StoreProduct, CouponValidation, PartnerProductInfo, PublicApiError } from "@/lib/storeApi";
@@ -58,6 +58,17 @@ export type CompletedOrder = {
   financialSummary: FinancialSummary;
 };
 
+function hasFinalCheckoutOutcome(order: CompletedOrder): boolean {
+  const orderStatus = order.status?.toLowerCase();
+  const paymentStatus = order.paymentStatus?.toLowerCase();
+
+  return (
+    order.financialSummary?.reservationValid === true ||
+    ["paid", "confirmed", "completed", "cancelled", "canceled", "refunded"].includes(orderStatus ?? "") ||
+    ["paid", "cancelled", "canceled", "refunded"].includes(paymentStatus ?? "")
+  );
+}
+
 export type WizardSelectedVariant = { variantName: string; label: string; price: number };
 
 export function useWizardState({
@@ -83,7 +94,12 @@ export function useWizardState({
   const [refreshingReferralCreditBalance, setRefreshingReferralCreditBalance] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
+  const [reservationDeadlinePassed, setReservationDeadlinePassed] = useState(false);
+  const [refreshingOrderStatus, setRefreshingOrderStatus] = useState(false);
+  const [orderStatusRefreshFailed, setOrderStatusRefreshFailed] = useState(false);
   const checkoutIdempotencyKeyRef = useRef<string | null>(null);
+  const paymentTokenRef = useRef<string | null>(null);
+  const orderStatusRefreshInFlightRef = useRef(false);
 
   const [form, setFormState] = useState<WizardForm>({
     customerName: "",
@@ -678,6 +694,8 @@ export function useWizardState({
         }
       }
 
+      const tok = typeof order.paymentToken === "string" ? order.paymentToken : null;
+      paymentTokenRef.current = tok;
       setCompletedOrder({
         orderNumber: order.orderNumber,
         totalAmount: order.totalAmount,
@@ -697,7 +715,6 @@ export function useWizardState({
         financialSummary: order.financialSummary,
       });
       clearCheckoutIdempotencyKey();
-      const tok = order.paymentToken as string | null ?? null;
       if (tok) {
         try {
           localStorage.setItem("pending_order_lookup", JSON.stringify({
@@ -814,23 +831,92 @@ export function useWizardState({
     }
   }
 
+  const currentOrderNumber = completedOrder?.orderNumber;
+  const refreshOrderStatus = useCallback(async (showFailure = false) => {
+    const paymentToken = paymentTokenRef.current;
+    if (!currentOrderNumber || !paymentToken || orderStatusRefreshInFlightRef.current) return;
+
+    orderStatusRefreshInFlightRef.current = true;
+    setRefreshingOrderStatus(true);
+    try {
+      const latestOrder = await publicStoreApi.getOrder(slug, currentOrderNumber, paymentToken);
+      setCompletedOrder((current) => {
+        if (!current || current.orderNumber !== currentOrderNumber) return current;
+        return {
+          ...current,
+          totalAmount: latestOrder.totalAmount,
+          paymentStatus: latestOrder.paymentStatus,
+          status: latestOrder.status,
+          reservationExpiresAt: latestOrder.reservationExpiresAt ?? null,
+          depositAmount: latestOrder.depositAmount ?? null,
+          paidAmount: latestOrder.paidAmount ?? null,
+          amountRemaining: latestOrder.amountRemaining ?? null,
+          pixQrCode: latestOrder.pixQrCode ?? null,
+          pixQrCodeUrl: latestOrder.pixQrCodeUrl ?? null,
+          pixCopyPaste: latestOrder.pixCopyPaste ?? null,
+          financialSummary: latestOrder.financialSummary ?? current.financialSummary,
+        };
+      });
+      setOrderStatusRefreshFailed(false);
+    } catch {
+      if (showFailure) setOrderStatusRefreshFailed(true);
+    } finally {
+      orderStatusRefreshInFlightRef.current = false;
+      setRefreshingOrderStatus(false);
+    }
+  }, [currentOrderNumber, slug]);
+
+  useEffect(() => {
+    if (!completedOrder || !paymentTokenRef.current || hasFinalCheckoutOutcome(completedOrder)) return;
+    const timer = window.setInterval(() => {
+      void refreshOrderStatus();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [
+    completedOrder?.orderNumber,
+    completedOrder?.status,
+    completedOrder?.paymentStatus,
+    completedOrder?.financialSummary?.reservationValid,
+    refreshOrderStatus,
+  ]);
+
   useEffect(() => {
     const expiresAt = completedOrder?.reservationExpiresAt;
-    if (!expiresAt) return;
+    if (!expiresAt || (completedOrder && hasFinalCheckoutOutcome(completedOrder))) {
+      setExpiryCountdown(null);
+      setReservationDeadlinePassed(false);
+      return;
+    }
+    const expiresAtMs = new Date(expiresAt).getTime();
+    if (!Number.isFinite(expiresAtMs)) {
+      setExpiryCountdown(null);
+      setReservationDeadlinePassed(false);
+      return;
+    }
     const tick = () => {
-      const diff = new Date(expiresAt).getTime() - Date.now();
+      const diff = expiresAtMs - Date.now();
       if (diff <= 0) {
-        setExpiryCountdown("00:00");
-        return;
+        setExpiryCountdown(null);
+        setReservationDeadlinePassed(true);
+        return false;
       }
       const m = Math.floor(diff / 60000);
       const s = Math.floor((diff % 60000) / 1000);
       setExpiryCountdown(`${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+      setReservationDeadlinePassed(false);
+      return true;
     };
-    tick();
-    const timer = setInterval(tick, 1000);
+    if (!tick()) return;
+    const timer = window.setInterval(() => {
+      if (!tick()) window.clearInterval(timer);
+    }, 1000);
     return () => clearInterval(timer);
-  }, [completedOrder?.reservationExpiresAt]);
+  }, [
+    completedOrder?.reservationExpiresAt,
+    completedOrder?.status,
+    completedOrder?.paymentStatus,
+    completedOrder?.financialSummary?.reservationValid,
+  ]);
 
   return {
     navigate,
@@ -846,6 +932,10 @@ export function useWizardState({
     completedOrder,
     showConfetti,
     expiryCountdown,
+    reservationDeadlinePassed,
+    refreshingOrderStatus,
+    orderStatusRefreshFailed,
+    refreshOrderStatus,
     form,
     set,
     qty,

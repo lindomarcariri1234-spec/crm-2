@@ -140,6 +140,7 @@ function makeState(
     showConfetti: false,
     expiryCountdown: null,
     qty: 1,
+    coPassengers: [],
     effectiveSeats: [] as string[],
     form: {
       customerName: "João Silva",
@@ -408,5 +409,37 @@ describe("StepConfirmation — financial summary with minimum deposit", () => {
     expect(confirmationText).toContain("Saldo Pendente");
     expect(confirmationText).toContain("Entrada solicitada");
     expect(confirmationText).not.toContain("Saldo projetado após pagar a entrada");
+  });
+
+  it("replaces an expired zero countdown with a status check", async () => {
+    const refreshOrderStatus = vi.fn().mockResolvedValue(undefined);
+    const { container } = await renderConfirmation(
+      makeOrder({ status: "pending", paymentStatus: "pending" }),
+      {
+        reservationDeadlinePassed: true,
+        refreshOrderStatus,
+      },
+    );
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("O prazo de 30 minutos terminou.");
+    expect(text).not.toContain("00:00");
+
+    const refreshButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Verificar status"),
+    );
+    expect(refreshButton).toBeDefined();
+    await flushAct(() => refreshButton?.click());
+    expect(refreshOrderStatus).toHaveBeenCalledWith(true);
+  });
+
+  it("shows a cancelled reservation with a cancellation status", async () => {
+    const { container } = await renderConfirmation(
+      makeOrder({ status: "cancelled", paymentStatus: "pending" }),
+    );
+
+    expect(container.textContent).toContain("Reserva cancelada");
+    expect(container.querySelector("h2")?.className).toContain("text-red-900");
+    expect(container.textContent).not.toContain("00:00");
   });
 });

@@ -156,7 +156,7 @@ export function ReservationsTable({
               <TableHead className="w-[130px]">Valor bruto / desconto</TableHead>
               <TableHead className="w-[110px]">Total líquido</TableHead>
               <TableHead className="w-[130px]">Pago / saldo</TableHead>
-              <TableHead className="w-[82px]">Pagamento</TableHead>
+              <TableHead className="w-[145px]">Forma de pagamento</TableHead>
               <TableHead className="w-[95px]">Status</TableHead>
               <TableHead className="w-[52px] text-right">Ações</TableHead>
             </TableRow>

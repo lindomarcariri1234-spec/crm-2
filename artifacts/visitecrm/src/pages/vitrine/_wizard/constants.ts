@@ -37,7 +37,7 @@ export const PAYMENT_METHODS_CONFIG = [
   {
     id: "boleto",
     label: "Boleto Bancário",
-    description: "Vencimento em 3 dias úteis",
+    description: "Boleto vence em 3 dias úteis; vaga reservada por 30 min",
     Icon: Tag,
     color: "text-amber-600",
     bg: "bg-amber-50",

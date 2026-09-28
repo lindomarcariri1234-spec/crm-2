@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   CheckCircle2,
+  XCircle,
   Ticket,
   MapPin,
   Users,
@@ -13,6 +14,7 @@ import {
   Search,
   Mail,
   Phone,
+  RefreshCw,
   UserCircle,
   Copy,
   Check,
@@ -99,6 +101,10 @@ export function StepConfirmation({
     completedOrder,
     showConfetti,
     expiryCountdown,
+    reservationDeadlinePassed,
+    refreshingOrderStatus,
+    orderStatusRefreshFailed,
+    refreshOrderStatus,
     qty,
     coPassengers,
     effectiveSeats,
@@ -140,6 +146,9 @@ export function StepConfirmation({
   const isFullyPaid = summary.states.payment === "paid";
   const isPartiallyPaid = summary.states.payment === "partially_paid";
   const reservationValid = summary.reservationValid;
+  const orderCancelled = ["cancelled", "canceled"].includes(
+    completedOrder.status?.toLowerCase() ?? "",
+  );
   const remainingAmt = summary.amountRemaining;
   const referralCreditWasAdjusted =
     completedOrder.referralCreditRequested != null &&
@@ -163,7 +172,7 @@ export function StepConfirmation({
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 pb-20">
-      {showConfetti && <ConfettiAnimation />}
+      {showConfetti && !orderCancelled && <ConfettiAnimation />}
 
       <StepIndicator current="confirmado" />
 
@@ -171,29 +180,39 @@ export function StepConfirmation({
         <div
           className="rounded-2xl p-8 text-center border"
           style={{
-            background: `linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)`,
-            borderColor: "#bbf7d0",
+            background: orderCancelled
+              ? "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)"
+              : "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)",
+            borderColor: orderCancelled ? "#fecaca" : "#bbf7d0",
           }}
         >
           <div className="flex justify-center mb-4">
-            <div className="bg-green-500 rounded-full p-4">
-              <CheckCircle2 className="w-14 h-14 text-white" />
+            <div className={`${orderCancelled ? "bg-red-500" : "bg-green-500"} rounded-full p-4`}>
+              {orderCancelled
+                ? <XCircle className="w-14 h-14 text-white" />
+                : <CheckCircle2 className="w-14 h-14 text-white" />}
             </div>
           </div>
-          <h2 className="text-3xl font-bold text-green-900 mb-2">
+          <h2 className={`text-3xl font-bold mb-2 ${orderCancelled ? "text-red-900" : "text-green-900"}`}>
             {reservationValid
               ? "Reserva Confirmada! 🎉"
               : isPartiallyPaid
                 ? "Pagamento Parcial Recebido"
-                : "Pedido Realizado! 🎉"}
+                : orderCancelled
+                  ? "Reserva cancelada"
+                  : "Pedido Realizado! 🎉"}
           </h2>
-          <p className="text-lg text-green-800 mb-6">
+          <p className={`text-lg mb-6 ${orderCancelled ? "text-red-800" : "text-green-800"}`}>
             {reservationValid
               ? "Seu pagamento foi confirmado e a reserva está válida."
               : isPartiallyPaid
                 ? "Uma parte do pagamento foi confirmada. A reserva ainda aguarda atingir o mínimo exigido e ser confirmada."
+                : orderCancelled
+                  ? "O prazo de pagamento de 30 minutos terminou e a reserva foi cancelada. Se você já pagou, entre em contato com a agência antes de fazer um novo pedido."
                 : form.paymentMethod === "pix"
                   ? "Seu pedido foi criado! Complete o pagamento via PIX para confirmar sua reserva."
+                  : form.paymentMethod === "cash"
+                    ? "Seu pedido ficará reservado por 30 minutos. Pague em dinheiro na agência dentro desse prazo para confirmar a reserva."
                   : "Seu pedido foi criado. Confirme o pagamento para validar a reserva."}
           </p>
           <div className="inline-flex items-center gap-2 bg-white px-6 py-3 rounded-xl shadow-sm border border-green-200">
@@ -205,7 +224,7 @@ export function StepConfirmation({
               </p>
             </div>
           </div>
-          {expiryCountdown !== null && (
+          {expiryCountdown !== null && !reservationValid && !orderCancelled && (
             <div className="mt-4 inline-flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-5 py-3">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -225,6 +244,34 @@ export function StepConfirmation({
                 <strong className="font-mono text-base">{expiryCountdown}</strong> ou a reserva será
                 cancelada automaticamente.
               </span>
+            </div>
+          )}
+          {reservationDeadlinePassed && !reservationValid && !orderCancelled && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-4 flex flex-col items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 text-amber-900"
+            >
+              <p className="text-sm">
+                O prazo de 30 minutos terminou. Estamos atualizando a situação da reserva; a confirmação do cancelamento pode levar alguns minutos.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void refreshOrderStatus(true)}
+                disabled={refreshingOrderStatus}
+              >
+                {refreshingOrderStatus
+                  ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  : <RefreshCw className="mr-2 h-4 w-4" />}
+                Verificar status
+              </Button>
+              {orderStatusRefreshFailed && (
+                <p className="text-xs">
+                  Não foi possível consultar agora. Tentaremos novamente automaticamente.
+                </p>
+              )}
             </div>
           )}
         </div>
