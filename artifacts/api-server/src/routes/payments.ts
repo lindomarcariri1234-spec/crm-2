@@ -948,28 +948,22 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
                 );
               }
               assertOpen(reservation);
-              if (updates.status === PAYMENT_STATUS.PAID) {
-                const paidValue = await sumPaidReservationPayments(
-                  tx,
-                  existingPayment.reservationId,
-                  me.tenantId,
+              const paidValue = await sumPaidReservationPayments(
+                tx,
+                existingPayment.reservationId,
+                me.tenantId,
+              );
+              const currentBalance = roundMoney(Math.max(
+                0,
+                roundMoney(Number(reservation.totalValue)) - paidValue,
+              ));
+              if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
+                throw new ValidationError(
+                  "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
+                  "PAYMENT_EXCEEDS_BALANCE",
                 );
-                const currentBalance = roundMoney(Math.max(
-                  0,
-                  roundMoney(Number(reservation.totalValue)) - paidValue,
-                ));
-                if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
-                  throw new ValidationError(
-                    "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
-                    "PAYMENT_EXCEEDS_BALANCE",
-                  );
-                }
               }
-            } else if (
-              lockedOrder &&
-              updates.status === PAYMENT_STATUS.PAID &&
-              existingPayment.status !== PAYMENT_STATUS.PAID
-            ) {
+            } else if (lockedOrder) {
               const reservations = await tx.select({
                 status: reservationsTable.status,
                 expiresAt: reservationsTable.expiresAt,

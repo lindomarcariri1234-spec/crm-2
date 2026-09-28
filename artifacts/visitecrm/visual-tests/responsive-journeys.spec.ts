@@ -46,8 +46,13 @@ async function clickFlowButton(page: Page, label: string) {
   await button.click();
 }
 
-async function assertDisplayedTripTotal(page: Page, stage: string, expectedTotal = 2650) {
-  const totalLabel = page.getByText("Total líquido", { exact: true }).last();
+async function assertDisplayedTripTotal(
+  page: Page,
+  stage: string,
+  expectedTotal = 2650,
+  expectedLabel = "Total líquido",
+) {
+  const totalLabel = page.getByText(expectedLabel, { exact: true }).last();
   await expect(totalLabel, `${stage} should show a total`).toBeVisible();
   const ptBrTotal = expectedTotal.toLocaleString("pt-BR", {
     minimumFractionDigits: 2,
@@ -306,11 +311,11 @@ for (const viewport of widths) {
     await clickFlowButton(page, "Continuar");
     await expect(page.getByText("Revisão dos Itens", { exact: true })).toBeVisible();
     await expect(page.getByText("Rota dos Geossítios do Araripe").first()).toBeVisible();
-    await assertDisplayedTripTotal(page, `checkout review at ${viewport.label}`);
+    await assertDisplayedTripTotal(page, `checkout review at ${viewport.label}`, 2650, "Total");
 
     await clickFlowButton(page, "Ir para Pagamento");
     await expect(page.getByText("Forma de Pagamento", { exact: false }).first()).toBeVisible();
-    await assertDisplayedTripTotal(page, `checkout payment at ${viewport.label}`);
+    await assertDisplayedTripTotal(page, `checkout payment at ${viewport.label}`, 2650, "Total");
     await assertNoDocumentOverflow(page, `checkout payment at ${viewport.label}`);
 
     await clickFlowButton(page, "Confirmar Pedido");
