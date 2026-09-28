@@ -63,6 +63,7 @@ const input = (props: ComponentProps<"input">) => createElement("input", props);
 
 vi.mock("@workspace/api-client-react", () => ({
   useGetReservation: () => ({ data: reservation, isLoading: false }),
+  useGetTrip: () => ({ data: { boardingPoints: [] } }),
   useListBoardingLocations: () => ({ data: [] }),
   useListUsers: () => ({ data: [] }),
   useGetMe: () => ({ data: { role: "agency_admin" } }),

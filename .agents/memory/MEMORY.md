@@ -153,3 +153,4 @@
 - [Local PostgreSQL integration setup](local-postgres-integration.md) — ephemeral PostgreSQL needs an explicit writable socket directory because `/run/postgresql` is absent
 - [PostgreSQL lock barrier visibility](postgres-lock-barrier-visibility.md) — lock tests should rely on a known blocker PID when pg_stat_activity hides query text
 - [PNPM linker and resolver peers](pnpm-hoisted-lockfile-mismatch.md) — use deploy-matched PNPM for frozen installs; explicitly scope @hookform/resolvers 3 to Zod 3 in mixed Zod 3/4 workspaces
+- [Boarding point ID namespaces](boarding-point-id-namespaces.md) — keep trip-point IDs distinct from agency catalog IDs when displaying or editing reservation boarding selections

@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useGetReservation,
+  useGetTrip,
   useListBoardingLocations,
   useUpdateReservation,
   useListUsers,
@@ -59,6 +60,18 @@ const PAYMENT_METHODS = [
   { value: "boleto", label: "Boleto" },
 ];
 
+type BoardingOption = {
+  id: string;
+  name: string;
+  time?: string | null;
+  address?: string | null;
+};
+
+type ReservationBoardingDetails = {
+  boardingLocationId?: string | null;
+  boardingLocation?: Pick<BoardingOption, "name" | "time" | "address"> | null;
+};
+
 function parseReservationStatus(v: string): ReservationStatus | undefined {
   const r = ReservationStatusSchema.safeParse(v);
   return r.success ? r.data : undefined;
@@ -99,6 +112,12 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
   const [boardingLocationId, setBoardingLocationId] = useState<string>("");
   const [selectedTripId, setSelectedTripId] = useState<string>("");
   const [selectedClientId, setSelectedClientId] = useState<string>("");
+  const { data: selectedTripData } = useGetTrip(selectedTripId, {
+    query: {
+      queryKey: ["/api/trips", selectedTripId],
+      enabled: open && !!selectedTripId,
+    },
+  });
 
   // Financial fields (synchronized)
   const [ticketPrice, setTicketPrice] = useState<string>("");
@@ -179,7 +198,56 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
     }
   }, [ticketPrice, quantity, discount]);
 
-  const boardingLocations = boardingRaw ?? [];
+  const reservationBoarding = data as
+    | (NonNullable<typeof data> & ReservationBoardingDetails)
+    | undefined;
+  const tripBoardingPoints = useMemo(() => {
+    const points =
+      (selectedTripData as { boardingPoints?: BoardingOption[] } | undefined)?.boardingPoints ?? [];
+    return points
+      .filter((point) => point.id && point.name?.trim())
+      .map((point) => ({ ...point, name: point.name.trim() }));
+  }, [selectedTripData]);
+  const boardingLocations = useMemo(() => {
+    const optionsById = new Map<string, BoardingOption>();
+
+    // Trip-specific point IDs are the source used by storefront reservations.
+    for (const point of tripBoardingPoints) {
+      optionsById.set(point.id, point);
+    }
+
+    // Keep catalog IDs available for reservations created through the CRM.
+    for (const location of boardingRaw ?? []) {
+      if (!location.id || !location.name?.trim() || optionsById.has(location.id)) continue;
+      optionsById.set(location.id, {
+        id: location.id,
+        name: location.name.trim(),
+        time: null,
+        address: location.address ?? null,
+      });
+    }
+
+    // Preserve a saved value even if its point was removed from both lists.
+    const savedId = reservationBoarding?.boardingLocationId;
+    if (savedId && !optionsById.has(savedId)) {
+      const savedPoint = reservationBoarding?.boardingLocation;
+      optionsById.set(savedId, {
+        id: savedId,
+        name: savedPoint?.name?.trim() || "Ponto de embarque não localizado",
+        time: savedPoint?.time ?? null,
+        address: savedPoint?.address ?? null,
+      });
+    }
+
+    return [...optionsById.values()];
+  }, [boardingRaw, reservationBoarding, tripBoardingPoints]);
+  const selectedBoarding = boardingLocations.find((location) => location.id === boardingLocationId);
+  const selectedBoardingDetails = [
+    selectedBoarding?.time ? `Horário: ${selectedBoarding.time}` : "",
+    selectedBoarding?.address ? `Endereço: ${selectedBoarding.address}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -398,16 +466,19 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
               </div>
               {boardingLocations.length > 0 && (
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Local de Embarque</label>
+                  <label className="text-sm font-medium">Ponto de embarque</label>
                   <Select value={boardingLocationId || "none"} onValueChange={v => setBoardingLocationId(v === "none" ? "" : v)}>
                     <SelectTrigger><SelectValue placeholder="Nenhum" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Nenhum</SelectItem>
-                      {boardingLocations.map(b => (
-                        <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                      {boardingLocations.map((location) => (
+                        <SelectItem key={location.id} value={location.id}>{location.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  {selectedBoardingDetails && (
+                    <p className="text-xs text-muted-foreground">{selectedBoardingDetails}</p>
+                  )}
                 </div>
               )}
               <div className="space-y-2">
