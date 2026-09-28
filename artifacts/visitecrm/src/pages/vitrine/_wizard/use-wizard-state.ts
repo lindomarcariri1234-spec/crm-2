@@ -446,7 +446,9 @@ export function useWizardState({
   function setCoPassenger(index: number, field: keyof CoPassenger, value: string) {
     setCoPassengers((prev) => {
       const next = [...prev];
-      if (!next[index]) next[index] = { name: "", cpf: "", phone: "" };
+      for (let i = 0; i <= index; i += 1) {
+        if (!next[i]) next[i] = { name: "", cpf: "", phone: "" };
+      }
       next[index] = { ...next[index], [field]: value };
       return next;
     });
@@ -480,22 +482,25 @@ export function useWizardState({
     setLayoutSeats([]);
   }
 
-  function canProceedFromDados() {
-    const coPassengersComplete =
-      coPassengers.length === Math.max(0, qty - 1) &&
-      coPassengers.every((passenger) => passenger.name.trim().length > 0);
+  function hasCompleteCoPassengers() {
+    const requiredCount = Math.max(0, qty - 1);
+    return Array.from({ length: requiredCount }, (_, index) => coPassengers[index])
+      .every((passenger) => !!passenger?.name.trim());
+  }
 
+  function canProceedFromDados() {
     return (
       !!form.customerName.trim() &&
       !!form.customerEmail.trim() &&
       validatePhone(form.customerPhone) &&
       validateCpf(form.customerCpf) &&
-      coPassengersComplete
+      hasCompleteCoPassengers()
     );
   }
 
   function canProceedFromRevisao() {
     if (isSoldOut) return false;
+    if (!hasCompleteCoPassengers()) return false;
     if (product?.hasVariants && !selectedVariant) return false;
     if (showSeatGrid && product?.totalCapacity && qty > product.totalCapacity) return false;
     if (qty < 1) return false;
@@ -568,6 +573,11 @@ export function useWizardState({
 
   async function submit() {
     if (!product) return;
+    if (!hasCompleteCoPassengers()) {
+      setStep("dados");
+      setSubmitError("Informe o nome de cada acompanhante antes de continuar.");
+      return;
+    }
     setSubmitting(true);
     try {
       const seatNotes =

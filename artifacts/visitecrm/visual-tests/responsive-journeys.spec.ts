@@ -25,6 +25,11 @@ const syntheticCustomer = {
   cpf: "52998224725",
 };
 
+const syntheticCoPassengers = [
+  { name: "Acompanhante Dois", cpf: "111.444.777-35", phone: "(88) 98888-1111" },
+  { name: "Acompanhante Três", cpf: "935.411.347-80", phone: "(88) 97777-2222" },
+];
+
 async function openFixture(page: Page, scenario: string, width: number, height: number) {
   await page.setViewportSize({ width, height });
   await page.goto(`/visual-tests/index.html?scenario=${scenario}`);
@@ -41,15 +46,25 @@ async function clickFlowButton(page: Page, label: string) {
   await button.click();
 }
 
-async function assertDisplayedTripTotal(page: Page, stage: string) {
-  const totalLabel = page.getByText("Total", { exact: true }).last();
+async function assertDisplayedTripTotal(page: Page, stage: string, expectedTotal = 2650) {
+  const totalLabel = page.getByText("Total líquido", { exact: true }).last();
   await expect(totalLabel, `${stage} should show a total`).toBeVisible();
+  const ptBrTotal = expectedTotal.toLocaleString("pt-BR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const englishTotal = expectedTotal.toFixed(2);
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   await expect(totalLabel.locator(".."), `${stage} should preserve the fixture total`).toContainText(
-    /2\.650,00|2650\.00/,
+    new RegExp(`${escapeRegExp(ptBrTotal)}|${escapeRegExp(englishTotal)}`),
   );
 }
 
-async function assertSyntheticOrderRequest(page: Page) {
+async function assertSyntheticOrderRequest(
+  page: Page,
+  quantity = 1,
+  coPassengers: typeof syntheticCoPassengers | [] = [],
+) {
   const request = await page.evaluate(() => {
     const raw = window.sessionStorage.getItem("visual-test:last-order-request");
     return raw ? JSON.parse(raw) : null;
@@ -59,6 +74,7 @@ async function assertSyntheticOrderRequest(page: Page) {
     customerPhone?: string;
     paymentMethod?: string;
     items?: Array<{ productId?: string; productName?: string; quantity?: number; unitPrice?: number }>;
+    coPassengers?: Array<{ name?: string; cpf?: string; phone?: string }>;
   } | null;
 
   expect(request, "the mocked order endpoint should capture the synthetic submission").not.toBeNull();
@@ -72,9 +88,14 @@ async function assertSyntheticOrderRequest(page: Page) {
   expect(request?.items?.[0]).toMatchObject({
     productId: "visual-product-fixture",
     productName: "Rota dos Geossítios do Araripe",
-    quantity: 1,
+    quantity,
     unitPrice: 2650,
   });
+  if (coPassengers.length > 0) {
+    expect(request?.coPassengers).toEqual(coPassengers);
+  } else {
+    expect(request).not.toHaveProperty("coPassengers");
+  }
 }
 
 async function assertNoDocumentOverflow(page: Page, scenario: string) {
@@ -213,6 +234,66 @@ for (const viewport of widths) {
     await expect(page.getByText("VIS-TESTE-001", { exact: true }).first()).toBeVisible();
     await assertSyntheticOrderRequest(page);
     await assertNoDocumentOverflow(page, `reservation confirmation at ${viewport.label}`);
+  });
+
+  test(`group reservation preserves each companion at ${viewport.label} width`, async ({ page }) => {
+    await openFixture(page, "reserva", viewport.width, viewport.height);
+    await page.locator("#name").fill(syntheticCustomer.name);
+    await page.locator("#email").fill(syntheticCustomer.email);
+    await page.locator("#phone").fill(syntheticCustomer.phone);
+    await page.locator("#cpf").fill(syntheticCustomer.cpf);
+    await page.locator("select").first().selectOption("3");
+
+    // Fill the third passenger first to ensure a sparse state cannot bypass validation.
+    await page.locator("#co-name-1").fill(syntheticCoPassengers[1].name);
+    await page.locator("#co-cpf-1").fill(syntheticCoPassengers[1].cpf.replace(/\D/g, ""));
+    await page.locator("#co-phone-1").fill(syntheticCoPassengers[1].phone);
+    const continueButton = page.getByRole("button", { name: "Continuar", exact: true });
+    await expect(continueButton).toBeDisabled();
+
+    await page.locator("#co-name-0").fill(syntheticCoPassengers[0].name);
+    await page.locator("#co-cpf-0").fill(syntheticCoPassengers[0].cpf.replace(/\D/g, ""));
+    await page.locator("#co-phone-0").fill(syntheticCoPassengers[0].phone);
+    await expect(continueButton).toBeEnabled();
+    await assertNoDocumentOverflow(page, `group reservation details at ${viewport.label}`);
+
+    await clickFlowButton(page, "Continuar");
+    await expect(page.getByRole("heading", { name: "Revisão do Pedido" })).toBeVisible();
+    await expect(page.getByTestId("review-passenger-quantity")).toHaveText("3");
+    for (const [index, passenger] of syntheticCoPassengers.entries()) {
+      await expect(page.getByText(`Passageiro ${index + 2}: ${passenger.name}`, { exact: true })).toBeVisible();
+    }
+    await assertDisplayedTripTotal(page, `group reservation review at ${viewport.label}`, 7950);
+
+    await page.getByRole("button", { name: "−", exact: true }).click();
+    await page.getByRole("button", { name: "+", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Continuar", exact: true })).toBeDisabled();
+    await expect(page.getByText(/Volte à etapa anterior e informe os dados dos novos acompanhantes/)).toBeVisible();
+    await page.getByRole("button", { name: "Voltar", exact: true }).last().click();
+    await page.locator("#co-name-1").fill(syntheticCoPassengers[1].name);
+    await page.locator("#co-cpf-1").fill(syntheticCoPassengers[1].cpf.replace(/\D/g, ""));
+    await page.locator("#co-phone-1").fill(syntheticCoPassengers[1].phone);
+    await clickFlowButton(page, "Continuar");
+    await expect(page.getByTestId("review-passenger-quantity")).toHaveText("3");
+    await assertDisplayedTripTotal(page, `group reservation updated review at ${viewport.label}`, 7950);
+
+    await clickFlowButton(page, "Continuar");
+    await expect(page.getByRole("heading", { name: "Forma de Pagamento" })).toBeVisible();
+    await page.locator('input[name="payment_method"][value="pix"]').check();
+    await assertDisplayedTripTotal(page, `group reservation payment at ${viewport.label}`, 7950);
+    await assertNoDocumentOverflow(page, `group reservation payment at ${viewport.label}`);
+
+    await clickFlowButton(page, "Confirmar Reserva");
+    await expect(page.getByRole("heading", { name: /Pedido Realizado!/ })).toBeVisible();
+    await expect(page.getByTestId("confirmation-passenger-count")).toHaveText("3 passageiros");
+    for (const [index, passenger] of syntheticCoPassengers.entries()) {
+      await expect(page.getByText(`Passageiro ${index + 2}: ${passenger.name}`, { exact: true })).toBeVisible();
+    }
+    await expect(
+      page.getByRole("heading", { name: "Resumo Financeiro" }).locator(".."),
+    ).toContainText("R$ 7950.00");
+    await assertSyntheticOrderRequest(page, 3, syntheticCoPassengers);
+    await assertNoDocumentOverflow(page, `group reservation confirmation at ${viewport.label}`);
   });
 
   test(`checkout flow completes with synthetic details at ${viewport.label} width`, async ({ page }) => {

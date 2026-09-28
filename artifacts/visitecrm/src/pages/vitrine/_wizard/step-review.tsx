@@ -16,6 +16,8 @@ export function StepReview({ state, store }: { state: WizardState; store: Public
     setSelectedVariant,
     isSoldOut,
     qty,
+    coPassengers,
+    canProceedFromDados,
     maxSeats,
     incrementQty,
     decrementQty,
@@ -83,31 +85,40 @@ export function StepReview({ state, store }: { state: WizardState; store: Public
         )}
 
         <div
-          className={`flex items-center justify-between p-4 border rounded-xl ${
+          className={`space-y-3 p-4 border rounded-xl ${
             isSoldOut ? "opacity-50 pointer-events-none" : ""
           }`}
         >
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Quantidade de passageiros</span>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Quantidade de passageiros</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={decrementQty}
+                className="w-8 h-8 rounded-full border flex items-center justify-center text-lg font-bold hover:bg-muted transition-colors"
+                disabled={qty <= 1}
+              >
+                −
+              </button>
+              <span data-testid="review-passenger-quantity" className="w-8 text-center font-bold text-lg">
+                {qty}
+              </span>
+              <button
+                onClick={incrementQty}
+                className="w-8 h-8 rounded-full border flex items-center justify-center text-lg font-bold hover:bg-muted transition-colors"
+                disabled={qty >= maxSeats}
+              >
+                +
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={decrementQty}
-              className="w-8 h-8 rounded-full border flex items-center justify-center text-lg font-bold hover:bg-muted transition-colors"
-              disabled={qty <= 1}
-            >
-              −
-            </button>
-            <span className="w-8 text-center font-bold text-lg">{qty}</span>
-            <button
-              onClick={incrementQty}
-              className="w-8 h-8 rounded-full border flex items-center justify-center text-lg font-bold hover:bg-muted transition-colors"
-              disabled={qty >= maxSeats}
-            >
-              +
-            </button>
-          </div>
+          {!canProceedFromDados() && (
+            <p className="text-xs text-amber-700" role="status">
+              Volte à etapa anterior e informe os dados dos novos acompanhantes antes de continuar.
+            </p>
+          )}
         </div>
 
         {product.showSeatMap === false && (
@@ -308,6 +319,18 @@ export function StepReview({ state, store }: { state: WizardState; store: Public
               <div>
                 <p className="text-muted-foreground text-xs">Data de Nascimento</p>
                 <p className="font-medium">{fmtDate(form.customerBirthdate)}</p>
+              </div>
+            )}
+            {coPassengers.slice(0, Math.max(0, qty - 1)).length > 0 && (
+              <div className="sm:col-span-2">
+                <p className="text-muted-foreground text-xs">Acompanhantes</p>
+                <ul className="mt-1 space-y-1">
+                  {coPassengers.slice(0, Math.max(0, qty - 1)).map((passenger, index) => (
+                    <li key={index} className="font-medium">
+                      Passageiro {index + 2}: {passenger.name}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
           </div>

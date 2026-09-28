@@ -100,6 +100,7 @@ export function StepConfirmation({
     showConfetti,
     expiryCountdown,
     qty,
+    coPassengers,
     effectiveSeats,
     form,
     navigate,
@@ -270,7 +271,7 @@ export function StepConfirmation({
               })()}
               <div>
                 <p className="text-muted-foreground text-xs">Passageiros</p>
-                <p className="font-semibold">
+                <p className="font-semibold" data-testid="confirmation-passenger-count">
                   {qty} passageiro{qty !== 1 ? "s" : ""}
                 </p>
               </div>
@@ -331,6 +332,18 @@ export function StepConfirmation({
                 <p className="text-muted-foreground text-xs">Telefone</p>
                 <p className="font-semibold">{form.customerPhone}</p>
               </div>
+              {coPassengers.slice(0, Math.max(0, qty - 1)).length > 0 && (
+                <div>
+                  <p className="text-muted-foreground text-xs">Acompanhantes</p>
+                  <ul className="mt-1 space-y-1">
+                    {coPassengers.slice(0, Math.max(0, qty - 1)).map((passenger, index) => (
+                      <li key={index} className="font-semibold">
+                        Passageiro {index + 2}: {passenger.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div>
                 <p className="text-muted-foreground text-xs">Número do Pedido</p>
                 <div className="mt-1">

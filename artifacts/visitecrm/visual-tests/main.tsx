@@ -50,7 +50,7 @@ function jsonResponse(payload: unknown): Response {
   });
 }
 
-function payloadFor(pathname: string, method: string): unknown {
+function payloadFor(pathname: string, method: string, requestBody?: unknown): unknown {
   if (pathname === "/api/client/me") return visualProfile;
   if (pathname === "/api/client/me/referrals") return profileReferrals;
   if (pathname === "/api/client/me/referral-campaign") {
@@ -140,7 +140,28 @@ function payloadFor(pathname: string, method: string): unknown {
   }
   if (pathname === `${storePrefix}/reviews`) return [];
   if (pathname.startsWith(`${storePrefix}/orders/`) && method === "GET") return visualOrder;
-  if (pathname === `${storePrefix}/orders` && method === "POST") return visualCreatedOrder;
+  if (pathname === `${storePrefix}/orders` && method === "POST") {
+    const orderRequest = requestBody as {
+      items?: Array<{ quantity?: number; unitPrice?: number }>;
+    } | null;
+    const totalAmount = orderRequest?.items?.reduce(
+      (total, item) => total + (item.quantity ?? 1) * (item.unitPrice ?? 0),
+      0,
+    ) || Number(visualCreatedOrder.totalAmount);
+    return {
+      ...visualCreatedOrder,
+      subtotal: totalAmount.toFixed(2),
+      totalAmount: totalAmount.toFixed(2),
+      amountRemaining: totalAmount.toFixed(2),
+      financialSummary: {
+        ...visualCreatedOrder.financialSummary,
+        subtotal: totalAmount,
+        totalAmount,
+        paidAmount: 0,
+        amountRemaining: totalAmount,
+      },
+    };
+  }
   if (pathname.startsWith(`${storePrefix}/trips/`) && pathname.endsWith("/seat-map")) {
     return {
       tripId: visualProduct.tripId,
@@ -197,11 +218,12 @@ function installFixtureFetch() {
     const url = new URL(inputUrl, window.location.href);
     if (url.origin === window.location.origin && url.pathname.startsWith("/api/")) {
       const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+      let requestBody: unknown;
       if (url.pathname === `/api/public/store/${visualStore.slug}/orders` && method === "POST") {
-        const body = await readJsonRequestBody(input, init);
-        window.sessionStorage.setItem("visual-test:last-order-request", JSON.stringify(body));
+        requestBody = await readJsonRequestBody(input, init);
+        window.sessionStorage.setItem("visual-test:last-order-request", JSON.stringify(requestBody));
       }
-      return jsonResponse(payloadFor(url.pathname, method));
+      return jsonResponse(payloadFor(url.pathname, method, requestBody));
     }
     return nativeFetch(input, init);
   }) as typeof window.fetch;
