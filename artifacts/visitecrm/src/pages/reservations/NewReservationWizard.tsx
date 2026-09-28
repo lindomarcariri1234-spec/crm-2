@@ -23,6 +23,8 @@ import { WizardStep2 } from "./WizardStep2";
 import { STATUS_LABELS } from "./constants";
 import { computeReservationTotal, applyDiscounts } from "@/lib/reservationPricing";
 
+const WIZARD_TRIP_REFRESH_INTERVAL_MS = 15_000;
+
 function WizardStepIndicator({ step }: { step: number }) {
   const steps = ["Seleção", "Pagamento", "Confirmação"];
   return (
@@ -131,7 +133,14 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
   const cpfMatches = cpfData?.data ?? [];
 
   const validateCoupon = useValidateReservationCoupon();
-  const { data: selectedTripFull } = useGetTrip(selectedTripId, { query: { queryKey: ["wizard-trip", selectedTripId], enabled: !!selectedTripId } });
+  const { data: selectedTripFull } = useGetTrip(selectedTripId, {
+    query: {
+      queryKey: ["wizard-trip", selectedTripId],
+      enabled: open && !!selectedTripId,
+      refetchInterval: open && selectedTripId ? WIZARD_TRIP_REFRESH_INTERVAL_MS : false,
+      refetchIntervalInBackground: false,
+    },
+  });
   const { data: loyaltyInfo } = useGetClientLoyalty(selectedClientId, { query: { queryKey: ["wizard-loyalty", selectedClientId], enabled: !!selectedClientId, retry: false } });
 
   const { data: dupCheckData } = useListReservations(
@@ -194,6 +203,14 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
 
     return [...optionsById.values()];
   }, [boardingRaw, selectedTripFull?.boardingPoints]);
+
+  useEffect(() => {
+    if (!open || !selectedTripId || !selectedTripFull || !boardingLocationId || boardingLocationId === "__none__") return;
+    if (!boardingOptions.some((point) => point.id === boardingLocationId)) {
+      setBoardingLocationId("");
+    }
+  }, [boardingLocationId, boardingOptions, open, selectedTripFull, selectedTripId]);
+
   const selectedTrip = tripsData?.data.find(t => t.id === selectedTripId);
   const selectedClient = (() => {
     if (!selectedClientId) return undefined;

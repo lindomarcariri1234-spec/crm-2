@@ -249,6 +249,7 @@ export function TripForm({ tripId }: { tripId?: string }) {
           },
         });
         await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["wizard-trip", tripId] }),
           queryClient.invalidateQueries({ queryKey: [`/api/trips/${tripId}/costs`] }),
           queryClient.invalidateQueries({ queryKey: ["trip-costs", tripId] }),
           queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
