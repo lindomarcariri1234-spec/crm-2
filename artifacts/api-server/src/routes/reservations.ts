@@ -270,8 +270,15 @@ type ReservationRelations = {
   client?: typeof clientsTable.$inferSelect;
   hasAutoRetry: boolean;
   numberingType: string | null;
-  boardingLocationMap?: Map<string, { name: string; time?: string }>;
+  boardingLocationMap?: Map<string, { name: string; time?: string; address?: string }>;
   conflictingTrips?: ConflictingTrip[];
+};
+
+type ReservationTripBoardingPoint = {
+  id: string;
+  name: string;
+  time?: string | null;
+  address?: string | null;
 };
 
 function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: ReservationRelations) {
@@ -304,11 +311,11 @@ function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: Res
     boardingLocationId: r.boardingLocationId ?? null,
     boardingLocation: (() => {
       if (!r.boardingLocationId || !trip) return null;
-      const bps = (trip.boardingPoints ?? []) as Array<{ id: string; name: string; time?: string }>;
+      const bps = (trip.boardingPoints ?? []) as ReservationTripBoardingPoint[];
       const bp = bps.find(p => p.id === r.boardingLocationId);
-      if (bp) return { name: bp.name, time: bp.time ?? null };
+      if (bp) return { name: bp.name, time: bp.time ?? null, address: bp.address ?? null };
       const bl = boardingLocationMap?.get(r.boardingLocationId);
-      if (bl) return { name: bl.name, time: bl.time ?? null };
+      if (bl) return { name: bl.name, time: bl.time ?? null, address: bl.address ?? null };
       return null;
     })(),
     storeOrderId: r.storeOrderId ?? null,
@@ -437,6 +444,34 @@ async function attachLinkedReservationData<T extends object>(
 async function formatReservation(r: typeof reservationsTable.$inferSelect, includeLinkedData = true) {
   const [trip] = await db.select().from(tripsTable).where(and(eq(tripsTable.id, r.tripId), eq(tripsTable.tenantId, r.tenantId))).limit(1);
   const [client] = r.clientId ? await db.select().from(clientsTable).where(and(eq(clientsTable.id, r.clientId), eq(clientsTable.tenantId, r.tenantId))).limit(1) : [];
+  const tripBoardingPoints = (trip?.boardingPoints ?? []) as ReservationTripBoardingPoint[];
+  const hasTripBoardingPoint = tripBoardingPoints.some(point => point.id === r.boardingLocationId);
+  let boardingLocationMap: Map<string, { name: string; time?: string; address?: string }> | undefined;
+  if (r.boardingLocationId && !hasTripBoardingPoint) {
+    const [boardingLocation] = await db
+      .select({
+        id: boardingLocationsTable.id,
+        name: boardingLocationsTable.name,
+        address: boardingLocationsTable.address,
+        departureTime: boardingLocationsTable.departureTime,
+      })
+      .from(boardingLocationsTable)
+      .where(and(
+        eq(boardingLocationsTable.id, r.boardingLocationId),
+        eq(boardingLocationsTable.tenantId, r.tenantId),
+      ))
+      .limit(1);
+    if (boardingLocation) {
+      boardingLocationMap = new Map([[
+        boardingLocation.id,
+        {
+          name: boardingLocation.name,
+          time: boardingLocation.departureTime ?? undefined,
+          address: boardingLocation.address,
+        },
+      ]]);
+    }
+  }
   const [autoRetryLog] = await db.select({ id: emailLogsTable.id })
     .from(emailLogsTable)
     .where(and(eq(emailLogsTable.reservationId, r.id), eq(emailLogsTable.isAutoRetry, true), eq(emailLogsTable.tenantId, r.tenantId)))
@@ -452,6 +487,7 @@ async function formatReservation(r: typeof reservationsTable.$inferSelect, inclu
     client,
     hasAutoRetry: autoRetryLog !== undefined,
     numberingType: layoutRow?.numberingType ?? null,
+    boardingLocationMap,
   });
   return includeLinkedData ? (await attachLinkedReservationData([view], [r], r.tenantId))[0] : view;
 }
@@ -483,7 +519,12 @@ export async function batchFormatReservations(
         eq(emailLogsTable.isAutoRetry, true),
         inArray(emailLogsTable.reservationId, reservationIds),
       )),
-    db.select({ id: boardingLocationsTable.id, name: boardingLocationsTable.name, departureTime: boardingLocationsTable.departureTime })
+    db.select({
+      id: boardingLocationsTable.id,
+      name: boardingLocationsTable.name,
+      address: boardingLocationsTable.address,
+      departureTime: boardingLocationsTable.departureTime,
+    })
       .from(boardingLocationsTable)
       .where(eq(boardingLocationsTable.tenantId, tenantId)),
   ]);
@@ -491,7 +532,10 @@ export async function batchFormatReservations(
   const tripMap = new Map(trips.map(t => [t.id, t]));
   const clientMap = new Map(clients.map(c => [c.id, c]));
   const autoRetrySet = new Set(autoRetryLogs.map(l => l.reservationId).filter((id): id is string => id != null));
-  const boardingLocationMap = new Map(boardingLocations.map(bl => [bl.id, { name: bl.name, time: bl.departureTime ?? undefined }]));
+  const boardingLocationMap = new Map(boardingLocations.map(bl => [
+    bl.id,
+    { name: bl.name, time: bl.departureTime ?? undefined, address: bl.address },
+  ]));
 
   const layoutIds = [...new Set(trips.map(t => t.layoutId).filter((id): id is string => id != null))];
   const layouts = layoutIds.length

@@ -4176,6 +4176,7 @@ export const ListReservationsResponse = zod.object({
           id: zod.string().optional(),
           name: zod.string().optional(),
           time: zod.string().nullish(),
+          address: zod.string().nullish(),
         })
         .nullish(),
       storeOrderId: zod.string().nullish(),
@@ -4387,6 +4388,7 @@ export const CreateReservationResponse = zod.object({
       id: zod.string().optional(),
       name: zod.string().optional(),
       time: zod.string().nullish(),
+      address: zod.string().nullish(),
     })
     .nullish(),
   storeOrderId: zod.string().nullish(),
@@ -4549,6 +4551,7 @@ export const GetReservationResponse = zod.object({
       id: zod.string().optional(),
       name: zod.string().optional(),
       time: zod.string().nullish(),
+      address: zod.string().nullish(),
     })
     .nullish(),
   storeOrderId: zod.string().nullish(),
@@ -4748,6 +4751,7 @@ export const UpdateReservationResponse = zod.object({
       id: zod.string().optional(),
       name: zod.string().optional(),
       time: zod.string().nullish(),
+      address: zod.string().nullish(),
     })
     .nullish(),
   storeOrderId: zod.string().nullish(),
@@ -4906,6 +4910,7 @@ export const CheckInReservationResponse = zod.object({
       id: zod.string().optional(),
       name: zod.string().optional(),
       time: zod.string().nullish(),
+      address: zod.string().nullish(),
     })
     .nullish(),
   storeOrderId: zod.string().nullish(),

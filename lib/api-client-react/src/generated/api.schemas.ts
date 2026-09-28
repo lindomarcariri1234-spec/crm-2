@@ -1704,6 +1704,8 @@ export type ReservationBoardingLocation = {
   name?: string;
   /** @nullable */
   time?: string | null;
+  /** @nullable */
+  address?: string | null;
 } | null;
 
 export type ReservationClient = {

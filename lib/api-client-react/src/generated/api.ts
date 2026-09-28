@@ -25511,7 +25511,8 @@ export type ScanLegacyCalendarEventsMutationResult = NonNullable<
   Awaited<ReturnType<typeof scanLegacyCalendarEvents>>
 >;
 export type ScanLegacyCalendarEventsMutationBody =
-  BodyType<CalendarReconciliationScanRequest> | undefined;
+  | BodyType<CalendarReconciliationScanRequest>
+  | undefined;
 export type ScanLegacyCalendarEventsMutationError = ErrorType<void>;
 export type ScanLegacyCalendarEventsMutationVariables = {
   data?: BodyType<CalendarReconciliationScanRequest>;

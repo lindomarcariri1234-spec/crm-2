@@ -8148,6 +8148,8 @@ components:
               type: string
             time:
               type: ["string", "null"]
+            address:
+              type: ["string", "null"]
         storeOrderId:
           type: ["string", "null"]
         discountCouponCode:
