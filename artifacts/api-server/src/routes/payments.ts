@@ -607,6 +607,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
             status: reservationsTable.status,
             storeOrderId: reservationsTable.storeOrderId,
             expiresAt: reservationsTable.expiresAt,
+            isGratuidade: reservationsTable.isGratuidade,
           })
           .from(reservationsTable)
           .where(and(
@@ -617,6 +618,12 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
           .limit(1);
         if (!lockedReservation) {
           throw new NotFoundError("Reservation not found or not in tenant", "RESERVATION_NOT_FOUND");
+        }
+        if (lockedReservation.isGratuidade) {
+          throw new ConflictError(
+            "Não é possível registrar um pagamento em uma reserva com gratuidade.",
+            "GRATUITY_PAYMENT_FORBIDDEN",
+          );
         }
         reservationClientId = lockedReservation.clientId;
         reservationTotalValue = lockedReservation.totalValue;
@@ -829,12 +836,14 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
     if (parsed.data.status != null) updates.status = parsePaymentStatus(parsed.data.status);
     if (parsed.data.paidAt !== undefined) updates.paidAt = parsed.data.paidAt ? new Date(parsed.data.paidAt) : null;
     if (parsed.data.notes !== undefined) updates.notes = parsed.data.notes ?? null;
+    const isActivePaymentStatusUpdate = updates.status === PAYMENT_STATUS.PAID
+      || updates.status === PAYMENT_STATUS.APPROVED;
     // A new paid receivable must serialize with storefront expiry/refunds and
     // orderless expiry before the payment is changed. The locator reads below
     // only identify rows to lock; all mutable state is checked again under lock.
     // Other updates retain payment -> reservation ordering for referral reversal.
     const result = await db.transaction(async (tx) => {
-      const [locator] = updates.status === PAYMENT_STATUS.PAID
+      const [locator] = isActivePaymentStatusUpdate
         ? await tx.select({
           type: paymentsTable.type,
           reservationId: paymentsTable.reservationId,
@@ -882,7 +891,7 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         .limit(1);
       if (!existingPayment) return { payment: null, reversal: null, previousStatus: null };
 
-      if (updates.status === PAYMENT_STATUS.PAID) {
+      if (isActivePaymentStatusUpdate) {
         if (
           !locator
           || locator.type !== existingPayment.type
@@ -898,9 +907,10 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
           ) {
             throw new ConflictError("Não é possível receber pagamento de um pedido encerrado", "ORDER_CLOSED");
           }
-          // A PAID -> PAID edit must not lock the reservation: DELETE locks
-          // payment -> reservation -> other eligible PAID payments for reversal.
-          if (existingPayment.status !== PAYMENT_STATUS.PAID) {
+          // Lock only when the payment's active status is changing. In
+          // particular, an unchanged PAID status only edits metadata and keeps
+          // the payment -> reservation order used by referral reversals.
+          if (existingPayment.status !== updates.status) {
             const assertOpen = (reservation: { status: string; expiresAt: Date | null }) => {
               if (["cancelled", "failed", "refunded"].includes(reservation.status)) {
                 throw new ConflictError("Não é possível receber pagamento de uma reserva encerrada", "RESERVATION_CLOSED");
@@ -919,6 +929,7 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
                 status: reservationsTable.status,
                 storeOrderId: reservationsTable.storeOrderId,
                 expiresAt: reservationsTable.expiresAt,
+                isGratuidade: reservationsTable.isGratuidade,
               }).from(reservationsTable)
                 .where(and(
                   eq(reservationsTable.id, existingPayment.reservationId),
@@ -930,23 +941,35 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
               if (reservation.storeOrderId !== locatedStoreOrderId) {
                 throw new ConflictError("O pedido da reserva mudou durante a confirmação", "PAYMENT_ORDER_CHANGED");
               }
-              assertOpen(reservation);
-              const paidValue = await sumPaidReservationPayments(
-                tx,
-                existingPayment.reservationId,
-                me.tenantId,
-              );
-              const currentBalance = roundMoney(Math.max(
-                0,
-                roundMoney(Number(reservation.totalValue)) - paidValue,
-              ));
-              if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
-                throw new ValidationError(
-                  "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
-                  "PAYMENT_EXCEEDS_BALANCE",
+              if (reservation.isGratuidade) {
+                throw new ConflictError(
+                  "Não é possível registrar um pagamento em uma reserva com gratuidade.",
+                  "GRATUITY_PAYMENT_FORBIDDEN",
                 );
               }
-            } else if (lockedOrder) {
+              assertOpen(reservation);
+              if (updates.status === PAYMENT_STATUS.PAID) {
+                const paidValue = await sumPaidReservationPayments(
+                  tx,
+                  existingPayment.reservationId,
+                  me.tenantId,
+                );
+                const currentBalance = roundMoney(Math.max(
+                  0,
+                  roundMoney(Number(reservation.totalValue)) - paidValue,
+                ));
+                if (roundMoney(Number(existingPayment.amount)) > currentBalance) {
+                  throw new ValidationError(
+                    "O valor do pagamento não pode ser maior do que o saldo devedor da reserva.",
+                    "PAYMENT_EXCEEDS_BALANCE",
+                  );
+                }
+              }
+            } else if (
+              lockedOrder &&
+              updates.status === PAYMENT_STATUS.PAID &&
+              existingPayment.status !== PAYMENT_STATUS.PAID
+            ) {
               const reservations = await tx.select({
                 status: reservationsTable.status,
                 expiresAt: reservationsTable.expiresAt,

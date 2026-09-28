@@ -104,6 +104,12 @@ function VoucherContent({ r, qrDataUrl }: { r: Reservation | null | undefined; q
             <p className="text-xs text-gray-500 mb-0.5">Desconto</p>
             <p className="font-bold text-sm text-red-600">{financial?.discount ? `− ${fmt(financial.discount)}` : "—"}</p>
           </div>
+          {Number(r?.gratuityAmount ?? 0) > 0 && (
+            <div className="bg-amber-50 rounded p-2">
+              <p className="text-xs text-amber-700 mb-0.5">Cortesia</p>
+              <p className="font-bold text-sm text-amber-700">− {fmt(Number(r?.gratuityAmount ?? 0))}</p>
+            </div>
+          )}
           <div className="bg-gray-50 rounded p-2">
             <p className="text-xs text-gray-500 mb-0.5">Total líquido</p>
             <p className="font-bold text-sm text-gray-900">{fmt(financial?.total ?? 0)}</p>

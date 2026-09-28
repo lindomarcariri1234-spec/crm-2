@@ -305,6 +305,77 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
+  it("POST /payments rejects an isGratuidade reservation", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.rows = [{
+      id: "reservation-gratuity-001",
+      clientId: "client-001",
+      totalValue: "0.00",
+      storeOrderId: null,
+      isGratuidade: true,
+    }];
+
+    const res = await request(buildApp(paymentsRouter))
+      .post("/api/payments")
+      .send({
+        reservationId: "reservation-gratuity-001",
+        type: "receivable",
+        category: "reservation",
+        amount: 100,
+        paymentMethod: "pix",
+        dueDate: "2026-08-23",
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("GRATUITY_PAYMENT_FORBIDDEN");
+    expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it("PATCH /payments/:id rejects approving a cancelled payment for an isGratuidade reservation", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const txUpdate = vi.fn(() => makeUpdate());
+    mockTransaction.mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => callback({
+      select: vi.fn(() => makeChain()),
+      insert: vi.fn(() => ({ values: mockInsertValues })),
+      update: txUpdate,
+      delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
+    }));
+    dbState.selectRowsQueue = [
+      [{
+        id: "payment-gratuity-001",
+        tenantId: "tenant-001",
+        type: "receivable",
+        reservationId: "reservation-gratuity-001",
+        orderId: null,
+      }],
+      [{ storeOrderId: null }],
+      [{
+        id: "payment-gratuity-001",
+        tenantId: "tenant-001",
+        type: "receivable",
+        reservationId: "reservation-gratuity-001",
+        orderId: null,
+        status: "cancelled",
+        amount: "100.00",
+      }],
+      [{
+        totalValue: "0.00",
+        status: "confirmed",
+        storeOrderId: null,
+        expiresAt: null,
+        isGratuidade: true,
+      }],
+    ];
+
+    const res = await request(buildApp(paymentsRouter))
+      .patch("/api/payments/payment-gratuity-001")
+      .send({ status: "approved" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("GRATUITY_PAYMENT_FORBIDDEN");
+    expect(txUpdate).not.toHaveBeenCalled();
+  });
+
   it("POST /payments rolls back earlier installments when a later insert fails", async () => {
     const committedRows: unknown[] = [];
     let insertCount = 0;

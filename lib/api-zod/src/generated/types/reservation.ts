@@ -25,6 +25,7 @@ export interface Reservation {
   packageType?: string | null;
   hasInsurance: boolean;
   isGratuidade: boolean;
+  gratuityAmount: number;
   totalValue: number;
   paidValue: number;
   balance: number;

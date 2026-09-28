@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { reservationsTable, passengersTable, tripsTable, clientsTable, accommodationsTable, accommodationRoomsTable, reservationRoomAssignmentsTable, storeCouponsTable, storesTable, storeOrdersTable, loyaltyMembersTable, loyaltyTransactionsTable, loyaltyProgramsTable, referralsTable, referralSettingsTable, referralCampaignsTable, dealsTable, tenantsTable, emailLogsTable, paymentsTable, commissionsTable, vehicleLayoutsTable, reservationInstallmentsTable, boardingLocationsTable, usersTable } from "@workspace/db";
+import { reservationsTable, passengersTable, tripsTable, clientsTable, accommodationsTable, accommodationRoomsTable, reservationRoomAssignmentsTable, storeCouponsTable, storesTable, storeOrdersTable, loyaltyMembersTable, loyaltyTransactionsTable, loyaltyProgramsTable, referralsTable, referralSettingsTable, referralCampaignsTable, dealsTable, tenantsTable, emailLogsTable, paymentsTable, commissionsTable, vehicleLayoutsTable, reservationInstallmentsTable, boardingLocationsTable, usersTable, auditLogsTable } from "@workspace/db";
 import { eq, and, sql, desc, asc, inArray, notInArray, or, ilike, ne } from "drizzle-orm";
 import { formatBRL } from "@workspace/shared";
 import { generateId, generateVoucherCode } from "../lib/id";
@@ -25,7 +25,7 @@ import { ROLES, RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS
 import { parseReservationStatus } from "../lib/status-validators";
 import { moveDealToStage, cancelDealOnReservationCancellation } from "../services/pipeline-automation";
 import { syncClientDeal } from "../services/pipeline-deal-sync";
-import { recalculateClientFinancials } from "./payments.js";
+import { recalculateClientFinancials } from "../services/client-financials.js";
 import { detectAndNotifyTripOverlap } from "../lib/trip-overlap-notify";
 import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
 import {
@@ -41,6 +41,7 @@ import {
 } from "../lib/linked-data";
 import { convertPaidReservationReferral } from "../services/reservation-referral-conversion";
 import { buildRoomAllocationSummary, getTripNights } from "../lib/room-allocation-summary";
+import { calculateReservationGratuityTransition } from "../lib/reservation-gratuity";
 import {
   cancelLockedReservationAndReleaseCapacity,
   deleteReservationAndReleaseCapacity,
@@ -292,6 +293,7 @@ function buildReservationView(r: typeof reservationsTable.$inferSelect, rel: Res
     packageType: r.packageType,
     hasInsurance: r.hasInsurance,
     isGratuidade: r.isGratuidade,
+    gratuityAmount: Number(r.gratuityAmount ?? 0),
     totalValue: Number(r.totalValue),
     paidValue: Number(r.paidValue),
     balance: Number(r.balance),
@@ -1329,8 +1331,15 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
       appliedLoyalty: appliedLoyaltyAmount,
       appliedReferral: appliedReferralAmount,
       discountTotal: serverDiscountTotal,
-      finalTotal: serverFinalTotal,
+      finalTotal: calculatedFinalTotal,
     } = applyDiscounts(baseValue, serverCouponAmount, serverLoyaltyAmount, serverReferralAmount);
+    const persistedDiscountTotal = roundMoney(
+      Number(parsed.data.discountTotal ?? 0) + serverDiscountTotal,
+    );
+    const serverGratuityAmount = parsed.data.isGratuidade
+      ? roundMoney(calculatedFinalTotal)
+      : 0;
+    const serverFinalTotal = parsed.data.isGratuidade ? 0 : calculatedFinalTotal;
 
     const effectiveLoyaltyPoints = computeEffectiveLoyaltyPoints(
       serverLoyaltyPoints,
@@ -1342,6 +1351,13 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
     const voucherCode = generateVoucherCode();
     const seatsCount = parsed.data.seats.length;
     const paidValueNum = Number(parsed.data.paidValue ?? 0);
+    if (parsed.data.isGratuidade && paidValueNum > 0) {
+      next(new ConflictError(
+        "Uma reserva com pagamento recebido não pode ser convertida em gratuidade. Registre o estorno antes.",
+        "GRATUITY_HAS_PAYMENTS",
+      ));
+      return;
+    }
 
     const tenantPrefix = await getTenantReservationPrefix(me.tenantId);
     const yearMonth = getYearMonth();
@@ -1440,9 +1456,10 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         packageType: parsed.data.packageType ?? selectedRoomName,
         hasInsurance: parsed.data.hasInsurance ?? false,
         isGratuidade: parsed.data.isGratuidade ?? false,
+        gratuityAmount: String(serverGratuityAmount),
         totalValue: String(serverFinalTotal),
-        paidValue: String(parsed.data.paidValue ?? 0),
-        balance: String(computeBalance(serverFinalTotal, parsed.data.paidValue ?? 0)),
+        paidValue: String(parsed.data.isGratuidade ? 0 : paidValueNum),
+        balance: String(computeBalance(serverFinalTotal, parsed.data.isGratuidade ? 0 : paidValueNum)),
         paymentMethod: parsed.data.paymentMethod ?? null,
         installments: parsed.data.installments ?? 1,
         commissionPercentage: parsed.data.commissionPercentage ? String(parsed.data.commissionPercentage) : null,
@@ -1450,6 +1467,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         sellerId: effectiveSellerId,
         boardingLocationId: parsed.data.boardingLocationId ?? null,
         status: paidValueNum >= serverFinalTotal ? RESERVATION_STATUS.CONFIRMED : RESERVATION_STATUS.PENDING,
+        confirmedAt: parsed.data.isGratuidade ? new Date() : null,
         voucherCode,
         reservationNumber,
         qrCode: `QR-${voucherCode}`,
@@ -1461,7 +1479,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
         discountLoyaltyAmount: appliedLoyaltyAmount > 0 ? String(appliedLoyaltyAmount) : null,
         discountReferralCode: appliedReferralAmount > 0 ? serverReferralCode : null,
         discountReferralAmount: appliedReferralAmount > 0 ? String(appliedReferralAmount) : null,
-        discountTotal: serverDiscountTotal > 0 ? String(serverDiscountTotal) : null,
+        discountTotal: persistedDiscountTotal > 0 ? String(persistedDiscountTotal) : null,
       });
 
       // When a reservation is created with an upfront payment, persist a matching
@@ -1639,7 +1657,7 @@ router.post("/reservations", async (req, res, next: NextFunction): Promise<void>
     }
     const formatted = await formatReservation(reservation, false);
     res.status(201).json(formatted);
-    if (parsed.data.firstDueDate && (parsed.data.installments ?? 1) >= 1) {
+    if (!parsed.data.isGratuidade && parsed.data.firstDueDate && (parsed.data.installments ?? 1) >= 1) {
       generateInstallments(id, me.tenantId, Number(reservation.totalValue), parsed.data.installments ?? 1, parsed.data.firstDueDate)
         .catch((err) => req.log.error({ err }, "Error generating installments on reservation create"));
     }
@@ -1840,6 +1858,16 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     const parsed = UpdateReservationBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
 
+    const gratuityFlagChanging = parsed.data.isGratuidade != null
+      && parsed.data.isGratuidade !== existing.isGratuidade;
+    if (parsed.data.isGratuidade != null && existing.storeOrderId) {
+      next(new ConflictError(
+        "A gratuidade só pode ser alterada em reservas criadas fora da Loja.",
+        "STORE_ORDER_GRATUITY_UNSUPPORTED",
+      ));
+      return;
+    }
+
     const updates: Partial<typeof reservationsTable.$inferInsert> = {};
     if (parsed.data.status != null) updates.status = parseReservationStatus(parsed.data.status);
     if (parsed.data.paymentMethod != null) updates.paymentMethod = parsed.data.paymentMethod;
@@ -1847,7 +1875,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     if (parsed.data.seats != null) updates.seats = parsed.data.seats;
     if (parsed.data.installments != null) updates.installments = parsed.data.installments;
     if (parsed.data.boardingLocationId !== undefined) updates.boardingLocationId = parsed.data.boardingLocationId ?? null;
-    if (parsed.data.totalValue != null) {
+    if (parsed.data.totalValue != null && parsed.data.isGratuidade !== true) {
       updates.totalValue = String(parsed.data.totalValue);
     }
     if (parsed.data.commissionAmount !== undefined) updates.commissionAmount = parsed.data.commissionAmount != null ? String(parsed.data.commissionAmount) : null;
@@ -1890,21 +1918,29 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     const requiresCapacityTransitionLock = (isBeingCancelled && wasActive)
       || isBeingConfirmed
       || isBeingDemoted
+      || gratuityFlagChanging
       || tripChanged
       || (parsed.data.seats != null && wasActive);
 
     let reversedReferralInfo: { referralId: string; referrerId: string; referredId: string | null; bonusAmount: string } | null = null;
     let cancellationApplied = false;
+    let gratuityAuditContext: {
+      auditId: string;
+      action: "reservation_gratuity_applied" | "reservation_gratuity_removed";
+      before: Record<string, unknown>;
+      after: Record<string, unknown> | null;
+      pendingPaymentIdsToCancel: string[];
+      removedInstallmentIds: string[];
+      clientId: string | null;
+    } | null = null;
 
     const reservation = await db.transaction(async (tx) => {
-      if (parsed.data.totalValue != null) {
+      let lockedFinancials: typeof reservationsTable.$inferSelect | undefined;
+      if (parsed.data.totalValue != null || parsed.data.isGratuidade != null) {
         // Match installment updates' reservation-first lock order. The
         // pre-transaction `existing` row may have an outdated paidValue if a
         // concurrent installment update commits while this request waits.
-        const [lockedFinancials] = await tx.select({
-          id: reservationsTable.id,
-          paidValue: reservationsTable.paidValue,
-        }).from(reservationsTable)
+        [lockedFinancials] = await tx.select().from(reservationsTable)
           .where(and(
             eq(reservationsTable.id, req.params.id),
             eq(reservationsTable.tenantId, me.tenantId),
@@ -1912,15 +1948,157 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
           .limit(1)
           .for("update");
         if (!lockedFinancials) return null;
-        updates.balance = String(computeBalance(
-          parsed.data.totalValue,
-          Number(lockedFinancials.paidValue),
-        ));
+        if (parsed.data.totalValue != null && parsed.data.isGratuidade !== true) {
+          updates.balance = String(computeBalance(
+            parsed.data.totalValue,
+            Number(lockedFinancials.paidValue),
+          ));
+        }
+
+        if (parsed.data.isGratuidade != null) {
+          if (
+            lockedFinancials.storeOrderId &&
+            parsed.data.isGratuidade != null
+          ) {
+            throw new ConflictError(
+              "A gratuidade só pode ser alterada em reservas criadas fora da Loja.",
+              "STORE_ORDER_GRATUITY_UNSUPPORTED",
+            );
+          }
+
+          const gratuityTransition = calculateReservationGratuityTransition(
+            lockedFinancials,
+            parsed.data.isGratuidade,
+            parsed.data.totalValue,
+          );
+
+          if (gratuityTransition) {
+            let pendingPaymentIdsToCancel: string[] = [];
+            let removedInstallmentIds: string[] = [];
+
+            if (gratuityTransition.action === "applied") {
+              const reservationPayments = await tx.select({
+                id: paymentsTable.id,
+                status: paymentsTable.status,
+              }).from(paymentsTable)
+                .where(and(
+                  eq(paymentsTable.reservationId, req.params.id),
+                  eq(paymentsTable.tenantId, me.tenantId),
+                  eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+                ));
+              const paidPaymentRows = reservationPayments.filter((payment) =>
+                payment.status === PAYMENT_STATUS.PAID ||
+                payment.status === PAYMENT_STATUS.APPROVED
+              );
+              const reservationInstallments = await tx.select({
+                id: reservationInstallmentsTable.id,
+                paidAt: reservationInstallmentsTable.paidAt,
+              }).from(reservationInstallmentsTable)
+                .where(and(
+                  eq(reservationInstallmentsTable.reservationId, req.params.id),
+                  eq(reservationInstallmentsTable.tenantId, me.tenantId),
+                ))
+                .for("update");
+              const paidInstallments = reservationInstallments.filter((installment) => installment.paidAt != null);
+
+              if (
+                Number(lockedFinancials.paidValue) > 0 ||
+                paidPaymentRows.length > 0 ||
+                paidInstallments.length > 0
+              ) {
+                throw new ConflictError(
+                  "Uma reserva com pagamento recebido não pode ser convertida em gratuidade. Registre o estorno antes.",
+                  "GRATUITY_HAS_PAYMENTS",
+                );
+              }
+
+              pendingPaymentIdsToCancel = reservationPayments
+                .filter((payment) =>
+                  payment.status === PAYMENT_STATUS.PENDING ||
+                  payment.status === PAYMENT_STATUS.OVERDUE
+                )
+                .map((payment) => payment.id);
+
+              removedInstallmentIds = reservationInstallments
+                .filter((installment) => installment.paidAt == null)
+                .map((installment) => installment.id);
+              if (removedInstallmentIds.length > 0) {
+                await tx.delete(reservationInstallmentsTable)
+                  .where(and(
+                    eq(reservationInstallmentsTable.tenantId, me.tenantId),
+                    inArray(reservationInstallmentsTable.id, removedInstallmentIds),
+                  ));
+              }
+            }
+
+            updates.isGratuidade = gratuityTransition.isGratuidade;
+            updates.totalValue = gratuityTransition.totalValue.toFixed(2);
+            updates.gratuityAmount = gratuityTransition.gratuityAmount.toFixed(2);
+            updates.balance = gratuityTransition.balance.toFixed(2);
+            if (gratuityTransition.action === "applied") updates.paidValue = "0.00";
+
+            gratuityAuditContext = {
+              auditId: generateId(),
+              action: gratuityTransition.action === "applied"
+                ? "reservation_gratuity_applied"
+                : "reservation_gratuity_removed",
+              after: null,
+              before: {
+                isGratuidade: lockedFinancials.isGratuidade,
+                totalValue: Number(lockedFinancials.totalValue),
+                gratuityAmount: Number(lockedFinancials.gratuityAmount ?? 0),
+                paidValue: Number(lockedFinancials.paidValue),
+                balance: Number(lockedFinancials.balance),
+                discountTotal: Number(lockedFinancials.discountTotal ?? 0),
+                status: lockedFinancials.status,
+              },
+              pendingPaymentIdsToCancel,
+              removedInstallmentIds,
+              clientId: lockedFinancials.clientId,
+            };
+          }
+        }
       }
 
       let lockedReservation: LockedReservationCapacityRow | undefined;
       if (requiresCapacityTransitionLock) {
         lockedReservation = await lockReservationForCancellation(tx, me.tenantId, req.params.id);
+      }
+
+      if (gratuityAuditContext && lockedReservation && lockedFinancials) {
+        const restoringCharge = gratuityAuditContext.action === "reservation_gratuity_removed";
+        const targetTotal = Number(updates.totalValue ?? lockedFinancials.totalValue);
+        const targetPaid = Number(updates.paidValue ?? lockedFinancials.paidValue);
+
+        if (
+          !restoringCharge &&
+          lockedReservation.status === RESERVATION_STATUS.PENDING
+        ) {
+          isBeingConfirmed = true;
+          isBeingDemoted = false;
+          updates.status = RESERVATION_STATUS.CONFIRMED;
+          updates.confirmedAt = lockedFinancials.confirmedAt ?? new Date();
+          updates.expiresAt = null;
+        } else if (
+          restoringCharge &&
+          lockedReservation.status === RESERVATION_STATUS.PENDING &&
+          targetPaid >= targetTotal
+        ) {
+          isBeingConfirmed = true;
+          isBeingDemoted = false;
+          updates.status = RESERVATION_STATUS.CONFIRMED;
+          updates.confirmedAt = lockedFinancials.confirmedAt ?? new Date();
+          updates.expiresAt = null;
+        } else if (
+          restoringCharge &&
+          lockedReservation.status === RESERVATION_STATUS.CONFIRMED &&
+          targetTotal > targetPaid &&
+          !lockedFinancials.depositAmount
+        ) {
+          isBeingDemoted = true;
+          isBeingConfirmed = false;
+          updates.status = RESERVATION_STATUS.PENDING;
+        }
       }
 
       if (isBeingCancelled && lockedReservation) {
@@ -1963,11 +2141,11 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         const confirmationReservation = lockedReservation;
         if (confirmationReservation?.status === RESERVATION_STATUS.PENDING) {
           isBeingConfirmed = true;
-          const seatsCount = confirmationReservation.seats.length;
-          if (seatsCount > 0) {
+          const capacityUnits = Number(confirmationReservation.capacityUnits) || confirmationReservation.seats.length;
+          if (capacityUnits > 0) {
             await tx.update(tripsTable).set({
-              confirmedSeats: sql`confirmed_seats + ${seatsCount}`,
-              reservedSeats: sql`GREATEST(0, reserved_seats - ${seatsCount})`,
+              confirmedSeats: sql`confirmed_seats + ${capacityUnits}`,
+              reservedSeats: sql`GREATEST(0, reserved_seats - ${capacityUnits})`,
             }).where(and(
               eq(tripsTable.id, confirmationReservation.tripId),
               eq(tripsTable.tenantId, me.tenantId),
@@ -1982,11 +2160,11 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         const demotionReservation = lockedReservation;
         if (demotionReservation?.status === RESERVATION_STATUS.CONFIRMED) {
           isBeingDemoted = true;
-          const seatsCount = demotionReservation.seats.length;
-          if (seatsCount > 0) {
+          const capacityUnits = Number(demotionReservation.capacityUnits) || demotionReservation.seats.length;
+          if (capacityUnits > 0) {
             await tx.update(tripsTable).set({
-              confirmedSeats: sql`GREATEST(0, confirmed_seats - ${seatsCount})`,
-              reservedSeats: sql`reserved_seats + ${seatsCount}`,
+              confirmedSeats: sql`GREATEST(0, confirmed_seats - ${capacityUnits})`,
+              reservedSeats: sql`reserved_seats + ${capacityUnits}`,
             }).where(and(
               eq(tripsTable.id, demotionReservation.tripId),
               eq(tripsTable.tenantId, me.tenantId),
@@ -2444,6 +2622,34 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
         .limit(1);
       if (!updated) return null;
 
+      if (gratuityAuditContext) {
+        const auditAfter = {
+          isGratuidade: updated.isGratuidade,
+          totalValue: Number(updated.totalValue),
+          gratuityAmount: Number(updated.gratuityAmount ?? 0),
+          paidValue: Number(updated.paidValue),
+          balance: Number(updated.balance),
+          discountTotal: Number(updated.discountTotal ?? 0),
+          status: updated.status,
+          pendingReceivablePaymentIdsToCancel: gratuityAuditContext.pendingPaymentIdsToCancel,
+          cancelledPaymentIds: [],
+          removedInstallmentIds: gratuityAuditContext.removedInstallmentIds,
+        };
+        gratuityAuditContext.after = auditAfter;
+        await tx.insert(auditLogsTable).values({
+          id: gratuityAuditContext.auditId,
+          tenantId: me.tenantId,
+          userId: me.id,
+          action: gratuityAuditContext.action,
+          entityType: "reservation",
+          entityId: req.params.id,
+          before: gratuityAuditContext.before,
+          after: auditAfter,
+          ipAddress: req.ip ?? null,
+          userAgent: req.get("user-agent") ?? null,
+        });
+      }
+
       if (parsed.data.seats != null) {
         const newSeats = parsed.data.seats;
         const newCount = newSeats.length;
@@ -2637,6 +2843,44 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     });
 
     if (!reservation) { next(new NotFoundError("Reservation not found", "NOT_FOUND")); return; }
+    if (parsed.data.isGratuidade === true && reservation.isGratuidade) {
+      await db.transaction(async (tx) => {
+        // Payment edits lock the payment row before the reservation. Cancel
+        // pending receivables after the gratuity transaction releases its
+        // reservation lock to avoid reversing that order and deadlocking.
+        const cancelledPayments = await tx.update(paymentsTable)
+          .set({ status: PAYMENT_STATUS.CANCELLED, updatedAt: new Date() })
+          .where(and(
+            eq(paymentsTable.tenantId, me.tenantId),
+            eq(paymentsTable.reservationId, req.params.id),
+            eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE),
+            inArray(paymentsTable.status, [PAYMENT_STATUS.PENDING, PAYMENT_STATUS.OVERDUE]),
+          ))
+          .returning({ id: paymentsTable.id });
+
+        if (cancelledPayments.length > 0) {
+          const clientIds = new Set(
+            [gratuityAuditContext?.clientId, reservation.clientId]
+              .filter((id): id is string => !!id),
+          );
+          for (const clientId of clientIds) {
+            await recalculateClientFinancials(clientId, me.tenantId, tx);
+          }
+        }
+
+        if (gratuityAuditContext?.after) {
+          await tx.update(auditLogsTable).set({
+            after: {
+              ...gratuityAuditContext.after,
+              cancelledPaymentIds: cancelledPayments.map((payment) => payment.id),
+            },
+          }).where(and(
+            eq(auditLogsTable.id, gratuityAuditContext.auditId),
+            eq(auditLogsTable.tenantId, me.tenantId),
+          ));
+        }
+      });
+    }
     // Run only after the update transaction commits. The converter locks and
     // selects PENDING, making confirmation/payment replays exactly-once.
     if (
@@ -2676,7 +2920,7 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
     }
     const formatted = await formatReservation(reservation, false);
     res.json(formatted);
-    if (parsed.data.firstDueDate) {
+    if (parsed.data.firstDueDate && !reservation.isGratuidade) {
       const instCount = parsed.data.installments ?? reservation.installments ?? 1;
       const total = parsed.data.totalValue != null ? parsed.data.totalValue : Number(reservation.totalValue);
       generateInstallments(req.params.id, me.tenantId, total, instCount, parsed.data.firstDueDate)

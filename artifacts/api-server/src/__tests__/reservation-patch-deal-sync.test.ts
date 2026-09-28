@@ -26,7 +26,7 @@ import { randomUUID } from "crypto";
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import express from "express";
 import request from "supertest";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   db,
   tenantsTable,
@@ -38,6 +38,7 @@ import {
   paymentsTable,
   passengersTable,
   calendarEventsTable,
+  auditLogsTable,
 } from "@workspace/db";
 import { ROLES, RESERVATION_STATUS, TRIP_STATUS, PAYMENT_STATUS, PAYMENT_TYPE } from "@workspace/permissions";
 import { syncReservationPaymentStatus } from "../lib/reservation-payments.js";
@@ -214,6 +215,7 @@ const TENANT_ID    = `pdstest-${RUN}`;
 const USER_ID      = `pdsu-${RUN}`;
 const TRIP_ID      = `pdst-${RUN}`;
 const DESTINATION_TRIP_ID = `pds-destination-trip-${RUN}`;
+const GRATUITY_TRIP_ID = `pds-gratuity-trip-${RUN}`;
 const CLIENT_ID    = `pdsc-${RUN}`;
 const RES_ID       = `pdsr-${RUN}`;
 const SELLER_ID    = `pdss-${RUN}`;
@@ -320,6 +322,24 @@ beforeAll(async () => {
     createdById:      USER_ID,
   });
 
+  await db.insert(tripsTable).values({
+    id:               GRATUITY_TRIP_ID,
+    tenantId:         TENANT_ID,
+    name:             "PDS Gratuity Trip",
+    slug:             `pds-gratuity-trip-${RUN}`,
+    destination:      "Fortaleza",
+    destinationCity:  "Fortaleza",
+    destinationState: "CE",
+    type:             "excursao",
+    category:         "standard",
+    departureDate:    new Date("2028-05-15"),
+    totalCapacity:    40,
+    availableSeats:   40,
+    reservedSeats:    0,
+    priceAdult:       "1200",
+    createdById:      USER_ID,
+  });
+
   await db.insert(clientsTable).values({
     id:        CLIENT_ID,
     tenantId:  TENANT_ID,
@@ -382,6 +402,9 @@ afterAll(async () => {
   // Allow fire-and-forget promises to settle before tearing down rows
   await new Promise((resolve) => setTimeout(resolve, 200));
 
+  await db.delete(paymentsTable).where(eq(paymentsTable.tenantId, TENANT_ID));
+  await db.delete(reservationInstallmentsTable).where(eq(reservationInstallmentsTable.tenantId, TENANT_ID));
+  await db.delete(auditLogsTable).where(eq(auditLogsTable.tenantId, TENANT_ID));
   await db.delete(reservationsTable).where(eq(reservationsTable.tenantId, TENANT_ID));
   await db.delete(clientsTable).where(eq(clientsTable.tenantId, TENANT_ID));
   await db.delete(tripsTable).where(eq(tripsTable.tenantId, TENANT_ID));
@@ -1032,4 +1055,170 @@ describe("PATCH /reservations/:id — syncClientDeal call-site guard", () => {
     }
   });
 
+});
+
+async function insertGratuityReservation(
+  id: string,
+  overrides: Partial<typeof reservationsTable.$inferInsert> = {},
+) {
+  await db.insert(reservationsTable).values({
+    id,
+    tenantId: TENANT_ID,
+    tripId: TRIP_ID,
+    clientId: CLIENT_ID,
+    createdById: USER_ID,
+    status: RESERVATION_STATUS.PENDING,
+    totalValue: "120.00",
+    gratuityAmount: "0.00",
+    paidValue: "0.00",
+    balance: "120.00",
+    seats: [],
+    capacityUnits: 0,
+    tripType: "excursao",
+    voucherCode: `GRAT-${id}`,
+    qrCode: `QR-GRAT-${id}`,
+    ...overrides,
+  });
+}
+
+describe("PATCH /reservations/:id — gratuity guardrails", () => {
+  it("waives an unpaid non-store reservation, clears receivables, and retains capacity", async () => {
+    const reservationId = `pdsr-grat-${RUN}`;
+    const paymentId = `pdsp-grat-${RUN}`;
+    const installmentId = `pdsi-grat-${RUN}`;
+    await insertGratuityReservation(reservationId, {
+      tripId: DESTINATION_TRIP_ID,
+      seats: ["38"],
+      capacityUnits: 1,
+    });
+    await db.update(tripsTable).set({
+      reservedSeats: 1,
+      confirmedSeats: 0,
+    }).where(eq(tripsTable.id, DESTINATION_TRIP_ID));
+    await db.insert(paymentsTable).values({
+      id: paymentId,
+      tenantId: TENANT_ID,
+      reservationId,
+      clientId: CLIENT_ID,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "120.00",
+      paymentMethod: "pix",
+      dueDate: new Date(),
+      status: PAYMENT_STATUS.PENDING,
+      description: "Gratuity integration test receivable",
+    });
+    await db.insert(reservationInstallmentsTable).values({
+      id: installmentId,
+      tenantId: TENANT_ID,
+      reservationId,
+      installmentNumber: 1,
+      dueDate: new Date(),
+      amount: "120.00",
+    });
+
+    const res = await request(buildApp())
+      .patch(`/api/reservations/${reservationId}`)
+      .send({ isGratuidade: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      isGratuidade: true,
+      gratuityAmount: 120,
+      totalValue: 0,
+      paidValue: 0,
+      balance: 0,
+      status: RESERVATION_STATUS.CONFIRMED,
+      seats: ["38"],
+    });
+
+    const [payment] = await db.select({ status: paymentsTable.status })
+      .from(paymentsTable).where(eq(paymentsTable.id, paymentId)).limit(1);
+    const remainingInstallments = await db.select({ id: reservationInstallmentsTable.id })
+      .from(reservationInstallmentsTable)
+      .where(eq(reservationInstallmentsTable.reservationId, reservationId));
+    const [trip] = await db.select({
+      reservedSeats: tripsTable.reservedSeats,
+      confirmedSeats: tripsTable.confirmedSeats,
+    }).from(tripsTable).where(eq(tripsTable.id, DESTINATION_TRIP_ID)).limit(1);
+    const gratuityAudit = await db.select({ id: auditLogsTable.id })
+      .from(auditLogsTable)
+      .where(and(
+        eq(auditLogsTable.entityId, reservationId),
+        eq(auditLogsTable.action, "reservation_gratuity_applied"),
+      ));
+
+    expect(payment.status).toBe(PAYMENT_STATUS.CANCELLED);
+    expect(remainingInstallments).toHaveLength(0);
+    expect(trip).toMatchObject({ reservedSeats: 0, confirmedSeats: 1 });
+    expect(gratuityAudit).toHaveLength(1);
+  });
+
+  it("rejects gratuity when any payment is already recorded", async () => {
+    const reservationId = `pdsr-grat-paid-${RUN}`;
+    const paymentId = `pdsp-grat-paid-${RUN}`;
+    await insertGratuityReservation(reservationId, {
+      tripId: DESTINATION_TRIP_ID,
+      clientId: OTHER_CLIENT_ID,
+      totalValue: "120.00",
+      paidValue: "25.00",
+      balance: "95.00",
+    });
+    await db.insert(paymentsTable).values({
+      id: paymentId,
+      tenantId: TENANT_ID,
+      reservationId,
+      clientId: OTHER_CLIENT_ID,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      category: "reservation",
+      amount: "25.00",
+      paymentMethod: "pix",
+      dueDate: new Date(),
+      paidAt: new Date(),
+      status: PAYMENT_STATUS.PAID,
+      gateway: "manual-reservation",
+      transactionId: paymentId,
+      description: "Recorded payment for gratuity guard test",
+    });
+
+    const res = await request(buildApp())
+      .patch(`/api/reservations/${reservationId}`)
+      .send({ isGratuidade: true });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("GRATUITY_HAS_PAYMENTS");
+    const [reservation] = await db.select({
+      isGratuidade: reservationsTable.isGratuidade,
+      totalValue: reservationsTable.totalValue,
+      paidValue: reservationsTable.paidValue,
+    }).from(reservationsTable).where(eq(reservationsTable.id, reservationId)).limit(1);
+    const [payment] = await db.select({ status: paymentsTable.status })
+      .from(paymentsTable).where(eq(paymentsTable.id, paymentId)).limit(1);
+    expect(reservation).toMatchObject({
+      isGratuidade: false,
+      totalValue: "120.00",
+      paidValue: "25.00",
+    });
+    expect(payment.status).toBe(PAYMENT_STATUS.PAID);
+  });
+
+  it("rejects gratuity changes for a reservation linked to a store order", async () => {
+    const reservationId = `pdsr-grat-store-${RUN}`;
+    await insertGratuityReservation(reservationId, {
+      tripId: GRATUITY_TRIP_ID,
+      storeOrderId: `store-order-${RUN}`,
+    });
+
+    const res = await request(buildApp())
+      .patch(`/api/reservations/${reservationId}`)
+      .send({ isGratuidade: true });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("STORE_ORDER_GRATUITY_UNSUPPORTED");
+    const [reservation] = await db.select({
+      isGratuidade: reservationsTable.isGratuidade,
+      totalValue: reservationsTable.totalValue,
+    }).from(reservationsTable).where(eq(reservationsTable.id, reservationId)).limit(1);
+    expect(reservation).toMatchObject({ isGratuidade: false, totalValue: "120.00" });
+  });
 });

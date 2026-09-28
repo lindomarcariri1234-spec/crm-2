@@ -25,6 +25,7 @@ export const reservationsTable = pgTable("reservations", {
   packageType: text("package_type"),
   hasInsurance: boolean("has_insurance").notNull().default(false),
   isGratuidade: boolean("is_gratuidade").notNull().default(false),
+  gratuityAmount: numeric("gratuity_amount", { precision: 10, scale: 2 }).notNull().default("0"),
   totalValue: numeric("total_value", { precision: 10, scale: 2 }).notNull(),
   paidValue: numeric("paid_value", { precision: 10, scale: 2 }).notNull().default("0"),
   balance: numeric("balance", { precision: 10, scale: 2 }).notNull(),

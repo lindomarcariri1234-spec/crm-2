@@ -687,6 +687,13 @@
       "when": 1809950000000,
       "tag": "0097_reconcile_schema_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1809950001000,
+      "tag": "0098_reservation_gratuity_amount",
+      "breakpoints": true
     }
   ]
 }

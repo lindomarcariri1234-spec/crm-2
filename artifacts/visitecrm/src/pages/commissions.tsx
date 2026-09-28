@@ -245,18 +245,30 @@ export default function Commissions() {
                         <QueryErrorState resourceLabel="as reservas com falha de sincronização" error={failedSyncQueryError} onRetry={() => { void refetchFailedSync(); }} compact />
                       </TableCell>
                     </TableRow>
-                  ) : failedSyncReservations.map(r => (
+                  ) : failedSyncReservations.map(r => {
+                    const discountTotal = (r as { discountTotal?: number | null }).discountTotal ?? 0;
+                    const gratuityAmount = (r as { gratuityAmount?: number | null }).gratuityAmount ?? 0;
+                    return (
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-sm">{r.reservationNumber ?? r.id.slice(0, 10) + "…"}</TableCell>
                       <TableCell className="text-sm">{r.client?.name ?? "—"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{r.trip?.name ?? "—"}</TableCell>
                       <TableCell className="text-sm font-medium">
                         <div className="flex flex-col gap-0.5">
-                          {(r as { discountTotal?: number | null }).discountTotal ? (
+                          {discountTotal + gratuityAmount > 0 ? (
                             <>
-                              <span className="text-xs text-muted-foreground line-through">{fmt(r.totalValue + ((r as { discountTotal?: number | null }).discountTotal ?? 0))}</span>
+                              <span className="text-xs text-muted-foreground line-through">{fmt(r.totalValue + discountTotal + gratuityAmount)}</span>
                               <span>{fmt(r.totalValue)}</span>
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 w-fit">com desconto</span>
+                              {gratuityAmount > 0 && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 w-fit">
+                                  cortesia {fmt(gratuityAmount)}
+                                </span>
+                              )}
+                              {discountTotal > 0 && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 w-fit">
+                                  com desconto
+                                </span>
+                              )}
                             </>
                           ) : fmt(r.totalValue)}
                         </div>
@@ -280,7 +292,8 @@ export default function Commissions() {
                         </Button>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

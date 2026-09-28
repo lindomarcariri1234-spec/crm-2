@@ -571,16 +571,14 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
 
   useEffect(() => {
     if (form.tripId && form.tripId !== "none" && selectedTrip) {
-      setForm(prev => ({ ...prev, ticketPrice: prev.isGratuidade ? "0" : String(selectedTrip.priceAdult) }));
+      setForm(prev => ({ ...prev, ticketPrice: String(selectedTrip.priceAdult) }));
     } else if (!form.tripId || form.tripId === "none") {
       setForm(prev => ({ ...prev, ticketPrice: "" }));
     }
   }, [form.tripId, selectedTrip]);
 
   useEffect(() => {
-    if (form.isGratuidade) {
-      setForm(prev => ({ ...prev, ticketPrice: "0" }));
-    } else if (form.tripId && form.tripId !== "none" && selectedTrip) {
+    if (!form.isGratuidade && form.tripId && form.tripId !== "none" && selectedTrip) {
       setForm(prev => ({ ...prev, ticketPrice: String(selectedTrip.priceAdult) }));
     }
   }, [form.isGratuidade]);
@@ -592,7 +590,8 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
   const selectedRoomId = form.roomId !== "none" ? form.roomId : undefined;
   const valorTotal = ticketPrice * quantity;
   const valorComDesconto = Math.max(0, valorTotal - discount);
-  const faltaPagar = valorComDesconto - amountPaid;
+  const valorCobrado = form.isGratuidade ? 0 : valorComDesconto;
+  const faltaPagar = valorCobrado - amountPaid;
 
   const handleSubmit = async (forceCreate = false) => {
     if (!form.name.trim()) {
@@ -622,8 +621,14 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
       toast({ title: "Desconto inválido", description: "O desconto não pode ser negativo nem maior que o Valor Total.", variant: "destructive" });
       return;
     }
-    if (amountPaid < 0 || amountPaid > valorComDesconto) {
-      toast({ title: "Valor pago inválido", description: "O valor já pago não pode ser maior que o Valor com Desconto.", variant: "destructive" });
+    if (amountPaid < 0 || amountPaid > valorCobrado) {
+      toast({
+        title: "Valor pago inválido",
+        description: form.isGratuidade
+          ? "Uma reserva com gratuidade não pode ter pagamento registrado."
+          : "O valor já pago não pode ser maior que o Valor com Desconto.",
+        variant: "destructive",
+      });
       return;
     }
     const base = {
@@ -1234,9 +1239,17 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                     id="isGratuidade"
                     checked={form.isGratuidade}
                     onCheckedChange={v => setForm(prev => ({ ...prev, isGratuidade: !!v }))}
+                    disabled={Boolean(existingReservation?.storeOrderId) || Boolean(existingReservation?.id) || (!form.isGratuidade && (parseFloat(form.amountPaid) || 0) > 0)}
                   />
                   <Label htmlFor="isGratuidade" className="cursor-pointer font-medium text-amber-700 dark:text-amber-400">Gratuidade (passageiro cortesia)</Label>
                 </div>
+                {existingReservation?.storeOrderId ? (
+                  <p className="text-xs text-amber-700">A gratuidade não pode ser alterada em uma reserva vinculada a um pedido da Loja.</p>
+                ) : existingReservation?.id ? (
+                  <p className="text-xs text-muted-foreground">Altere a gratuidade pelo editor da reserva para manter os valores financeiros sincronizados.</p>
+                ) : !form.isGratuidade && (parseFloat(form.amountPaid) || 0) > 0 ? (
+                  <p className="text-xs text-amber-700">Registre o estorno do pagamento antes de converter esta reserva em gratuidade.</p>
+                ) : null}
                 <div className="flex items-center gap-3">
                   <Checkbox
                     id="hasInsurance"
@@ -1377,8 +1390,13 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                   </p>
                 </div>
                 <div className="rounded-lg border bg-muted/30 p-3">
-                  <p className="text-xs text-muted-foreground mb-1">Valor c/ Desconto</p>
-                  <p className="text-base font-bold">{formatCurrency(valorComDesconto)}</p>
+                  <p className="text-xs text-muted-foreground mb-1">
+                    {form.isGratuidade ? "Valor dispensado" : "Valor c/ Desconto"}
+                  </p>
+                  <p className={`text-base font-bold ${form.isGratuidade ? "text-amber-700" : ""}`}>
+                    {formatCurrency(valorComDesconto)}
+                  </p>
+                  {form.isGratuidade && <p className="text-xs text-green-700">Total a cobrar: {formatCurrency(0)}</p>}
                 </div>
                 <div className="rounded-lg border bg-muted/30 p-3">
                   <p className="text-xs text-muted-foreground mb-1">Valor Pago</p>

@@ -188,6 +188,41 @@ describe("rotas de importação operacional", () => {
     }));
   });
 
+  it("rejeita pagamento pendente importado para reserva com gratuidade sem gravá-lo", async () => {
+    mocks.mockInsert.mockReturnValue({
+      values: vi.fn().mockReturnThis(),
+      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+    });
+    tx.transaction.mockImplementation(async callback => callback(tx));
+    mocks.mockExecute
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a" }] })
+      .mockResolvedValueOnce({ rows: [{ total_value: "100.00", is_gratuidade: true }] });
+    mocks.queryQueue.push(
+      [],
+      [],
+      [{ entity: "reservations", sourceKey: "RES-1", targetId: "reservation-a" }],
+      [],
+      [{ id: "reservation-a", clientId: "client-a", tripId: "trip-a", totalValue: "100.00" }],
+      [],
+    );
+
+    const response = await request(app()).post("/api/spreadsheet-imports/import").send(payload(
+      "payments",
+      [
+        "id_externo,reserva_id_externo,tipo,categoria,valor,status,forma_pagamento,vencimento",
+        "PAG-GRAT-1,RES-1,receivable,reserva,\"100,00\",pending,pix,15/12/2026",
+      ].join("\n"),
+      "gratuidade-payment",
+    ));
+
+    expect(response.status).toBe(200);
+    expect(response.body.report.results[0]).toEqual(expect.objectContaining({
+      action: "rejected",
+      reason: "Não é possível importar um pagamento ativo para uma reserva com gratuidade.",
+    }));
+    expect(mocks.mockInsert).not.toHaveBeenCalledWith(mocks.paymentsTable);
+  });
+
   it("bloqueia comissão quando o vendedor não existe na agência", async () => {
     mocks.queryQueue.push(
       [],

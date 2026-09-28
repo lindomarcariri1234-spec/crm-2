@@ -9,6 +9,7 @@ function makeReservation(overrides: Partial<ReservationWithFinancialLinks> = {})
     seats: ["1"],
     hasInsurance: false,
     isGratuidade: false,
+    gratuityAmount: 0,
     totalValue: 189.05,
     paidValue: 169,
     balance: 20.05,
@@ -129,6 +130,26 @@ describe("getReservationFinancialSummary", () => {
       paid: 169,
       balance: 20.05,
       usesOrderTotals: false,
+    });
+  });
+
+  it("keeps a complimentary reservation at zero and shows the waived amount separately", () => {
+    const summary = getReservationFinancialSummary(makeReservation({
+      isGratuidade: true,
+      totalValue: 0,
+      paidValue: 0,
+      balance: 0,
+      discountTotal: 9.95,
+      gratuityAmount: 189.05,
+    }));
+
+    expect(summary).toMatchObject({
+      subtotal: 199,
+      discount: 9.95,
+      gratuityAmount: 189.05,
+      total: 0,
+      paid: 0,
+      balance: 0,
     });
   });
 });

@@ -263,9 +263,18 @@ export function ReservationsTable({
                   <TableCell>
                     <div className="whitespace-nowrap">
                       <p className="text-sm font-medium">{formatCurrency(financial.subtotal)}</p>
-                      <p className={`mt-1 text-xs ${financial.discount > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                        {financial.discount > 0 ? `Desconto − ${formatCurrency(financial.discount)}` : "Sem desconto"}
-                      </p>
+                      {financial.gratuityAmount > 0 && (
+                        <p className="mt-1 text-xs text-amber-700">
+                          Cortesia − {formatCurrency(financial.gratuityAmount)}
+                        </p>
+                      )}
+                      {financial.discount > 0 ? (
+                        <p className="mt-1 text-xs text-destructive">
+                          Desconto − {formatCurrency(financial.discount)}
+                        </p>
+                      ) : financial.gratuityAmount === 0 ? (
+                        <p className="mt-1 text-xs text-muted-foreground">Sem desconto</p>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-sm font-semibold text-primary">{formatCurrency(financial.total)}</TableCell>

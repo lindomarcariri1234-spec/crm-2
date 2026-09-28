@@ -939,26 +939,36 @@ async function upsertPayment(tx: ImportTx, tenantId: string, row: ParsedEntityRo
     throw new Error("Pagamento associado ao ID Externo não existe mais nesta agência.");
   }
   const reservationId = data.reservationId as string | null;
-  if (reservationId && data.status === "paid") {
+  if (reservationId) {
     const lockedResult = await tx.execute(sql`
-      SELECT total_value
+      SELECT total_value, is_gratuidade
       FROM reservations
       WHERE id = ${reservationId} AND tenant_id = ${tenantId}
       FOR UPDATE
     `);
-    const locked = (lockedResult as unknown as { rows: Array<{ total_value: string }> }).rows[0];
+    const locked = (lockedResult as unknown as {
+      rows: Array<{ total_value: string; is_gratuidade: boolean }>;
+    }).rows[0];
     if (!locked) throw new Error("Reserva associada ao pagamento não existe mais nesta agência.");
-    const paidResult = await tx.execute(sql`
-      SELECT COALESCE(SUM(amount::numeric), 0) AS prior_paid
-      FROM payments
-      WHERE reservation_id = ${reservationId}
-        AND tenant_id = ${tenantId}
-        AND status = 'paid'
-        AND id <> ${targetId}
-    `);
-    const priorPaid = Number((paidResult as unknown as { rows: Array<{ prior_paid: string }> }).rows[0]?.prior_paid ?? 0);
-    if (priorPaid + Number(data.amount) > Number(locked.total_value) + 0.009) {
-      throw new Error("O total de pagamentos pagos excede o valor da reserva.");
+    if (
+      locked.is_gratuidade &&
+      !["cancelled", "refunded", "failed"].includes(String(data.status))
+    ) {
+      throw new Error("Não é possível importar um pagamento ativo para uma reserva com gratuidade.");
+    }
+    if (data.status === "paid") {
+      const paidResult = await tx.execute(sql`
+        SELECT COALESCE(SUM(amount::numeric), 0) AS prior_paid
+        FROM payments
+        WHERE reservation_id = ${reservationId}
+          AND tenant_id = ${tenantId}
+          AND status = 'paid'
+          AND id <> ${targetId}
+      `);
+      const priorPaid = Number((paidResult as unknown as { rows: Array<{ prior_paid: string }> }).rows[0]?.prior_paid ?? 0);
+      if (priorPaid + Number(data.amount) > Number(locked.total_value) + 0.009) {
+        throw new Error("O total de pagamentos pagos excede o valor da reserva.");
+      }
     }
   }
   const values = {

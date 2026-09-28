@@ -103,6 +103,10 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
   const financialSummary = linkedData?.financialSummary;
   const hasSingleLinkedReservation = linkedData?.linkedOrder != null
     && linkedData.linkedReservations?.length === 1;
+  const isStoreLinked = Boolean(data?.storeOrderId);
+  const existingPaidAmount = Number(financialSummary?.paidAmount ?? data?.paidValue ?? 0);
+  const gratuityCheckboxDisabled = isStoreLinked
+    || (!data?.isGratuidade && existingPaidAmount > 0);
 
   const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
 
@@ -164,13 +168,14 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       const existingQuantity = data.seats?.length ?? 1;
       const existingTotal = financialSummary?.totalAmount ?? Number(data.totalValue ?? 0);
       const existingDiscount = financialSummary?.discountAmount ?? Number(data.discountTotal ?? 0);
+      const existingGratuityAmount = Number(data.gratuityAmount ?? 0);
       const existingPaid = financialSummary?.paidAmount ?? Number(data.paidValue ?? 0);
       const existingCommission = data.commissionAmount ?? null;
       const existingSellerId = data.sellerId ?? "";
 
       const derivedPrice = existingQuantity > 0
-        ? (existingTotal + existingDiscount) / existingQuantity
-        : existingTotal;
+        ? (existingTotal + existingDiscount + existingGratuityAmount) / existingQuantity
+        : existingTotal + existingDiscount + existingGratuityAmount;
 
       setQuantity(String(existingQuantity));
       setTicketPrice(String(derivedPrice.toFixed(2)));
@@ -189,6 +194,10 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
 
   // Auto-sync totalValue from ticketPrice * quantity - discount
   useEffect(() => {
+    if (isGratuidade) {
+      setTotalValue("0.00");
+      return;
+    }
     const price = parseFloat(ticketPrice) || 0;
     const qty = parseInt(quantity) || 0;
     const disc = parseFloat(discount) || 0;
@@ -196,7 +205,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       const computed = Math.max(0, price * qty - disc);
       setTotalValue(String(computed.toFixed(2)));
     }
-  }, [ticketPrice, quantity, discount]);
+  }, [ticketPrice, quantity, discount, isGratuidade]);
 
   const reservationBoarding = data as
     | (NonNullable<typeof data> & ReservationBoardingDetails)
@@ -266,7 +275,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       status: parseReservationStatus(editStatus),
       paymentMethod: paymentMethod || undefined,
       notes: (fd.get("notes") as string) || undefined,
-      totalValue: totalVal > 0 ? totalVal : undefined,
+      totalValue: isGratuidade ? 0 : totalVal > 0 ? totalVal : undefined,
       installments: installmentsRaw ? parseInt(installmentsRaw) : undefined,
       firstDueDate: firstDueDateRaw || undefined,
       seats: seatsRaw ? seatsRaw.split(",").map(s => s.trim()).filter(Boolean) : undefined,
@@ -274,7 +283,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
       commissionAmount: commVal,
       sellerId: sellerVal,
       discountTotal: discVal > 0 ? discVal : null,
-      isGratuidade,
+      ...(!isStoreLinked ? { isGratuidade } : {}),
     };
 
     if (selectedClientId && selectedClientId !== data?.clientId) {
@@ -301,7 +310,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
 
   const handleRegisterPayment = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!data) return;
+    if (!data || data.isGratuidade) return;
     const amount = parseFloat(payAmount) || 0;
     if (amount <= 0) return;
     const now = new Date().toISOString();
@@ -404,7 +413,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Preço da Passagem (R$)</label>
-                  <Input type="number" step="0.01" min="0" value={ticketPrice} onChange={e => setTicketPrice(e.target.value)} placeholder="0,00" />
+                  <Input type="number" step="0.01" min="0" value={ticketPrice} onChange={e => setTicketPrice(e.target.value)} placeholder="0,00" disabled={isGratuidade} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Quantidade de Passageiros</label>
@@ -412,7 +421,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Desconto (R$)</label>
-                  <Input type="number" step="0.01" min="0" value={discount} onChange={e => setDiscount(e.target.value)} placeholder="0,00" />
+                  <Input type="number" step="0.01" min="0" value={discount} onChange={e => setDiscount(e.target.value)} placeholder="0,00" disabled={isGratuidade} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Valor Já Pago (R$)</label>
@@ -490,11 +499,22 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
                   type="checkbox"
                   checked={isGratuidade}
                   onChange={e => setIsGratuidade(e.target.checked)}
+                  disabled={gratuityCheckboxDisabled}
                   className="rounded border-border h-4 w-4"
                 />
                 <span className="text-sm font-medium">Gratuidade</span>
                 <span className="text-xs text-muted-foreground">(passageiro cortesia, sem cobrança)</span>
               </label>
+              {isStoreLinked && (
+                <p className="text-xs text-amber-700" role="note">
+                  A gratuidade não pode ser alterada em uma reserva vinculada a um pedido da Loja.
+                </p>
+              )}
+              {!isStoreLinked && !data?.isGratuidade && existingPaidAmount > 0 && (
+                <p className="text-xs text-amber-700" role="note">
+                  Registre o estorno do pagamento antes de converter esta reserva em gratuidade.
+                </p>
+              )}
               <div className="flex justify-end gap-2 pt-2">
                 <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
                 <Button type="submit" disabled={updateReservation.isPending}>
@@ -504,7 +524,7 @@ export function EditReservationModal({ reservationId, open, onClose, onSuccess }
             </form>
 
             {/* ── Inline payment section ── */}
-            {currentBalance > 0 && (
+            {currentBalance > 0 && !data?.isGratuidade && (
               <div className="border-t pt-4" ref={paymentSectionRef}>
                 <div className="flex items-center gap-2 mb-3">
                   <DollarSign className="w-4 h-4 text-primary" />

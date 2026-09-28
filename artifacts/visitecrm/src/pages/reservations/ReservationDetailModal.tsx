@@ -312,7 +312,12 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
               {data.isGratuidade && (
                 <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-lg border border-amber-200">
                   <Tag className="w-4 h-4 text-amber-600 shrink-0" />
-                  <p className="text-sm text-amber-700 font-medium">Gratuidade — passageiro cortesia</p>
+                  <div>
+                    <p className="text-sm text-amber-700 font-medium">Gratuidade — passageiro cortesia</p>
+                    {Number(data.gratuityAmount ?? 0) > 0 && (
+                      <p className="text-xs text-amber-700">Valor dispensado: {fmt(Number(data.gratuityAmount))}</p>
+                    )}
+                  </div>
                 </div>
               )}
               {data.checkedInAt && (

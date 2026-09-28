@@ -148,6 +148,7 @@
 - [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
 - [Referral bonus cashback eligibility](referral-bonus-cashback-eligibility.md) — paid referral bonuses are spendable cashback; unpaid bonuses wait for grace period, while expiry/reversal/used amounts remain excluded
 - [Reservation expiry payment locks](reservation-expiry-payment-locks.md) — expiry and every storefront payment path must lock the order before its reservations; only receivable/paid rows protect a hold
+- [Gratuity and payment lock order](gratuity-payment-lock-order.md) — commit gratuity before cancelling receivables to avoid payment→reservation lock inversion
 - [Artifact workflow ownership](artifact-workflow-ownership.md) — registered artifact workflows start independently; do not launch the same artifact again from the aggregate Project workflow
 - [UploadThing SDK error redaction](uploadthing-error-redaction.md) — provider errors can contain auth headers; log only safe operation metadata
 - [Local PostgreSQL integration setup](local-postgres-integration.md) — use a writable socket and keep ephemeral PostgreSQL alive in a persistent shell during tests

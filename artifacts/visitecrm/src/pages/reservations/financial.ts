@@ -6,6 +6,7 @@ export type ReservationWithFinancialLinks = Reservation & LinkedData;
 export interface ReservationFinancialSummary {
   subtotal: number;
   discount: number;
+  gratuityAmount: number;
   total: number;
   paid: number;
   balance: number;
@@ -33,10 +34,12 @@ export function getReservationFinancialSummary(
 ): ReservationFinancialSummary {
   const order = reservation.linkedOrder;
   const canonical = reservation.financialSummary;
+  const gratuityAmount = fromCents(toCents(reservation.gratuityAmount ?? 0));
   if (canonical) {
     return {
-      subtotal: canonical.subtotal,
+      subtotal: fromCents(toCents(canonical.subtotal) + toCents(gratuityAmount)),
       discount: canonical.discountAmount,
+      gratuityAmount,
       total: canonical.totalAmount,
       paid: canonical.paidAmount,
       balance: canonical.amountRemaining,
@@ -58,8 +61,9 @@ export function getReservationFinancialSummary(
       ? fromCents(Math.max(0, toCents(order.totalAmount) - toCents(order.paidAmount)))
       : fromCents(toCents(order.amountRemaining));
     return {
-      subtotal: fromCents(toCents(order.subtotal)),
+      subtotal: fromCents(toCents(order.subtotal) + toCents(gratuityAmount)),
       discount,
+      gratuityAmount,
       total,
       paid,
       balance,
@@ -75,8 +79,9 @@ export function getReservationFinancialSummary(
   const paid = fromCents(toCents(linkedReservation?.paidValue ?? reservation.paidValue));
   const balance = fromCents(toCents(linkedReservation?.balance ?? reservation.balance));
   return {
-    subtotal: fromCents(toCents(total + discount)),
+    subtotal: fromCents(toCents(total + discount + gratuityAmount)),
     discount,
+    gratuityAmount,
     total,
     paid,
     balance,
