@@ -3,8 +3,8 @@ name: Vercel runtime log query limit
 description: Practical constraint when fetching Vercel function logs through the REST connector.
 ---
 
-The Vercel deployment runtime-log endpoint can run for more than five minutes when requested without filters and return an “Exceeded query duration limit of 5 minutes” record instead of useful rows. Avoid repeating a broad call. Prefer short time windows and deployment, status, or text filters through `vercel logs` when an authenticated CLI is available, or validate a narrow public health route and use available build events.
+The Vercel deployment runtime-log endpoint can return an “Exceeded query duration limit of 5 minutes” record instead of useful rows. This can still happen when the request is scoped to a deployment and includes a short `since`/`until` window plus a `limit`; the REST endpoint may not provide effective filters for the underlying query. Do not interpret a timeout or empty result as proof that a function was not invoked.
 
-**Why:** A broad runtime-log request during production verification hit the service's five-minute query ceiling, while deployment status, build events, and a direct health check were accessible.
+**Why:** Both an unfiltered request and a recent-time-window request during production verification hit the service's five-minute query ceiling, while deployment status and public health checks remained accessible.
 
-**How to apply:** For production function failures, query logs with the smallest time range and filters possible. If no filtered interface is available, don't loop on the same unfiltered request; report that runtime logs are inaccessible and use deployment metadata and public endpoint checks.
+**How to apply:** Try one deployment-scoped, narrow-time query. If it still times out, do not repeat the same connector call; use another log surface or deployment metadata and safe public probes, and state explicitly when the exact request origin remains unverified.
