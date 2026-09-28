@@ -12,10 +12,26 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Check, ChevronsUpDown, Plus, Loader2 } from "lucide-react";
 import { TRIP_TYPE_LABELS } from "./constants";
 
+export interface BoardingOption {
+  id: string;
+  name: string;
+  time?: string | null;
+  address?: string | null;
+}
+
+function formatBoardingDetails(point: BoardingOption | undefined): string {
+  return [
+    point?.time ? `Horário: ${point.time}` : "",
+    point?.address ? `Endereço: ${point.address}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 interface WizardStep1Props {
   allTrips: Trip[];
   allClients: { id: string; name: string; whatsapp?: string | null; cpf?: string | null }[];
-  boardingRaw: { id: string; name: string }[] | undefined;
+  boardingOptions: BoardingOption[] | undefined;
   selectedTripFull: Trip | undefined;
   selectedTripId: string;
   selectedClientId: string;
@@ -47,7 +63,7 @@ interface WizardStep1Props {
 }
 
 export function WizardStep1({
-  allTrips, allClients, boardingRaw, selectedTripFull,
+  allTrips, allClients, boardingOptions, selectedTripFull,
   selectedTripId, selectedClientId, boardingLocationId,
   selectedSeats, manualSeats, tripComboOpen, clientComboOpen, canGoNext,
   clientSearch, isCpfMode, nameSearchResults, nameSearchLoading,
@@ -224,14 +240,24 @@ export function WizardStep1({
         </div>
       )}
 
-      {(boardingRaw ?? []).length > 0 && (
+      {(boardingOptions ?? []).length > 0 && (
         <div className="space-y-2">
-          <label className="text-sm font-medium">Ponto de Embarque</label>
+          <label className="text-sm font-medium">Ponto de embarque</label>
           <Select onValueChange={onSelectBoarding} value={boardingLocationId}>
             <SelectTrigger><SelectValue placeholder="Selecionar ponto de embarque..." /></SelectTrigger>
             <SelectContent>
               <SelectItem value="__none__">Nenhum</SelectItem>
-              {(boardingRaw ?? []).map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+              {(boardingOptions ?? []).map((point) => {
+                const details = formatBoardingDetails(point);
+                return (
+                  <SelectItem key={point.id} value={point.id}>
+                    <span className="flex flex-col">
+                      <span>{point.name}</span>
+                      {details && <span className="text-xs text-muted-foreground">{details}</span>}
+                    </span>
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
         </div>

@@ -18,7 +18,7 @@ import { XCircle, AlertTriangle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RESERVATION_STATUS, ROLES } from "@workspace/permissions";
 import { PAYMENT_METHOD_LABELS as PAYMENT_LABELS } from "@/lib/labels";
-import { WizardStep1 } from "./WizardStep1";
+import { WizardStep1, type BoardingOption } from "./WizardStep1";
 import { WizardStep2 } from "./WizardStep2";
 import { STATUS_LABELS } from "./constants";
 import { computeReservationTotal, applyDiscounts } from "@/lib/reservationPricing";
@@ -167,13 +167,46 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
 
   const allTrips = tripsData?.data ?? [];
   const allClients = clientsData?.data ?? [];
+  const boardingOptions = useMemo<BoardingOption[]>(() => {
+    const optionsById = new Map<string, BoardingOption>();
+
+    // Prefer trip-specific points; storefront reservations persist these IDs.
+    for (const point of selectedTripFull?.boardingPoints ?? []) {
+      if (!point.id || !point.name?.trim()) continue;
+      optionsById.set(point.id, {
+        id: point.id,
+        name: point.name.trim(),
+        time: point.time ?? null,
+        address: point.address ?? null,
+      });
+    }
+
+    // Keep agency catalog IDs available for existing CRM and legacy flows.
+    for (const location of boardingRaw ?? []) {
+      if (!location.id || !location.name?.trim() || optionsById.has(location.id)) continue;
+      optionsById.set(location.id, {
+        id: location.id,
+        name: location.name.trim(),
+        time: null,
+        address: location.address ?? null,
+      });
+    }
+
+    return [...optionsById.values()];
+  }, [boardingRaw, selectedTripFull?.boardingPoints]);
   const selectedTrip = tripsData?.data.find(t => t.id === selectedTripId);
   const selectedClient = (() => {
     if (!selectedClientId) return undefined;
     if (pendingClient?.id === selectedClientId) return pendingClient;
     return clientsData?.data.find(c => c.id === selectedClientId);
   })();
-  const selectedBoarding = (boardingRaw ?? []).find(b => b.id === boardingLocationId);
+  const selectedBoarding = boardingOptions.find((point) => point.id === boardingLocationId);
+  const selectedBoardingDetails = [
+    selectedBoarding?.time ? `Horário: ${selectedBoarding.time}` : "",
+    selectedBoarding?.address ? `Endereço: ${selectedBoarding.address}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const effectiveSeats = useMemo(() => {
     if (selectedSeats.length > 0) return selectedSeats;
@@ -186,7 +219,12 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
   }, [selectedTripFull, effectiveSeats.length]);
 
   useEffect(() => {
-    if (open) { setSelectedTripId(initialTripId ?? ""); setSelectedClientId(initialClientId ?? ""); setTotalValue(initialAmount ?? 0); }
+    if (open) {
+      setSelectedTripId(initialTripId ?? "");
+      setSelectedClientId(initialClientId ?? "");
+      setBoardingLocationId("");
+      setTotalValue(initialAmount ?? 0);
+    }
   }, [open, initialTripId, initialClientId, initialAmount]);
 
   useEffect(() => {
@@ -459,7 +497,7 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
 
           {step === 1 && (
             <WizardStep1
-              allTrips={allTrips} allClients={allClients} boardingRaw={boardingRaw}
+              allTrips={allTrips} allClients={allClients} boardingOptions={boardingOptions}
               selectedTripFull={selectedTripFull} selectedTripId={selectedTripId}
               selectedClientId={selectedClientId} boardingLocationId={boardingLocationId}
               selectedSeats={selectedSeats} manualSeats={manualSeats}
@@ -469,7 +507,13 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
               cpfMatches={cpfMatches} cpfSearchLoading={cpfSearchLoading}
               pendingClient={pendingClient}
               setTripComboOpen={setTripComboOpen} setClientComboOpen={setClientComboOpen}
-              onSelectTrip={id => { setSelectedTripId(id); setSelectedSeats([]); setManualSeats(""); setTripComboOpen(false); }}
+              onSelectTrip={id => {
+                if (id !== selectedTripId) setBoardingLocationId("");
+                setSelectedTripId(id);
+                setSelectedSeats([]);
+                setManualSeats("");
+                setTripComboOpen(false);
+              }}
               onSelectClient={handleSelectClient}
               onClientSearchChange={setClientSearch}
               onCreateNewClient={handleOpenNewClientDialog}
@@ -491,7 +535,15 @@ export function NewReservationWizard({ open, onClose, onSuccess, initialTripId, 
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div><p className="text-muted-foreground text-xs mb-0.5">Viagem</p><p className="font-semibold">{selectedTrip?.name ?? "—"}</p>{selectedTrip?.destination && <p className="text-xs text-muted-foreground">{selectedTrip.destination}</p>}</div>
                   <div><p className="text-muted-foreground text-xs mb-0.5">Cliente</p><p className="font-semibold">{selectedClient?.name ?? "—"}</p>{selectedClient?.whatsapp && <p className="text-xs text-muted-foreground">{selectedClient.whatsapp}</p>}</div>
-                  {selectedBoarding && <div><p className="text-muted-foreground text-xs mb-0.5">Ponto de Embarque</p><p className="font-semibold">{selectedBoarding.name}</p></div>}
+                  {selectedBoarding && (
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-0.5">Ponto de embarque</p>
+                      <p className="font-semibold">{selectedBoarding.name}</p>
+                      {selectedBoardingDetails && (
+                        <p className="text-xs text-muted-foreground">{selectedBoardingDetails}</p>
+                      )}
+                    </div>
+                  )}
                   <div><p className="text-muted-foreground text-xs mb-0.5">Assentos</p><p className="font-semibold">{effectiveSeats.length > 0 ? effectiveSeats.join(", ") : "A definir"}</p></div>
                 </div>
                 <Separator />

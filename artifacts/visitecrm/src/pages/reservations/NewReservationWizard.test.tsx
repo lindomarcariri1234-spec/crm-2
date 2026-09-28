@@ -1,22 +1,46 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ComponentProps, type ReactNode } from "react";
-import { cleanupRoots, renderComponent } from "../../__tests__/eventSourceHarness.js";
+import { cleanupRoots, flushAct, renderComponent } from "../../__tests__/eventSourceHarness.js";
 
 const mockDuplicateReservations = vi.hoisted(() => vi.fn());
+const mockCreateReservation = vi.hoisted(() => vi.fn());
+const mockBoardingData = vi.hoisted(() => ({
+  trip: {
+    id: "trip-1",
+    name: "Rota do Cariri",
+    priceAdult: 500,
+    departureDate: "2026-10-15",
+    boardingPoints: [
+      {
+        id: "trip-point-1",
+        name: "Asa de Crato",
+        time: "21:00",
+        address: "Praça Siqueira Campos",
+      },
+    ],
+  },
+  catalog: [
+    {
+      id: "catalog-point-1",
+      name: "Terminal Rodoviário",
+      address: "Rua do Comércio",
+    },
+  ],
+}));
 
 const passthrough = ({ children }: { children?: ReactNode }) =>
   createElement("div", null, children);
 
 vi.mock("@workspace/api-client-react", () => ({
-  useListTrips: () => ({ data: { data: [] } }),
-  useListClients: () => ({ data: { data: [] } }),
-  useListBoardingLocations: () => ({ data: [] }),
+  useListTrips: () => ({ data: { data: [{ id: "trip-1", name: "Rota do Cariri" }] } }),
+  useListClients: () => ({ data: { data: [{ id: "client-1", name: "Cliente Teste" }] } }),
+  useListBoardingLocations: () => ({ data: mockBoardingData.catalog }),
   useListUsers: () => ({ data: [] }),
   useGetMe: () => ({ data: undefined }),
-  useCreateReservation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  useCreateReservation: () => ({ isPending: false, mutateAsync: mockCreateReservation }),
   useUpdateDeal: () => ({ mutateAsync: vi.fn() }),
   useValidateReservationCoupon: () => ({ mutateAsync: vi.fn() }),
-  useGetTrip: () => ({ data: undefined }),
+  useGetTrip: () => ({ data: mockBoardingData.trip }),
   useGetClientLoyalty: () => ({ data: undefined }),
   useCreateClient: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useListReservations: () => ({
@@ -38,17 +62,48 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
 }));
 
-vi.mock("../reservations/WizardStep1", () =>
-  ({
-    WizardStep1: () => createElement("div", { "data-testid": "wizard-step-1" }),
-  }),
-);
+vi.mock("../reservations/WizardStep1", () => ({
+  WizardStep1: ({
+    boardingOptions,
+    onSelectBoarding,
+    onSelectSeats,
+    onNext,
+  }: {
+    boardingOptions: { id: string; name: string; time?: string | null; address?: string | null }[];
+    onSelectBoarding: (id: string) => void;
+    onSelectSeats: (seats: string[]) => void;
+    onNext: () => void;
+  }) => createElement(
+    "div",
+    { "data-testid": "wizard-step-1" },
+    ...boardingOptions.map((point) => createElement(
+      "div",
+      { "data-testid": `boarding-point-${point.id}`, key: point.id },
+      [
+        point.name,
+        point.time ? `Horário: ${point.time}` : "",
+        point.address ? `Endereço: ${point.address}` : "",
+      ].filter(Boolean).join(" · "),
+    )),
+    createElement("button", {
+      type: "button",
+      "data-testid": "choose-trip-point",
+      onClick: () => {
+        onSelectSeats(["12"]);
+        onSelectBoarding("trip-point-1");
+        onNext();
+      },
+    }, "Continuar"),
+  ),
+}));
 
-vi.mock("../reservations/WizardStep2", () =>
-  ({
-    WizardStep2: () => createElement("div", { "data-testid": "wizard-step-2" }),
-  }),
-);
+vi.mock("../reservations/WizardStep2", () => ({
+  WizardStep2: ({ onNext }: { onNext: () => void }) => createElement(
+    "button",
+    { type: "button", "data-testid": "finish-step-2", onClick: onNext },
+    "Continuar para confirmação",
+  ),
+}));
 
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: passthrough,
@@ -138,5 +193,48 @@ describe("NewReservationWizard duplicate banner status labels", () => {
     expect(banner).not.toBeNull();
     expect(bannerText).toContain(translatedStatus);
     expect(bannerText).not.toContain(status);
+  });
+
+  it("keeps trip and catalog boarding choices, then saves the selected trip-point ID", async () => {
+    mockDuplicateReservations.mockReturnValue([]);
+    mockCreateReservation.mockResolvedValue({ id: "reservation-created" });
+
+    const { NewReservationWizard } = await import("./NewReservationWizard.js");
+    const { container } = await renderComponent(
+      createElement(NewReservationWizard, {
+        open: true,
+        onClose: vi.fn(),
+        onSuccess: vi.fn(),
+        initialTripId: "trip-1",
+        initialClientId: "client-1",
+      }),
+    );
+
+    expect(container.querySelector('[data-testid="boarding-point-trip-point-1"]')?.textContent)
+      .toContain("Asa de Crato · Horário: 21:00 · Endereço: Praça Siqueira Campos");
+    expect(container.querySelector('[data-testid="boarding-point-catalog-point-1"]')?.textContent)
+      .toContain("Terminal Rodoviário");
+
+    const choosePoint = container.querySelector('[data-testid="choose-trip-point"]') as HTMLButtonElement | null;
+    expect(choosePoint).not.toBeNull();
+    await flushAct(() => choosePoint?.click());
+
+    const finishPayment = container.querySelector('[data-testid="finish-step-2"]') as HTMLButtonElement | null;
+    expect(finishPayment).not.toBeNull();
+    await flushAct(() => finishPayment?.click());
+
+    expect(container.textContent).toContain("Asa de Crato");
+    expect(container.textContent).toContain("Horário: 21:00");
+    expect(container.textContent).toContain("Endereço: Praça Siqueira Campos");
+
+    const confirm = Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Confirmar Reserva"));
+    expect(confirm).toBeDefined();
+    await flushAct(() => confirm?.click());
+
+    expect(mockCreateReservation).toHaveBeenCalledTimes(1);
+    const createCall = mockCreateReservation.mock.calls[0] as unknown as
+      [{ data: { boardingLocationId: string | null } }] | undefined;
+    expect(createCall?.[0].data.boardingLocationId).toBe("trip-point-1");
   });
 });
