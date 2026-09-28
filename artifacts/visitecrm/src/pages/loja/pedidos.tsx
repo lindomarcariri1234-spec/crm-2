@@ -138,7 +138,7 @@ function CopyButton({ value }: { value: string }) {
   );
 }
 
-function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose: () => void; onUpdated: (o: StoreOrder) => void }) {
+export function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose: () => void; onUpdated: (o: StoreOrder) => void }) {
   const { toast } = useToast();
   const [order, setOrder] = useState<StoreOrder | null>(null);
   const [loading, setLoading] = useState(true);
@@ -149,16 +149,25 @@ function OrderDetail({ orderId, onClose, onUpdated }: { orderId: string; onClose
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
+    setOrder(null);
     storeApi.getOrder(orderId).then((o) => {
+      if (!active) return;
       setOrder(o);
       setStatus(o.status);
       setPaymentStatus(o.paymentStatus);
       setFulfillmentStatus(o.fulfillmentStatus ?? "unfulfilled");
       setInternalNotes(o.internalNotes ?? "");
     }).catch(() => {
+      if (!active) return;
       toast({ title: "Erro ao carregar pedido", variant: "destructive" });
-    }).finally(() => setLoading(false));
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => {
+      active = false;
+    };
   }, [orderId]);
 
   async function save() {
@@ -773,6 +782,7 @@ export default function LojaPedidos() {
           </DialogHeader>
           {selectedId && (
             <OrderDetail
+              key={selectedId}
               orderId={selectedId}
               onClose={() => setSelectedId(null)}
               onUpdated={(updated) => {

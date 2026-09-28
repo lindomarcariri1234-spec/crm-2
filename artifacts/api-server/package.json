@@ -14,7 +14,7 @@
     "typecheck": "NODE_OPTIONS='--max-old-space-size=4096' tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:bundle-size": "vitest run scripts/vercel-bundle-size.test.mjs",
-    "test:integration": "if [ -z \"${DATABASE_URL:-}\" ]; then echo 'Skipping referral-reversal integration tests: DATABASE_URL is not set.'; else vitest run --config vitest.integration.config.ts; fi"
+    "test:integration": "if [ -z \"${DATABASE_URL:-}\" ]; then echo 'DATABASE_URL is required to run integration tests.' >&2; exit 2; fi; vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@clerk/express": "^2.1.12",
