@@ -24,6 +24,7 @@ export default defineConfig({
       "src/__tests__/persist-order-first-purchase-concurrency-integration.test.ts",
       "src/__tests__/reservation-referral-payment-reversal-integration.test.ts",
       "src/__tests__/payment-expiry-concurrency.integration.test.ts",
+      "src/__tests__/nps-email-response-concurrency.integration.test.ts",
       "src/__tests__/unlink-client-from-trips-concurrency-integration.test.ts",
       "src/__tests__/referral-reversal-gaps.test.ts",
       "src/__tests__/referral-source-constraint.test.ts",

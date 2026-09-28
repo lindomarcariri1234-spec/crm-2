@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db, npsInvitationsTable, clientNpsResponsesTable, clientsTable, tenantsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 
@@ -94,49 +94,69 @@ router.get("/nps/respond", async (req, res, next: NextFunction): Promise<void> =
     const agencyName = tenant?.name ?? "a agência";
 
     if (invitation.respondedAt) {
-      res.status(200).send(thankYouHtml(agencyName, score));
+      const [existingResponse] = await db
+        .select({ score: clientNpsResponsesTable.score })
+        .from(clientNpsResponsesTable)
+        .where(eq(clientNpsResponsesTable.reservationId, invitation.reservationId))
+        .limit(1);
+      res.status(200).send(thankYouHtml(agencyName, existingResponse?.score ?? score));
       return;
     }
 
-    const existingResponse = await db
-      .select({ id: clientNpsResponsesTable.id })
-      .from(clientNpsResponsesTable)
-      .where(eq(clientNpsResponsesTable.reservationId, invitation.reservationId))
-      .limit(1);
+    const recordedScore = await db.transaction(async (tx) => {
+      const [insertedResponse] = await tx
+        .insert(clientNpsResponsesTable)
+        .values({
+          id: generateId(),
+          tenantId: invitation.tenantId,
+          clientId: invitation.clientId,
+          reservationId: invitation.reservationId,
+          tripId: invitation.tripId ?? null,
+          score,
+          comment: comment ?? null,
+        })
+        .onConflictDoNothing({ target: clientNpsResponsesTable.reservationId })
+        .returning({ score: clientNpsResponsesTable.score });
 
-    if (existingResponse.length === 0) {
-      await db.insert(clientNpsResponsesTable).values({
-        id: generateId(),
-        tenantId: invitation.tenantId,
-        clientId: invitation.clientId,
-        reservationId: invitation.reservationId,
-        tripId: invitation.tripId ?? null,
-        score,
-        comment: comment ?? null,
-      });
+      if (insertedResponse) {
+        await tx
+          .update(clientsTable)
+          .set({ npsScore: insertedResponse.score })
+          .where(
+            and(
+              eq(clientsTable.id, invitation.clientId),
+              eq(clientsTable.tenantId, invitation.tenantId),
+            ),
+          );
+      }
 
-      await db
-        .update(clientsTable)
-        .set({ npsScore: score })
+      const [storedResponse] = insertedResponse
+        ? [insertedResponse]
+        : await tx
+            .select({ score: clientNpsResponsesTable.score })
+            .from(clientNpsResponsesTable)
+            .where(eq(clientNpsResponsesTable.reservationId, invitation.reservationId))
+            .limit(1);
+
+      await tx
+        .update(npsInvitationsTable)
+        .set({ respondedAt: new Date() })
         .where(
           and(
-            eq(clientsTable.id, invitation.clientId),
-            eq(clientsTable.tenantId, invitation.tenantId),
+            eq(npsInvitationsTable.id, invitation.id),
+            isNull(npsInvitationsTable.respondedAt),
           ),
         );
-    }
 
-    await db
-      .update(npsInvitationsTable)
-      .set({ respondedAt: new Date() })
-      .where(eq(npsInvitationsTable.id, invitation.id));
+      return storedResponse?.score ?? score;
+    });
 
     logger.info(
-      { token, score, tenantId: invitation.tenantId, clientId: invitation.clientId },
-      "[nps] Response recorded via email link",
+      { score: recordedScore, tenantId: invitation.tenantId, clientId: invitation.clientId },
+      "[nps] Response handled via email link",
     );
 
-    res.status(200).send(thankYouHtml(agencyName, score));
+    res.status(200).send(thankYouHtml(agencyName, recordedScore));
   } catch (err) {
     next(err);
   }
