@@ -107,7 +107,7 @@ export function StepPayment({ state, store }: { state: WizardState; store: Publi
                     <p className="text-xs text-amber-700">
                       R$ {minDeposit.toFixed(2)}{" "}
                       <span className="text-amber-600">
-                        (Saldo após a entrada: R$ {(finalTotal - minDeposit).toFixed(2)})
+                        (Saldo projetado após pagar a entrada: R$ {(finalTotal - minDeposit).toFixed(2)})
                       </span>
                     </p>
                   </div>

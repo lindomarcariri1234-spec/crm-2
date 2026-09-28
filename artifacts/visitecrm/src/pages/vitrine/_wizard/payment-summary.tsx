@@ -210,7 +210,7 @@ export function StepPaymentSummary({
             </div>
           )}
           <div className="border-t pt-2 flex justify-between font-bold text-base">
-            <span>Total</span>
+            <span>Total líquido</span>
             <span style={{ color: store.primaryColor }}>R$ {finalTotal.toFixed(2)}</span>
           </div>
         </div>
@@ -298,17 +298,18 @@ export function StepPaymentSummary({
               <span className="font-semibold text-amber-700">R$ {Number(form.depositAmount).toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Saldo após a entrada</span>
+              <span className="text-muted-foreground">Saldo projetado após pagar a entrada</span>
               <span className="font-medium">R$ {(finalTotal - Number(form.depositAmount)).toFixed(2)}</span>
             </div>
             <p className="text-[11px] text-amber-700">
-              A entrada solicitada não representa um pagamento confirmado. O valor pago será atualizado
-              somente após a confirmação do recebível pela agência ou pelo provedor.
+              A entrada solicitada não é um pagamento confirmado. Até a confirmação pela agência ou pelo
+              provedor, o saldo pendente permanece em R$ {finalTotal.toFixed(2)}; o valor acima é uma
+              projeção após pagar a entrada.
             </p>
           </>
         )}
         <div className="border-t pt-2 flex justify-between font-bold text-base">
-          <span>Total</span>
+          <span>Total líquido</span>
           <span style={{ color: store.primaryColor }}>R$ {finalTotal.toFixed(2)}</span>
         </div>
         {form.paymentMethod && (

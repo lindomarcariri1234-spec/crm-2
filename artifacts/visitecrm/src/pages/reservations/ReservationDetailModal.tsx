@@ -175,7 +175,7 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
               {summary.discount > 0 ? (
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Valor Total</p>
+                    <p className="text-xs text-muted-foreground mb-1">Subtotal</p>
                     <p className="font-semibold text-lg line-through text-muted-foreground">{fmt(summary.subtotal)}</p>
                   </div>
                   <div>
@@ -371,7 +371,7 @@ export function ReservationDetailModal({ reservationId, open, onClose }: {
               <div className="p-3 bg-muted/30 rounded-lg border">
                 {financial!.discount > 0 ? (
                   <>
-                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Valor Total:</span><span className="font-semibold line-through text-muted-foreground">{fmt(financial!.subtotal)}</span></div>
+                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal:</span><span className="font-semibold line-through text-muted-foreground">{fmt(financial!.subtotal)}</span></div>
                     <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Desconto:</span><span className="font-semibold text-destructive">− {fmt(financial!.discount)}</span></div>
                     <div className="flex justify-between text-sm mt-1"><span className="text-muted-foreground">Total líquido:</span><span className="font-semibold">{fmt(financial!.total)}</span></div>
                   </>

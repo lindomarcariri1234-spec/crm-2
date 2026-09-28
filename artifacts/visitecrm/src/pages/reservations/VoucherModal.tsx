@@ -97,7 +97,7 @@ function VoucherContent({ r, qrDataUrl }: { r: Reservation | null | undefined; q
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Resumo Financeiro</p>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
           <div className="bg-gray-50 rounded p-2">
-            <p className="text-xs text-gray-500 mb-0.5">Valor Total</p>
+            <p className="text-xs text-gray-500 mb-0.5">Subtotal</p>
             <p className="font-bold text-sm text-gray-900">{fmt(financial?.subtotal ?? 0)}</p>
           </div>
           <div className="bg-red-50 rounded p-2">

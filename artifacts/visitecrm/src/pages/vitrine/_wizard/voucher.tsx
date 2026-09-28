@@ -195,7 +195,7 @@ export function Voucher({
             {financialSummary.states.payment === "partially_paid" ? "Pagamento parcial confirmado" : "Entrada mínima solicitada"}
           </p>
           <div className="flex justify-between">
-            <span>Valor total do pedido</span>
+            <span>Total líquido do pedido</span>
             <span className="font-semibold">R$ {financialSummary.totalAmount.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">

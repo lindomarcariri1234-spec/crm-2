@@ -1,8 +1,8 @@
 /**
  * MinDepositConfirmation.test.tsx
  *
- * Component-level rendering tests for StepConfirmation's financial summary
- * under three deposit scenarios:
+ * Component-level rendering tests for the checkout and StepConfirmation
+ * financial summaries under deposit scenarios:
  *   - partial deposit (deposit < total)
  *   - full-total deposit (deposit === total)
  *   - no deposit (deposit is null / zero)
@@ -188,18 +188,24 @@ function makeState(
 // ---------------------------------------------------------------------------
 // Render helper
 // ---------------------------------------------------------------------------
-async function renderConfirmation(completedOrder: CompletedOrder) {
+async function renderConfirmation(
+  completedOrder: CompletedOrder,
+  stateOverrides: Partial<WizardState> = {},
+) {
   // Import lazily so mocks are applied first
   const { StepConfirmation } = await import(
     "../pages/vitrine/_wizard/step-confirmation.js"
   );
   const store = makeStore();
-  const state = makeState(completedOrder);
+  const state = makeState(completedOrder, stateOverrides);
   const el = createElement(StepConfirmation, { state, store, slug: "loja-teste" });
   return renderComponent(el);
 }
 
-async function renderPaymentSummary(state: WizardState) {
+async function renderPaymentSummary(
+  state: WizardState,
+  variant: "review" | "payment" = "review",
+) {
   const { StepPaymentSummary } = await import(
     "../pages/vitrine/_wizard/payment-summary.js"
   );
@@ -207,7 +213,7 @@ async function renderPaymentSummary(state: WizardState) {
     createElement(StepPaymentSummary, {
       state,
       store: makeStore(),
-      variant: "review",
+      variant,
     }),
   );
 }
@@ -344,5 +350,63 @@ describe("StepConfirmation — financial summary with minimum deposit", () => {
     expect(text).toContain("Aplicamos R$ 40.00 de cashback.");
     expect(text).toContain("O novo total do pedido é R$ 460.00.");
     expect(text).toContain("Saldo atual de cashback: R$ 60.00.");
+  });
+
+  it("distinguishes the projected balance after a requested entry from the current unpaid balance", async () => {
+    const order = makeOrder({
+      totalAmount: "189.05",
+      depositAmount: "90.00",
+      paidAmount: 0,
+      amountRemaining: "189.05",
+    });
+    const reviewState = makeState(order, {
+      subtotal: 199,
+      unitPrice: 199,
+      referralDiscount: 9.95,
+      referralDiscountPct: 5,
+      referralDiscountType: "percentage",
+      finalTotal: 189.05,
+    });
+    reviewState.form = { ...reviewState.form, depositAmount: "90.00", paymentMethod: "cash" };
+
+    const review = await renderPaymentSummary(reviewState, "payment");
+    const reviewText = review.container.textContent ?? "";
+    expect(reviewText).toContain("Subtotal");
+    expect(reviewText).toContain("R$ 199.00");
+    expect(reviewText).toContain("Desconto de indicação (5%)");
+    expect(reviewText).toContain("− R$ 9.95");
+    expect(reviewText).toContain("Total líquido");
+    expect(reviewText).toContain("R$ 189.05");
+    expect(reviewText).toContain("Entrada solicitada");
+    expect(reviewText).toContain("R$ 90.00");
+    expect(reviewText).toContain("Saldo projetado após pagar a entrada");
+    expect(reviewText).toContain("R$ 99.05");
+    expect(reviewText).toContain("saldo pendente permanece em R$ 189.05");
+
+    const confirmationState = makeState(order);
+    const confirmation = await renderConfirmation(order, {
+      subtotal: 199,
+      unitPrice: 199,
+      finalTotal: 189.05,
+      referralDiscount: 9.95,
+      referralDiscountPct: 5,
+      referralDiscountType: "percentage",
+      referralApplied: true,
+      form: {
+        ...confirmationState.form,
+        depositAmount: "90.00",
+        paymentMethod: "cash",
+      },
+    });
+    const confirmationText = confirmation.container.textContent ?? "";
+    expect(confirmationText).toContain("Total líquido");
+    expect(confirmationText).toContain("Desconto de indicação (5%)");
+    expect(confirmationText).toContain("− R$ 9.95");
+    expect(confirmationText).toContain("189.05");
+    expect(confirmationText).toContain("Pagamento Recebido");
+    expect(confirmationText).toContain("0.00");
+    expect(confirmationText).toContain("Saldo Pendente");
+    expect(confirmationText).toContain("Entrada solicitada");
+    expect(confirmationText).not.toContain("Saldo projetado após pagar a entrada");
   });
 });

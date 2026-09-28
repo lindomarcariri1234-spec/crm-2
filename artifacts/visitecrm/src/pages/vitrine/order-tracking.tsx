@@ -326,7 +326,7 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
           <DiscountBreakdown order={order} />
 
           <div className="flex justify-between font-bold text-base border-t pt-2">
-            <span>Total</span>
+            <span>Total líquido</span>
             <span style={{ color: colors.primary }}>R$ {totalAmt.toFixed(2)}</span>
           </div>
         </div>
@@ -338,7 +338,7 @@ function OrderResult({ order, store }: { order: StoreOrder; store: PublicStore }
              {paidAmt > 0 ? "Pagamento parcial confirmado" : "Entrada solicitada"}
           </p>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Valor total do pedido</span>
+            <span className="text-muted-foreground">Total líquido do pedido</span>
             <span className="font-semibold">R$ {totalAmt.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
@@ -546,7 +546,7 @@ export default function VitrineOrderTracking({
               </div>
               <DiscountBreakdown order={order} />
               <div className="flex justify-between font-bold text-base border-t pt-2">
-                <span>Total</span>
+                <span>Total líquido</span>
                 <span>R$ {parseFloat(order.totalAmount).toFixed(2)}</span>
               </div>
             </div>
