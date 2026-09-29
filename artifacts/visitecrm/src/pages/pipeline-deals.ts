@@ -14,3 +14,29 @@ export function mergePipelineDeals<T extends { id: string }>(
     return true;
   });
 }
+
+export function getTripsMissingReturnDate<
+  TDeal extends { stageId: string; tripId?: string | null },
+  TStage extends { id: string; name: string },
+  TTrip extends { id: string; name: string; returnDate?: string | null },
+>(
+  openDeals: readonly TDeal[] | undefined,
+  visibleStages: readonly TStage[] | undefined,
+  trips: readonly TTrip[] | undefined,
+): TTrip[] {
+  const inTravelStageIds = new Set(
+    (visibleStages ?? [])
+      .filter((stage) => stage.name.trim().toLowerCase() === "em viagem")
+      .map((stage) => stage.id),
+  );
+  if (!inTravelStageIds.size) return [];
+
+  const linkedTripIds = new Set(
+    (openDeals ?? [])
+      .filter((deal) => deal.tripId && inTravelStageIds.has(deal.stageId))
+      .map((deal) => deal.tripId as string),
+  );
+  if (!linkedTripIds.size) return [];
+
+  return (trips ?? []).filter((trip) => linkedTripIds.has(trip.id) && !trip.returnDate);
+}

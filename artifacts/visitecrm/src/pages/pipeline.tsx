@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import {
   DndContext, closestCenter, DragOverlay, useSensor, useSensors, PointerSensor,
   type DragStartEvent, type DragEndEvent
@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ClientModal } from "./clients";
 import { Client360Modal } from "@/components/client360-modal";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,13 +31,14 @@ import {
   Plus, Search, Trash2, Phone, Mail, Calendar, MapPin, X, Pencil, UserPen, Eye, BookOpen,
   ExternalLink, ShoppingBag, ChevronDown, ChevronUp, BarChart2, Loader2, XCircle,
   Settings2, Star, ChevronRight, ChevronLeft, GripVertical, Plane, ArrowRightLeft, Bell, CreditCard,
+  AlertTriangle,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { DEAL_STATUS, ROLES } from "@workspace/permissions";
 import { formatCurrency } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { mergePipelineDeals } from "./pipeline-deals";
+import { getTripsMissingReturnDate, mergePipelineDeals } from "./pipeline-deals";
 import type { LinkedData } from "@/lib/linked-data";
 
 const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -1264,7 +1266,7 @@ export default function Pipeline() {
     await Promise.all([refetchOpenDeals(), refetchWonDeals()]);
   };
   const { data: allClients, refetch: refetchClients } = useListClients({ limit: 500, page: 1 });
-  const { data: tripsData } = useListTrips({ limit: 200 });
+  const { data: tripsData, refetch: refetchTrips } = useListTrips({ limit: 500, page: 1 });
   const moveDeal = useMoveDeal();
   const deleteDeal = useDeleteDeal();
   const updateDeal = useUpdateDeal();
@@ -1274,12 +1276,12 @@ export default function Pipeline() {
   // counters and the Vitrine origin stay current without requiring a reload.
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void Promise.all([refetchOpenDeals(), refetchWonDeals()]);
+      void Promise.all([refetchOpenDeals(), refetchWonDeals(), refetchTrips()]);
       void refetchLostDeals();
       void refetchStages();
     }, 30_000);
     return () => window.clearInterval(interval);
-  }, [refetchOpenDeals, refetchWonDeals, refetchLostDeals, refetchStages]);
+  }, [refetchOpenDeals, refetchWonDeals, refetchLostDeals, refetchStages, refetchTrips]);
 
   // Initialize selectedPipelineId to default pipeline
   useEffect(() => {
@@ -1327,6 +1329,11 @@ export default function Pipeline() {
     if (!selectedPipelineId) return stages ?? [];
     return (stages ?? []).filter(s => s.pipelineId === selectedPipelineId);
   }, [stages, selectedPipelineId]);
+
+  const tripsMissingReturnDate = useMemo(
+    () => getTripsMissingReturnDate(openDeals, visibleStages, tripsData?.data),
+    [openDeals, visibleStages, tripsData],
+  );
 
   const visibleStageIds = useMemo(() => new Set(visibleStages.map(s => s.id)), [visibleStages]);
 
@@ -1717,6 +1724,48 @@ export default function Pipeline() {
         <div className="flex-shrink-0 rounded-xl border bg-card p-4 shadow-sm">
           <AnalyticsPanel pipelineId={pipelineId} />
         </div>
+      )}
+
+      {tripsMissingReturnDate.length > 0 && (
+        <Alert
+          className="flex-shrink-0 border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+          data-testid="status-trips-missing-return-date"
+        >
+          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+          <div className="w-full">
+            <AlertTitle>Preencha a data de retorno</AlertTitle>
+            <AlertDescription className="space-y-2">
+              <p>
+                Há {tripsMissingReturnDate.length}{" "}
+                {tripsMissingReturnDate.length === 1 ? "viagem" : "viagens"} em “Em Viagem” sem data de retorno.
+                A automação só moverá os cartões para “Pós Viagem” depois que a data for preenchida.
+              </p>
+              {me?.role === ROLES.SALES && (
+                <p className="text-xs">Peça a um administrador da agência para preencher as datas.</p>
+              )}
+              <ul className="max-h-48 space-y-1 overflow-y-auto pr-2">
+                {tripsMissingReturnDate.map((trip) => (
+                  <li
+                    key={trip.id}
+                    className="flex flex-col gap-1 border-t border-amber-200/70 py-2 sm:flex-row sm:items-center sm:justify-between dark:border-amber-800"
+                    data-testid={`row-trip-missing-return-date-${trip.id}`}
+                  >
+                    <span className="min-w-0 truncate font-medium">{trip.name}</span>
+                    {me && me.role !== ROLES.SALES && (
+                      <Link
+                        href={`/trips/${trip.id}/edit`}
+                        className="shrink-0 text-xs font-medium underline underline-offset-4 hover:text-amber-700 dark:hover:text-amber-300"
+                        data-testid={`link-edit-missing-return-date-${trip.id}`}
+                      >
+                        Preencher data
+                      </Link>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </div>
+        </Alert>
       )}
 
       <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
