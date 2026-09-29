@@ -10,4 +10,6 @@ export interface UpdateChatbotConversationBody {
   status?: string;
   assignedUserId?: string;
   endedAt?: string;
+  /** @nullable */
+  clientId?: string | null;
 }

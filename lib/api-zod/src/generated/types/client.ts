@@ -49,6 +49,8 @@ export interface Client {
   /** @nullable */
   lastContactAt?: string | null;
   /** @nullable */
+  firstPaidAt?: string | null;
+  /** @nullable */
   origin?: string | null;
   /** @nullable */
   lastTripName?: string | null;

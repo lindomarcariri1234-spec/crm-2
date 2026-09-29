@@ -26,6 +26,7 @@ import { parseReservationStatus } from "../lib/status-validators";
 import { moveDealToStage, cancelDealOnReservationCancellation } from "../services/pipeline-automation";
 import { syncClientDeal } from "../services/pipeline-deal-sync";
 import { recalculateClientFinancials } from "../services/client-financials.js";
+import { recomputeClientClassification } from "../services/client-classification.js";
 import { detectAndNotifyTripOverlap } from "../lib/trip-overlap-notify";
 import { clientSellerScopeCondition, reservationSellerScopeCondition } from "../lib/seller-scope";
 import {
@@ -2836,6 +2837,32 @@ router.patch("/reservations/:id", async (req, res, next: NextFunction): Promise<
             await tx.update(passengersTable).set(seatFields)
               .where(eq(passengersTable.id, p.id));
           }
+        }
+      }
+
+      const clientAssociationChanged = existing.clientId !== updated.clientId;
+      const terminalStatusChanged = updated.status !== existing.status
+        && (updated.status === RESERVATION_STATUS.CANCELLED || updated.status === RESERVATION_STATUS.COMPLETED);
+      if (clientAssociationChanged || terminalStatusChanged) {
+        const affectedClientIds = new Set([existing.clientId, updated.clientId].filter((id): id is string => !!id));
+        for (const clientId of affectedClientIds) {
+          const trigger = clientAssociationChanged
+            ? "reservation_client_reassigned"
+            : updated.status === RESERVATION_STATUS.CANCELLED
+              ? "reservation_cancelled"
+              : "reservation_completed";
+          const reason = clientAssociationChanged
+            ? "Vínculo de cliente da reserva alterado; indicadores de classificação recalculados."
+            : updated.status === RESERVATION_STATUS.CANCELLED
+              ? "Reserva cancelada; indicadores de classificação recalculados."
+              : "Reserva concluída; indicadores de classificação recalculados.";
+          await recomputeClientClassification({
+            tenantId: me.tenantId,
+            clientId,
+            trigger,
+            sourceId: updated.id,
+            reason,
+          }, tx);
         }
       }
 

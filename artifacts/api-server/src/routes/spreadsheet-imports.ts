@@ -29,6 +29,7 @@ import { AppError, ForbiddenError, ValidationError } from "../lib/errors.js";
 import { generateId, generateVoucherCode } from "../lib/id.js";
 import { getTenantReservationPrefix, getYearMonth, nextReservationSequence, buildReservationNumber, tripTypeToCode } from "../lib/reservation-number.js";
 import { syncReservationPaymentStatus } from "../lib/reservation-payments.js";
+import { recomputeClientClassification } from "../services/client-classification.js";
 import {
   createCsvTemplate,
   createXlsxTemplate,
@@ -1012,6 +1013,13 @@ async function upsertPayment(tx: ImportTx, tenantId: string, row: ParsedEntityRo
         )
       WHERE id = ${clientId} AND tenant_id = ${tenantId}
     `);
+    await recomputeClientClassification({
+      tenantId,
+      clientId,
+      trigger: "spreadsheet_payment_import",
+      sourceId: targetId,
+      reason: "Pagamento importado ou atualizado; classificação recalculada.",
+    }, tx);
   }
 }
 

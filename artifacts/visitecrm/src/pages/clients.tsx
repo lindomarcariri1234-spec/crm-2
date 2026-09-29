@@ -253,6 +253,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 const CLASSIFICATION_LABELS: Record<string, string> = {
+  new: "Novo",
   lead: "Lead",
   prospect: "Prospecto",
   client: "Cliente",
@@ -334,7 +335,7 @@ interface ClientFormData {
 const EMPTY_CLIENT: ClientFormData = {
   name: "", email: "", whatsapp: "", phone: "", cpf: "", rg: "", birthDate: "", gender: "none",
   addressCity: "", addressState: "", instagram: "", pipelineStage: "none",
-  classification: "lead", status: "active", origin: "none", maritalStatus: "none",
+  classification: "new", status: "active", origin: "none", maritalStatus: "none",
   tripId: "none", boardingPoint: "none", seatNumber: "", travelType: "none",
   accommodationId: "none", roomId: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
   ticketPrice: "", quantity: "1", discount: "", paymentMethod: "none", amountPaid: "", commission: "", consultantId: "none",
@@ -361,7 +362,7 @@ function clientToForm(c: Client): ClientFormData {
     cpf: c.cpf ?? "", rg: c.rg ?? "", birthDate: c.birthDate ? sanitizeBirthDateInput(c.birthDate) : "",
     gender: c.gender ?? "none", addressCity: c.addressCity ?? "", addressState: c.addressState ?? "",
     instagram: c.instagram ?? "", pipelineStage: c.pipelineStage ?? "none",
-    classification: c.classification ?? "lead", status: c.status ?? "active",
+    classification: c.classification ?? "new", status: c.status ?? "active",
     origin: c.origin ?? "none", maritalStatus: c.maritalStatus ?? "none",
     tripId: "none", boardingPoint: "none", seatNumber: "", travelType: "none",
     accommodationId: "none", roomId: "none", hasInsurance: false, isGratuidade: false, hasMinorChild: false, isOnLap: false, travelReason: "none",
@@ -653,7 +654,6 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
       companyFeedback: form.companyFeedback || undefined,
       companyNps: form.npsScore ? parseInt(form.npsScore) : undefined,
       pipelineStage: form.pipelineStage !== "none" ? form.pipelineStage : undefined,
-      classification: form.classification || undefined,
       status: form.status || undefined,
       travelInterests: form.travelInterests.length > 0 ? form.travelInterests : [],
       ambassadorOptIn: form.ambassadorOptIn,

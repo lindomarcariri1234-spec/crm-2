@@ -105,7 +105,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 const CLASSIFICATION_LABELS: Record<string, string> = {
-  lead: "Lead", prospect: "Prospecto", client: "Cliente", vip: "VIP", inactive: "Inativo",
+  new: "Novo", lead: "Lead", prospect: "Prospecto", client: "Cliente", vip: "VIP", inactive: "Inativo",
 };
 
 const TIER_LABELS: Record<string, { label: string; color: string }> = {
@@ -121,7 +121,10 @@ const ACTIVITY_TYPE_OPTIONS = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "email", label: "E-mail" },
   { value: "meeting", label: "Reunião" },
-];
+  { value: "interest", label: "Interesse" },
+  { value: "qualification", label: "Qualificação" },
+] as const;
+type ClientActivityType = (typeof ACTIVITY_TYPE_OPTIONS)[number]["value"];
 
 function activityIcon(type: string) {
   switch (type) {
@@ -133,6 +136,8 @@ function activityIcon(type: string) {
     case "whatsapp": return { Icon: MessageSquare, bg: "bg-green-100", color: "text-green-600" };
     case "email": return { Icon: Mail, bg: "bg-sky-100", color: "text-sky-600" };
     case "meeting": return { Icon: Calendar, bg: "bg-purple-100", color: "text-purple-600" };
+    case "interest": return { Icon: Zap, bg: "bg-amber-100", color: "text-amber-700" };
+    case "qualification": return { Icon: CheckSquare, bg: "bg-emerald-100", color: "text-emerald-700" };
     case "note": return { Icon: FileText, bg: "bg-gray-100", color: "text-gray-500" };
     default: return { Icon: Zap, bg: "bg-blue-100", color: "text-blue-600" };
   }
@@ -157,7 +162,7 @@ function isAutoActivity(type: string) {
 
 function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: boolean }) {
   const { toast } = useToast();
-  const [formType, setFormType] = useState("note");
+  const [formType, setFormType] = useState<ClientActivityType>("note");
   const [formContent, setFormContent] = useState("");
   const [showForm, setShowForm] = useState(false);
 
@@ -221,7 +226,7 @@ function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: bool
 
       {showForm && (
         <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {ACTIVITY_TYPE_OPTIONS.map(opt => (
               <button
                 key={opt.value}
@@ -232,6 +237,11 @@ function ClientHistoryTab({ clientId, isOpen }: { clientId: string; isOpen: bool
               </button>
             ))}
           </div>
+          {formType === "qualification" && (
+            <p className="text-xs text-muted-foreground">
+              Esta confirmação promove o cadastro a Prospecto quando ainda não houver pagamento.
+            </p>
+          )}
           <Textarea
             placeholder="Descreva a atividade…"
             value={formContent}
@@ -1046,6 +1056,7 @@ export function Client360Modal({ open, onClose, clientId }: Client360ModalProps)
                     { label: "RG", value: client.rg ?? "—", icon: null },
                     { label: "Instagram", value: client.instagram ?? "—", icon: null },
                     { label: "Classificação", value: CLASSIFICATION_LABELS[client.classification] ?? client.classification, icon: null },
+                    { label: "Primeiro pagamento confirmado", value: client.firstPaidAt ? format(parseISO(client.firstPaidAt), "dd/MM/yyyy", { locale: ptBR }) : "—", icon: Calendar },
                     { label: "Pipeline", value: client.pipelineStage ?? "—", icon: null },
                   ].map(({ label, value, icon: Icon }) => (
                     <div key={label} className="flex items-center gap-2">

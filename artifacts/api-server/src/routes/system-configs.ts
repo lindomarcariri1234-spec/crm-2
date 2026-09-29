@@ -7,6 +7,10 @@ import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
+import {
+  recomputeTenantClientAndVipClassifications,
+  validateClientClassificationSettings,
+} from "../services/client-classification.js";
 
 const router = Router();
 
@@ -63,6 +67,17 @@ async function upsertHandler(req: Request, res: Response, next: import("express"
       return;
     }
     const { key, value } = parsed.data;
+    const nextClassificationSettings = value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>).clientClassification
+      : undefined;
+    if (key === "loyalty_settings" && nextClassificationSettings != null) {
+      try {
+        validateClientClassificationSettings(nextClassificationSettings);
+      } catch (error) {
+        next(new ValidationError(error instanceof Error ? error.message : "Configuração de classificação inválida.", "VALIDATION_ERROR"));
+        return;
+      }
+    }
     const [existing] = await db
       .select()
       .from(systemConfigsTable)
@@ -73,6 +88,14 @@ async function upsertHandler(req: Request, res: Response, next: import("express"
         ),
       )
       .limit(1);
+    const previousClassificationSettings = existing?.value
+      && typeof existing.value === "object"
+      && !Array.isArray(existing.value)
+      ? (existing.value as Record<string, unknown>).clientClassification
+      : undefined;
+    const refreshClassification =
+      key === "loyalty_settings"
+      && JSON.stringify(previousClassificationSettings ?? null) !== JSON.stringify(nextClassificationSettings ?? null);
 
     if (existing) {
       await db
@@ -84,6 +107,9 @@ async function upsertHandler(req: Request, res: Response, next: import("express"
         .from(systemConfigsTable)
         .where(eq(systemConfigsTable.id, existing.id))
         .limit(1);
+      if (refreshClassification) {
+        await recomputeTenantClientAndVipClassifications(me.tenantId);
+      }
       res.json(updated);
     } else {
       const id = generateId();
@@ -99,6 +125,9 @@ async function upsertHandler(req: Request, res: Response, next: import("express"
         .from(systemConfigsTable)
         .where(eq(systemConfigsTable.id, id))
         .limit(1);
+      if (refreshClassification) {
+        await recomputeTenantClientAndVipClassifications(me.tenantId);
+      }
       res.status(201).json(created);
     }
   } catch (err) {

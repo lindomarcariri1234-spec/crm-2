@@ -30,6 +30,7 @@ import { retryPendingAttendanceReplies } from "./services/whatsapp-attendance";
 import { retryPendingAccountDeletions } from "./services/account-deletion";
 import { runUploadThingOrphanCleanup } from "./lib/uploadthing-orphan-cleanup";
 import { runReferralAttemptLogCleanup } from "./lib/referral-attempt-log-cleanup";
+import { recomputeCurrentClientAndVipClassifications } from "./services/client-classification.js";
 import { runExpiredReservationsCron } from "./lib/expired-reservations";
 import { runPipelineTripDepartureCron, runPipelineTripEndedCron } from "./services/pipeline-automation";
 import { calculateScoresForAllTenants } from "./lib/client-scores";
@@ -306,6 +307,11 @@ applyMigrations()
       scheduleDistributedCron("client-scores", "0 3 * * *", async () => {
         logger.info("[client-scores] Daily scores cron triggered");
         await calculateScoresForAllTenants();
+      }, { timezone: "America/Sao_Paulo" });
+
+      scheduleDistributedCron("client-classification-refresh", "15 3 * * *", async () => {
+        const processed = await recomputeCurrentClientAndVipClassifications();
+        logger.info({ processed }, "[client-classification] Daily VIP window refresh completed");
       }, { timezone: "America/Sao_Paulo" });
 
       scheduleDistributedCron("gemeo-alerts", "0 6 * * *", async () => {

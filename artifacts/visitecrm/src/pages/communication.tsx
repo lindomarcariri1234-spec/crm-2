@@ -105,6 +105,8 @@ interface AiConversation {
   createdAt: string;
 }
 
+const NO_ASSOCIATED_CLIENT = "__no_associated_client__";
+
 interface AiMessage {
   id: string;
   role: string;
@@ -200,6 +202,7 @@ export default function Communication() {
   const [aiReply, setAiReply] = useState("");
   const [loadingAiInbox, setLoadingAiInbox] = useState(false);
   const [sendingAiReply, setSendingAiReply] = useState(false);
+  const [associatingAiConversationId, setAssociatingAiConversationId] = useState<string | null>(null);
   const aiReplyKey = useRef<string | null>(null);
 
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
@@ -389,7 +392,7 @@ export default function Communication() {
     useListMessages({ limit: 50 });
   const { data: templates, isLoading: loadingTemplates, isError: templatesError, error: templatesQueryError, refetch: refetchTemplates } =
     useListMessageTemplates();
-  const { data: clients } = useListClients({ limit: 200 });
+  const { data: clients } = useListClients({ limit: 500 });
 
   const sendMessage = useSendMessage();
   const createOutboundMessage = useCreateOutboundMessage();
@@ -771,6 +774,29 @@ export default function Communication() {
       toast({ title: "Não foi possível enviar pelo WhatsApp.", variant: "destructive" });
     } finally {
       setSendingAiReply(false);
+    }
+  };
+
+  const handleAssociateAiClient = async (clientId: string) => {
+    const conversationId = selectedAiConversationId;
+    if (!conversationId) return;
+    setAssociatingAiConversationId(conversationId);
+    try {
+      const res = await fetch(`${BASE}/api/chatbot-conversations/${conversationId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clientId: clientId === NO_ASSOCIATED_CLIENT ? null : clientId,
+        }),
+      });
+      if (!res.ok) throw new Error("failed");
+      await fetchAiInbox();
+      toast({ title: "Vínculo do atendimento atualizado." });
+    } catch {
+      toast({ title: "Não foi possível associar o atendimento ao cliente.", variant: "destructive" });
+    } finally {
+      setAssociatingAiConversationId(null);
     }
   };
 
@@ -1286,9 +1312,26 @@ export default function Communication() {
                   </div>
                 ) : (
                   <>
-                    <div className="p-3 border-b bg-muted/30">
-                      <p className="font-semibold text-sm">Atendimento WhatsApp</p>
-                      <p className="text-xs text-muted-foreground">A IA interrompe respostas ao detectar uma solicitação de atendimento humano.</p>
+                    <div className="p-3 border-b bg-muted/30 flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-sm">Atendimento WhatsApp</p>
+                        <p className="text-xs text-muted-foreground">A IA interrompe respostas ao detectar uma solicitação de atendimento humano.</p>
+                      </div>
+                      <Select
+                        value={aiConversations.find((conversation) => conversation.id === selectedAiConversationId)?.clientId ?? NO_ASSOCIATED_CLIENT}
+                        onValueChange={handleAssociateAiClient}
+                        disabled={associatingAiConversationId === selectedAiConversationId}
+                      >
+                        <SelectTrigger aria-label="Associar atendimento a cliente" className="w-full sm:w-64">
+                          <SelectValue placeholder="Associar cliente" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NO_ASSOCIATED_CLIENT}>Sem cliente associado</SelectItem>
+                          {(clients?.data ?? []).map((client) => (
+                            <SelectItem key={client.id} value={client.id}>{client.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="flex-1 overflow-y-auto p-3 space-y-2">
                       {aiMessages.map((message) => (

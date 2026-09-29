@@ -7,12 +7,22 @@ import {
   tenantIntegrationsTable,
 } from "@workspace/db";
 import { and, desc, eq, lt, or, sql } from "drizzle-orm";
-import { normalizeBrazilPhone } from "@workspace/shared";
 import { decryptOrPassthrough } from "../lib/crypto";
 import { getAIClientForTenant, sanitizeProviderError } from "../lib/ai-client";
 import { generateId } from "../lib/id";
 import { logger } from "../lib/logger";
 import { dispatchOutboundMessage, updateOutboundDeliveryFromWebhook } from "./outbound-delivery";
+import { recomputeClientClassification, recordClientClassificationEvent } from "./client-classification.js";
+
+function normalizeInboundWhatsAppPhone(raw: string): string | null {
+  const phonePart = raw.trim().split("@")[0]?.split(":")[0] ?? "";
+  const explicitlyInternational = /^\s*(?:\+|00)/.test(phonePart);
+  let digits = phonePart.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.length < 10 || digits.length > 15) return null;
+  if (explicitlyInternational || digits.startsWith("55")) return digits;
+  return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
+}
 
 export type WhatsAppInboundOutcome =
   | "ignored"
@@ -68,7 +78,7 @@ export function parseEvolutionInbound(instanceName: string, payload: unknown): E
     : typeof data["remoteJid"] === "string"
       ? data["remoteJid"]
       : typeof data["sender"] === "string" ? data["sender"] : "";
-  const rawPhone = rawJid.split("@")[0]?.replace(/\D/g, "") ?? "";
+  const rawPhone = rawJid.split("@")[0] ?? "";
   const content = typeof message["conversation"] === "string"
     ? message["conversation"]
     : typeof extended["text"] === "string"
@@ -79,7 +89,7 @@ export function parseEvolutionInbound(instanceName: string, payload: unknown): E
     messageId: typeof key["id"] === "string"
       ? key["id"]
       : typeof data["id"] === "string" ? data["id"] : null,
-    phone: normalizeBrazilPhone(rawPhone),
+    phone: normalizeInboundWhatsAppPhone(rawPhone),
     content: content?.trim().slice(0, 4_000) || null,
     fromMe: key["fromMe"] === true || data["fromMe"] === true || rawJid.endsWith("@g.us"),
   };
@@ -342,57 +352,181 @@ export async function processEvolutionInbound(opts: {
   if (!integration) return "unauthorized";
   const tenantId = integration.tenantId;
 
-  const clients = await db
-    .select({
+  const { client, conversation, inserted } = await db.transaction(async (tx) => {
+    await tx.execute(sql`
+      SELECT pg_advisory_xact_lock(
+        hashtextextended(${`client-whatsapp:${tenantId}:${inbound.phone}`}, 0)
+      )
+    `);
+    const clients = await tx.select({
       id: clientsTable.id,
       whatsapp: clientsTable.whatsapp,
       phone: clientsTable.phone,
       whatsappOptIn: clientsTable.whatsappOptIn,
-    })
-    .from(clientsTable)
-    .where(eq(clientsTable.tenantId, tenantId));
-  const client = clients.find((row) =>
-    normalizeBrazilPhone(row.whatsapp) === inbound.phone || normalizeBrazilPhone(row.phone ?? "") === inbound.phone,
-  );
-
-  const [existingConversation] = await db
-    .select()
-    .from(chatbotConversationsTable)
-    .where(
-      and(
+    }).from(clientsTable).where(eq(clientsTable.tenantId, tenantId));
+    const [existingConversation] = await tx.select().from(chatbotConversationsTable)
+      .where(and(
         eq(chatbotConversationsTable.tenantId, tenantId),
         eq(chatbotConversationsTable.channel, "whatsapp"),
-        eq(chatbotConversationsTable.sessionId, inbound.phone),
-      ),
-    )
-    .orderBy(desc(chatbotConversationsTable.createdAt))
-    .limit(1);
-  const conversation = existingConversation ?? (await db
-    .insert(chatbotConversationsTable)
-    .values({
-      id: generateId(),
-      tenantId,
-      clientId: client?.id ?? null,
-      channel: "whatsapp",
-      sessionId: inbound.phone,
-      metadata: { source: "evolution", phone: inbound.phone },
-    })
-    .returning())[0];
-  if (!conversation) throw new Error("Could not create WhatsApp conversation");
+        eq(chatbotConversationsTable.sessionId, inbound.phone!),
+      ))
+      .orderBy(desc(chatbotConversationsTable.createdAt))
+      .limit(1);
 
-  const [inserted] = await db
-    .insert(chatbotMessagesTable)
-    .values({
-      id: generateId(),
-      tenantId,
-      conversationId: conversation.id,
-      sourceMessageId: inbound.messageId,
-      role: "user",
-      content: inbound.content,
-      isBot: false,
-    })
-    .onConflictDoNothing()
-    .returning({ id: chatbotMessagesTable.id });
+    const matches = [...new Map(clients.filter((row) =>
+      normalizeInboundWhatsAppPhone(row.whatsapp ?? "") === inbound.phone
+      || normalizeInboundWhatsAppPhone(row.phone ?? "") === inbound.phone,
+    ).map((row) => [row.id, row])).values()];
+    const linkedClient = existingConversation?.clientId
+      ? clients.find((row) => row.id === existingConversation.clientId) ?? null
+      : null;
+    let client: (typeof clients)[number] | null = null;
+    let identityMatchStatus: string;
+    if (matches.length > 1) {
+      identityMatchStatus = "ambiguous";
+    } else if (linkedClient && matches.length === 1 && matches[0]?.id !== linkedClient.id) {
+      identityMatchStatus = "existing_link_conflict";
+    } else if (linkedClient && matches.length === 1) {
+      client = linkedClient;
+      identityMatchStatus = "matched";
+    } else if (linkedClient && matches.length === 0) {
+      client = linkedClient;
+      identityMatchStatus = "existing_link";
+    } else if (matches.length === 1) {
+      client = matches[0] ?? null;
+      identityMatchStatus = "matched";
+    } else {
+      const [created] = await tx.insert(clientsTable).values({
+        id: generateId(),
+        tenantId,
+        name: "Contato WhatsApp",
+        email: "",
+        whatsapp: inbound.phone!,
+        phone: inbound.phone!,
+        classification: "new",
+        origin: "whatsapp",
+        createdById: null,
+      }).returning({
+        id: clientsTable.id,
+        whatsapp: clientsTable.whatsapp,
+        phone: clientsTable.phone,
+        whatsappOptIn: clientsTable.whatsappOptIn,
+      });
+      if (!created) throw new Error("Could not create WhatsApp contact");
+      client = created;
+      identityMatchStatus = "auto_created";
+    }
+
+    const nextClientId = client?.id ?? null;
+    const existingMetadata = existingConversation?.metadata
+      && typeof existingConversation.metadata === "object"
+      && !Array.isArray(existingConversation.metadata)
+      ? existingConversation.metadata as Record<string, unknown>
+      : {};
+    const metadata = {
+      ...existingMetadata,
+      source: "evolution",
+      identityMatchStatus,
+    };
+    let conversation = existingConversation;
+    if (!conversation) {
+      [conversation] = await tx.insert(chatbotConversationsTable).values({
+        id: generateId(),
+        tenantId,
+        clientId: nextClientId,
+        channel: "whatsapp",
+        sessionId: inbound.phone!,
+        metadata,
+      }).returning();
+    } else if (conversation.clientId !== nextClientId || existingMetadata["identityMatchStatus"] !== identityMatchStatus) {
+      [conversation] = await tx.update(chatbotConversationsTable)
+        .set({ clientId: nextClientId, metadata })
+        .where(eq(chatbotConversationsTable.id, conversation.id))
+        .returning();
+    }
+    if (!conversation) throw new Error("Could not create WhatsApp conversation");
+
+    if (existingConversation?.clientId && existingConversation.clientId !== nextClientId) {
+      await recordClientClassificationEvent({
+        tenantId,
+        clientId: existingConversation.clientId,
+        eventType: "whatsapp_identity_unlinked",
+        idempotencyKey: `whatsapp-identity-unlinked:${conversation.id}:${inbound.messageId ?? conversation.id}`,
+        sourceType: "chatbot_conversation",
+        sourceId: conversation.id,
+        reason: "O vínculo automático foi removido por ambiguidade ou conflito de identidade.",
+        occurredAt: new Date(),
+        metadata: { identityMatchStatus },
+      }, tx);
+      await recomputeClientClassification({
+        tenantId,
+        clientId: existingConversation.clientId,
+        trigger: "whatsapp_identity_unlinked",
+        sourceId: conversation.id,
+        reason: "A conversa foi desvinculada por ambiguidade ou conflito de identidade.",
+      }, tx);
+    }
+
+    if (identityMatchStatus === "ambiguous" || identityMatchStatus === "existing_link_conflict") {
+      await recordClientClassificationEvent({
+        tenantId,
+        clientId: null,
+        eventType: "whatsapp_identity_ambiguous",
+        idempotencyKey: `whatsapp-identity-review:${conversation.id}:${inbound.messageId ?? conversation.id}`,
+        sourceType: "chatbot_conversation",
+        sourceId: conversation.id,
+        reason: identityMatchStatus === "ambiguous"
+          ? "A mensagem chegou de um telefone associado a mais de um cadastro; a conversa ficou sem vínculo."
+          : "O telefone corresponde a um cadastro diferente do vínculo existente; a conversa ficou sem vínculo.",
+        occurredAt: new Date(),
+        metadata: { identityMatchStatus, candidateCount: matches.length },
+      }, tx);
+    }
+
+    const [inserted] = await tx.insert(chatbotMessagesTable)
+      .values({
+        id: generateId(),
+        tenantId,
+        conversationId: conversation.id,
+        sourceMessageId: inbound.messageId,
+        role: "user",
+        content: inbound.content!,
+        isBot: false,
+      })
+      .onConflictDoNothing()
+      .returning({ id: chatbotMessagesTable.id });
+
+    if (identityMatchStatus === "auto_created") {
+      await recordClientClassificationEvent({
+        tenantId,
+        clientId: client!.id,
+        eventType: "whatsapp_contact_created",
+        idempotencyKey: `whatsapp-contact-created:${conversation.id}`,
+        sourceType: "chatbot_conversation",
+        sourceId: conversation.id,
+        reason: "Cadastro criado automaticamente após mensagem recebida pelo WhatsApp.",
+      }, tx);
+    }
+    if (inserted && client) {
+      await recordClientClassificationEvent({
+        tenantId,
+        clientId: client.id,
+        eventType: "whatsapp_inbound",
+        idempotencyKey: `whatsapp-inbound:${inbound.messageId ?? inserted.id}`,
+        sourceType: "chatbot_conversation",
+        sourceId: conversation.id,
+        reason: "Mensagem recebida de um contato associado a este cadastro.",
+      }, tx);
+      await recomputeClientClassification({
+        tenantId,
+        clientId: client.id,
+        trigger: "whatsapp_inbound",
+        sourceId: conversation.id,
+        reason: "Mensagem recebida pelo WhatsApp.",
+      }, tx);
+    }
+    return { client, conversation, inserted };
+  });
   const outboundKey = inbound.messageId ? `outbound:${inbound.messageId}` : null;
   if (inbound.messageId && !inserted && outboundKey) {
     const [existingReply] = await db.select({ id: chatbotMessagesTable.id })

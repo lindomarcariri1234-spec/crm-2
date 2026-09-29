@@ -1,12 +1,14 @@
 import { Router, type NextFunction } from "express";
-import { db, chatbotConversationsTable, chatbotMessagesTable } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
+import { db, chatbotConversationsTable, chatbotMessagesTable, clientsTable } from "@workspace/db";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
 import { deliverAttendanceReply } from "../services/whatsapp-attendance";
+import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
+import { ACTIONS, hasPermission, RESOURCES } from "@workspace/permissions";
 
 const router = Router();
 
@@ -101,23 +103,114 @@ router.patch("/chatbot-conversations/:id", async (req, res, next: NextFunction):
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (!ADMIN_ROLES.includes(me.role)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = z.object({
       status: z.string().optional(),
       assignedUserId: z.string().optional(),
       endedAt: z.string().optional(),
+      clientId: z.string().nullable().optional(),
     }).safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
-    const updates: Record<string, unknown> = {};
-    if (parsed.data.status) updates.status = parsed.data.status;
-    if (parsed.data.assignedUserId) updates.assignedUserId = parsed.data.assignedUserId;
-    if (parsed.data.endedAt) updates.endedAt = new Date(parsed.data.endedAt);
-    await db.update(chatbotConversationsTable).set(updates)
-      .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId)));
-    const [conv] = await db.select().from(chatbotConversationsTable)
-      .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId))).limit(1);
-    if (!conv) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
-    res.json(conv);
+    const changesConversationOperations =
+      parsed.data.status !== undefined ||
+      parsed.data.assignedUserId !== undefined ||
+      parsed.data.endedAt !== undefined;
+    if (changesConversationOperations && !ADMIN_ROLES.includes(me.role)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+    if (parsed.data.clientId !== undefined && !hasPermission(me.role, RESOURCES.CLIENTS, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
+
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(sql`
+        SELECT id FROM chatbot_conversations
+        WHERE id = ${req.params.id} AND tenant_id = ${me.tenantId}
+        FOR UPDATE
+      `);
+      const [current] = await tx.select().from(chatbotConversationsTable)
+        .where(and(eq(chatbotConversationsTable.id, req.params.id), eq(chatbotConversationsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!current) return { error: "conversation" as const };
+
+      if (parsed.data.clientId && parsed.data.clientId !== current.clientId) {
+        const [target] = await tx.select({ id: clientsTable.id }).from(clientsTable)
+          .where(and(eq(clientsTable.id, parsed.data.clientId), eq(clientsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!target) return { error: "client" as const };
+      }
+
+      const updates: Partial<typeof chatbotConversationsTable.$inferInsert> = {};
+      if (parsed.data.status !== undefined) updates.status = parsed.data.status;
+      if (parsed.data.assignedUserId !== undefined) updates.assignedUserId = parsed.data.assignedUserId || null;
+      if (parsed.data.endedAt !== undefined) updates.endedAt = parsed.data.endedAt ? new Date(parsed.data.endedAt) : null;
+      const clientChanged = parsed.data.clientId !== undefined && parsed.data.clientId !== current.clientId;
+      if (clientChanged) updates.clientId = parsed.data.clientId;
+      if (Object.keys(updates).length > 0) {
+        await tx.update(chatbotConversationsTable).set(updates)
+          .where(and(eq(chatbotConversationsTable.id, current.id), eq(chatbotConversationsTable.tenantId, me.tenantId)));
+      }
+
+      if (clientChanged) {
+        const now = new Date();
+        if (current.clientId) {
+          await recordClientClassificationEvent({
+            tenantId: me.tenantId,
+            clientId: current.clientId,
+            eventType: "manual_whatsapp_unassociation",
+            idempotencyKey: `whatsapp-unassociate:${current.id}:${now.toISOString()}`,
+            sourceType: "chatbot_conversation",
+            sourceId: current.id,
+            actorId: me.id,
+            reason: "A equipe removeu ou alterou o vínculo desta conversa com o cadastro.",
+            occurredAt: now,
+          }, tx);
+          await recomputeClientClassification({
+            tenantId: me.tenantId,
+            clientId: current.clientId,
+            trigger: "manual_whatsapp_unassociation",
+            sourceId: current.id,
+            actorId: me.id,
+            reason: "Vínculo manual da conversa alterado pela equipe.",
+            occurredAt: now,
+          }, tx);
+        }
+        if (parsed.data.clientId) {
+          await recordClientClassificationEvent({
+            tenantId: me.tenantId,
+            clientId: parsed.data.clientId,
+            eventType: "manual_whatsapp_association",
+            idempotencyKey: `whatsapp-associate:${current.id}:${parsed.data.clientId}:${now.toISOString()}`,
+            sourceType: "chatbot_conversation",
+            sourceId: current.id,
+            actorId: me.id,
+            reason: "A equipe associou manualmente esta conversa ao cadastro.",
+            occurredAt: now,
+          }, tx);
+          await recomputeClientClassification({
+            tenantId: me.tenantId,
+            clientId: parsed.data.clientId,
+            trigger: "manual_whatsapp_association",
+            sourceId: current.id,
+            actorId: me.id,
+            reason: "A equipe confirmou manualmente a associação da conversa.",
+            occurredAt: now,
+          }, tx);
+        }
+      }
+
+      const [updated] = await tx.select().from(chatbotConversationsTable)
+        .where(and(eq(chatbotConversationsTable.id, current.id), eq(chatbotConversationsTable.tenantId, me.tenantId)))
+        .limit(1);
+      return { conversation: updated };
+    });
+    if ("error" in result) {
+      next(new NotFoundError(result.error === "client" ? "Client not found" : "Not found", "NOT_FOUND"));
+      return;
+    }
+    if (!result.conversation) { next(new NotFoundError("Not found", "NOT_FOUND")); return; }
+    res.json(result.conversation);
   } catch (err) {
     next(err);
   }

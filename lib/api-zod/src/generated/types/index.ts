@@ -95,6 +95,7 @@ export * from "./createChatbotMessageBody";
 export * from "./createChatbotMessageBodyRole";
 export * from "./createClientActivityBody";
 export * from "./createClientActivityBodyMetadata";
+export * from "./createClientActivityBodyType";
 export * from "./createClientBody";
 export * from "./createCommissionRuleBody";
 export * from "./createCommissionRuleBodyType";

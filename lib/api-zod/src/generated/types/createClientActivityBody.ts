@@ -6,10 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { CreateClientActivityBodyMetadata } from "./createClientActivityBodyMetadata";
+import type { CreateClientActivityBodyType } from "./createClientActivityBodyType";
 
 export interface CreateClientActivityBody {
-  /** Activity type: note, call, whatsapp, email, meeting */
-  type: string;
+  /** Activity type; interest records an explicit sales signal and qualification records an explicit qualification decision. */
+  type: CreateClientActivityBodyType;
   content: string;
   /**
    * Optional structured metadata (e.g. callDuration, meetingLocation)

@@ -7002,6 +7002,8 @@ components:
           type: string
         lastContactAt:
           type: ["string", "null"]
+        firstPaidAt:
+          type: ["string", "null"]
         origin:
           type: ["string", "null"]
         lastTripName:
@@ -7257,7 +7259,8 @@ components:
       properties:
         type:
           type: string
-          description: "Activity type: note, call, whatsapp, email, meeting"
+          enum: [note, call, whatsapp, email, meeting, interest, qualification]
+          description: "Activity type; interest records an explicit sales signal and qualification records an explicit qualification decision."
         content:
           type: string
         metadata:
@@ -8104,6 +8107,8 @@ components:
           type: boolean
         isGratuidade:
           type: boolean
+        gratuityAmount:
+          type: number
         totalValue:
           type: number
         paidValue:
@@ -8215,6 +8220,7 @@ components:
         - seats
         - hasInsurance
         - isGratuidade
+        - gratuityAmount
         - totalValue
         - paidValue
         - balance
@@ -11576,6 +11582,8 @@ components:
           type: string
         endedAt:
           type: string
+        clientId:
+          type: ["string", "null"]
 
     # ─── CHATBOT MESSAGE ───────────────────────────────────────────
     ChatbotMessage:

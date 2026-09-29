@@ -46,6 +46,7 @@ import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_
 import { parseTripStatus } from "../lib/status-validators";
 import { getPassengerExportFinancialValues } from "../lib/passenger-export";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
+import { recomputeTripClientClassifications } from "../services/client-classification.js";
 
 import { AppError, ForbiddenError, NotFoundError, UnprocessableEntityError, ValidationError } from "../lib/errors";
 
@@ -1554,6 +1555,14 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
       .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)))
       .limit(1);
     if (!trip) { next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND")); return; }
+    if (updates.status !== undefined || parsed.data.returnDate !== undefined) {
+      await recomputeTripClientClassifications({
+        tenantId: me.tenantId,
+        tripId: trip.id,
+        trigger: "trip_status_or_schedule_changed",
+        reason: "Status ou data de retorno da viagem alterados; classificação recalculada.",
+      });
+    }
     if (coverImageChanged) {
       await deleteOrphanedFile(oldCoverImage, parsed.data.coverImage, req.log, me.tenantId);
     }

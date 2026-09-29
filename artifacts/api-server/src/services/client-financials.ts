@@ -1,7 +1,8 @@
 import { db, clientsTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
+import { recomputeClientClassification } from "./client-classification.js";
 
-type ClientFinancialExecutor = Pick<typeof db, "execute" | "update">;
+type ClientFinancialExecutor = Pick<typeof db, "execute" | "select" | "insert" | "update">;
 
 /**
  * Rebuilds the denormalized client financial snapshot from receivable
@@ -32,4 +33,9 @@ export async function recalculateClientFinancials(
     eq(clientsTable.id, clientId),
     eq(clientsTable.tenantId, tenantId),
   ));
+  await recomputeClientClassification({
+    tenantId,
+    clientId,
+    trigger: "payment_recalculation",
+  }, executor);
 }

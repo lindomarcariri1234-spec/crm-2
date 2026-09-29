@@ -31,6 +31,7 @@ import { normalizedClientWhatsappSql } from "../lib/client-phone";
 import { reconcileClientIdentity } from "../services/client-identity";
 import { unlinkClientFromTrips } from "../services/unlink-client-from-trips";
 import { broadcastSeatUpdate } from "../lib/realtime";
+import { recomputeClientClassification, recordClientClassificationEvent } from "../services/client-classification.js";
 
 const ListClientsQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -105,6 +106,7 @@ function formatClient(c: typeof clientsTable.$inferSelect, extra?: { isNew?: boo
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
     lastContactAt: c.lastContactAt?.toISOString() ?? null,
+    firstPaidAt: c.firstPaidAt?.toISOString() ?? null,
     origin: c.origin ?? null,
     maritalStatus: c.maritalStatus ?? null,
     professionalArea: c.professionalArea ?? null,
@@ -294,7 +296,6 @@ router.post("/clients", async (req, res, next: NextFunction): Promise<void> => {
     }
     const parsed = CreateClientBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
-
     const name = parsed.data.name.trim();
     const email = parsed.data.email?.trim() ?? "";
     const whatsapp = parsed.data.whatsapp?.trim() ?? "";
@@ -598,7 +599,10 @@ router.patch("/clients/:id", async (req, res, next: NextFunction): Promise<void>
     if (shouldAutoBlockReferralCode) {
       updates.referralCodeStatus = "blocked";
     }
-    if (parsed.data.classification != null) updates.classification = parsed.data.classification;
+    if (parsed.data.classification != null && parsed.data.classification !== existing.classification) {
+      next(new ValidationError("A classificação é calculada automaticamente. Registre uma interação ou qualificação para alterá-la.", "CLASSIFICATION_MANAGED"));
+      return;
+    }
     if (parsed.data.tags != null) updates.tags = parsed.data.tags;
     if (parsed.data.observations !== undefined) updates.observations = parsed.data.observations ?? null;
     if (parsed.data.dreamDestinations != null) updates.dreamDestinations = parsed.data.dreamDestinations;
@@ -770,7 +774,7 @@ router.get("/clients/:clientId/activities", async (req, res, next: NextFunction)
 });
 
 const CreateActivityBody = z.object({
-  type: z.enum(["note", "call", "whatsapp", "email", "meeting"]),
+  type: z.enum(["note", "call", "whatsapp", "email", "meeting", "interest", "qualification"]),
   content: z.string().min(1),
   metadata: z.record(z.string(), z.unknown()).nullish(),
 });
@@ -786,18 +790,49 @@ router.post("/clients/:clientId/activities", async (req, res, next: NextFunction
     }
     const { type, content, metadata } = parsedBody.data;
     const id = generateId();
-    await db.insert(notesTable).values({
-      id,
-      clientId: req.params.clientId,
-      type,
-      content,
-      metadata: metadata ? JSON.stringify(metadata) : null,
-      isPrivate: false,
-      createdById: me.id,
+    const signalEventType = type === "qualification"
+      ? "opportunity_qualified"
+      : ["interest", "call", "whatsapp", "email", "meeting"].includes(type)
+        ? "interest_recorded"
+        : null;
+    const activity = await db.transaction(async (tx) => {
+      await tx.insert(notesTable).values({
+        id,
+        clientId: req.params.clientId,
+        type,
+        content,
+        metadata: metadata ? JSON.stringify(metadata) : null,
+        isPrivate: false,
+        createdById: me.id,
+      });
+      if (signalEventType) {
+        const reason = signalEventType === "opportunity_qualified"
+          ? "A equipe confirmou explicitamente a qualificação comercial."
+          : "A equipe registrou uma interação identificável com o contato.";
+        await recordClientClassificationEvent({
+          tenantId: me.tenantId,
+          clientId: client.id,
+          eventType: signalEventType,
+          idempotencyKey: `client-activity:${id}`,
+          sourceType: "client_activity",
+          sourceId: id,
+          actorId: me.id,
+          reason,
+        }, tx);
+        await recomputeClientClassification({
+          tenantId: me.tenantId,
+          clientId: client.id,
+          trigger: signalEventType,
+          sourceId: id,
+          actorId: me.id,
+          reason,
+        }, tx);
+      }
+      const [createdActivity] = await tx.select().from(notesTable)
+        .where(and(eq(notesTable.id, id), eq(notesTable.clientId, req.params.clientId)))
+        .limit(1);
+      return createdActivity;
     });
-    const [activity] = await db.select().from(notesTable)
-      .where(and(eq(notesTable.id, id), eq(notesTable.clientId, req.params.clientId)))
-      .limit(1);
     if (!activity) { next(new AppError("Failed to create activity", 500, "ACTIVITY_CREATE_FAILED")); return; }
     res.status(201).json({
       id: activity.id, clientId: activity.clientId, type: activity.type,

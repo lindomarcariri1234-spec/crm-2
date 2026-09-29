@@ -28,6 +28,7 @@ import { processEvolutionInbound } from "../services/whatsapp-attendance";
 import { processEvolutionDeliveryStatus } from "../services/whatsapp-attendance";
 import { moveDealToStage } from "../services/pipeline-automation";
 import { updateOutboundDeliveryFromWebhook } from "../services/outbound-delivery";
+import { recomputeClientClassification } from "../services/client-classification.js";
 
 const router = Router();
 
@@ -470,17 +471,42 @@ export async function handleStripeEvent(event: StripeEvent, store: StoreScope): 
     const amount = Number(obj["amount"] ?? 0);
     const amountRefunded = Number(obj["amount_refunded"] ?? 0);
     if (amount > 0 && amountRefunded < amount) {
+      let refundedOrderId: string | null = null;
       await db.transaction(async (tx) => {
         const [order] = await tx.select({ id: storeOrdersTable.id, tenantId: storeOrdersTable.tenantId })
           .from(storeOrdersTable)
           .where(and(eq(storeOrdersTable.paymentIntentId, paymentIntentId), eq(storeOrdersTable.tenantId, store.tenantId)))
           .limit(1);
-        if (order) await adjustOrderSettlement(tx as unknown as DbExecutor, {
-          tenantId: order.tenantId, orderId: order.id, amount: amountRefunded,
-          totalAmount: amount, eventKey: `partial-refund:stripe:${paymentIntentId}:${amountRefunded}`,
-          occurredAt: new Date(), reason: "Reembolso parcial Stripe",
-        });
+        if (order) {
+          refundedOrderId = order.id;
+          await adjustOrderSettlement(tx as unknown as DbExecutor, {
+            tenantId: order.tenantId, orderId: order.id, amount: amountRefunded,
+            totalAmount: amount, eventKey: `partial-refund:stripe:${paymentIntentId}:${amountRefunded}`,
+            occurredAt: new Date(), reason: "Reembolso parcial Stripe",
+          });
+        }
       });
+      if (refundedOrderId) {
+        const affected = await db.execute(sql`
+          SELECT DISTINCT COALESCE(p.client_id, r.client_id) AS client_id
+          FROM payments p
+          LEFT JOIN reservations r ON r.id = p.reservation_id AND r.tenant_id = p.tenant_id
+          WHERE p.tenant_id = ${store.tenantId}
+            AND p.order_id = ${refundedOrderId}
+            AND COALESCE(p.client_id, r.client_id) IS NOT NULL
+          ORDER BY client_id
+        `);
+        const clients = (affected as unknown as { rows: Array<{ client_id: string }> }).rows;
+        for (const client of clients) {
+          await recomputeClientClassification({
+            tenantId: store.tenantId,
+            clientId: client.client_id,
+            trigger: "partial_order_refund",
+            sourceId: refundedOrderId,
+            reason: "Reembolso parcial aplicado; indicadores de classificação recalculados.",
+          });
+        }
+      }
       return;
     }
     await db.transaction(async (tx) => {

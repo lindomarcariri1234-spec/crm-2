@@ -2101,6 +2101,7 @@ export const ListClientsResponse = zod.object({
       createdAt: zod.string(),
       updatedAt: zod.string(),
       lastContactAt: zod.string().nullish(),
+      firstPaidAt: zod.string().nullish(),
       origin: zod.string().nullish(),
       lastTripName: zod.string().nullish(),
       maritalStatus: zod.string().nullish(),
@@ -2205,6 +2206,7 @@ export const CreateClientResponse = zod.object({
   createdAt: zod.string(),
   updatedAt: zod.string(),
   lastContactAt: zod.string().nullish(),
+  firstPaidAt: zod.string().nullish(),
   origin: zod.string().nullish(),
   lastTripName: zod.string().nullish(),
   maritalStatus: zod.string().nullish(),
@@ -2267,6 +2269,7 @@ export const GetClientResponse = zod.object({
   createdAt: zod.string(),
   updatedAt: zod.string(),
   lastContactAt: zod.string().nullish(),
+  firstPaidAt: zod.string().nullish(),
   origin: zod.string().nullish(),
   lastTripName: zod.string().nullish(),
   maritalStatus: zod.string().nullish(),
@@ -2363,6 +2366,7 @@ export const UpdateClientResponse = zod.object({
   createdAt: zod.string(),
   updatedAt: zod.string(),
   lastContactAt: zod.string().nullish(),
+  firstPaidAt: zod.string().nullish(),
   origin: zod.string().nullish(),
   lastTripName: zod.string().nullish(),
   maritalStatus: zod.string().nullish(),
@@ -2457,6 +2461,7 @@ export const UpdateClientPipelineStageResponse = zod.object({
   createdAt: zod.string(),
   updatedAt: zod.string(),
   lastContactAt: zod.string().nullish(),
+  firstPaidAt: zod.string().nullish(),
   origin: zod.string().nullish(),
   lastTripName: zod.string().nullish(),
   maritalStatus: zod.string().nullish(),
@@ -2523,8 +2528,18 @@ export const CreateClientActivityParams = zod.object({
 
 export const CreateClientActivityBody = zod.object({
   type: zod
-    .string()
-    .describe("Activity type: note, call, whatsapp, email, meeting"),
+    .enum([
+      "note",
+      "call",
+      "whatsapp",
+      "email",
+      "meeting",
+      "interest",
+      "qualification",
+    ])
+    .describe(
+      "Activity type; interest records an explicit sales signal and qualification records an explicit qualification decision.",
+    ),
   content: zod.string(),
   metadata: zod
     .record(zod.string(), zod.unknown())
@@ -9393,6 +9408,7 @@ export const UpdateChatbotConversationBody = zod.object({
   status: zod.string().optional(),
   assignedUserId: zod.string().optional(),
   endedAt: zod.string().optional(),
+  clientId: zod.string().nullish(),
 });
 
 export const UpdateChatbotConversationResponse = zod.object({

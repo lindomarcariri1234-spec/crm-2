@@ -3,6 +3,7 @@ import { reservationsTable, paymentsTable, tripsTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
 import { roundMoney } from "./pricing";
 import { RESERVATION_STATUS, PAYMENT_STATUS, type ReservationStatus } from "@workspace/permissions";
+import { recomputeClientClassification } from "../services/client-classification.js";
 
 export type DbExecutor = Pick<typeof db, "execute" | "select" | "insert" | "update" | "delete">;
 
@@ -53,15 +54,39 @@ export async function syncReservationPaymentStatus(
   const totalValue = roundMoney(Number(reservation.totalValue));
   const paidValue = await sumPaidReservationPayments(executor, reservationId, tenantId);
   const balance = roundMoney(Math.max(totalValue - paidValue, 0));
+  const isExpired = String(reservation.status) === "expired";
 
   if (
     reservation.status === RESERVATION_STATUS.CANCELLED ||
-    reservation.status === RESERVATION_STATUS.COMPLETED
+    reservation.status === RESERVATION_STATUS.COMPLETED ||
+    reservation.status === RESERVATION_STATUS.REFUNDED ||
+    isExpired
   ) {
     await executor
       .update(reservationsTable)
       .set({ paidValue: String(paidValue), balance: String(balance) })
       .where(and(eq(reservationsTable.id, reservationId), eq(reservationsTable.tenantId, tenantId)));
+    if (reservation.clientId) {
+      await recomputeClientClassification({
+        tenantId,
+        clientId: reservation.clientId,
+        trigger: reservation.status === RESERVATION_STATUS.CANCELLED
+          ? "reservation_cancelled"
+          : reservation.status === RESERVATION_STATUS.REFUNDED
+            ? "reservation_refunded"
+            : isExpired
+              ? "reservation_expired"
+              : "payment_recalculation",
+        sourceId: reservation.id,
+        reason: reservation.status === RESERVATION_STATUS.CANCELLED
+          ? "Reserva cancelada; indicadores de classificação recalculados."
+          : reservation.status === RESERVATION_STATUS.REFUNDED
+            ? "Reserva reembolsada; indicadores de classificação recalculados."
+            : isExpired
+              ? "Reserva expirada; indicadores de classificação recalculados."
+              : "Pagamento da reserva sincronizado.",
+      }, executor);
+    }
     return;
   }
 
@@ -123,6 +148,15 @@ export async function syncReservationPaymentStatus(
         }).where(and(eq(tripsTable.id, reservation.tripId), eq(tripsTable.tenantId, tenantId)));
       }
     }
+  }
+  if (reservation.clientId) {
+    await recomputeClientClassification({
+      tenantId,
+      clientId: reservation.clientId,
+      trigger: "payment_recalculation",
+      sourceId: reservation.id,
+      reason: "Pagamento da reserva sincronizado.",
+    }, executor);
   }
 }
 

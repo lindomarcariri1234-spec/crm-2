@@ -694,6 +694,13 @@
       "when": 1809950001000,
       "tag": "0098_reservation_gratuity_amount",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1809960000000,
+      "tag": "0099_client_classification",
+      "breakpoints": true
     }
   ]
 }

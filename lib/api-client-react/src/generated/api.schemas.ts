@@ -823,6 +823,8 @@ export interface Client {
   /** @nullable */
   lastContactAt?: string | null;
   /** @nullable */
+  firstPaidAt?: string | null;
+  /** @nullable */
   origin?: string | null;
   /** @nullable */
   lastTripName?: string | null;
@@ -1020,6 +1022,22 @@ export interface ClientActivity {
 }
 
 /**
+ * Activity type; interest records an explicit sales signal and qualification records an explicit qualification decision.
+ */
+export type CreateClientActivityBodyType =
+  (typeof CreateClientActivityBodyType)[keyof typeof CreateClientActivityBodyType];
+
+export const CreateClientActivityBodyType = {
+  note: "note",
+  call: "call",
+  whatsapp: "whatsapp",
+  email: "email",
+  meeting: "meeting",
+  interest: "interest",
+  qualification: "qualification",
+} as const;
+
+/**
  * Optional structured metadata (e.g. callDuration, meetingLocation)
  * @nullable
  */
@@ -1028,8 +1046,8 @@ export type CreateClientActivityBodyMetadata = {
 } | null;
 
 export interface CreateClientActivityBody {
-  /** Activity type: note, call, whatsapp, email, meeting */
-  type: string;
+  /** Activity type; interest records an explicit sales signal and qualification records an explicit qualification decision. */
+  type: CreateClientActivityBodyType;
   content: string;
   /**
    * Optional structured metadata (e.g. callDuration, meetingLocation)
@@ -4241,6 +4259,8 @@ export interface UpdateChatbotConversationBody {
   status?: string;
   assignedUserId?: string;
   endedAt?: string;
+  /** @nullable */
+  clientId?: string | null;
 }
 
 export interface ChatbotMessage {

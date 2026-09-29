@@ -365,6 +365,206 @@ function TierUpgradeWhatsappSettings({
   );
 }
 
+type ClientClassificationSettings = {
+  currency: string;
+  vipSpendThreshold: number;
+  vipCompletedTripsThreshold: number;
+  periodType: "rolling" | "calendar_year" | "all_time";
+  periodMonths: number;
+};
+
+const DEFAULT_CLIENT_CLASSIFICATION_SETTINGS: ClientClassificationSettings = {
+  currency: "BRL",
+  vipSpendThreshold: 3000,
+  vipCompletedTripsThreshold: 5,
+  periodType: "rolling",
+  periodMonths: 12,
+};
+
+function normalizeClientClassificationSettings(value: unknown): ClientClassificationSettings {
+  const candidate = (value && typeof value === "object" ? value : {}) as Partial<ClientClassificationSettings>;
+  const currency =
+    typeof candidate.currency === "string" && /^[A-Za-z]{3}$/.test(candidate.currency)
+      ? candidate.currency.toUpperCase()
+      : DEFAULT_CLIENT_CLASSIFICATION_SETTINGS.currency;
+  const vipSpendThreshold =
+    typeof candidate.vipSpendThreshold === "number" &&
+    Number.isFinite(candidate.vipSpendThreshold) &&
+    candidate.vipSpendThreshold >= 0
+      ? candidate.vipSpendThreshold
+      : DEFAULT_CLIENT_CLASSIFICATION_SETTINGS.vipSpendThreshold;
+  const vipCompletedTripsThreshold =
+    typeof candidate.vipCompletedTripsThreshold === "number" &&
+    Number.isInteger(candidate.vipCompletedTripsThreshold) &&
+    candidate.vipCompletedTripsThreshold >= 1
+      ? candidate.vipCompletedTripsThreshold
+      : DEFAULT_CLIENT_CLASSIFICATION_SETTINGS.vipCompletedTripsThreshold;
+  const periodType =
+    candidate.periodType === "rolling" ||
+    candidate.periodType === "calendar_year" ||
+    candidate.periodType === "all_time"
+      ? candidate.periodType
+      : DEFAULT_CLIENT_CLASSIFICATION_SETTINGS.periodType;
+  const periodMonths =
+    typeof candidate.periodMonths === "number" &&
+    Number.isInteger(candidate.periodMonths) &&
+    candidate.periodMonths >= 1 &&
+    candidate.periodMonths <= 120
+      ? candidate.periodMonths
+      : DEFAULT_CLIENT_CLASSIFICATION_SETTINGS.periodMonths;
+
+  return { currency, vipSpendThreshold, vipCompletedTripsThreshold, periodType, periodMonths };
+}
+
+function ClientClassificationSettingsCard({
+  initialSettings,
+  onSave,
+}: {
+  initialSettings: ClientClassificationSettings;
+  onSave: (settings: ClientClassificationSettings) => Promise<void>;
+}) {
+  const [settings, setSettings] = useState(initialSettings);
+  const [isSaving, setIsSaving] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    setSettings(initialSettings);
+  }, [
+    initialSettings.currency,
+    initialSettings.vipSpendThreshold,
+    initialSettings.vipCompletedTripsThreshold,
+    initialSettings.periodType,
+    initialSettings.periodMonths,
+  ]);
+
+  const handleSave = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const currency = settings.currency.trim().toUpperCase();
+    const spend = Number(settings.vipSpendThreshold);
+    const trips = Number(settings.vipCompletedTripsThreshold);
+    const months = Number(settings.periodMonths);
+
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      toast({ title: "Moeda inválida", description: "Informe um código ISO de 3 letras, como BRL.", variant: "destructive" });
+      return;
+    }
+    if (!Number.isFinite(spend) || spend < 0) {
+      toast({ title: "Valor mínimo inválido", description: "O valor deve ser igual ou maior que zero.", variant: "destructive" });
+      return;
+    }
+    if (!Number.isInteger(trips) || trips < 1) {
+      toast({ title: "Quantidade de viagens inválida", description: "Informe pelo menos 1 viagem concluída.", variant: "destructive" });
+      return;
+    }
+    if (!Number.isInteger(months) || months < 1 || months > 120) {
+      toast({ title: "Período inválido", description: "Informe entre 1 e 120 meses.", variant: "destructive" });
+      return;
+    }
+
+    const nextSettings = {
+      ...settings,
+      currency,
+      vipSpendThreshold: spend,
+      vipCompletedTripsThreshold: trips,
+      periodMonths: months,
+    };
+    try {
+      setIsSaving(true);
+      await onSave(nextSettings);
+      toast({ title: "Classificação VIP salva!" });
+    } catch {
+      toast({ title: "Erro ao salvar classificação VIP", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Classificação de clientes</CardTitle>
+        <CardDescription>
+          Defina os critérios para identificar clientes VIP automaticamente. O cliente precisa atingir os dois critérios.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSave} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Moeda</label>
+              <Input
+                value={settings.currency}
+                onChange={(event) => setSettings((current) => ({ ...current, currency: event.target.value.toUpperCase() }))}
+                maxLength={3}
+                placeholder="BRL"
+                aria-label="Código da moeda"
+              />
+              <p className="text-xs text-muted-foreground">Código ISO de 3 letras.</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Gasto mínimo</label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={settings.vipSpendThreshold}
+                onChange={(event) => setSettings((current) => ({ ...current, vipSpendThreshold: Number(event.target.value) }))}
+              />
+              <p className="text-xs text-muted-foreground">Valor acumulado no período.</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Viagens concluídas</label>
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={settings.vipCompletedTripsThreshold}
+                onChange={(event) => setSettings((current) => ({ ...current, vipCompletedTripsThreshold: Number(event.target.value) }))}
+              />
+              <p className="text-xs text-muted-foreground">Mínimo de viagens.</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Período de análise</label>
+              <Select
+                value={settings.periodType}
+                onValueChange={(value: ClientClassificationSettings["periodType"]) =>
+                  setSettings((current) => ({ ...current, periodType: value }))
+                }
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="rolling">Janela móvel</SelectItem>
+                  <SelectItem value="calendar_year">Ano civil</SelectItem>
+                  <SelectItem value="all_time">Todo o histórico</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {settings.periodType === "rolling" && (
+            <div className="max-w-xs space-y-2">
+              <label className="text-sm font-medium">Meses da janela móvel</label>
+              <Input
+                type="number"
+                min="1"
+                max="120"
+                step="1"
+                value={settings.periodMonths}
+                onChange={(event) => setSettings((current) => ({ ...current, periodMonths: Number(event.target.value) }))}
+              />
+              <p className="text-xs text-muted-foreground">Escolha entre 1 e 120 meses.</p>
+            </div>
+          )}
+          <div className="flex justify-end">
+            <Button type="submit" disabled={isSaving}>
+              {isSaving ? "Salvando..." : "Salvar classificação"}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 const VALID_LOYALTY_TABS = ["members", "transactions"];
 
 export default function Loyalty() {
@@ -501,17 +701,29 @@ export default function Loyalty() {
   const availablePoints = (members ?? []).reduce((s, m) => s + m.availablePoints, 0);
   const loyaltySettings = (configs.find((config) => config.key === "loyalty_settings")?.value ?? {}) as {
     tierUpgradeWhatsappMessage?: unknown;
+    clientClassification?: unknown;
   };
   const tierUpgradeWhatsappMessage =
     typeof loyaltySettings.tierUpgradeWhatsappMessage === "string"
       ? loyaltySettings.tierUpgradeWhatsappMessage
       : "";
+  const clientClassificationSettings = normalizeClientClassificationSettings(loyaltySettings.clientClassification);
 
   const saveTierUpgradeWhatsappMessage = async (message: string) => {
     await upsertSystemConfig.mutateAsync({
       data: {
         key: "loyalty_settings",
         value: { ...loyaltySettings, tierUpgradeWhatsappMessage: message.trim() || null },
+      },
+    });
+    await refetchConfigs();
+  };
+
+  const saveClientClassificationSettings = async (clientClassification: ClientClassificationSettings) => {
+    await upsertSystemConfig.mutateAsync({
+      data: {
+        key: "loyalty_settings",
+        value: { ...loyaltySettings, clientClassification },
       },
     });
     await refetchConfigs();
@@ -764,6 +976,11 @@ export default function Loyalty() {
           onSave={saveTierUpgradeWhatsappMessage}
         />
       )}
+
+      <ClientClassificationSettingsCard
+        initialSettings={clientClassificationSettings}
+        onSave={saveClientClassificationSettings}
+      />
 
       <Tabs value={tab} onValueChange={handleTabChange}>
         <TabsList>

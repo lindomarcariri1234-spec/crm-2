@@ -2,6 +2,7 @@ export * from "./tenants";
 export * from "./tenant-state-history";
 export * from "./users";
 export * from "./clients";
+export * from "./client-classification";
 export * from "./notes";
 export * from "./trips";
 export * from "./trip-imports";

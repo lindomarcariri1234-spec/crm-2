@@ -49,7 +49,11 @@ export const clientsTable = pgTable("clients", {
   status: text("status").notNull().default("active"),
   tags: text("tags").array().notNull().default([]),
   pipelineStage: text("pipeline_stage").notNull().default("novo"),
-  createdById: text("created_by_id").notNull(),
+  // Automated sources (for example an inbound WhatsApp lead) do not have a
+  // human actor. Keep the field nullable rather than attributing ownership to
+  // an integration or tenant id.
+  createdById: text("created_by_id"),
+  firstPaidAt: timestamp("first_paid_at", { withTimezone: true }),
   userId: text("user_id"),
   referralCode: text("referral_code"),
   referralCodeGeneratedAt: timestamp("referral_code_generated_at", { withTimezone: true }),
