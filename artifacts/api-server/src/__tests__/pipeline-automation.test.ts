@@ -79,8 +79,11 @@ vi.mock("drizzle-orm", () => ({
   desc:      vi.fn(() => "desc"),
   lte:       vi.fn(() => "lte"),
   gte:       vi.fn(() => "gte"),
+  lt:        vi.fn(() => "lt"),
   isNotNull: vi.fn(() => "isNotNull"),
+  isNull:    vi.fn(() => "isNull"),
   max:       vi.fn(() => "max"),
+  or:        vi.fn((...a: unknown[]) => a),
   sql:       vi.fn(() => "sql"),
 }));
 
@@ -110,6 +113,7 @@ import {
   moveDealToStage,
   cancelDealOnReservationCancellation,
   runPipelineTripDepartureCron,
+  runPipelineTripEndedCron,
 } from "../services/pipeline-automation.js";
 
 // ---------------------------------------------------------------------------
@@ -638,5 +642,70 @@ describe("runPipelineTripDepartureCron", () => {
 
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockSelect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runPipelineTripEndedCron", () => {
+  it("catches up overdue trip deals even when the cron was missed for more than seven days", async () => {
+    const oldReturnDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const candidate = {
+      dealId: "deal-overdue",
+      tenantId: "tenant-1",
+      pipelineId: "pipeline-a",
+      currentStageOrder: 5,
+      targetStageId: "stage-post-trip",
+      targetStageOrder: 6,
+      returnDate: oldReturnDate,
+    };
+
+    mockWhere.mockImplementationOnce(() => wv([candidate]));
+
+    // moveDealToStage rechecks the exact deal and its pipeline-scoped stage.
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([makeDeal({ id: candidate.dealId })]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([makeCurrentStage({ order: 5 })]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([
+      makeTargetStage({ id: candidate.targetStageId, order: candidate.targetStageOrder }),
+    ]);
+
+    await runPipelineTripEndedCron();
+
+    const queryPredicate = JSON.stringify(mockWhere.mock.calls[0]?.[0]);
+    expect(queryPredicate).toContain("lte");
+    expect(queryPredicate).not.toContain("gte");
+    expect(mockUpdateSet).toHaveBeenCalledWith({ stageId: candidate.targetStageId });
+    expect(mockLoggerError).not.toHaveBeenCalled();
+  });
+
+  it("does not regress advanced deals and warns once per pipeline missing Pós Viagem", async () => {
+    mockWhere.mockImplementationOnce(() => wv([
+      {
+        dealId: "deal-already-post-trip",
+        tenantId: "tenant-1",
+        pipelineId: "pipeline-a",
+        currentStageOrder: 6,
+        targetStageId: "stage-post-trip",
+        targetStageOrder: 6,
+      },
+      {
+        dealId: "deal-without-target",
+        tenantId: "tenant-1",
+        pipelineId: "pipeline-without-post-trip",
+        currentStageOrder: 4,
+        targetStageId: null,
+        targetStageOrder: null,
+      },
+    ]));
+
+    await runPipelineTripEndedCron();
+
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      { pipelineId: "pipeline-without-post-trip", targetStageName: "Pós Viagem" },
+      "[pipeline-automation] Target stage not found in pipeline — skipping trip-ended moves",
+    );
   });
 });

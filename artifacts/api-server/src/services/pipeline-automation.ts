@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
 import { dealsTable, pipelineStagesTable, tripsTable, reservationsTable } from "@workspace/db";
-import { eq, and, desc, ne, inArray, lte, gte, isNotNull, max, sql } from "drizzle-orm";
+import { eq, and, desc, ne, inArray, lt, lte, gte, isNotNull, isNull, max, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { ACTIVE_RESERVATION_STATUSES, DEAL_STATUS } from "@workspace/permissions";
 import { logger } from "../lib/logger";
@@ -8,6 +8,7 @@ import { generateId } from "../lib/id";
 
 type PipelineExecutor = Pick<typeof db, "select" | "update">;
 const departureTargetStages = alias(pipelineStagesTable, "departure_target_stages");
+const postTripTargetStages = alias(pipelineStagesTable, "post_trip_target_stages");
 
 export async function moveDealToStage({
   tenantId,
@@ -304,46 +305,91 @@ export async function cancelDealOnReservationCancellation({
 export async function runPipelineTripEndedCron(): Promise<void> {
   logger.info("[pipeline-automation] Running trip-ended cron");
   const now = new Date();
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-  const endedTrips = await db
-    .select({ id: tripsTable.id, tenantId: tripsTable.tenantId })
+  // Catch up every overdue open deal, not only trips returned in the last
+  // seven days. If Redis lease contention or an outage skips several runs,
+  // the prior window could permanently strand older cards in "Em Viagem".
+  // Joining deals and their stages avoids rescanning trips with no outstanding
+  // pipeline work and leaves already-advanced cards out of the daily query.
+  const candidates = await db
+    .select({
+      dealId: dealsTable.id,
+      tenantId: dealsTable.tenantId,
+      pipelineId: pipelineStagesTable.pipelineId,
+      currentStageOrder: pipelineStagesTable.order,
+      targetStageId: postTripTargetStages.id,
+      targetStageOrder: postTripTargetStages.order,
+    })
     .from(tripsTable)
+    .innerJoin(
+      dealsTable,
+      and(
+        eq(dealsTable.tripId, tripsTable.id),
+        eq(dealsTable.tenantId, tripsTable.tenantId),
+        eq(dealsTable.status, DEAL_STATUS.OPEN),
+      ),
+    )
+    .innerJoin(
+      pipelineStagesTable,
+      and(
+        eq(pipelineStagesTable.id, dealsTable.stageId),
+        eq(pipelineStagesTable.tenantId, tripsTable.tenantId),
+      ),
+    )
+    .leftJoin(
+      postTripTargetStages,
+      and(
+        eq(postTripTargetStages.pipelineId, pipelineStagesTable.pipelineId),
+        eq(postTripTargetStages.tenantId, tripsTable.tenantId),
+        eq(postTripTargetStages.name, "Pós Viagem"),
+      ),
+    )
     .where(
       and(
         isNotNull(tripsTable.returnDate),
         lte(sql`${tripsTable.returnDate}`, sql`${now}`),
-        gte(sql`${tripsTable.returnDate}`, sql`${sevenDaysAgo}`),
+        or(
+          isNull(postTripTargetStages.id),
+          lt(pipelineStagesTable.order, postTripTargetStages.order),
+        ),
       ),
     );
 
-  logger.info({ count: endedTrips.length }, "[pipeline-automation] Trips ended — processing deals");
+  logger.info({ count: candidates.length }, "[pipeline-automation] Overdue trip deals — processing");
 
-  let moved = 0;
-  for (const trip of endedTrips) {
-    const openDeals = await db
-      .select({ id: dealsTable.id })
-      .from(dealsTable)
-      .where(
-        and(
-          eq(dealsTable.tenantId, trip.tenantId),
-          eq(dealsTable.tripId, trip.id),
-          eq(dealsTable.status, DEAL_STATUS.OPEN),
-        ),
-      );
-
-    for (const deal of openDeals) {
-      await moveDealToStage({
-        tenantId: trip.tenantId,
-        dealId: deal.id,
-        targetStageName: "Pós Viagem",
-        forwardOnly: true,
-      });
-      moved++;
+  const missingTargetStagePipelines = new Set<string>();
+  const dueDeals = new Map<string, (typeof candidates)[number]>();
+  for (const candidate of candidates) {
+    if (!candidate.targetStageId || candidate.targetStageOrder == null) {
+      missingTargetStagePipelines.add(candidate.pipelineId);
+      continue;
     }
+    if (candidate.currentStageOrder >= candidate.targetStageOrder) continue;
+    dueDeals.set(candidate.dealId, candidate);
   }
 
-  logger.info({ moved }, "[pipeline-automation] Trip-ended cron complete");
+  for (const pipelineId of missingTargetStagePipelines) {
+    logger.warn(
+      { pipelineId, targetStageName: "Pós Viagem" },
+      "[pipeline-automation] Target stage not found in pipeline — skipping trip-ended moves",
+    );
+  }
+
+  let attempted = 0;
+  for (const candidate of dueDeals.values()) {
+    await moveDealToStage({
+      tenantId: candidate.tenantId,
+      dealId: candidate.dealId,
+      targetStageName: "Pós Viagem",
+      forwardOnly: true,
+    });
+    attempted++;
+  }
+
+  logger.info(
+    { candidates: candidates.length, attempted, missingTargetStagePipelines: missingTargetStagePipelines.size },
+    "[pipeline-automation] Trip-ended cron complete",
+  );
 }
 
 const saoPauloDateFormatter = new Intl.DateTimeFormat("en-CA", {

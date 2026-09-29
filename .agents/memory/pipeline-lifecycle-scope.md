@@ -10,3 +10,9 @@ Pipeline lifecycle synchronization must create new reservation cards in the tena
 **How to apply:** Resolve stage names within the card's current pipeline for existing cards, and within the canonical pipeline for new cards. Reservation-payment transitions require a reservation link; only same-trip active reservations can prevent a cancellation from closing a deal.
 
 Paid or completed product-only store orders remain visible through their own stable, won “Pedido Loja” card in the canonical pipeline; they must not be treated as reservation lifecycle cards.
+
+Deal stages represent the trip-level journey, not an individual passenger event: “Em Viagem” is based on scheduled departure, and “Pós Viagem” requires an elapsed returnDate. A single passenger boarding/check-in is not evidence that the trip has ended.
+
+**Why:** A reservation card can include multiple passengers, so one person's boarding does not mean the whole booking or trip has reached its post-trip phase.
+
+**How to apply:** Keep automatic stage changes tied to trip dates and the exact linked reservation. If the return date is missing, do not infer completion from passenger check-in; require a separate explicit signal or manual correction.
