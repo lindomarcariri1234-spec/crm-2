@@ -34,6 +34,7 @@ const {
   mockUpdateWhere,
   mockUpdateSet,
   mockUpdate,
+  mockExecute,
   mockLoggerWarn,
   mockLoggerError,
 } = vi.hoisted(() => {
@@ -47,11 +48,12 @@ const {
   const mockUpdateWhere = vi.fn().mockResolvedValue([]);
   const mockUpdateSet   = vi.fn(() => ({ where: mockUpdateWhere }));
   const mockUpdate      = vi.fn(() => ({ set: mockUpdateSet }));
+  const mockExecute     = vi.fn().mockResolvedValue({ rows: [] });
   const mockLoggerWarn  = vi.fn();
   const mockLoggerError = vi.fn();
   return {
     mockLimit, mockOrderBy, mockWhere, mockFrom, mockInnerJoin, mockLeftJoin, mockSelect,
-    mockUpdateWhere, mockUpdateSet, mockUpdate,
+    mockUpdateWhere, mockUpdateSet, mockUpdate, mockExecute,
     mockLoggerWarn, mockLoggerError,
   };
 });
@@ -64,6 +66,7 @@ vi.mock("@workspace/db", () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
+    execute: mockExecute,
   },
   dealsTable:          { _table: "deals" },
   pipelineStagesTable: { _table: "pipelineStages" },
@@ -84,7 +87,9 @@ vi.mock("drizzle-orm", () => ({
   isNull:    vi.fn(() => "isNull"),
   max:       vi.fn(() => "max"),
   or:        vi.fn((...a: unknown[]) => a),
-  sql:       vi.fn(() => "sql"),
+  sql:       vi.fn((strings: TemplateStringsArray, ..._values: unknown[]) =>
+    strings.reduce((result, part, index) => result + part + (index < _values.length ? "?" : ""), ""),
+  ),
 }));
 
 vi.mock("drizzle-orm/pg-core", () => ({
@@ -175,8 +180,9 @@ beforeEach(() => {
   mockUpdateWhere.mockResolvedValue([]);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   mockUpdate.mockReturnValue({ set: mockUpdateSet });
-    mockLoggerWarn.mockReset();
-    mockLoggerError.mockReset();
+  mockExecute.mockResolvedValue({ rows: [] });
+  mockLoggerWarn.mockReset();
+  mockLoggerError.mockReset();
 });
 
 // ---------------------------------------------------------------------------
@@ -529,6 +535,53 @@ describe("cancelDealOnReservationCancellation", () => {
     expect(mockLoggerError).not.toHaveBeenCalled();
   });
 
+  it("closes earlier cancelled-trip cards when the client's last active reservation is cancelled", async () => {
+    const reservation = { clientId: "client-1", tripId: "trip-2" };
+    const currentDeal = { id: "deal-current", stageId: "stage-current" };
+    const earlierCancelledDeal = { id: "deal-earlier", stageId: "stage-earlier" };
+
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([reservation]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([currentDeal]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([]); // No other active reservation on this trip.
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([]); // No active reservation on another trip.
+    mockExecute.mockResolvedValueOnce({ rows: [earlierCancelledDeal] });
+
+    // Resolve "Cancelado" in each deal's own pipeline.
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([{ pipelineId: "pipeline-current" }]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([{ id: "cancelled-current" }]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([{ pipelineId: "pipeline-earlier" }]);
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([{ id: "cancelled-earlier" }]);
+
+    const result = await cancelDealOnReservationCancellation({
+      tenantId: "tenant-1",
+      reservationId: "res-cancelled-last-active",
+    });
+
+    expect(result).toBe(true);
+    expect(mockUpdateSet).toHaveBeenCalledTimes(2);
+    expect(mockUpdateSet).toHaveBeenNthCalledWith(1, {
+      stageId: "cancelled-current",
+      status: "lost",
+    });
+    expect(mockUpdateSet).toHaveBeenNthCalledWith(2, {
+      stageId: "cancelled-earlier",
+      status: "lost",
+    });
+    const candidateQuery = String(mockExecute.mock.calls[0]?.[0]);
+    expect(candidateQuery).toContain("d.tenant_id = ?");
+    expect(candidateQuery).toContain("r.status IN ('cancelled', 'refunded')");
+    expect(candidateQuery).toContain("d.reservation_id IS NULL");
+    expect(candidateQuery).toContain("r.status NOT IN ('cancelled', 'refunded')");
+  });
+
   // Scenario K: no deal found at all → no update
   it("K — returns without update when no open deal is found for the reservation", async () => {
     const reservation = { clientId: "client-1", tripId: "trip-1" };
@@ -542,6 +595,11 @@ describe("cancelDealOnReservationCancellation", () => {
     // Q3: deal by client+trip fallback → NOT found
     mockWhere.mockImplementationOnce(() => wv([]));
     mockOrderBy.mockImplementationOnce(() => ov([]));
+    mockLimit.mockResolvedValueOnce([]);
+    // Q4-Q5: no active reservation on the same or another trip.
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([]);
+    mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([]);
 
     await cancelDealOnReservationCancellation({ tenantId: "tenant-1", reservationId: "res-cancelled" });

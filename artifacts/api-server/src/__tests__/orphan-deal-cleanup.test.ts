@@ -115,6 +115,7 @@ describe("cleanupOrphanDeals()", () => {
     expect(mockCancelDeal).toHaveBeenCalledWith({
       tenantId: orphan.tenantId,
       reservationId: orphan.reservationId,
+      reconcileClientDeals: false,
     });
     expect(mockLogInfo).toHaveBeenCalledTimes(1);
     const [logObj] = mockLogInfo.mock.calls[0] as [Record<string, unknown>, ...unknown[]];
@@ -151,6 +152,7 @@ describe("cleanupOrphanDeals()", () => {
     expect(mockCancelDeal).toHaveBeenCalledWith({
       tenantId: unlinkedOrphan.tenantId,
       reservationId: unlinkedOrphan.reservationId,
+      reconcileClientDeals: false,
     });
     expect(mockLogInfo).toHaveBeenCalledTimes(1);
     const [logObj] = mockLogInfo.mock.calls[0] as [Record<string, unknown>, ...unknown[]];
@@ -273,10 +275,12 @@ describe("getOrphanDealsCount()", () => {
     expect(mockCancelDeal).toHaveBeenCalledWith({
       tenantId: linkedOrphan.tenantId,
       reservationId: linkedOrphan.reservationId,
+      reconcileClientDeals: false,
     });
     expect(mockCancelDeal).toHaveBeenCalledWith({
       tenantId: unlinkedOrphan.tenantId,
       reservationId: unlinkedOrphan.reservationId,
+      reconcileClientDeals: false,
     });
 
     const dialect = new PgDialect();

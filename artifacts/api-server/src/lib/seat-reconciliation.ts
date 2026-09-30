@@ -358,10 +358,10 @@ export async function getClientFinancialDriftCount(): Promise<number> {
  *     reservationId from the pair so cancelDealOnReservationCancellation can resolve the
  *     client+trip context and use its own client+trip fallback to find the deal.
  *
- * Both legs apply a NOT EXISTS guard that mirrors cancelDealOnReservationCancellation
- * Steps 3 and 3b: if the client has ANY active (pending/confirmed) reservation on ANY
- * trip the helper returns false without cancelling — so we pre-filter those deals out
- * to keep the dashboard count perfectly aligned with what repair will actually close.
+  * Both legs apply a NOT EXISTS guard that mirrors cancelDealOnReservationCancellation:
+  * if the client has ANY active (pending/confirmed) reservation on ANY trip the helper
+  * returns false without cancelling. This repair passes reconcileClientDeals=false so
+  * each row is counted individually rather than sweeping the client's other cards.
  */
 export async function cleanupOrphanDeals(): Promise<{ orphansFixed: number }> {
   let orphansFixed = 0;
