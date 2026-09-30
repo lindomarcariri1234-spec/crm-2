@@ -122,17 +122,25 @@ export async function moveDealToStage({
  *  4. If the client has an active reservation for a different trip, also leave
  *     the deal OPEN and in its current stage. Confirmed/pending trips take
  *     priority over cancellation, but the deal is not re-linked across trips.
- *  5. Only when the client has no active reservation on any trip, move the deal
- *     to "Cancelado" and mark it LOST. Create the stage if it doesn't exist.
+ *  5. Only when the client has no active reservation on any trip, move open
+ *     deals linked to cancelled trips to "Cancelado" and mark them LOST.
+ *     Legacy trip-only deals qualify only when every reservation for that trip
+ *     is cancelled or refunded. Create the stage if it doesn't exist.
  *
  * Never throws — errors are logged and the cancellation continues.
  */
 export async function cancelDealOnReservationCancellation({
   tenantId,
   reservationId,
+  reconcileClientDeals = true,
 }: {
   tenantId: string;
   reservationId: string;
+  /**
+   * Sweep other open deals for this client once no active reservation remains.
+   * The orphan cleanup passes false so its per-deal repaired count stays exact.
+   */
+  reconcileClientDeals?: boolean;
 }): Promise<boolean> {
   try {
     // Step 1: Load the cancelled reservation to get clientId + tripId.
@@ -181,7 +189,7 @@ export async function cancelDealOnReservationCancellation({
       deal = byClientTrip;
     }
 
-    if (!deal) return false;
+    if (!deal && !reconcileClientDeals) return false;
 
     // Step 3: Check for another active reservation on this same trip. If one
     // exists, keep the trip-specific deal linked to its surviving booking.
@@ -200,20 +208,22 @@ export async function cancelDealOnReservationCancellation({
       .limit(1);
 
     if (activeSameTripReservation) {
-      await db
-        .update(dealsTable)
-        .set({ reservationId: activeSameTripReservation.id })
-        .where(and(eq(dealsTable.id, deal.id), eq(dealsTable.tenantId, tenantId)));
+      if (deal) {
+        await db
+          .update(dealsTable)
+          .set({ reservationId: activeSameTripReservation.id })
+          .where(and(eq(dealsTable.id, deal.id), eq(dealsTable.tenantId, tenantId)));
 
-      logger.info(
-        {
-          tenantId,
-          dealId: deal.id,
-          cancelledReservationId: reservationId,
-          activeReservationId: activeSameTripReservation.id,
-        },
-        "[pipeline-automation] Deal re-linked to active reservation — not moved to Cancelado",
-      );
+        logger.info(
+          {
+            tenantId,
+            dealId: deal.id,
+            cancelledReservationId: reservationId,
+            activeReservationId: activeSameTripReservation.id,
+          },
+          "[pipeline-automation] Deal re-linked to active reservation — not moved to Cancelado",
+        );
+      }
       return false;
     }
 
@@ -248,94 +258,155 @@ export async function cancelDealOnReservationCancellation({
       return false;
     }
 
-    // Step 5: No active reservation remains for this client. Resolve the deal's
-    // pipeline from its current stage before finding/creating the target stage.
-    const [currentStage] = await db
-      .select({ pipelineId: pipelineStagesTable.pipelineId })
-      .from(pipelineStagesTable)
-      .where(eq(pipelineStagesTable.id, deal.stageId))
-      .limit(1);
+    // Step 6: No active reservation remains for this client. Reconcile every
+    // open card linked to a cancelled/refunded reservation, including cards
+    // left open when a previous cancellation was blocked by another active trip.
+    const relatedDeals = reconcileClientDeals
+      ? (await db.execute(sql`
+          SELECT DISTINCT d.id, d.stage_id AS "stageId"
+          FROM deals d
+          WHERE d.tenant_id = ${tenantId}
+            AND d.status = 'open'
+            AND (
+              EXISTS (
+                SELECT 1
+                FROM reservations r
+                WHERE r.id = d.reservation_id
+                  AND r.tenant_id = d.tenant_id
+                  AND r.client_id = ${clientId}
+                  AND r.status IN ('cancelled', 'refunded')
+              )
+              OR (
+                d.reservation_id IS NULL
+                AND d.client_id = ${clientId}
+                AND d.trip_id IS NOT NULL
+                AND EXISTS (
+                  SELECT 1
+                  FROM reservations r
+                  WHERE r.tenant_id = d.tenant_id
+                    AND r.client_id = d.client_id
+                    AND r.trip_id = d.trip_id
+                    AND r.status IN ('cancelled', 'refunded')
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM reservations r
+                  WHERE r.tenant_id = d.tenant_id
+                    AND r.client_id = d.client_id
+                    AND r.trip_id = d.trip_id
+                    AND r.status NOT IN ('cancelled', 'refunded')
+                )
+              )
+            )
+        `) as unknown as { rows: Array<{ id: string; stageId: string }> }).rows
+      : [];
 
-    if (!currentStage) return false;
-    const { pipelineId } = currentStage;
+    const dealsToCancel = new Map<string, { id: string; stageId: string }>();
+    if (deal) dealsToCancel.set(deal.id, deal);
+    for (const relatedDeal of relatedDeals) dealsToCancel.set(relatedDeal.id, relatedDeal);
+    if (dealsToCancel.size === 0) return false;
 
-    // Step 6: Look for an existing "Cancelado" stage in this pipeline.
-    const [cancelledStage] = await db
-      .select({ id: pipelineStagesTable.id })
+    let movedAnyDeal = false;
+    for (const dealToCancel of dealsToCancel.values()) {
+      const moved = await moveOpenDealToCancelledStage({
+        tenantId,
+        deal: dealToCancel,
+        reservationId,
+      });
+      movedAnyDeal = movedAnyDeal || moved;
+    }
+    return movedAnyDeal;
+  } catch (err) {
+    logger.error({ err, tenantId, reservationId }, "[pipeline-automation] Failed to cancel deal on reservation cancellation");
+    return false;
+  }
+}
+
+async function moveOpenDealToCancelledStage({
+  tenantId,
+  deal,
+  reservationId,
+}: {
+  tenantId: string;
+  deal: { id: string; stageId: string };
+  reservationId: string;
+}): Promise<boolean> {
+  const [currentStage] = await db
+    .select({ pipelineId: pipelineStagesTable.pipelineId })
+    .from(pipelineStagesTable)
+    .where(eq(pipelineStagesTable.id, deal.stageId))
+    .limit(1);
+
+  if (!currentStage) return false;
+  const { pipelineId } = currentStage;
+
+  const [cancelledStage] = await db
+    .select({ id: pipelineStagesTable.id })
+    .from(pipelineStagesTable)
+    .where(
+      and(
+        eq(pipelineStagesTable.pipelineId, pipelineId),
+        eq(pipelineStagesTable.tenantId, tenantId),
+        eq(pipelineStagesTable.name, "Cancelado"),
+      ),
+    )
+    .limit(1);
+
+  let cancelledStageId: string;
+
+  if (cancelledStage) {
+    cancelledStageId = cancelledStage.id;
+  } else {
+    const [maxRow] = await db
+      .select({ maxOrder: max(pipelineStagesTable.order) })
       .from(pipelineStagesTable)
       .where(
         and(
           eq(pipelineStagesTable.pipelineId, pipelineId),
           eq(pipelineStagesTable.tenantId, tenantId),
-          eq(pipelineStagesTable.name, "Cancelado"),
         ),
-      )
-      .limit(1);
-
-    let cancelledStageId: string;
-
-    if (cancelledStage) {
-      cancelledStageId = cancelledStage.id;
-    } else {
-      // Stage doesn't exist — find the max order and create it.
-      const [maxRow] = await db
-        .select({ maxOrder: max(pipelineStagesTable.order) })
-        .from(pipelineStagesTable)
-        .where(
-          and(
-            eq(pipelineStagesTable.pipelineId, pipelineId),
-            eq(pipelineStagesTable.tenantId, tenantId),
-          ),
-        );
-
-      const newOrder = (maxRow?.maxOrder ?? 0) + 10;
-      const newId = generateId();
-
-      await db.insert(pipelineStagesTable).values({
-        id: newId,
-        tenantId,
-        pipelineId,
-        name: "Cancelado",
-        color: "#6b7280",
-        order: newOrder,
-      }).onConflictDoNothing();
-
-      // A cancellation replay can race another worker creating this default
-      // stage. The stage-name unique index resolves the write; re-read the
-      // canonical row so both workers move the deal to the same stage.
-      const [resolvedStage] = await db
-        .select({ id: pipelineStagesTable.id })
-        .from(pipelineStagesTable)
-        .where(and(
-          eq(pipelineStagesTable.pipelineId, pipelineId),
-          eq(pipelineStagesTable.tenantId, tenantId),
-          eq(pipelineStagesTable.name, "Cancelado"),
-        ))
-        .limit(1);
-      if (!resolvedStage) return false;
-
-      cancelledStageId = resolvedStage.id;
-      logger.info(
-        { tenantId, pipelineId, stageId: newId, order: newOrder },
-        "[pipeline-automation] Created default 'Cancelado' stage",
       );
-    }
 
-    // Step 7: Move the deal and mark it as lost.
-    await db
-      .update(dealsTable)
-      .set({ stageId: cancelledStageId, status: DEAL_STATUS.LOST })
-      .where(and(eq(dealsTable.id, deal.id), eq(dealsTable.tenantId, tenantId)));
+    const newOrder = (maxRow?.maxOrder ?? 0) + 10;
+    const newId = generateId();
 
+    await db.insert(pipelineStagesTable).values({
+      id: newId,
+      tenantId,
+      pipelineId,
+      name: "Cancelado",
+      color: "#6b7280",
+      order: newOrder,
+    }).onConflictDoNothing();
+
+    const [resolvedStage] = await db
+      .select({ id: pipelineStagesTable.id })
+      .from(pipelineStagesTable)
+      .where(and(
+        eq(pipelineStagesTable.pipelineId, pipelineId),
+        eq(pipelineStagesTable.tenantId, tenantId),
+        eq(pipelineStagesTable.name, "Cancelado"),
+      ))
+      .limit(1);
+    if (!resolvedStage) return false;
+
+    cancelledStageId = resolvedStage.id;
     logger.info(
-      { tenantId, dealId: deal.id, reservationId, stageId: cancelledStageId },
-      "[pipeline-automation] Deal moved to Cancelado on reservation cancellation",
+      { tenantId, pipelineId, stageId: newId, order: newOrder },
+      "[pipeline-automation] Created default 'Cancelado' stage",
     );
-    return true;
-  } catch (err) {
-    logger.error({ err, tenantId, reservationId }, "[pipeline-automation] Failed to cancel deal on reservation cancellation");
-    return false;
   }
+
+  await db
+    .update(dealsTable)
+    .set({ stageId: cancelledStageId, status: DEAL_STATUS.LOST })
+    .where(and(eq(dealsTable.id, deal.id), eq(dealsTable.tenantId, tenantId)));
+
+  logger.info(
+    { tenantId, dealId: deal.id, reservationId, stageId: cancelledStageId },
+    "[pipeline-automation] Deal moved to Cancelado on reservation cancellation",
+  );
+  return true;
 }
 
 export async function runPipelineTripEndedCron(): Promise<void> {

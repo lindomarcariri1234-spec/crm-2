@@ -444,6 +444,7 @@ export async function cleanupOrphanDeals(): Promise<{ orphansFixed: number }> {
       const fixed = await cancelDealOnReservationCancellation({
         tenantId: orphan.tenantId,
         reservationId: orphan.reservationId,
+        reconcileClientDeals: false,
       });
       if (fixed) orphansFixed++;
     }
