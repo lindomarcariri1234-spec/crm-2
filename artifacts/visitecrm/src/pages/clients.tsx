@@ -653,7 +653,6 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
       internalRating: form.internalRating > 0 ? form.internalRating : undefined,
       companyFeedback: form.companyFeedback || undefined,
       companyNps: form.npsScore ? parseInt(form.npsScore) : undefined,
-      pipelineStage: form.pipelineStage !== "none" ? form.pipelineStage : undefined,
       status: form.status || undefined,
       travelInterests: form.travelInterests.length > 0 ? form.travelInterests : [],
       ambassadorOptIn: form.ambassadorOptIn,
@@ -1026,15 +1025,40 @@ export function ClientModal({ open, onClose, editClient, onSave, defaultStageId,
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>Status no Pipeline</Label>
-                <Select value={form.pipelineStage} onValueChange={set("pipelineStage")}>
-                  <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Nenhum</SelectItem>
-                    {stages?.map(s => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+              <div
+                className="space-y-3 rounded-lg border bg-muted/20 p-3 md:col-span-2"
+                data-testid="pipeline-classification-explainer"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-medium">Classificação automática do cliente</p>
+                  <Badge variant="outline" className="text-xs">
+                    {CLASSIFICATION_LABELS[form.classification] ?? form.classification}
+                  </Badge>
+                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  A classificação descreve o perfil do cliente. A etapa do negócio é acompanhada no quadro do Pipeline
+                  e pode avançar automaticamente com a reserva, o pagamento e as datas da viagem.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2 sm:items-start">
+                  <div className="space-y-2">
+                    <Label>Etapa antiga do cadastro (somente leitura)</Label>
+                    <Select value={form.pipelineStage} disabled>
+                      <SelectTrigger aria-label="Etapa antiga do cadastro, somente leitura">
+                        <SelectValue placeholder="Sem etapa antiga" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Sem etapa antiga</SelectItem>
+                        {form.pipelineStage !== "none" && (
+                          <SelectItem value={form.pipelineStage}>{form.pipelineStage}</SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-xs leading-relaxed text-muted-foreground sm:pt-7">
+                    Este valor legado não move cartões e não altera a classificação. Para mudar a etapa, mova o negócio
+                    no quadro do Pipeline.
+                  </p>
+                </div>
               </div>
             </div>
             {!isEditing && (

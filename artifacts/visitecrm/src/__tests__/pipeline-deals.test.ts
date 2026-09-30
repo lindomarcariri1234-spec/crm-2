@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getTripsMissingReturnDate, mergePipelineDeals } from "../pages/pipeline-deals.js";
+import {
+  filterDealsByClientClassificationAndCity,
+  getPipelineStageAutomationHint,
+  getTripsMissingReturnDate,
+  mergePipelineDeals,
+} from "../pages/pipeline-deals.js";
 
 describe("mergePipelineDeals", () => {
   it("keeps confirmed-reservation deals visible with open deals", () => {
@@ -49,5 +54,42 @@ describe("getTripsMissingReturnDate", () => {
         [{ id: "trip-1", name: "Serra Azul", returnDate: null }],
       ),
     ).toEqual([]);
+  });
+});
+
+describe("getPipelineStageAutomationHint", () => {
+  it("explains the known automatic stage triggers", () => {
+    expect(getPipelineStageAutomationHint("Reserva Criada"))
+      .toBe("quando a reserva é criada ou vinculada");
+    expect(getPipelineStageAutomationHint("Pagamento Confirmado"))
+      .toBe("quando o recebível é pago");
+    expect(getPipelineStageAutomationHint("Em Viagem"))
+      .toBe("na saída da viagem ou no check-in");
+    expect(getPipelineStageAutomationHint("Pós Viagem"))
+      .toBe("após a data de retorno");
+    expect(getPipelineStageAutomationHint("Cancelado"))
+      .toBe("quando não há mais reserva ativa");
+  });
+
+  it("matches accents and surrounding whitespace without labeling custom stages", () => {
+    expect(getPipelineStageAutomationHint("  POS VIAGEM  "))
+      .toBe("após a data de retorno");
+    expect(getPipelineStageAutomationHint("Contato realizado")).toBeNull();
+  });
+});
+
+describe("filterDealsByClientClassificationAndCity", () => {
+  const deals = [
+    { id: "vip", clientId: "client-vip", clientClassification: "vip", clientCity: "Juazeiro do Norte" },
+    { id: "client", clientId: "client-1", clientClassification: "client", clientCity: "Crato" },
+    { id: "lead", clientId: null, clientClassification: null, clientCity: null },
+  ];
+
+  it("filters client-linked deals by classification and city without dropping anonymous leads by city alone", () => {
+    expect(filterDealsByClientClassificationAndCity(deals, "vip", "JUAZEIRO")).toEqual([deals[0]]);
+    expect(filterDealsByClientClassificationAndCity(deals, "all", "crato")).toEqual([
+      deals[1],
+      deals[2],
+    ]);
   });
 });

@@ -156,3 +156,4 @@
 - [PNPM linker and resolver peers](pnpm-hoisted-lockfile-mismatch.md) — use deploy-matched PNPM for frozen installs; explicitly scope @hookform/resolvers 3 to Zod 3 in mixed Zod 3/4 workspaces
 - [Boarding point ID namespaces](boarding-point-id-namespaces.md) — keep trip-point IDs distinct from agency catalog IDs when displaying or editing reservation boarding selections
 - [Group reservation passenger validation](group-reservation-passenger-validation.md) — validate every required companion position explicitly; sparse arrays can bypass `.every()` completeness checks
+- [Pipeline stage vs. client classification](pipeline-stage-classification.md) — deal stage controls board placement; client classification is profile context, and the legacy client stage is display-only

@@ -15,6 +15,53 @@ export function mergePipelineDeals<T extends { id: string }>(
   });
 }
 
+const PIPELINE_STAGE_AUTOMATION_HINTS: Record<string, string> = {
+  "reserva criada": "quando a reserva é criada ou vinculada",
+  "pagamento confirmado": "quando o recebível é pago",
+  "em viagem": "na saída da viagem ou no check-in",
+  "pos viagem": "após a data de retorno",
+  cancelado: "quando não há mais reserva ativa",
+};
+
+export function getPipelineStageAutomationHint(stageName: string): string | null {
+  // Only the built-in, name-based triggers are documented; custom stages stay unlabelled.
+  const normalizedName = stageName
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  return PIPELINE_STAGE_AUTOMATION_HINTS[normalizedName] ?? null;
+}
+
+export function filterDealsByClientClassificationAndCity<
+  TDeal extends {
+    clientId?: string | null;
+    clientClassification?: string | null;
+    clientCity?: string | null;
+  },
+>(
+  deals: readonly TDeal[],
+  classification: string,
+  city: string,
+): TDeal[] {
+  let filteredDeals = [...deals];
+
+  if (classification !== "all") {
+    filteredDeals = filteredDeals.filter(
+      (deal) => !!deal.clientId && deal.clientClassification === classification,
+    );
+  }
+  if (city) {
+    filteredDeals = filteredDeals.filter((deal) => {
+      if (!deal.clientId) return true;
+      return (deal.clientCity ?? "").toLowerCase().includes(city.toLowerCase());
+    });
+  }
+
+  return filteredDeals;
+}
+
 export function getTripsMissingReturnDate<
   TDeal extends { stageId: string; tripId?: string | null },
   TStage extends { id: string; name: string },

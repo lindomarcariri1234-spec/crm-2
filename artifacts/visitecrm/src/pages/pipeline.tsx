@@ -31,20 +31,25 @@ import {
   Plus, Search, Trash2, Phone, Mail, Calendar, MapPin, X, Pencil, UserPen, Eye, BookOpen,
   ExternalLink, ShoppingBag, ChevronDown, ChevronUp, BarChart2, Loader2, XCircle,
   Settings2, Star, ChevronRight, ChevronLeft, GripVertical, Plane, ArrowRightLeft, Bell, CreditCard,
-  AlertTriangle,
+  AlertTriangle, Zap,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { DEAL_STATUS, ROLES } from "@workspace/permissions";
 import { formatCurrency } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { getTripsMissingReturnDate, mergePipelineDeals } from "./pipeline-deals";
+import {
+  filterDealsByClientClassificationAndCity,
+  getPipelineStageAutomationHint,
+  getTripsMissingReturnDate,
+  mergePipelineDeals,
+} from "./pipeline-deals";
 import type { LinkedData } from "@/lib/linked-data";
 
 const API_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 const CLASSIFICATION_LABELS: Record<string, string> = {
-  lead: "Lead", prospect: "Prospecto", client: "Cliente", vip: "VIP", inactive: "Inativo",
+  new: "Novo", lead: "Lead", prospect: "Prospecto", client: "Cliente", vip: "VIP", inactive: "Inativo",
 };
 
 // ─── Card Mark Modal ──────────────────────────────────────────────────────────
@@ -323,7 +328,16 @@ function ClientCardContent({ deal, tripsById, onEditClient, onView360, onDelete,
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <p className="font-semibold text-sm leading-tight truncate">{name}</p>
+            <p className="font-semibold text-sm leading-tight truncate" title={name}>{name}</p>
+            {deal.clientId && deal.clientClassification && (
+              <Badge
+                variant="outline"
+                className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium"
+                title="Classificação automática do cliente"
+              >
+                Perfil: {CLASSIFICATION_LABELS[deal.clientClassification] ?? deal.clientClassification}
+              </Badge>
+            )}
             {deal.source === "website" && (
               <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 shrink-0">
                 <ShoppingBag className="w-2.5 h-2.5" />
@@ -359,10 +373,10 @@ function ClientCardContent({ deal, tripsById, onEditClient, onView360, onDelete,
             </p>
           )}
         </div>
-        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        <div className="flex shrink-0 gap-0.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="p-1 text-muted-foreground hover:text-foreground rounded" title="Opções">
+              <button type="button" className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Opções" aria-label="Opções do negócio">
                 <Pencil className="w-3 h-3" />
               </button>
             </DropdownMenuTrigger>
@@ -396,7 +410,7 @@ function ClientCardContent({ deal, tripsById, onEditClient, onView360, onDelete,
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <button onClick={() => onDelete(deal.id)} className="p-1 text-muted-foreground hover:text-destructive rounded">
+          <button type="button" onClick={() => onDelete(deal.id)} className="rounded p-1 text-muted-foreground hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Remover do pipeline" aria-label="Remover negócio do pipeline">
             <Trash2 className="w-3 h-3" />
           </button>
         </div>
@@ -445,12 +459,6 @@ function ClientCardContent({ deal, tripsById, onEditClient, onView360, onDelete,
         <div className="flex items-center gap-1 mb-1">
           <Calendar className="w-3 h-3 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">{format(parseISO(deal.expectedCloseDate), "dd/MM/yy", { locale: ptBR })}</span>
-        </div>
-      )}
-
-      {tripName && (
-        <div className="mb-1">
-          <span className="text-xs bg-blue-50 text-blue-600 border border-blue-100 px-1.5 py-0.5 rounded truncate inline-block max-w-full">{tripName}</span>
         </div>
       )}
 
@@ -1365,19 +1373,7 @@ export default function Pipeline() {
           tripName.toLowerCase().includes(q);
       });
     }
-    if (filterClassification !== "all") {
-      d = d.filter(x => {
-        if (!x.clientId) return false;
-        return x.clientClassification === filterClassification;
-      });
-    }
-    if (filterCity) {
-      d = d.filter(x => {
-        if (!x.clientId) return true;
-        return (x.clientCity ?? "").toLowerCase().includes(filterCity.toLowerCase());
-      });
-    }
-    return d;
+    return filterDealsByClientClassificationAndCity(d, filterClassification, filterCity);
   }, [deals, search, filterStageId, filterClassification, filterCity, visibleStageIds, tripsById]);
 
   const perdidoStageId = useMemo(
@@ -1389,6 +1385,7 @@ export default function Pipeline() {
     let d = lostDealsData ?? [];
     // Filter to stages in the selected pipeline
     if (visibleStageIds.size > 0) d = d.filter(x => visibleStageIds.has(x.stageId));
+    if (filterStageId !== "all") d = d.filter(x => x.stageId === filterStageId);
     if (search.trim()) {
       const q = search.toLowerCase();
       const digitsQ = q.replace(/\D/g, "");
@@ -1408,8 +1405,8 @@ export default function Pipeline() {
           tripName.toLowerCase().includes(q);
       });
     }
-    return d;
-  }, [lostDealsData, search, visibleStageIds, tripsById]);
+    return filterDealsByClientClassificationAndCity(d, filterClassification, filterCity);
+  }, [lostDealsData, search, filterStageId, filterClassification, filterCity, visibleStageIds, tripsById]);
 
   const dealsByStage = (stageId: string, isLost: boolean) =>
     isLost ? filteredLostDeals.filter(d => d.stageId === stageId) : filteredDeals.filter(d => d.stageId === stageId);
@@ -1817,6 +1814,7 @@ export default function Pipeline() {
               const isLostStage = stage.name.toLowerCase() === "perdido";
               const stageDeals = dealsByStage(stage.id, isLostStage);
               const stageValue = stageDeals.reduce((acc, d) => acc + d.value, 0);
+              const automationHint = getPipelineStageAutomationHint(stage.name);
               return (
                 <div
                   key={stage.id}
@@ -1842,6 +1840,15 @@ export default function Pipeline() {
                   {stageValue > 0 && (
                     <p className="px-3 pb-1.5 text-xs text-muted-foreground">{formatCurrency(stageValue)}</p>
                   )}
+                  {automationHint && (
+                    <p
+                      className="flex items-start gap-1.5 px-3 pb-2 text-[10px] leading-tight text-emerald-800 dark:text-emerald-300"
+                      title={`Avanço automático: ${automationHint}`}
+                    >
+                      <Zap className="mt-px h-3 w-3 shrink-0" aria-hidden="true" />
+                      <span>Automação: {automationHint}</span>
+                    </p>
+                  )}
 
                   <DroppableColumn stage={stage}>
                     {stageDeals.map(deal => (
@@ -1860,17 +1867,24 @@ export default function Pipeline() {
                       />
                     ))}
                     {stageDeals.length === 0 && !isLostStage && (
-                      <button
-                        onClick={() => openNew(stage.id)}
-                        className="flex items-center justify-center h-16 rounded-lg border-2 border-dashed text-xs text-muted-foreground hover:border-primary hover:text-primary transition-colors w-full"
-                      >
-                        + Adicionar lead
-                      </button>
+                      hasFilters ? (
+                        <div className="flex min-h-16 items-center justify-center rounded-lg border border-dashed px-3 text-center text-xs text-muted-foreground">
+                          Nenhum negócio nesta etapa com os filtros atuais
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openNew(stage.id)}
+                          className="flex h-16 w-full items-center justify-center rounded-lg border-2 border-dashed text-xs text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                        >
+                          + Adicionar lead
+                        </button>
+                      )
                     )}
                     {stageDeals.length === 0 && isLostStage && (
                       <div className="flex flex-col items-center justify-center h-16 text-xs text-muted-foreground gap-1">
                         <XCircle className="w-4 h-4 opacity-40" />
-                        <span>Nenhum negócio perdido</span>
+                        <span>{hasFilters ? "Nenhum negócio perdido com os filtros atuais" : "Nenhum negócio perdido"}</span>
                       </div>
                     )}
                   </DroppableColumn>
