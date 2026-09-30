@@ -1512,7 +1512,7 @@ router.patch("/trips/:id", async (req, res, next: NextFunction): Promise<void> =
 
       // Fire-and-forget: move each open Pipeline deal to "Cancelado".
       // Called after the transaction so the cancelled reservation rows are visible
-      // to cancelDealOnReservationCancellation's "other active reservation" check.
+      // to cancelDealOnReservationCancellation's client-wide active-reservation check.
       for (const r of allActiveReservations) {
         if (r.clientId) {
           cancelDealOnReservationCancellation({ tenantId: me.tenantId, reservationId: r.id })

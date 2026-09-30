@@ -391,20 +391,21 @@ describe("moveDealToStage", () => {
 // cancelDealOnReservationCancellation
 //
 // Scenarios:
-//  H. Happy path — deal found by reservationId, no other active reservation
+//  H. Happy path — deal found by reservationId, no active reservation for client
 //     → deal moved to "Cancelado" + marked LOST
 //  I. Client has another active reservation for the same trip
 //     → deal re-linked to active reservation, stays OPEN (no Cancelado move)
 //  J. Deal not found by reservationId, found by client+trip fallback,
-//     no active reservation → deal moved to Cancelado via fallback path
+//     no client-wide active reservation → deal moved to Cancelado
 //  K. No deal found at all → no DB update, no error
 //  L. Reservation record not found (no clientId/tripId) → no DB update
+//  M. Active reservation on another trip → deal stays in its current stage
 // ---------------------------------------------------------------------------
 
 describe("cancelDealOnReservationCancellation", () => {
 
-  // Scenario H: happy path — reservationId match, no active sibling on this trip
-  it("H — moves deal to Cancelado when no active reservation exists for the same trip", async () => {
+  // Scenario H: reservationId match, no active reservation for this client
+  it("H — moves deal to Cancelado when the client has no active reservations", async () => {
     const reservation    = { clientId: "client-1", tripId: "trip-1" };
     const deal           = { id: "deal-1", stageId: "stage-reserva" };
     const currentStage   = { pipelineId: "pipeline-a" };
@@ -419,10 +420,13 @@ describe("cancelDealOnReservationCancellation", () => {
     // Q3: check active reservation (same trip) → none
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([]);
-    // Q4: get pipelineId from current stage
+    // Q4: check for active reservations on other trips → none
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([]);
+    // Q5: get pipelineId from current stage
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([currentStage]);
-    // Q5: find "Cancelado" stage → exists
+    // Q6: find "Cancelado" stage → exists
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([cancelledStage]);
 
@@ -460,7 +464,7 @@ describe("cancelDealOnReservationCancellation", () => {
   });
 
   // Scenario J: deal not found by reservationId, found via client+trip fallback
-  it("J — moves deal to Cancelado when found by client+trip fallback (pre-linkage deal)", async () => {
+  it("J — moves deal to Cancelado via client+trip fallback when the client has no active reservations", async () => {
     const reservation    = { clientId: "client-1", tripId: "trip-1" };
     const deal           = { id: "deal-old", stageId: "stage-reserva" };
     const currentStage   = { pipelineId: "pipeline-a" };
@@ -479,10 +483,13 @@ describe("cancelDealOnReservationCancellation", () => {
     // Q4: check active reservation (same trip) → none
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([]);
-    // Q5: get pipelineId from current stage
+    // Q5: check for active reservations on other trips → none
+    mockWhere.mockImplementationOnce(() => wv([]));
+    mockLimit.mockResolvedValueOnce([]);
+    // Q6: get pipelineId from current stage
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([currentStage]);
-    // Q6: find "Cancelado" stage → exists
+    // Q7: find "Cancelado" stage → exists
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([cancelledStage]);
 
@@ -493,12 +500,11 @@ describe("cancelDealOnReservationCancellation", () => {
     expect(mockLoggerError).not.toHaveBeenCalled();
   });
 
-  // Scenario M: another trip does not keep this cancelled trip's card active.
-  it("M — cancels this trip's deal even when the client has another trip", async () => {
+  // Scenario M: an active reservation on another trip takes priority over cancellation.
+  it("M — keeps the deal in its current stage when the client has another confirmed trip", async () => {
     const reservation           = { clientId: "client-1", tripId: "trip-1" };
-    const deal                  = { id: "deal-1", stageId: "stage-reserva" };
-    const currentStage          = { pipelineId: "pipeline-a" };
-    const cancelledStage        = { id: "stage-cancelado" };
+    const deal                  = { id: "deal-1", stageId: "stage-confirmada" };
+    const activeOtherTrip       = { id: "res-active-other-trip" };
 
     // Q1: load reservation
     mockWhere.mockImplementationOnce(() => wv([]));
@@ -506,21 +512,20 @@ describe("cancelDealOnReservationCancellation", () => {
     // Q2: deal by reservationId → found
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([deal]);
-    // Q3: check active reservation (same trip) → none
+    // Q3: check active reservation on the same trip → none
     mockWhere.mockImplementationOnce(() => wv([]));
     mockLimit.mockResolvedValueOnce([]);
-    // The lifecycle deliberately does not query other trips. The next lookup
-    // is this deal's pipeline, so another trip cannot keep it open.
+    // Q4: a confirmed reservation on another trip prevents cancellation.
     mockWhere.mockImplementationOnce(() => wv([]));
-    mockLimit.mockResolvedValueOnce([currentStage]);
-    // Q5: find Cancelado stage
-    mockWhere.mockImplementationOnce(() => wv([]));
-    mockLimit.mockResolvedValueOnce([cancelledStage]);
+    mockLimit.mockResolvedValueOnce([activeOtherTrip]);
 
-    await cancelDealOnReservationCancellation({ tenantId: "tenant-1", reservationId: "res-cancelled" });
+    const result = await cancelDealOnReservationCancellation({
+      tenantId: "tenant-1",
+      reservationId: "res-cancelled",
+    });
 
-    expect(mockUpdate).toHaveBeenCalledTimes(1);
-    expect(mockUpdateSet).toHaveBeenCalledWith({ stageId: cancelledStage.id, status: "lost" });
+    expect(result).toBe(false);
+    expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockLoggerError).not.toHaveBeenCalled();
   });
 

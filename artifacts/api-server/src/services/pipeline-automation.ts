@@ -118,10 +118,12 @@ export async function moveDealToStage({
  *     client+trip fallback for deals created before reservationId linkage was
  *     enforced.
  *  3. If the client has ANOTHER active (pending/confirmed) reservation for the
- *     same trip, re-link the deal to that reservation and leave it OPEN —
- *     the deal should follow the surviving booking, not be cancelled.
- *  4. Otherwise move the deal to "Cancelado" and mark it LOST.  If the stage
- *     doesn't exist yet it is created automatically.
+ *     same trip, re-link the deal to that reservation and leave it OPEN.
+ *  4. If the client has an active reservation for a different trip, also leave
+ *     the deal OPEN and in its current stage. Confirmed/pending trips take
+ *     priority over cancellation, but the deal is not re-linked across trips.
+ *  5. Only when the client has no active reservation on any trip, move the deal
+ *     to "Cancelado" and mark it LOST. Create the stage if it doesn't exist.
  *
  * Never throws — errors are logged and the cancellation continues.
  */
@@ -181,10 +183,9 @@ export async function cancelDealOnReservationCancellation({
 
     if (!deal) return false;
 
-    // Step 3: Check if the client has another ACTIVE reservation for the same trip.
-    // If so, re-link the deal to that reservation and leave it open — the client
-    // still has a live booking; cancelling the deal would be incorrect.
-    const [activeReservation] = await db
+    // Step 3: Check for another active reservation on this same trip. If one
+    // exists, keep the trip-specific deal linked to its surviving booking.
+    const [activeSameTripReservation] = await db
       .select({ id: reservationsTable.id })
       .from(reservationsTable)
       .where(
@@ -198,22 +199,57 @@ export async function cancelDealOnReservationCancellation({
       )
       .limit(1);
 
-    if (activeReservation) {
+    if (activeSameTripReservation) {
       await db
         .update(dealsTable)
-        .set({ reservationId: activeReservation.id })
+        .set({ reservationId: activeSameTripReservation.id })
         .where(and(eq(dealsTable.id, deal.id), eq(dealsTable.tenantId, tenantId)));
 
       logger.info(
-        { tenantId, dealId: deal.id, cancelledReservationId: reservationId, activeReservationId: activeReservation.id },
+        {
+          tenantId,
+          dealId: deal.id,
+          cancelledReservationId: reservationId,
+          activeReservationId: activeSameTripReservation.id,
+        },
         "[pipeline-automation] Deal re-linked to active reservation — not moved to Cancelado",
       );
       return false;
     }
 
-    // Step 4: No surviving reservation for THIS trip — get the deal's pipeline
-    // from its current stage. A booking in another trip must not keep this
-    // cancelled trip's card open.
+    // Step 4: Another trip for the same client still has an active reservation.
+    // Confirmed/pending travel takes priority over cancellation. Keep this
+    // trip-specific deal in its current stage, without re-linking it to a
+    // different trip's reservation.
+    const [activeOtherTripReservation] = await db
+      .select({ id: reservationsTable.id })
+      .from(reservationsTable)
+      .where(
+        and(
+          eq(reservationsTable.tenantId, tenantId),
+          eq(reservationsTable.clientId, clientId),
+          ne(reservationsTable.id, reservationId),
+          ne(reservationsTable.tripId, tripId),
+          inArray(reservationsTable.status, ["pending", "confirmed"]),
+        ),
+      )
+      .limit(1);
+
+    if (activeOtherTripReservation) {
+      logger.info(
+        {
+          tenantId,
+          dealId: deal.id,
+          cancelledReservationId: reservationId,
+          activeReservationId: activeOtherTripReservation.id,
+        },
+        "[pipeline-automation] Client has another active trip — deal not moved to Cancelado",
+      );
+      return false;
+    }
+
+    // Step 5: No active reservation remains for this client. Resolve the deal's
+    // pipeline from its current stage before finding/creating the target stage.
     const [currentStage] = await db
       .select({ pipelineId: pipelineStagesTable.pipelineId })
       .from(pipelineStagesTable)
@@ -223,7 +259,7 @@ export async function cancelDealOnReservationCancellation({
     if (!currentStage) return false;
     const { pipelineId } = currentStage;
 
-    // Step 5: Look for an existing "Cancelado" stage in this pipeline.
+    // Step 6: Look for an existing "Cancelado" stage in this pipeline.
     const [cancelledStage] = await db
       .select({ id: pipelineStagesTable.id })
       .from(pipelineStagesTable)
@@ -285,7 +321,7 @@ export async function cancelDealOnReservationCancellation({
       );
     }
 
-    // Step 6: Move the deal and mark it as lost.
+    // Step 7: Move the deal and mark it as lost.
     await db
       .update(dealsTable)
       .set({ stageId: cancelledStageId, status: DEAL_STATUS.LOST })

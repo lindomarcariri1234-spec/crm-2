@@ -2,7 +2,9 @@
  * Unit tests for cancelDealOnReservationCancellation() in pipeline-automation.ts
  *
  * Verifies:
- *  - Returns true when the "Cancelado" stage exists and the deal is moved to it + marked LOST
+ *  - Returns true when no pending/confirmed reservation remains across the client's trips
+ *  - Leaves the deal untouched when another trip for the client is still active
+ *  - Re-links to another active reservation for the same trip
  *  - Returns true when the "Cancelado" stage is MISSING — auto-creates it, moves deal, marks LOST
  *  - Returns false (never throws) when an internal DB call fails — error logged for audit trail
  *  - Returns false without writing anything when no open deal is linked to the reservation
@@ -104,13 +106,15 @@ const PIPELINE_ID = "pipeline-001";
  *  1. Fetch cancelled reservation → { clientId, tripId }
  *  2. Find deal by reservationId → [deal]
  *  3. Active same-trip reservation check → [] (none)
- *  4. Get current stage → { pipelineId }
- *  5. Get "Cancelado" stage by name → found
+ *  4. Active reservation on any other trip → [] (none)
+ *  5. Get current stage → { pipelineId }
+ *  6. Get "Cancelado" stage by name → found
  */
 function selectQueueStageExists(): unknown[][] {
   return [
     [{ clientId: CLIENT_ID, tripId: TRIP_ID }],
     [{ id: DEAL_ID, stageId: STAGE_ID }],
+    [],
     [],
     [{ pipelineId: PIPELINE_ID }],
     [{ id: "stage-cancelled-existing" }],
@@ -126,6 +130,7 @@ function selectQueueStageMissing(): unknown[][] {
   return [
     [{ clientId: CLIENT_ID, tripId: TRIP_ID }],
     [{ id: DEAL_ID, stageId: STAGE_ID }],
+    [],
     [],
     [{ pipelineId: PIPELINE_ID }],
     [],                      // Cancelado stage not found
@@ -163,6 +168,28 @@ describe("cancelDealOnReservationCancellation()", () => {
       status: "lost",
     });
   });
+
+  it.each(["pending", "confirmed"] as const)(
+    "leaves the deal in its current stage when the client has an active %s reservation on another trip",
+    async (activeStatus) => {
+      resetSelectQueue([
+        [{ clientId: CLIENT_ID, tripId: TRIP_ID }],
+        [{ id: DEAL_ID, stageId: STAGE_ID }],
+        [], // No surviving reservation for the cancelled trip.
+        [{ id: "res-active-other-trip", tripId: "trip-002", status: activeStatus }],
+      ]);
+
+      const result = await cancelDealOnReservationCancellation({
+        tenantId: TENANT_ID,
+        reservationId: RESERVATION_ID,
+      });
+
+      expect(result).toBe(false);
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+      expect(mockInsertValues).not.toHaveBeenCalled();
+      expect(mockLogError).not.toHaveBeenCalled();
+    },
+  );
 
   it("emits an audit log entry when a deal is moved to Cancelado", async () => {
     resetSelectQueue(selectQueueStageExists());
