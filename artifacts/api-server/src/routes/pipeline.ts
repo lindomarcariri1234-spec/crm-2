@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable, storeOrdersTable, referralsTable, linkedDataReconciliationRunsTable, paymentsTable } from "@workspace/db";
+import { pipelinesTable, pipelineStagesTable, dealsTable, clientsTable, reservationsTable, tripsTable, storeOrdersTable, referralsTable, linkedDataReconciliationRunsTable, paymentsTable } from "@workspace/db";
 import { eq, and, asc, desc, inArray, count, or } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, ADMIN_ROLES } from '../lib/tenant';
@@ -69,16 +69,16 @@ router.get("/admin/linked-data/reconcile/history", async (req, res, next: NextFu
 });
 
 const CreateDealBody = z.object({
-  clientId: z.string().optional(),
-  stageId: z.string().optional(),
+  clientId: z.string().min(1).optional(),
+  stageId: z.string().min(1).optional(),
   title: z.string(),
   description: z.string().optional(),
   value: z.number().optional(),
   leadName: z.string().optional(),
   leadEmail: z.string().optional(),
   leadWhatsapp: z.string().optional(),
-  tripId: z.string().optional(),
-  reservationId: z.string().optional(),
+  tripId: z.string().min(1).optional(),
+  reservationId: z.string().min(1).optional(),
   expectedCloseDate: z.string().optional(),
   status: z.string().optional(),
   travelReason: z.string().optional(),
@@ -94,11 +94,106 @@ const UpdateDealBody = z.object({
   lostReason: z.string().optional().nullable(),
   travelReason: z.string().optional().nullable(),
   followUpNote: z.string().optional().nullable(),
-  reservationId: z.string().optional().nullable(),
-  tripId: z.string().optional().nullable(),
+  reservationId: z.string().min(1).nullable().optional(),
+  tripId: z.string().min(1).nullable().optional(),
 });
 
 const MoveDealBody = z.object({ stageId: z.string() });
+
+type DealLinkageInput = {
+  tenantId: string;
+  clientId?: string | null;
+  tripId?: string | null;
+  reservationId?: string | null;
+  deriveMissingClientId?: boolean;
+  deriveMissingTripId?: boolean;
+};
+
+async function resolveDealLinkage({
+  tenantId,
+  clientId,
+  tripId,
+  reservationId,
+  deriveMissingClientId = false,
+  deriveMissingTripId = false,
+}: DealLinkageInput): Promise<{
+  clientId: string | null;
+  tripId: string | null;
+  reservationId: string | null;
+}> {
+  let resolvedClientId = clientId ?? null;
+  let resolvedTripId = tripId ?? null;
+  const resolvedReservationId = reservationId ?? null;
+
+  if (resolvedReservationId) {
+    const [reservation] = await db.select({
+      clientId: reservationsTable.clientId,
+      tripId: reservationsTable.tripId,
+    })
+      .from(reservationsTable)
+      .where(and(
+        eq(reservationsTable.id, resolvedReservationId),
+        eq(reservationsTable.tenantId, tenantId),
+      ))
+      .limit(1);
+
+    if (!reservation) {
+      throw new ValidationError("Reserva não encontrada nesta agência", "RESERVATION_NOT_FOUND");
+    }
+
+    if (resolvedClientId == null && deriveMissingClientId) {
+      resolvedClientId = reservation.clientId;
+    }
+    if ((reservation.clientId ?? null) !== resolvedClientId) {
+      throw new ValidationError(
+        "A reserva não pertence ao cliente vinculado ao negócio",
+        "DEAL_LINKAGE_MISMATCH",
+      );
+    }
+
+    if (resolvedTripId == null && deriveMissingTripId) {
+      resolvedTripId = reservation.tripId;
+    }
+    if (resolvedTripId !== reservation.tripId) {
+      throw new ValidationError(
+        "A reserva não pertence à viagem vinculada ao negócio",
+        "DEAL_LINKAGE_MISMATCH",
+      );
+    }
+  }
+
+  if (resolvedClientId) {
+    const [client] = await db.select({ id: clientsTable.id })
+      .from(clientsTable)
+      .where(and(
+        eq(clientsTable.id, resolvedClientId),
+        eq(clientsTable.tenantId, tenantId),
+      ))
+      .limit(1);
+    if (!client) {
+      throw new ValidationError("Client not found or not in tenant", "CLIENT_NOT_FOUND");
+    }
+  }
+
+  if (resolvedTripId) {
+    const [trip] = await db.select({ id: tripsTable.id })
+      .from(tripsTable)
+      .where(and(
+        eq(tripsTable.id, resolvedTripId),
+        eq(tripsTable.tenantId, tenantId),
+      ))
+      .limit(1);
+    if (!trip) {
+      throw new ValidationError("Viagem não encontrada nesta agência", "TRIP_NOT_FOUND");
+    }
+  }
+
+  return {
+    clientId: resolvedClientId,
+    tripId: resolvedTripId,
+    reservationId: resolvedReservationId,
+  };
+}
 
 const DEFAULT_STAGES = [
   { name: "Lead", order: 1, color: "#6366F1", isFinal: false, isDefaultWeb: false },
@@ -473,12 +568,14 @@ router.post("/deals", async (req, res, next: NextFunction): Promise<void> => {
     const parsed = CreateDealBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
 
-    if (parsed.data.clientId) {
-      const [client] = await db.select().from(clientsTable)
-        .where(and(eq(clientsTable.id, parsed.data.clientId), eq(clientsTable.tenantId, me.tenantId)))
-        .limit(1);
-      if (!client) { next(new ValidationError("Client not found or not in tenant", "CLIENT_NOT_FOUND")); return; }
-    }
+    const linkage = await resolveDealLinkage({
+      tenantId: me.tenantId,
+      clientId: parsed.data.clientId,
+      tripId: parsed.data.tripId,
+      reservationId: parsed.data.reservationId,
+      deriveMissingClientId: true,
+      deriveMissingTripId: true,
+    });
 
     // Resolve stageId: explicit > default-pipeline isDefaultWeb > default-pipeline order=1 > any stage.
     let resolvedStageId = parsed.data.stageId;
@@ -521,7 +618,7 @@ router.post("/deals", async (req, res, next: NextFunction): Promise<void> => {
     await db.insert(dealsTable).values({
       id,
       tenantId: me.tenantId,
-      clientId: parsed.data.clientId ?? null,
+      clientId: linkage.clientId,
       stageId: resolvedStageId,
       title: parsed.data.title,
       description: parsed.data.description ?? null,
@@ -531,8 +628,8 @@ router.post("/deals", async (req, res, next: NextFunction): Promise<void> => {
       leadName: parsed.data.leadName ?? null,
       leadEmail: parsed.data.leadEmail ?? null,
       leadWhatsapp: parsed.data.leadWhatsapp ?? null,
-      tripId: parsed.data.tripId ?? null,
-      reservationId: parsed.data.reservationId ?? null,
+      tripId: linkage.tripId,
+      reservationId: linkage.reservationId,
       expectedCloseDate: parsed.data.expectedCloseDate ? new Date(parsed.data.expectedCloseDate) : null,
       travelReason: parsed.data.travelReason ?? null,
     });
@@ -562,10 +659,22 @@ router.patch("/deals/:id", async (req, res, next: NextFunction): Promise<void> =
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    await requireDealAccess(me, req.params.id);
+    const existingDeal = await requireDealAccess(me, req.params.id);
 
     const parsed = UpdateDealBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message), "VALIDATION_ERROR")); return; }
+
+    const linkageChanged = parsed.data.reservationId !== undefined || parsed.data.tripId !== undefined;
+    const linkage = linkageChanged
+      ? await resolveDealLinkage({
+        tenantId: me.tenantId,
+        clientId: existingDeal.clientId,
+        tripId: parsed.data.tripId !== undefined ? parsed.data.tripId : existingDeal.tripId,
+        reservationId: parsed.data.reservationId !== undefined ? parsed.data.reservationId : existingDeal.reservationId,
+        deriveMissingClientId: existingDeal.clientId == null,
+        deriveMissingTripId: parsed.data.tripId === undefined && existingDeal.tripId == null,
+      })
+      : null;
 
     const updates: Partial<typeof dealsTable.$inferInsert> = {};
     if (parsed.data.title != null) updates.title = parsed.data.title;
@@ -585,11 +694,12 @@ router.patch("/deals/:id", async (req, res, next: NextFunction): Promise<void> =
       if (!stage) { next(new ValidationError("Stage not found or not in tenant", "STAGE_NOT_FOUND")); return; }
       updates.stageId = parsed.data.stageId;
     }
-    if (parsed.data.reservationId !== undefined) {
-      updates.reservationId = parsed.data.reservationId ?? null;
-    }
-    if (parsed.data.tripId !== undefined) {
-      updates.tripId = parsed.data.tripId ?? null;
+    if (linkage) {
+      updates.reservationId = linkage.reservationId;
+      updates.tripId = linkage.tripId;
+      if (linkage.clientId !== existingDeal.clientId) {
+        updates.clientId = linkage.clientId;
+      }
     }
 
     await db.update(dealsTable).set(updates)
