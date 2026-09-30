@@ -2223,6 +2223,16 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: dueDateFrom
+          in: query
+          description: Inclusive start of the due-date range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
+        - name: dueDateTo
+          in: query
+          description: Inclusive end of the due-date range in America/Sao_Paulo.
+          schema:
+            type: ["string", "null"]
         - name: page
           in: query
           schema:

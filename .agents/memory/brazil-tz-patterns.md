@@ -57,6 +57,12 @@ NOT `setDate(getDate()+N); setHours(0,0,0,0)` (uses UTC midnight, misses 10 PMâ€
 Already done correctly in referral expiry queries: `AT TIME ZONE 'America/Sao_Paulo'`.
 Drizzle js-side: pass UTC Date objects from `brazilDayWindow()`.
 
+For a user-supplied inclusive calendar-date range on a timestamp column, convert the selected start date to BRT midnight, convert the selected end date to the following BRT midnight, then query with `>= start` and `< endExclusive`. Do not approximate the inclusive end with `23:59:59.999`.
+
+**Why:** An exclusive next-day boundary includes every stored timestamp on the selected final day without depending on database timestamp precision.
+
+**How to apply:** Use the selected calendar dates as `YYYY-MM-DD`, convert BRT midnight to UTC (`03:00Z` for Brazil's current fixed UTC-3 offset), and advance the end boundary by one calendar day in UTC.
+
 ### Trip departure instants
 When filtering or ordering trips by when they actually leave, use the shared SQL expression that converts `departureDate` plus `departureTime` into a `timestamptz` in `America/Sao_Paulo`; use its JS parser for notification calculations.
 

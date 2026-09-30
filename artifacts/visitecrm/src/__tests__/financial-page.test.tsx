@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   useListClients: vi.fn(),
   useFinancialMetrics: vi.fn(),
   navigate: vi.fn(),
+  search: "",
+  can: vi.fn(() => true),
+  toast: vi.fn(),
 }));
 
 vi.mock("@workspace/api-client-react", () => ({
@@ -50,8 +53,16 @@ vi.mock("@tanstack/react-query", () => ({
 vi.mock("wouter", () => ({
   Link: ({ href, children }: { href: string; children: unknown }) =>
     createElement("a", { href }, children as never),
-  useSearch: () => "",
+  useSearch: () => mocks.search,
   useLocation: () => ["/financeiro", mocks.navigate],
+}));
+
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({ can: mocks.can }),
+}));
+
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: mocks.toast }),
 }));
 
 vi.mock("../lib/financial-metrics-api", () => ({
@@ -116,7 +127,7 @@ function financialMetrics(
 }
 
 function setSuccessfulQueries() {
-  const query = { data: { data: [] }, isLoading: false, refetch: vi.fn() };
+  const query = { data: { data: [], total: 0, page: 1, limit: 50 }, isLoading: false, isError: false, refetch: vi.fn() };
   const mutation = { mutateAsync: vi.fn(), isPending: false };
 
   mocks.useGetPaymentsSummary.mockReturnValue({ refetch: vi.fn() });
@@ -137,6 +148,8 @@ function setSuccessfulQueries() {
 }
 
 beforeEach(() => {
+  mocks.search = "";
+  mocks.can.mockReturnValue(true);
   setSuccessfulQueries();
   mocks.useFinancialMetrics.mockReturnValue({
     data: financialMetrics(),
@@ -189,5 +202,54 @@ describe("Financial page PMS payment adjustments", () => {
     expect(row?.textContent).toContain("PMS-204");
     expect(row?.textContent).toContain("Correção de pagamento");
     expect(row?.textContent).toContain("Ana");
+  });
+
+  it("sends due-date filters to the server and shows server-side pagination", async () => {
+    mocks.search = "?tab=receivable&dateFrom=2026-09-10&dateTo=2026-09-30";
+    mocks.useListPayments.mockReturnValue({
+      data: { data: [], total: 124, page: 1, limit: 50 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(mocks.useListPayments).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "receivable",
+        dueDateFrom: "2026-09-10",
+        dueDateTo: "2026-09-30",
+        page: 1,
+        limit: 50,
+      }),
+    );
+    expect(handle.container.textContent).toContain("Página 1 de 3");
+    expect(handle.container.textContent).toContain("Próxima");
+  });
+
+  it("hides financial mutation controls when the current role lacks permission", async () => {
+    mocks.can.mockReturnValue(false);
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(handle.container.textContent).not.toContain("Novo Lançamento");
+    expect(handle.container.textContent).not.toContain("Nova Despesa");
+    expect(handle.container.textContent).not.toContain("Nova Regra");
+  });
+
+  it("shows a retry action when the receivables request fails", async () => {
+    mocks.useListPayments.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(handle.container.textContent).toContain("Não foi possível carregar os recebíveis.");
+    expect(handle.container.textContent).toContain("Tentar novamente");
   });
 });

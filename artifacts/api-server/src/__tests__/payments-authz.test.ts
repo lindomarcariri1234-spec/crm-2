@@ -25,7 +25,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
-const { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments } = vi.hoisted(() => {
+const { dbState, makeChain, makeUpdate, mockSelect, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments } = vi.hoisted(() => {
   const dbState = {
     rows: [] as unknown[],
     rowsByTable: new Map<unknown, unknown[]>(),
@@ -52,6 +52,7 @@ const { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockE
     (chain as { then: unknown }).then = (resolve: (v: unknown) => unknown) => resolve(rows);
     return chain;
   };
+  const mockSelect = vi.fn(() => makeChain());
   const mockInsertValues = vi.fn().mockResolvedValue(undefined);
   const mockTransaction = vi.fn();
   const mockSumPaidReservationPayments = vi.fn().mockResolvedValue(0);
@@ -63,12 +64,12 @@ const { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockE
       }),
     }),
   });
-  return { dbState, makeChain, makeUpdate, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments };
+  return { dbState, makeChain, makeUpdate, mockSelect, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments };
 });
 
 vi.mock("@workspace/db", () => ({
   db: {
-    select: vi.fn(() => makeChain()),
+    select: mockSelect,
     insert: vi.fn(() => ({ values: mockInsertValues })),
     update: vi.fn(() => makeUpdate()),
     delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
@@ -218,6 +219,17 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     expect(res.status).toBe(403);
   });
 
+  it("GET /payments → rejects impossible due-date filters before querying", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/payments?dueDateFrom=2026-02-30");
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
   it("GET /payments/:id → 403 for SUPPORT (cannot fetch arbitrary payment by id)", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.SUPPORT) as never);
     const res = await request(buildApp(paymentsRouter)).get("/api/payments/pay-001");
@@ -229,6 +241,40 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     const res = await request(buildApp(paymentsRouter)).get("/api/payments/pay-001");
     expect(res.status).toBe(200);
     expect(res.body.id).toBe("pay-001");
+  });
+
+  it("POST /payments → rejects a client that does not own the selected reservation", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.rows = [{
+      id: "reservation-001",
+      clientId: "client-owner",
+      totalValue: "500.00",
+      status: "confirmed",
+      storeOrderId: null,
+      expiresAt: null,
+      isGratuidade: false,
+    }];
+    dbState.selectRowsQueue = [
+      [{ storeOrderId: null }],
+      [{ id: "client-other" }],
+    ];
+
+    const res = await request(buildApp(paymentsRouter))
+      .post("/api/payments")
+      .send({
+        type: "receivable",
+        category: "reservation",
+        amount: 100,
+        paymentMethod: "pix",
+        dueDate: "2026-10-15",
+        installments: 1,
+        reservationId: "reservation-001",
+        clientId: "client-other",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "PAYMENT_CLIENT_RESERVATION_MISMATCH" });
+    expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
   it("POST /payments → 403 for SUPPORT (non-finance cannot create payments)", async () => {

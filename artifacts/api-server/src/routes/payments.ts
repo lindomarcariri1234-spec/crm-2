@@ -1,7 +1,7 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
 import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
-import { eq, and, sql, desc, inArray, isNull, gte, lt } from "drizzle-orm";
+import { eq, and, sql, asc, desc, inArray, isNull, gte, lt } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
@@ -458,14 +458,43 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
     const me = await requireAuth(req, res);
     if (!me) return;
 
-    const { reservationId, clientId: clientIdParam, status, type, page = "1", limit = "20", dateFrom, dateTo } = req.query as Record<string, string>;
-    const pageNum = parseInt(page) || 1;
-    const limitNum = Math.min(parseInt(limit) || 20, 500);
+    const {
+      reservationId,
+      clientId: clientIdParam,
+      status,
+      type,
+      page = "1",
+      limit = "20",
+      dateFrom,
+      dateTo,
+      dueDateFrom,
+      dueDateTo,
+    } = req.query as Record<string, string>;
+    const parsedPage = Number.parseInt(page, 10);
+    const parsedLimit = Number.parseInt(limit, 10);
+    const pageNum = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const limitNum = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20, 500);
     const offset = (pageNum - 1) * limitNum;
 
     const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-    if (dateFrom && !ISO_DATE.test(dateFrom)) { next(new ValidationError("dateFrom must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
-    if (dateTo && !ISO_DATE.test(dateTo)) { next(new ValidationError("dateTo must be a valid ISO date (YYYY-MM-DD)", "VALIDATION_ERROR")); return; }
+    const isValidIsoDate = (value?: string) => {
+      if (!value || !ISO_DATE.test(value)) return false;
+      const [year, month, day] = value.split("-").map(Number);
+      const parsed = new Date(Date.UTC(year, month - 1, day));
+      return parsed.getUTCFullYear() === year
+        && parsed.getUTCMonth() === month - 1
+        && parsed.getUTCDate() === day;
+    };
+    for (const [name, value] of Object.entries({ dateFrom, dateTo, dueDateFrom, dueDateTo })) {
+      if (value && !isValidIsoDate(value)) {
+        next(new ValidationError(`${name} must be a valid ISO date (YYYY-MM-DD)`, "VALIDATION_ERROR"));
+        return;
+      }
+    }
+    if ((dateFrom && dateTo && dateFrom > dateTo) || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)) {
+      next(new ValidationError("The start date must not be after the end date", "VALIDATION_ERROR"));
+      return;
+    }
 
     const conditions: ReturnType<typeof eq>[] = [eq(paymentsTable.tenantId, me.tenantId)];
     if (reservationId) conditions.push(eq(paymentsTable.reservationId, reservationId));
@@ -473,6 +502,16 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
     if (type) conditions.push(eq(paymentsTable.type, parsePaymentType(type)));
     if (dateFrom) conditions.push(sql`${paymentsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
     if (dateTo) conditions.push(sql`${paymentsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
+    // Treat due-date filter values as Brazil calendar days and include the full
+    // final day by using an exclusive boundary at the next BRT midnight.
+    if (dueDateFrom) {
+      conditions.push(gte(paymentsTable.dueDate, new Date(`${dueDateFrom}T03:00:00.000Z`)));
+    }
+    if (dueDateTo) {
+      const endExclusive = new Date(`${dueDateTo}T03:00:00.000Z`);
+      endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+      conditions.push(lt(paymentsTable.dueDate, endExclusive));
+    }
 
     if (me.role === ROLES.CLIENT) {
       const [clientRecord] = await db.select({ id: clientsTable.id })
@@ -511,7 +550,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
     }
 
     const payments = await db.select().from(paymentsTable)
-      .where(and(...conditions)).orderBy(desc(paymentsTable.dueDate))
+      .where(and(...conditions)).orderBy(asc(paymentsTable.dueDate), asc(paymentsTable.id))
       .limit(limitNum).offset(offset);
 
     const [countResult] = await db.select({ count: sql<number>`count(*)` })
@@ -641,6 +680,12 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
         ) {
           throw new ConflictError("O prazo para pagamento desta reserva expirou", "RESERVATION_EXPIRED");
         }
+        if (parsed.data.clientId && parsed.data.clientId !== lockedReservation.clientId) {
+          throw new ValidationError(
+            "O cliente do pagamento deve corresponder ao cliente da reserva.",
+            "PAYMENT_CLIENT_RESERVATION_MISMATCH",
+          );
+        }
         if (isReceivedPayment) {
           const paidValue = await sumPaidReservationPayments(
             tx,
@@ -670,7 +715,7 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
           id: paymentId,
           tenantId: me.tenantId,
           reservationId: parsed.data.reservationId ?? null,
-          clientId: parsed.data.clientId ?? null,
+          clientId: parsed.data.clientId ?? reservationClientId,
           type: parsePaymentType(parsed.data.type),
           category: parsed.data.category,
           amount: (installmentCents / 100).toFixed(2),
@@ -695,9 +740,10 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       .where(and(eq(paymentsTable.id, id), eq(paymentsTable.tenantId, me.tenantId)))
       .limit(1);
     if (!payment) { next(new AppError("Failed to create payment", 500, "PAYMENT_CREATE_FAILED")); return; }
-    if (parsed.data.clientId) {
+    const effectiveClientId = parsed.data.clientId ?? reservationClientId;
+    if (effectiveClientId) {
       try {
-        await recalculateClientFinancials(parsed.data.clientId, me.tenantId);
+        await recalculateClientFinancials(effectiveClientId, me.tenantId);
       } catch (err) {
         req.log.error({ err }, "Error recalculating client financials after payment creation — non-fatal");
       }
@@ -719,7 +765,6 @@ router.post("/payments", async (req, res, next: NextFunction): Promise<void> => 
       }
       await syncReservationCommission(parsed.data.reservationId, me.tenantId);
     }
-    const effectiveClientId = parsed.data.clientId ?? reservationClientId;
     if (explicitStatus === PAYMENT_STATUS.PAID && parsed.data.type === PAYMENT_TYPE.RECEIVABLE && effectiveClientId) {
       if (parsed.data.reservationId && reservationTotalValue) {
         loyaltyAwardPointsForReservation({

@@ -1303,3 +1303,25 @@ describe("Reservation mutation authorization — support role is view-only", () 
     expect(res.status).not.toBe(403);
   });
 });
+
+describe("Upcoming reservation installments authorization", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([ROLES.SALES, ROLES.SUPPORT, ROLES.CLIENT])(
+    "blocks role %s from reading tenant-wide installment balances",
+    async (role) => {
+      requireAuthMock.mockResolvedValue({ ...FAKE_USER, role } as never);
+
+      const res = await request(buildReservationsApp())
+        .get("/api/reservations/installments/upcoming?days=7");
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ code: "FORBIDDEN_ROLE" });
+      expect(mockSelect).not.toHaveBeenCalled();
+    },
+  );
+});

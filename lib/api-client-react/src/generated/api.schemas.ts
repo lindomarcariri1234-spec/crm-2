@@ -5631,6 +5631,16 @@ export type ListPaymentsParams = {
    * @nullable
    */
   dateTo?: string | null;
+  /**
+   * Inclusive start of the due-date range in America/Sao_Paulo.
+   * @nullable
+   */
+  dueDateFrom?: string | null;
+  /**
+   * Inclusive end of the due-date range in America/Sao_Paulo.
+   * @nullable
+   */
+  dueDateTo?: string | null;
   page?: number;
   limit?: number;
 };

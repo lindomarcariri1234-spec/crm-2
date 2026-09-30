@@ -2,7 +2,6 @@ import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
-  useGetPaymentsSummary,
   useListPayments,
   useListExpenses,
   useListCommissions,
@@ -19,7 +18,7 @@ import {
   useListClients,
 } from "@workspace/api-client-react";
 import type { CommissionRule } from "@workspace/api-client-react";
-import { PAYMENT_STATUS, PAYMENT_TYPE, EXPENSE_STATUS, COMMISSION_STATUS } from "@workspace/permissions";
+import { ACTIONS, RESOURCES, PAYMENT_STATUS, PAYMENT_TYPE, EXPENSE_STATUS, COMMISSION_STATUS } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,9 +39,12 @@ import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS
 import { PageHeader } from "@/components/page-header";
 import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
 import { useFinancialMetrics } from "@/lib/financial-metrics-api";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useToast } from "@/hooks/use-toast";
 
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+const PAYMENTS_PAGE_SIZE = 50;
 
 const EXPENSE_CATEGORIES: Record<string, string> = EXPENSE_CATEGORY_LABELS;
 
@@ -141,6 +143,50 @@ function PaymentMethodChart({ payments }: { payments: Array<{ paymentMethod?: st
   );
 }
 
+function PaymentPagination({
+  page,
+  total,
+  pageSize,
+  onPageChange,
+}: {
+  page: number;
+  total: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (total === 0) return null;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const firstItem = (page - 1) * pageSize + 1;
+  const lastItem = Math.min(page * pageSize, total);
+  return (
+    <div className="flex flex-col gap-2 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <p className="text-xs text-muted-foreground" aria-live="polite">
+        {firstItem}–{lastItem} de {total} lançamentos · Página {page} de {pageCount}
+      </p>
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+        >
+          Anterior
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={page >= pageCount}
+          onClick={() => onPageChange(page + 1)}
+        >
+          Próxima
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 const VALID_TABS = ["receivable", "payable", "expenses", "commissions", "settlement", "rules"];
 
 type SettlementData = {
@@ -167,6 +213,13 @@ export default function Financial() {
   const searchStr = useSearch();
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
+  const { can } = usePermissions();
+  const { toast } = useToast();
+  const canCreateFinancial = can(RESOURCES.FINANCIAL, ACTIONS.CREATE);
+  const canEditFinancial = can(RESOURCES.FINANCIAL, ACTIONS.EDIT);
+  const canCreateCommissionRule = can(RESOURCES.COMMISSIONS, ACTIONS.CREATE);
+  const canEditCommissions = can(RESOURCES.COMMISSIONS, ACTIONS.EDIT);
+  const canDeleteCommissionRules = can(RESOURCES.COMMISSIONS, ACTIONS.DELETE);
   const initialTab = useMemo(() => {
     const params = new URLSearchParams(searchStr);
     const t = params.get("tab");
@@ -187,8 +240,13 @@ export default function Financial() {
   const [categoryFilter, setCategoryFilter] = useState(() => new URLSearchParams(searchStr).get("category") ?? "");
   const [dateFrom, setDateFrom] = useState(() => new URLSearchParams(searchStr).get("dateFrom") ?? "");
   const [dateTo, setDateTo] = useState(() => new URLSearchParams(searchStr).get("dateTo") ?? "");
+  const [paymentsPage, setPaymentsPage] = useState(1);
   const [pmsReservationFilter, setPmsReservationFilter] = useState(() => new URLSearchParams(searchStr).get("reservationNumber") ?? "");
   const [pmsAdjustedByFilter, setPmsAdjustedByFilter] = useState(() => new URLSearchParams(searchStr).get("adjustedBy") ?? "");
+
+  useEffect(() => {
+    setPaymentsPage(1);
+  }, [tab, statusFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -208,6 +266,7 @@ export default function Financial() {
     amount: number; clientName: string | null; tripName: string | null; voucherCode: string | null;
   }>>([]);
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
+  const [upcomingError, setUpcomingError] = useState<string | null>(null);
   const [settlement, setSettlement] = useState<SettlementData | null>(null);
   const [loadingSettlement, setLoadingSettlement] = useState(false);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
@@ -228,8 +287,17 @@ export default function Financial() {
     setLoadingUpcoming(true);
     try {
       const res = await fetch(`${BASE}/api/reservations/installments/upcoming?days=7`, { credentials: "include" });
-      if (res.ok) setUpcomingInstallments(await res.json());
-    } catch { /* ignore */ } finally { setLoadingUpcoming(false); }
+      if (!res.ok) throw new Error();
+      const rows = await res.json();
+      if (!Array.isArray(rows)) throw new Error();
+      setUpcomingInstallments(rows);
+      setUpcomingError(null);
+    } catch {
+      setUpcomingInstallments([]);
+      setUpcomingError("Não foi possível carregar as parcelas próximas. Tente novamente.");
+    } finally {
+      setLoadingUpcoming(false);
+    }
   }, []);
 
   const fetchSettlement = useCallback(async () => {
@@ -262,11 +330,18 @@ export default function Financial() {
     reader.readAsDataURL(file);
   }, []);
 
-  const { refetch: refetchSummary } = useGetPaymentsSummary();
-  const { data: paymentsData, isLoading: loadingPayments, refetch: refetchPayments } = useListPayments({
+  const {
+    data: paymentsData,
+    isLoading: loadingPayments,
+    isError: paymentsError,
+    refetch: refetchPayments,
+  } = useListPayments({
     type: tab === "receivable" || tab === "payable" ? tab : undefined,
     status: statusFilter || undefined,
-    limit: 50,
+    dueDateFrom: dateFrom || undefined,
+    dueDateTo: dateTo || undefined,
+    page: paymentsPage,
+    limit: PAYMENTS_PAGE_SIZE,
   });
   const { data: allReceivedPayments } = useListPayments({ type: PAYMENT_TYPE.RECEIVABLE, status: PAYMENT_STATUS.PAID, limit: 500 });
   const { data: expensesData, isLoading: loadingExpenses, refetch: refetchExpenses } = useListExpenses({ limit: 50 });
@@ -280,6 +355,14 @@ export default function Financial() {
   }), [pmsReservationFilter, pmsAdjustedByFilter]);
   const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics(undefined, financialAdjustmentFilters);
   const pmsPaymentAdjustments = financialMetrics?.pmsPaymentAdjustments ?? [];
+  const paymentTotal = paymentsData?.total ?? 0;
+  const paymentPageCount = Math.max(1, Math.ceil(paymentTotal / PAYMENTS_PAGE_SIZE));
+
+  useEffect(() => {
+    if (paymentsData && paymentsPage > paymentPageCount) {
+      setPaymentsPage(paymentPageCount);
+    }
+  }, [paymentsData, paymentPageCount, paymentsPage]);
 
   const clientMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -311,26 +394,36 @@ export default function Financial() {
   const handleCreatePayment = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
-    await createPayment.mutateAsync({
-      data: {
-        type: paymentType,
-        category: paymentCategory || "reservation",
-        amount: parseFloat(fd.get("amount") as string || "0"),
-        paymentMethod: paymentMethodField || "pix",
-        dueDate: fd.get("dueDate") as string,
-        description: fd.get("description") as string || undefined,
-        installments: parseInt(fd.get("installments") as string || "1"),
-        ...(receiptDataUrl ? { receiptUrl: receiptDataUrl } : {}),
-      } as Parameters<typeof createPayment.mutateAsync>[0]["data"]
-    });
-    setIsPaymentOpen(false);
-    setPaymentCategory("reservation");
-    setPaymentMethodField("pix");
-    setReceiptDataUrl(null);
-    setReceiptFileName(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    refetchPayments();
-    refetchSummary();
+    try {
+      await createPayment.mutateAsync({
+        data: {
+          type: paymentType,
+          category: paymentCategory || "reservation",
+          amount: parseFloat(fd.get("amount") as string || "0"),
+          paymentMethod: paymentMethodField || "pix",
+          dueDate: fd.get("dueDate") as string,
+          description: fd.get("description") as string || undefined,
+          installments: parseInt(fd.get("installments") as string || "1"),
+          ...(receiptDataUrl ? { receiptUrl: receiptDataUrl } : {}),
+        } as Parameters<typeof createPayment.mutateAsync>[0]["data"]
+      });
+      setIsPaymentOpen(false);
+      setPaymentCategory("reservation");
+      setPaymentMethodField("pix");
+      setReceiptDataUrl(null);
+      setReceiptFileName(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setPaymentsPage(1);
+      void refetchPayments();
+      void queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] });
+      toast({ title: "Lançamento financeiro criado." });
+    } catch {
+      toast({
+        title: "Não foi possível criar o lançamento.",
+        description: "Confira os dados e tente novamente.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleCreateExpense = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -357,9 +450,20 @@ export default function Financial() {
   };
 
   const handleMarkPaid = async (paymentId: string) => {
-    await updatePayment.mutateAsync({ id: paymentId, data: { status: PAYMENT_STATUS.PAID, paidAt: new Date().toISOString() } });
-    refetchPayments();
-    refetchSummary();
+    try {
+      await updatePayment.mutateAsync({ id: paymentId, data: { status: PAYMENT_STATUS.PAID, paidAt: new Date().toISOString() } });
+    } catch {
+      toast({
+        title: "Não foi possível atualizar o pagamento.",
+        description: "O lançamento continua com o status anterior. Tente novamente.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setPaymentsPage(1);
+    void refetchPayments();
+    void queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] });
+    toast({ title: "Pagamento atualizado como recebido." });
   };
 
   const handleMarkExpensePaid = async (expenseId: string) => {
@@ -418,12 +522,7 @@ export default function Financial() {
     return { total, paid, pending };
   }, [commissions]);
 
-  const filteredPayments = useMemo(() => {
-    let all = paymentsData?.data ?? [];
-    if (dateFrom) all = all.filter(p => p.dueDate >= dateFrom);
-    if (dateTo) all = all.filter(p => p.dueDate <= dateTo);
-    return all;
-  }, [paymentsData, dateFrom, dateTo]);
+  const paymentRows = paymentsData?.data ?? [];
 
   const filteredExpenses = useMemo(() => {
     let all = expensesData?.data ?? [];
@@ -456,12 +555,16 @@ export default function Financial() {
               <ExternalLink className="w-4 h-4 mr-1.5" /> Exportar
             </Button>
           </Link>
-          <Button variant="outline" onClick={() => setIsExpenseOpen(true)}>
-            <TrendingDown className="w-4 h-4 mr-2" /> Nova Despesa
-          </Button>
-          <Button onClick={() => setIsPaymentOpen(true)}>
-            <Plus className="w-4 h-4 mr-2" /> Novo Lançamento
-          </Button>
+          {canCreateFinancial && (
+            <Button variant="outline" onClick={() => setIsExpenseOpen(true)}>
+              <TrendingDown className="w-4 h-4 mr-2" /> Nova Despesa
+            </Button>
+          )}
+          {canCreateFinancial && (
+            <Button onClick={() => setIsPaymentOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" /> Novo Lançamento
+            </Button>
+          )}
           </>
         }
       />
@@ -723,9 +826,10 @@ export default function Financial() {
                     if (showUpcomingInstallments) {
                       setShowUpcomingInstallments(false);
                       setUpcomingInstallments([]);
+                      setUpcomingError(null);
                     } else {
                       setShowUpcomingInstallments(true);
-                      fetchUpcomingInstallments();
+                      void fetchUpcomingInstallments();
                     }
                   }}
                 >
@@ -765,6 +869,17 @@ export default function Financial() {
                     Array.from({ length: 3 }).map((_, i) => (
                       <TableRow key={i}>{Array.from({ length: 7 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                     ))
+                  ) : upcomingError ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-6 text-center text-sm text-destructive">
+                        <div className="flex flex-wrap items-center justify-center gap-3">
+                          <span role="alert">{upcomingError}</span>
+                          <Button size="sm" variant="outline" onClick={() => void fetchUpcomingInstallments()}>
+                            Tentar novamente
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
                   ) : upcomingInstallments.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground text-sm">Nenhuma parcela vencendo nos próximos 7 dias.</TableCell></TableRow>
                   ) : upcomingInstallments.map(inst => (
@@ -808,9 +923,20 @@ export default function Financial() {
                   Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                   ))
-                ) : filteredPayments.length === 0 ? (
+                ) : paymentsError ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-6 text-center text-sm text-destructive">
+                      <div className="flex flex-wrap items-center justify-center gap-3">
+                        <span role="alert">Não foi possível carregar os recebíveis.</span>
+                        <Button size="sm" variant="outline" onClick={() => void refetchPayments()}>
+                          Tentar novamente
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : paymentRows.length === 0 ? (
                   <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">Nenhum lançamento encontrado.</TableCell></TableRow>
-                ) : filteredPayments.map(p => (
+                ) : paymentRows.map(p => (
                   <TableRow key={p.id}>
                     <TableCell><p className="font-medium text-sm">{p.description || "—"}</p></TableCell>
                     <TableCell className="text-sm text-muted-foreground">{p.clientId ? (clientMap[p.clientId] ?? "—") : "—"}</TableCell>
@@ -824,8 +950,13 @@ export default function Financial() {
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      {p.status === PAYMENT_STATUS.PENDING && (
-                        <Button size="sm" variant="outline" onClick={() => handleMarkPaid(p.id)}>
+                      {canEditFinancial && p.status === PAYMENT_STATUS.PENDING && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={updatePayment.isPending}
+                          onClick={() => void handleMarkPaid(p.id)}
+                        >
                           <CheckCircle className="w-4 h-4 mr-1" /> Recebido
                         </Button>
                       )}
@@ -834,6 +965,12 @@ export default function Financial() {
                 ))}
               </TableBody>
             </Table>
+              <PaymentPagination
+                page={paymentsPage}
+                total={paymentTotal}
+                pageSize={PAYMENTS_PAGE_SIZE}
+                onPageChange={setPaymentsPage}
+              />
           </div>
         </TabsContent>
 
@@ -855,9 +992,20 @@ export default function Financial() {
                   Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                   ))
-                ) : filteredPayments.length === 0 ? (
+                ) : paymentsError ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-6 text-center text-sm text-destructive">
+                      <div className="flex flex-wrap items-center justify-center gap-3">
+                        <span role="alert">Não foi possível carregar os pagamentos a pagar.</span>
+                        <Button size="sm" variant="outline" onClick={() => void refetchPayments()}>
+                          Tentar novamente
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : paymentRows.length === 0 ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Nenhum lançamento encontrado.</TableCell></TableRow>
-                ) : filteredPayments.map(p => (
+                ) : paymentRows.map(p => (
                   <TableRow key={p.id}>
                     <TableCell><p className="font-medium text-sm">{p.description || "—"}</p></TableCell>
                     <TableCell className="text-xs text-muted-foreground">{p.category}</TableCell>
@@ -869,8 +1017,13 @@ export default function Financial() {
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      {p.status === PAYMENT_STATUS.PENDING && (
-                        <Button size="sm" variant="outline" onClick={() => handleMarkPaid(p.id)}>
+                      {canEditFinancial && p.status === PAYMENT_STATUS.PENDING && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={updatePayment.isPending}
+                          onClick={() => void handleMarkPaid(p.id)}
+                        >
                           <CheckCircle className="w-4 h-4 mr-1" /> Pago
                         </Button>
                       )}
@@ -879,14 +1032,22 @@ export default function Financial() {
                 ))}
               </TableBody>
             </Table>
+              <PaymentPagination
+                page={paymentsPage}
+                total={paymentTotal}
+                pageSize={PAYMENTS_PAGE_SIZE}
+                onPageChange={setPaymentsPage}
+              />
           </div>
         </TabsContent>
 
         <TabsContent value="expenses" className="mt-4">
           <div className="flex justify-end mb-3">
-            <Button variant="outline" size="sm" onClick={() => setIsExpenseOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" /> Registrar Despesa
-            </Button>
+            {canCreateFinancial && (
+              <Button variant="outline" size="sm" onClick={() => setIsExpenseOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" /> Registrar Despesa
+              </Button>
+            )}
           </div>
           <div className="bg-card rounded-lg border overflow-hidden">
             <Table>
@@ -921,8 +1082,8 @@ export default function Financial() {
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      {e.status !== EXPENSE_STATUS.PAID && (
-                        <Button size="sm" variant="outline" onClick={() => handleMarkExpensePaid(e.id)}>
+                      {canEditFinancial && e.status !== EXPENSE_STATUS.PAID && (
+                        <Button size="sm" variant="outline" disabled={updateExpense.isPending} onClick={() => void handleMarkExpensePaid(e.id)}>
                           <CheckCircle className="w-4 h-4 mr-1" /> Pago
                         </Button>
                       )}
@@ -987,12 +1148,12 @@ export default function Financial() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        {c.status === COMMISSION_STATUS.PENDING && (
+                        {canEditCommissions && c.status === COMMISSION_STATUS.PENDING && (
                           <Button size="sm" variant="outline" onClick={() => handleApproveCommission(c.id)}>
                             Aprovar
                           </Button>
                         )}
-                        {c.status === COMMISSION_STATUS.APPROVED && (
+                        {canEditCommissions && c.status === COMMISSION_STATUS.APPROVED && (
                           <Button size="sm" onClick={() => handlePayCommission(c.id)}>
                             <DollarSign className="w-4 h-4 mr-1" /> Pagar
                           </Button>
@@ -1007,11 +1168,13 @@ export default function Financial() {
         </TabsContent>
 
         <TabsContent value="rules" className="mt-4 space-y-4">
-          <div className="flex justify-end">
-            <Button onClick={() => { setEditingRule(null); setIsRuleOpen(true); }}>
-              <Plus className="w-4 h-4 mr-2" /> Nova Regra
-            </Button>
-          </div>
+          {canCreateCommissionRule && (
+            <div className="flex justify-end">
+              <Button onClick={() => { setEditingRule(null); setIsRuleOpen(true); }}>
+                <Plus className="w-4 h-4 mr-2" /> Nova Regra
+              </Button>
+            </div>
+          )}
           <div className="bg-card rounded-lg border overflow-hidden">
             <Table>
               <TableHeader>
@@ -1046,12 +1209,16 @@ export default function Financial() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingRule(rule); setRuleType(rule.type); setIsRuleOpen(true); }}>
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDeleteRule(rule.id)}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        {canEditCommissions && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingRule(rule); setRuleType(rule.type); setIsRuleOpen(true); }}>
+                            <Pencil className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {canDeleteCommissionRules && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => void handleDeleteRule(rule.id)}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

@@ -5359,6 +5359,14 @@ export const ListPaymentsQueryParams = zod.object({
   type: zod.coerce.string().nullish(),
   dateFrom: zod.coerce.string().nullish(),
   dateTo: zod.coerce.string().nullish(),
+  dueDateFrom: zod.coerce
+    .string()
+    .nullish()
+    .describe("Inclusive start of the due-date range in America/Sao_Paulo."),
+  dueDateTo: zod.coerce
+    .string()
+    .nullish()
+    .describe("Inclusive end of the due-date range in America/Sao_Paulo."),
   page: zod.coerce.number().int().default(listPaymentsQueryPageDefault),
   limit: zod.coerce.number().int().default(listPaymentsQueryLimitDefault),
 });

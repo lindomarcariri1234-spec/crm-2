@@ -3093,7 +3093,10 @@ router.get("/reservations/installments/upcoming", async (req, res, next: NextFun
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    if (me.role === "cliente") { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.VIEW)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+      return;
+    }
 
     const days = Math.min(Math.max(parseInt(String(req.query["days"] ?? "7")), 1), 90);
     const now = new Date();
