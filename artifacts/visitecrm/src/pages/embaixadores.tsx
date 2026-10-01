@@ -20,6 +20,7 @@ interface FullRankingEntry {
 interface FullRankingResponse {
   referrers: FullRankingEntry[];
   travelers: FullRankingEntry[];
+  activeAmbassadorsCount: number;
   month: string;
 }
 
@@ -143,7 +144,7 @@ export default function EmbaixadoresPage() {
             <h1 className="text-2xl font-bold">Embaixadores</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Ranking completo de indicadores e viajantes
+            Top 50 indicadores e viajantes
             {monthLabel ? ` — ${monthLabel}` : ""}
           </p>
         </div>
@@ -214,10 +215,7 @@ export default function EmbaixadoresPage() {
                   <div>
                     <p className="text-xs text-muted-foreground">Embaixadores Ativos</p>
                     <p className="font-semibold text-sm">
-                      {new Set([
-                        ...(data?.referrers ?? []).filter((r) => r.ambassadorOptIn).map((r) => r.clientId),
-                        ...(data?.travelers ?? []).filter((r) => r.ambassadorOptIn).map((r) => r.clientId),
-                      ]).size}
+                      {data?.activeAmbassadorsCount ?? 0}
                     </p>
                     <p className="text-xs text-muted-foreground">no ranking público</p>
                   </div>
@@ -244,9 +242,8 @@ export default function EmbaixadoresPage() {
           <Card className="bg-muted/30">
             <CardContent className="pt-4 pb-4">
               <p className="text-xs text-muted-foreground">
-                <strong>Notas:</strong> O ranking inclui todos os clientes do mês atual, independente do opt-in. 
+                <strong>Notas:</strong> As tabelas mostram os 50 primeiros por categoria; o CSV exporta o ranking completo. O ranking administrativo inclui clientes com ou sem opt-in.
                 No portal do cliente, apenas clientes com "Embaixador" ativo aparecem no ranking público, com nomes mascarados (ex: "Maria S."). 
-                O ranking atualiza diariamente.
               </p>
             </CardContent>
           </Card>

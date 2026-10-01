@@ -586,7 +586,7 @@ function Router() {
       {/* Task 6 pages */}
       <Route path="/vouchers" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Vouchers} />} />
       <Route path="/indicacoes" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Indicacoes} />} />
-      <Route path="/embaixadores" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Embaixadores} />} />
+      <Route path="/embaixadores" component={() => <RoleGate allowedRoles={MANAGEMENT_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Embaixadores} />} />
       <Route path="/configuracoes" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Configuracoes} />} />
       <Route path="/downloads" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} fallbackPath="/meu-painel" component={Downloads} />} />
 

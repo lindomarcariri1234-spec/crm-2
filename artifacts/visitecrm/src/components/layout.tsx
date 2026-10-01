@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useUser, useClerk } from "@clerk/react";
 import { useGetMe, useGetCalendarStatus, getGetCalendarStatusQueryKey } from "@workspace/api-client-react";
-import { ROLES } from "@workspace/permissions";
+import { MANAGEMENT_ROLES, ROLES } from "@workspace/permissions";
 import { AlertsBell } from "./alerts-bell";
 import {
   AlertCircle,
@@ -221,7 +221,7 @@ const AGENCY_NAVIGATION: NavItem[] = [
       { name: "Fidelidade", href: "/fidelidade", icon: Star },
       { name: "NPS", href: "/nps", icon: TrendingUp },
       { name: "Indicações", href: "/indicacoes", icon: Share2 },
-      { name: "Embaixadores", href: "/embaixadores", icon: Award },
+      { name: "Embaixadores", href: "/embaixadores", icon: Award, roles: MANAGEMENT_ROLES },
     ],
   },
   {

@@ -371,8 +371,22 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
       return;
     }
     const period = brazilMonthPeriod();
+    const isCsvExport = req.query["export"] === "csv";
+    const referrerPeriod = and(
+      eq(referralsTable.tenantId, me.tenantId),
+      inArray(referralsTable.status, RANKING_ELIGIBLE_STATUSES.referral),
+      gte(referralsTable.createdAt, period.start),
+      lt(referralsTable.createdAt, period.end),
+    );
+    const travelerPeriod = and(
+      eq(reservationsTable.tenantId, me.tenantId),
+      inArray(reservationsTable.status, RANKING_ELIGIBLE_STATUSES.traveler),
+      isNotNull(reservationsTable.clientId),
+      gte(tripsTable.returnDate, period.start),
+      lt(tripsTable.returnDate, period.end),
+    );
 
-    const referrersRaw = await db
+    const referrersQuery = db
       .select({
         clientId: referralsTable.referrerId,
         name: clientsTable.name,
@@ -385,19 +399,11 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
         eq(clientsTable.id, referralsTable.referrerId),
         eq(clientsTable.tenantId, me.tenantId),
       ))
-      .where(
-        and(
-          eq(referralsTable.tenantId, me.tenantId),
-          inArray(referralsTable.status, RANKING_ELIGIBLE_STATUSES.referral),
-          gte(referralsTable.createdAt, period.start),
-          lt(referralsTable.createdAt, period.end),
-        ),
-      )
+      .where(referrerPeriod)
       .groupBy(referralsTable.referrerId, clientsTable.name, clientsTable.email, clientsTable.ambassadorOptIn)
-       .orderBy(desc(sql`COUNT(${referralsTable.id})`), asc(clientsTable.name), asc(referralsTable.referrerId))
-      .limit(50);
+      .orderBy(desc(sql`COUNT(${referralsTable.id})`), asc(clientsTable.name), asc(referralsTable.referrerId));
 
-    const travelersRaw = await db
+    const travelersQuery = db
       .select({
         clientId: reservationsTable.clientId,
         name: clientsTable.name,
@@ -411,20 +417,16 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
         clientsTable,
         and(eq(clientsTable.id, reservationsTable.clientId), eq(clientsTable.tenantId, me.tenantId), isNotNull(reservationsTable.clientId)),
       )
-      .where(
-        and(
-          eq(reservationsTable.tenantId, me.tenantId),
-          inArray(reservationsTable.status, RANKING_ELIGIBLE_STATUSES.traveler),
-          isNotNull(reservationsTable.clientId),
-          gte(tripsTable.returnDate, period.start),
-          lt(tripsTable.returnDate, period.end),
-        ),
-      )
+      .where(travelerPeriod)
       .groupBy(reservationsTable.clientId, clientsTable.name, clientsTable.email, clientsTable.ambassadorOptIn)
-       .orderBy(desc(sql`COUNT(${reservationsTable.id})`), asc(clientsTable.name), asc(reservationsTable.clientId))
-      .limit(50);
+      .orderBy(desc(sql`COUNT(${reservationsTable.id})`), asc(clientsTable.name), asc(reservationsTable.clientId));
 
-    if (req.query["export"] === "csv") {
+    const [referrersRaw, travelersRaw] = await Promise.all([
+      isCsvExport ? referrersQuery : referrersQuery.limit(50),
+      isCsvExport ? travelersQuery : travelersQuery.limit(50),
+    ]);
+
+    if (isCsvExport) {
       const month = period.key;
       const lines: string[] = [
         `RANKING DE INDICADORES - ${month}`,
@@ -445,9 +447,47 @@ router.get("/club/ranking/full", async (req, res, next: NextFunction): Promise<v
       return;
     }
 
+    // The visible tables intentionally show the top 50, but this summary must
+    // count every opted-in client with eligible activity in either ranking.
+    const [optedInReferrers, optedInTravelers] = await Promise.all([
+      db
+        .select({ clientId: referralsTable.referrerId })
+        .from(referralsTable)
+        .innerJoin(
+          clientsTable,
+          and(
+            eq(clientsTable.id, referralsTable.referrerId),
+            eq(clientsTable.tenantId, me.tenantId),
+            eq(clientsTable.ambassadorOptIn, true),
+          ),
+        )
+        .where(referrerPeriod)
+        .groupBy(referralsTable.referrerId),
+      db
+        .select({ clientId: reservationsTable.clientId })
+        .from(reservationsTable)
+        .innerJoin(tripsTable, and(eq(tripsTable.id, reservationsTable.tripId), eq(tripsTable.tenantId, me.tenantId)))
+        .innerJoin(
+          clientsTable,
+          and(
+            eq(clientsTable.id, reservationsTable.clientId),
+            eq(clientsTable.tenantId, me.tenantId),
+            eq(clientsTable.ambassadorOptIn, true),
+            isNotNull(reservationsTable.clientId),
+          ),
+        )
+        .where(travelerPeriod)
+        .groupBy(reservationsTable.clientId),
+    ]);
+    const activeAmbassadorsCount = new Set([
+      ...optedInReferrers.map(({ clientId }) => clientId),
+      ...optedInTravelers.map(({ clientId }) => clientId),
+    ].filter((clientId): clientId is NonNullable<typeof clientId> => clientId != null)).size;
+
     res.json({
       referrers: referrersRaw.map((r, i) => ({ rank: i + 1, ...r })),
       travelers: travelersRaw.map((r, i) => ({ rank: i + 1, ...r })),
+      activeAmbassadorsCount,
       month: period.key,
       rankingMeta: {
         referrers: rankingMetadata("referral", "admin", period),
