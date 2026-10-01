@@ -355,56 +355,86 @@ function formatTripCost(c: typeof tripCostsTable.$inferSelect) {
   };
 }
 
-type ConsolidatedExpense = ReturnType<typeof formatExpense> | ReturnType<typeof formatTripCost>;
+type ExpenseSummaryAggregate = {
+  category: string;
+  status: string;
+  total: string | number;
+  paid: string | number;
+  pending: string | number;
+  overdue: string | number;
+  paidThisMonth: string | number;
+};
 
-function isActiveConsolidatedExpense(row: ConsolidatedExpense): boolean {
-  return row.status !== "cancelled";
+function parseUtcDateOnly(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return date;
 }
 
-function isInExpenseSummaryPeriod(row: ConsolidatedExpense, period: string): boolean {
-  if (period === "all") return true;
-  const dueDate = new Date(row.dueDate);
-  if (Number.isNaN(dueDate.getTime())) return false;
-  const now = new Date();
-  if (period === "month") return row.dueDate.slice(0, 7) === localToday().slice(0, 7);
-  if (period === "quarter") {
-    const cutoff = new Date(now);
-    cutoff.setMonth(now.getMonth() - 3);
-    return dueDate >= cutoff;
+function addUtcMonthsClamped(date: Date, months: number): Date {
+  const monthIndex = date.getUTCFullYear() * 12 + date.getUTCMonth() + months;
+  const year = Math.floor(monthIndex / 12);
+  const month = monthIndex - year * 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date.getUTCDate(), lastDay)));
+}
+
+function getExpenseSummaryWindow(period: string, today = localToday()): { start: Date; end: Date } | null {
+  if (period === "all") return null;
+  const todayDate = parseUtcDateOnly(today);
+  if (!todayDate) return null;
+
+  if (period === "month") {
+    return {
+      start: new Date(Date.UTC(todayDate.getUTCFullYear(), todayDate.getUTCMonth(), 1)),
+      end: new Date(Date.UTC(todayDate.getUTCFullYear(), todayDate.getUTCMonth() + 1, 1)),
+    };
   }
-  if (period === "year") {
-    const cutoff = new Date(now);
-    cutoff.setFullYear(now.getFullYear() - 1);
-    return dueDate >= cutoff;
-  }
-  return true;
+
+  const start = period === "quarter"
+    ? addUtcMonthsClamped(todayDate, -3)
+    : period === "year"
+      ? addUtcMonthsClamped(todayDate, -12)
+      : null;
+  if (!start) return null;
+  const end = new Date(todayDate);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
 }
 
-function sumConsolidatedExpenses(rows: ConsolidatedExpense[]): number {
-  return rows.reduce((sum, row) => sum + Number(row.amount), 0);
+function getBrazilCurrentMonthWindow(today = localToday()): { start: Date; end: Date } {
+  const todayDate = parseUtcDateOnly(today) ?? new Date();
+  const year = todayDate.getUTCFullYear();
+  const month = todayDate.getUTCMonth();
+  return {
+    start: new Date(Date.UTC(year, month, 1, 3)),
+    end: new Date(Date.UTC(year, month + 1, 1, 3)),
+  };
 }
 
-function buildExpenseSummary(rows: ConsolidatedExpense[], period: string, categoryRows: ConsolidatedExpense[]) {
-  const activeRows = rows.filter(isActiveConsolidatedExpense);
-  const periodRows = activeRows.filter(row => isInExpenseSummaryPeriod(row, period));
-  const currentMonth = localToday().slice(0, 7);
-  const paidThisMonth = activeRows
-    .filter(row => row.status === "paid" && row.paymentDate?.slice(0, 7) === currentMonth)
-    .reduce((sum, row) => sum + Number(row.amount), 0);
+function buildExpenseSummary(rows: ExpenseSummaryAggregate[]) {
   const categoryTotals = new Map<string, number>();
-  for (const row of categoryRows) {
-    if (!isActiveConsolidatedExpense(row)) continue;
-    categoryTotals.set(row.category, (categoryTotals.get(row.category) ?? 0) + Number(row.amount));
+  for (const row of rows) {
+    const amount = Number(row.total) || 0;
+    if (amount !== 0) categoryTotals.set(row.category, (categoryTotals.get(row.category) ?? 0) + amount);
   }
+  const sum = (key: keyof Pick<ExpenseSummaryAggregate, "total" | "paid" | "pending" | "overdue" | "paidThisMonth">) =>
+    roundMoney(rows.reduce((total, row) => total + (Number(row[key]) || 0), 0));
 
   return {
-    total: sumConsolidatedExpenses(periodRows),
-    paid: sumConsolidatedExpenses(periodRows.filter(row => row.status === "paid")),
-    pending: sumConsolidatedExpenses(periodRows.filter(row => row.status === "pending")),
-    overdue: sumConsolidatedExpenses(periodRows.filter(row => row.status === "overdue")),
-    paidThisMonth,
+    total: sum("total"),
+    paid: sum("paid"),
+    pending: sum("pending"),
+    overdue: sum("overdue"),
+    paidThisMonth: sum("paidThisMonth"),
     categoryBreakdown: [...categoryTotals.entries()]
-      .map(([category, total]) => ({ category, total }))
+      .map(([category, total]) => ({ category, total: roundMoney(total) }))
       .sort((a, b) => b.total - a.total),
   };
 }
@@ -1361,8 +1391,10 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
       tripId, status, category, supplierId, dateFrom, dateTo,
       page = "1", limit = "20", includeTripCosts, summaryPeriod = "all",
     } = req.query as Record<string, string>;
-    const pageNum = parseInt(page) || 1;
-    const limitNum = Math.min(parseInt(limit) || 20, 500);
+    const parsedPage = Number.parseInt(page, 10);
+    const parsedLimit = Number.parseInt(limit, 10);
+    const pageNum = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const limitNum = Number.isSafeInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 20;
     const offset = (pageNum - 1) * limitNum;
     const shouldIncludeTripCosts = includeTripCosts === "true";
 
@@ -1381,20 +1413,72 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
 
     if (shouldIncludeTripCosts) {
       const tripCostConditions: ReturnType<typeof eq>[] = [eq(tripCostsTable.tenantId, me.tenantId)];
+      const tripCostDueDate = sql`COALESCE(${tripCostsTable.dueDate}, ${tripCostsTable.createdAt})`;
       if (tripId) tripCostConditions.push(eq(tripCostsTable.tripId, tripId));
       if (status) tripCostConditions.push(eq(tripCostsTable.status, parseExpenseStatus(status)));
       if (category) tripCostConditions.push(eq(tripCostsTable.category, category));
       if (supplierId) tripCostConditions.push(eq(tripCostsTable.supplierId, supplierId));
-      if (fromDate && !Number.isNaN(fromDate.getTime())) tripCostConditions.push(gte(tripCostsTable.dueDate, fromDate));
-      if (toDate && !Number.isNaN(toDate.getTime())) tripCostConditions.push(lt(tripCostsTable.dueDate, toDate));
+      if (fromDate && !Number.isNaN(fromDate.getTime())) tripCostConditions.push(gte(tripCostDueDate, fromDate));
+      if (toDate && !Number.isNaN(toDate.getTime())) tripCostConditions.push(lt(tripCostDueDate, toDate));
 
-      const [expenses, tripCosts, allExpenses, allTripCosts] = await Promise.all([
-        db.select().from(expensesTable).where(and(...conditions)),
-        db.select().from(tripCostsTable).where(and(...tripCostConditions)),
-        db.select().from(expensesTable).where(eq(expensesTable.tenantId, me.tenantId)),
-        db.select().from(tripCostsTable).where(eq(tripCostsTable.tenantId, me.tenantId)),
+      const unlinkedTripCostCondition = sql`NOT EXISTS (
+        SELECT 1
+        FROM ${expensesTable}
+        WHERE ${expensesTable.linkedTripCostId} = ${tripCostsTable.id}
+          AND ${expensesTable.tenantId} = ${me.tenantId}
+      )`;
+      const tripCostWhere = and(...tripCostConditions, unlinkedTripCostCondition);
+      const validatedSummaryPeriod = ["all", "month", "quarter", "year"].includes(summaryPeriod)
+        ? summaryPeriod
+        : "all";
+      const summaryWindow = getExpenseSummaryWindow(validatedSummaryPeriod);
+      const paidThisMonthWindow = getBrazilCurrentMonthWindow();
+      const expenseInSummaryPeriod = summaryWindow
+        ? sql`${expensesTable.dueDate} >= ${summaryWindow.start} AND ${expensesTable.dueDate} < ${summaryWindow.end}`
+        : sql`TRUE`;
+      const tripCostInSummaryPeriod = summaryWindow
+        ? sql`${tripCostDueDate} >= ${summaryWindow.start} AND ${tripCostDueDate} < ${summaryWindow.end}`
+        : sql`TRUE`;
+      const maxRowsPerSource = offset + limitNum;
+
+      const [
+        expenses,
+        tripCosts,
+        [expenseCountResult],
+        [tripCostCountResult],
+        expenseSummaryRows,
+        tripCostSummaryRows,
+      ] = await Promise.all([
+        db.select().from(expensesTable).where(and(...conditions))
+          .orderBy(desc(expensesTable.dueDate), desc(expensesTable.createdAt), desc(expensesTable.id))
+          .limit(maxRowsPerSource),
+        db.select().from(tripCostsTable).where(tripCostWhere)
+          .orderBy(desc(tripCostDueDate), desc(tripCostsTable.createdAt), desc(tripCostsTable.id))
+          .limit(maxRowsPerSource),
+        db.select({ count: sql<number>`count(*)` })
+          .from(expensesTable).where(and(...conditions)),
+        db.select({ count: sql<number>`count(*)` })
+          .from(tripCostsTable).where(tripCostWhere),
+        db.select({
+          category: expensesTable.category,
+          status: expensesTable.status,
+          total: sql<string>`coalesce(sum(case when ${expensesTable.status} <> 'cancelled' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+          paid: sql<string>`coalesce(sum(case when ${expensesTable.status} = 'paid' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+          pending: sql<string>`coalesce(sum(case when ${expensesTable.status} = 'pending' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+          overdue: sql<string>`coalesce(sum(case when ${expensesTable.status} = 'overdue' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+          paidThisMonth: sql<string>`coalesce(sum(case when ${expensesTable.status} = 'paid' and ${expensesTable.paymentDate} >= ${paidThisMonthWindow.start} and ${expensesTable.paymentDate} < ${paidThisMonthWindow.end} then ${expensesTable.amount} else 0 end), 0)`,
+        }).from(expensesTable).where(and(...conditions)).groupBy(expensesTable.category, expensesTable.status),
+        db.select({
+          category: tripCostsTable.category,
+          status: tripCostsTable.status,
+          total: sql<string>`coalesce(sum(case when ${tripCostsTable.status} <> 'cancelled' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+          paid: sql<string>`coalesce(sum(case when ${tripCostsTable.status} = 'paid' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+          pending: sql<string>`coalesce(sum(case when ${tripCostsTable.status} = 'pending' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+          overdue: sql<string>`coalesce(sum(case when ${tripCostsTable.status} = 'overdue' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+          paidThisMonth: sql<string>`coalesce(sum(case when ${tripCostsTable.status} = 'paid' and ${tripCostsTable.paidAt} >= ${paidThisMonthWindow.start} and ${tripCostsTable.paidAt} < ${paidThisMonthWindow.end} then ${tripCostsTable.amount} else 0 end), 0)`,
+        }).from(tripCostsTable).where(tripCostWhere).groupBy(tripCostsTable.category, tripCostsTable.status),
       ]);
-      const linkedTripCostIds = new Set(allExpenses
+      const linkedTripCostIds = new Set(expenses
         .map(expense => expense.linkedTripCostId)
         .filter((id): id is string => Boolean(id)));
       const consolidated = [
@@ -1404,25 +1488,18 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
           .map(formatTripCost),
       ].sort((a, b) => {
         const byDueDate = new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime();
-        return byDueDate || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return byDueDate
+          || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          || b.id.localeCompare(a.id);
       });
-      const allConsolidated = [
-        ...allExpenses.map(formatExpense),
-        ...allTripCosts
-          .filter(cost => !linkedTripCostIds.has(cost.id))
-          .map(formatTripCost),
-      ];
+      const total = Number(expenseCountResult?.count ?? 0) + Number(tripCostCountResult?.count ?? 0);
 
       res.json({
         data: consolidated.slice(offset, offset + limitNum),
-        total: consolidated.length,
+        total,
         page: pageNum,
         limit: limitNum,
-        summary: buildExpenseSummary(
-          allConsolidated,
-          ["all", "month", "quarter", "year"].includes(summaryPeriod) ? summaryPeriod : "all",
-          consolidated,
-        ),
+        summary: buildExpenseSummary([...expenseSummaryRows, ...tripCostSummaryRows] as ExpenseSummaryAggregate[]),
       });
       return;
     }

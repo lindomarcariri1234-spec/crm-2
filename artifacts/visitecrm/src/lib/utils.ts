@@ -33,6 +33,20 @@ export function formatDate(d: string): string {
   }
 }
 
+export function formatDateOnlyBR(d?: string | null): string {
+  if (!d) return "—";
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(d);
+  if (!match) return d;
+  const [, year, month, day] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    date.getUTCFullYear() !== Number(year)
+    || date.getUTCMonth() !== Number(month) - 1
+    || date.getUTCDate() !== Number(day)
+  ) return d;
+  return `${day}/${month}/${year}`;
+}
+
 export function formatDateShort(d?: string | null): string | null {
   if (!d) return null;
   try {

@@ -518,7 +518,14 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       notes: null,
       createdAt: new Date("2026-08-21T12:00:00Z"),
     };
-    dbState.selectRowsQueue = [[agencyExpense], [tripCost], [agencyExpense], [tripCost]];
+    dbState.selectRowsQueue = [
+      [agencyExpense],
+      [tripCost],
+      [{ count: 1 }],
+      [{ count: 1 }],
+      [{ category: "transport", status: "pending", total: "500", paid: "0", pending: "500", overdue: "0", paidThisMonth: "0" }],
+      [{ category: "transporte", status: "pending", total: "750", paid: "0", pending: "750", overdue: "0", paidThisMonth: "0" }],
+    ];
 
     const res = await request(buildApp(paymentsRouter))
       .get("/api/expenses?includeTripCosts=true&tripId=trip-001&status=pending");
@@ -593,7 +600,15 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       makeTripCost("trip-cost-001", "100.00", "2026-08-22T12:00:00Z"),
       makeTripCost("trip-cost-002", "400.00", "2026-08-17T12:00:00Z"),
     ];
-    dbState.selectRowsQueue = [agencyRows, tripRows, agencyRows, tripRows];
+    const listRowsAndSummary = () => [
+      agencyRows,
+      tripRows,
+      [{ count: 2 }],
+      [{ count: 1 }],
+      [{ category: "transport", status: "pending", total: "300", paid: "0", pending: "300", overdue: "0", paidThisMonth: "0" }],
+      [{ category: "transporte", status: "pending", total: "400", paid: "0", pending: "400", overdue: "0", paidThisMonth: "0" }],
+    ];
+    dbState.selectRowsQueue = listRowsAndSummary();
 
     const res = await request(buildApp(paymentsRouter))
       .get("/api/expenses?includeTripCosts=true&tripId=trip-001&status=pending&page=2&limit=2");
@@ -608,7 +623,7 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
     ]);
     expect(res.body.summary.total).toBe(700);
 
-    dbState.selectRowsQueue = [agencyRows, tripRows, agencyRows, tripRows];
+    dbState.selectRowsQueue = listRowsAndSummary();
     const firstPage = await request(buildApp(paymentsRouter))
       .get("/api/expenses?includeTripCosts=true&tripId=trip-001&status=pending&page=1&limit=2");
     expect(firstPage.status).toBe(200);
@@ -690,7 +705,20 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
         createdAt: new Date("2026-09-04T12:00:00Z"),
       },
     ];
-    dbState.selectRowsQueue = [agencyRows, tripRows, agencyRows, tripRows];
+    dbState.selectRowsQueue = [
+      agencyRows,
+      tripRows,
+      [{ count: 2 }],
+      [{ count: 2 }],
+      [
+        { category: "transport", status: "paid", total: "300", paid: "300", pending: "0", overdue: "0", paidThisMonth: "300" },
+        { category: "transport", status: "cancelled", total: "0", paid: "0", pending: "0", overdue: "0", paidThisMonth: "0" },
+      ],
+      [
+        { category: "Transporte", status: "paid", total: "700", paid: "700", pending: "0", overdue: "0", paidThisMonth: "700" },
+        { category: "Transporte", status: "cancelled", total: "0", paid: "0", pending: "0", overdue: "0", paidThisMonth: "0" },
+      ],
+    ];
 
     const res = await request(buildApp(paymentsRouter))
       .get("/api/expenses?includeTripCosts=true&tripId=trip-001");

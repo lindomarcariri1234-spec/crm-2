@@ -13,7 +13,7 @@ import {
   useListSuppliers,
 } from "@workspace/api-client-react";
 import type { Expense } from "@workspace/api-client-react";
-import { EXPENSE_STATUS } from "@workspace/permissions";
+import { ACTIONS, EXPENSE_STATUS, RESOURCES } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,10 +22,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, CheckCircle, TrendingDown, Clock, AlertCircle, ChevronLeft, ChevronRight } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDateOnlyBR } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS as CATEGORY_LABELS } from "@/lib/labels";
 import { ListLoadErrorRow } from "@/components/list-load-error";
 import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Link2, Unlink } from "lucide-react";
 import {
   FinancialConsolidationView,
@@ -43,6 +44,12 @@ type TripPlanningRecord = {
 };
 
 export default function Expenses() {
+  const { can } = usePermissions();
+  const canCreateExpense = can(RESOURCES.FINANCIAL, ACTIONS.CREATE);
+  const canEditExpense = can(RESOURCES.FINANCIAL, ACTIONS.EDIT);
+  const showActionsColumn = canEditExpense;
+  const tableColumnCount = 10 + Number(showActionsColumn);
+
   const [statusFilter, setStatusFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [tripFilter, setTripFilter] = useState("");
@@ -156,21 +163,24 @@ export default function Expenses() {
     ];
   }, [selectedTripFinancialData]);
 
-  const financialRows = tripFilter ? selectedTripActualRows : expenses;
-  const financialSummary = tripFilter
-    ? selectedTripFinancialData?.summary
-      ? {
-          totalRealCosts: selectedTripFinancialData.summary.totalRealCosts,
-          totalPaidCosts: selectedTripFinancialData.summary.totalPaidCosts,
-          totalPendingCosts: selectedTripFinancialData.summary.totalPendingCosts,
-        }
-      : undefined
-    : {
+  const hasFilteredSummary = Boolean(expensesData?.summary);
+  const financialRows = tripFilter
+    ? hasFilteredSummary ? selectedTripActualRows : []
+    : expenses;
+  const financialSummary = hasFilteredSummary
+    ? {
         total: kpis.total,
         paid: kpis.paid,
         pending: kpis.pending,
         overdue: kpis.overdue,
-      };
+      }
+    : undefined;
+  const financialCategoryTotals = hasFilteredSummary
+    ? categoryBreakdown.map(item => ({
+        category: normalizeFinancialCategory(item.category),
+        total: item.total,
+      }))
+    : undefined;
 
   useEffect(() => {
     setPage(1);
@@ -269,9 +279,11 @@ export default function Expenses() {
           <h1 className="text-2xl font-bold tracking-tight">Despesas</h1>
           <p className="text-muted-foreground text-sm">Controle todas as despesas operacionais e por viagem</p>
         </div>
-        <Button onClick={() => setIsCreateOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" /> Registrar Despesa
-        </Button>
+        {canCreateExpense && (
+          <Button onClick={() => setIsCreateOpen(true)}>
+            <Plus className="w-4 h-4 mr-2" /> Registrar Despesa
+          </Button>
+        )}
       </div>
 
       <div className="flex items-center justify-between">
@@ -327,10 +339,7 @@ export default function Expenses() {
         plannedRows={tripFilter ? selectedTripFinancialData?.plannedCosts ?? [] : globalPlannedRows}
         pricing={selectedTripFinancialData?.pricing}
         actualSummary={financialSummary}
-        actualCategoryTotals={tripFilter ? undefined : categoryBreakdown.map(item => ({
-          category: normalizeFinancialCategory(item.category),
-          total: item.total,
-        }))}
+        actualCategoryTotals={financialCategoryTotals}
         title="Visão financeira consolidada"
         description={tripFilter
           ? "Preços por categoria, orçamento planejado, custos da viagem e despesas da agência."
@@ -407,23 +416,23 @@ export default function Expenses() {
               <TableHead>Forma</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Vínculo</TableHead>
-              <TableHead className="text-right">Ações</TableHead>
+              {showActionsColumn && <TableHead className="text-right">Ações</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               Array.from({ length: 5 }).map((_, i) => (
-                <TableRow key={i}>{Array.from({ length: 11 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                <TableRow key={i}>{Array.from({ length: tableColumnCount }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
               ))
             ) : isError ? (
               <ListLoadErrorRow
-                colSpan={11}
+                colSpan={tableColumnCount}
                 onRetry={refetch}
                 message="Não foi possível carregar as despesas."
               />
             ) : expenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-10 text-muted-foreground">
+                <TableCell colSpan={tableColumnCount} className="text-center py-10 text-muted-foreground">
                   {hasFilters ? "Nenhuma despesa com os filtros selecionados." : "Nenhuma despesa registrada."}
                 </TableCell>
               </TableRow>
@@ -451,7 +460,7 @@ export default function Expenses() {
                    ) : e.supplierName ?? "—"}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">{e.tripId ? tripsData?.data.find(t => t.id === e.tripId)?.name ?? e.tripId.slice(0, 8) + "…" : "—"}</TableCell>
-                <TableCell className="text-sm">{new Date(e.dueDate).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}</TableCell>
+                <TableCell className="text-sm">{formatDateOnlyBR(e.dueDate)}</TableCell>
                 <TableCell className="font-medium text-sm">{fmt(e.amount)}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{METHOD_LABELS[e.paymentMethod ?? ""] ?? e.paymentMethod ?? "—"}</TableCell>
                 <TableCell>
@@ -465,29 +474,31 @@ export default function Expenses() {
                       <Link2 className="w-3.5 h-3.5" />
                       Custo {e.linkedTripCostId.slice(0, 8)}…
                     </span>
-                  ) : e.tripId && e.source !== "trip" ? (
+                  ) : canEditExpense && e.tripId && e.source !== "trip" ? (
                     <Button size="sm" variant="outline" onClick={() => setLinkingExpense(e)}>
                       <Link2 className="w-3.5 h-3.5 mr-1" /> Vincular
                     </Button>
                   ) : <span className="text-muted-foreground">—</span>}
                 </TableCell>
-                <TableCell className="text-right">
-                  {e.linkedTripCostId ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleUnlinkFromTripCost(e.id)}
-                      disabled={unlinkExpense.isPending}
-                      title="Desvincular para alterar valor ou status"
-                    >
-                      <Unlink className="w-4 h-4 mr-1" /> Desvincular
-                    </Button>
-                  ) : e.source !== "trip" && e.status !== EXPENSE_STATUS.PAID && e.status !== EXPENSE_STATUS.CANCELLED && (
-                    <Button size="sm" variant="outline" onClick={() => handleMarkPaid(e.id)}>
-                      <CheckCircle className="w-4 h-4 mr-1" /> Pago
-                    </Button>
-                  )}
-                </TableCell>
+                {showActionsColumn && (
+                  <TableCell className="text-right">
+                    {e.linkedTripCostId && canEditExpense ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleUnlinkFromTripCost(e.id)}
+                        disabled={unlinkExpense.isPending}
+                        title="Desvincular para alterar valor ou status"
+                      >
+                        <Unlink className="w-4 h-4 mr-1" /> Desvincular
+                      </Button>
+                    ) : canEditExpense && e.source !== "trip" && e.status !== EXPENSE_STATUS.PAID && e.status !== EXPENSE_STATUS.CANCELLED && (
+                      <Button size="sm" variant="outline" onClick={() => handleMarkPaid(e.id)}>
+                        <CheckCircle className="w-4 h-4 mr-1" /> Pago
+                      </Button>
+                    )}
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>

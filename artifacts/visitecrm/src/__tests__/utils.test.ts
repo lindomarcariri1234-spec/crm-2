@@ -17,6 +17,7 @@ import {
   formatTripDateRange,
   formatTripDateTime,
 } from "../pages/trips/utils.js";
+import { formatDateOnlyBR } from "../lib/utils.js";
 
 describe("formatCurrency", () => {
   it("formats zero as BRL currency", () => {
@@ -74,6 +75,17 @@ describe("formatDate", () => {
   it("returns the original string for a non-date input", () => {
     const result = formatDate("not-a-date");
     expect(result).toBe("not-a-date");
+  });
+});
+
+describe("formatDateOnlyBR", () => {
+  it("keeps an ISO timestamp's calendar date instead of shifting it by timezone", () => {
+    expect(formatDateOnlyBR("2026-09-30T00:00:00.000Z")).toBe("30/09/2026");
+  });
+
+  it("formats a date-only value and safely rejects invalid dates", () => {
+    expect(formatDateOnlyBR("2026-09-30")).toBe("30/09/2026");
+    expect(formatDateOnlyBR("2026-02-30")).toBe("2026-02-30");
   });
 });
 
