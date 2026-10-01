@@ -119,6 +119,7 @@ jobs:
       - name: Build mobile artifacts
         env:
           EXPO_PUBLIC_DOMAIN: visitecrm.com
+          EXPO_METRO_PORT: "8082"
         run: |
           pnpm --filter @workspace/cliente-app run build
           pnpm --filter @workspace/guide-app run build
