@@ -195,14 +195,14 @@ export function TripList() {
             {Object.entries(STATUS_MAP).map(([k, v]) => <SelectItem key={k} value={k}>{v.label}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={typeFilter} onValueChange={v => { setTypeFilter(v); setPage(1); }}>
+        <Select value={typeFilter} onValueChange={setTypeFilter}>
           <SelectTrigger className="w-36"><SelectValue placeholder="Tipo" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos os tipos</SelectItem>
             {TRIP_TYPES.map(t => <SelectItem key={t} value={t}>{TRIP_TYPE_LABELS[t] ?? t}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Input type="date" value={dateFilter} onChange={e => { setDateFilter(e.target.value); setPage(1); }} className="w-40" title="Filtrar por data de saída (a partir de)" />
+        <Input type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)} className="w-40" title="Filtrar por data de saída (a partir de)" />
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="w-4 h-4 mr-1" />Limpar

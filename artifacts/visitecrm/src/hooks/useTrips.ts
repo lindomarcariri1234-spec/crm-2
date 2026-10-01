@@ -17,9 +17,17 @@ export function useTrips() {
 
   const [search, setSearch] = useState(() => new URLSearchParams(searchStr).get("q") ?? "");
   const [statusFilter, setStatusFilter] = useState(() => new URLSearchParams(searchStr).get("status") ?? "all");
-  const [typeFilter, setTypeFilter] = useState(() => new URLSearchParams(searchStr).get("type") ?? "all");
-  const [dateFilter, setDateFilter] = useState(() => new URLSearchParams(searchStr).get("date") ?? "");
+  const [typeFilter, setTypeFilterState] = useState(() => new URLSearchParams(searchStr).get("type") ?? "all");
+  const [dateFilter, setDateFilterState] = useState(() => new URLSearchParams(searchStr).get("date") ?? "");
   const [page, setPage] = useState(() => parseInt(new URLSearchParams(searchStr).get("page") ?? "1") || 1);
+  const setTypeFilter = useCallback((value: string) => {
+    setTypeFilterState(value);
+    setPage(1);
+  }, []);
+  const setDateFilter = useCallback((value: string) => {
+    setDateFilterState(value);
+    setPage(1);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams();
