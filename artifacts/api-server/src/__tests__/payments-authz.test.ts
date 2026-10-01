@@ -21,6 +21,8 @@ import pino from "pino";
  */
 
 import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, ROLES } from "@workspace/permissions";
+import { paymentsTable } from "@workspace/db";
+import { gte, lt } from "drizzle-orm";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -82,7 +84,7 @@ vi.mock("@workspace/db", () => ({
     delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
     transaction: mockTransaction,
   },
-  paymentsTable: {},
+  paymentsTable: { dueDate: "payments.dueDate" },
   expensesTable: mockExpensesTable,
   reservationsTable: {},
   clientsTable: {},
@@ -264,6 +266,23 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "VALIDATION_ERROR" });
     expect(mockSelect).not.toHaveBeenCalled();
+  });
+
+  it("GET /payments → uses inclusive São Paulo day boundaries across a month change", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/payments?dueDateFrom=2026-01-31&dueDateTo=2026-02-01");
+
+    expect(res.status).toBe(200);
+    expect(gte).toHaveBeenCalledWith(
+      paymentsTable.dueDate,
+      new Date("2026-01-31T03:00:00.000Z"),
+    );
+    expect(lt).toHaveBeenCalledWith(
+      paymentsTable.dueDate,
+      new Date("2026-02-02T03:00:00.000Z"),
+    );
   });
 
   it("GET /payments/:id → 403 for SUPPORT (cannot fetch arbitrary payment by id)", async () => {
