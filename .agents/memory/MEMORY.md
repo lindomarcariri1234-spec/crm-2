@@ -123,7 +123,7 @@
 - [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
 - [GitHub workflow permission](github-workflow-permission.md) — repo write access may not permit editing .github/workflows; the separate workflow scope is required.
 - [Vercel monorepo framework](vercel-monorepo-framework.md) — linked monorepos may be classified as Express despite vercel.json; set the Vercel project framework explicitly to Vite.
-- [Vercel canceled Git deployments](vercel-canceled-git-deployments.md) — if an auto deployment cancels before build, create a fresh production deployment from the verified Git SHA.
+- [Vercel canceled Git deployments](vercel-canceled-git-deployments.md) — use the exact source SHA with forceNew; unverified-signature cancellation needs explicit approval before any manual bypass.
 - [Temporary worktree package resolution](temporary-worktree-package-resolution.md) — keep pnpm workspace links in scratch worktrees resolving to that worktree, not the primary checkout.
 - [Mockup sandbox routing isolation](mockup-sandbox-routing-isolation.md) — direct wouter imports can trigger invalid hooks in isolated previews; use a local hash-navigation shim.
 - [Expo watcher pressure from sandbox builds](expo-watcher-pressure-from-sandbox-builds.md) — generated sandbox dist can amplify Metro ENOSPC failures; cleaning it helps, but broader watch limits may persist.
