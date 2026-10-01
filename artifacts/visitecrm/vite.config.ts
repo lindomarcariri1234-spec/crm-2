@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
+import type { Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { readdir, readFile } from "node:fs/promises";
 import path from "path";
 import { execFileSync } from "node:child_process";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
@@ -47,6 +49,53 @@ const publicationIdentityPlugin = {
   },
 };
 
+function staticPublicAssetsPlugin(): Plugin {
+  const publicDirectory = path.resolve(import.meta.dirname, "public");
+  const generatedPublicEntries = new Set([
+    "assets",
+    "index.html",
+    ".publication-version",
+  ]);
+
+  return {
+    name: "visitecrm-static-public-assets",
+    apply: "build",
+    async generateBundle() {
+      const emitDirectory = async (
+        sourceDirectory: string,
+        outputDirectory = "",
+      ) => {
+        for (const entry of await readdir(sourceDirectory, {
+          withFileTypes: true,
+        })) {
+          if (
+            outputDirectory === "" &&
+            generatedPublicEntries.has(entry.name)
+          ) {
+            continue;
+          }
+
+          const sourcePath = path.join(sourceDirectory, entry.name);
+          const outputPath = path.posix.join(outputDirectory, entry.name);
+          if (entry.isDirectory()) {
+            await emitDirectory(sourcePath, outputPath);
+          } else if (entry.isFile()) {
+            this.emitFile({
+              type: "asset",
+              fileName: outputPath,
+              source: await readFile(sourcePath),
+            });
+          }
+        }
+      };
+
+      // run-vercel-build copies the finished storefront back into public/ for
+      // serverless includes. Do not feed that previous build back into Vite.
+      await emitDirectory(publicDirectory);
+    },
+  };
+}
+
 // Replit provisions CLERK_PUBLISHABLE_KEY for the active Clerk environment:
 // the development tenant for workspace previews and the production tenant for
 // published deployments. Keeping this mapping at build time prevents an old
@@ -75,6 +124,7 @@ export default defineConfig({
   define: clerkKeyOverride,
   plugins: [
     publicationIdentityPlugin,
+    staticPublicAssetsPlugin(),
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
@@ -104,6 +154,7 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    copyPublicDir: false,
     // ExcelJS is a single, on-demand third-party runtime (~937 kB minified)
     // that cannot be meaningfully split by Rollup. It is loaded only by the
     // spreadsheet import/download flows. The post-build bundle check enforces
