@@ -27,6 +27,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@workspace/api-client-react", () => ({
+  getListClientsQueryKey: (params: unknown) => ["/api/clients", params],
+  getListCommissionRulesQueryKey: () => ["/api/commission-rules"],
+  getListCommissionsQueryKey: () => ["/api/commissions"],
+  getListExpensesQueryKey: (params: unknown) => ["/api/expenses", params],
+  getListPaymentsQueryKey: (params: unknown) => ["/api/payments", params],
   useGetPaymentsSummary: mocks.useGetPaymentsSummary,
   useListPayments: mocks.useListPayments,
   useListExpenses: mocks.useListExpenses,
@@ -224,9 +229,36 @@ describe("Financial page PMS payment adjustments", () => {
         page: 1,
         limit: 50,
       }),
+      expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
     );
     expect(handle.container.textContent).toContain("Página 1 de 3");
     expect(handle.container.textContent).toContain("Próxima");
+  });
+
+  it("loads only the active tab's list data", async () => {
+    mocks.search = "?tab=expenses";
+
+    await renderComponent(createElement(Financial));
+
+    expect(mocks.useListPayments).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Object),
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
+    expect(mocks.useListExpenses).toHaveBeenCalledWith(
+      { limit: 50 },
+      expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(mocks.useListCommissions).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
+    expect(mocks.useListCommissionRules).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
+    expect(mocks.useListClients).toHaveBeenCalledWith(
+      { limit: 500, page: 1 },
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
   });
 
   it("hides financial mutation controls when the current role lacks permission", async () => {

@@ -2,6 +2,11 @@ import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { localToday } from "@workspace/shared";
 import {
+  getListClientsQueryKey,
+  getListCommissionRulesQueryKey,
+  getListCommissionsQueryKey,
+  getListExpensesQueryKey,
+  getListPaymentsQueryKey,
   useListPayments,
   useListExpenses,
   useListCommissions,
@@ -38,6 +43,8 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS } from "@/lib/labels";
 import { PageHeader } from "@/components/page-header";
 import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
+import { PaymentPagination } from "@/components/financial/payment-pagination";
+import { ReceivablesTab, type UpcomingInstallment } from "@/components/financial/receivables-tab";
 import { useFinancialMetrics } from "@/lib/financial-metrics-api";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useToast } from "@/hooks/use-toast";
@@ -143,50 +150,6 @@ function PaymentMethodChart({ payments }: { payments: Array<{ paymentMethod?: st
   );
 }
 
-function PaymentPagination({
-  page,
-  total,
-  pageSize,
-  onPageChange,
-}: {
-  page: number;
-  total: number;
-  pageSize: number;
-  onPageChange: (page: number) => void;
-}) {
-  if (total === 0) return null;
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const firstItem = (page - 1) * pageSize + 1;
-  const lastItem = Math.min(page * pageSize, total);
-  return (
-    <div className="flex flex-col gap-2 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-xs text-muted-foreground" aria-live="polite">
-        {firstItem}–{lastItem} de {total} lançamentos · Página {page} de {pageCount}
-      </p>
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={page <= 1}
-          onClick={() => onPageChange(page - 1)}
-        >
-          Anterior
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={page >= pageCount}
-          onClick={() => onPageChange(page + 1)}
-        >
-          Próxima
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 const VALID_TABS = ["receivable", "payable", "expenses", "commissions", "settlement", "rules"];
 
 type SettlementData = {
@@ -228,6 +191,7 @@ export default function Financial() {
   // subsequent URL changes are handled by the useEffect below (searchStr dep) to avoid resetting user-selected tabs.
   }, []);
   const [tab, setTab] = useState(initialTab);
+  const isPaymentsTab = tab === "receivable" || tab === "payable";
 
   useEffect(() => {
     const params = new URLSearchParams(searchStr);
@@ -261,10 +225,7 @@ export default function Financial() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, statusFilter, categoryFilter, dateFrom, dateTo, pmsReservationFilter, pmsAdjustedByFilter]);
   const [showUpcomingInstallments, setShowUpcomingInstallments] = useState(false);
-  const [upcomingInstallments, setUpcomingInstallments] = useState<Array<{
-    id: string; reservationId: string; installmentNumber: number; dueDate: string;
-    amount: number; clientName: string | null; tripName: string | null; voucherCode: string | null;
-  }>>([]);
+  const [upcomingInstallments, setUpcomingInstallments] = useState<UpcomingInstallment[]>([]);
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
   const [upcomingError, setUpcomingError] = useState<string | null>(null);
   const [settlement, setSettlement] = useState<SettlementData | null>(null);
@@ -330,25 +291,38 @@ export default function Financial() {
     reader.readAsDataURL(file);
   }, []);
 
-  const {
-    data: paymentsData,
-    isLoading: loadingPayments,
-    isError: paymentsError,
-    refetch: refetchPayments,
-  } = useListPayments({
+  const paymentListParams = {
     type: tab === "receivable" || tab === "payable" ? tab : undefined,
     status: statusFilter || undefined,
     dueDateFrom: dateFrom || undefined,
     dueDateTo: dateTo || undefined,
     page: paymentsPage,
     limit: PAYMENTS_PAGE_SIZE,
+  };
+  const {
+    data: paymentsData,
+    isLoading: loadingPayments,
+    isError: paymentsError,
+    refetch: refetchPayments,
+  } = useListPayments(paymentListParams, {
+    query: { enabled: isPaymentsTab, queryKey: getListPaymentsQueryKey(paymentListParams) },
   });
   const { data: allReceivedPayments } = useListPayments({ type: PAYMENT_TYPE.RECEIVABLE, status: PAYMENT_STATUS.PAID, limit: 500 });
-  const { data: expensesData, isLoading: loadingExpenses, refetch: refetchExpenses } = useListExpenses({ limit: 50 });
-  const { data: commissionsData, isLoading: loadingCommissions, refetch: refetchCommissions } = useListCommissions();
-  const { data: rulesData, isLoading: loadingRules, refetch: refetchRules } = useListCommissionRules();
+  const { data: expensesData, isLoading: loadingExpenses, refetch: refetchExpenses } = useListExpenses(
+    { limit: 50 },
+    { query: { enabled: tab === "expenses", queryKey: getListExpensesQueryKey({ limit: 50 }) } },
+  );
+  const { data: commissionsData, isLoading: loadingCommissions, refetch: refetchCommissions } = useListCommissions({
+    query: { enabled: tab === "commissions", queryKey: getListCommissionsQueryKey() },
+  });
+  const { data: rulesData, isLoading: loadingRules, refetch: refetchRules } = useListCommissionRules({
+    query: { enabled: tab === "rules", queryKey: getListCommissionRulesQueryKey() },
+  });
   const { data: chartData } = useGetDashboardRevenueChart({ period: "12m" });
-  const { data: clientsData } = useListClients({ limit: 500, page: 1 });
+  const { data: clientsData } = useListClients(
+    { limit: 500, page: 1 },
+    { query: { enabled: tab === "receivable", queryKey: getListClientsQueryKey({ limit: 500, page: 1 }) } },
+  );
   const financialAdjustmentFilters = useMemo(() => ({
     reservationNumber: pmsReservationFilter.trim() || undefined,
     adjustedBy: pmsAdjustedByFilter.trim() || undefined,
@@ -846,132 +820,25 @@ export default function Financial() {
         </div>
 
         <TabsContent value="receivable" className="mt-4 space-y-4">
-          {showUpcomingInstallments && (
-            <div className="bg-orange-50 border border-orange-200 rounded-lg overflow-hidden">
-              <div className="px-4 py-3 bg-orange-100 border-b border-orange-200 flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-orange-800">📅 Parcelas com vencimento nos próximos 7 dias</h3>
-                <span className="text-xs text-orange-600">{upcomingInstallments.length} parcela(s)</span>
-              </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Reserva</TableHead>
-                    <TableHead>Cliente</TableHead>
-                    <TableHead>Viagem</TableHead>
-                    <TableHead>Parcela</TableHead>
-                    <TableHead>Vencimento</TableHead>
-                    <TableHead>Valor</TableHead>
-                    <TableHead className="text-right">Ação</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loadingUpcoming ? (
-                    Array.from({ length: 3 }).map((_, i) => (
-                      <TableRow key={i}>{Array.from({ length: 7 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                    ))
-                  ) : upcomingError ? (
-                    <TableRow>
-                      <TableCell colSpan={7} className="py-6 text-center text-sm text-destructive">
-                        <div className="flex flex-wrap items-center justify-center gap-3">
-                          <span role="alert">{upcomingError}</span>
-                          <Button size="sm" variant="outline" onClick={() => void fetchUpcomingInstallments()}>
-                            Tentar novamente
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ) : upcomingInstallments.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground text-sm">Nenhuma parcela vencendo nos próximos 7 dias.</TableCell></TableRow>
-                  ) : upcomingInstallments.map(inst => (
-                    <TableRow key={inst.id} className="hover:bg-orange-50/50">
-                      <TableCell className="font-mono text-xs">{inst.voucherCode ?? "—"}</TableCell>
-                      <TableCell className="text-sm">{inst.clientName ?? "—"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground truncate max-w-[140px]">{inst.tripName ?? "—"}</TableCell>
-                      <TableCell className="text-sm text-center">#{inst.installmentNumber}</TableCell>
-                      <TableCell className="text-sm font-medium text-orange-700">{formatDate(String(inst.dueDate))}</TableCell>
-                      <TableCell className="font-semibold text-sm">{fmt(inst.amount)}</TableCell>
-                      <TableCell className="text-right">
-                        <Link href={`/reservations?id=${inst.reservationId}`}>
-                          <Button size="sm" variant="outline" className="h-7 px-2 text-xs">
-                            <ExternalLink className="w-3 h-3 mr-1" /> Ver reserva
-                          </Button>
-                        </Link>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          <div className="bg-card rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Descrição</TableHead>
-                  <TableHead>Cliente</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead>Vencimento</TableHead>
-                  <TableHead>Valor</TableHead>
-                  <TableHead>Forma</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loadingPayments ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                  ))
-                ) : paymentsError ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="py-6 text-center text-sm text-destructive">
-                      <div className="flex flex-wrap items-center justify-center gap-3">
-                        <span role="alert">Não foi possível carregar os recebíveis.</span>
-                        <Button size="sm" variant="outline" onClick={() => void refetchPayments()}>
-                          Tentar novamente
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : paymentRows.length === 0 ? (
-                  <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">Nenhum lançamento encontrado.</TableCell></TableRow>
-                ) : paymentRows.map(p => (
-                  <TableRow key={p.id}>
-                    <TableCell><p className="font-medium text-sm">{p.description || "—"}</p></TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{p.clientId ? (clientMap[p.clientId] ?? "—") : "—"}</TableCell>
-                    <TableCell><span className="text-xs text-muted-foreground">{p.category}</span></TableCell>
-                    <TableCell className="text-sm">{formatDate(String(p.dueDate))}</TableCell>
-                    <TableCell className="font-medium text-sm">{fmt(p.amount)}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}</TableCell>
-                    <TableCell>
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[p.status] ?? "bg-gray-100 text-gray-800"}`}>
-                        {STATUS_LABELS[p.status] ?? p.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {canEditFinancial && p.status === PAYMENT_STATUS.PENDING && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={updatePayment.isPending}
-                          onClick={() => void handleMarkPaid(p.id)}
-                        >
-                          <CheckCircle className="w-4 h-4 mr-1" /> Recebido
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-              <PaymentPagination
-                page={paymentsPage}
-                total={paymentTotal}
-                pageSize={PAYMENTS_PAGE_SIZE}
-                onPageChange={setPaymentsPage}
-              />
-          </div>
+          <ReceivablesTab
+            showUpcomingInstallments={showUpcomingInstallments}
+            upcomingInstallments={upcomingInstallments}
+            loadingUpcoming={loadingUpcoming}
+            upcomingError={upcomingError}
+            onRetryUpcoming={() => void fetchUpcomingInstallments()}
+            loadingPayments={loadingPayments}
+            paymentsError={paymentsError}
+            onRetryPayments={() => void refetchPayments()}
+            paymentRows={paymentRows}
+            clientMap={clientMap}
+            canEditFinancial={canEditFinancial}
+            updatePaymentPending={updatePayment.isPending}
+            onMarkPaid={(paymentId) => void handleMarkPaid(paymentId)}
+            page={paymentsPage}
+            total={paymentTotal}
+            pageSize={PAYMENTS_PAGE_SIZE}
+            onPageChange={setPaymentsPage}
+          />
         </TabsContent>
 
         <TabsContent value="payable" className="mt-4">
