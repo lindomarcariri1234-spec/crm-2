@@ -589,6 +589,9 @@ export default function Financial() {
       </Card>
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+        <p className="col-span-full -mb-2 text-xs text-muted-foreground" data-testid="text-financial-kpi-period">
+          Período: {financialMetrics?.period.label ?? "mês atual"} (BRT). Os filtros de data das listas não alteram este resumo.
+        </p>
         <KpiCard
           icon={TrendingUp}
           label="Receita Recebida"
@@ -601,14 +604,14 @@ export default function Financial() {
           icon={CheckCircle}
           label="Receita Contratada"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalTotals?.bookedRevenue ?? 0)}
-          sub={`Descontos: ${fmt(canonicalTotals?.discounts ?? 0)}`}
+          sub={`Mês atual · Descontos: ${fmt(canonicalTotals?.discounts ?? 0)}`}
           color="text-blue-600"
         />
         <KpiCard
           icon={AlertCircle}
           label="A Receber"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalTotals?.receivable ?? 0)}
-          sub={`Vencido: ${fmt(canonicalTotals?.overdueReceivable ?? 0)}`}
+          sub={`Vencimentos do mês · vencido: ${fmt(canonicalTotals?.overdueReceivable ?? 0)}`}
           color="text-yellow-600"
           trend="down"
         />
@@ -616,7 +619,7 @@ export default function Financial() {
           icon={TrendingDown}
           label="Custos Operacionais Pagos"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalCosts)}
-          sub={`A pagar: ${fmt(canonicalTotals?.payable ?? 0)}`}
+          sub={`Pagos no mês · a pagar: ${fmt(canonicalTotals?.payable ?? 0)}`}
           color="text-red-600"
         />
       </div>

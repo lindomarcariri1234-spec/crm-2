@@ -382,6 +382,9 @@ function AgencyDashboard() {
              <div className="w-2 h-5 rounded-full bg-[#4C8B5F]" />
              <h2 className="text-sm font-semibold text-[#356B46] uppercase tracking-wide">Financeiro</h2>
           </div>
+          <p className="-mt-2 mb-4 text-xs text-muted-foreground">
+            Receita, custos, lucro e margem consideram o mês atual (BRT). Contas vencidas e dívidas são saldos atuais; o ticket médio considera o histórico de reservas confirmadas.
+          </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub="Caixa recebido no mês atual (BRT)" icon={TrendingUp} loading={loadingFinancialMetrics} color="text-emerald-600" highlight="green" />
             <KpiCard title="Custos Pagos" value={formatCurrency(financialMetrics?.totals.operatingCostsPaid ?? 0)} sub="Despesas gerais + custos de viagem" icon={TrendingDown} loading={loadingFinancialMetrics} color="text-red-500" />
@@ -402,7 +405,7 @@ function AgencyDashboard() {
               loading={loadingFinancialMetrics}
               color={(financialMetrics?.totals.margin ?? 0) >= 20 ? "text-emerald-600" : (financialMetrics?.totals.margin ?? 0) >= 10 ? "text-yellow-600" : "text-red-600"}
             />
-             <KpiCard title="Ticket Médio" value={formatCurrency(summary?.avgTicket ?? 0)} sub="Por reserva confirmada" icon={Target} loading={loadingSummary} color="text-[#5D3E2A]" />
+             <KpiCard title="Ticket Médio" value={formatCurrency(summary?.avgTicket ?? 0)} sub="Histórico de reservas confirmadas" icon={Target} loading={loadingSummary} color="text-[#5D3E2A]" />
             <KpiCard
               title="Contas Vencidas"
               value={formatCurrency(financialMetrics?.totals.overdueReceivable ?? 0)}
