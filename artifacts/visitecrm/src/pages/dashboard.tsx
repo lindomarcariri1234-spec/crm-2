@@ -388,7 +388,7 @@ function AgencyDashboard() {
              <h2 className="text-sm font-semibold text-[#356B46] uppercase tracking-wide">Financeiro</h2>
           </div>
           <p className="-mt-2 mb-4 text-xs text-muted-foreground">
-            Período: {FINANCIAL_METRICS_PERIOD_SELECTION_LABELS[financialPeriod]}. Contas vencidas e dívidas são saldos atuais; o ticket médio considera o histórico de reservas confirmadas.
+            Período: {FINANCIAL_METRICS_PERIOD_SELECTION_LABELS[financialPeriod]}. Vencidos consideram parcelas com vencimento no período; dívidas incluem o saldo atual de indicação e comissões não pagas criadas no período. O ticket médio considera o histórico de reservas confirmadas.
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub={financialPeriod === "current" ? "Caixa recebido no mês atual (BRT)" : "Caixa recebido no período"} icon={TrendingUp} loading={loadingFinancialMetrics} color="text-emerald-600" highlight="green" />
@@ -414,7 +414,7 @@ function AgencyDashboard() {
             <KpiCard
               title="Contas Vencidas"
               value={formatCurrency(financialMetrics?.totals.overdueReceivable ?? 0)}
-              sub={`Saldo vencido atual · ${summary?.overduePaymentsCount ?? 0} cobranças`}
+              sub="Parcelas vencidas com vencimento no período"
               icon={AlertTriangle}
               loading={loadingFinancialMetrics}
               color={(summary?.overduePaymentsCount ?? 0) > 0 ? "text-red-600" : "text-muted-foreground"}

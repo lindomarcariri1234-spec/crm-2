@@ -19,9 +19,9 @@ export const FINANCIAL_METRIC_CONTRACTS = {
   bookedRevenue: "Eligible reservations created in the period; totalValue (net booked value).",
   receivedRevenue: "Eligible receivable payments paid in the period; each payment id is counted once.",
   receivable: "Open receivable payments due in the period (pending, overdue, or approved); cancelled/refunded/failed payments are excluded.",
-  overdueReceivable: "Open receivable payments whose due date is before the report generation time.",
+  overdueReceivable: "Open receivable payments with a due date in the selected period that is before the report generation time.",
   payable: "Open payable payments due in the period (pending, overdue, or approved).",
-  overduePayable: "Open payable payments whose due date is before the report generation time.",
+  overduePayable: "Open payable payments with a due date in the selected period that is before the report generation time.",
   discounts: "discountTotal attributed from eligible reservations created in the period.",
   clientReferralBonuses: "Non-reversed referral bonusAmount whose bonusPaidAt is in the period.",
   clientReferralCredits: "Non-reversed referral bonusCreditUsedAmount whose bonusCreditUsedAt is in the period.",
@@ -34,7 +34,7 @@ export const FINANCIAL_METRIC_CONTRACTS = {
   tripCosts: "Incurred, non-cancelled, unlinked trip costs due or created in the period.",
   tripCostsPaid: "Unlinked trip costs paid in the period, dated by paidAt.",
   userReferralBalance: "Current tenant user referral-balance snapshot; it is not filtered by period and is not revenue.",
-  userDebt: "Current agency liability to users: referral balances plus unpaid seller and referral commissions.",
+  userDebt: "Current user referral balances plus unpaid seller and referral commissions created in the selected period.",
   operatingCostsPaid: "Paid general expenses plus paid unlinked trip costs. A linked pair is counted once through the expense and uses the expense payment date.",
   profit: "Cash profit: receivedRevenue minus operatingCostsPaid, paid seller/referral commissions, and client referral bonuses paid.",
   margin: "profit / receivedRevenue * 100 (zero when no received revenue).",
@@ -264,15 +264,21 @@ export function buildFinancialMetricFilters(
       eq(paymentsTable.tenantId, tenantId),
       inArray(paymentsTable.type, ["receivable", "payable"]),
       inArray(paymentsTable.status, ["pending", "overdue", "approved"]),
+      gte(paymentsTable.dueDate, period.start),
+      lt(paymentsTable.dueDate, period.end),
       lt(paymentsTable.dueDate, asOf),
     ),
     unpaidSellerCommissions: and(
       eq(commissionsTable.tenantId, tenantId),
       sql`${commissionsTable.status} not in ('paid', 'cancelled', 'refunded', 'failed', 'charged_back')`,
+      gte(commissionsTable.createdAt, period.start),
+      lt(commissionsTable.createdAt, period.end),
     ),
     unpaidReferralCommissions: and(
       eq(referralCommissionsTable.tenantId, tenantId),
       sql`${referralCommissionsTable.status} not in ('paid', 'cancelled', 'refunded', 'failed', 'charged_back')`,
+      gte(referralCommissionsTable.createdAt, period.start),
+      lt(referralCommissionsTable.createdAt, period.end),
     ),
     pmsPaymentAdjustments: and(...pmsPaymentAdjustmentFilters),
   };
@@ -390,10 +396,14 @@ export function calculateFinancialMetrics(
       else diagnostics.unallocatedPaymentIds.push(String(row.id));
     } else if (type === "receivable" && openReceivableStatuses.has(status)) {
       if (inPeriod(row.dueDate, period)) total.receivable += amount;
-      if (row.dueDate instanceof Date && row.dueDate < asOf) total.overdueReceivable += amount;
+      if (row.dueDate instanceof Date && inPeriod(row.dueDate, period) && row.dueDate < asOf) {
+        total.overdueReceivable += amount;
+      }
     } else if (type === "payable" && openReceivableStatuses.has(status)) {
       if (inPeriod(row.dueDate, period)) total.payable += amount;
-      if (row.dueDate instanceof Date && row.dueDate < asOf) total.overduePayable += amount;
+      if (row.dueDate instanceof Date && inPeriod(row.dueDate, period) && row.dueDate < asOf) {
+        total.overduePayable += amount;
+      }
     }
   }
   const accumulate = (rows: AnyRow[], source: string, metric: keyof typeof total, dates: string[], tripMap?: Record<string, number>, userMap?: Record<string, number>) => {
@@ -435,10 +445,10 @@ export function calculateFinancialMetrics(
   }
   for (const user of sources.users) total.userReferralBalance += cents(user.referralBalance);
   let unpaidSeller = sources.commissions
-    .filter(row => eligibleRow(row) && String(row.status).toLowerCase() !== paidStatus)
+    .filter(row => eligibleRow(row) && String(row.status).toLowerCase() !== paidStatus && inPeriod(row.createdAt, period))
     .reduce((sum, row) => sum + cents(row.commissionAmount), 0);
   let unpaidReferral = sources.referralCommissions
-    .filter(row => eligibleRow(row) && String(row.status).toLowerCase() !== paidStatus)
+    .filter(row => eligibleRow(row) && String(row.status).toLowerCase() !== paidStatus && inPeriod(row.createdAt, period))
     .reduce((sum, row) => sum + cents(row.amount), 0);
   if (snapshot) {
     total.overdueReceivable = cents(snapshot.overdueReceivable);

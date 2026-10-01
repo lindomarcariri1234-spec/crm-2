@@ -326,7 +326,7 @@ export default function Analytics() {
         <KpiCard icon={TrendingUp} label="Taxa de Conversao" value={`${conversionRate.toFixed(1)}%`} sub="Reservas / Negocios" color="text-orange-600" loading={isLoading} />
         <KpiCard icon={Users} label="Total de Clientes" value={String(summary?.totalClients ?? 0)} sub={`+${summary?.newClientsThisMonth ?? 0} este mes`} color="text-teal-600" loading={isLoading} />
         <KpiCard icon={MapPin} label="Viagens Ativas" value={String(summary?.activeTrips ?? 0)} sub={`${summary?.occupancyRate?.toFixed(1) ?? 0}% ocupacao media`} color="text-indigo-600" loading={isLoading} />
-        <KpiCard icon={BarChart2} label="A receber no período" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Recebíveis com vencimento no período · vencido: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading || financialMetricsFetching} />
+        <KpiCard icon={BarChart2} label="A receber no período" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Recebíveis com vencimento no período · vencidos no período: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading || financialMetricsFetching} />
       </div>
 
         <FinancialMetricsOverview period={period} showPeriodSelector={false} />

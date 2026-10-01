@@ -1,10 +1,12 @@
 ---
-name: Financial snapshot scaling
-description: How to keep period reports bounded without changing current overdue and liability snapshots
+name: Financial balance period scoping
+description: How financial periods filter overdue items and unpaid commissions while preserving the current user referral balance
 ---
 
-Period metrics should load only rows within their reporting windows. Current overdue balances and liabilities are different: they span history, so compute them as SQL aggregates and merge the scalar results into the report rather than loading every matching row.
+For period reports, overdue receivables and payables include only currently open payments whose due date falls inside the selected window and before the report's as-of time. User debt combines the current tenant-wide user referral balance with currently unpaid seller and referral commissions created inside the selected window.
 
-**Why:** Filtering periodic sources alone can look like a performance fix while historical open payments and unpaid commissions still grow API memory and response time without bound.
+Keep these totals as SQL aggregates rather than loading all matching history. The referral balance remains a current snapshot because the metrics endpoint does not have a reliable period-level balance breakdown.
 
-**How to apply:** Whenever a financial report combines period activity with an as-of snapshot, keep the activity row-bounded, aggregate the snapshot in PostgreSQL, and index both date-window and snapshot predicates by tenant/status.
+**Why:** The chosen reporting meaning is current open obligations associated with dates in the selected period, not a reconstruction of historical balances. The referral balance itself remains current; summing it as if it were earned in the selected window would misstate the metric.
+
+**How to apply:** Keep date predicates tenant-scoped and end-exclusive. Use due dates for overdue payments and creation dates for unpaid commissions. Keep UI labels explicit that user debt includes the current referral balance plus period-scoped unpaid commissions; do not call the whole total a historical or period balance.

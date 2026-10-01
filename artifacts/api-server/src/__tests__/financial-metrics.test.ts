@@ -107,6 +107,30 @@ describe("canonical financial metrics", () => {
     });
   });
 
+  it("scopes open overdue amounts and unpaid commissions to the selected period", () => {
+    const result = calculateFinancialMetrics(sources({
+      payments: [
+        { id: "overdue-in-period", type: "receivable", status: "pending", amount: "25", dueDate: date("2025-02-20T12:00:00Z") },
+        { id: "overdue-before-period", type: "receivable", status: "pending", amount: "100", dueDate: date("2025-01-20T12:00:00Z") },
+      ],
+      commissions: [
+        { id: "unpaid-in-period", status: "approved", commissionAmount: "3", createdAt: date("2025-02-10T12:00:00Z") },
+        { id: "unpaid-before-period", status: "approved", commissionAmount: "30", createdAt: date("2025-01-10T12:00:00Z") },
+      ],
+      referralCommissions: [
+        { id: "referral-unpaid-in-period", status: "approved", amount: "2", createdAt: date("2025-02-12T12:00:00Z") },
+        { id: "referral-unpaid-before-period", status: "approved", amount: "20", createdAt: date("2025-01-12T12:00:00Z") },
+      ],
+      users: [{ id: "user", referralBalance: "10" }],
+    }), { ...period, asOf: date("2025-03-01T03:00:00Z") });
+
+    expect(result.totals).toMatchObject({
+      overdueReceivable: 25,
+      userReferralBalance: 10,
+      userDebt: 15,
+    });
+  });
+
   it("discloses PMS payment adjustments without counting them as revenue", () => {
     const result = calculateFinancialMetrics(sources({
       reservations: [
@@ -196,7 +220,17 @@ describe("canonical financial metrics", () => {
       expect(query.params, query.sql).not.toContain("another-tenant");
     }
     expect(dialect.sqlToQuery(filters.payments!).params).not.toContain(asOf);
-    expect(dialect.sqlToQuery(filters.overduePayments!).params).toContain(asOf.toISOString());
+    expect(dialect.sqlToQuery(filters.overduePayments!).params).toEqual(expect.arrayContaining([
+      period.start.toISOString(),
+      period.end.toISOString(),
+      asOf.toISOString(),
+    ]));
+    for (const filter of [filters.unpaidSellerCommissions, filters.unpaidReferralCommissions]) {
+      expect(dialect.sqlToQuery(filter!).params).toEqual(expect.arrayContaining([
+        period.start.toISOString(),
+        period.end.toISOString(),
+      ]));
+    }
 
     const filtered = buildFinancialMetricFilters(tenantId, period, asOf, {
       reservationNumber: "PMS-001",

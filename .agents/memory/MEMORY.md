@@ -89,7 +89,7 @@
 - [Query error branches and hook order](query-error-hook-order.md) — aggregate query-error UI must not return before later React hooks in the same component.
 - [Migration validator parsing](migration-validator-alter-table.md) — recognize IF EXISTS, comma-separated ADD COLUMNs, and unindented CREATE TABLE blocks (see [indentation detail](validate-tables-indent.md)).
 - [Canonical financial metric semantics](canonical-financial-metrics.md) — keep cash, accrual, credits, commissions and user liabilities separate; never merge cross-source rows by similarity.
-- [Financial snapshot scaling](financial-snapshot-scaling.md) — period rows may be bounded, but current overdue/debt snapshots must be SQL aggregates or historical liabilities still grow API memory.
+- [Financial balance period scoping](financial-snapshot-scaling.md) — overdue payments use due dates, unpaid commissions use creation dates, and user referral balance remains current.
 - [Multichannel delivery history](multichannel-delivery-history.md) — preserve numeric delivery attempts and expose detailed provider attempts under a separate history field.
 - [PostgreSQL parameter casts](postgres-parameter-casts.md) — raw SQL arithmetic needs explicit casts when interpolated values arrive as unknown parameters.
 - [Client deletion and trip history](client-deletion-trip-history.md) — anonymize reservation ownership on account removal while preserving passengers, seats, payments, and history

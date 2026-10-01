@@ -623,7 +623,7 @@ export default function Financial() {
           icon={AlertCircle}
           label="A Receber"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalTotals?.receivable ?? 0)}
-          sub={`Vencimentos no período · vencido atual: ${fmt(canonicalTotals?.overdueReceivable ?? 0)}`}
+          sub={`Vencimentos no período · vencido no período: ${fmt(canonicalTotals?.overdueReceivable ?? 0)}`}
           color="text-yellow-600"
           trend="down"
         />
@@ -670,17 +670,17 @@ export default function Financial() {
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">A Receber</p>
                     <p className="text-lg font-semibold text-blue-600">{fmt(canonicalTotals?.receivable ?? 0)}</p>
-                    <p className="text-[10px] text-muted-foreground">Vencido: {fmt(canonicalTotals?.overdueReceivable ?? 0)}</p>
+                    <p className="text-[10px] text-muted-foreground">Vencido no período: {fmt(canonicalTotals?.overdueReceivable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">A Pagar Pendente</p>
                     <p className="text-lg font-semibold text-orange-600">{fmt(canonicalTotals?.payable ?? 0)}</p>
-                    <p className="text-[10px] text-muted-foreground">Vencido: {fmt(canonicalTotals?.overduePayable ?? 0)}</p>
+                    <p className="text-[10px] text-muted-foreground">Vencido no período: {fmt(canonicalTotals?.overduePayable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">Dívidas com Usuários</p>
                     <p className="text-lg font-semibold">{fmt(canonicalTotals?.userDebt ?? 0)}</p>
-                    <p className="text-[10px] text-muted-foreground">Saldos e comissões não pagas</p>
+                    <p className="text-[10px] text-muted-foreground">Saldo atual de indicação + comissões não pagas criadas no período</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">Bônus e Créditos</p>
