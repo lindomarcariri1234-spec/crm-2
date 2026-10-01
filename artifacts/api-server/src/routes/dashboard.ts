@@ -8,7 +8,7 @@ function brazilUTC(year: number, month1Based: number, day: number): Date {
 }
 import { db } from "@workspace/db";
 import { clientsTable, tripsTable, reservationsTable, paymentsTable, dealsTable, npsResponsesTable, expensesTable, passengersTable, loyaltyMembersTable } from "@workspace/db";
-import { eq, and, asc, gte, lte, lt, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, asc, gte, desc, sql, inArray } from "drizzle-orm";
 import { requireAuth } from "../lib/tenant";
 import { roundMoney } from "../lib/pricing";
 import { ForbiddenError, ValidationError } from "../lib/errors";
@@ -25,6 +25,46 @@ const RevenueChartQuery = z.object({
 const ChartsQuery = z.object({
   period: z.enum(["3m", "6m", "12m"]).default("12m"),
 });
+
+function dashboardPaymentMetricSelection(
+  startOfMonth: Date,
+  startOfToday: Date,
+  next3Days: Date,
+  now: Date,
+) {
+  const paidReceivable = sql`${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+    AND ${paymentsTable.status} = ${PAYMENT_STATUS.PAID}`;
+  const pending = sql`${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}`;
+  const pendingReceivable = sql`${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+    AND ${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}`;
+  const pendingPayable = sql`${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE}
+    AND ${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}`;
+
+  return {
+    totalRevenue: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${paidReceivable}), 0)`,
+    revenueThisMonth: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${paidReceivable} AND ${paymentsTable.paidAt} >= ${startOfMonth}), 0)`,
+    pendingPayments: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pending}), 0)`,
+    receivedToday: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${paidReceivable} AND ${paymentsTable.paidAt} >= ${startOfToday}), 0)`,
+    toReceiveNext3Days: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingReceivable}
+        AND ${paymentsTable.dueDate} >= ${startOfToday}
+        AND ${paymentsTable.dueDate} <= ${next3Days}), 0)`,
+    totalPayable: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingPayable}), 0)`,
+    pendingReceivable: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingReceivable}), 0)`,
+    overduePaymentsCount: sql<number>`count(*) filter (where ${pendingReceivable}
+      AND ${paymentsTable.dueDate} < ${now})`,
+    overduePayments: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingReceivable} AND ${paymentsTable.dueDate} < ${now}), 0)`,
+    payingClientCount: sql<number>`count(distinct ${paymentsTable.clientId})
+      filter (where ${paidReceivable})`,
+  };
+}
 
 const router = Router();
 
@@ -75,32 +115,34 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
     }
 
     if (me.role === ROLES.SALES) {
-      const [clientCount] = await db.select({ count: sql<number>`count(*)` })
-        .from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me)));
-      const [newClientCount] = await db.select({ count: sql<number>`count(*)` })
-        .from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me), gte(clientsTable.createdAt, startOfMonth)));
-
-      const myClients = await db.select({ id: clientsTable.id }).from(clientsTable)
+      const [sellerClientSummary] = await db.select({
+        count: sql<number>`count(*)`,
+        newCount: sql<number>`count(*) filter (where ${clientsTable.createdAt} >= ${startOfMonth})`,
+      }).from(clientsTable)
         .where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me)));
-      const myClientIds = myClients.map(c => c.id);
+      const hasSellerClients = Number(sellerClientSummary?.count ?? 0) > 0;
 
-      let totalRevenue = 0, revenueThisMonth = 0, pendingAmount = 0, receivedToday = 0;
-      if (myClientIds.length > 0) {
-        const payments = await db.select().from(paymentsTable)
-          .where(and(eq(paymentsTable.tenantId, tenantId), inArray(paymentsTable.clientId, myClientIds)));
-        for (const p of payments) {
-          if (p.type === PAYMENT_TYPE.RECEIVABLE && p.status === PAYMENT_STATUS.PAID) {
-            totalRevenue += Number(p.amount);
-            if (p.paidAt && p.paidAt >= startOfMonth) revenueThisMonth += Number(p.amount);
-            if (p.paidAt && p.paidAt >= startOfToday) receivedToday += Number(p.amount);
-          }
-          if (p.status === PAYMENT_STATUS.PENDING) pendingAmount += Number(p.amount);
-        }
-      }
+      const [sellerPaymentSummary] = hasSellerClients
+        ? await db.select(dashboardPaymentMetricSelection(startOfMonth, startOfToday, next3Days, now))
+          .from(paymentsTable)
+          .innerJoin(clientsTable, and(
+            eq(paymentsTable.clientId, clientsTable.id),
+            eq(paymentsTable.tenantId, clientsTable.tenantId),
+          ))
+          .where(and(
+            eq(paymentsTable.tenantId, tenantId),
+            eq(clientsTable.tenantId, tenantId),
+            clientSellerScopeCondition(me),
+          ))
+        : [undefined];
+      const totalRevenue = Number(sellerPaymentSummary?.totalRevenue ?? 0);
+      const revenueThisMonth = Number(sellerPaymentSummary?.revenueThisMonth ?? 0);
+      const pendingAmount = Number(sellerPaymentSummary?.pendingPayments ?? 0);
+      const receivedToday = Number(sellerPaymentSummary?.receivedToday ?? 0);
 
       let totalReservations = 0, confirmedReservations = 0, cancelledReservations = 0, reservationsToday = 0;
       let avgTicket = 0, activeClientsCount = 0;
-      if (myClientIds.length > 0) {
+      if (hasSellerClients) {
         const [rc] = await db.select({ count: sql<number>`count(*)` })
           .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), reservationSellerScopeCondition(me)));
         const [cc] = await db.select({ count: sql<number>`count(*)` })
@@ -115,8 +157,8 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
         .from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN), eq(dealsTable.ownerId, me.id)));
 
       res.json({
-        totalClients: Number(clientCount?.count ?? 0),
-        newClientsThisMonth: Number(newClientCount?.count ?? 0),
+        totalClients: Number(sellerClientSummary?.count ?? 0),
+        newClientsThisMonth: Number(sellerClientSummary?.newCount ?? 0),
         totalTrips: 0, activeTrips: 0,
         totalRevenue: roundMoney(totalRevenue),
         revenueThisMonth: roundMoney(revenueThisMonth),
@@ -134,165 +176,161 @@ router.get("/dashboard/summary", async (req, res, next: NextFunction): Promise<v
     }
 
     // Admin / owner role
-    const [clientCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(clientsTable).where(eq(clientsTable.tenantId, tenantId));
-    const [newClientCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), gte(clientsTable.createdAt, startOfMonth)));
+    const [clientSummary] = await db.select({
+      count: sql<number>`count(*)`,
+      newCount: sql<number>`count(*) filter (where ${clientsTable.createdAt} >= ${startOfMonth})`,
+    }).from(clientsTable).where(eq(clientsTable.tenantId, tenantId));
 
-    const [tripCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(tripsTable).where(eq(tripsTable.tenantId, tenantId));
-    const [activeTripCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), eq(tripsTable.status, TRIP_STATUS.ACTIVE)));
+    const activeTripCondition = sql`${tripsTable.status} = ${TRIP_STATUS.ACTIVE}`;
+    const [tripSummary] = await db.select({
+      count: sql<number>`count(*)`,
+      activeCount: sql<number>`count(*) filter (where ${activeTripCondition})`,
+      activeCapacity: sql<number>`coalesce(sum(${tripsTable.totalCapacity})
+        filter (where ${activeTripCondition}), 0)`,
+      activeReserved: sql<number>`coalesce(sum(${tripsTable.reservedSeats})
+        filter (where ${activeTripCondition}), 0)`,
+      createdThisMonth: sql<number>`count(*) filter (where ${tripsTable.createdAt} >= ${startOfMonth})`,
+    }).from(tripsTable).where(eq(tripsTable.tenantId, tenantId));
 
-    const [reservationCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationsTable).where(eq(reservationsTable.tenantId, tenantId));
-    const [confirmedReservationCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
-    const [cancelledReservationCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CANCELLED)));
-    const [todayReservationCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), gte(reservationsTable.createdAt, startOfToday)));
+    const confirmedReservation = sql`${reservationsTable.status} = ${RESERVATION_STATUS.CONFIRMED}`;
+    const [reservationSummary] = await db.select({
+      count: sql<number>`count(*)`,
+      confirmedCount: sql<number>`count(*) filter (where ${confirmedReservation})`,
+      cancelledCount: sql<number>`count(*) filter (where ${reservationsTable.status} = ${RESERVATION_STATUS.CANCELLED})`,
+      createdTodayCount: sql<number>`count(*) filter (where ${reservationsTable.createdAt} >= ${startOfToday})`,
+      avgTicket: sql<number>`avg(cast(${reservationsTable.totalValue} as numeric))
+        filter (where ${confirmedReservation})`,
+      activeClientCount: sql<number>`count(distinct ${reservationsTable.clientId})
+        filter (where ${confirmedReservation})`,
+      salesThisMonthCount: sql<number>`count(*) filter (
+        where ${confirmedReservation} AND ${reservationsTable.createdAt} >= ${startOfMonth})`,
+      pendingCount: sql<number>`count(*) filter (
+        where ${reservationsTable.status} = ${RESERVATION_STATUS.PENDING})`,
+      repeatBuyerCount: sql<number>`(
+        SELECT count(*)::int
+        FROM (
+          SELECT ${reservationsTable.clientId}
+          FROM ${reservationsTable}
+          WHERE ${reservationsTable.tenantId} = ${tenantId}
+            AND ${reservationsTable.status} = ${RESERVATION_STATUS.CONFIRMED}
+          GROUP BY ${reservationsTable.clientId}
+          HAVING count(*) >= 2
+        ) AS repeat_buyers
+      )`,
+    }).from(reservationsTable).where(eq(reservationsTable.tenantId, tenantId));
 
-    const [avgTicketRow] = await db.select({ avg: sql<number>`avg(cast(total_value as numeric))` })
-      .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
-    const [activeClientsRow] = await db.select({ count: sql<number>`count(distinct client_id)` })
-      .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
-
-    const payments = await db.select().from(paymentsTable).where(eq(paymentsTable.tenantId, tenantId));
-    let totalRevenue = 0, revenueThisMonth = 0, pendingPaymentsAmt = 0, receivedToday = 0, toReceiveNext3Days = 0, totalPayable = 0, pendingReceivableAmt = 0;
-    for (const p of payments) {
-      if (p.type === PAYMENT_TYPE.RECEIVABLE && p.status === PAYMENT_STATUS.PAID) {
-        totalRevenue += Number(p.amount);
-        if (p.paidAt && p.paidAt >= startOfMonth) revenueThisMonth += Number(p.amount);
-        if (p.paidAt && p.paidAt >= startOfToday) receivedToday += Number(p.amount);
-      }
-      if (p.type === PAYMENT_TYPE.RECEIVABLE && p.status === PAYMENT_STATUS.PENDING) {
-        pendingReceivableAmt += Number(p.amount);
-        if (p.dueDate && p.dueDate >= startOfToday && p.dueDate <= next3Days) {
-          toReceiveNext3Days += Number(p.amount);
-        }
-      }
-      if (p.type === PAYMENT_TYPE.PAYABLE && p.status === PAYMENT_STATUS.PENDING) totalPayable += Number(p.amount);
-      if (p.status === PAYMENT_STATUS.PENDING) pendingPaymentsAmt += Number(p.amount);
-    }
-    const totalFaturamento = totalRevenue + pendingReceivableAmt;
+    const [paymentSummary] = await db.select(
+      dashboardPaymentMetricSelection(startOfMonth, startOfToday, next3Days, now),
+    ).from(paymentsTable).where(eq(paymentsTable.tenantId, tenantId));
 
     const [totalExpensesRow] = await db.select({ total: sql<number>`sum(cast(amount as numeric))` })
       .from(expensesTable).where(eq(expensesTable.tenantId, tenantId));
 
-    // receivedFromActiveTrips and pendingFromActiveTrips
-    const activeTrips = await db.select({ id: tripsTable.id })
-      .from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), eq(tripsTable.status, TRIP_STATUS.ACTIVE)));
-    const activeTripIds = activeTrips.map(t => t.id);
-    let receivedFromActiveTrips = 0, pendingFromActiveTrips = 0;
-    if (activeTripIds.length > 0) {
-      const activeResIds = (await db.select({ id: reservationsTable.id })
-        .from(reservationsTable)
-        .where(and(
-          eq(reservationsTable.tenantId, tenantId),
-          inArray(reservationsTable.tripId, activeTripIds),
-          inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
-        )))
-        .map(r => r.id);
-      if (activeResIds.length > 0) {
-        const activePayments = await db.select({ amount: paymentsTable.amount, type: paymentsTable.type, status: paymentsTable.status })
-          .from(paymentsTable)
-          .where(and(eq(paymentsTable.tenantId, tenantId), inArray(paymentsTable.reservationId, activeResIds)));
-        for (const p of activePayments) {
-          if (p.type === PAYMENT_TYPE.RECEIVABLE && p.status === PAYMENT_STATUS.PAID) receivedFromActiveTrips += Number(p.amount);
-          if (p.type === PAYMENT_TYPE.RECEIVABLE && p.status === PAYMENT_STATUS.PENDING) pendingFromActiveTrips += Number(p.amount);
-        }
-      }
-    }
+    const [activeTripPaymentSummary] = await db.select({
+      received: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric)) filter (
+        where ${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+          AND ${paymentsTable.status} = ${PAYMENT_STATUS.PAID}
+      ), 0)`,
+      pending: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric)) filter (
+        where ${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+          AND ${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}
+      ), 0)`,
+    }).from(paymentsTable)
+      .innerJoin(reservationsTable, and(
+        eq(paymentsTable.reservationId, reservationsTable.id),
+        eq(paymentsTable.tenantId, reservationsTable.tenantId),
+      ))
+      .innerJoin(tripsTable, and(
+        eq(reservationsTable.tripId, tripsTable.id),
+        eq(reservationsTable.tenantId, tripsTable.tenantId),
+      ))
+      .where(and(
+        eq(paymentsTable.tenantId, tenantId),
+        eq(reservationsTable.tenantId, tenantId),
+        eq(tripsTable.tenantId, tenantId),
+        eq(tripsTable.status, TRIP_STATUS.ACTIVE),
+        inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES),
+      ));
 
-    const trips = await db.select({ totalCapacity: tripsTable.totalCapacity, reservedSeats: tripsTable.reservedSeats })
-      .from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), eq(tripsTable.status, TRIP_STATUS.ACTIVE)));
-    const totalCapacity = trips.reduce((a, t) => a + t.totalCapacity, 0);
-    const totalReserved = trips.reduce((a, t) => a + t.reservedSeats, 0);
-    const occupancyRate = totalCapacity > 0 ? (totalReserved / totalCapacity) * 100 : 0;
+    const [npsSummary] = await db.select({
+      average: sql<number>`avg(${npsResponsesTable.score})`,
+    }).from(npsResponsesTable).where(eq(npsResponsesTable.tenantId, tenantId));
+    const averageNps = npsSummary?.average == null ? null : Number(npsSummary.average);
 
-    const npsResponses = await db.select({ score: npsResponsesTable.score })
-      .from(npsResponsesTable).where(eq(npsResponsesTable.tenantId, tenantId));
-    const averageNps = npsResponses.length > 0 ? npsResponses.reduce((a, r) => a + r.score, 0) / npsResponses.length : null;
+    const [dealSummary] = await db.select({
+      openCount: sql<number>`count(*) filter (where ${dealsTable.status} = ${DEAL_STATUS.OPEN})`,
+      pipelineValue: sql<number>`coalesce(sum(cast(${dealsTable.value} as numeric))
+        filter (where ${dealsTable.status} = ${DEAL_STATUS.OPEN}), 0)`,
+    }).from(dealsTable).where(eq(dealsTable.tenantId, tenantId));
 
-    const [dealCount] = await db.select({ count: sql<number>`count(*)` })
-      .from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN)));
-    const [dealValue] = await db.select({ total: sql<number>`sum(cast(value as numeric))` })
-      .from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN)));
-
-    // New KPIs
-    const [salesThisMonthRow] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED), gte(reservationsTable.createdAt, startOfMonth)));
-    const [pendingReservationsRow] = await db.select({ count: sql<number>`count(*)` })
-      .from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.PENDING)));
-    const [overduePaymentsRow] = await db.select({
-      count: sql<number>`count(*)`,
-      amount: sql<number>`coalesce(sum(cast(${paymentsTable.amount} as numeric)), 0)`,
-    }).from(paymentsTable).where(and(eq(paymentsTable.tenantId, tenantId), eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE), eq(paymentsTable.status, PAYMENT_STATUS.PENDING), lt(paymentsTable.dueDate, now)));
     const [loyaltyPointsRow] = await db.select({ total: sql<number>`sum(total_points)` })
       .from(loyaltyMembersTable).where(eq(loyaltyMembersTable.tenantId, tenantId));
 
-    // Retention rate: clients with 2+ confirmed reservations / total clients
-    const repeatBuyersRaw = await db.select({ clientId: reservationsTable.clientId, count: sql<number>`count(*)` })
-      .from(reservationsTable)
-      .where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)))
-      .groupBy(reservationsTable.clientId)
-      .having(sql`count(*) >= 2`);
-    const totalClientsForRetention = Number(clientCount?.count ?? 0);
-    const retentionRate = totalClientsForRetention > 0 ? Math.round((repeatBuyersRaw.length / totalClientsForRetention) * 1000) / 10 : 0;
+    const totalClientsForRetention = Number(clientSummary?.count ?? 0);
+    const repeatBuyerCount = Number(reservationSummary?.repeatBuyerCount ?? 0);
+    const retentionRate = totalClientsForRetention > 0
+      ? Math.round((repeatBuyerCount / totalClientsForRetention) * 1000) / 10
+      : 0;
+    const payingClientCount = Number(paymentSummary?.payingClientCount ?? 0);
+    const conversionRate = totalClientsForRetention > 0
+      ? Math.round((payingClientCount / totalClientsForRetention) * 1000) / 10
+      : 0;
 
-    // Trips this month
-    const [tripsThisMonthRow] = await db.select({ count: sql<number>`count(*)` })
-      .from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), gte(tripsTable.createdAt, startOfMonth)));
+    const totalRevenue = Number(paymentSummary?.totalRevenue ?? 0);
+    const revenueThisMonth = Number(paymentSummary?.revenueThisMonth ?? 0);
+    const pendingPaymentsAmt = Number(paymentSummary?.pendingPayments ?? 0);
+    const receivedToday = Number(paymentSummary?.receivedToday ?? 0);
+    const toReceiveNext3Days = Number(paymentSummary?.toReceiveNext3Days ?? 0);
+    const totalPayable = Number(paymentSummary?.totalPayable ?? 0);
+    const pendingReceivableAmt = Number(paymentSummary?.pendingReceivable ?? 0);
+    const totalFaturamento = totalRevenue + pendingReceivableAmt;
 
-    // Conversion rate: paying clients / total clients
-    const payingClientsRaw = await db.select({ clientId: paymentsTable.clientId })
-      .from(paymentsTable)
-      .where(and(eq(paymentsTable.tenantId, tenantId), eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE), eq(paymentsTable.status, PAYMENT_STATUS.PAID)));
-    const payingClientCount = new Set(payingClientsRaw.map(p => p.clientId).filter(Boolean)).size;
-    const conversionRate = totalClientsForRetention > 0 ? Math.round((payingClientCount / totalClientsForRetention) * 1000) / 10 : 0;
+    const activeTripCount = Number(tripSummary?.activeCount ?? 0);
+    const totalCapacity = Number(tripSummary?.activeCapacity ?? 0);
+    const totalReserved = Number(tripSummary?.activeReserved ?? 0);
+    const occupancyRate = totalCapacity > 0 ? (totalReserved / totalCapacity) * 100 : 0;
 
     // Computed summary values
     const profit = totalRevenue - Number(totalExpensesRow?.total ?? 0);
     const profitMargin = totalRevenue > 0 ? Math.round((profit / totalRevenue) * 1000) / 10 : 0;
 
     res.json({
-      totalClients: Number(clientCount?.count ?? 0),
-      newClientsThisMonth: Number(newClientCount?.count ?? 0),
-      totalTrips: Number(tripCount?.count ?? 0),
-      activeTrips: Number(activeTripCount?.count ?? 0),
+      totalClients: Number(clientSummary?.count ?? 0),
+      newClientsThisMonth: Number(clientSummary?.newCount ?? 0),
+      totalTrips: Number(tripSummary?.count ?? 0),
+      activeTrips: activeTripCount,
       totalRevenue: roundMoney(totalRevenue),
       revenueThisMonth: roundMoney(revenueThisMonth),
       pendingPayments: roundMoney(pendingPaymentsAmt),
-      totalReservations: Number(reservationCount?.count ?? 0),
-      confirmedReservations: Number(confirmedReservationCount?.count ?? 0),
+      totalReservations: Number(reservationSummary?.count ?? 0),
+      confirmedReservations: Number(reservationSummary?.confirmedCount ?? 0),
       occupancyRate: Math.round(occupancyRate * 10) / 10,
       averageNps: averageNps !== null ? Math.round(averageNps * 10) / 10 : null,
       avgNps: averageNps !== null ? Math.round(averageNps * 10) / 10 : null,
-      openDeals: Number(dealCount?.count ?? 0),
-      dealsPipelineValue: Number(dealValue?.total ?? 0),
-      pipelineLeads: Number(dealCount?.count ?? 0),
+      openDeals: Number(dealSummary?.openCount ?? 0),
+      dealsPipelineValue: Number(dealSummary?.pipelineValue ?? 0),
+      pipelineLeads: Number(dealSummary?.openCount ?? 0),
       receivedToday: roundMoney(receivedToday),
       toReceiveNext3Days: roundMoney(toReceiveNext3Days),
-      reservationsToday: Number(todayReservationCount?.count ?? 0),
-      avgTicket: roundMoney(Number(avgTicketRow?.avg ?? 0)),
-      activeClientsCount: Number(activeClientsRow?.count ?? 0),
+      reservationsToday: Number(reservationSummary?.createdTodayCount ?? 0),
+      avgTicket: roundMoney(Number(reservationSummary?.avgTicket ?? 0)),
+      activeClientsCount: Number(reservationSummary?.activeClientCount ?? 0),
       totalExpenses: roundMoney(Number(totalExpensesRow?.total ?? 0)),
-      cancelledReservations: Number(cancelledReservationCount?.count ?? 0),
-      receivedFromActiveTrips: roundMoney(receivedFromActiveTrips),
-      pendingFromActiveTrips: roundMoney(pendingFromActiveTrips),
+      cancelledReservations: Number(reservationSummary?.cancelledCount ?? 0),
+      receivedFromActiveTrips: roundMoney(Number(activeTripPaymentSummary?.received ?? 0)),
+      pendingFromActiveTrips: roundMoney(Number(activeTripPaymentSummary?.pending ?? 0)),
       totalPayable: roundMoney(totalPayable),
-      avgReservationsPerTrip: Number(activeTripCount?.count ?? 0) > 0
-        ? Math.round((Number(confirmedReservationCount?.count ?? 0) / Number(activeTripCount?.count ?? 1)) * 10) / 10
+      avgReservationsPerTrip: activeTripCount > 0
+        ? Math.round((Number(reservationSummary?.confirmedCount ?? 0) / activeTripCount) * 10) / 10
         : 0,
       totalFaturamento: roundMoney(totalFaturamento),
-      salesThisMonth: Number(salesThisMonthRow?.count ?? 0),
-      pendingReservations: Number(pendingReservationsRow?.count ?? 0),
-      overduePaymentsCount: Number(overduePaymentsRow?.count ?? 0),
-      overduePayments: roundMoney(Number(overduePaymentsRow?.amount ?? 0)),
+      salesThisMonth: Number(reservationSummary?.salesThisMonthCount ?? 0),
+      pendingReservations: Number(reservationSummary?.pendingCount ?? 0),
+      overduePaymentsCount: Number(paymentSummary?.overduePaymentsCount ?? 0),
+      overduePayments: roundMoney(Number(paymentSummary?.overduePayments ?? 0)),
       loyaltyPointsIssued: Number(loyaltyPointsRow?.total ?? 0),
       retentionRate,
-      tripsThisMonth: Number(tripsThisMonthRow?.count ?? 0),
+      tripsThisMonth: Number(tripSummary?.createdThisMonth ?? 0),
       conversionRate,
       profit: roundMoney(profit),
       profitMargin,
