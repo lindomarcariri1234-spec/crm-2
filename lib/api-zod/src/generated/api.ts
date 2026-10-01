@@ -5640,6 +5640,8 @@ export const ListExpensesResponse = zod.object({
         zod.object({
           category: zod.string(),
           total: zod.number(),
+          paid: zod.number(),
+          open: zod.number(),
         }),
       ),
     })

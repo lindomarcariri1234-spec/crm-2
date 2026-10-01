@@ -9083,7 +9083,11 @@ components:
                 type: string
               total:
                 type: number
-            required: [category, total]
+              paid:
+                type: number
+              open:
+                type: number
+            required: [category, total, paid, open]
       required: [total, paid, pending, overdue, paidThisMonth, categoryBreakdown]
 
     CreateExpenseBody:

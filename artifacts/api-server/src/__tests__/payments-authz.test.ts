@@ -25,11 +25,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
-const { dbState, makeChain, makeUpdate, mockSelect, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments } = vi.hoisted(() => {
+const { dbState, makeChain, makeUpdate, mockSelect, mockExecute, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments } = vi.hoisted(() => {
   const dbState = {
     rows: [] as unknown[],
     rowsByTable: new Map<unknown, unknown[]>(),
     selectRowsQueue: [] as unknown[][],
+    executeRowsQueue: [] as unknown[][],
+    executeQueries: [] as unknown[],
   };
   const mockExpensesTable = {};
   const mockTripCostsTable = {};
@@ -53,6 +55,10 @@ const { dbState, makeChain, makeUpdate, mockSelect, mockInsertValues, mockTransa
     return chain;
   };
   const mockSelect = vi.fn(() => makeChain());
+  const mockExecute = vi.fn((query: unknown) => {
+    dbState.executeQueries.push(query);
+    return Promise.resolve({ rows: dbState.executeRowsQueue.shift() ?? [] });
+  });
   const mockInsertValues = vi.fn().mockResolvedValue(undefined);
   const mockTransaction = vi.fn();
   const mockSumPaidReservationPayments = vi.fn().mockResolvedValue(0);
@@ -64,12 +70,13 @@ const { dbState, makeChain, makeUpdate, mockSelect, mockInsertValues, mockTransa
       }),
     }),
   });
-  return { dbState, makeChain, makeUpdate, mockSelect, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments };
+  return { dbState, makeChain, makeUpdate, mockSelect, mockExecute, mockInsertValues, mockTransaction, mockExpensesTable, mockTripCostsTable, mockSumPaidReservationPayments };
 });
 
 vi.mock("@workspace/db", () => ({
   db: {
     select: mockSelect,
+    execute: mockExecute,
     insert: vi.fn(() => ({ values: mockInsertValues })),
     update: vi.fn(() => makeUpdate()),
     delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
@@ -89,7 +96,11 @@ vi.mock("@workspace/db", () => ({
 
 vi.mock("drizzle-orm", async () => {
   const { makeDrizzleOrmMock } = await import("./helpers/drizzle-mock.js");
-  return makeDrizzleOrmMock();
+  const sqlTag = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings: [...strings], values }),
+    { raw: (text: string) => ({ raw: text }) },
+  );
+  return { ...makeDrizzleOrmMock(), sql: vi.fn(sqlTag) };
 });
 
 vi.mock("../lib/tenant.js", () => ({
@@ -184,6 +195,8 @@ beforeEach(() => {
   dbState.rows = [FAKE_PAYMENT];
   dbState.rowsByTable.clear();
   dbState.selectRowsQueue = [];
+  dbState.executeRowsQueue = [];
+  dbState.executeQueries = [];
   mockTransaction.mockReset();
   mockSumPaidReservationPayments.mockResolvedValue(0);
   mockTransaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback({
@@ -518,9 +531,17 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       notes: null,
       createdAt: new Date("2026-08-21T12:00:00Z"),
     };
+    dbState.executeRowsQueue = [[
+      { ...agencyExpense, linkedTripCostId: null, supplierName: null, source: "agency" },
+      {
+        ...tripCost,
+        linkedTripCostId: null,
+        paymentMethod: null,
+        paymentDate: tripCost.paidAt,
+        source: "trip",
+      },
+    ]];
     dbState.selectRowsQueue = [
-      [agencyExpense],
-      [tripCost],
       [{ count: 1 }],
       [{ count: 1 }],
       [{ category: "transport", status: "pending", total: "500", paid: "0", pending: "500", overdue: "0", paidThisMonth: "0" }],
@@ -556,7 +577,73 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       pending: 1250,
       overdue: 0,
       paidThisMonth: 0,
+      categoryBreakdown: expect.arrayContaining([
+        { category: "transport", total: 500, paid: 0, open: 500 },
+        { category: "transporte", total: 750, paid: 0, open: 750 },
+      ]),
     });
+  });
+
+  it("GET /expenses?includeTripCosts=true keeps a fallback due date on the Sao Paulo creation day", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const createdAt = new Date("2026-08-23T02:00:00.000Z");
+    dbState.executeRowsQueue = [[{
+      id: "trip-cost-no-due-date",
+      tripId: "trip-001",
+      linkedTripCostId: null,
+      category: "Transporte",
+      description: "Custo sem vencimento explícito",
+      amount: "100.00",
+      supplierId: null,
+      supplierName: null,
+      paymentMethod: null,
+      paymentDate: null,
+      dueDate: null,
+      sortDueDate: new Date("2026-08-22T00:00:00.000Z"),
+      status: "pending",
+      notes: null,
+      createdAt,
+      source: "trip",
+    }]];
+    dbState.selectRowsQueue = [
+      [{ count: 0 }],
+      [{ count: 1 }],
+      [{ category: "Transporte", status: "pending", total: "100", paid: "0", pending: "100", overdue: "0", paidThisMonth: "0" }],
+      [],
+    ];
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/expenses?includeTripCosts=true&tripId=trip-001");
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0]).toMatchObject({
+      id: "trip-cost-no-due-date",
+      dueDate: "2026-08-22T00:00:00.000Z",
+      createdAt: "2026-08-23T02:00:00.000Z",
+    });
+  });
+
+  it("GET /expenses?includeTripCosts=true aggregates paid and open amounts per category", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.executeRowsQueue = [[]];
+    dbState.selectRowsQueue = [
+      [{ count: 0 }],
+      [{ count: 0 }],
+      [
+        { category: "transport", status: "paid", total: "200", paid: "200", pending: "0", overdue: "0", paidThisMonth: "200" },
+        { category: "transport", status: "pending", total: "50", paid: "0", pending: "50", overdue: "0", paidThisMonth: "0" },
+        { category: "transport", status: "overdue", total: "20", paid: "0", pending: "0", overdue: "20", paidThisMonth: "0" },
+      ],
+      [],
+    ];
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/expenses?includeTripCosts=true&tripId=trip-001");
+
+    expect(res.status).toBe(200);
+    expect(res.body.summary.categoryBreakdown).toEqual([
+      { category: "transport", total: 270, paid: 200, open: 70 },
+    ]);
   });
 
   it("GET /expenses?includeTripCosts=true paginates the consolidated result without changing its total", async () => {
@@ -601,13 +688,18 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       makeTripCost("trip-cost-002", "400.00", "2026-08-17T12:00:00Z"),
     ];
     const listRowsAndSummary = () => [
-      agencyRows,
-      tripRows,
       [{ count: 2 }],
       [{ count: 1 }],
       [{ category: "transport", status: "pending", total: "300", paid: "0", pending: "300", overdue: "0", paidThisMonth: "0" }],
       [{ category: "transporte", status: "pending", total: "400", paid: "0", pending: "400", overdue: "0", paidThisMonth: "0" }],
     ];
+    dbState.executeRowsQueue = [[{
+      ...tripRows[1],
+      linkedTripCostId: null,
+      paymentMethod: null,
+      paymentDate: tripRows[1].paidAt,
+      source: "trip",
+    }]];
     dbState.selectRowsQueue = listRowsAndSummary();
 
     const res = await request(buildApp(paymentsRouter))
@@ -623,6 +715,10 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
     ]);
     expect(res.body.summary.total).toBe(700);
 
+    dbState.executeRowsQueue = [[
+      { ...agencyRows[0], supplierName: null, source: "agency" },
+      { ...agencyRows[1], supplierName: null, source: "agency" },
+    ]];
     dbState.selectRowsQueue = listRowsAndSummary();
     const firstPage = await request(buildApp(paymentsRouter))
       .get("/api/expenses?includeTripCosts=true&tripId=trip-001&status=pending&page=1&limit=2");
@@ -636,6 +732,38 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       expect.objectContaining({ id: "agency-expense-002", source: "agency" }),
     ]));
     expect(firstPage.body.data.some((row: { id: string }) => row.id === "trip-cost-001")).toBe(false);
+  });
+
+  it("GET /expenses?includeTripCosts=true sends only one requested page to the application for a deep page", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    const page = 5_000_000;
+    const limit = 50;
+    dbState.executeRowsQueue = [[]];
+    dbState.selectRowsQueue = [
+      [{ count: 0 }],
+      [{ count: 0 }],
+      [],
+      [],
+    ];
+
+    const res = await request(buildApp(paymentsRouter))
+      .get(`/api/expenses?includeTripCosts=true&page=${page}&limit=${limit}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+    const query = dbState.executeQueries[0] as { strings: string[]; values: unknown[] };
+    expect(query.strings.join("?").trim()).toMatch(/LIMIT \? OFFSET \?$/);
+    expect(query.values.slice(-2)).toEqual([limit, (page - 1) * limit]);
+  });
+
+  it("GET /expenses rejects a page offset outside the safe integer range", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const res = await request(buildApp(paymentsRouter))
+      .get("/api/expenses?includeTripCosts=true&page=9007199254740991&limit=500");
+
+    expect(res.status).toBe(400);
+    expect(mockExecute).not.toHaveBeenCalled();
   });
 
   it("GET /expenses?includeTripCosts=true keeps cancelled rows auditable but excludes them from every KPI", async () => {
@@ -705,9 +833,17 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
         createdAt: new Date("2026-09-04T12:00:00Z"),
       },
     ];
+    dbState.executeRowsQueue = [[
+      ...agencyRows.map(row => ({ ...row, linkedTripCostId: null, supplierName: null, source: "agency" })),
+      ...tripRows.map(row => ({
+        ...row,
+        linkedTripCostId: null,
+        paymentMethod: null,
+        paymentDate: row.paidAt,
+        source: "trip",
+      })),
+    ]];
     dbState.selectRowsQueue = [
-      agencyRows,
-      tripRows,
       [{ count: 2 }],
       [{ count: 2 }],
       [
@@ -734,6 +870,10 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
       pending: 0,
       overdue: 0,
       paidThisMonth: 1000,
+      categoryBreakdown: expect.arrayContaining([
+        { category: "transport", total: 300, paid: 300, open: 0 },
+        { category: "Transporte", total: 700, paid: 700, open: 0 },
+      ]),
     });
   });
 

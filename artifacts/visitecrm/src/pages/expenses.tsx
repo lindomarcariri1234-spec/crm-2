@@ -29,6 +29,7 @@ import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Link2, Unlink } from "lucide-react";
 import {
+  canCompareFinancialBudgetVariance,
   FinancialConsolidationView,
   normalizeFinancialCategory,
 } from "@/components/financial-consolidation-view";
@@ -179,8 +180,19 @@ export default function Expenses() {
     ? categoryBreakdown.map(item => ({
         category: normalizeFinancialCategory(item.category),
         total: item.total,
+        paid: item.paid,
+        open: item.open,
       }))
     : undefined;
+  const showBudgetVariance = canCompareFinancialBudgetVariance({
+    tripId: tripFilter,
+    status: statusFilter,
+    category: categoryFilter,
+    dateFrom,
+    dateTo,
+    supplierId: supplierFilter,
+    period: periodFilter,
+  });
 
   useEffect(() => {
     setPage(1);
@@ -345,6 +357,7 @@ export default function Expenses() {
           ? "Preços por categoria, orçamento planejado, custos da viagem e despesas da agência."
           : "Custos diretos, despesas da agência e orçamento planejado agregado das viagens reunidos em uma única leitura. Filtre uma viagem para comparar seus preços."}
         showPaymentBreakdown={!!tripFilter}
+        showBudgetVariance={showBudgetVariance}
       />
 
       <div className="flex flex-wrap items-center gap-3 bg-card p-4 rounded-lg border">

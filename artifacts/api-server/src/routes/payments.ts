@@ -345,13 +345,60 @@ function formatExpense(e: typeof expensesTable.$inferSelect) {
   };
 }
 
-function formatTripCost(c: typeof tripCostsTable.$inferSelect) {
+function brazilCalendarDateAnchor(value: Date): Date {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === type)?.value ?? "";
+  return new Date(Date.UTC(Number(part("year")), Number(part("month")) - 1, Number(part("day"))));
+}
+
+type ConsolidatedExpenseRow = {
+  id: string;
+  tripId: string | null;
+  linkedTripCostId: string | null;
+  category: string;
+  description: string;
+  amount: string | number;
+  supplierId: string | null;
+  supplierName: string | null;
+  paymentMethod: string | null;
+  paymentDate: Date | string | null;
+  dueDate: Date | string | null;
+  sortDueDate: Date | string;
+  status: string;
+  notes: string | null;
+  createdAt: Date | string;
+  source: "agency" | "trip";
+};
+
+function dateValueToIso(value: Date | string): string {
+  return (value instanceof Date ? value : new Date(value)).toISOString();
+}
+
+function formatConsolidatedExpense(row: ConsolidatedExpenseRow) {
+  const dueDate = row.dueDate ?? brazilCalendarDateAnchor(
+    row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt),
+  );
   return {
-    id: c.id, tripId: c.tripId, category: c.category, description: c.description,
-    amount: Number(c.amount), supplierId: c.supplierId ?? null, supplierName: c.supplierName ?? null,
-    paymentMethod: null, paymentDate: c.paidAt?.toISOString() ?? null,
-    dueDate: (c.dueDate ?? c.createdAt).toISOString(), status: c.status,
-    notes: c.notes ?? null, createdAt: c.createdAt.toISOString(), source: "trip" as const,
+    id: row.id,
+    tripId: row.tripId,
+    linkedTripCostId: row.linkedTripCostId,
+    category: row.category,
+    description: row.description,
+    amount: Number(row.amount),
+    supplierId: row.supplierId,
+    supplierName: row.supplierName,
+    paymentMethod: row.paymentMethod,
+    paymentDate: row.paymentDate ? dateValueToIso(row.paymentDate) : null,
+    dueDate: dateValueToIso(dueDate),
+    status: row.status,
+    notes: row.notes,
+    createdAt: dateValueToIso(row.createdAt),
+    source: row.source,
   };
 }
 
@@ -419,10 +466,16 @@ function getBrazilCurrentMonthWindow(today = localToday()): { start: Date; end: 
 }
 
 function buildExpenseSummary(rows: ExpenseSummaryAggregate[]) {
-  const categoryTotals = new Map<string, number>();
+  const categoryTotals = new Map<string, { total: number; paid: number; open: number }>();
   for (const row of rows) {
-    const amount = Number(row.total) || 0;
-    if (amount !== 0) categoryTotals.set(row.category, (categoryTotals.get(row.category) ?? 0) + amount);
+    const total = Number(row.total) || 0;
+    const paid = Number(row.paid) || 0;
+    if (total === 0 && paid === 0) continue;
+    const category = categoryTotals.get(row.category) ?? { total: 0, paid: 0, open: 0 };
+    category.total += total;
+    category.paid += paid;
+    category.open += total - paid;
+    categoryTotals.set(row.category, category);
   }
   const sum = (key: keyof Pick<ExpenseSummaryAggregate, "total" | "paid" | "pending" | "overdue" | "paidThisMonth">) =>
     roundMoney(rows.reduce((total, row) => total + (Number(row[key]) || 0), 0));
@@ -434,7 +487,12 @@ function buildExpenseSummary(rows: ExpenseSummaryAggregate[]) {
     overdue: sum("overdue"),
     paidThisMonth: sum("paidThisMonth"),
     categoryBreakdown: [...categoryTotals.entries()]
-      .map(([category, total]) => ({ category, total: roundMoney(total) }))
+      .map(([category, totals]) => ({
+        category,
+        total: roundMoney(totals.total),
+        paid: roundMoney(totals.paid),
+        open: roundMoney(totals.open),
+      }))
       .sort((a, b) => b.total - a.total),
   };
 }
@@ -1396,6 +1454,10 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
     const pageNum = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
     const limitNum = Number.isSafeInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 20;
     const offset = (pageNum - 1) * limitNum;
+    if (!Number.isSafeInteger(offset)) {
+      next(new ValidationError("O deslocamento da paginação é muito grande"));
+      return;
+    }
     const shouldIncludeTripCosts = includeTripCosts === "true";
 
     const conditions: ReturnType<typeof eq>[] = [eq(expensesTable.tenantId, me.tenantId)];
@@ -1413,7 +1475,10 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
 
     if (shouldIncludeTripCosts) {
       const tripCostConditions: ReturnType<typeof eq>[] = [eq(tripCostsTable.tenantId, me.tenantId)];
-      const tripCostDueDate = sql`COALESCE(${tripCostsTable.dueDate}, ${tripCostsTable.createdAt})`;
+      const tripCostDueDate = sql`COALESCE(
+        ${tripCostsTable.dueDate},
+        date_trunc('day', ${tripCostsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC'
+      )`;
       if (tripId) tripCostConditions.push(eq(tripCostsTable.tripId, tripId));
       if (status) tripCostConditions.push(eq(tripCostsTable.status, parseExpenseStatus(status)));
       if (category) tripCostConditions.push(eq(tripCostsTable.category, category));
@@ -1439,22 +1504,61 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
       const tripCostInSummaryPeriod = summaryWindow
         ? sql`${tripCostDueDate} >= ${summaryWindow.start} AND ${tripCostDueDate} < ${summaryWindow.end}`
         : sql`TRUE`;
-      const maxRowsPerSource = offset + limitNum;
-
       const [
-        expenses,
-        tripCosts,
+        consolidatedRowsResult,
         [expenseCountResult],
         [tripCostCountResult],
         expenseSummaryRows,
         tripCostSummaryRows,
       ] = await Promise.all([
-        db.select().from(expensesTable).where(and(...conditions))
-          .orderBy(desc(expensesTable.dueDate), desc(expensesTable.createdAt), desc(expensesTable.id))
-          .limit(maxRowsPerSource),
-        db.select().from(tripCostsTable).where(tripCostWhere)
-          .orderBy(desc(tripCostDueDate), desc(tripCostsTable.createdAt), desc(tripCostsTable.id))
-          .limit(maxRowsPerSource),
+        db.execute(sql`
+          SELECT *
+          FROM (
+            SELECT
+              ${expensesTable.id} AS "id",
+              ${expensesTable.tripId} AS "tripId",
+              ${expensesTable.linkedTripCostId} AS "linkedTripCostId",
+              ${expensesTable.category} AS "category",
+              ${expensesTable.description} AS "description",
+              ${expensesTable.amount} AS "amount",
+              ${expensesTable.supplierId} AS "supplierId",
+              NULL::text AS "supplierName",
+              ${expensesTable.paymentMethod} AS "paymentMethod",
+              ${expensesTable.paymentDate} AS "paymentDate",
+              ${expensesTable.dueDate} AS "dueDate",
+              ${expensesTable.dueDate} AS "sortDueDate",
+              ${expensesTable.status} AS "status",
+              ${expensesTable.notes} AS "notes",
+              ${expensesTable.createdAt} AS "createdAt",
+              'agency'::text AS "source"
+            FROM ${expensesTable}
+            WHERE ${and(...conditions)}
+
+            UNION ALL
+
+            SELECT
+              ${tripCostsTable.id} AS "id",
+              ${tripCostsTable.tripId} AS "tripId",
+              NULL::text AS "linkedTripCostId",
+              ${tripCostsTable.category} AS "category",
+              ${tripCostsTable.description} AS "description",
+              ${tripCostsTable.amount} AS "amount",
+              ${tripCostsTable.supplierId} AS "supplierId",
+              ${tripCostsTable.supplierName} AS "supplierName",
+              NULL::text AS "paymentMethod",
+              ${tripCostsTable.paidAt} AS "paymentDate",
+              ${tripCostsTable.dueDate} AS "dueDate",
+              ${tripCostDueDate} AS "sortDueDate",
+              ${tripCostsTable.status} AS "status",
+              ${tripCostsTable.notes} AS "notes",
+              ${tripCostsTable.createdAt} AS "createdAt",
+              'trip'::text AS "source"
+            FROM ${tripCostsTable}
+            WHERE ${tripCostWhere}
+          ) AS consolidated_expenses
+          ORDER BY "sortDueDate" DESC, "createdAt" DESC, "id" DESC, "source" DESC
+          LIMIT ${limitNum} OFFSET ${offset}
+        `),
         db.select({ count: sql<number>`count(*)` })
           .from(expensesTable).where(and(...conditions)),
         db.select({ count: sql<number>`count(*)` })
@@ -1478,24 +1582,10 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
           paidThisMonth: sql<string>`coalesce(sum(case when ${tripCostsTable.status} = 'paid' and ${tripCostsTable.paidAt} >= ${paidThisMonthWindow.start} and ${tripCostsTable.paidAt} < ${paidThisMonthWindow.end} then ${tripCostsTable.amount} else 0 end), 0)`,
         }).from(tripCostsTable).where(tripCostWhere).groupBy(tripCostsTable.category, tripCostsTable.status),
       ]);
-      const linkedTripCostIds = new Set(expenses
-        .map(expense => expense.linkedTripCostId)
-        .filter((id): id is string => Boolean(id)));
-      const consolidated = [
-        ...expenses.map(formatExpense),
-        ...tripCosts
-          .filter(cost => !linkedTripCostIds.has(cost.id))
-          .map(formatTripCost),
-      ].sort((a, b) => {
-        const byDueDate = new Date(b.dueDate).getTime() - new Date(a.dueDate).getTime();
-        return byDueDate
-          || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          || b.id.localeCompare(a.id);
-      });
       const total = Number(expenseCountResult?.count ?? 0) + Number(tripCostCountResult?.count ?? 0);
 
       res.json({
-        data: consolidated.slice(offset, offset + limitNum),
+        data: (consolidatedRowsResult.rows as ConsolidatedExpenseRow[]).map(formatConsolidatedExpense),
         total,
         page: pageNum,
         limit: limitNum,

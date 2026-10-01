@@ -9,4 +9,6 @@
 export type ExpenseListSummaryCategoryBreakdownItem = {
   category: string;
   total: number;
+  paid: number;
+  open: number;
 };

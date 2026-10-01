@@ -57,6 +57,24 @@ export function normalizeFinancialCategory(category: string | null | undefined):
   return AGENCY_CATEGORY_LABELS[value.toLowerCase()] ?? (value || "Outros");
 }
 
+export function canCompareFinancialBudgetVariance(scope: {
+  tripId?: string;
+  status?: string;
+  category?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  supplierId?: string;
+  period: "all" | "month" | "quarter" | "year";
+}): boolean {
+  return scope.period === "all"
+    && !scope.tripId
+    && !scope.status
+    && !scope.category
+    && !scope.dateFrom
+    && !scope.dateTo
+    && !scope.supplierId;
+}
+
 function isCancelled(status: string): boolean {
   return status.toLowerCase() === "cancelled";
 }
@@ -68,7 +86,7 @@ function isPaid(status: string): boolean {
 export function buildFinancialCategoryRows(
   actualRows: readonly FinancialActualRow[],
   plannedRows: readonly FinancialPlannedRow[] = [],
-  actualCategoryTotals?: ReadonlyArray<{ category: string; total: number }>,
+  actualCategoryTotals?: ReadonlyArray<{ category: string; total: number; paid: number; open: number }>,
 ): CategoryRow[] {
   const rows = new Map<string, CategoryRow>();
   const getRow = (category: string) => {
@@ -86,7 +104,10 @@ export function buildFinancialCategoryRows(
 
   if (actualCategoryTotals) {
     for (const actual of actualCategoryTotals) {
-      getRow(actual.category).actual += Number(actual.total) || 0;
+      const row = getRow(actual.category);
+      row.actual += Number(actual.total) || 0;
+      row.paid += Number(actual.paid) || 0;
+      row.open += Number(actual.open) || 0;
     }
   } else {
     for (const actual of actualRows) {
@@ -135,15 +156,17 @@ export function FinancialConsolidationView({
   title = "Visão financeira consolidada",
   description = "Preços, orçamento planejado e custos realizados conciliados sem duplicidade.",
   showPaymentBreakdown = true,
+  showBudgetVariance = true,
 }: {
   actualRows: readonly FinancialActualRow[];
   plannedRows?: readonly FinancialPlannedRow[];
   pricing?: FinancialPricing | null;
   actualSummary?: FinancialActualSummary;
-  actualCategoryTotals?: ReadonlyArray<{ category: string; total: number }>;
+  actualCategoryTotals?: ReadonlyArray<{ category: string; total: number; paid: number; open: number }>;
   title?: string;
   description?: string;
   showPaymentBreakdown?: boolean;
+  showBudgetVariance?: boolean;
 }) {
   const categoryRows = useMemo(
     () => buildFinancialCategoryRows(actualRows, plannedRows, actualCategoryTotals),
@@ -264,11 +287,17 @@ export function FinancialConsolidationView({
           <span>Selecione uma viagem para cruzar estes custos com os preços por categoria e o orçamento planejado.</span>
         </div>
       )}
-      {hasPlanning && plannedTotal > 0 && (
+      {hasPlanning && plannedTotal > 0 && showBudgetVariance && (
         <div className={`border-t px-5 py-3 text-xs ${variance <= 0 ? "text-green-700" : "text-amber-700"}`}>
           {variance <= 0
             ? `${formatCurrency(Math.abs(variance))} abaixo do orçamento planejado.`
             : `${formatCurrency(variance)} acima do orçamento planejado.`}
+        </div>
+      )}
+      {hasPlanning && plannedTotal > 0 && !showBudgetVariance && (
+        <div className="flex items-start gap-2 border-t bg-blue-50/60 px-5 py-3 text-xs text-blue-800">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>A comparação com o orçamento fica oculta enquanto há filtros ativos, pois o realizado considera apenas os registros filtrados.</span>
         </div>
       )}
       {hasPlanning && !pricing && (
