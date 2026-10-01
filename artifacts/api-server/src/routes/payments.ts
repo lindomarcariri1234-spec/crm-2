@@ -1136,6 +1136,8 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
     });
     const payment = result.payment;
     if (!payment) { next(new NotFoundError("Payment not found", "NOT_FOUND")); return; }
+    const transitionedToPaid = result.previousStatus !== PAYMENT_STATUS.PAID
+      && payment.status === PAYMENT_STATUS.PAID;
     if (payment.clientId) {
       try {
         await recalculateClientFinancials(payment.clientId, me.tenantId);
@@ -1257,11 +1259,11 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
     res.json(formatPayment(payment));
     CalendarSyncService.syncPayment(req.params.id)
       .catch((err) => req.log.warn({ err, context: "payment.update", paymentId: req.params.id }, "Calendar sync falhou — continuando"));
-    if (payment.reservationId && payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
+    if (transitionedToPaid && payment.reservationId && payment.type === PAYMENT_TYPE.RECEIVABLE) {
       enqueueNewBookingNotificationEmail(payment.reservationId, me.tenantId)
         .catch((err) => req.log.error({ err }, "Error enqueueing agency new-booking notification on payment update"));
     }
-    if (updates.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE && payment.clientId) {
+    if (transitionedToPaid && payment.type === PAYMENT_TYPE.RECEIVABLE && payment.clientId) {
       (async () => {
         try {
           const [client] = await db.select({

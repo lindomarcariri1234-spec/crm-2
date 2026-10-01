@@ -20,7 +20,7 @@ import pino from "pino";
  * DB query; positive controls use a chainable thenable DB mock.
  */
 
-import { ROLES } from "@workspace/permissions";
+import { PAYMENT_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, ROLES } from "@workspace/permissions";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -118,7 +118,10 @@ vi.mock("../lib/loyalty-helpers.js", () => ({
   loyaltyAwardPointsForReservation: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../lib/google-calendar/sync-service.js", () => ({
-  CalendarSyncService: { syncTrip: vi.fn(), syncPayment: vi.fn() },
+  CalendarSyncService: {
+    syncTrip: vi.fn().mockResolvedValue(undefined),
+    syncPayment: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 vi.mock("../lib/reservation-payments.js", () => ({
   sumPaidReservationPayments: mockSumPaidReservationPayments,
@@ -129,6 +132,23 @@ vi.mock("../services/checkout/create-reservations.js", () => ({
 }));
 vi.mock("../queues/email-helpers.js", () => ({
   enqueueNewBookingNotificationEmail: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../queues/whatsapp-helpers.js", () => ({
+  dispatchWhatsAppPaymentReceived: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../lib/push-notifications.js", () => ({
+  sendPushNotification: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../services/client-financials.js", () => ({
+  recalculateClientFinancials: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../services/reservation-order-payment-sync.js", () => ({
+  syncStoreOrderFromOrderPayment: vi.fn().mockResolvedValue(undefined),
+  syncStoreOrderFromReservationPayment: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../services/reservation-referral-conversion.js", () => ({
+  convertPaidReservationReferral: vi.fn().mockResolvedValue(undefined),
+  reverseReservationReferralIfNoEligiblePaymentInTransaction: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("../services/pipeline-automation.js", () => ({
   moveDealToStage: vi.fn().mockResolvedValue(undefined),
@@ -144,6 +164,9 @@ import paymentsRouter from "../routes/payments.js";
 import tripCostsRouter from "../routes/trip-costs.js";
 import settlementsRouter from "../routes/settlements.js";
 import { errorHandler } from "../middlewares/errorHandler.js";
+import { enqueueNewBookingNotificationEmail } from "../queues/email-helpers.js";
+import { dispatchWhatsAppPaymentReceived } from "../queues/whatsapp-helpers.js";
+import { sendPushNotification } from "../lib/push-notifications.js";
 
 function stubLogger(
   req: express.Request & { log?: Record<string, unknown> },
@@ -433,6 +456,105 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("GRATUITY_PAYMENT_FORBIDDEN");
     expect(txUpdate).not.toHaveBeenCalled();
+  });
+
+  it("PATCH /payments/:id sends payment confirmations only on the transition to paid", async () => {
+    requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+
+    const reservationId = "reservation-payment-notification-001";
+    const clientId = "client-payment-notification-001";
+    const pendingPayment = {
+      ...FAKE_PAYMENT,
+      id: "payment-notification-001",
+      reservationId,
+      clientId,
+      type: PAYMENT_TYPE.RECEIVABLE,
+      amount: "100.00",
+      status: PAYMENT_STATUS.PENDING,
+      paidAt: null,
+      orderId: null,
+    };
+    const paidPayment = {
+      ...pendingPayment,
+      status: PAYMENT_STATUS.PAID,
+      paidAt: new Date("2026-09-01T12:00:00.000Z"),
+    };
+    const locator = {
+      type: PAYMENT_TYPE.RECEIVABLE,
+      reservationId,
+      orderId: null,
+    };
+    const reservationValidation = {
+      totalValue: "500.00",
+      status: RESERVATION_STATUS.CONFIRMED,
+      storeOrderId: null,
+      expiresAt: null,
+      isGratuidade: false,
+    };
+    const commissionReservation = {
+      ...reservationValidation,
+      totalValue: "500.00",
+      paidValue: "100.00",
+      commissionAmount: null,
+      sellerId: null,
+      createdById: "creator-001",
+    };
+    const loyaltyReservation = { clientId, totalValue: "500.00" };
+
+    const setPaymentRows = (
+      existingPayment: typeof pendingPayment,
+      updatedPayment: typeof paidPayment,
+      hasStatusUpdate: boolean,
+      notifyClient: boolean,
+    ) => {
+      dbState.selectRowsQueue = [
+        ...(hasStatusUpdate ? [[locator], [{ storeOrderId: null }]] : []),
+        [existingPayment],
+        ...(existingPayment.status !== updatedPayment.status ? [[reservationValidation]] : []),
+        [updatedPayment],
+        [commissionReservation],
+        [loyaltyReservation],
+        ...(notifyClient
+          ? [[{
+            expoPushToken: "ExponentPushToken[test]",
+            whatsapp: "+5511999999999",
+            phone: null,
+            name: "Client Test",
+            whatsappOptIn: true,
+          }], [{ balance: "400.00" }]]
+          : []),
+      ];
+    };
+
+    setPaymentRows(pendingPayment, paidPayment, true, true);
+    const firstConfirmation = await request(buildApp(paymentsRouter))
+      .patch(`/api/payments/${pendingPayment.id}`)
+      .send({ status: PAYMENT_STATUS.PAID });
+    expect(firstConfirmation.status, JSON.stringify(firstConfirmation.body)).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(enqueueNewBookingNotificationEmail).toHaveBeenCalledOnce();
+    expect(sendPushNotification).toHaveBeenCalledOnce();
+    expect(dispatchWhatsAppPaymentReceived).toHaveBeenCalledOnce();
+
+    setPaymentRows(paidPayment, paidPayment, true, false);
+    const repeatedPaidStatus = await request(buildApp(paymentsRouter))
+      .patch(`/api/payments/${paidPayment.id}`)
+      .send({ status: PAYMENT_STATUS.PAID });
+    expect(repeatedPaidStatus.status, JSON.stringify(repeatedPaidStatus.body)).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const paidWithEditedNotes = { ...paidPayment, notes: "Observação atualizada" };
+    setPaymentRows(paidPayment, paidWithEditedNotes, false, false);
+    const notesUpdate = await request(buildApp(paymentsRouter))
+      .patch(`/api/payments/${paidPayment.id}`)
+      .send({ notes: paidWithEditedNotes.notes });
+    expect(notesUpdate.status, JSON.stringify(notesUpdate.body)).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(enqueueNewBookingNotificationEmail).toHaveBeenCalledOnce();
+    expect(sendPushNotification).toHaveBeenCalledOnce();
+    expect(dispatchWhatsAppPaymentReceived).toHaveBeenCalledOnce();
   });
 
   it("POST /payments rolls back earlier installments when a later insert fails", async () => {
