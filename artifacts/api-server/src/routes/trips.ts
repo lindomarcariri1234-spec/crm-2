@@ -9,9 +9,10 @@ import { getClientIp } from "../lib/get-client-ip";
 import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, type TripImportResult } from "@workspace/db";
 import { checkPlanLimit } from "../lib/planLimits";
 import type { LayoutCell, FixedCostItem, VariableCostItem, FreePassenger } from "@workspace/db";
-import { eq, and, ilike, sql, desc, asc, inArray, or, gt, isNotNull } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser, MANAGEMENT_ROLES, ADMIN_ROLES } from "../lib/tenant";
+import { parseBrazilCalendarDateStart } from "../lib/trip-date-filter";
 import { deleteOrphanedFile } from "../lib/uploadthing";
 import { hasSeatMapFeature } from "../lib/plan-features";
 import { deriveAgeCategory, getAgeYears, syncIsChildUnder7 } from "../lib/passenger";
@@ -69,6 +70,12 @@ function tripImportFingerprint(data: { name: string; destination: string; destin
 const ListTripsQuery = z.object({
   search: z.string().optional(),
   status: z.enum(["draft", "published", "active", "confirmed", "cancelled", "completed"]).optional(),
+  type: z.string().optional(),
+  date: z.string()
+    .refine((value) => parseBrazilCalendarDateStart(value) !== null, {
+      message: "Data deve estar no formato YYYY-MM-DD",
+    })
+    .optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(500).default(20),
 });
@@ -516,12 +523,21 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
       next(new ValidationError(queryResult.error.errors[0]?.message ?? "Invalid query params", "VALIDATION_ERROR"));
       return;
     }
-    const { search, status, page: pageNum, limit: limitNum } = queryResult.data;
+    const { search, status, type, date, page: pageNum, limit: limitNum } = queryResult.data;
     const offset = (pageNum - 1) * limitNum;
 
     const conditions: ReturnType<typeof eq>[] = [eq(tripsTable.tenantId, me.tenantId)];
     if (search) conditions.push(ilike(tripsTable.name, `%${search}%`) as ReturnType<typeof eq>);
     if (status) conditions.push(eq(tripsTable.status, parseTripStatus(status)));
+    if (type) conditions.push(eq(tripsTable.type, type) as ReturnType<typeof eq>);
+    if (date) {
+      const departureDateStart = parseBrazilCalendarDateStart(date);
+      if (!departureDateStart) {
+        next(new ValidationError("Data deve estar no formato YYYY-MM-DD", "VALIDATION_ERROR"));
+        return;
+      }
+      conditions.push(gte(tripsTable.departureDate, departureDateStart) as ReturnType<typeof eq>);
+    }
 
     const activeTripCondition = inArray(tripsTable.status, [
       TRIP_STATUS.ACTIVE,
@@ -549,7 +565,7 @@ router.get("/trips", async (req, res, next: NextFunction): Promise<void> => {
         totalCapacity: sql<number>`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.totalCapacity} else 0 end), 0)::int`,
         occupiedSeats: sql<number>`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats} else 0 end), 0)::int`,
         totalRevenue: sql<number>`coalesce(sum(case when ${activeTripCondition} then (${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats}) * ${tripsTable.priceAdult} else 0 end), 0)::float8`,
-      }).from(tripsTable).where(eq(tripsTable.tenantId, me.tenantId))
+      }).from(tripsTable).where(and(...conditions))
         .catch((statsErr: unknown) => {
           logger.error(
             { err: statsErr, tenantId: me.tenantId },

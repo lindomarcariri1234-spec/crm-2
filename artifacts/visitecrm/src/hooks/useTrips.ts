@@ -1,6 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useSearch, useLocation } from "wouter";
-import { parseISO } from "date-fns";
 import {
   useListTrips, useCreateTrip, useDeleteTrip, useGetDashboardUpcomingTrips, useGetMe,
 } from "@workspace/api-client-react";
@@ -50,6 +49,8 @@ export function useTrips() {
   const { data: tripsData, isLoading, isError, error, refetch } = useListTrips({
     search: search || undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
+    type: typeFilter !== "all" ? typeFilter : undefined,
+    date: dateFilter || undefined,
     page,
     limit: PAGE_SIZE,
   });
@@ -102,15 +103,7 @@ export function useTrips() {
     return total;
   }, []);
 
-  const trips = useMemo(() => {
-    let data = tripsData?.data ?? [];
-    if (typeFilter !== "all") data = data.filter(t => t.type === typeFilter);
-    if (dateFilter) {
-      const from = new Date(dateFilter);
-      data = data.filter(t => { try { return parseISO(t.departureDate) >= from; } catch { return true; } });
-    }
-    return data;
-  }, [tripsData, typeFilter, dateFilter]);
+  const trips = tripsData?.data ?? [];
 
   const stats = useMemo(() => {
     const aggregate = tripsData?.stats;

@@ -18,10 +18,11 @@ import { TripCountdown, OccupancyBar } from "./TripCountdown";
 import { BoardingPanelModal } from "./BoardingPanelModal";
 import { TripCard, PublishToStoreDialog } from "./TripCard";
 import { useTrips } from "@/hooks/useTrips";
-import { useGetMe, useGetTenant } from "@workspace/api-client-react";
+import { useGetTenant } from "@workspace/api-client-react";
 import { PageHeader } from "@/components/page-header";
 import { TripCsvImportModal } from "./TripCsvImportModal";
 import { buildTripCsvHeader, buildTripCsvRows } from "@/lib/trip-csv-import";
+import { getTripListActionPermissions } from "@/lib/trip-list-permissions";
 import { useToast } from "@/hooks/use-toast";
 
 export function TripList() {
@@ -34,14 +35,23 @@ export function TripList() {
   const { toast } = useToast();
 
   const {
-    trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, isVendedor,
+    trips, exportTrips, isLoading, isError, error, totalPages, upcomingTrips, stats, me,
     search, setSearch, statusFilter, setStatusFilter,
     typeFilter, setTypeFilter, dateFilter, setDateFilter,
     page, setPage, deleteTrip, handleDuplicate, handleDelete,
     hasActiveFilters, clearFilters, refetch,
   } = useTrips();
-  const { data: me } = useGetMe();
   const tenantId = me?.tenantId ?? null;
+  const {
+    canCreateTrip,
+    canEditTrip,
+    canDeleteTrip,
+    canManageTrip,
+    canImportTrips,
+    canExportTrips,
+    canPublishToStore,
+  } = getTripListActionPermissions(me?.role);
+  const isReadOnly = !canCreateTrip && !canEditTrip && !canDeleteTrip && !canManageTrip;
   const { data: tenantData } = useGetTenant(tenantId ?? "", {
     query: { enabled: !!tenantId, queryKey: ["tenant", tenantId] },
   });
@@ -97,17 +107,17 @@ export function TripList() {
       <PageHeader
         title="Viagens"
         description={
-          isVendedor ? "Visualize as excursões e pacotes disponíveis" : "Gerencie excursões e pacotes da agência"
+          isReadOnly ? "Visualize excursões e pacotes disponíveis" : "Gerencie excursões e pacotes da agência"
         }
         actions={
           <>
-          {!isVendedor && (
+          {canImportTrips && (
             <Button variant="outline" onClick={() => setImportOpen(true)}>
               <Upload className="w-4 h-4 mr-2" />Importar planilha
             </Button>
           )}
-          {!isVendedor && (
-            <Button variant="outline" onClick={handleExport} disabled={isExporting || stats.total === 0}>
+          {canExportTrips && (
+            <Button variant="outline" onClick={handleExport} disabled={isExporting}>
               {isExporting
                 ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 : <Download className="w-4 h-4 mr-2" />}
@@ -115,20 +125,20 @@ export function TripList() {
             </Button>
           )}
           <Link href="/trips/calendar"><Button variant="outline"><Calendar className="w-4 h-4 mr-2" />Calendário</Button></Link>
-          {!isVendedor && (
+          {canManageTrip && (
             <Link href="/trips/media"><Button variant="outline"><Images className="w-4 h-4 mr-2" />Mídia</Button></Link>
           )}
-          {!isVendedor && (
+          {canCreateTrip && (
             <Link href="/trips/new"><Button><Plus className="w-4 h-4 mr-2" />Nova Viagem</Button></Link>
           )}
           </>
         }
       />
 
-      {isVendedor && (
+      {isReadOnly && (
         <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-blue-800 text-sm">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>Você está no modo visualização. Apenas a agência pode criar ou editar viagens.</span>
+          <span>Seu perfil pode visualizar viagens, mas não tem permissão para criá-las ou editá-las.</span>
         </div>
       )}
 
@@ -221,13 +231,19 @@ export function TripList() {
         <div className="text-center py-20 text-muted-foreground">
           <MapPin className="w-10 h-10 mx-auto mb-3 opacity-30" />
           <p className="font-medium">Nenhuma viagem encontrada</p>
-          <p className="text-sm mt-1">{isVendedor ? "Nenhuma viagem disponível no momento" : "Crie sua primeira viagem para começar"}</p>
-          {!isVendedor && <Link href="/trips/new"><Button className="mt-4">Nova Viagem</Button></Link>}
+          <p className="text-sm mt-1">
+            {hasActiveFilters
+              ? "Nenhuma viagem corresponde aos filtros atuais"
+              : isReadOnly
+                ? "Nenhuma viagem disponível no momento"
+                : "Crie sua primeira viagem para começar"}
+          </p>
+          {!hasActiveFilters && canCreateTrip && <Link href="/trips/new"><Button className="mt-4">Nova Viagem</Button></Link>}
         </div>
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {trips.map(trip => (
-            <TripCard key={trip.id} trip={trip} isVendedor={isVendedor} seatMapEnabled={seatMapEnabled} onDelete={() => setDeletingId(trip.id)} onDuplicate={() => handleDuplicate(trip)} onBoarding={() => setBoardingTrip({ id: trip.id, name: trip.name })} />
+            <TripCard key={trip.id} trip={trip} canEditTrip={canEditTrip} canCreateTrip={canCreateTrip} canDeleteTrip={canDeleteTrip} canPublishToStore={canPublishToStore} seatMapEnabled={seatMapEnabled} onDelete={() => setDeletingId(trip.id)} onDuplicate={() => handleDuplicate(trip)} onBoarding={() => setBoardingTrip({ id: trip.id, name: trip.name })} />
           ))}
         </div>
       ) : (
@@ -256,10 +272,10 @@ export function TripList() {
                 <Link href={`/trips/${trip.id}/passengers`}><Button size="icon" variant="ghost" className="h-8 w-8" title="Passageiros"><Users className="w-4 h-4" /></Button></Link>
                 <Button size="icon" variant="ghost" className="h-8 w-8 text-green-700" onClick={() => setBoardingTrip({ id: trip.id, name: trip.name })} title="Painel de Embarque"><ClipboardList className="w-4 h-4" /></Button>
                 {seatMapEnabled && <Link href={`/trips/${trip.id}/seat-map`}><Button size="icon" variant="ghost" className="h-8 w-8" title="Mapa de Assentos"><Bus className="w-4 h-4" /></Button></Link>}
-                {!isVendedor && <Link href={`/trips/${trip.id}/edit`}><Button size="icon" variant="ghost" className="h-8 w-8" title="Editar"><Edit className="w-4 h-4" /></Button></Link>}
-                {!isVendedor && <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDuplicate(trip)} title="Duplicar"><Copy className="w-4 h-4" /></Button>}
-                {!isVendedor && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setDeletingId(trip.id)} title="Excluir"><Trash2 className="w-4 h-4" /></Button>}
-                {!isVendedor && <Button size="icon" variant="ghost" className="h-8 w-8 text-primary" onClick={() => setPublishingTrip(trip)} title="Publicar na Loja"><ShoppingBag className="w-4 h-4" /></Button>}
+                {canEditTrip && <Link href={`/trips/${trip.id}/edit`}><Button size="icon" variant="ghost" className="h-8 w-8" title="Editar"><Edit className="w-4 h-4" /></Button></Link>}
+                {canCreateTrip && <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleDuplicate(trip)} title="Duplicar"><Copy className="w-4 h-4" /></Button>}
+                {canDeleteTrip && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" onClick={() => setDeletingId(trip.id)} title="Excluir"><Trash2 className="w-4 h-4" /></Button>}
+                {canPublishToStore && <Button size="icon" variant="ghost" className="h-8 w-8 text-primary" onClick={() => setPublishingTrip(trip)} title="Publicar na Loja"><ShoppingBag className="w-4 h-4" /></Button>}
               </div>
             </div>
           ))}

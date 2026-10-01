@@ -85,7 +85,7 @@ const Vitrine = lazy(() => import("@/pages/vitrine"));
 
 // Partner portal (public — JWT auth inside)
 const ParceirosPortal = lazy(() => import("@/pages/parceiros/index"));
-import { ROLES, ADMIN_ROLES } from "@workspace/permissions";
+import { ROLES, ADMIN_ROLES, MANAGEMENT_ROLES } from "@workspace/permissions";
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -531,10 +531,10 @@ function Router() {
       <Route path="/clients" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Clients} />} />
       <Route path="/clients/:id" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Clients} />} />
       <Route path="/trips" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Trips} />} />
-      <Route path="/trips/new" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} vendedorFallback="/trips" component={Trips} />} />
+      <Route path="/trips/new" component={() => <RoleGate allowedRoles={MANAGEMENT_ROLES} layout={Layout} vendedorFallback="/trips" component={Trips} />} />
       <Route path="/trips/calendar" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Trips} />} />
-      <Route path="/trips/media" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} vendedorFallback="/trips" component={Trips} />} />
-      <Route path="/trips/:id/edit" component={() => <RoleGate allowedRoles={AGENCY_ROLES} layout={Layout} vendedorFallback="/trips" component={Trips} />} />
+      <Route path="/trips/media" component={() => <RoleGate allowedRoles={MANAGEMENT_ROLES} layout={Layout} vendedorFallback="/trips" component={Trips} />} />
+      <Route path="/trips/:id/edit" component={() => <RoleGate allowedRoles={MANAGEMENT_ROLES} layout={Layout} vendedorFallback="/trips" component={Trips} />} />
       <Route path="/trips/:id/seat-map" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Trips} />} />
       <Route path="/trips/:id/passengers-overview" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Trips} />} />
       <Route path="/trips/:id/passengers" component={() => <RoleGate allowedRoles="*" layout={Layout} component={Trips} />} />

@@ -15,6 +15,11 @@ export type ListTripsParams = {
    * @nullable
    */
   status?: string | null;
+  type?: string;
+  /**
+   * Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo).
+   */
+  date?: string;
   page?: number;
   limit?: number;
 };

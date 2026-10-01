@@ -1465,6 +1465,15 @@ paths:
           in: query
           schema:
             type: ["string", "null"]
+        - name: type
+          in: query
+          schema:
+            type: string
+        - name: date
+          in: query
+          description: Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo).
+          schema:
+            type: string
         - name: page
           in: query
           schema:

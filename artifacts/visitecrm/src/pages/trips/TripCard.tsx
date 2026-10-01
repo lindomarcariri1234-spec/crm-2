@@ -273,7 +273,27 @@ export function PublishToStoreDialog({ trip, open, onClose }: { trip: Trip; open
   );
 }
 
-export function TripCard({ trip, isVendedor, seatMapEnabled = true, onDelete, onDuplicate, onBoarding }: { trip: Trip; isVendedor?: boolean; seatMapEnabled?: boolean; onDelete: () => void; onDuplicate: () => void; onBoarding: () => void }) {
+export function TripCard({
+  trip,
+  canEditTrip = false,
+  canCreateTrip = false,
+  canDeleteTrip = false,
+  canPublishToStore = false,
+  seatMapEnabled = true,
+  onDelete,
+  onDuplicate,
+  onBoarding,
+}: {
+  trip: Trip;
+  canEditTrip?: boolean;
+  canCreateTrip?: boolean;
+  canDeleteTrip?: boolean;
+  canPublishToStore?: boolean;
+  seatMapEnabled?: boolean;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onBoarding: () => void;
+}) {
   const freeCount = (Number(trip.freeOrganizers) || 0) + (Number(trip.freeGuides) || 0);
   const pct = trip.totalCapacity > 0 ? Math.round((trip.reservedSeats + trip.confirmedSeats + freeCount) / trip.totalCapacity * 100) : 0;
   const statusInfo = STATUS_MAP[trip.status] ?? { label: trip.status, color: "bg-gray-100 text-gray-600" };
@@ -331,18 +351,18 @@ export function TripCard({ trip, isVendedor, seatMapEnabled = true, onDelete, on
               <Button variant="outline" size="sm" className="text-xs"><Bus className="w-3 h-3 mr-1" />Mapa</Button>
             </Link>
           )}
-          {!isVendedor && (
+          {canEditTrip && (
             <Link href={`/trips/${trip.id}/edit`}>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Editar"><Edit className="w-4 h-4" /></Button>
             </Link>
           )}
-          {!isVendedor && (
+          {canCreateTrip && (
             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" onClick={onDuplicate} title="Duplicar">
               <Copy className="w-4 h-4" />
             </Button>
           )}
-          {!isVendedor && <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={onDelete} title="Excluir"><Trash2 className="w-4 h-4" /></Button>}
-          {!isVendedor && <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => setPublishOpen(true)} title="Publicar na Loja"><ShoppingBag className="w-4 h-4" /></Button>}
+          {canDeleteTrip && <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={onDelete} title="Excluir"><Trash2 className="w-4 h-4" /></Button>}
+          {canPublishToStore && <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => setPublishOpen(true)} title="Publicar na Loja"><ShoppingBag className="w-4 h-4" /></Button>}
         </div>
       </div>
       <PublishToStoreDialog trip={trip} open={publishOpen} onClose={() => setPublishOpen(false)} />

@@ -13,6 +13,7 @@ import { ROLES } from "@workspace/permissions";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
+import { and, eq, gte } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Shared auth mock
@@ -301,9 +302,61 @@ describe("GET /dashboard/charts — period query param validation", () => {
 // GET /trips — page/limit/status validation
 // ---------------------------------------------------------------------------
 
-describe("GET /trips — page, limit, status query param validation", () => {
+describe("GET /trips — page, limit, status, type and date query param validation", () => {
   beforeEach(() => {
     mockRequireAuth.mockResolvedValue(agencyAdmin);
+  });
+
+  it.each(["not-a-date", "2026-02-30"])("rejects invalid date %s with 400 VALIDATION_ERROR", async (date) => {
+    const res = await request(app)
+      .get("/trips")
+      .query({ date });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("applies type and Brazil-date filters before pagination and to the total", async () => {
+    type QueryChain = Promise<unknown[]> & {
+      from: () => QueryChain;
+      where: () => QueryChain;
+      orderBy: () => QueryChain;
+      limit: () => QueryChain;
+      offset: () => QueryChain;
+    };
+    const result = (rows: unknown[]): QueryChain => {
+      const chain = Promise.resolve(rows) as QueryChain;
+      chain.from = chain.where = chain.orderBy = chain.limit = chain.offset = () => chain;
+      return chain;
+    };
+
+    vi.mocked(and).mockClear();
+    vi.mocked(eq).mockClear();
+    vi.mocked(gte).mockClear();
+    mockSelect
+      .mockImplementationOnce(() => result([]))
+      .mockImplementationOnce(() => result([{ count: 7 }]))
+      .mockImplementationOnce(() => result([{
+        total: 7,
+        active: 0,
+        totalCapacity: 0,
+        occupiedSeats: 0,
+        totalRevenue: 0,
+      }]));
+
+    const res = await request(app)
+      .get("/trips")
+      .query({ type: "excursao", date: "2026-09-15", page: "2", limit: "12" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ data: [], total: 7, page: 2, limit: 12 });
+    expect(eq.mock.calls.filter(([, value]) => value === "excursao")).toHaveLength(1);
+    expect(gte.mock.calls.filter(([, value]) =>
+      value instanceof Date && value.toISOString() === "2026-09-15T03:00:00.000Z",
+    )).toHaveLength(1);
+    expect(and.mock.calls).toHaveLength(3);
+    expect(and.mock.calls.every((conditions) => conditions.length === 3 && conditions.includes("gte")))
+      .toBe(true);
   });
 
   it("rejects page=0 with 400 VALIDATION_ERROR", async () => {

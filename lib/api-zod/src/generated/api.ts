@@ -3052,6 +3052,13 @@ export const listTripsQueryLimitDefault = 20;
 export const ListTripsQueryParams = zod.object({
   search: zod.coerce.string().nullish(),
   status: zod.coerce.string().nullish(),
+  type: zod.coerce.string().optional(),
+  date: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo).",
+    ),
   page: zod.coerce.number().int().default(listTripsQueryPageDefault),
   limit: zod.coerce.number().int().default(listTripsQueryLimitDefault),
 });
