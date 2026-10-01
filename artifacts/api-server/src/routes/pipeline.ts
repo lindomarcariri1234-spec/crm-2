@@ -171,7 +171,10 @@ async function resolveDealLinkage({
       ))
       .limit(1);
     if (!client) {
-      throw new ValidationError("Client not found or not in tenant", "CLIENT_NOT_FOUND");
+      throw new ValidationError(
+        "Cliente não encontrado ou não pertence a esta agência",
+        "CLIENT_NOT_FOUND",
+      );
     }
   }
 

@@ -148,6 +148,40 @@ describe("pipeline deal linkage", () => {
       .send({ stageId: "stage-1", title: "Lead", reservationId: "foreign-reservation" });
 
     expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "RESERVATION_NOT_FOUND",
+      message: "Reserva não encontrada nesta agência",
+    });
+    expect(mocks.mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a client from another tenant without creating a deal", async () => {
+    queueSelectRows([]);
+
+    const response = await request(buildApp())
+      .post("/api/deals")
+      .send({ clientId: "foreign-client", stageId: "stage-1", title: "Lead" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "CLIENT_NOT_FOUND",
+      message: "Cliente não encontrado ou não pertence a esta agência",
+    });
+    expect(mocks.mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a trip from another tenant without creating a deal", async () => {
+    queueSelectRows([]);
+
+    const response = await request(buildApp())
+      .post("/api/deals")
+      .send({ tripId: "foreign-trip", stageId: "stage-1", title: "Lead" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "TRIP_NOT_FOUND",
+      message: "Viagem não encontrada nesta agência",
+    });
     expect(mocks.mockInsert).not.toHaveBeenCalled();
   });
 
@@ -165,6 +199,10 @@ describe("pipeline deal linkage", () => {
       });
 
     expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "DEAL_LINKAGE_MISMATCH",
+      message: "A reserva não pertence ao cliente vinculado ao negócio",
+    });
     expect(mocks.mockInsert).not.toHaveBeenCalled();
   });
 
@@ -181,6 +219,41 @@ describe("pipeline deal linkage", () => {
       });
 
     expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "DEAL_LINKAGE_MISMATCH",
+      message: "A reserva não pertence à viagem vinculada ao negócio",
+    });
+    expect(mocks.mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a reservation whose client belongs to another tenant", async () => {
+    queueSelectRows(
+      [{ clientId: "foreign-client", tripId: "trip-1" }],
+      [],
+    );
+
+    const response = await request(buildApp())
+      .post("/api/deals")
+      .send({ stageId: "stage-1", title: "Lead", reservationId: "reservation-1" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("CLIENT_NOT_FOUND");
+    expect(mocks.mockInsert).not.toHaveBeenCalled();
+  });
+
+  it("rejects a reservation whose trip belongs to another tenant", async () => {
+    queueSelectRows(
+      [{ clientId: "client-1", tripId: "foreign-trip" }],
+      [{ id: "client-1" }],
+      [],
+    );
+
+    const response = await request(buildApp())
+      .post("/api/deals")
+      .send({ stageId: "stage-1", title: "Lead", reservationId: "reservation-1" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("TRIP_NOT_FOUND");
     expect(mocks.mockInsert).not.toHaveBeenCalled();
   });
 
@@ -238,6 +311,58 @@ describe("pipeline deal linkage", () => {
       .send({ reservationId: "reservation-2" });
 
     expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "DEAL_LINKAGE_MISMATCH",
+      message: "A reserva não pertence à viagem vinculada ao negócio",
+    });
+    expect(mocks.mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects changing a deal to a reservation from a different client", async () => {
+    const existingDeal = makeDeal({ tripId: "trip-1", reservationId: "reservation-1" });
+    queueSelectRows(
+      [existingDeal],
+      [{ clientId: "client-2", tripId: "trip-1" }],
+    );
+
+    const response = await request(buildApp())
+      .patch("/api/deals/deal-1")
+      .send({ reservationId: "reservation-2" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "DEAL_LINKAGE_MISMATCH",
+      message: "A reserva não pertence ao cliente vinculado ao negócio",
+    });
+    expect(mocks.mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects linking a deal to a reservation from another tenant", async () => {
+    const existingDeal = makeDeal();
+    queueSelectRows([existingDeal], []);
+
+    const response = await request(buildApp())
+      .patch("/api/deals/deal-1")
+      .send({ reservationId: "foreign-reservation" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe("RESERVATION_NOT_FOUND");
+    expect(mocks.mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("rejects linking a deal to a trip from another tenant", async () => {
+    const existingDeal = makeDeal();
+    queueSelectRows([existingDeal], [{ id: "client-1" }], []);
+
+    const response = await request(buildApp())
+      .patch("/api/deals/deal-1")
+      .send({ tripId: "foreign-trip" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: "TRIP_NOT_FOUND",
+      message: "Viagem não encontrada nesta agência",
+    });
     expect(mocks.mockUpdate).not.toHaveBeenCalled();
   });
 
