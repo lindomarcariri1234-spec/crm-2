@@ -1,4 +1,4 @@
-/* VISITECRM_BUNDLE_SOURCE_FINGERPRINT:3fae0bee9b338cce16affc6f5582bafa4b4b91471039b713f3d98ee8d4f1e3ba */
+/* VISITECRM_BUNDLE_SOURCE_FINGERPRINT:4e0e5e658f4875ba0975de891f949245cd61a25a7b8263475ac028691bb2d4e8 */
 import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
 import __bannerUrl from 'node:url';
@@ -93923,6 +93923,10 @@ var init_api2 = __esm({
     ListTripsQueryParams = objectType({
       search: coerce.string().nullish(),
       status: coerce.string().nullish(),
+      type: coerce.string().optional(),
+      date: coerce.string().optional().describe(
+        "Inclusive departure-date lower bound in YYYY-MM-DD (America/Sao_Paulo)."
+      ),
       page: coerce.number().int().default(listTripsQueryPageDefault),
       limit: coerce.number().int().default(listTripsQueryLimitDefault)
     });
@@ -96084,7 +96088,9 @@ var init_api2 = __esm({
         categoryBreakdown: arrayType(
           objectType({
             category: stringType(),
-            total: numberType()
+            total: numberType(),
+            paid: numberType(),
+            open: numberType()
           })
         )
       }).optional()
@@ -192874,8 +192880,8 @@ var require_lte = __commonJS({
   "../../node_modules/.pnpm/semver@7.8.5/node_modules/semver/functions/lte.js"(exports, module) {
     "use strict";
     var compare = require_compare();
-    var lte5 = (a, b4, loose) => compare(a, b4, loose) <= 0;
-    module.exports = lte5;
+    var lte4 = (a, b4, loose) => compare(a, b4, loose) <= 0;
+    module.exports = lte4;
   }
 });
 
@@ -192888,7 +192894,7 @@ var require_cmp = __commonJS({
     var gt8 = require_gt();
     var gte4 = require_gte();
     var lt8 = require_lt();
-    var lte5 = require_lte();
+    var lte4 = require_lte();
     var cmp = (a, op, b4, loose) => {
       switch (op) {
         case "===":
@@ -192920,7 +192926,7 @@ var require_cmp = __commonJS({
         case "<":
           return lt8(a, b4, loose);
         case "<=":
-          return lte5(a, b4, loose);
+          return lte4(a, b4, loose);
         default:
           throw new TypeError(`Invalid operator: ${op}`);
       }
@@ -193723,7 +193729,7 @@ var require_outside = __commonJS({
     var satisfies = require_satisfies();
     var gt8 = require_gt();
     var lt8 = require_lt();
-    var lte5 = require_lte();
+    var lte4 = require_lte();
     var gte4 = require_gte();
     var outside = (version4, range, hilo, options) => {
       version4 = new SemVer(version4, options);
@@ -193732,7 +193738,7 @@ var require_outside = __commonJS({
       switch (hilo) {
         case ">":
           gtfn = gt8;
-          ltefn = lte5;
+          ltefn = lte4;
           ltfn = lt8;
           comp = ">";
           ecomp = ">=";
@@ -194055,7 +194061,7 @@ var require_semver2 = __commonJS({
     var eq2 = require_eq();
     var neq = require_neq();
     var gte4 = require_gte();
-    var lte5 = require_lte();
+    var lte4 = require_lte();
     var cmp = require_cmp();
     var coerce2 = require_coerce();
     var truncate = require_truncate();
@@ -194094,7 +194100,7 @@ var require_semver2 = __commonJS({
       eq: eq2,
       neq,
       gte: gte4,
-      lte: lte5,
+      lte: lte4,
       cmp,
       coerce: coerce2,
       truncate,
@@ -269304,6 +269310,108 @@ var init_expense_trip_cost_link = __esm({
   }
 });
 
+// src/lib/commission-calculation.ts
+function toNumber(value) {
+  if (value == null || value === "") return 0;
+  const result = Number(value);
+  if (!Number.isFinite(result)) {
+    throw new Error("Commission configuration contains an invalid number");
+  }
+  return result;
+}
+function getCommissionTravelScope(destinationCountry) {
+  if (!destinationCountry?.trim()) return null;
+  const trimmedCountry = destinationCountry.trim();
+  const normalizedCountry = destinationCountry.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!normalizedCountry) return null;
+  if (/^(?:n\/a|n\.a\.|not applicable)$/i.test(trimmedCountry) || UNKNOWN_COUNTRIES.has(normalizedCountry)) {
+    return null;
+  }
+  if (normalizedCountry === "br" || normalizedCountry === "bra" || normalizedCountry.includes("brasil") || normalizedCountry.includes("brazil")) {
+    return "national";
+  }
+  return "international";
+}
+function selectApplicableCommissionRule(rules, tripId, travelScope) {
+  const tripRule = tripId ? rules.find((rule) => rule.appliesTo === "trip" && rule.tripId === tripId) : void 0;
+  if (tripRule) return tripRule;
+  const travelRule = travelScope ? rules.find((rule) => rule.appliesTo === travelScope) : void 0;
+  if (travelRule) return travelRule;
+  return rules.find((rule) => rule.appliesTo === "all");
+}
+function calculateRuleCommission(saleAmount, rule) {
+  const value = toNumber(rule.value);
+  if (value < 0) {
+    throw new Error("Commission rule value cannot be negative");
+  }
+  if ((rule.type ?? "percentage") === "fixed") {
+    return {
+      commissionAmount: roundMoney(value),
+      commissionRate: null,
+      commissionType: "fixed"
+    };
+  }
+  if (rule.type != null && rule.type !== "percentage") {
+    throw new Error("Commission rule type is invalid");
+  }
+  return {
+    commissionAmount: roundMoney(saleAmount * value / 100),
+    commissionRate: value,
+    commissionType: "percentage"
+  };
+}
+function calculateSellerCommission(saleAmount, seller) {
+  const rate = toNumber(seller.commissionRate);
+  const fixed = toNumber(seller.commissionFixed);
+  if (seller.commissionType === "none") {
+    return { commissionAmount: 0, commissionRate: null, commissionType: "none" };
+  }
+  if (seller.commissionType === "fixed") {
+    return {
+      commissionAmount: roundMoney(fixed),
+      commissionRate: null,
+      commissionType: "fixed"
+    };
+  }
+  if (seller.commissionType === "hybrid") {
+    return {
+      commissionAmount: roundMoney(saleAmount * rate / 100 + fixed),
+      commissionRate: rate,
+      commissionType: "hybrid"
+    };
+  }
+  return {
+    commissionAmount: roundMoney(saleAmount * rate / 100),
+    commissionRate: rate,
+    commissionType: "percentage"
+  };
+}
+function canTransitionCommissionStatus(current, next) {
+  if (current === next) return true;
+  return current === COMMISSION_STATUS.PENDING && next === COMMISSION_STATUS.APPROVED || current === COMMISSION_STATUS.APPROVED && next === COMMISSION_STATUS.PAID;
+}
+var UNKNOWN_COUNTRIES;
+var init_commission_calculation = __esm({
+  "src/lib/commission-calculation.ts"() {
+    "use strict";
+    init_src2();
+    init_pricing();
+    UNKNOWN_COUNTRIES = /* @__PURE__ */ new Set([
+      "unknown",
+      "unk",
+      "notprovided",
+      "notavailable",
+      "desconhecido",
+      "naoinformado",
+      "naoidentificado",
+      "indefinido",
+      "undefined",
+      "null",
+      "none"
+    ]);
+  }
+});
+
 // src/routes/payments.ts
 function paymentReferralReversalReason(status) {
   switch (status) {
@@ -269371,7 +269479,7 @@ async function syncReservationCommission(reservationId, tenantId) {
   let ruleId = null;
   let sellerId = null;
   if (hasDirectCommission) {
-    commissionAmount = parseFloat(directAmount);
+    commissionAmount = roundMoney(parseFloat(directAmount));
     commissionType = "direct";
     const explicitSellerId = reservation.sellerId ?? null;
     if (explicitSellerId) {
@@ -269397,14 +269505,21 @@ async function syncReservationCommission(reservationId, tenantId) {
       sellerId = creator.id;
     }
     const rules = await db.select().from(commissionRulesTable).where(and(eq(commissionRulesTable.tenantId, tenantId), eq(commissionRulesTable.isActive, true)));
-    const tripSpecificRule = rules.find((r2) => r2.appliesTo === "trip" && r2.tripId === reservation.tripId);
-    const allRule = rules.find((r2) => r2.appliesTo === "all");
-    const rule = tripSpecificRule ?? allRule;
+    let travelScope = null;
+    const hasTravelScopedRules = rules.some(
+      (rule2) => rule2.appliesTo === "national" || rule2.appliesTo === "international"
+    );
+    if (reservation.tripId && hasTravelScopedRules) {
+      const [trip] = await db.select({ destinationCountry: tripsTable.destinationCountry }).from(tripsTable).where(and(eq(tripsTable.id, reservation.tripId), eq(tripsTable.tenantId, tenantId))).limit(1);
+      travelScope = getCommissionTravelScope(trip?.destinationCountry);
+    }
+    const rule = selectApplicableCommissionRule(rules, reservation.tripId, travelScope);
     if (rule) {
       ruleId = rule.id;
-      commissionType = rule.type ?? "percentage";
-      commissionRate = parseFloat(String(rule.value));
-      commissionAmount = rule.type === "percentage" ? baseAmount * commissionRate / 100 : commissionRate;
+      const calculation = calculateRuleCommission(baseAmount, rule);
+      commissionType = calculation.commissionType;
+      commissionRate = calculation.commissionRate;
+      commissionAmount = calculation.commissionAmount;
     } else {
       const [sellerConfig] = await db.select({
         commissionType: usersTable.commissionType,
@@ -269412,21 +269527,10 @@ async function syncReservationCommission(reservationId, tenantId) {
         commissionFixed: usersTable.commissionFixed
       }).from(usersTable).where(and(eq(usersTable.id, sellerId), eq(usersTable.tenantId, tenantId))).limit(1);
       if (sellerConfig) {
-        commissionType = sellerConfig.commissionType ?? "percentage";
-        const rate = parseFloat(String(sellerConfig.commissionRate ?? "0"));
-        const fixed = parseFloat(String(sellerConfig.commissionFixed ?? "0"));
-        if (sellerConfig.commissionType === "none") {
-        } else if (sellerConfig.commissionType === "fixed" && fixed > 0) {
-          commissionAmount = fixed;
-          commissionRate = fixed;
-        } else if (sellerConfig.commissionType === "hybrid") {
-          const pct = rate > 0 ? baseAmount * rate / 100 : 0;
-          commissionAmount = pct + fixed;
-          commissionRate = rate;
-        } else if (rate > 0) {
-          commissionAmount = baseAmount * rate / 100;
-          commissionRate = rate;
-        }
+        const calculation = calculateSellerCommission(baseAmount, sellerConfig);
+        commissionType = calculation.commissionType;
+        commissionRate = calculation.commissionRate;
+        commissionAmount = calculation.commissionAmount;
       }
     }
   }
@@ -269507,65 +269611,109 @@ function formatExpense(e2) {
     supplierName: null
   };
 }
-function formatTripCost(c2) {
+function brazilCalendarDateAnchor(value) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(value);
+  const part = (type) => parts.find((item) => item.type === type)?.value ?? "";
+  return new Date(Date.UTC(Number(part("year")), Number(part("month")) - 1, Number(part("day"))));
+}
+function dateValueToIso(value) {
+  return (value instanceof Date ? value : new Date(value)).toISOString();
+}
+function formatConsolidatedExpense(row) {
+  const dueDate = row.dueDate ?? brazilCalendarDateAnchor(
+    row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt)
+  );
   return {
-    id: c2.id,
-    tripId: c2.tripId,
-    category: c2.category,
-    description: c2.description,
-    amount: Number(c2.amount),
-    supplierId: c2.supplierId ?? null,
-    supplierName: c2.supplierName ?? null,
-    paymentMethod: null,
-    paymentDate: c2.paidAt?.toISOString() ?? null,
-    dueDate: (c2.dueDate ?? c2.createdAt).toISOString(),
-    status: c2.status,
-    notes: c2.notes ?? null,
-    createdAt: c2.createdAt.toISOString(),
-    source: "trip"
+    id: row.id,
+    tripId: row.tripId,
+    linkedTripCostId: row.linkedTripCostId,
+    category: row.category,
+    description: row.description,
+    amount: Number(row.amount),
+    supplierId: row.supplierId,
+    supplierName: row.supplierName,
+    paymentMethod: row.paymentMethod,
+    paymentDate: row.paymentDate ? dateValueToIso(row.paymentDate) : null,
+    dueDate: dateValueToIso(dueDate),
+    status: row.status,
+    notes: row.notes,
+    createdAt: dateValueToIso(row.createdAt),
+    source: row.source
   };
 }
-function isActiveConsolidatedExpense(row) {
-  return row.status !== "cancelled";
+function parseUtcDateOnly(value) {
+  const match4 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match4) return null;
+  const [, yearText, monthText, dayText] = match4;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const date6 = new Date(Date.UTC(year, month - 1, day));
+  if (date6.getUTCFullYear() !== year || date6.getUTCMonth() !== month - 1 || date6.getUTCDate() !== day) return null;
+  return date6;
 }
-function isInExpenseSummaryPeriod(row, period) {
-  if (period === "all") return true;
-  const dueDate = new Date(row.dueDate);
-  if (Number.isNaN(dueDate.getTime())) return false;
-  const now = /* @__PURE__ */ new Date();
-  if (period === "month") return row.dueDate.slice(0, 7) === localToday().slice(0, 7);
-  if (period === "quarter") {
-    const cutoff = new Date(now);
-    cutoff.setMonth(now.getMonth() - 3);
-    return dueDate >= cutoff;
-  }
-  if (period === "year") {
-    const cutoff = new Date(now);
-    cutoff.setFullYear(now.getFullYear() - 1);
-    return dueDate >= cutoff;
-  }
-  return true;
+function addUtcMonthsClamped(date6, months) {
+  const monthIndex = date6.getUTCFullYear() * 12 + date6.getUTCMonth() + months;
+  const year = Math.floor(monthIndex / 12);
+  const month = monthIndex - year * 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date6.getUTCDate(), lastDay)));
 }
-function sumConsolidatedExpenses(rows) {
-  return rows.reduce((sum, row) => sum + Number(row.amount), 0);
-}
-function buildExpenseSummary(rows, period, categoryRows) {
-  const activeRows = rows.filter(isActiveConsolidatedExpense);
-  const periodRows = activeRows.filter((row) => isInExpenseSummaryPeriod(row, period));
-  const currentMonth = localToday().slice(0, 7);
-  const paidThisMonth = activeRows.filter((row) => row.status === "paid" && row.paymentDate?.slice(0, 7) === currentMonth).reduce((sum, row) => sum + Number(row.amount), 0);
-  const categoryTotals = /* @__PURE__ */ new Map();
-  for (const row of categoryRows) {
-    if (!isActiveConsolidatedExpense(row)) continue;
-    categoryTotals.set(row.category, (categoryTotals.get(row.category) ?? 0) + Number(row.amount));
+function getExpenseSummaryWindow(period, today = localToday()) {
+  if (period === "all") return null;
+  const todayDate = parseUtcDateOnly(today);
+  if (!todayDate) return null;
+  if (period === "month") {
+    return {
+      start: new Date(Date.UTC(todayDate.getUTCFullYear(), todayDate.getUTCMonth(), 1)),
+      end: new Date(Date.UTC(todayDate.getUTCFullYear(), todayDate.getUTCMonth() + 1, 1))
+    };
   }
+  const start = period === "quarter" ? addUtcMonthsClamped(todayDate, -3) : period === "year" ? addUtcMonthsClamped(todayDate, -12) : null;
+  if (!start) return null;
+  const end = new Date(todayDate);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
+}
+function getBrazilCurrentMonthWindow(today = localToday()) {
+  const todayDate = parseUtcDateOnly(today) ?? /* @__PURE__ */ new Date();
+  const year = todayDate.getUTCFullYear();
+  const month = todayDate.getUTCMonth();
   return {
-    total: sumConsolidatedExpenses(periodRows),
-    paid: sumConsolidatedExpenses(periodRows.filter((row) => row.status === "paid")),
-    pending: sumConsolidatedExpenses(periodRows.filter((row) => row.status === "pending")),
-    overdue: sumConsolidatedExpenses(periodRows.filter((row) => row.status === "overdue")),
-    paidThisMonth,
-    categoryBreakdown: [...categoryTotals.entries()].map(([category, total]) => ({ category, total })).sort((a, b4) => b4.total - a.total)
+    start: new Date(Date.UTC(year, month, 1, 3)),
+    end: new Date(Date.UTC(year, month + 1, 1, 3))
+  };
+}
+function buildExpenseSummary(rows) {
+  const categoryTotals = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const total = Number(row.total) || 0;
+    const paid = Number(row.paid) || 0;
+    if (total === 0 && paid === 0) continue;
+    const category = categoryTotals.get(row.category) ?? { total: 0, paid: 0, open: 0 };
+    category.total += total;
+    category.paid += paid;
+    category.open += total - paid;
+    categoryTotals.set(row.category, category);
+  }
+  const sum = (key) => roundMoney(rows.reduce((total, row) => total + (Number(row[key]) || 0), 0));
+  return {
+    total: sum("total"),
+    paid: sum("paid"),
+    pending: sum("pending"),
+    overdue: sum("overdue"),
+    paidThisMonth: sum("paidThisMonth"),
+    categoryBreakdown: [...categoryTotals.entries()].map(([category, totals]) => ({
+      category,
+      total: roundMoney(totals.total),
+      paid: roundMoney(totals.paid),
+      open: roundMoney(totals.open)
+    })).sort((a, b4) => b4.total - a.total)
   };
 }
 async function requirePaymentAccess(me5, paymentId) {
@@ -269617,6 +269765,7 @@ var init_payments2 = __esm({
     init_reservation_order_payment_sync();
     init_client_financials();
     init_expense_trip_cost_link();
+    init_commission_calculation();
     router2 = (0, import_express5.Router)();
     router2.get("/trips/:tripId/financial-report", async (req, res, next) => {
       try {
@@ -270174,6 +270323,7 @@ var init_payments2 = __esm({
           next(new NotFoundError("Payment not found", "NOT_FOUND"));
           return;
         }
+        const transitionedToPaid = result.previousStatus !== PAYMENT_STATUS.PAID && payment.status === PAYMENT_STATUS.PAID;
         if (payment.clientId) {
           try {
             await recalculateClientFinancials2(payment.clientId, me5.tenantId);
@@ -270275,10 +270425,10 @@ var init_payments2 = __esm({
         }
         res.json(formatPayment(payment));
         CalendarSyncService.syncPayment(req.params.id).catch((err) => req.log.warn({ err, context: "payment.update", paymentId: req.params.id }, "Calendar sync falhou \u2014 continuando"));
-        if (payment.reservationId && payment.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE) {
+        if (transitionedToPaid && payment.reservationId && payment.type === PAYMENT_TYPE.RECEIVABLE) {
           enqueueNewBookingNotificationEmail(payment.reservationId, me5.tenantId).catch((err) => req.log.error({ err }, "Error enqueueing agency new-booking notification on payment update"));
         }
-        if (updates.status === PAYMENT_STATUS.PAID && payment.type === PAYMENT_TYPE.RECEIVABLE && payment.clientId) {
+        if (transitionedToPaid && payment.type === PAYMENT_TYPE.RECEIVABLE && payment.clientId) {
           (async () => {
             try {
               const [client] = await db.select({
@@ -270441,9 +270591,15 @@ var init_payments2 = __esm({
           includeTripCosts,
           summaryPeriod = "all"
         } = req.query;
-        const pageNum = parseInt(page) || 1;
-        const limitNum = Math.min(parseInt(limit) || 20, 500);
+        const parsedPage = Number.parseInt(page, 10);
+        const parsedLimit = Number.parseInt(limit, 10);
+        const pageNum = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+        const limitNum = Number.isSafeInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 20;
         const offset = (pageNum - 1) * limitNum;
+        if (!Number.isSafeInteger(offset)) {
+          next(new ValidationError2("O deslocamento da pagina\xE7\xE3o \xE9 muito grande"));
+          return;
+        }
         const shouldIncludeTripCosts = includeTripCosts === "true";
         const conditions = [eq(expensesTable.tenantId, me5.tenantId)];
         if (tripId) conditions.push(eq(expensesTable.tripId, tripId));
@@ -270459,40 +270615,111 @@ var init_payments2 = __esm({
         }
         if (shouldIncludeTripCosts) {
           const tripCostConditions = [eq(tripCostsTable.tenantId, me5.tenantId)];
+          const tripCostDueDate = sql`COALESCE(
+        ${tripCostsTable.dueDate},
+        date_trunc('day', ${tripCostsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'UTC'
+      )`;
           if (tripId) tripCostConditions.push(eq(tripCostsTable.tripId, tripId));
           if (status) tripCostConditions.push(eq(tripCostsTable.status, parseExpenseStatus(status)));
           if (category) tripCostConditions.push(eq(tripCostsTable.category, category));
           if (supplierId) tripCostConditions.push(eq(tripCostsTable.supplierId, supplierId));
-          if (fromDate && !Number.isNaN(fromDate.getTime())) tripCostConditions.push(gte(tripCostsTable.dueDate, fromDate));
-          if (toDate2 && !Number.isNaN(toDate2.getTime())) tripCostConditions.push(lt(tripCostsTable.dueDate, toDate2));
-          const [expenses2, tripCosts, allExpenses, allTripCosts] = await Promise.all([
-            db.select().from(expensesTable).where(and(...conditions)),
-            db.select().from(tripCostsTable).where(and(...tripCostConditions)),
-            db.select().from(expensesTable).where(eq(expensesTable.tenantId, me5.tenantId)),
-            db.select().from(tripCostsTable).where(eq(tripCostsTable.tenantId, me5.tenantId))
+          if (fromDate && !Number.isNaN(fromDate.getTime())) tripCostConditions.push(gte(tripCostDueDate, fromDate));
+          if (toDate2 && !Number.isNaN(toDate2.getTime())) tripCostConditions.push(lt(tripCostDueDate, toDate2));
+          const unlinkedTripCostCondition = sql`NOT EXISTS (
+        SELECT 1
+        FROM ${expensesTable}
+        WHERE ${expensesTable.linkedTripCostId} = ${tripCostsTable.id}
+          AND ${expensesTable.tenantId} = ${me5.tenantId}
+      )`;
+          const tripCostWhere = and(...tripCostConditions, unlinkedTripCostCondition);
+          const validatedSummaryPeriod = ["all", "month", "quarter", "year"].includes(summaryPeriod) ? summaryPeriod : "all";
+          const summaryWindow = getExpenseSummaryWindow(validatedSummaryPeriod);
+          const paidThisMonthWindow = getBrazilCurrentMonthWindow();
+          const expenseInSummaryPeriod = summaryWindow ? sql`${expensesTable.dueDate} >= ${summaryWindow.start} AND ${expensesTable.dueDate} < ${summaryWindow.end}` : sql`TRUE`;
+          const tripCostInSummaryPeriod = summaryWindow ? sql`${tripCostDueDate} >= ${summaryWindow.start} AND ${tripCostDueDate} < ${summaryWindow.end}` : sql`TRUE`;
+          const [
+            consolidatedRowsResult,
+            [expenseCountResult],
+            [tripCostCountResult],
+            expenseSummaryRows,
+            tripCostSummaryRows
+          ] = await Promise.all([
+            db.execute(sql`
+          SELECT *
+          FROM (
+            SELECT
+              ${expensesTable.id} AS "id",
+              ${expensesTable.tripId} AS "tripId",
+              ${expensesTable.linkedTripCostId} AS "linkedTripCostId",
+              ${expensesTable.category} AS "category",
+              ${expensesTable.description} AS "description",
+              ${expensesTable.amount} AS "amount",
+              ${expensesTable.supplierId} AS "supplierId",
+              NULL::text AS "supplierName",
+              ${expensesTable.paymentMethod} AS "paymentMethod",
+              ${expensesTable.paymentDate} AS "paymentDate",
+              ${expensesTable.dueDate} AS "dueDate",
+              ${expensesTable.dueDate} AS "sortDueDate",
+              ${expensesTable.status} AS "status",
+              ${expensesTable.notes} AS "notes",
+              ${expensesTable.createdAt} AS "createdAt",
+              'agency'::text AS "source"
+            FROM ${expensesTable}
+            WHERE ${and(...conditions)}
+
+            UNION ALL
+
+            SELECT
+              ${tripCostsTable.id} AS "id",
+              ${tripCostsTable.tripId} AS "tripId",
+              NULL::text AS "linkedTripCostId",
+              ${tripCostsTable.category} AS "category",
+              ${tripCostsTable.description} AS "description",
+              ${tripCostsTable.amount} AS "amount",
+              ${tripCostsTable.supplierId} AS "supplierId",
+              ${tripCostsTable.supplierName} AS "supplierName",
+              NULL::text AS "paymentMethod",
+              ${tripCostsTable.paidAt} AS "paymentDate",
+              ${tripCostsTable.dueDate} AS "dueDate",
+              ${tripCostDueDate} AS "sortDueDate",
+              ${tripCostsTable.status} AS "status",
+              ${tripCostsTable.notes} AS "notes",
+              ${tripCostsTable.createdAt} AS "createdAt",
+              'trip'::text AS "source"
+            FROM ${tripCostsTable}
+            WHERE ${tripCostWhere}
+          ) AS consolidated_expenses
+          ORDER BY "sortDueDate" DESC, "createdAt" DESC, "id" DESC, "source" DESC
+          LIMIT ${limitNum} OFFSET ${offset}
+        `),
+            db.select({ count: sql`count(*)` }).from(expensesTable).where(and(...conditions)),
+            db.select({ count: sql`count(*)` }).from(tripCostsTable).where(tripCostWhere),
+            db.select({
+              category: expensesTable.category,
+              status: expensesTable.status,
+              total: sql`coalesce(sum(case when ${expensesTable.status} <> 'cancelled' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+              paid: sql`coalesce(sum(case when ${expensesTable.status} = 'paid' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+              pending: sql`coalesce(sum(case when ${expensesTable.status} = 'pending' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+              overdue: sql`coalesce(sum(case when ${expensesTable.status} = 'overdue' and ${expenseInSummaryPeriod} then ${expensesTable.amount} else 0 end), 0)`,
+              paidThisMonth: sql`coalesce(sum(case when ${expensesTable.status} = 'paid' and ${expensesTable.paymentDate} >= ${paidThisMonthWindow.start} and ${expensesTable.paymentDate} < ${paidThisMonthWindow.end} then ${expensesTable.amount} else 0 end), 0)`
+            }).from(expensesTable).where(and(...conditions)).groupBy(expensesTable.category, expensesTable.status),
+            db.select({
+              category: tripCostsTable.category,
+              status: tripCostsTable.status,
+              total: sql`coalesce(sum(case when ${tripCostsTable.status} <> 'cancelled' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+              paid: sql`coalesce(sum(case when ${tripCostsTable.status} = 'paid' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+              pending: sql`coalesce(sum(case when ${tripCostsTable.status} = 'pending' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+              overdue: sql`coalesce(sum(case when ${tripCostsTable.status} = 'overdue' and ${tripCostInSummaryPeriod} then ${tripCostsTable.amount} else 0 end), 0)`,
+              paidThisMonth: sql`coalesce(sum(case when ${tripCostsTable.status} = 'paid' and ${tripCostsTable.paidAt} >= ${paidThisMonthWindow.start} and ${tripCostsTable.paidAt} < ${paidThisMonthWindow.end} then ${tripCostsTable.amount} else 0 end), 0)`
+            }).from(tripCostsTable).where(tripCostWhere).groupBy(tripCostsTable.category, tripCostsTable.status)
           ]);
-          const linkedTripCostIds = new Set(allExpenses.map((expense) => expense.linkedTripCostId).filter((id) => Boolean(id)));
-          const consolidated = [
-            ...expenses2.map(formatExpense),
-            ...tripCosts.filter((cost) => !linkedTripCostIds.has(cost.id)).map(formatTripCost)
-          ].sort((a, b4) => {
-            const byDueDate = new Date(b4.dueDate).getTime() - new Date(a.dueDate).getTime();
-            return byDueDate || new Date(b4.createdAt).getTime() - new Date(a.createdAt).getTime();
-          });
-          const allConsolidated = [
-            ...allExpenses.map(formatExpense),
-            ...allTripCosts.filter((cost) => !linkedTripCostIds.has(cost.id)).map(formatTripCost)
-          ];
+          const total = Number(expenseCountResult?.count ?? 0) + Number(tripCostCountResult?.count ?? 0);
           res.json({
-            data: consolidated.slice(offset, offset + limitNum),
-            total: consolidated.length,
+            data: consolidatedRowsResult.rows.map(formatConsolidatedExpense),
+            total,
             page: pageNum,
             limit: limitNum,
-            summary: buildExpenseSummary(
-              allConsolidated,
-              ["all", "month", "quarter", "year"].includes(summaryPeriod) ? summaryPeriod : "all",
-              consolidated
-            )
+            summary: buildExpenseSummary([...expenseSummaryRows, ...tripCostSummaryRows])
           });
           return;
         }
@@ -285030,6 +285257,28 @@ var init_get_client_ip = __esm({
   }
 });
 
+// src/lib/trip-date-filter.ts
+function parseBrazilCalendarDateStart(value) {
+  const match4 = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match4) return null;
+  const year = Number(match4[1]);
+  const month = Number(match4[2]);
+  const day = Number(match4[3]);
+  const utcMidnight = Date.UTC(year, month - 1, day);
+  const calendarDate = new Date(utcMidnight);
+  if (calendarDate.getUTCFullYear() !== year || calendarDate.getUTCMonth() !== month - 1 || calendarDate.getUTCDate() !== day) {
+    return null;
+  }
+  return new Date(utcMidnight + BRAZIL_UTC_OFFSET_MS);
+}
+var BRAZIL_UTC_OFFSET_MS;
+var init_trip_date_filter = __esm({
+  "src/lib/trip-date-filter.ts"() {
+    "use strict";
+    BRAZIL_UTC_OFFSET_MS = 3 * 60 * 60 * 1e3;
+  }
+});
+
 // src/lib/plan-features.ts
 function getPlanTier(planId) {
   return PLAN_TIER[planId] ?? 0;
@@ -285540,6 +285789,7 @@ var init_trips2 = __esm({
     init_drizzle_orm();
     init_id2();
     init_tenant();
+    init_trip_date_filter();
     init_uploadthing2();
     init_plan_features();
     init_passenger();
@@ -285565,6 +285815,10 @@ var init_trips2 = __esm({
     ListTripsQuery = external_exports2.object({
       search: external_exports2.string().optional(),
       status: external_exports2.enum(["draft", "published", "active", "confirmed", "cancelled", "completed"]).optional(),
+      type: external_exports2.string().optional(),
+      date: external_exports2.string().refine((value) => parseBrazilCalendarDateStart(value) !== null, {
+        message: "Data deve estar no formato YYYY-MM-DD"
+      }).optional(),
       page: external_exports2.coerce.number().int().min(1).default(1),
       limit: external_exports2.coerce.number().int().min(1).max(500).default(20)
     });
@@ -285589,17 +285843,26 @@ var init_trips2 = __esm({
           next(new ValidationError2(queryResult.error.errors[0]?.message ?? "Invalid query params", "VALIDATION_ERROR"));
           return;
         }
-        const { search, status, page: pageNum, limit: limitNum } = queryResult.data;
+        const { search, status, type, date: date6, page: pageNum, limit: limitNum } = queryResult.data;
         const offset = (pageNum - 1) * limitNum;
         const conditions = [eq(tripsTable.tenantId, me5.tenantId)];
         if (search) conditions.push(ilike(tripsTable.name, `%${search}%`));
         if (status) conditions.push(eq(tripsTable.status, parseTripStatus(status)));
+        if (type) conditions.push(eq(tripsTable.type, type));
+        if (date6) {
+          const departureDateStart = parseBrazilCalendarDateStart(date6);
+          if (!departureDateStart) {
+            next(new ValidationError2("Data deve estar no formato YYYY-MM-DD", "VALIDATION_ERROR"));
+            return;
+          }
+          conditions.push(gte(tripsTable.departureDate, departureDateStart));
+        }
         const activeTripCondition = inArray(tripsTable.status, [
           TRIP_STATUS.ACTIVE,
           TRIP_STATUS.CONFIRMED
         ]);
         const [trips, [countResult], [statsResult]] = await Promise.all([
-          db.select().from(tripsTable).where(and(...conditions)).orderBy(asc(tripsTable.departureDate)).limit(limitNum).offset(offset),
+          db.select().from(tripsTable).where(and(...conditions)).orderBy(asc(tripsTable.departureDate), asc(tripsTable.id)).limit(limitNum).offset(offset),
           db.select({ count: sql`count(*)` }).from(tripsTable).where(and(...conditions)),
           db.select({
             total: sql`count(*)::int`,
@@ -285607,7 +285870,7 @@ var init_trips2 = __esm({
             totalCapacity: sql`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.totalCapacity} else 0 end), 0)::int`,
             occupiedSeats: sql`coalesce(sum(case when ${activeTripCondition} then ${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats} else 0 end), 0)::int`,
             totalRevenue: sql`coalesce(sum(case when ${activeTripCondition} then (${tripsTable.reservedSeats} + ${tripsTable.confirmedSeats}) * ${tripsTable.priceAdult} else 0 end), 0)::float8`
-          }).from(tripsTable).where(eq(tripsTable.tenantId, me5.tenantId)).catch((statsErr) => {
+          }).from(tripsTable).where(and(...conditions)).catch((statsErr) => {
             logger.error(
               { err: statsErr, tenantId: me5.tenantId },
               "[trips] failed to compute trip stats aggregate; returning trip list without stats"
@@ -295366,7 +295629,7 @@ function parseCivilDate(value) {
   if (normalized.getUTCFullYear() !== year || normalized.getUTCMonth() + 1 !== month || normalized.getUTCDate() !== day) {
     return void 0;
   }
-  const startInclusive = new Date(normalized.getTime() + BRAZIL_UTC_OFFSET_MS);
+  const startInclusive = new Date(normalized.getTime() + BRAZIL_UTC_OFFSET_MS2);
   return { key: value, year, month, startInclusive };
 }
 function parseBrazilDateRange(dateFrom, dateTo) {
@@ -295400,7 +295663,7 @@ function getBrazilCalendarMonth(date6) {
   return { year, month };
 }
 function brazilMonthStart(year, monthIndex) {
-  return new Date(utcDate(year, monthIndex, 1).getTime() + BRAZIL_UTC_OFFSET_MS);
+  return new Date(utcDate(year, monthIndex, 1).getTime() + BRAZIL_UTC_OFFSET_MS2);
 }
 function getBrazilMonthBuckets(count2 = 12, referenceDate = /* @__PURE__ */ new Date()) {
   if (!Number.isInteger(count2) || count2 < 0) {
@@ -295429,12 +295692,12 @@ function getBrazilMonthBuckets(count2 = 12, referenceDate = /* @__PURE__ */ new 
   }
   return buckets;
 }
-var BRAZIL_TIME_ZONE, BRAZIL_UTC_OFFSET_MS, DAY_MS;
+var BRAZIL_TIME_ZONE, BRAZIL_UTC_OFFSET_MS2, DAY_MS;
 var init_brazil_calendar = __esm({
   "src/lib/brazil-calendar.ts"() {
     "use strict";
     BRAZIL_TIME_ZONE = "America/Sao_Paulo";
-    BRAZIL_UTC_OFFSET_MS = 3 * 60 * 60 * 1e3;
+    BRAZIL_UTC_OFFSET_MS2 = 3 * 60 * 60 * 1e3;
     DAY_MS = 24 * 60 * 60 * 1e3;
   }
 });
@@ -296387,6 +296650,39 @@ var init_ranking_contract = __esm({
 function brazilUTC(year, month1Based, day) {
   return new Date(Date.UTC(year, month1Based - 1, day, 3, 0, 0, 0));
 }
+function dashboardPaymentMetricSelection(startOfMonth, startOfToday, next3Days, now) {
+  const paidReceivable = sql`${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+    AND ${paymentsTable.status} = ${PAYMENT_STATUS.PAID}`;
+  const pending = sql`${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}`;
+  const pendingReceivable = sql`${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+    AND ${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}`;
+  const pendingPayable = sql`${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE}
+    AND ${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}`;
+  return {
+    totalRevenue: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${paidReceivable}), 0)`,
+    revenueThisMonth: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${paidReceivable} AND ${paymentsTable.paidAt} >= ${startOfMonth}), 0)`,
+    pendingPayments: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pending}), 0)`,
+    receivedToday: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${paidReceivable} AND ${paymentsTable.paidAt} >= ${startOfToday}), 0)`,
+    toReceiveNext3Days: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingReceivable}
+        AND ${paymentsTable.dueDate} >= ${startOfToday}
+        AND ${paymentsTable.dueDate} <= ${next3Days}), 0)`,
+    totalPayable: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingPayable}), 0)`,
+    pendingReceivable: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingReceivable}), 0)`,
+    overduePaymentsCount: sql`count(*) filter (where ${pendingReceivable}
+      AND ${paymentsTable.dueDate} < ${now})`,
+    overduePayments: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric))
+      filter (where ${pendingReceivable} AND ${paymentsTable.dueDate} < ${now}), 0)`,
+    payingClientCount: sql`count(distinct ${paymentsTable.clientId})
+      filter (where ${paidReceivable})`
+  };
+}
 var import_express19, RevenueChartQuery, ChartsQuery, router13, dashboard_default;
 var init_dashboard = __esm({
   "src/routes/dashboard.ts"() {
@@ -296462,35 +296758,36 @@ var init_dashboard = __esm({
           return;
         }
         if (me5.role === ROLES.SALES) {
-          const [clientCount2] = await db.select({ count: sql`count(*)` }).from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me5)));
-          const [newClientCount2] = await db.select({ count: sql`count(*)` }).from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me5), gte(clientsTable.createdAt, startOfMonth)));
-          const myClients = await db.select({ id: clientsTable.id }).from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me5)));
-          const myClientIds = myClients.map((c2) => c2.id);
-          let totalRevenue2 = 0, revenueThisMonth2 = 0, pendingAmount = 0, receivedToday2 = 0;
-          if (myClientIds.length > 0) {
-            const payments2 = await db.select().from(paymentsTable).where(and(eq(paymentsTable.tenantId, tenantId), inArray(paymentsTable.clientId, myClientIds)));
-            for (const p2 of payments2) {
-              if (p2.type === PAYMENT_TYPE.RECEIVABLE && p2.status === PAYMENT_STATUS.PAID) {
-                totalRevenue2 += Number(p2.amount);
-                if (p2.paidAt && p2.paidAt >= startOfMonth) revenueThisMonth2 += Number(p2.amount);
-                if (p2.paidAt && p2.paidAt >= startOfToday) receivedToday2 += Number(p2.amount);
-              }
-              if (p2.status === PAYMENT_STATUS.PENDING) pendingAmount += Number(p2.amount);
-            }
-          }
+          const [sellerClientSummary] = await db.select({
+            count: sql`count(*)`,
+            newCount: sql`count(*) filter (where ${clientsTable.createdAt} >= ${startOfMonth})`
+          }).from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), clientSellerScopeCondition(me5)));
+          const hasSellerClients = Number(sellerClientSummary?.count ?? 0) > 0;
+          const [sellerPaymentSummary] = hasSellerClients ? await db.select(dashboardPaymentMetricSelection(startOfMonth, startOfToday, next3Days, now)).from(paymentsTable).innerJoin(clientsTable, and(
+            eq(paymentsTable.clientId, clientsTable.id),
+            eq(paymentsTable.tenantId, clientsTable.tenantId)
+          )).where(and(
+            eq(paymentsTable.tenantId, tenantId),
+            eq(clientsTable.tenantId, tenantId),
+            clientSellerScopeCondition(me5)
+          )) : [void 0];
+          const totalRevenue2 = Number(sellerPaymentSummary?.totalRevenue ?? 0);
+          const revenueThisMonth2 = Number(sellerPaymentSummary?.revenueThisMonth ?? 0);
+          const pendingAmount = Number(sellerPaymentSummary?.pendingPayments ?? 0);
+          const receivedToday2 = Number(sellerPaymentSummary?.receivedToday ?? 0);
           let totalReservations = 0, confirmedReservations = 0, cancelledReservations = 0, reservationsToday = 0;
           let avgTicket = 0, activeClientsCount = 0;
-          if (myClientIds.length > 0) {
+          if (hasSellerClients) {
             const [rc2] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), reservationSellerScopeCondition(me5)));
             const [cc2] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), reservationSellerScopeCondition(me5), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
             totalReservations = Number(rc2?.count ?? 0);
             confirmedReservations = Number(cc2?.count ?? 0);
           }
-          const [dealCount2] = await db.select({ count: sql`count(*)` }).from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN), eq(dealsTable.ownerId, me5.id)));
-          const [dealValue2] = await db.select({ total: sql`sum(cast(value as numeric))` }).from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN), eq(dealsTable.ownerId, me5.id)));
+          const [dealCount] = await db.select({ count: sql`count(*)` }).from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN), eq(dealsTable.ownerId, me5.id)));
+          const [dealValue] = await db.select({ total: sql`sum(cast(value as numeric))` }).from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN), eq(dealsTable.ownerId, me5.id)));
           res.json({
-            totalClients: Number(clientCount2?.count ?? 0),
-            newClientsThisMonth: Number(newClientCount2?.count ?? 0),
+            totalClients: Number(sellerClientSummary?.count ?? 0),
+            newClientsThisMonth: Number(sellerClientSummary?.newCount ?? 0),
             totalTrips: 0,
             activeTrips: 0,
             totalRevenue: roundMoney(totalRevenue2),
@@ -296500,8 +296797,8 @@ var init_dashboard = __esm({
             confirmedReservations,
             occupancyRate: 0,
             averageNps: null,
-            openDeals: Number(dealCount2?.count ?? 0),
-            dealsPipelineValue: Number(dealValue2?.total ?? 0),
+            openDeals: Number(dealCount?.count ?? 0),
+            dealsPipelineValue: Number(dealValue?.total ?? 0),
             receivedToday: receivedToday2,
             toReceiveNext3Days: 0,
             reservationsToday,
@@ -296517,111 +296814,136 @@ var init_dashboard = __esm({
           });
           return;
         }
-        const [clientCount] = await db.select({ count: sql`count(*)` }).from(clientsTable).where(eq(clientsTable.tenantId, tenantId));
-        const [newClientCount] = await db.select({ count: sql`count(*)` }).from(clientsTable).where(and(eq(clientsTable.tenantId, tenantId), gte(clientsTable.createdAt, startOfMonth)));
-        const [tripCount] = await db.select({ count: sql`count(*)` }).from(tripsTable).where(eq(tripsTable.tenantId, tenantId));
-        const [activeTripCount] = await db.select({ count: sql`count(*)` }).from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), eq(tripsTable.status, TRIP_STATUS.ACTIVE)));
-        const [reservationCount] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(eq(reservationsTable.tenantId, tenantId));
-        const [confirmedReservationCount] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
-        const [cancelledReservationCount] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CANCELLED)));
-        const [todayReservationCount] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), gte(reservationsTable.createdAt, startOfToday)));
-        const [avgTicketRow] = await db.select({ avg: sql`avg(cast(total_value as numeric))` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
-        const [activeClientsRow] = await db.select({ count: sql`count(distinct client_id)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED)));
-        const payments = await db.select().from(paymentsTable).where(eq(paymentsTable.tenantId, tenantId));
-        let totalRevenue = 0, revenueThisMonth = 0, pendingPaymentsAmt = 0, receivedToday = 0, toReceiveNext3Days = 0, totalPayable = 0, pendingReceivableAmt = 0;
-        for (const p2 of payments) {
-          if (p2.type === PAYMENT_TYPE.RECEIVABLE && p2.status === PAYMENT_STATUS.PAID) {
-            totalRevenue += Number(p2.amount);
-            if (p2.paidAt && p2.paidAt >= startOfMonth) revenueThisMonth += Number(p2.amount);
-            if (p2.paidAt && p2.paidAt >= startOfToday) receivedToday += Number(p2.amount);
-          }
-          if (p2.type === PAYMENT_TYPE.RECEIVABLE && p2.status === PAYMENT_STATUS.PENDING) {
-            pendingReceivableAmt += Number(p2.amount);
-            if (p2.dueDate && p2.dueDate >= startOfToday && p2.dueDate <= next3Days) {
-              toReceiveNext3Days += Number(p2.amount);
-            }
-          }
-          if (p2.type === PAYMENT_TYPE.PAYABLE && p2.status === PAYMENT_STATUS.PENDING) totalPayable += Number(p2.amount);
-          if (p2.status === PAYMENT_STATUS.PENDING) pendingPaymentsAmt += Number(p2.amount);
-        }
-        const totalFaturamento = totalRevenue + pendingReceivableAmt;
-        const [totalExpensesRow] = await db.select({ total: sql`sum(cast(amount as numeric))` }).from(expensesTable).where(eq(expensesTable.tenantId, tenantId));
-        const activeTrips = await db.select({ id: tripsTable.id }).from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), eq(tripsTable.status, TRIP_STATUS.ACTIVE)));
-        const activeTripIds = activeTrips.map((t8) => t8.id);
-        let receivedFromActiveTrips = 0, pendingFromActiveTrips = 0;
-        if (activeTripIds.length > 0) {
-          const activeResIds = (await db.select({ id: reservationsTable.id }).from(reservationsTable).where(and(
-            eq(reservationsTable.tenantId, tenantId),
-            inArray(reservationsTable.tripId, activeTripIds),
-            inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES)
-          ))).map((r2) => r2.id);
-          if (activeResIds.length > 0) {
-            const activePayments = await db.select({ amount: paymentsTable.amount, type: paymentsTable.type, status: paymentsTable.status }).from(paymentsTable).where(and(eq(paymentsTable.tenantId, tenantId), inArray(paymentsTable.reservationId, activeResIds)));
-            for (const p2 of activePayments) {
-              if (p2.type === PAYMENT_TYPE.RECEIVABLE && p2.status === PAYMENT_STATUS.PAID) receivedFromActiveTrips += Number(p2.amount);
-              if (p2.type === PAYMENT_TYPE.RECEIVABLE && p2.status === PAYMENT_STATUS.PENDING) pendingFromActiveTrips += Number(p2.amount);
-            }
-          }
-        }
-        const trips = await db.select({ totalCapacity: tripsTable.totalCapacity, reservedSeats: tripsTable.reservedSeats }).from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), eq(tripsTable.status, TRIP_STATUS.ACTIVE)));
-        const totalCapacity = trips.reduce((a, t8) => a + t8.totalCapacity, 0);
-        const totalReserved = trips.reduce((a, t8) => a + t8.reservedSeats, 0);
-        const occupancyRate = totalCapacity > 0 ? totalReserved / totalCapacity * 100 : 0;
-        const npsResponses = await db.select({ score: npsResponsesTable.score }).from(npsResponsesTable).where(eq(npsResponsesTable.tenantId, tenantId));
-        const averageNps = npsResponses.length > 0 ? npsResponses.reduce((a, r2) => a + r2.score, 0) / npsResponses.length : null;
-        const [dealCount] = await db.select({ count: sql`count(*)` }).from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN)));
-        const [dealValue] = await db.select({ total: sql`sum(cast(value as numeric))` }).from(dealsTable).where(and(eq(dealsTable.tenantId, tenantId), eq(dealsTable.status, DEAL_STATUS.OPEN)));
-        const [salesThisMonthRow] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED), gte(reservationsTable.createdAt, startOfMonth)));
-        const [pendingReservationsRow] = await db.select({ count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.PENDING)));
-        const [overduePaymentsRow] = await db.select({
+        const [clientSummary] = await db.select({
           count: sql`count(*)`,
-          amount: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric)), 0)`
-        }).from(paymentsTable).where(and(eq(paymentsTable.tenantId, tenantId), eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE), eq(paymentsTable.status, PAYMENT_STATUS.PENDING), lt(paymentsTable.dueDate, now)));
+          newCount: sql`count(*) filter (where ${clientsTable.createdAt} >= ${startOfMonth})`
+        }).from(clientsTable).where(eq(clientsTable.tenantId, tenantId));
+        const activeTripCondition = sql`${tripsTable.status} = ${TRIP_STATUS.ACTIVE}`;
+        const [tripSummary] = await db.select({
+          count: sql`count(*)`,
+          activeCount: sql`count(*) filter (where ${activeTripCondition})`,
+          activeCapacity: sql`coalesce(sum(${tripsTable.totalCapacity})
+        filter (where ${activeTripCondition}), 0)`,
+          activeReserved: sql`coalesce(sum(${tripsTable.reservedSeats})
+        filter (where ${activeTripCondition}), 0)`,
+          createdThisMonth: sql`count(*) filter (where ${tripsTable.createdAt} >= ${startOfMonth})`
+        }).from(tripsTable).where(eq(tripsTable.tenantId, tenantId));
+        const confirmedReservation = sql`${reservationsTable.status} = ${RESERVATION_STATUS.CONFIRMED}`;
+        const [reservationSummary] = await db.select({
+          count: sql`count(*)`,
+          confirmedCount: sql`count(*) filter (where ${confirmedReservation})`,
+          cancelledCount: sql`count(*) filter (where ${reservationsTable.status} = ${RESERVATION_STATUS.CANCELLED})`,
+          createdTodayCount: sql`count(*) filter (where ${reservationsTable.createdAt} >= ${startOfToday})`,
+          avgTicket: sql`avg(cast(${reservationsTable.totalValue} as numeric))
+        filter (where ${confirmedReservation})`,
+          activeClientCount: sql`count(distinct ${reservationsTable.clientId})
+        filter (where ${confirmedReservation})`,
+          salesThisMonthCount: sql`count(*) filter (
+        where ${confirmedReservation} AND ${reservationsTable.createdAt} >= ${startOfMonth})`,
+          pendingCount: sql`count(*) filter (
+        where ${reservationsTable.status} = ${RESERVATION_STATUS.PENDING})`,
+          repeatBuyerCount: sql`(
+        SELECT count(*)::int
+        FROM (
+          SELECT ${reservationsTable.clientId}
+          FROM ${reservationsTable}
+          WHERE ${reservationsTable.tenantId} = ${tenantId}
+            AND ${reservationsTable.status} = ${RESERVATION_STATUS.CONFIRMED}
+          GROUP BY ${reservationsTable.clientId}
+          HAVING count(*) >= 2
+        ) AS repeat_buyers
+      )`
+        }).from(reservationsTable).where(eq(reservationsTable.tenantId, tenantId));
+        const [paymentSummary] = await db.select(
+          dashboardPaymentMetricSelection(startOfMonth, startOfToday, next3Days, now)
+        ).from(paymentsTable).where(eq(paymentsTable.tenantId, tenantId));
+        const [totalExpensesRow] = await db.select({ total: sql`sum(cast(amount as numeric))` }).from(expensesTable).where(eq(expensesTable.tenantId, tenantId));
+        const [activeTripPaymentSummary] = await db.select({
+          received: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric)) filter (
+        where ${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+          AND ${paymentsTable.status} = ${PAYMENT_STATUS.PAID}
+      ), 0)`,
+          pending: sql`coalesce(sum(cast(${paymentsTable.amount} as numeric)) filter (
+        where ${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE}
+          AND ${paymentsTable.status} = ${PAYMENT_STATUS.PENDING}
+      ), 0)`
+        }).from(paymentsTable).innerJoin(reservationsTable, and(
+          eq(paymentsTable.reservationId, reservationsTable.id),
+          eq(paymentsTable.tenantId, reservationsTable.tenantId)
+        )).innerJoin(tripsTable, and(
+          eq(reservationsTable.tripId, tripsTable.id),
+          eq(reservationsTable.tenantId, tripsTable.tenantId)
+        )).where(and(
+          eq(paymentsTable.tenantId, tenantId),
+          eq(reservationsTable.tenantId, tenantId),
+          eq(tripsTable.tenantId, tenantId),
+          eq(tripsTable.status, TRIP_STATUS.ACTIVE),
+          inArray(reservationsTable.status, ACTIVE_RESERVATION_STATUSES)
+        ));
+        const [npsSummary] = await db.select({
+          average: sql`avg(${npsResponsesTable.score})`
+        }).from(npsResponsesTable).where(eq(npsResponsesTable.tenantId, tenantId));
+        const averageNps = npsSummary?.average == null ? null : Number(npsSummary.average);
+        const [dealSummary] = await db.select({
+          openCount: sql`count(*) filter (where ${dealsTable.status} = ${DEAL_STATUS.OPEN})`,
+          pipelineValue: sql`coalesce(sum(cast(${dealsTable.value} as numeric))
+        filter (where ${dealsTable.status} = ${DEAL_STATUS.OPEN}), 0)`
+        }).from(dealsTable).where(eq(dealsTable.tenantId, tenantId));
         const [loyaltyPointsRow] = await db.select({ total: sql`sum(total_points)` }).from(loyaltyMembersTable).where(eq(loyaltyMembersTable.tenantId, tenantId));
-        const repeatBuyersRaw = await db.select({ clientId: reservationsTable.clientId, count: sql`count(*)` }).from(reservationsTable).where(and(eq(reservationsTable.tenantId, tenantId), eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED))).groupBy(reservationsTable.clientId).having(sql`count(*) >= 2`);
-        const totalClientsForRetention = Number(clientCount?.count ?? 0);
-        const retentionRate = totalClientsForRetention > 0 ? Math.round(repeatBuyersRaw.length / totalClientsForRetention * 1e3) / 10 : 0;
-        const [tripsThisMonthRow] = await db.select({ count: sql`count(*)` }).from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), gte(tripsTable.createdAt, startOfMonth)));
-        const payingClientsRaw = await db.select({ clientId: paymentsTable.clientId }).from(paymentsTable).where(and(eq(paymentsTable.tenantId, tenantId), eq(paymentsTable.type, PAYMENT_TYPE.RECEIVABLE), eq(paymentsTable.status, PAYMENT_STATUS.PAID)));
-        const payingClientCount = new Set(payingClientsRaw.map((p2) => p2.clientId).filter(Boolean)).size;
+        const totalClientsForRetention = Number(clientSummary?.count ?? 0);
+        const repeatBuyerCount = Number(reservationSummary?.repeatBuyerCount ?? 0);
+        const retentionRate = totalClientsForRetention > 0 ? Math.round(repeatBuyerCount / totalClientsForRetention * 1e3) / 10 : 0;
+        const payingClientCount = Number(paymentSummary?.payingClientCount ?? 0);
         const conversionRate = totalClientsForRetention > 0 ? Math.round(payingClientCount / totalClientsForRetention * 1e3) / 10 : 0;
+        const totalRevenue = Number(paymentSummary?.totalRevenue ?? 0);
+        const revenueThisMonth = Number(paymentSummary?.revenueThisMonth ?? 0);
+        const pendingPaymentsAmt = Number(paymentSummary?.pendingPayments ?? 0);
+        const receivedToday = Number(paymentSummary?.receivedToday ?? 0);
+        const toReceiveNext3Days = Number(paymentSummary?.toReceiveNext3Days ?? 0);
+        const totalPayable = Number(paymentSummary?.totalPayable ?? 0);
+        const pendingReceivableAmt = Number(paymentSummary?.pendingReceivable ?? 0);
+        const totalFaturamento = totalRevenue + pendingReceivableAmt;
+        const activeTripCount = Number(tripSummary?.activeCount ?? 0);
+        const totalCapacity = Number(tripSummary?.activeCapacity ?? 0);
+        const totalReserved = Number(tripSummary?.activeReserved ?? 0);
+        const occupancyRate = totalCapacity > 0 ? totalReserved / totalCapacity * 100 : 0;
         const profit = totalRevenue - Number(totalExpensesRow?.total ?? 0);
         const profitMargin = totalRevenue > 0 ? Math.round(profit / totalRevenue * 1e3) / 10 : 0;
         res.json({
-          totalClients: Number(clientCount?.count ?? 0),
-          newClientsThisMonth: Number(newClientCount?.count ?? 0),
-          totalTrips: Number(tripCount?.count ?? 0),
-          activeTrips: Number(activeTripCount?.count ?? 0),
+          totalClients: Number(clientSummary?.count ?? 0),
+          newClientsThisMonth: Number(clientSummary?.newCount ?? 0),
+          totalTrips: Number(tripSummary?.count ?? 0),
+          activeTrips: activeTripCount,
           totalRevenue: roundMoney(totalRevenue),
           revenueThisMonth: roundMoney(revenueThisMonth),
           pendingPayments: roundMoney(pendingPaymentsAmt),
-          totalReservations: Number(reservationCount?.count ?? 0),
-          confirmedReservations: Number(confirmedReservationCount?.count ?? 0),
+          totalReservations: Number(reservationSummary?.count ?? 0),
+          confirmedReservations: Number(reservationSummary?.confirmedCount ?? 0),
           occupancyRate: Math.round(occupancyRate * 10) / 10,
           averageNps: averageNps !== null ? Math.round(averageNps * 10) / 10 : null,
           avgNps: averageNps !== null ? Math.round(averageNps * 10) / 10 : null,
-          openDeals: Number(dealCount?.count ?? 0),
-          dealsPipelineValue: Number(dealValue?.total ?? 0),
-          pipelineLeads: Number(dealCount?.count ?? 0),
+          openDeals: Number(dealSummary?.openCount ?? 0),
+          dealsPipelineValue: Number(dealSummary?.pipelineValue ?? 0),
+          pipelineLeads: Number(dealSummary?.openCount ?? 0),
           receivedToday: roundMoney(receivedToday),
           toReceiveNext3Days: roundMoney(toReceiveNext3Days),
-          reservationsToday: Number(todayReservationCount?.count ?? 0),
-          avgTicket: roundMoney(Number(avgTicketRow?.avg ?? 0)),
-          activeClientsCount: Number(activeClientsRow?.count ?? 0),
+          reservationsToday: Number(reservationSummary?.createdTodayCount ?? 0),
+          avgTicket: roundMoney(Number(reservationSummary?.avgTicket ?? 0)),
+          activeClientsCount: Number(reservationSummary?.activeClientCount ?? 0),
           totalExpenses: roundMoney(Number(totalExpensesRow?.total ?? 0)),
-          cancelledReservations: Number(cancelledReservationCount?.count ?? 0),
-          receivedFromActiveTrips: roundMoney(receivedFromActiveTrips),
-          pendingFromActiveTrips: roundMoney(pendingFromActiveTrips),
+          cancelledReservations: Number(reservationSummary?.cancelledCount ?? 0),
+          receivedFromActiveTrips: roundMoney(Number(activeTripPaymentSummary?.received ?? 0)),
+          pendingFromActiveTrips: roundMoney(Number(activeTripPaymentSummary?.pending ?? 0)),
           totalPayable: roundMoney(totalPayable),
-          avgReservationsPerTrip: Number(activeTripCount?.count ?? 0) > 0 ? Math.round(Number(confirmedReservationCount?.count ?? 0) / Number(activeTripCount?.count ?? 1) * 10) / 10 : 0,
+          avgReservationsPerTrip: activeTripCount > 0 ? Math.round(Number(reservationSummary?.confirmedCount ?? 0) / activeTripCount * 10) / 10 : 0,
           totalFaturamento: roundMoney(totalFaturamento),
-          salesThisMonth: Number(salesThisMonthRow?.count ?? 0),
-          pendingReservations: Number(pendingReservationsRow?.count ?? 0),
-          overduePaymentsCount: Number(overduePaymentsRow?.count ?? 0),
-          overduePayments: roundMoney(Number(overduePaymentsRow?.amount ?? 0)),
+          salesThisMonth: Number(reservationSummary?.salesThisMonthCount ?? 0),
+          pendingReservations: Number(reservationSummary?.pendingCount ?? 0),
+          overduePaymentsCount: Number(paymentSummary?.overduePaymentsCount ?? 0),
+          overduePayments: roundMoney(Number(paymentSummary?.overduePayments ?? 0)),
           loyaltyPointsIssued: Number(loyaltyPointsRow?.total ?? 0),
           retentionRate,
-          tripsThisMonth: Number(tripsThisMonthRow?.count ?? 0),
+          tripsThisMonth: Number(tripSummary?.createdThisMonth ?? 0),
           conversionRate,
           profit: roundMoney(profit),
           profitMargin
@@ -297403,7 +297725,11 @@ var init_loyalty2 = __esm({
 });
 
 // src/routes/commissions.ts
-var import_express21, router15, CreateRuleBody, commissionSelect, commissions_default;
+async function validateRuleTrip(tenantId, tripId) {
+  const [trip] = await db.select({ id: tripsTable.id }).from(tripsTable).where(and(eq(tripsTable.id, tripId), eq(tripsTable.tenantId, tenantId))).limit(1);
+  return Boolean(trip);
+}
+var import_express21, router15, COMMISSION_RULE_APPLIES_TO, commissionRuleValueSchema, CreateRuleBody, UpdateRuleBody, UpdateCommissionBody2, commissionSelect, commissions_default;
 var init_commissions2 = __esm({
   "src/routes/commissions.ts"() {
     "use strict";
@@ -297414,17 +297740,54 @@ var init_commissions2 = __esm({
     init_id2();
     init_tenant();
     init_src2();
-    init_pricing();
     init_src3();
     init_errors4();
+    init_commission_calculation();
     router15 = (0, import_express21.Router)();
+    COMMISSION_RULE_APPLIES_TO = ["all", "trip", "national", "international"];
+    commissionRuleValueSchema = external_exports.string().trim().min(1).refine(
+      (value) => Number.isFinite(Number(value)) && Number(value) >= 0,
+      "value must be a non-negative number"
+    );
     CreateRuleBody = external_exports.object({
-      name: external_exports.string().min(1),
+      name: external_exports.string().trim().min(1),
+      type: external_exports.enum(["percentage", "fixed"]).default("percentage"),
+      value: commissionRuleValueSchema,
+      appliesTo: external_exports.enum(COMMISSION_RULE_APPLIES_TO).default("all"),
+      tripId: external_exports.string().trim().min(1).optional(),
+      isActive: external_exports.boolean().default(true)
+    }).strict().superRefine((rule, ctx) => {
+      if (rule.appliesTo === "trip" && !rule.tripId) {
+        ctx.addIssue({ code: "custom", path: ["tripId"], message: "tripId is required for trip-specific rules" });
+      }
+      if (rule.appliesTo !== "trip" && rule.tripId) {
+        ctx.addIssue({ code: "custom", path: ["tripId"], message: "tripId is only allowed for trip-specific rules" });
+      }
+    });
+    UpdateRuleBody = external_exports.object({
+      name: external_exports.string().trim().min(1).optional(),
       type: external_exports.enum(["percentage", "fixed"]).optional(),
-      value: external_exports.string(),
-      appliesTo: external_exports.string().optional(),
-      tripId: external_exports.string().optional(),
+      value: commissionRuleValueSchema.optional(),
+      appliesTo: external_exports.enum(COMMISSION_RULE_APPLIES_TO).optional(),
+      tripId: external_exports.string().trim().min(1).nullable().optional(),
       isActive: external_exports.boolean().optional()
+    }).strict().refine((rule) => Object.keys(rule).length > 0, "At least one rule field is required");
+    UpdateCommissionBody2 = external_exports.object({
+      status: external_exports.enum([
+        COMMISSION_STATUS.PENDING,
+        COMMISSION_STATUS.APPROVED,
+        COMMISSION_STATUS.PAID,
+        COMMISSION_STATUS.CANCELLED
+      ]),
+      paidAt: external_exports.string().datetime().optional()
+    }).strict().superRefine((update, ctx) => {
+      if (update.paidAt && update.status !== COMMISSION_STATUS.PAID) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["paidAt"],
+          message: "paidAt can only be supplied when setting status to paid"
+        });
+      }
     });
     router15.get("/commission-rules", async (req, res, next) => {
       try {
@@ -297434,7 +297797,7 @@ var init_commissions2 = __esm({
           next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
           return;
         }
-        const rules = await db.select().from(commissionRulesTable).where(and(eq(commissionRulesTable.tenantId, me5.tenantId), eq(commissionRulesTable.isActive, true)));
+        const rules = await db.select().from(commissionRulesTable).where(eq(commissionRulesTable.tenantId, me5.tenantId));
         res.json(rules);
       } catch (err) {
         req.log.error({ err }, "Error listing commission rules");
@@ -297454,8 +297817,17 @@ var init_commissions2 = __esm({
           next(new ValidationError2(parsed.error.message, "VALIDATION_ERROR"));
           return;
         }
+        if (parsed.data.tripId && !await validateRuleTrip(me5.tenantId, parsed.data.tripId)) {
+          next(new ValidationError2("The selected trip does not belong to this agency", "INVALID_TRIP_ID"));
+          return;
+        }
         const id = generateId();
-        await db.insert(commissionRulesTable).values({ id, tenantId: me5.tenantId, ...parsed.data });
+        await db.insert(commissionRulesTable).values({
+          id,
+          tenantId: me5.tenantId,
+          ...parsed.data,
+          tripId: parsed.data.appliesTo === "trip" ? parsed.data.tripId : null
+        });
         const [rule] = await db.select().from(commissionRulesTable).where(and(eq(commissionRulesTable.id, id), eq(commissionRulesTable.tenantId, me5.tenantId))).limit(1);
         if (!rule) {
           next(new NotFoundError("Not found", "NOT_FOUND"));
@@ -297475,12 +297847,36 @@ var init_commissions2 = __esm({
           next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
           return;
         }
-        const parsed = CreateRuleBody.partial().safeParse(req.body);
+        const parsed = UpdateRuleBody.safeParse(req.body);
         if (!parsed.success) {
           next(new ValidationError2(parsed.error.message, "VALIDATION_ERROR"));
           return;
         }
-        await db.update(commissionRulesTable).set(parsed.data).where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me5.tenantId)));
+        const [currentRule] = await db.select().from(commissionRulesTable).where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me5.tenantId))).limit(1);
+        if (!currentRule) {
+          next(new NotFoundError("Not found", "NOT_FOUND"));
+          return;
+        }
+        const appliesTo = parsed.data.appliesTo ?? currentRule.appliesTo;
+        const requestedTripId = parsed.data.tripId === void 0 ? currentRule.tripId : parsed.data.tripId;
+        if (appliesTo === "trip" && !requestedTripId) {
+          next(new ValidationError2("tripId is required for trip-specific rules", "INVALID_TRIP_ID"));
+          return;
+        }
+        if (appliesTo !== "trip" && parsed.data.tripId) {
+          next(new ValidationError2("tripId is only allowed for trip-specific rules", "INVALID_TRIP_ID"));
+          return;
+        }
+        const tripId = appliesTo === "trip" ? requestedTripId : null;
+        if (tripId && !await validateRuleTrip(me5.tenantId, tripId)) {
+          next(new ValidationError2("The selected trip does not belong to this agency", "INVALID_TRIP_ID"));
+          return;
+        }
+        await db.update(commissionRulesTable).set({
+          ...parsed.data,
+          appliesTo,
+          tripId
+        }).where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me5.tenantId)));
         const [rule] = await db.select().from(commissionRulesTable).where(and(eq(commissionRulesTable.id, req.params.id), eq(commissionRulesTable.tenantId, me5.tenantId))).limit(1);
         if (!rule) {
           next(new NotFoundError("Not found", "NOT_FOUND"));
@@ -297511,28 +297907,35 @@ var init_commissions2 = __esm({
       try {
         const me5 = await requireAuth(req, res);
         if (!me5) return;
+        if (!hasPermission(me5.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) {
+          next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+          return;
+        }
         const { sellerId, saleAmount, tripId } = req.query;
         if (!sellerId || !saleAmount) {
           next(new ValidationError2("sellerId and saleAmount are required", "MISSING_PARAMS"));
           return;
         }
-        const amount2 = parseFloat(saleAmount);
-        if (isNaN(amount2) || amount2 <= 0) {
+        const amount2 = Number(saleAmount);
+        if (!Number.isFinite(amount2) || amount2 <= 0) {
           next(new ValidationError2("saleAmount must be a positive number", "INVALID_AMOUNT"));
           return;
         }
         const rules = await db.select().from(commissionRulesTable).where(and(eq(commissionRulesTable.tenantId, me5.tenantId), eq(commissionRulesTable.isActive, true)));
-        const tripSpecificRule = tripId ? rules.find((r2) => r2.appliesTo === "trip" && r2.tripId === tripId) : void 0;
-        const allRule = rules.find((r2) => r2.appliesTo === "all");
-        const rule = tripSpecificRule ?? allRule;
+        let travelScope = null;
+        if (tripId) {
+          const [trip] = await db.select({ destinationCountry: tripsTable.destinationCountry }).from(tripsTable).where(and(eq(tripsTable.id, tripId), eq(tripsTable.tenantId, me5.tenantId))).limit(1);
+          if (!trip) {
+            next(new NotFoundError("Trip not found", "TRIP_NOT_FOUND"));
+            return;
+          }
+          travelScope = getCommissionTravelScope(trip.destinationCountry);
+        }
+        const rule = selectApplicableCommissionRule(rules, tripId, travelScope);
         if (rule) {
-          const ruleValue = parseFloat(String(rule.value));
-          const ruleType = rule.type ?? "percentage";
-          const commissionAmount = ruleType === "fixed" ? roundMoney(ruleValue) : roundMoney(amount2 * ruleValue / 100);
+          const calculation2 = calculateRuleCommission(amount2, rule);
           res.json({
-            commissionAmount,
-            commissionRate: ruleType === "fixed" ? null : ruleValue,
-            commissionType: ruleType,
+            ...calculation2,
             source: "rule",
             saleAmount: amount2
           });
@@ -297547,22 +297950,12 @@ var init_commissions2 = __esm({
           next(new NotFoundError("Seller not found", "SELLER_NOT_FOUND"));
           return;
         }
-        const rate = parseFloat(String(seller.commissionRate ?? "0"));
-        const fixed = parseFloat(String(seller.commissionFixed ?? "0"));
-        if (seller.commissionType === "none") {
-          res.json({ commissionAmount: 0, commissionRate: null, commissionType: "none", source: "seller", saleAmount: amount2 });
-        } else if (seller.commissionType === "fixed" && fixed > 0) {
-          res.json({ commissionAmount: fixed, commissionRate: null, commissionType: "fixed", source: "seller", saleAmount: amount2 });
-        } else if (seller.commissionType === "hybrid") {
-          const pct = rate > 0 ? roundMoney(amount2 * rate / 100) : 0;
-          const commissionAmount = roundMoney(amount2 * rate / 100);
-          res.json({ commissionAmount, commissionRate: rate, commissionType: "hybrid", source: "seller", saleAmount: amount2 });
-        } else if (rate > 0) {
-          const commissionAmount = roundMoney(amount2 * rate / 100);
-          res.json({ commissionAmount, commissionRate: rate, commissionType: "percentage", source: "seller", saleAmount: amount2 });
-        } else {
-          res.json({ commissionAmount: 0, commissionRate: 0, commissionType: "percentage", source: "none", saleAmount: amount2 });
-        }
+        const calculation = calculateSellerCommission(amount2, seller);
+        res.json({
+          ...calculation,
+          source: calculation.commissionType === "percentage" && calculation.commissionAmount === 0 ? "none" : "seller",
+          saleAmount: amount2
+        });
       } catch (err) {
         req.log.error({ err }, "Error calculating commission");
         next(err);
@@ -297572,6 +297965,10 @@ var init_commissions2 = __esm({
       try {
         const me5 = await requireAuth(req, res);
         if (!me5) return;
+        if (!hasPermission(me5.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) {
+          next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+          return;
+        }
         const month = localToday().slice(0, 7);
         const result = await db.execute(sql`
       SELECT
@@ -297617,6 +298014,10 @@ var init_commissions2 = __esm({
       try {
         const me5 = await requireAuth(req, res);
         if (!me5) return;
+        if (!hasPermission(me5.role, RESOURCES.COMMISSIONS, ACTIONS.VIEW)) {
+          next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
+          return;
+        }
         let commissions;
         if (ADMIN_ROLES.includes(me5.role)) {
           commissions = await db.select(commissionSelect).from(commissionsTable).leftJoin(usersTable, eq(commissionsTable.userId, usersTable.id)).where(eq(commissionsTable.tenantId, me5.tenantId)).orderBy(desc(commissionsTable.createdAt));
@@ -297640,18 +298041,35 @@ var init_commissions2 = __esm({
           next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE"));
           return;
         }
-        const parsed = external_exports.object({ status: external_exports.string().optional(), paidAt: external_exports.string().optional() }).safeParse(req.body);
+        const parsed = UpdateCommissionBody2.safeParse(req.body);
         if (!parsed.success) {
           next(new ValidationError2(parsed.error.message, "VALIDATION_ERROR"));
           return;
         }
-        const updates = {};
-        if (parsed.data.status) updates.status = parsed.data.status;
-        if (parsed.data.paidAt) updates.paidAt = new Date(parsed.data.paidAt);
-        await db.update(commissionsTable).set(updates).where(and(eq(commissionsTable.id, req.params.id), eq(commissionsTable.tenantId, me5.tenantId)));
-        const [commission] = await db.select().from(commissionsTable).where(and(eq(commissionsTable.id, req.params.id), eq(commissionsTable.tenantId, me5.tenantId))).limit(1);
-        if (!commission) {
+        const [current] = await db.select().from(commissionsTable).where(and(eq(commissionsTable.id, req.params.id), eq(commissionsTable.tenantId, me5.tenantId))).limit(1);
+        if (!current) {
           next(new NotFoundError("Not found", "NOT_FOUND"));
+          return;
+        }
+        if (current.status === parsed.data.status) {
+          res.json(current);
+          return;
+        }
+        if (!canTransitionCommissionStatus(current.status, parsed.data.status)) {
+          next(new ConflictError("Commission status transition is not allowed", "COMMISSION_STATUS_TRANSITION"));
+          return;
+        }
+        const paidAt = parsed.data.status === COMMISSION_STATUS.PAID ? new Date(parsed.data.paidAt ?? (/* @__PURE__ */ new Date()).toISOString()) : null;
+        const [commission] = await db.update(commissionsTable).set({
+          status: parsed.data.status,
+          paidAt
+        }).where(and(
+          eq(commissionsTable.id, req.params.id),
+          eq(commissionsTable.tenantId, me5.tenantId),
+          eq(commissionsTable.status, current.status)
+        )).returning();
+        if (!commission) {
+          next(new ConflictError("Commission was changed by another request", "COMMISSION_STATUS_TRANSITION"));
           return;
         }
         res.json(commission);

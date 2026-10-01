@@ -9,6 +9,7 @@
     "build:vercel": "node ./build-vercel.mjs",
     "verify:vercel": "node ./scripts/verify-vercel-bundle.mjs",
     "deploy:vercel": "node ./scripts/run-vercel-build.mjs",
+    "smoke:vercel-routes": "node ./scripts/smoke-vercel-routes.mjs",
     "migrate:vercel": "node ./scripts/run-vercel-migrate.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "NODE_OPTIONS='--max-old-space-size=4096' tsc -p tsconfig.json --noEmit",

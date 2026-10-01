@@ -29,6 +29,10 @@
       "destination": "/api/storefront?store_slug=:slug&store_path=:rest*"
     },
     {
+      "source": "/api",
+      "destination": "https://crm-2-lindomarcariri.replit.app/api"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://crm-2-lindomarcariri.replit.app/api/:path*"
     },
