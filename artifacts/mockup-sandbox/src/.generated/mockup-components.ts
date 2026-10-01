@@ -3,10 +3,10 @@ type ModuleMap = Record<string, () => Promise<Record<string, unknown>>>;
 export const modules: ModuleMap = {
   "./components/mockups/client-pipeline-status/Current.tsx": () => import("../components/mockups/client-pipeline-status/Current.tsx"),
   "./components/mockups/client-pipeline-status/Explanation.tsx": () => import("../components/mockups/client-pipeline-status/Explanation.tsx"),
-  "./components/mockups/client-portal/Current.tsx": () => import("../components/mockups/client-portal/Current.tsx"),
-  "./components/mockups/client-portal/Redesign.tsx": () => import("../components/mockups/client-portal/Redesign.tsx"),
   "./components/mockups/client-records/ClientWorkspace.tsx": () => import("../components/mockups/client-records/ClientWorkspace.tsx"),
   "./components/mockups/client-records/Current.tsx": () => import("../components/mockups/client-records/Current.tsx"),
+  "./components/mockups/client-portal/Current.tsx": () => import("../components/mockups/client-portal/Current.tsx"),
+  "./components/mockups/client-portal/Redesign.tsx": () => import("../components/mockups/client-portal/Redesign.tsx"),
   "./components/mockups/reservations-table/Current.tsx": () => import("../components/mockups/reservations-table/Current.tsx"),
   "./components/mockups/reservations-table/Refined.tsx": () => import("../components/mockups/reservations-table/Refined.tsx"),
   "./components/mockups/vitrine-marketplace/Current.tsx": () => import("../components/mockups/vitrine-marketplace/Current.tsx"),
