@@ -1,7 +1,7 @@
 /**
  * Real PostgreSQL integration test for reservation boarding-point persistence.
  * It creates reservations through the API and reloads each one through the
- * reservation detail endpoint, covering both supported ID namespaces.
+ * detail and batched list endpoints, covering both supported ID namespaces.
  */
 import { randomUUID } from "node:crypto";
 import express from "express";
@@ -184,7 +184,7 @@ afterAll(async () => {
 });
 
 describe("reservation boarding point persistence — real PostgreSQL", () => {
-  it("keeps trip-specific and catalog IDs and details after reopening the reservation", async () => {
+  it("keeps trip-specific and catalog IDs and details in detail and list responses", async () => {
     const cases = [
       {
         clientId: TRIP_CLIENT_ID,
@@ -199,6 +199,7 @@ describe("reservation boarding point persistence — real PostgreSQL", () => {
         expectedPoint: CATALOG_POINT,
       },
     ];
+    const reservationIdsByClient = new Map<string, string>();
 
     for (const testCase of cases) {
       const created = await request(app)
@@ -214,6 +215,7 @@ describe("reservation boarding point persistence — real PostgreSQL", () => {
         });
 
       expect(created.status).toBe(201);
+      reservationIdsByClient.set(testCase.clientId, created.body.id);
       expect(created.body.boardingLocationId).toBe(testCase.selectedId);
       expect(created.body.boardingLocation).toEqual({
         name: testCase.expectedPoint.name,
@@ -235,6 +237,28 @@ describe("reservation boarding point persistence — real PostgreSQL", () => {
         name: testCase.expectedPoint.name,
         time: testCase.expectedPoint.time,
         address: testCase.expectedPoint.address,
+      });
+    }
+
+    const listed = await request(app)
+      .get(`/api/reservations?tripId=${encodeURIComponent(TRIP_ID)}&limit=20`);
+    expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+    expect(listed.body.total).toBe(cases.length);
+    expect(listed.body.data).toHaveLength(cases.length);
+
+    for (const testCase of cases) {
+      const reservationId = reservationIdsByClient.get(testCase.clientId);
+      const listedReservation = listed.body.data.find(
+        (reservation: { id: string }) => reservation.id === reservationId,
+      );
+      expect(listedReservation).toMatchObject({
+        id: reservationId,
+        boardingLocationId: testCase.selectedId,
+        boardingLocation: {
+          name: testCase.expectedPoint.name,
+          time: testCase.expectedPoint.time,
+          address: testCase.expectedPoint.address,
+        },
       });
     }
   });
