@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { getAuth } from "@clerk/express";
 import type { Request, Response } from "express";
 import { ROLES, ADMIN_ROLES, MANAGEMENT_ROLES, ALL_STAFF_ROLES } from "@workspace/permissions";
+import { ForbiddenError } from "./errors.js";
 
 export type { Role } from "@workspace/permissions";
 export { ROLES, ADMIN_ROLES, MANAGEMENT_ROLES, ALL_STAFF_ROLES };
@@ -129,6 +130,20 @@ export async function checkTenantAccess(tenantId: string, req: Request, res: Res
   return true;
 }
 
+/**
+ * Checks the local activity flag for an authenticated Clerk identity.
+ * A missing local row is allowed only for flows that intentionally support
+ * first-time provisioning (such as onboarding and uploads before profile sync).
+ */
+export async function isClerkUserActiveOrUnprovisioned(clerkId: string): Promise<boolean> {
+  const [user] = await db
+    .select({ isActive: usersTable.isActive })
+    .from(usersTable)
+    .where(eq(usersTable.clerkId, clerkId))
+    .limit(1);
+  return !user || user.isActive;
+}
+
 export type RequireAuthOptions = {
   /**
    * When true, skip the tenant subscription/trial-state check.
@@ -148,6 +163,15 @@ export async function requireAuth(req: Request, res: Response, options?: Require
   const [user] = await db.select().from(usersTable).where(eq(usersTable.clerkId, userId)).limit(1);
   if (!user) {
     res.status(401).json({ error: "User not provisioned", code: "USER_NOT_PROVISIONED", message: "User not provisioned", requestId: req.id ?? "unknown" });
+    return null;
+  }
+  if (!user.isActive) {
+    res.status(403).json({
+      error: "User inactive",
+      code: "USER_INACTIVE",
+      message: "Sua conta está desativada. Fale com um administrador da agência para reativar o acesso.",
+      requestId: req.id ?? "unknown",
+    });
     return null;
   }
   // Superadmins may not have a tenantId (they manage the platform globally)
@@ -175,6 +199,12 @@ export async function getTenantUser(req: Request): Promise<AuthedUser | null> {
   if (!userId) return null;
   const [user] = await db.select().from(usersTable).where(eq(usersTable.clerkId, userId)).limit(1);
   if (!user) return null;
+  if (!user.isActive) {
+    throw new ForbiddenError(
+      "Sua conta está desativada. Fale com um administrador da agência para reativar o acesso.",
+      "USER_INACTIVE",
+    );
+  }
   if (!user.tenantId && user.role !== ROLES.SUPER_ADMIN) return null;
   return { ...user, tenantId: user.tenantId ?? "" } as AuthedUser;
 }

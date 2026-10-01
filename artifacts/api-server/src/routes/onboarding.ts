@@ -4,7 +4,7 @@ import { eq, asc, ilike } from "drizzle-orm";
 import { z } from "zod/v4";
 import { generateId } from "../lib/id";
 import { getAuth, clerkClient } from "@clerk/express";
-import { AppError, ConflictError, NotFoundError, ValidationError } from "../lib/errors";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ROLES } from "@workspace/permissions";
 
 const router = Router();
@@ -23,6 +23,13 @@ router.get("/onboarding/status", async (req, res, next: NextFunction): Promise<v
     const [user] = await db.select().from(usersTable).where(eq(usersTable.clerkId, auth.clerkId)).limit(1);
     if (!user) {
       res.json({ onboardingComplete: false, hasTenant: false, user: null });
+      return;
+    }
+    if (!user.isActive) {
+      next(new ForbiddenError(
+        "Sua conta está desativada. Fale com um administrador da agência para reativar o acesso.",
+        "USER_INACTIVE",
+      ));
       return;
     }
     res.json({
@@ -105,6 +112,13 @@ router.post("/onboarding/agency", async (req, res, next: NextFunction): Promise<
         return;
       }
       user = provisioned;
+    }
+    if (!user.isActive) {
+      next(new ForbiddenError(
+        "Sua conta está desativada. Fale com um administrador da agência para reativar o acesso.",
+        "USER_INACTIVE",
+      ));
+      return;
     }
     if (user.tenantId) {
       next(new ConflictError("User already has a tenant assigned", "TENANT_ALREADY_ASSIGNED"));

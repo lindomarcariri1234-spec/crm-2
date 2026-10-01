@@ -42,6 +42,13 @@ router.get("/users/me", async (req, res, next): Promise<void> => {
       .where(eq(usersTable.clerkId, clerkId))
       .limit(1);
     if (!user) { next(new NotFoundError("User not found", "USER_NOT_FOUND")); return; }
+    if (!user.isActive) {
+      next(new ForbiddenError(
+        "Sua conta está desativada. Fale com um administrador da agência para reativar o acesso.",
+        "USER_INACTIVE",
+      ));
+      return;
+    }
     // Check the agency status at the login entry point. Do not use a users-plan
     // limit here: a limit controls creation of another profile, not whether an
     // existing staff member can sign in.
@@ -309,6 +316,13 @@ router.post("/users/me/sync", async (req, res, next): Promise<void> => {
     }
 
     const [existing] = await db.select().from(usersTable).where(eq(usersTable.clerkId, clerkId)).limit(1);
+    if (existing && !existing.isActive) {
+      next(new ForbiddenError(
+        "Sua conta está desativada. Fale com um administrador da agência para reativar o acesso.",
+        "USER_INACTIVE",
+      ));
+      return;
+    }
     // A still-valid Clerk session must not recreate a user removed locally
     // while its provider deletion is pending (or after it completed).
     if (!existing && await findAccountDeletion(clerkId)) {

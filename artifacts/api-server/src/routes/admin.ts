@@ -457,6 +457,13 @@ router.post("/admin/sync-superadmin", async (req, res, next: NextFunction): Prom
     if (!existing) {
       next(new NotFoundError("User not found — sign in first to create your profile, then call this endpoint", "NOT_FOUND")); return;
     }
+    if (!existing.isActive) {
+      next(new ForbiddenError(
+        "Sua conta está desativada. Fale com um administrador da agência para reativar o acesso.",
+        "USER_INACTIVE",
+      ));
+      return;
+    }
 
     if (existing.role === ROLES.SUPER_ADMIN) {
       res.json({ ok: true, already: true, userId: existing.id, role: ROLES.SUPER_ADMIN }); return;

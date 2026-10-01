@@ -7,16 +7,19 @@
  */
 
 import { ROLES } from "@workspace/permissions";
+import { SyncMeBody } from "@workspace/api-zod";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
 
-const { mockLimit, mockWhere, mockFrom, mockSelect } = vi.hoisted(() => {
+const { mockLimit, mockWhere, mockFrom, mockSelect, mockSyncMeSafeParse, mockClerkGetUser } = vi.hoisted(() => {
   const mockLimit = vi.fn();
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
-  return { mockLimit, mockWhere, mockFrom, mockSelect };
+  const mockSyncMeSafeParse = vi.fn();
+  const mockClerkGetUser = vi.fn();
+  return { mockLimit, mockWhere, mockFrom, mockSelect, mockSyncMeSafeParse, mockClerkGetUser };
 });
 
 vi.mock("@workspace/db", () => ({
@@ -41,7 +44,7 @@ vi.mock("drizzle-orm", () => ({
 }));
 
 vi.mock("@clerk/express", () => ({
-  clerkClient: vi.fn(),
+  clerkClient: { users: { getUser: mockClerkGetUser } },
   getAuth: vi.fn(() => ({ userId: "user_test" })),
   clerkMiddleware: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
@@ -63,7 +66,7 @@ vi.mock("../lib/id.js", () => ({
 }));
 
 vi.mock("@workspace/api-zod", () => ({
-  SyncMeBody: { safeParse: vi.fn() },
+  SyncMeBody: { safeParse: mockSyncMeSafeParse },
   CreateUserBody: { safeParse: vi.fn() },
   UpdateUserBody: { safeParse: vi.fn() },
   GetMeResponse: {},
@@ -207,5 +210,65 @@ describe("GET /api/users/me — authenticated profile", () => {
       expect.any(Object),
       expect.any(Object),
     );
+  });
+
+  it("rejects an inactive profile before checking tenant access", async () => {
+    mockLimit.mockResolvedValueOnce([{
+      id: "user-001",
+      clerkId: "user_test",
+      isActive: false,
+      tenantId: "tenant-001",
+    }]);
+
+    const res = await request(buildApp()).get("/api/users/me");
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("USER_INACTIVE");
+    expect(checkTenantAccessMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/users/me/sync — inactive account guard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLimit.mockReset();
+    mockWhere.mockReturnValue({ limit: mockLimit });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
+    mockSelect.mockReturnValue({ from: mockFrom });
+    mockSyncMeSafeParse.mockReset().mockReturnValue({
+      success: true,
+      data: {
+        name: "Ana Agência",
+        email: "ana@example.com",
+        avatarUrl: null,
+        clientSignup: false,
+      },
+    });
+    mockClerkGetUser.mockReset().mockResolvedValue({
+      emailAddresses: [],
+      primaryEmailAddressId: null,
+      publicMetadata: {},
+    });
+  });
+
+  it("does not reconcile or update a user whose account is inactive", async () => {
+    mockLimit.mockResolvedValueOnce([{
+      id: "user-001",
+      clerkId: "user_test",
+      name: "Ana Agência",
+      email: "ana@example.com",
+      isActive: false,
+      tenantId: "tenant-001",
+      role: ROLES.AGENCY_ADMIN,
+    }]);
+
+    const res = await request(buildApp())
+      .post("/api/users/me/sync")
+      .send({ name: "Ana Agência", email: "ana@example.com" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("USER_INACTIVE");
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    expect(checkTenantAccessMock).not.toHaveBeenCalled();
   });
 });

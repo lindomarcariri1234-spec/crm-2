@@ -268,7 +268,7 @@ function RoleRedirect() {
       : isServerError
         ? `O servidor retornou um erro ${statusCode}. Aguarde alguns instantes e tente novamente.`
         : statusCode === 403
-          ? "O acesso à agência foi recusado. Verifique a situação da assinatura ou fale com o responsável pela conta."
+          ? "O acesso à conta foi recusado. Fale com o administrador da agência para verificar se seu usuário está ativo e se a assinatura está regular."
         : authError.fromSync
           ? "Não foi possível sincronizar sua conta. Isso pode ser um problema temporário."
           : "Conta autenticada, mas não encontrada no sistema. Tente sair e entrar novamente.";

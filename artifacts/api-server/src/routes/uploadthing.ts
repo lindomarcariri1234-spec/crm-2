@@ -4,6 +4,7 @@ import { logger } from "../lib/logger";
 import { db } from "@workspace/db";
 import { usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { isClerkUserActiveOrUnprovisioned } from "../lib/tenant";
 
 // Dynamic require: uploadthing is external in esbuild (see build.mjs), so the
 // require() below executes at runtime — after patchGlobalFetch() in lib/uploadthing.ts
@@ -16,14 +17,20 @@ const { createUploadthing, createRouteHandler } = require("uploadthing/express")
 
 const f = createUploadthing();
 
+async function assertUploadAccountActive(userId: string): Promise<void> {
+  if (!(await isClerkUserActiveOrUnprovisioned(userId))) {
+    throw new Error("Unauthorized");
+  }
+}
+
 /** Resolve tenantId from a Clerk userId. Throws "Unauthorized" if not found. */
 async function resolveAgencyMiddleware(userId: string) {
   const [user] = await db
-    .select({ id: usersTable.id, tenantId: usersTable.tenantId })
+    .select({ id: usersTable.id, tenantId: usersTable.tenantId, isActive: usersTable.isActive })
     .from(usersTable)
     .where(eq(usersTable.clerkId, userId))
     .limit(1);
-  if (!user) throw new Error("Unauthorized");
+  if (!user || !user.isActive) throw new Error("Unauthorized");
   return { userId: user.id, tenantId: user.tenantId };
 }
 
@@ -55,6 +62,7 @@ export const uploadRouter = {
     .middleware(async ({ req }) => {
       const { userId } = getAuth(req);
       if (!userId) throw new Error("Unauthorized");
+      await assertUploadAccountActive(userId);
       return { userId };
     })
     .onUploadComplete(async ({ file }) => {
@@ -65,6 +73,7 @@ export const uploadRouter = {
     .middleware(async ({ req }) => {
       const { userId } = getAuth(req);
       if (!userId) throw new Error("Unauthorized");
+      await assertUploadAccountActive(userId);
       return { userId };
     })
     .onUploadComplete(async ({ file }) => {
@@ -75,6 +84,7 @@ export const uploadRouter = {
     .middleware(async ({ req }) => {
       const { userId } = getAuth(req);
       if (!userId) throw new Error("Unauthorized");
+      await assertUploadAccountActive(userId);
       return { userId };
     })
     .onUploadComplete(async ({ file }) => {
@@ -85,6 +95,7 @@ export const uploadRouter = {
     .middleware(async ({ req }) => {
       const { userId } = getAuth(req);
       if (!userId) throw new Error("Unauthorized");
+      await assertUploadAccountActive(userId);
       return { userId };
     })
     .onUploadComplete(async ({ file }) => {
@@ -95,6 +106,7 @@ export const uploadRouter = {
     .middleware(async ({ req }) => {
       const { userId } = getAuth(req);
       if (!userId) throw new Error("Unauthorized");
+      await assertUploadAccountActive(userId);
       return { userId };
     })
     .onUploadComplete(async ({ file }) => {
@@ -112,6 +124,7 @@ export const uploadRouter = {
     .middleware(async ({ req }) => {
       const { userId } = getAuth(req);
       if (!userId) throw new Error("Unauthorized");
+      await assertUploadAccountActive(userId);
       return { userId };
     })
     .onUploadComplete(async ({ file }) => {
