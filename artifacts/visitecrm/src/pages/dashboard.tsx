@@ -35,7 +35,11 @@ import { ptBR } from "date-fns/locale";
 import { formatCurrency } from "@/lib/utils";
 import { formatTripDateTime, parseTripDateTime } from "@/lib/tripDateTime";
 import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
-import { useFinancialMetrics } from "@/lib/financial-metrics-api";
+import {
+  FINANCIAL_METRICS_PERIOD_SELECTION_LABELS,
+  type FinancialMetricsPeriodSelection,
+  useFinancialMetrics,
+} from "@/lib/financial-metrics-api";
 
 const TASKS_KEY = "visite-crm-tasks";
 
@@ -171,6 +175,7 @@ const AUTO_SLUG_RE = /^agencia-[a-z0-9]{6}(-\d+)?$/;
 
 function AgencyDashboard() {
   const [chartPeriod, setChartPeriod] = useState<"3m" | "6m" | "12m">("12m");
+  const [financialPeriod, setFinancialPeriod] = useState<FinancialMetricsPeriodSelection>("current");
   const [bannerDismissed, setBannerDismissed] = useState(() => localStorage.getItem(SETUP_BANNER_KEY) === "1");
   const { data: me } = useGetMe();
 
@@ -197,7 +202,7 @@ function AgencyDashboard() {
     isError: financialMetricsError,
     error: financialMetricsQueryError,
     refetch: refetchFinancialMetrics,
-  } = useFinancialMetrics();
+  } = useFinancialMetrics(financialPeriod === "current" ? undefined : financialPeriod);
 
   const npsLabel = summary?.averageNps != null ? `${summary.averageNps.toFixed(1)} / 10` : "—";
   const totalRevenue = summary?.totalRevenue ?? 0;
@@ -383,11 +388,11 @@ function AgencyDashboard() {
              <h2 className="text-sm font-semibold text-[#356B46] uppercase tracking-wide">Financeiro</h2>
           </div>
           <p className="-mt-2 mb-4 text-xs text-muted-foreground">
-            Receita, custos, lucro e margem consideram o mês atual (BRT). Contas vencidas e dívidas são saldos atuais; o ticket médio considera o histórico de reservas confirmadas.
+            Período: {FINANCIAL_METRICS_PERIOD_SELECTION_LABELS[financialPeriod]}. Contas vencidas e dívidas são saldos atuais; o ticket médio considera o histórico de reservas confirmadas.
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub="Caixa recebido no mês atual (BRT)" icon={TrendingUp} loading={loadingFinancialMetrics} color="text-emerald-600" highlight="green" />
-            <KpiCard title="Custos Pagos" value={formatCurrency(financialMetrics?.totals.operatingCostsPaid ?? 0)} sub="Despesas gerais + custos de viagem" icon={TrendingDown} loading={loadingFinancialMetrics} color="text-red-500" />
+            <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub={financialPeriod === "current" ? "Caixa recebido no mês atual (BRT)" : "Caixa recebido no período"} icon={TrendingUp} loading={loadingFinancialMetrics} color="text-emerald-600" highlight="green" />
+            <KpiCard title="Custos Pagos" value={formatCurrency(financialMetrics?.totals.operatingCostsPaid ?? 0)} sub="Despesas gerais + custos de viagem no período" icon={TrendingDown} loading={loadingFinancialMetrics} color="text-red-500" />
             <KpiCard
               title="Lucro Líquido"
               value={formatCurrency(financialMetrics?.totals.profit ?? 0)}
@@ -409,7 +414,7 @@ function AgencyDashboard() {
             <KpiCard
               title="Contas Vencidas"
               value={formatCurrency(financialMetrics?.totals.overdueReceivable ?? 0)}
-              sub={`${summary?.overduePaymentsCount ?? 0} cobranças em atraso`}
+              sub={`Saldo vencido atual · ${summary?.overduePaymentsCount ?? 0} cobranças`}
               icon={AlertTriangle}
               loading={loadingFinancialMetrics}
               color={(summary?.overduePaymentsCount ?? 0) > 0 ? "text-red-600" : "text-muted-foreground"}
@@ -417,7 +422,10 @@ function AgencyDashboard() {
             />
           </div>
         </section>
-        <FinancialMetricsOverview />
+        <FinancialMetricsOverview
+          selectedPeriod={financialPeriod}
+          onSelectedPeriodChange={setFinancialPeriod}
+        />
 
         {/* VENDAS */}
         <section className="rounded-2xl border border-[#C9DCE9] bg-gradient-to-br from-[#F0F6FA] to-[#FAFCFD] p-4 shadow-[0_4px_16px_rgba(30,91,140,.05)] md:p-5">

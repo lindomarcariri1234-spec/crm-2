@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { financialMetricCards, hasFinancialMetricData } from "../components/financial-metrics-overview";
-import type { FinancialMetricTotals } from "../lib/financial-metrics-api";
+import {
+  FINANCIAL_METRICS_PERIOD_SELECTION_LABELS,
+  type FinancialMetricTotals,
+} from "../lib/financial-metrics-api";
 
 const emptyTotals: FinancialMetricTotals = {
   grossBookedRevenue: 0, bookedRevenue: 0, receivedRevenue: 0, receivable: 0,
@@ -25,5 +28,11 @@ describe("FinancialMetricsOverview", () => {
   it("only treats a non-zero canonical total as financial activity", () => {
     expect(hasFinancialMetricData(emptyTotals)).toBe(false);
     expect(hasFinancialMetricData({ ...emptyTotals, receivedRevenue: 12.5 })).toBe(true);
+  });
+
+  it("offers the current month and every supported rolling period", () => {
+    expect(Object.keys(FINANCIAL_METRICS_PERIOD_SELECTION_LABELS)).toEqual([
+      "current", "7d", "30d", "90d", "12m",
+    ]);
   });
 });

@@ -57,6 +57,7 @@ export interface FinancialMetricsResponse {
 }
 
 export type FinancialMetricsPeriod = "7d" | "30d" | "90d" | "12m";
+export type FinancialMetricsPeriodSelection = "current" | FinancialMetricsPeriod;
 export interface FinancialMetricsFilters {
   reservationNumber?: string;
   adjustedBy?: string;
@@ -67,6 +68,11 @@ export const FINANCIAL_METRICS_PERIOD_LABELS: Record<FinancialMetricsPeriod, str
   "30d": "Últimos 30 dias",
   "90d": "Últimos 90 dias",
   "12m": "Últimos 12 meses",
+};
+
+export const FINANCIAL_METRICS_PERIOD_SELECTION_LABELS: Record<FinancialMetricsPeriodSelection, string> = {
+  current: "Mês atual (BRT)",
+  ...FINANCIAL_METRICS_PERIOD_LABELS,
 };
 
 export const getFinancialMetricsQueryKey = (

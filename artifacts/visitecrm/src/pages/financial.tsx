@@ -48,7 +48,11 @@ import { SettlementTab, type SettlementData } from "@/components/financial/settl
 import { ExpensesTab } from "@/components/financial/expenses-tab";
 import { CommissionsTab } from "@/components/financial/commissions-tab";
 import { CommissionRulesTab } from "@/components/financial/commission-rules-tab";
-import { useFinancialMetrics } from "@/lib/financial-metrics-api";
+import {
+  FINANCIAL_METRICS_PERIOD_SELECTION_LABELS,
+  type FinancialMetricsPeriodSelection,
+  useFinancialMetrics,
+} from "@/lib/financial-metrics-api";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useToast } from "@/hooks/use-toast";
 
@@ -164,6 +168,7 @@ export default function Financial() {
   const [paymentsPage, setPaymentsPage] = useState(1);
   const [pmsReservationFilter, setPmsReservationFilter] = useState(() => new URLSearchParams(searchStr).get("reservationNumber") ?? "");
   const [pmsAdjustedByFilter, setPmsAdjustedByFilter] = useState(() => new URLSearchParams(searchStr).get("adjustedBy") ?? "");
+  const [financialPeriod, setFinancialPeriod] = useState<FinancialMetricsPeriodSelection>("current");
 
   useEffect(() => {
     setPaymentsPage(1);
@@ -289,7 +294,10 @@ export default function Financial() {
     reservationNumber: pmsReservationFilter.trim() || undefined,
     adjustedBy: pmsAdjustedByFilter.trim() || undefined,
   }), [pmsReservationFilter, pmsAdjustedByFilter]);
-  const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics(undefined, financialAdjustmentFilters);
+  const { data: financialMetrics, isLoading: loadingFinancialMetrics } = useFinancialMetrics(
+    financialPeriod === "current" ? undefined : financialPeriod,
+    financialAdjustmentFilters,
+  );
   const pmsPaymentAdjustments = financialMetrics?.pmsPaymentAdjustments ?? [];
   const paymentTotal = paymentsData?.total ?? 0;
   const paymentPageCount = Math.max(1, Math.ceil(paymentTotal / PAYMENTS_PAGE_SIZE));
@@ -309,6 +317,7 @@ export default function Financial() {
   const canonicalTotals = financialMetrics?.totals;
   const canonicalRevenue = canonicalTotals?.receivedRevenue ?? 0;
   const canonicalCosts = canonicalTotals?.operatingCostsPaid ?? 0;
+  const financialPeriodLabel = FINANCIAL_METRICS_PERIOD_SELECTION_LABELS[financialPeriod];
   const financialExportHref = useMemo(() => {
     const params = new URLSearchParams({ reportType: "financial" });
     if (dateFrom) params.set("startDate", dateFrom);
@@ -497,7 +506,10 @@ export default function Financial() {
         }
       />
 
-      <FinancialMetricsOverview />
+      <FinancialMetricsOverview
+        selectedPeriod={financialPeriod}
+        onSelectedPeriodChange={setFinancialPeriod}
+      />
 
       <Card data-testid="section-pms-payment-adjustments">
         <CardHeader className="pb-3">
@@ -590,13 +602,13 @@ export default function Financial() {
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <p className="col-span-full -mb-2 text-xs text-muted-foreground" data-testid="text-financial-kpi-period">
-          Período: {financialMetrics?.period.label ?? "mês atual"} (BRT). Os filtros de data das listas não alteram este resumo.
+          Período: {financialPeriodLabel}. Os filtros de data das listas não alteram este resumo.
         </p>
         <KpiCard
           icon={TrendingUp}
           label="Receita Recebida"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalRevenue)}
-          sub="Caixa recebido no mês atual (BRT)"
+          sub={financialPeriod === "current" ? "Caixa recebido no mês atual (BRT)" : "Caixa recebido no período"}
           color="text-green-600"
           trend="up"
         />
@@ -604,14 +616,14 @@ export default function Financial() {
           icon={CheckCircle}
           label="Receita Contratada"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalTotals?.bookedRevenue ?? 0)}
-          sub={`Mês atual · Descontos: ${fmt(canonicalTotals?.discounts ?? 0)}`}
+          sub={`${financialPeriodLabel} · Descontos: ${fmt(canonicalTotals?.discounts ?? 0)}`}
           color="text-blue-600"
         />
         <KpiCard
           icon={AlertCircle}
           label="A Receber"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalTotals?.receivable ?? 0)}
-          sub={`Vencimentos do mês · vencido: ${fmt(canonicalTotals?.overdueReceivable ?? 0)}`}
+          sub={`Vencimentos no período · vencido atual: ${fmt(canonicalTotals?.overdueReceivable ?? 0)}`}
           color="text-yellow-600"
           trend="down"
         />
@@ -619,7 +631,7 @@ export default function Financial() {
           icon={TrendingDown}
           label="Custos Operacionais Pagos"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalCosts)}
-          sub={`Pagos no mês · a pagar: ${fmt(canonicalTotals?.payable ?? 0)}`}
+          sub={`Pagos no período · a pagar: ${fmt(canonicalTotals?.payable ?? 0)}`}
           color="text-red-600"
         />
       </div>

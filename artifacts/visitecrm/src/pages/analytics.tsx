@@ -329,7 +329,7 @@ export default function Analytics() {
         <KpiCard icon={BarChart2} label="A receber no período" value={fmtCompact(financialMetrics?.totals.receivable ?? 0)} sub={`Recebíveis com vencimento no período · vencido: ${fmtCompact(financialMetrics?.totals.overdueReceivable ?? 0)}`} color="text-blue-600" loading={isLoading || financialMetricsLoading || financialMetricsFetching} />
       </div>
 
-      <FinancialMetricsOverview period={period} />
+        <FinancialMetricsOverview period={period} showPeriodSelector={false} />
 
       <Tabs defaultValue="overview">
         <TabsList className="w-full justify-start overflow-x-auto">

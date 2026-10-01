@@ -83,6 +83,13 @@ vi.mock("../lib/financial-metrics-api", () => ({
     "90d": "Últimos 90 dias",
     "12m": "Últimos 12 meses",
   },
+  FINANCIAL_METRICS_PERIOD_SELECTION_LABELS: {
+    current: "Mês atual (BRT)",
+    "7d": "Últimos 7 dias",
+    "30d": "Últimos 30 dias",
+    "90d": "Últimos 90 dias",
+    "12m": "Últimos 12 meses",
+  },
 }));
 
 import Analytics from "../pages/analytics.js";

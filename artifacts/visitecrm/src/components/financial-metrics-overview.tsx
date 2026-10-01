@@ -1,11 +1,15 @@
+import { useState } from "react";
 import { AlertCircle, ArrowUpRight, Info, Loader2 } from "lucide-react";
 import { Link } from "wouter";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatCurrency } from "@/lib/utils";
 import {
   FINANCIAL_METRICS_PERIOD_LABELS,
+  FINANCIAL_METRICS_PERIOD_SELECTION_LABELS,
   type FinancialMetricTotals,
   type FinancialMetricsPeriod,
+  type FinancialMetricsPeriodSelection,
   useFinancialMetrics,
 } from "@/lib/financial-metrics-api";
 
@@ -42,11 +46,33 @@ function displayMetric(card: MetricCard, totals: FinancialMetricTotals): string 
   return card.suffix ? `${value.toFixed(2)}${card.suffix}` : formatCurrency(value);
 }
 
-export function FinancialMetricsOverview({ period }: { period?: FinancialMetricsPeriod } = {}) {
-  const { data, isLoading, isFetching, isError, error } = useFinancialMetrics(period);
-  const periodLabel = period
-    ? FINANCIAL_METRICS_PERIOD_LABELS[period]
+type FinancialMetricsOverviewProps = {
+  period?: FinancialMetricsPeriod;
+  selectedPeriod?: FinancialMetricsPeriodSelection;
+  onSelectedPeriodChange?: (period: FinancialMetricsPeriodSelection) => void;
+  showPeriodSelector?: boolean;
+};
+
+export function FinancialMetricsOverview({
+  period,
+  selectedPeriod: controlledSelectedPeriod,
+  onSelectedPeriodChange,
+  showPeriodSelector = true,
+}: FinancialMetricsOverviewProps = {}) {
+  const [internalSelectedPeriod, setInternalSelectedPeriod] = useState<FinancialMetricsPeriodSelection>("current");
+  const selectedPeriod = controlledSelectedPeriod ?? period ?? internalSelectedPeriod;
+  const queryPeriod = selectedPeriod === "current" ? undefined : selectedPeriod;
+  const { data, isLoading, isFetching, isError, error } = useFinancialMetrics(queryPeriod);
+  const periodLabel = queryPeriod
+    ? FINANCIAL_METRICS_PERIOD_LABELS[queryPeriod]
     : data?.period.label;
+  const handlePeriodChange = (value: string) => {
+    const nextPeriod = value as FinancialMetricsPeriodSelection;
+    if (controlledSelectedPeriod === undefined && period === undefined) {
+      setInternalSelectedPeriod(nextPeriod);
+    }
+    onSelectedPeriodChange?.(nextPeriod);
+  };
 
   return (
     <section className="rounded-lg border bg-card p-4" data-testid="section-financial-metrics-overview">
@@ -55,9 +81,27 @@ export function FinancialMetricsOverview({ period }: { period?: FinancialMetrics
           <h2 className="text-base font-semibold">Visão financeira consolidada</h2>
           {periodLabel && <p className="mt-1 text-xs text-muted-foreground" data-testid="text-financial-metrics-period">Período: {periodLabel} · Fuso: {data?.timezone ?? "America/Sao_Paulo"}</p>}
         </div>
-        <Link href="/financeiro" className="inline-flex items-center text-xs font-medium text-primary hover:underline" data-testid="link-financial-metrics-financial">
-          Ver financeiro <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          {showPeriodSelector && (
+            <Select value={selectedPeriod} onValueChange={handlePeriodChange}>
+              <SelectTrigger
+                className="h-8 w-[180px] text-xs"
+                aria-label="Período dos indicadores financeiros"
+                data-testid="select-financial-metrics-period"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                {Object.entries(FINANCIAL_METRICS_PERIOD_SELECTION_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Link href="/financeiro" className="inline-flex items-center text-xs font-medium text-primary hover:underline" data-testid="link-financial-metrics-financial">
+            Ver financeiro <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
+          </Link>
+        </div>
       </div>
 
       {isLoading || isFetching ? (
