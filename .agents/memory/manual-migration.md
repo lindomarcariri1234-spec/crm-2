@@ -49,3 +49,9 @@ drizzle-kit generate/push prompts interactively and cannot be run non-interactiv
 **Why:** An assumption that earlier journal rows survive a later SQL error made a recovery test fail; retry must be proven against the actual database transaction boundary.
 
 **How to apply:** Force a SQL error in a disposable copy of a migration, then retry with the canonical journal against the same database and confirm the full journal completes without dropping the database.
+
+**Migration recovery fixtures:** Select the migration to fault by its stable tag or SQL signature, never by a relative journal position such as `entries.at(-2)`.
+
+**Why:** The append-only journal can gain newer entries, shifting a positional lookup onto unrelated SQL and making the integration suite fail before it reaches the intended recovery case.
+
+**How to apply:** Resolve the specific migration used by a recovery fixture, assert its expected SQL shape, then modify only its disposable copy.
