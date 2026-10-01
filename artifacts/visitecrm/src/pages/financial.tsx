@@ -31,20 +31,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Link, useSearch, useLocation } from "wouter";
 import {
   Plus, TrendingUp, TrendingDown, DollarSign, AlertCircle, CheckCircle,
-  ArrowUpRight, ArrowDownRight, BarChart2, ExternalLink,
+  BarChart2, ExternalLink,
   Paperclip, X as XIcon, FileText, Image,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS } from "@/lib/labels";
+import { PAYMENT_METHOD_LABELS as METHOD_LABELS } from "@/lib/labels";
 import { PageHeader } from "@/components/page-header";
 import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
-import { PaymentPagination } from "@/components/financial/payment-pagination";
 import { ReceivablesTab, type UpcomingInstallment } from "@/components/financial/receivables-tab";
+import { KpiCard } from "@/components/financial/kpi-card";
+import { PayablesTab } from "@/components/financial/payables-tab";
+import { SettlementTab, type SettlementData } from "@/components/financial/settlement-tab";
 import { ExpensesTab } from "@/components/financial/expenses-tab";
 import { CommissionsTab } from "@/components/financial/commissions-tab";
 import { CommissionRulesTab } from "@/components/financial/commission-rules-tab";
@@ -55,30 +55,6 @@ import { useToast } from "@/hooks/use-toast";
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const PAYMENTS_PAGE_SIZE = 50;
-
-function KpiCard({ icon: Icon, label, value, sub, trend, color }: {
-  icon: React.ElementType; label: string; value: string; sub?: string; trend?: "up" | "down" | "neutral"; color: string;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-5 flex items-start gap-4">
-        <div className={`mt-1 p-2 rounded-md bg-muted ${color}`}>
-          <Icon className="w-5 h-5" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="text-2xl font-bold">{value}</p>
-          {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
-        </div>
-        {trend && (
-          <div className={trend === "up" ? "text-green-600" : trend === "down" ? "text-red-600" : "text-muted-foreground"}>
-            {trend === "up" ? <ArrowUpRight className="w-5 h-5" /> : <ArrowDownRight className="w-5 h-5" />}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
 
 function RevenueChart({ data }: { data: Array<{ label: string; revenue: number; expenses: number }> }) {
   const max = Math.max(...data.map(d => Math.max(d.revenue, d.expenses)), 1);
@@ -152,26 +128,6 @@ function PaymentMethodChart({ payments }: { payments: Array<{ paymentMethod?: st
 }
 
 const VALID_TABS = ["receivable", "payable", "expenses", "commissions", "settlement", "rules"];
-
-type SettlementData = {
-  summary: {
-    agencyNet: number;
-    partnerPayable: number;
-    walletOutstanding: number;
-    cashbackOutstanding: number;
-    reversals: number;
-  };
-  entries: Array<{
-    id: string;
-    participantType: string;
-    category: string;
-    direction: string;
-    amount: number;
-    settlementStatus: string;
-    eventType: string;
-    occurredAt: string;
-  }>;
-};
 
 export default function Financial() {
   const searchStr = useSearch();
@@ -835,70 +791,19 @@ export default function Financial() {
         </TabsContent>
 
         <TabsContent value="payable" className="mt-4">
-          <div className="bg-card rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Descrição</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead>Vencimento</TableHead>
-                  <TableHead>Valor</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loadingPayments ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                  ))
-                ) : paymentsError ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="py-6 text-center text-sm text-destructive">
-                      <div className="flex flex-wrap items-center justify-center gap-3">
-                        <span role="alert">Não foi possível carregar os pagamentos a pagar.</span>
-                        <Button size="sm" variant="outline" onClick={() => void refetchPayments()}>
-                          Tentar novamente
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : paymentRows.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Nenhum lançamento encontrado.</TableCell></TableRow>
-                ) : paymentRows.map(p => (
-                  <TableRow key={p.id}>
-                    <TableCell><p className="font-medium text-sm">{p.description || "—"}</p></TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{p.category}</TableCell>
-                    <TableCell className="text-sm">{formatDate(String(p.dueDate))}</TableCell>
-                    <TableCell className="font-medium text-sm">{fmt(p.amount)}</TableCell>
-                    <TableCell>
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[p.status] ?? "bg-gray-100 text-gray-800"}`}>
-                        {STATUS_LABELS[p.status] ?? p.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {canEditFinancial && p.status === PAYMENT_STATUS.PENDING && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={updatePayment.isPending}
-                          onClick={() => void handleMarkPaid(p.id)}
-                        >
-                          <CheckCircle className="w-4 h-4 mr-1" /> Pago
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-              <PaymentPagination
-                page={paymentsPage}
-                total={paymentTotal}
-                pageSize={PAYMENTS_PAGE_SIZE}
-                onPageChange={setPaymentsPage}
-              />
-          </div>
+          <PayablesTab
+            payments={paymentRows}
+            isLoading={loadingPayments}
+            isError={paymentsError}
+            onRetry={() => void refetchPayments()}
+            canEditFinancial={canEditFinancial}
+            updatePaymentPending={updatePayment.isPending}
+            onMarkPaid={(paymentId) => void handleMarkPaid(paymentId)}
+            page={paymentsPage}
+            total={paymentTotal}
+            pageSize={PAYMENTS_PAGE_SIZE}
+            onPageChange={setPaymentsPage}
+          />
         </TabsContent>
 
         <TabsContent value="expenses" className="mt-4">
@@ -936,54 +841,12 @@ export default function Financial() {
           />
         </TabsContent>
 
-        <TabsContent value="settlement" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              Livro de liquidação por participante. Valores de carteira, cashback e comissão não se misturam.
-            </p>
-            <Button size="sm" variant="outline" onClick={() => void fetchSettlement()} disabled={loadingSettlement}>
-              Atualizar
-            </Button>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-            <KpiCard icon={DollarSign} label="Receita da agência" value={fmt(settlement?.summary.agencyNet ?? 0)} color="text-emerald-600" />
-            <KpiCard icon={TrendingDown} label="Repasse a parceiros" value={fmt(settlement?.summary.partnerPayable ?? 0)} color="text-blue-600" />
-            <KpiCard icon={DollarSign} label="Carteira em aberto" value={fmt(settlement?.summary.walletOutstanding ?? 0)} color="text-violet-600" />
-            <KpiCard icon={DollarSign} label="Cashback em aberto" value={fmt(settlement?.summary.cashbackOutstanding ?? 0)} color="text-amber-600" />
-            <KpiCard icon={AlertCircle} label="Estornos e disputas" value={fmt(settlement?.summary.reversals ?? 0)} color="text-red-600" />
-          </div>
-          <div className="rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Data</TableHead>
-                  <TableHead>Participante</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Valor</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loadingSettlement ? (
-                  Array.from({ length: 4 }).map((_, index) => (
-                    <TableRow key={index}>{Array.from({ length: 5 }).map((__, cell) => <TableCell key={cell}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                  ))
-                ) : !settlement?.entries.length ? (
-                  <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Nenhum lançamento de liquidação no período.</TableCell></TableRow>
-                ) : settlement.entries.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="text-sm">{formatDate(entry.occurredAt)}</TableCell>
-                    <TableCell className="capitalize text-sm">{entry.participantType}</TableCell>
-                    <TableCell className="text-sm">{entry.category.replace(/_/g, " ")}</TableCell>
-                    <TableCell><Badge variant={entry.settlementStatus === "reversed" ? "destructive" : "secondary"}>{entry.settlementStatus}</Badge></TableCell>
-                    <TableCell className={`text-right font-medium ${entry.direction === "debit" ? "text-red-600" : "text-emerald-600"}`}>
-                      {entry.direction === "debit" ? "−" : "+"}{fmt(entry.amount)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+        <TabsContent value="settlement" className="mt-4">
+          <SettlementTab
+            settlement={settlement}
+            isLoading={loadingSettlement}
+            onRefresh={() => void fetchSettlement()}
+          />
         </TabsContent>
       </Tabs>
 

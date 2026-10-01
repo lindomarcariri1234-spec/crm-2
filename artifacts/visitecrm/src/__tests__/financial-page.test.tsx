@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
-import { cleanupRoots, renderComponent } from "./eventSourceHarness.js";
+import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js";
 import type { FinancialMetricsResponse } from "../lib/financial-metrics-api.js";
 
 const mocks = vi.hoisted(() => ({
@@ -80,6 +80,7 @@ vi.mock("../components/financial-metrics-overview", () => ({
 }));
 
 import Financial from "../pages/financial.js";
+import { SettlementTab, type SettlementData } from "../components/financial/settlement-tab.js";
 
 const emptyTotals: FinancialMetricsResponse["totals"] = {
   grossBookedRevenue: 0,
@@ -235,6 +236,30 @@ describe("Financial page PMS payment adjustments", () => {
     expect(handle.container.textContent).toContain("Próxima");
   });
 
+  it("renders the payable tab with the active payment query and pagination", async () => {
+    mocks.search = "?tab=payable";
+    mocks.useListPayments.mockReturnValue({
+      data: { data: [], total: 124, page: 1, limit: 50 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(mocks.useListPayments).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "payable",
+        page: 1,
+        limit: 50,
+      }),
+      expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(handle.container.textContent).toContain("Nenhum lançamento encontrado.");
+    expect(handle.container.textContent).toContain("Página 1 de 3");
+  });
+
   it("loads only the active tab's list data", async () => {
     mocks.search = "?tab=expenses";
 
@@ -299,6 +324,54 @@ describe("Financial page PMS payment adjustments", () => {
     );
     expect(handle.container.textContent).toContain("Nova Regra");
     expect(handle.container.textContent).toContain("Nenhuma regra de comissão cadastrada.");
+  });
+
+  it("renders settlement summaries and refreshes from the settlement component", async () => {
+    const onRefresh = vi.fn();
+    const settlement: SettlementData = {
+      summary: {
+        agencyNet: 1200,
+        partnerPayable: 450,
+        walletOutstanding: 80,
+        cashbackOutstanding: 30,
+        reversals: 20,
+      },
+      entries: [{
+        id: "settlement-1",
+        participantType: "seller",
+        category: "commission_payment",
+        direction: "debit",
+        amount: 80,
+        settlementStatus: "reversed",
+        eventType: "commission",
+        occurredAt: "2026-09-12T15:30:00.000Z",
+      }],
+    };
+    const handle = await renderComponent(createElement(SettlementTab, {
+      settlement,
+      isLoading: false,
+      onRefresh,
+    }));
+
+    expect(handle.container.textContent).toContain("Receita da agência");
+    expect(handle.container.textContent).toContain("Repasse a parceiros");
+    expect(handle.container.textContent).toContain("commission payment");
+    expect(handle.container.textContent).toContain("reversed");
+
+    const refreshButton = [...handle.container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Atualizar"));
+    expect(refreshButton).toBeDefined();
+    await flushAct(() => refreshButton?.click());
+    expect(onRefresh).toHaveBeenCalledOnce();
+
+    await handle.rerender(createElement(SettlementTab, {
+      settlement,
+      isLoading: true,
+      onRefresh,
+    }));
+    const loadingRefreshButton = [...handle.container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Atualizar"));
+    expect(loadingRefreshButton?.disabled).toBe(true);
   });
 
   it("hides financial mutation controls when the current role lacks permission", async () => {
