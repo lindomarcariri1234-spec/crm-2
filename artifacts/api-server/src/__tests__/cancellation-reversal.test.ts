@@ -55,7 +55,7 @@ const {
   const mockTxSelect = vi.fn(() => ({ from: mockTxFrom }));
 
   const mockLimit = vi.fn();
-  const mockWhere = vi.fn(() => ({ limit: mockLimit }));
+  const mockWhere = vi.fn(() => ({ limit: mockLimit, for: mockLimit }));
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit }));
   const mockSelect = vi.fn(() => ({ from: mockFrom }));
   const mockTransaction = vi.fn();
@@ -123,6 +123,7 @@ vi.mock("@workspace/db", () => ({
   usersTable: {},
   paymentsTable: {},
   commissionsTable: {},
+  systemConfigsTable: {},
 }));
 
 vi.mock("drizzle-orm", async () => {
@@ -204,6 +205,13 @@ vi.mock("../lib/passenger.js", () => ({
   deriveAgeCategory: vi.fn(() => "adult"),
   getAgeYears: vi.fn(() => 30),
 }));
+
+// Reservation cancellation tests cover the financial reversal itself. Keep the
+// unrelated client-classification side effect at its service boundary.
+vi.mock("../services/client-classification.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/client-classification.js")>();
+  return { ...actual, recomputeClientClassification: vi.fn().mockResolvedValue(null) };
+});
 
 // ---------------------------------------------------------------------------
 // Import routers and middleware AFTER all mocks

@@ -41,7 +41,7 @@ const {
   const mockWhere = vi.fn(() => ({ limit: mockLimit }));
   const mockOrderBy = vi.fn();
   const mockFrom = vi.fn(() => ({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy }));
-  const mockSelect = vi.fn(() => ({ from: mockFrom }));
+  const mockSelect = vi.fn<() => unknown>(() => ({ from: mockFrom }));
   const mockInsertReturning = vi.fn();
   const mockInsertValues = vi.fn(() => ({ returning: mockInsertReturning }));
   const mockInsert = vi.fn(() => ({ values: mockInsertValues }));

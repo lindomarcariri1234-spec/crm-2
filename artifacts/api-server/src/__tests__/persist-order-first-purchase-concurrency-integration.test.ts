@@ -159,7 +159,11 @@ describe("persistCheckoutOrder — first-purchase referral reservation under con
     ]);
 
     const fulfilled = results.filter(
-      (result): result is PromiseFulfilledResult<unknown> =>
+      (
+        result,
+      ): result is PromiseFulfilledResult<
+        Awaited<ReturnType<typeof persistCheckoutOrder>>
+      > =>
         result.status === "fulfilled",
     );
     const rejected = results.filter(

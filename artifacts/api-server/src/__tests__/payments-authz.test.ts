@@ -498,6 +498,9 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
       status: PAYMENT_STATUS.PAID,
       paidAt: new Date("2026-09-01T12:00:00.000Z"),
     };
+    type PaymentStatusRow = {
+      status: (typeof pendingPayment | typeof paidPayment)["status"];
+    };
     const locator = {
       type: PAYMENT_TYPE.RECEIVABLE,
       reservationId,
@@ -521,8 +524,8 @@ describe("payments authorization — FINANCIAL permission enforcement", () => {
     const loyaltyReservation = { clientId, totalValue: "500.00" };
 
     const setPaymentRows = (
-      existingPayment: typeof pendingPayment,
-      updatedPayment: typeof paidPayment,
+      existingPayment: PaymentStatusRow,
+      updatedPayment: PaymentStatusRow,
       hasStatusUpdate: boolean,
       notifyClient: boolean,
     ) => {

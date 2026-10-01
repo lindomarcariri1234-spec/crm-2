@@ -92,6 +92,7 @@ vi.mock("@workspace/db", () => ({
   reservationsTable: { __name: "reservations" },
   storeProductsTable: { __name: "store_products" },
   storeOrdersTable: { __name: "store_orders" },
+  auditLogsTable: {},
 }));
 
 vi.mock("drizzle-orm", () => ({
@@ -120,6 +121,11 @@ vi.mock("../lib/tenant.js", () => ({
 vi.mock("../lib/planLimits.js", () => ({
   checkPlanLimit: mockCheckPlanLimit,
 }));
+
+vi.mock("../services/account-deletion", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/account-deletion")>();
+  return { ...actual, findAccountDeletion: vi.fn().mockResolvedValue(null) };
+});
 
 vi.mock("../lib/id.js", () => ({
   generateId: vi.fn(() => "gen-user-id"),

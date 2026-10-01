@@ -90,6 +90,9 @@ jobs:
             NODE_OPTIONS=--max-old-space-size=1500 pnpm exec tsc -p tsconfig.check.json
           )
 
+      - name: Type-check API tests
+        run: pnpm --filter @workspace/api-server run typecheck:tests
+
       - name: Type-check API client and frontend
         run: |
           NODE_OPTIONS=--max-old-space-size=1100 pnpm --filter @workspace/shared exec tsc --build

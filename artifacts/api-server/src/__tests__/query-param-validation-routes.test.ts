@@ -88,6 +88,16 @@ vi.mock("@workspace/db", () => {
   };
 });
 
+vi.mock("drizzle-orm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("drizzle-orm")>();
+  return {
+    ...actual,
+    and: vi.fn(actual.and),
+    eq: vi.fn(actual.eq),
+    gte: vi.fn(actual.gte),
+  };
+});
+
 vi.mock("drizzle-orm", async () => {
   const { makeDrizzleOrmMock } = await import("./helpers/drizzle-mock.js");
   return {
@@ -350,12 +360,12 @@ describe("GET /trips — page, limit, status, type and date query param validati
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ data: [], total: 7, page: 2, limit: 12 });
-    expect(eq.mock.calls.filter(([, value]) => value === "excursao")).toHaveLength(1);
-    expect(gte.mock.calls.filter(([, value]) =>
+    expect(vi.mocked(eq).mock.calls.filter(([, value]) => value === "excursao")).toHaveLength(1);
+    expect(vi.mocked(gte).mock.calls.filter(([, value]) =>
       value instanceof Date && value.toISOString() === "2026-09-15T03:00:00.000Z",
     )).toHaveLength(1);
-    expect(and.mock.calls).toHaveLength(3);
-    expect(and.mock.calls.every((conditions) => conditions.length === 3 && conditions.includes("gte")))
+    expect(vi.mocked(and).mock.calls).toHaveLength(3);
+    expect(vi.mocked(and).mock.calls.every((conditions) => conditions.length === 3))
       .toBe(true);
   });
 

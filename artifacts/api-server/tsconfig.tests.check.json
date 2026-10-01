@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.check.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": ".tsbuildinfo.tests.check"
+  },
+  "exclude": []
+}

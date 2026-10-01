@@ -10,6 +10,7 @@ const {
   makeChain,
   paymentsTable,
   reservationsTable,
+  systemConfigsTable,
 } = vi.hoisted(() => {
   const dbState = {
     payments: [] as Array<Record<string, unknown>>,
@@ -19,6 +20,7 @@ const {
   const mockDelete = vi.fn();
   const paymentsTable = { id: "payments.id" };
   const reservationsTable = { id: "reservations.id" };
+  const systemConfigsTable = { id: "system_configs.id" };
 
   const makeChain = (getRows: () => unknown[]) => {
     const chain = {} as Record<string, unknown>;
@@ -33,7 +35,7 @@ const {
     return chain;
   };
 
-  return { dbState, mockRequireAuth, mockDelete, makeChain, paymentsTable, reservationsTable };
+  return { dbState, mockRequireAuth, mockDelete, makeChain, paymentsTable, reservationsTable, systemConfigsTable };
 });
 
 vi.mock("@workspace/db", () => ({
@@ -66,6 +68,7 @@ vi.mock("@workspace/db", () => ({
   paymentsTable,
   expensesTable: {},
   reservationsTable,
+  systemConfigsTable,
   clientsTable: {},
   commissionRulesTable: {},
   commissionsTable: {},
@@ -219,6 +222,8 @@ beforeEach(() => {
       } else if (table === reservationsTable) {
         tableChain.then = (resolve: (rows: unknown[]) => unknown) =>
           resolve(dbState.reservations.filter((reservation) => reservation.tenantId === TENANT_ID));
+      } else if (table === systemConfigsTable) {
+        tableChain.then = (resolve: (rows: unknown[]) => unknown) => resolve([]);
       }
       return tableChain;
     };

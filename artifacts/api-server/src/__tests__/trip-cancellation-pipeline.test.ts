@@ -68,6 +68,7 @@ vi.mock("@workspace/db", () => ({
   dealsTable:        { _: "deals" },
   pipelineStagesTable: { _: "pipelineStages" },
   auditLogsTable:    { _: "auditLogs" },
+  systemConfigsTable: {},
   vehicleLayoutsTable: { _: "vehicleLayouts" },
   tripMediaTable:    { _: "tripMedia" },
   tripCheckinsTable: { _: "tripCheckins" },
@@ -335,7 +336,7 @@ beforeEach(() => {
       return { set: txUpdateSet };
     });
     const txDelete = vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) }));
-    const txExecute = vi.fn().mockResolvedValue([]);
+    const txExecute = vi.fn().mockResolvedValue({ rows: [] });
     await cb({ update: txUpdate, delete: txDelete, execute: txExecute });
   });
 });
@@ -431,7 +432,9 @@ describe("PATCH /trips/:id status=cancelled — Pipeline deal cancellation", () 
       .send({ status: "cancelled" });
 
     // The transaction must have been invoked
-    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    // One transaction cancels the trip/reservations; the second recomputes
+    // client classifications for the changed trip state.
+    expect(mockTransaction).toHaveBeenCalledTimes(2);
 
     // At least one update inside the tx should target reservationsTable
     const reservationUpdate = capturedTxUpdates.find(u => u.table === reservationsTable);

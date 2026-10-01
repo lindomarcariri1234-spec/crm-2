@@ -273,28 +273,32 @@ function makeReservation(overrides: Record<string, unknown> = {}) {
 }
 
 // Queue-based tx select: each tx.select().from().where().limit() returns the next item.
-interface QueryChain extends Promise<unknown[]> {
-  limit(n?: number): Promise<unknown[]>;
+interface QueryChain extends PromiseLike<unknown[]> {
+  limit(n?: number): QueryChain;
   where(cond?: unknown): QueryChain;
   from(table?: unknown): QueryChain;
   for(lockMode: string): QueryChain;
-  orderBy(...args: unknown[]): Promise<unknown[]>;
+  orderBy(...args: unknown[]): QueryChain;
 }
 
 function makeChain(
   resolveData: () => unknown[],
   forResponse: () => unknown[] = () => [],
 ): QueryChain {
-  const chain: Record<string, unknown> = {
-    then: (resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) =>
-      Promise.resolve().then(resolveData).then(resolve, reject),
+  const chain: QueryChain = {
+    then<TResult1 = unknown[], TResult2 = never>(
+      onfulfilled?: ((value: unknown[]) => TResult1 | PromiseLike<TResult1>) | null,
+      onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+    ): PromiseLike<TResult1 | TResult2> {
+      return Promise.resolve().then(resolveData).then(onfulfilled, onrejected);
+    },
     limit: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
     where: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
     from: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
     for: vi.fn().mockImplementation(() => makeChain(forResponse)),
     orderBy: vi.fn().mockImplementation(() => makeChain(resolveData, forResponse)),
   };
-  return chain as QueryChain;
+  return chain;
 }
 
 function buildTxMock(
