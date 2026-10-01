@@ -120,8 +120,8 @@ function TasksCard() {
 
 const DONUT_COLORS = ["#1E5B8C", "#4C8B5F", "#D8A646", "#E07B39", "#5D3E2A", "#6C8798", "#C4874C", "#78A98A"];
 
-function KpiCard({ title, value, sub, icon: Icon, loading, color = "text-primary", highlight }: {
-  title: string; value: string | number; sub?: string; icon: ElementType; loading: boolean; color?: string; highlight?: "green" | "red" | "yellow";
+function KpiCard({ title, value, sub, icon: Icon, loading, error = false, color = "text-primary", highlight }: {
+  title: string; value: string | number; sub?: string; icon: ElementType; loading: boolean; error?: boolean; color?: string; highlight?: "green" | "red" | "yellow";
 }) {
   const highlightClass = highlight === "green" ? "border-[#BFD9C5] bg-[#F3F8F2] dark:border-emerald-900/70 dark:bg-emerald-950/30" :
     highlight === "red" ? "border-[#E9C7BD] bg-[#FBF2EF] dark:border-red-900/70 dark:bg-red-950/30" :
@@ -138,6 +138,11 @@ function KpiCard({ title, value, sub, icon: Icon, loading, color = "text-primary
       <CardContent>
         {loading ? (
           <><Skeleton className="h-8 w-24 mb-1" /><Skeleton className="h-4 w-36" /></>
+        ) : error ? (
+          <>
+            <div className="text-2xl font-bold tracking-tight text-muted-foreground">—</div>
+            <p className="text-xs text-muted-foreground mt-0.5">Não foi possível carregar</p>
+          </>
         ) : (
           <>
             <div className="text-2xl font-bold tracking-tight text-[#2F3A43] dark:text-card-foreground">{value}</div>
@@ -205,10 +210,10 @@ function AgencyDashboard() {
   } = useFinancialMetrics(financialPeriod === "current" ? undefined : financialPeriod);
 
   const npsLabel = summary?.averageNps != null ? `${summary.averageNps.toFixed(1)} / 10` : "—";
-  const totalRevenue = summary?.totalRevenue ?? 0;
-  const totalExpenses = summary?.totalExpenses ?? 0;
-  const netProfit = totalRevenue - totalExpenses;
-  const margin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+  const totalRevenue = financialMetrics?.totals.receivedRevenue ?? 0;
+  const totalExpenses = financialMetrics?.totals.operatingCostsPaid ?? 0;
+  const netProfit = financialMetrics?.totals.profit ?? 0;
+  const margin = financialMetrics?.totals.margin ?? 0;
 
   // Revenue vs Expenses merged data from charts endpoint
   const revExpChartData = useMemo(() => {
@@ -234,8 +239,38 @@ function AgencyDashboard() {
     refetchOnWindowFocus: false,
   });
 
-  const dashboardError = summaryError || chartsError || funnelError || tripsError || paymentSummaryError || pendingPaymentsError || topCustomersError || financialMetricsError;
-  const dashboardQueryError = summaryQueryError ?? chartsQueryError ?? funnelQueryError ?? tripsQueryError ?? paymentSummaryQueryError ?? pendingPaymentsQueryError ?? topCustomersQueryError ?? financialMetricsQueryError;
+  const dashboardErrorLabels = [
+    summaryError && "indicadores gerais",
+    chartsError && "gráficos",
+    funnelError && "funil de conversão",
+    tripsError && "próximas viagens",
+    paymentSummaryError && "resumo de pagamentos",
+    pendingPaymentsError && "pagamentos pendentes",
+    topCustomersError && "clientes em destaque",
+    financialMetricsError && "indicadores financeiros",
+  ].filter((label): label is string => typeof label === "string");
+
+  const diagnosticUnavailable =
+    (summaryError && !summary) ||
+    (chartsError && !charts) ||
+    (financialMetricsError && !financialMetrics);
+  const diagnosticQueryError =
+    (!summary && summaryQueryError) ||
+    (!charts && chartsQueryError) ||
+    (!financialMetrics && financialMetricsQueryError);
+
+  function retryFailedDashboardQueries() {
+    const retries: Array<Promise<unknown>> = [];
+    if (summaryError) retries.push(refetchSummary());
+    if (chartsError) retries.push(refetchCharts());
+    if (funnelError) retries.push(refetchFunnel());
+    if (tripsError) retries.push(refetchTrips());
+    if (paymentSummaryError) retries.push(refetchPaymentSummary());
+    if (pendingPaymentsError) retries.push(refetchPendingPayments());
+    if (topCustomersError) retries.push(refetchTopCustomers());
+    if (financialMetricsError) retries.push(refetchFinancialMetrics());
+    void Promise.all(retries);
+  }
 
   const ESSENTIAL_INTEGRATION_TYPES = ["whatsapp_evolution", "stripe_account", "mercadopago"];
   const integrationIssues = (integrationStatuses ?? []).filter(
@@ -244,7 +279,7 @@ function AgencyDashboard() {
 
   // Diagnostic engine
   const diagnostics = useMemo(() => {
-    if (!summary || !charts) return [];
+    if (!summary || !charts || !financialMetrics) return [];
     const tips: Array<{ type: "warning" | "success" | "info"; title: string; desc: string }> = [];
 
     if ((summary.occupancyRate ?? 0) < 60)
@@ -275,28 +310,7 @@ function AgencyDashboard() {
       tips.push({ type: "success", title: "Operação saudável", desc: "Todos os indicadores estão dentro dos parâmetros ideais. Continue monitorando e buscando oportunidades de crescimento." });
 
     return tips;
-  }, [summary, charts, margin, totalRevenue]);
-
-  if (dashboardError) {
-    return (
-      <QueryErrorState
-        resourceLabel="o painel"
-        error={dashboardQueryError}
-        onRetry={() => {
-          void Promise.all([
-            refetchSummary(),
-            refetchCharts(),
-            refetchFunnel(),
-            refetchTrips(),
-            refetchPaymentSummary(),
-            refetchPendingPayments(),
-            refetchTopCustomers(),
-            refetchFinancialMetrics(),
-          ]);
-        }}
-      />
-    );
-  }
+  }, [summary, charts, financialMetrics, margin, totalRevenue]);
 
   return (
     <div className="visite-enter relative mx-auto max-w-[1600px] space-y-7">
@@ -334,6 +348,7 @@ function AgencyDashboard() {
            <p className="text-muted-foreground text-sm">Acompanhe vendas, viagens e caixa em um só lugar.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-muted-foreground">Séries mensais:</span>
           <div className="flex overflow-hidden rounded-xl border border-[#DCE3E8] bg-[#F5F7FA] text-xs dark:border-border dark:bg-muted">
             {(["3m", "6m", "12m"] as const).map(p => (
               <button
@@ -349,6 +364,28 @@ function AgencyDashboard() {
            <Link href="/trips"><Button size="sm" className="bg-[#5D3E2A] text-white shadow-sm hover:bg-[#49301F]"><Plus className="w-4 h-4 mr-1" /> Nova Viagem</Button></Link>
         </div>
       </div>
+
+      {dashboardErrorLabels.length > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="alert-dashboard-partial-data"
+          className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <p className="min-w-0 flex-1">
+            Alguns dados não carregaram ({dashboardErrorLabels.join(", ")}). As demais seções continuam disponíveis.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={retryFailedDashboardQueries}
+            data-testid="button-retry-dashboard-failed-queries"
+          >
+            Tentar novamente
+          </Button>
+        </div>
+      )}
 
       {/* Overdue expenses alert */}
       {(paymentSummary?.overdueReceivable ?? 0) > 0 && (
@@ -391,14 +428,15 @@ function AgencyDashboard() {
             Período: {FINANCIAL_METRICS_PERIOD_SELECTION_LABELS[financialPeriod]}. Vencidos consideram parcelas com vencimento no período; dívidas incluem o saldo atual de indicação e comissões não pagas criadas no período. O ticket médio considera o histórico de reservas confirmadas.
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub={financialPeriod === "current" ? "Caixa recebido no mês atual (BRT)" : "Caixa recebido no período"} icon={TrendingUp} loading={loadingFinancialMetrics} color="text-emerald-600" highlight="green" />
-            <KpiCard title="Custos Pagos" value={formatCurrency(financialMetrics?.totals.operatingCostsPaid ?? 0)} sub="Despesas gerais + custos de viagem no período" icon={TrendingDown} loading={loadingFinancialMetrics} color="text-red-500" />
+            <KpiCard title="Receita Recebida" value={formatCurrency(financialMetrics?.totals.receivedRevenue ?? 0)} sub={financialPeriod === "current" ? "Caixa recebido no mês atual (BRT)" : "Caixa recebido no período"} icon={TrendingUp} loading={loadingFinancialMetrics} error={financialMetricsError && !financialMetrics} color="text-emerald-600" highlight="green" />
+            <KpiCard title="Custos Pagos" value={formatCurrency(financialMetrics?.totals.operatingCostsPaid ?? 0)} sub="Despesas gerais + custos de viagem no período" icon={TrendingDown} loading={loadingFinancialMetrics} error={financialMetricsError && !financialMetrics} color="text-red-500" />
             <KpiCard
               title="Lucro Líquido"
               value={formatCurrency(financialMetrics?.totals.profit ?? 0)}
               sub={`Margem: ${(financialMetrics?.totals.margin ?? 0).toFixed(1)}%`}
               icon={DollarSign}
               loading={loadingFinancialMetrics}
+              error={financialMetricsError && !financialMetrics}
               color={(financialMetrics?.totals.profit ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}
               highlight={(financialMetrics?.totals.profit ?? 0) >= 0 ? "green" : "red"}
             />
@@ -408,17 +446,19 @@ function AgencyDashboard() {
               sub={(financialMetrics?.totals.profit ?? 0) >= 0 ? "Resultado positivo" : "Resultado negativo"}
               icon={Percent}
               loading={loadingFinancialMetrics}
+              error={financialMetricsError && !financialMetrics}
               color={(financialMetrics?.totals.margin ?? 0) >= 20 ? "text-emerald-600" : (financialMetrics?.totals.margin ?? 0) >= 10 ? "text-yellow-600" : "text-red-600"}
             />
-             <KpiCard title="Ticket Médio" value={formatCurrency(summary?.avgTicket ?? 0)} sub="Histórico de reservas confirmadas" icon={Target} loading={loadingSummary} color="text-[#5D3E2A]" />
+             <KpiCard title="Ticket Médio" value={formatCurrency(summary?.avgTicket ?? 0)} sub="Histórico de reservas confirmadas" icon={Target} loading={loadingSummary} error={summaryError && !summary} color="text-[#5D3E2A]" />
             <KpiCard
               title="Contas Vencidas"
               value={formatCurrency(financialMetrics?.totals.overdueReceivable ?? 0)}
               sub="Parcelas vencidas com vencimento no período"
               icon={AlertTriangle}
               loading={loadingFinancialMetrics}
-              color={(summary?.overduePaymentsCount ?? 0) > 0 ? "text-red-600" : "text-muted-foreground"}
-              highlight={(summary?.overduePaymentsCount ?? 0) > 0 ? "red" : undefined}
+              error={financialMetricsError && !financialMetrics}
+              color={(financialMetrics?.totals.overdueReceivable ?? 0) > 0 ? "text-red-600" : "text-muted-foreground"}
+              highlight={(financialMetrics?.totals.overdueReceivable ?? 0) > 0 ? "red" : undefined}
             />
           </div>
         </section>
@@ -427,6 +467,15 @@ function AgencyDashboard() {
           onSelectedPeriodChange={setFinancialPeriod}
         />
 
+        {summaryError && !summary ? (
+          <QueryErrorState
+            resourceLabel="os indicadores gerais"
+            error={summaryQueryError}
+            onRetry={() => { void refetchSummary(); }}
+            compact
+          />
+        ) : (
+          <>
         {/* VENDAS */}
         <section className="rounded-2xl border border-[#C9DCE9] bg-gradient-to-br from-[#F0F6FA] to-[#FAFCFD] p-4 shadow-[0_4px_16px_rgba(30,91,140,.05)] md:p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -513,11 +562,32 @@ function AgencyDashboard() {
             />
           </div>
         </section>
+          </>
+        )}
       </div>
 
       {/* ═══ SEÇÃO 2: 10 GRÁFICOS ═══ */}
+      {chartsError && !charts ? (
+        <section>
+          <SectionTitle
+            icon={Activity}
+            title="Gráficos e Análises"
+            description="Séries mensais e distribuições da operação"
+          />
+          <QueryErrorState
+            resourceLabel="os gráficos"
+            error={chartsQueryError}
+            onRetry={() => { void refetchCharts(); }}
+            compact
+          />
+        </section>
+      ) : (
       <section>
-        <SectionTitle icon={Activity} title="Gráficos e Análises" description="Dados históricos e comparativos dos últimos 12 meses" />
+        <SectionTitle
+          icon={Activity}
+          title="Gráficos e Análises"
+          description={`Séries mensais dos últimos ${chartPeriod === "3m" ? "3" : chartPeriod === "6m" ? "6" : "12"} meses; distribuições e indicadores operacionais mostram o acumulado geral ou a situação atual.`}
+        />
 
         {/* Chart 1 & 2: Revenue vs Expenses + Client Origin */}
         <div className="grid gap-4 lg:grid-cols-7 mb-4">
@@ -557,7 +627,9 @@ function AgencyDashboard() {
               <CardDescription>Por canal de captação</CardDescription>
             </CardHeader>
             <CardContent>
-              {clientOriginData.length === 0 ? (
+              {loadingCharts ? (
+                <Skeleton className="h-[200px] w-full" />
+              ) : clientOriginData.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">Sem dados de origem.</p>
               ) : (
                 <div className="flex items-center gap-4">
@@ -854,11 +926,20 @@ function AgencyDashboard() {
           </Card>
         </div>
       </section>
+      )}
 
       {/* ═══ SEÇÃO 3: FUNIL DE CONVERSÃO ═══ */}
       <section>
         <SectionTitle icon={Target} title="Funil de Conversão" description="Jornada do lead à compra efetiva" />
 
+        {funnelError && !funnel ? (
+          <QueryErrorState
+            resourceLabel="o funil de conversão"
+            error={funnelQueryError}
+            onRetry={() => { void refetchFunnel(); }}
+            compact
+          />
+        ) : (
         <div className="grid gap-4 lg:grid-cols-7">
           {/* Funnel visual */}
           <Card className="lg:col-span-3">
@@ -962,6 +1043,7 @@ function AgencyDashboard() {
             </CardContent>
           </Card>
         </div>
+        )}
       </section>
 
       {/* ═══ SEÇÃO 4: DIAGNÓSTICO EMPRESARIAL ═══ */}
@@ -983,20 +1065,27 @@ function AgencyDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              {(loadingSummary || loadingCharts) ? <Skeleton className="h-[200px] w-full" /> : (
+              {(loadingSummary || loadingCharts || loadingFinancialMetrics) ? <Skeleton className="h-[200px] w-full" /> : diagnosticUnavailable ? (
+                <QueryErrorState
+                  resourceLabel="o resumo do negócio"
+                  error={diagnosticQueryError}
+                  onRetry={retryFailedDashboardQueries}
+                  compact
+                />
+              ) : (
                 <div className="space-y-3">
                   {[
                     {
-                      label: "Receita Total",
+                      label: "Receita Recebida",
                       value: formatCurrency(totalRevenue),
                       color: "text-green-600",
-                      sub: `${formatCurrency(summary?.revenueThisMonth ?? 0)} este mês`,
+                      sub: `Período: ${FINANCIAL_METRICS_PERIOD_SELECTION_LABELS[financialPeriod]}`,
                     },
                     {
                       label: "Total Despesas + A Pagar",
-                      value: formatCurrency(totalExpenses + (summary?.totalPayable ?? 0)),
+                      value: formatCurrency(totalExpenses + (financialMetrics?.totals.payable ?? 0)),
                       color: "text-red-500",
-                      sub: `Despesas: ${formatCurrency(totalExpenses)} · A pagar: ${formatCurrency(summary?.totalPayable ?? 0)}`,
+                      sub: `Pagos: ${formatCurrency(totalExpenses)} · A pagar no período: ${formatCurrency(financialMetrics?.totals.payable ?? 0)}`,
                     },
                     {
                       label: "Lucro Líquido",
@@ -1050,7 +1139,14 @@ function AgencyDashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              {(loadingSummary || loadingCharts) ? <Skeleton className="h-[200px] w-full" /> : (
+              {(loadingSummary || loadingCharts || loadingFinancialMetrics) ? <Skeleton className="h-[200px] w-full" /> : diagnosticUnavailable ? (
+                <QueryErrorState
+                  resourceLabel="as recomendações"
+                  error={diagnosticQueryError}
+                  onRetry={retryFailedDashboardQueries}
+                  compact
+                />
+              ) : (
                 <div className="space-y-3">
                   {diagnostics.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-8">Nenhuma recomendação disponível. Cadastre mais dados.</p>
@@ -1105,6 +1201,8 @@ function AgencyDashboard() {
             <CardContent>
               {loadingTrips ? (
                 <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div>
+              ) : tripsError && !upcomingTrips ? (
+                <QueryErrorState resourceLabel="as próximas viagens" error={tripsQueryError} onRetry={() => { void refetchTrips(); }} compact />
               ) : !upcomingTrips?.length ? (
                 <p className="text-sm text-muted-foreground text-center py-8">Nenhuma viagem próxima.</p>
               ) : (
@@ -1145,6 +1243,8 @@ function AgencyDashboard() {
             <CardContent>
               {loadingPendingPayments ? (
                 <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+              ) : pendingPaymentsError && !pendingPaymentsList ? (
+                <QueryErrorState resourceLabel="os pagamentos pendentes" error={pendingPaymentsQueryError} onRetry={() => { void refetchPendingPayments(); }} compact />
               ) : !(pendingPaymentsList as PaymentListResponse | undefined)?.data?.length ? (
                 <p className="text-sm text-muted-foreground text-center py-8">Nenhum pagamento pendente.</p>
               ) : (
@@ -1190,6 +1290,8 @@ function AgencyDashboard() {
             <CardContent>
               {loadingFunnel ? (
                 <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+              ) : funnelError && !funnel ? (
+                <QueryErrorState resourceLabel="o funil por canal" error={funnelQueryError} onRetry={() => { void refetchFunnel(); }} compact />
               ) : !funnel?.byOrigin?.length ? (
                 <p className="text-sm text-muted-foreground text-center py-8">Sem dados de funil.</p>
               ) : (
@@ -1272,6 +1374,13 @@ function AgencyDashboard() {
                   </div>
                 ))}
               </div>
+            ) : topCustomersError && !topCustomers ? (
+              <QueryErrorState
+                resourceLabel="os clientes em destaque"
+                error={topCustomersQueryError}
+                onRetry={() => { void refetchTopCustomers(); }}
+                compact
+              />
             ) : !topCustomers?.length ? (
               <p className="text-sm text-muted-foreground text-center py-10">Nenhum cliente encontrado.</p>
             ) : (

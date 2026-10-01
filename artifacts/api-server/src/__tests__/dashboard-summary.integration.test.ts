@@ -430,4 +430,26 @@ describe("GET /dashboard/summary aggregate scaling", () => {
     expect(Number(sellerBody.confirmedReservations)).toBe(2);
     assertNoHistoryRowsWereSelected(selectSpy.mock.calls.slice(sellerStart));
   });
+
+  it("returns chart aggregates and boarding-point labels for the tenant", async () => {
+    const app = express();
+    app.use(express.json());
+    app.use("/api", dashboardRouter);
+    app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    });
+
+    requireAuthMock.mockResolvedValue({
+      id: fixture.adminId,
+      tenantId: fixture.tenantId,
+      role: "agency_admin",
+    } as never);
+
+    const response = await request(app).get("/api/dashboard/charts?period=12m");
+
+    expect(response.status).toBe(200);
+    expect(response.body.tripsByMonth).toHaveLength(12);
+    expect(response.body.reservationsByMonth).toHaveLength(12);
+    expect(response.body.topBoardingPoints).toEqual(expect.any(Array));
+  });
 });

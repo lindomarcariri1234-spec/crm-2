@@ -462,105 +462,148 @@ router.get("/dashboard/charts", async (req, res, next: NextFunction): Promise<vo
       return { d, key: monthKey(d), label: d.toLocaleString("pt-BR", { month: "short" }) };
     });
 
-    // 1. TOP DESTINATIONS — SQL JOIN + GROUP BY (confirmed only, top 10)
-    const topDestinationsRaw = await db.select({
-      name: sql<string>`COALESCE(${tripsTable.destinationCity}, ${tripsTable.destination})`,
-      count: sql<number>`count(${reservationsTable.id})::int`,
-    }).from(tripsTable)
-      .innerJoin(reservationsTable, and(
-        eq(reservationsTable.tripId, tripsTable.id),
-        eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
-        eq(reservationsTable.tenantId, tenantId),
-      ))
-      .where(eq(tripsTable.tenantId, tenantId))
-      .groupBy(sql`COALESCE(${tripsTable.destinationCity}, ${tripsTable.destination})`)
-      .orderBy(desc(sql`count(${reservationsTable.id})`))
-      .limit(10);
-    const topDestinations = topDestinationsRaw.map(r => ({ name: r.name, count: Number(r.count) }));
+    // Keep each query batch small so the dashboard does not monopolize the DB pool.
+    const [topDestinationsRaw, tripsByMonthRaw, resByMonthRaw, resByStatusRaw] = await Promise.all([
+      db.select({
+        name: sql<string>`COALESCE(${tripsTable.destinationCity}, ${tripsTable.destination})`,
+        count: sql<number>`count(${reservationsTable.id})::int`,
+      }).from(tripsTable)
+        .innerJoin(reservationsTable, and(
+          eq(reservationsTable.tripId, tripsTable.id),
+          eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
+          eq(reservationsTable.tenantId, tenantId),
+        ))
+        .where(eq(tripsTable.tenantId, tenantId))
+        .groupBy(sql`COALESCE(${tripsTable.destinationCity}, ${tripsTable.destination})`)
+        .orderBy(desc(sql`count(${reservationsTable.id})`))
+        .limit(10),
+      db.select({
+        monthStart: sql<string>`to_char(${tripsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
+        count: sql<number>`count(*)::int`,
+      }).from(tripsTable)
+        .where(and(eq(tripsTable.tenantId, tenantId), gte(tripsTable.createdAt, since)))
+        .groupBy(sql`to_char(${tripsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
+        .orderBy(sql`to_char(${tripsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`),
+      db.select({
+        monthStart: sql<string>`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
+        count: sql<number>`count(*)::int`,
+        cancelled: sql<number>`sum(case when ${reservationsTable.status} = ${RESERVATION_STATUS.CANCELLED} then 1 else 0 end)::int`,
+      }).from(reservationsTable)
+        .where(and(eq(reservationsTable.tenantId, tenantId), gte(reservationsTable.createdAt, since)))
+        .groupBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
+        .orderBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`),
+      db.select({
+        status: reservationsTable.status,
+        count: sql<number>`count(*)::int`,
+      }).from(reservationsTable)
+        .where(eq(reservationsTable.tenantId, tenantId))
+        .groupBy(reservationsTable.status),
+    ]);
 
-    // 2. TRIPS BY MONTH — SQL GROUP BY
-    const tripsByMonthRaw = await db.select({
-      monthStart: sql<string>`to_char(${tripsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
-      count: sql<number>`count(*)::int`,
-    }).from(tripsTable)
-      .where(and(eq(tripsTable.tenantId, tenantId), gte(tripsTable.createdAt, since)))
-      .groupBy(sql`to_char(${tripsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
-      .orderBy(sql`to_char(${tripsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`);
+    const [tripsByStatusRaw, originBreakdownRaw, revenueExpRaw, passByMonthRaw] = await Promise.all([
+      db.select({
+        status: tripsTable.status,
+        count: sql<number>`count(*)::int`,
+      }).from(tripsTable)
+        .where(eq(tripsTable.tenantId, tenantId))
+        .groupBy(tripsTable.status),
+      db.select({
+        name: sql<string>`COALESCE(${clientsTable.origin}, 'Outros')`,
+        count: sql<number>`count(*)::int`,
+      }).from(clientsTable)
+        .where(eq(clientsTable.tenantId, tenantId))
+        .groupBy(sql`COALESCE(${clientsTable.origin}, 'Outros')`)
+        .orderBy(desc(sql`count(*)`))
+        .limit(8),
+      db.select({
+        monthStart: sql<string>`to_char(${paymentsTable.paidAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
+        revenue: sql<string>`sum(case when ${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE} and ${paymentsTable.status} = ${PAYMENT_STATUS.PAID} then cast(${paymentsTable.amount} as numeric) else 0 end)`,
+        expenses: sql<string>`sum(case when ${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE} and ${paymentsTable.status} = ${PAYMENT_STATUS.PAID} then cast(${paymentsTable.amount} as numeric) else 0 end)`,
+      }).from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.tenantId, tenantId),
+          sql`${paymentsTable.paidAt} IS NOT NULL`,
+          gte(paymentsTable.paidAt, since),
+        ))
+        .groupBy(sql`to_char(${paymentsTable.paidAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
+        .orderBy(sql`to_char(${paymentsTable.paidAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`),
+      db.select({
+        monthStart: sql<string>`to_char(${passengersTable.checkedInAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
+        count: sql<number>`count(*)::int`,
+      }).from(passengersTable)
+        .innerJoin(reservationsTable, eq(passengersTable.reservationId, reservationsTable.id))
+        .where(and(
+          eq(reservationsTable.tenantId, tenantId),
+          sql`${passengersTable.checkedInAt} IS NOT NULL`,
+          gte(passengersTable.checkedInAt, since),
+        ))
+        .groupBy(sql`to_char(${passengersTable.checkedInAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
+        .orderBy(sql`to_char(${passengersTable.checkedInAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`),
+    ]);
+
+    const [boardingPointsRaw, avgTicketRaw] = await Promise.all([
+      db.execute(sql`
+        WITH boarding_counts AS (
+          SELECT p.boarding_location_id, count(*)::int AS passenger_count
+          FROM passengers p
+          JOIN reservations r ON p.reservation_id = r.id
+          WHERE r.tenant_id = ${tenantId} AND p.boarding_location_id IS NOT NULL
+          GROUP BY p.boarding_location_id
+          ORDER BY passenger_count DESC
+          LIMIT 10
+        )
+        SELECT
+          bc.boarding_location_id,
+          bc.passenger_count AS count,
+          (
+            SELECT bp.point->>'name'
+            FROM trips t
+            CROSS JOIN LATERAL json_array_elements(COALESCE(t.boarding_points, '[]'::json)) AS bp(point)
+            WHERE t.tenant_id = ${tenantId}
+              AND bp.point->>'id' = bc.boarding_location_id::text
+            LIMIT 1
+          ) AS name
+        FROM boarding_counts bc
+        ORDER BY bc.passenger_count DESC
+      `),
+      db.select({
+        monthStart: sql<string>`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
+        value: sql<string>`avg(cast(${reservationsTable.totalValue} as numeric))`,
+      }).from(reservationsTable)
+        .where(and(
+          eq(reservationsTable.tenantId, tenantId),
+          eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
+          gte(reservationsTable.createdAt, since),
+        ))
+        .groupBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
+        .orderBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`),
+    ]);
+
+    const topDestinations = topDestinationsRaw.map(r => ({ name: r.name, count: Number(r.count) }));
     const tripsByMonthMap = new Map(tripsByMonthRaw.map(r => [r.monthStart, Number(r.count)]));
     const tripsByMonth = months12.map(({ key, label }) => ({ label, count: tripsByMonthMap.get(key) ?? 0 }));
 
-    // 3. RESERVATIONS BY MONTH — SQL GROUP BY
-    const resByMonthRaw = await db.select({
-      monthStart: sql<string>`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
-      count: sql<number>`count(*)::int`,
-      cancelled: sql<number>`sum(case when ${reservationsTable.status} = ${RESERVATION_STATUS.CANCELLED} then 1 else 0 end)::int`,
-    }).from(reservationsTable)
-      .where(and(eq(reservationsTable.tenantId, tenantId), gte(reservationsTable.createdAt, since)))
-      .groupBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
-      .orderBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`);
     const resByMonthMap = new Map(resByMonthRaw.map(r => [
       r.monthStart.substring(0, 7), { count: Number(r.count), cancelled: Number(r.cancelled) },
     ]));
     const reservationsByMonth = months12.map(({ key, label }) => {
-      const v = resByMonthMap.get(key) ?? { count: 0, cancelled: 0 };
-      return { label, count: v.count, cancelled: v.cancelled };
+      const value = resByMonthMap.get(key) ?? { count: 0, cancelled: 0 };
+      return { label, count: value.count, cancelled: value.cancelled };
     });
 
-    // 4. RESERVATIONS BY STATUS — SQL GROUP BY
-    const resByStatusRaw = await db.select({
-      status: reservationsTable.status,
-      count: sql<number>`count(*)::int`,
-    }).from(reservationsTable)
-      .where(eq(reservationsTable.tenantId, tenantId))
-      .groupBy(reservationsTable.status);
     const reservationsByStatus = resByStatusRaw.map(r => ({ status: r.status, count: Number(r.count) }));
-
-    // 5. CANCELLATION RATES (computed from SQL aggregates)
-    const totalRes = reservationsByStatus.reduce((a, r) => a + r.count, 0);
+    const totalRes = reservationsByStatus.reduce((sum, row) => sum + row.count, 0);
     const cancelledRes = reservationsByStatus.find(r => r.status === RESERVATION_STATUS.CANCELLED)?.count ?? 0;
     const cancellationRate = totalRes > 0 ? Math.round((cancelledRes / totalRes) * 1000) / 10 : 0;
 
-    const tripsByStatusRaw = await db.select({
-      status: tripsTable.status,
-      count: sql<number>`count(*)::int`,
-    }).from(tripsTable)
-      .where(eq(tripsTable.tenantId, tenantId))
-      .groupBy(tripsTable.status);
-    const totalTripsAll = tripsByStatusRaw.reduce((a, r) => a + Number(r.count), 0);
+    const totalTripsAll = tripsByStatusRaw.reduce((sum, row) => sum + Number(row.count), 0);
     const cancelledTripsCount = Number(tripsByStatusRaw.find(r => r.status === TRIP_STATUS.CANCELLED)?.count ?? 0);
     const tripCancellationRate = totalTripsAll > 0 ? Math.round((cancelledTripsCount / totalTripsAll) * 1000) / 10 : 0;
-
-    // 6. AVG RESERVATIONS PER ACTIVE TRIP
-    const [activeTripsCount] = await db.select({ count: sql<number>`count(*)::int` })
-      .from(tripsTable).where(and(eq(tripsTable.tenantId, tenantId), eq(tripsTable.status, TRIP_STATUS.ACTIVE)));
     const confirmedResCount = reservationsByStatus.find(r => r.status === RESERVATION_STATUS.CONFIRMED)?.count ?? 0;
-    const activeCount = Number(activeTripsCount?.count ?? 0);
+    const activeCount = Number(tripsByStatusRaw.find(r => r.status === TRIP_STATUS.ACTIVE)?.count ?? 0);
     const avgReservationsPerTrip = activeCount > 0 ? Math.round((confirmedResCount / activeCount) * 10) / 10 : 0;
 
-    // 7. ORIGIN BREAKDOWN — SQL GROUP BY
-    const originBreakdownRaw = await db.select({
-      name: sql<string>`COALESCE(${clientsTable.origin}, 'Outros')`,
-      count: sql<number>`count(*)::int`,
-    }).from(clientsTable)
-      .where(eq(clientsTable.tenantId, tenantId))
-      .groupBy(sql`COALESCE(${clientsTable.origin}, 'Outros')`)
-      .orderBy(desc(sql`count(*)`))
-      .limit(8);
     const originBreakdown = originBreakdownRaw.map(r => ({ name: r.name, count: Number(r.count) }));
-
-    // 8. REVENUE & EXPENSES BY MONTH — SQL GROUP BY (Brazil timezone to avoid wrong-month at 21h-midnight BRT)
-    const revenueExpRaw = await db.select({
-      monthStart: sql<string>`to_char(${paymentsTable.paidAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
-      revenue: sql<string>`sum(case when ${paymentsTable.type} = ${PAYMENT_TYPE.RECEIVABLE} and ${paymentsTable.status} = ${PAYMENT_STATUS.PAID} then cast(${paymentsTable.amount} as numeric) else 0 end)`,
-      expenses: sql<string>`sum(case when ${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE} and ${paymentsTable.status} = ${PAYMENT_STATUS.PAID} then cast(${paymentsTable.amount} as numeric) else 0 end)`,
-    }).from(paymentsTable)
-      .where(and(
-        eq(paymentsTable.tenantId, tenantId),
-        sql`${paymentsTable.paidAt} IS NOT NULL`,
-        gte(paymentsTable.paidAt, since),
-      ))
-      .groupBy(sql`to_char(${paymentsTable.paidAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
-      .orderBy(sql`to_char(${paymentsTable.paidAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`);
     const revenueExpMap = new Map(revenueExpRaw.map(r => [
       r.monthStart,
       { revenue: roundMoney(Number(r.revenue ?? 0)), expenses: roundMoney(Number(r.expenses ?? 0)) },
@@ -568,55 +611,18 @@ router.get("/dashboard/charts", async (req, res, next: NextFunction): Promise<vo
     const revenueByMonth = months12.map(({ key, label }) => ({ label, value: revenueExpMap.get(key)?.revenue ?? 0 }));
     const expensesByMonth = months12.map(({ key, label }) => ({ label, value: revenueExpMap.get(key)?.expenses ?? 0 }));
 
-    // 9. PASSENGERS BY MONTH — SQL GROUP BY
-    const passByMonthRaw = await db.select({
-      monthStart: sql<string>`to_char(${passengersTable.checkedInAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
-      count: sql<number>`count(*)::int`,
-    }).from(passengersTable)
-      .innerJoin(reservationsTable, eq(passengersTable.reservationId, reservationsTable.id))
-      .where(and(
-        eq(reservationsTable.tenantId, tenantId),
-        sql`${passengersTable.checkedInAt} IS NOT NULL`,
-        gte(passengersTable.checkedInAt, since),
-      ))
-      .groupBy(sql`to_char(${passengersTable.checkedInAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
-      .orderBy(sql`to_char(${passengersTable.checkedInAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`);
     const passByMonthMap = new Map(passByMonthRaw.map(r => [r.monthStart, Number(r.count)]));
     const passengersByMonth = months12.map(({ key, label }) => ({ label, count: passByMonthMap.get(key) ?? 0 }));
 
-    // 10. TOP BOARDING POINTS — SQL GROUP BY + name resolution from JSON
-    const boardingCountRaw = await db.execute(sql`
-      SELECT p.boarding_location_id, count(*)::int as count
-      FROM passengers p
-      JOIN reservations r ON p.reservation_id = r.id
-      WHERE r.tenant_id = ${tenantId} AND p.boarding_location_id IS NOT NULL
-      GROUP BY p.boarding_location_id
-      ORDER BY count DESC
-      LIMIT 10
-    `);
-    const tripsWithBoarding = await db.select({ boardingPoints: tripsTable.boardingPoints })
-      .from(tripsTable).where(eq(tripsTable.tenantId, tenantId));
-    const boardingNameMap: Record<string, string> = {};
-    for (const t of tripsWithBoarding) {
-      for (const bp of (t.boardingPoints ?? [])) {
-        if (bp.id && bp.name) boardingNameMap[bp.id] = bp.name;
-      }
-    }
-    const topBoardingPoints = (boardingCountRaw.rows as Array<{ boarding_location_id: string; count: number }>)
-      .map(r => ({ name: boardingNameMap[r.boarding_location_id] ?? r.boarding_location_id, count: Number(r.count) }));
+    const topBoardingPoints = (boardingPointsRaw.rows as Array<{
+      boarding_location_id: string;
+      count: number;
+      name: string | null;
+    }>).map(r => ({
+      name: r.name ?? r.boarding_location_id,
+      count: Number(r.count),
+    }));
 
-    // 11. AVG TICKET BY MONTH — SQL GROUP BY
-    const avgTicketRaw = await db.select({
-      monthStart: sql<string>`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`,
-      value: sql<string>`avg(cast(${reservationsTable.totalValue} as numeric))`,
-    }).from(reservationsTable)
-      .where(and(
-        eq(reservationsTable.tenantId, tenantId),
-        eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
-        gte(reservationsTable.createdAt, since),
-      ))
-      .groupBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`)
-      .orderBy(sql`to_char(${reservationsTable.createdAt} AT TIME ZONE 'America/Sao_Paulo', 'YYYY-MM')`);
     const avgTicketMap = new Map(avgTicketRaw.map(r => [r.monthStart, Math.round(Number(r.value ?? 0))]));
     const avgTicketByMonth = months12.map(({ key, label }) => ({ label, value: avgTicketMap.get(key) ?? 0 }));
 
