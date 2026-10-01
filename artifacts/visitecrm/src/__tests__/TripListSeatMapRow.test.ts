@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createElement } from "react";
+import { ROLES } from "@workspace/permissions";
 import { renderComponent, cleanupRoots, flushAct } from "./eventSourceHarness.js";
 
 // ---------------------------------------------------------------------------
@@ -67,7 +68,7 @@ const defaultTripsHook = {
     totalPages: 1,
     upcomingTrips: [],
     stats: { total: 1, active: 1, occupancyRate: 50, totalRevenue: 0 },
-    me: { tenantId: "tenant-1", role: "admin" },
+    me: { tenantId: "tenant-1", role: ROLES.AGENCY_ADMIN },
     isVendedor: false,
     search: "",
     setSearch: vi.fn(),
