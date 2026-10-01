@@ -114,7 +114,7 @@ The platform includes a multi-tenant e-commerce solution with both an admin pane
 
 ## Testing Infrastructure
 
-- **Test framework**: Vitest v3
+- **Test framework**: Vitest v4
 - **Run all tests**: `pnpm test` (workspace root, backend then frontend)
 - **Backend only**: `pnpm --filter @workspace/api-server run test` — `artifacts/api-server/src/__tests__/**` and `src/workers/*.test.ts`, covering typed errors, pure utility functions (reservation numbering, passenger age, pricing/discount calculations), seat broadcast logic, endpoint-level request validation, and reminder-worker retry/exhaustion behavior.
 - **Frontend only**: `pnpm --filter @workspace/visitecrm run test` — `artifacts/visitecrm/src/__tests__/**`, covering formatting/utility helpers and reservation pricing/discount calculations plus their Zod schemas.

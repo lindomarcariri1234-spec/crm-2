@@ -24,6 +24,23 @@ export function resolveClerkPublishableKey(
     || undefined;
 }
 
+export function requireClerkAuthorizedParties(
+  origins: readonly (string | undefined)[],
+  isProduction: boolean,
+): string[] {
+  const authorizedParties = origins
+    .filter((origin): origin is string => Boolean(origin))
+    .map((origin) => origin.replace(/\/+$/, ""));
+
+  if (isProduction && authorizedParties.length === 0) {
+    throw new Error(
+      "Missing Clerk authorized parties in production. Configure FRONTEND_URL, REPLIT_DOMAINS, or ADDITIONAL_ORIGINS.",
+    );
+  }
+
+  return authorizedParties;
+}
+
 export function shouldBypassClerkForPath(pathname: string): boolean {
   return CLERK_BYPASS_PATHS.has(pathname)
     || isPathWithin(pathname, "/api/cron")

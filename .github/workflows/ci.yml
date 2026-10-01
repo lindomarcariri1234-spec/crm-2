@@ -116,6 +116,13 @@ jobs:
           pnpm --filter @workspace/cliente-app run typecheck
           pnpm --filter @workspace/guide-app run typecheck
 
+      - name: Build mobile artifacts
+        env:
+          EXPO_PUBLIC_DOMAIN: visitecrm.com
+        run: |
+          pnpm --filter @workspace/cliente-app run build
+          pnpm --filter @workspace/guide-app run build
+
       - name: Build API for production
         run: pnpm --filter @workspace/api-server run build
 

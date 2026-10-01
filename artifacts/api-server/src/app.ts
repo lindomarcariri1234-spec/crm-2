@@ -21,6 +21,7 @@ import {
   productSlugFromStorefrontPath,
 } from "./lib/storefront-metadata";
 import {
+  requireClerkAuthorizedParties,
   resolveClerkPublishableKey,
   shouldBypassClerkForPath,
 } from "./lib/clerk-request";
@@ -249,19 +250,22 @@ app.use((err: unknown, req: express.Request, res: express.Response, next: expres
   next(err);
 });
 
-const authorizedParties = [
+const authorizedParties = requireClerkAuthorizedParties([
   ...frontendUrls,
-  process.env["REPLIT_DEV_DOMAIN"] ? `https://${process.env["REPLIT_DEV_DOMAIN"]}` : undefined,
+  isDev && process.env["REPLIT_DEV_DOMAIN"]
+    ? `https://${process.env["REPLIT_DEV_DOMAIN"]}`
+    : undefined,
   ...replitDomains,
   ...additionalOrigins,
-].filter((s): s is string => Boolean(s))
-  .map((s) => s.replace(/\/+$/, ""));
+], !isDev);
 
 // Log at startup so production logs confirm which parties are allowed
 if (authorizedParties.length > 0) {
   logger.info({ authorizedParties }, "[clerk] authorizedParties configured");
 } else {
-  logger.info("[clerk] authorizedParties is empty — all Clerk azp values are accepted");
+  logger.info(
+    "[clerk] authorizedParties is empty in non-production; Clerk origin validation is disabled",
+  );
 }
 
 const clerkAuth = clerkMiddleware({
