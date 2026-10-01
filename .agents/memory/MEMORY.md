@@ -107,6 +107,7 @@
 - [Orval 8 with Zod 3](orval8-zod3-codegen.md) — secure Orval upgrades need explicit Zod 3 output, explicit formatting, and DOM iterable types for the generated fetch client.
 - [Deployment migration fail-fast](deployment-migration-fail-fast.md) — production must terminate on migration failure instead of serving a partially migrated schema and masking boot errors as 500s.
 - [Publication smoke checks](publication-smoke-check.md) — Replit has no postDeploy hook; verify the public storefront and API from the production entrypoint after local readiness.
+- [Clerk publication smoke authentication](publication-clerk-auth.md) — use one-use Clerk sign-in links for dedicated CI identities, validate the browser session, then revoke sessions or unused tokens; never rotate human cookies.
 - [Vercel external storefront assets](vercel-external-storefront-assets.md) — when storefront HTML is rewritten from Replit, forward hashed `/assets/*` before the SPA fallback so JS is not returned as HTML.
 - [Published chunk verification](published-chunk-verification.md) — recursively fetch same-origin Vite JS imports per public/protected route; pass short-lived auth only through environment headers.
 - [Referral credit reservation](referral-credit-reservation.md) — reserve cashback atomically at checkout; payment confirms it and unpaid orders release it.

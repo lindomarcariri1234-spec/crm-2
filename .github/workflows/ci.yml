@@ -161,30 +161,11 @@ jobs:
           PUBLICATION_CHUNK_SUPERADMIN_PATHS: /admin,/admin/tenants
           PUBLICATION_CHUNK_CLIENT_PATHS: /perfil
           PUBLICATION_CHUNK_INTERACTION_SELECTORS: '[role="tab"],button[aria-haspopup="menu"]'
-          # These sessions are issued manually by signing in as the dedicated
-          # seller, superadmin, and client accounts in the Clerk instance used
-          # by the published portal. CI does not create or renew them.
-          #
-          # Rotation procedure (before the recorded expiry):
-          # 1. Sign out and sign in again for each account, then copy its
-          #    Cookie or Authorization value from the browser request.
-          # 2. Replace the matching GitHub Actions secret below, and update
-          #    the matching repository Actions variable with the new ISO-8601
-          #    expiry timestamp (PUBLICATION_CHUNK_*_EXPIRES_AT).
-          # 3. Use Actions > CI > Run workflow to validate all three profiles.
-          #    The manual trigger is intentional so rotation does not require
-          #    a code change or a new publication.
-          #
-          # Values are passed only through the process environment; the
-          # verifier never prints or persists credentials.
-          PUBLICATION_CHUNK_SESSION_RENEWAL_WINDOW_HOURS: "72"
-          PUBLICATION_CHUNK_SELLER_AUTHORIZATION: ${{ secrets.PUBLICATION_CHUNK_SELLER_AUTHORIZATION }}
-          PUBLICATION_CHUNK_SELLER_COOKIE: ${{ secrets.PUBLICATION_CHUNK_SELLER_COOKIE }}
-          PUBLICATION_CHUNK_SELLER_EXPIRES_AT: ${{ vars.PUBLICATION_CHUNK_SELLER_EXPIRES_AT }}
-          PUBLICATION_CHUNK_SUPERADMIN_AUTHORIZATION: ${{ secrets.PUBLICATION_CHUNK_SUPERADMIN_AUTHORIZATION }}
-          PUBLICATION_CHUNK_SUPERADMIN_COOKIE: ${{ secrets.PUBLICATION_CHUNK_SUPERADMIN_COOKIE }}
-          PUBLICATION_CHUNK_SUPERADMIN_EXPIRES_AT: ${{ vars.PUBLICATION_CHUNK_SUPERADMIN_EXPIRES_AT }}
-          PUBLICATION_CHUNK_CLIENT_AUTHORIZATION: ${{ secrets.PUBLICATION_CHUNK_CLIENT_AUTHORIZATION }}
-          PUBLICATION_CHUNK_CLIENT_COOKIE: ${{ secrets.PUBLICATION_CHUNK_CLIENT_COOKIE }}
-          PUBLICATION_CHUNK_CLIENT_EXPIRES_AT: ${{ vars.PUBLICATION_CHUNK_CLIENT_EXPIRES_AT }}
+          # CI creates one-use Clerk sign-in tokens (5-minute expiry) for the
+          # dedicated role accounts, then revokes each resulting session.
+          # No browser cookies or copied Authorization values are stored.
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          PUBLICATION_CHUNK_SELLER_USER_ID: ${{ vars.PUBLICATION_CHUNK_SELLER_USER_ID }}
+          PUBLICATION_CHUNK_SUPERADMIN_USER_ID: ${{ vars.PUBLICATION_CHUNK_SUPERADMIN_USER_ID }}
+          PUBLICATION_CHUNK_CLIENT_USER_ID: ${{ vars.PUBLICATION_CHUNK_CLIENT_USER_ID }}
         run: node scripts/verify-publication-chunks.mjs

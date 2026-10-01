@@ -6,8 +6,9 @@ import { pathToFileURL } from "node:url";
 import { get } from "node:http";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-const DEFAULT_SESSION_RENEWAL_WINDOW_HOURS = 72;
 const DEFAULT_PUBLIC_PATH = "/";
+const CLERK_BACKEND_API_URL = "https://api.clerk.com/v1/";
+const CLERK_SIGN_IN_TOKEN_TTL_SECONDS = 300;
 const DEFAULT_PROTECTED_PATH = "/dashboard";
 const DEFAULT_PROTECTED_PATHS = [
   "/dashboard",
@@ -28,27 +29,21 @@ const PROFILE_ENVIRONMENTS = [
     name: "seller",
     label: "vendedor",
     pathEnvironmentVariable: "PUBLICATION_CHUNK_SELLER_PATHS",
-    authorizationEnvironmentVariable: "PUBLICATION_CHUNK_SELLER_AUTHORIZATION",
-    cookieEnvironmentVariable: "PUBLICATION_CHUNK_SELLER_COOKIE",
-    expiryEnvironmentVariable: "PUBLICATION_CHUNK_SELLER_EXPIRES_AT",
+    userIdEnvironmentVariable: "PUBLICATION_CHUNK_SELLER_USER_ID",
     defaultPath: "/meu-painel",
   },
   {
     name: "superadmin",
     label: "superadmin",
     pathEnvironmentVariable: "PUBLICATION_CHUNK_SUPERADMIN_PATHS",
-    authorizationEnvironmentVariable: "PUBLICATION_CHUNK_SUPERADMIN_AUTHORIZATION",
-    cookieEnvironmentVariable: "PUBLICATION_CHUNK_SUPERADMIN_COOKIE",
-    expiryEnvironmentVariable: "PUBLICATION_CHUNK_SUPERADMIN_EXPIRES_AT",
+    userIdEnvironmentVariable: "PUBLICATION_CHUNK_SUPERADMIN_USER_ID",
     defaultPath: "/admin",
   },
   {
     name: "client",
     label: "cliente",
     pathEnvironmentVariable: "PUBLICATION_CHUNK_CLIENT_PATHS",
-    authorizationEnvironmentVariable: "PUBLICATION_CHUNK_CLIENT_AUTHORIZATION",
-    cookieEnvironmentVariable: "PUBLICATION_CHUNK_CLIENT_COOKIE",
-    expiryEnvironmentVariable: "PUBLICATION_CHUNK_CLIENT_EXPIRES_AT",
+    userIdEnvironmentVariable: "PUBLICATION_CHUNK_CLIENT_USER_ID",
     defaultPath: "/perfil",
   },
 ];
@@ -258,83 +253,185 @@ function getTimeoutMs() {
     : DEFAULT_TIMEOUT_MS;
 }
 
-function getSessionRenewalWindowHours() {
-  const configuredWindow = Number(
-    process.env["PUBLICATION_CHUNK_SESSION_RENEWAL_WINDOW_HOURS"],
+async function callClerkBackend({
+  secretKey,
+  path,
+  body,
+  fetchImpl = fetch,
+}) {
+  const response = await fetchImpl(new URL(path, CLERK_BACKEND_API_URL), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/json",
+    },
+    signal: AbortSignal.timeout(getTimeoutMs()),
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const payload = await response.json().catch(() => null);
+  return { response, payload };
+}
+
+function getClerkErrorDetail(payload, secretKey) {
+  const details = Array.isArray(payload?.errors)
+    ? payload.errors
+        .flatMap((error) => [error?.code, error?.long_message, error?.message])
+        .filter((value) => typeof value === "string" && value.trim())
+    : [];
+  const detail = details.join(": ").slice(0, 300);
+  return secretKey
+    ? detail.replaceAll(secretKey, "[redacted]") ||
+        "Clerk returned no error details"
+    : detail || "Clerk returned no error details";
+}
+
+export async function createPublicationSignInProfiles({
+  publicUrl,
+  secretKey,
+  environment = process.env,
+  fetchImpl = fetch,
+  onProfileCreated,
+} = {}) {
+  const clerkSecretKey = (secretKey ?? environment["CLERK_SECRET_KEY"])?.trim();
+  if (!clerkSecretKey) {
+    throw new Error(
+      "CLERK_SECRET_KEY is missing; configure the GitHub Actions secret for the Clerk instance used by the published site.",
+    );
+  }
+  const baseUrl = normalizeBaseUrl(
+    publicUrl ??
+      environment["PUBLICATION_CHUNK_URL"] ??
+      environment["PUBLICATION_SMOKE_URL"],
   );
-  return Number.isFinite(configuredWindow) && configuredWindow > 0
-    ? configuredWindow
-    : DEFAULT_SESSION_RENEWAL_WINDOW_HOURS;
-}
+  const redirectUrl = new URL(DEFAULT_PUBLIC_PATH, baseUrl).href;
+  const profiles = [];
 
-function getProfileSessionRenewalInstructions(profileEnvironment) {
-  const profileName = profileEnvironment.name.toUpperCase();
-  return [
-    `Renew the ${profileEnvironment.label} session by signing in again with its dedicated Clerk account`,
-    `and update PUBLICATION_CHUNK_${profileName}_AUTHORIZATION or PUBLICATION_CHUNK_${profileName}_COOKIE`,
-    `in GitHub Actions secrets; then update the PUBLICATION_CHUNK_${profileName}_EXPIRES_AT Actions variable`,
-    "and run the CI workflow manually.",
-  ].join(" ");
-}
+  for (const profileEnvironment of PROFILE_ENVIRONMENTS) {
+    const userId = environment[
+      profileEnvironment.userIdEnvironmentVariable
+    ]?.trim();
+    if (!userId) {
+      throw new Error(
+        `The ${profileEnvironment.label} Clerk account is not configured; set the GitHub Actions variable ${profileEnvironment.userIdEnvironmentVariable} to its user ID.`,
+      );
+    }
 
-function validateProfileSessionExpiry(profileEnvironment) {
-  const configuredExpiry = process.env[
-    profileEnvironment.expiryEnvironmentVariable
-  ]?.trim();
-  if (!configuredExpiry) return;
+    let response;
+    let payload;
+    try {
+      ({ response, payload } = await callClerkBackend({
+        secretKey: clerkSecretKey,
+        path: "sign_in_tokens",
+        body: {
+          user_id: userId,
+          expires_in_seconds: CLERK_SIGN_IN_TOKEN_TTL_SECONDS,
+        },
+        fetchImpl,
+      }));
+    } catch {
+      throw new Error(
+        `Could not reach Clerk while creating the ${profileEnvironment.label} publication sign-in token.`,
+      );
+    }
+    if (!response.ok) {
+      const hint =
+        response.status === 401
+          ? "Check that the CLERK_SECRET_KEY GitHub Actions secret belongs to the published Clerk instance."
+          : response.status === 404
+            ? `Check the user ID in ${profileEnvironment.userIdEnvironmentVariable}.`
+            : getClerkErrorDetail(payload, clerkSecretKey);
+      throw new Error(
+        `Clerk could not create the ${profileEnvironment.label} publication sign-in token (HTTP ${response.status}). ${hint}`,
+      );
+    }
+    if (typeof payload?.id !== "string" || typeof payload?.url !== "string") {
+      throw new Error(
+        `Clerk returned an incomplete sign-in token for the ${profileEnvironment.label} profile; verify the Backend API response and Clerk instance configuration.`,
+      );
+    }
 
-  const expiryTime = Date.parse(configuredExpiry);
-  if (!Number.isFinite(expiryTime)) {
-    throw new Error(
-      `The ${profileEnvironment.label} publication session expiry metadata in ${profileEnvironment.expiryEnvironmentVariable} is invalid; use an ISO-8601 timestamp. ${getProfileSessionRenewalInstructions(profileEnvironment)}`,
-    );
+    let signInUrl;
+    try {
+      signInUrl = new URL(payload.url);
+    } catch {
+      throw new Error(
+        `Clerk returned an invalid sign-in URL for the ${profileEnvironment.label} profile.`,
+      );
+    }
+    if (signInUrl.protocol !== "https:") {
+      throw new Error(
+        `Clerk returned a non-HTTPS sign-in URL for the ${profileEnvironment.label} profile.`,
+      );
+    }
+    signInUrl.searchParams.set("redirect_url", redirectUrl);
+
+    const profile = {
+      name: profileEnvironment.name,
+      label: profileEnvironment.label,
+      paths: getConfiguredProfilePaths(profileEnvironment, environment),
+      signInUrl: signInUrl.href,
+      expectedUserId: userId,
+      signInTokenId: payload.id,
+    };
+    profiles.push(profile);
+    await onProfileCreated?.(profile);
   }
 
-  const expiresAt = new Date(expiryTime);
-  const remainingMs = expiryTime - Date.now();
-  const renewalWindowMs =
-    getSessionRenewalWindowHours() * 60 * 60 * 1_000;
-  if (remainingMs <= 0) {
-    throw new Error(
-      `The ${profileEnvironment.label} publication session expired at ${expiresAt.toISOString()}. ${getProfileSessionRenewalInstructions(profileEnvironment)}`,
-    );
+  return profiles;
+}
+
+async function revokeClerkResource({
+  secretKey,
+  path,
+  profileName,
+  resourceLabel,
+  fetchImpl,
+}) {
+  try {
+    const { response, payload } = await callClerkBackend({
+      secretKey,
+      path,
+      fetchImpl,
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      return `Could not revoke the temporary ${resourceLabel} for the ${profileName} profile (HTTP ${response.status}): ${getClerkErrorDetail(payload, secretKey)}.`;
+    }
+    return null;
+  } catch {
+    return `Could not reach Clerk to revoke the temporary ${resourceLabel} for the ${profileName} profile.`;
   }
-  if (remainingMs <= renewalWindowMs) {
-    const remainingHours = Math.max(
-      0.1,
-      Math.round((remainingMs / (60 * 60 * 1_000)) * 10) / 10,
-    );
-    throw new Error(
-      `The ${profileEnvironment.label} publication session expires in ${remainingHours} hour(s) at ${expiresAt.toISOString()}, inside the ${getSessionRenewalWindowHours()}-hour renewal window. ${getProfileSessionRenewalInstructions(profileEnvironment)}`,
-    );
+}
+
+export async function cleanupPublicationClerkSessions({
+  profiles,
+  sessionIds,
+  secretKey,
+  fetchImpl = fetch,
+} = {}) {
+  const failures = [];
+  for (const profile of profiles ?? []) {
+    const sessionId = sessionIds?.get(profile.name);
+    const failure = sessionId
+      ? await revokeClerkResource({
+          secretKey,
+          path: `sessions/${encodeURIComponent(sessionId)}/revoke`,
+          profileName: profile.label ?? profile.name,
+          resourceLabel: "session",
+          fetchImpl,
+        })
+      : profile.signInTokenId
+        ? await revokeClerkResource({
+            secretKey,
+            path: `sign_in_tokens/${encodeURIComponent(profile.signInTokenId)}/revoke`,
+            profileName: profile.label ?? profile.name,
+            resourceLabel: "sign-in token",
+            fetchImpl,
+          })
+        : null;
+    if (failure) failures.push(failure);
   }
-}
-
-function getHeadersFromEnvironment() {
-  const headers = { "User-Agent": USER_AGENT };
-  const authorization = process.env["PUBLICATION_CHUNK_AUTHORIZATION"]?.trim();
-  const cookie = process.env["PUBLICATION_CHUNK_COOKIE"]?.trim();
-  if (authorization) headers.Authorization = authorization;
-  if (cookie) headers.Cookie = cookie;
-  return headers;
-}
-
-function getProfileHeadersFromEnvironment(profileEnvironment) {
-  const headers = { "User-Agent": USER_AGENT };
-  const authorization =
-    process.env[profileEnvironment.authorizationEnvironmentVariable]?.trim();
-  const cookie = process.env[profileEnvironment.cookieEnvironmentVariable]?.trim();
-  if (authorization) headers.Authorization = authorization;
-  if (cookie) headers.Cookie = cookie;
-  return headers;
-}
-
-function hasProfileEnvironmentConfiguration(profileEnvironment) {
-  return [
-    profileEnvironment.pathEnvironmentVariable,
-    profileEnvironment.authorizationEnvironmentVariable,
-    profileEnvironment.cookieEnvironmentVariable,
-  ].some((environmentVariable) => Boolean(process.env[environmentVariable]?.trim()));
+  return failures;
 }
 
 function getProtectedPaths(configuredPaths, fallbackPath = DEFAULT_PROTECTED_PATH) {
@@ -354,8 +451,8 @@ function getProtectedPaths(configuredPaths, fallbackPath = DEFAULT_PROTECTED_PAT
   );
 }
 
-function getConfiguredProfilePaths(profileEnvironment) {
-  const configured = process.env[profileEnvironment.pathEnvironmentVariable]
+function getConfiguredProfilePaths(profileEnvironment, environment = process.env) {
+  const configured = environment[profileEnvironment.pathEnvironmentVariable]
     ?.split(",")
     .map((path) => path.trim())
     .filter(Boolean);
@@ -370,15 +467,10 @@ function assertProtectedHeaders(headers, profileName = null) {
   const profileDescription = profileName
     ? ` for the protected ${profileName} profile`
     : "";
-  const verb = profileName ? "require" : "requires";
   throw new Error(
     `The protected chunk ${
       profileName ? "routes" : "route"
-    }${profileDescription} ${verb}${
-      profileName
-        ? ` a session via PUBLICATION_CHUNK_${profileName.toUpperCase()}_AUTHORIZATION or PUBLICATION_CHUNK_${profileName.toUpperCase()}_COOKIE`
-        : " PUBLICATION_CHUNK_AUTHORIZATION or PUBLICATION_CHUNK_COOKIE"
-    }; provide a short-lived test session through the environment, never in source.`,
+    }${profileDescription} requires an authenticated session; provide a generated Clerk sign-in profile or explicit test headers.`,
   );
 }
 
@@ -399,10 +491,11 @@ function getProtectedSessionFailure({
     ? `HTTP ${status}`
     : "an authentication redirect";
   const destination = finalUrl ? ` to ${finalUrl.pathname}` : "";
-  const renewalInstructions = profileEnvironment
-    ? getProfileSessionRenewalInstructions(profileEnvironment)
-    : `Renew the ${profileDescription} publication session and update its GitHub Actions secret.`;
-  return `${route}: ${profileDescription} publication session was rejected (${statusDescription})${destination}. ${renewalInstructions}`;
+  const userIdVariable = profileEnvironment?.userIdEnvironmentVariable;
+  const identityHint = userIdVariable
+    ? ` Verify CLERK_SECRET_KEY and the account/role configured by ${userIdVariable}.`
+    : " Verify the configured Clerk test session.";
+  return `${route}: ${profileDescription} Clerk session was rejected (${statusDescription})${destination}.${identityHint}`;
 }
 
 function isAuthenticationRedirect(routeUrl, finalUrl) {
@@ -431,36 +524,44 @@ function normalizeProtectedProfile(profile, index) {
     "User-Agent": USER_AGENT,
     ...(profile.protectedHeaders ?? profile.headers ?? {}),
   };
-  assertProtectedHeaders(headers, name);
-  return { name, paths, headers };
+  const signInUrl =
+    typeof profile.signInUrl === "string" && profile.signInUrl.trim()
+      ? profile.signInUrl.trim()
+      : undefined;
+  if (!signInUrl) {
+    assertProtectedHeaders(headers, name);
+  } else {
+    let parsedSignInUrl;
+    try {
+      parsedSignInUrl = new URL(signInUrl);
+    } catch {
+      throw new Error(`Protected chunk profile ${name} has an invalid Clerk sign-in URL.`);
+    }
+    if (parsedSignInUrl.protocol !== "https:") {
+      throw new Error(`Protected chunk profile ${name} sign-in URL must use HTTPS.`);
+    }
+  }
+  return {
+    name,
+    label: profile.label ?? name,
+    paths,
+    headers,
+    signInUrl,
+    expectedUserId: profile.expectedUserId,
+    signInTokenId: profile.signInTokenId,
+  };
 }
 
 function getProtectedProfiles({ configuredProfiles, protectedHeaders, protectedPath }) {
   if (configuredProfiles !== undefined) {
-    if (!Array.isArray(configuredProfiles) || configuredProfiles.length === 0) {
-      throw new Error("protectedProfiles must contain at least one profile.");
+    if (!Array.isArray(configuredProfiles)) {
+      throw new Error("protectedProfiles must be an array.");
     }
     return configuredProfiles.map(normalizeProtectedProfile);
   }
 
-  const configuredProfileEnvironments = PROFILE_ENVIRONMENTS.filter(
-    hasProfileEnvironmentConfiguration,
-  );
-  if (configuredProfileEnvironments.length > 0) {
-    return PROFILE_ENVIRONMENTS.map((profileEnvironment) => {
-      const headers = getProfileHeadersFromEnvironment(profileEnvironment);
-      assertProtectedHeaders(headers, profileEnvironment.label);
-      validateProfileSessionExpiry(profileEnvironment);
-      return {
-        name: profileEnvironment.name,
-        paths: getConfiguredProfilePaths(profileEnvironment),
-        headers,
-      };
-    });
-  }
-
   const headers = {
-    ...getHeadersFromEnvironment(),
+    "User-Agent": USER_AGENT,
     ...protectedHeaders,
   };
   assertProtectedHeaders(headers);
@@ -883,14 +984,18 @@ async function launchChromium({ headers, timeoutMs }) {
 async function runBrowserSmoke({
   baseUrl,
   profileName,
+  profileLabel,
   protectedPaths,
   headers,
+  signInUrl,
+  expectedUserId,
+  onSessionCreated,
   expectedOrigin,
   timeoutMs,
   interactionSelectors,
   browserFactory = launchChromium,
 }) {
-  const browser = await browserFactory({ headers, timeoutMs });
+  const browser = await browserFactory({ headers, timeoutMs, profileName });
   const { client } = browser;
   const failures = [];
   const assetsByRoute = new Map();
@@ -912,7 +1017,8 @@ async function runBrowserSmoke({
       status: response.status,
       contentType: response.mimeType ?? "",
     };
-    const route = requestInfo.route ?? protectedPaths[0];
+    const route = requestInfo.route;
+    if (!route) return;
     const assets = assetsByRoute.get(route) ?? [];
     if (!assets.some((existing) => existing.url === asset.url)) assets.push(asset);
     assetsByRoute.set(route, assets);
@@ -920,9 +1026,9 @@ async function runBrowserSmoke({
   });
   client.on("Network.loadingFailed", ({ requestId, errorText }) => {
     const requestInfo = requests.get(requestId);
-    if (!requestInfo) return;
+    if (!requestInfo?.route) return;
     failures.push(
-      `${requestInfo.route ?? protectedPaths[0]}: JavaScript asset ${requestInfo.url} request failed: ${errorText}`,
+      `${requestInfo.route}: JavaScript asset ${requestInfo.url} request failed: ${errorText}`,
     );
   });
   client.on("Fetch.requestPaused", ({ requestId, request }) => {
@@ -956,8 +1062,8 @@ async function runBrowserSmoke({
   });
   await client.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Request" }] });
 
-  async function navigate(path) {
-    activeRoute = path;
+  async function navigate(path, route = path) {
+    activeRoute = route;
     const loaded = new Promise((resolve) => {
       let settled = false;
       const finish = () => {
@@ -974,6 +1080,91 @@ async function runBrowserSmoke({
     await navigation;
     await loaded;
     await wait(250);
+  }
+
+  async function getBrowserSessionState() {
+    try {
+      const result = await client.send("Runtime.evaluate", {
+        expression: `(() => {
+          const clerk = window.Clerk;
+          return {
+            origin: window.location.origin,
+            pathname: window.location.pathname,
+            userId: clerk?.user?.id ?? null,
+            sessionId: clerk?.session?.id ?? null,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      return result.result?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function waitForAuthenticatedSession() {
+    const deadline = Date.now() + Math.max(timeoutMs, 5_000);
+    let state = null;
+    while (Date.now() < deadline) {
+      state = await getBrowserSessionState();
+      if (
+        state?.origin === expectedOrigin &&
+        typeof state.userId === "string" &&
+        typeof state.sessionId === "string"
+      ) {
+        return state;
+      }
+      await wait(100);
+    }
+    const lastLocation =
+      state?.origin && state?.pathname
+        ? `${state.origin}${state.pathname}`
+        : "no application page";
+    throw new Error(
+      `Clerk did not activate the ${profileLabel ?? profileName} CI session on the published site (last page: ${lastLocation}). Check the Clerk Backend API secret, the configured user ID, and the Account Portal redirect.`,
+    );
+  }
+
+  async function validateRouteSession(route, activeSession) {
+    if (!signInUrl) return;
+    const state = await getBrowserSessionState();
+    let finalUrl;
+    try {
+      if (state?.origin && state?.pathname) {
+        finalUrl = new URL(state.pathname, state.origin);
+      }
+    } catch {
+      // Report an unavailable session below without exposing browser internals.
+    }
+    const requestedUrl = new URL(route, baseUrl);
+    const normalizedPath = (pathname) => pathname.replace(/\/+$/, "") || "/";
+    const wasRedirected =
+      !finalUrl ||
+      finalUrl.origin !== expectedOrigin ||
+      normalizedPath(finalUrl.pathname) !== normalizedPath(requestedUrl.pathname);
+    const identityChanged =
+      !state?.sessionId ||
+      state.sessionId !== activeSession.sessionId ||
+      state.userId !== expectedUserId;
+    if (!wasRedirected && !identityChanged) return;
+
+    if (finalUrl && isAuthenticationRedirect(requestedUrl, finalUrl)) {
+      failures.push(
+        getProtectedSessionFailure({
+          profileName,
+          route,
+          finalUrl,
+        }),
+      );
+      return;
+    }
+    const profileEnvironment = PROFILE_ENVIRONMENTS.find(
+      (profile) => profile.name === profileName,
+    );
+    const identityVariable = profileEnvironment?.userIdEnvironmentVariable;
+    failures.push(
+      `${route}: the ${profileLabel ?? profileName} Clerk account did not remain active on this route.${identityVariable ? ` Verify ${identityVariable} and that the account has the expected application role.` : ""}`,
+    );
   }
 
   async function clickInteractions(path) {
@@ -1000,13 +1191,32 @@ async function runBrowserSmoke({
           // route navigation itself is still useful and remains validated.
         }
         await navigate(path);
+        await validateRouteSession(path, authenticatedSession);
       }
     }
   }
 
+  let authenticatedSession = null;
   try {
+    if (signInUrl) {
+      await navigate(signInUrl, null);
+      authenticatedSession = await waitForAuthenticatedSession();
+      await onSessionCreated?.({
+        profileName,
+        sessionId: authenticatedSession.sessionId,
+      });
+      if (expectedUserId && authenticatedSession.userId !== expectedUserId) {
+        const profileEnvironment = PROFILE_ENVIRONMENTS.find(
+          (profile) => profile.name === profileName,
+        );
+        throw new Error(
+          `The Clerk sign-in token authenticated a different account for the ${profileLabel ?? profileName} profile. Check ${profileEnvironment?.userIdEnvironmentVariable ?? "its configured user ID"}.`,
+        );
+      }
+    }
     for (const path of protectedPaths) {
       await navigate(path);
+      await validateRouteSession(path, authenticatedSession);
       await clickInteractions(path);
     }
   } finally {
@@ -1042,6 +1252,7 @@ export async function verifyPublishedInteractions({
   protectedPaths,
   protectedHeaders,
   protectedProfiles,
+  onSessionCreated,
   timeoutMs = getTimeoutMs(),
   interactionSelectors,
   browserFactory,
@@ -1073,8 +1284,12 @@ export async function verifyPublishedInteractions({
       ...(await runBrowserSmoke({
         baseUrl,
         profileName: profile.name,
+        profileLabel: profile.label,
         protectedPaths: profile.paths,
         headers: profile.headers,
+        signInUrl: profile.signInUrl,
+        expectedUserId: profile.expectedUserId,
+        onSessionCreated,
         expectedOrigin: baseUrl.origin,
         timeoutMs,
         interactionSelectors: getInteractionSelectors(interactionSelectors),
@@ -1164,9 +1379,36 @@ async function main() {
     return;
   }
 
-  const results = await verifyPublishedChunks();
-  const browserResults = await verifyPublishedInteractions();
-  let failed = false;
+  const results = await verifyPublishedChunks({ protectedProfiles: [] });
+  const createdProfiles = [];
+  const sessionIds = new Map();
+  let browserResults = [];
+  let authenticationError = null;
+  try {
+    await createPublicationSignInProfiles({
+      onProfileCreated: (profile) => createdProfiles.push(profile),
+    });
+    browserResults = await verifyPublishedInteractions({
+      protectedProfiles: createdProfiles,
+      onSessionCreated: ({ profileName, sessionId }) => {
+        sessionIds.set(profileName, sessionId);
+      },
+    });
+  } catch (error) {
+    authenticationError = error;
+  }
+
+  const cleanupFailures = await cleanupPublicationClerkSessions({
+    profiles: createdProfiles,
+    sessionIds,
+    secretKey: process.env["CLERK_SECRET_KEY"]?.trim(),
+  });
+  for (const failure of cleanupFailures) {
+    console.error(`[publication-chunks] ERROR ${failure}`);
+  }
+  if (authenticationError) throw authenticationError;
+
+  let failed = cleanupFailures.length > 0;
   for (const result of [...results, ...browserResults]) {
     const prefix = result.ok ? "PASS" : "FAIL";
     const profileSuffix = result.profile ? ` [${result.profile}]` : "";
@@ -1180,7 +1422,9 @@ async function main() {
   }
   if (failed) {
     throw new Error(
-      "Published JavaScript chunk verification failed. Each route must load every same-origin JavaScript asset with a successful JavaScript content type.",
+      cleanupFailures.length > 0
+        ? "Published chunk verification failed or a temporary Clerk sign-in resource could not be revoked."
+        : "Published JavaScript chunk verification failed. Each route must load every same-origin JavaScript asset with a successful JavaScript content type.",
     );
   }
 }

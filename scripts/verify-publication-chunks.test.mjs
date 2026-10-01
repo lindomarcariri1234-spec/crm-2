@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   assertProtectedPublicationRouteCoverage,
+  cleanupPublicationClerkSessions,
+  createPublicationSignInProfiles,
   getChangedProtectedPublicationRoutes,
   getProtectedPublicationRoutes,
   getWorkflowPublicationPaths,
@@ -235,7 +237,7 @@ test("requires a protected test session without exposing a fallback credential",
         throw new Error("fetch must not be called");
       },
     }),
-    /requires PUBLICATION_CHUNK_AUTHORIZATION or PUBLICATION_CHUNK_COOKIE/,
+    /requires an authenticated session; provide a generated Clerk sign-in profile or explicit test headers/,
   );
 });
 
@@ -257,43 +259,34 @@ test("identifies the affected profile when a publication session is rejected", a
   assert.equal(results[1].ok, false);
   assert.match(
     results[1].failures[0],
-    /vendedor publication session was rejected \(HTTP 401\)/,
+    /vendedor Clerk session was rejected \(HTTP 401\)/,
   );
-  assert.match(results[1].failures[0], /PUBLICATION_CHUNK_SELLER_COOKIE/);
+  assert.match(results[1].failures[0], /PUBLICATION_CHUNK_SELLER_USER_ID/);
   assert.doesNotMatch(results[1].failures[0], new RegExp(secret));
 });
 
-test("rejects an expired profile session before making a request", async () => {
-  const environment = {
-    PUBLICATION_CHUNK_SELLER_PATHS: "/meu-painel",
-    PUBLICATION_CHUNK_SELLER_COOKIE: "seller-session",
-    PUBLICATION_CHUNK_SUPERADMIN_PATHS: "/admin",
-    PUBLICATION_CHUNK_SUPERADMIN_COOKIE: "superadmin-session",
-    PUBLICATION_CHUNK_CLIENT_PATHS: "/perfil",
-    PUBLICATION_CHUNK_CLIENT_COOKIE: "client-session",
-    PUBLICATION_CHUNK_SELLER_EXPIRES_AT: "2020-01-01T00:00:00.000Z",
-  };
-  const previousValues = new Map(
-    Object.keys(environment).map((key) => [key, process.env[key]]),
+test("requires a Clerk backend key and each dedicated account ID to mint CI sessions", async () => {
+  await assert.rejects(
+    createPublicationSignInProfiles({
+      publicUrl: "https://visitecrm.com",
+      environment: {},
+      fetchImpl: async () => {
+        throw new Error("fetch must not be called");
+      },
+    }),
+    /CLERK_SECRET_KEY is missing/,
   );
-  Object.assign(process.env, environment);
-
-  try {
-    await assert.rejects(
-      verifyPublishedChunks({
-        publicUrl: "https://visitecrm.com",
-        fetchImpl: async () => {
-          throw new Error("fetch must not be called");
-        },
-      }),
-      /vendedor publication session expired at 2020-01-01T00:00:00\.000Z.*PUBLICATION_CHUNK_SELLER_COOKIE/,
-    );
-  } finally {
-    for (const [key, value] of previousValues) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+  await assert.rejects(
+    createPublicationSignInProfiles({
+      publicUrl: "https://visitecrm.com",
+      secretKey: "test-backend-key",
+      environment: {},
+      fetchImpl: async () => {
+        throw new Error("fetch must not be called");
+      },
+    }),
+    /PUBLICATION_CHUNK_SELLER_USER_ID/,
+  );
 });
 
 test("checks seller, superadmin, and client assets with isolated protected sessions", async () => {
@@ -395,82 +388,131 @@ test("checks seller, superadmin, and client assets with isolated protected sessi
   );
 });
 
-test("loads seller, superadmin, and client sessions from profile environment variables", async () => {
+test("creates one-use short-lived Clerk tokens for all three protected profiles", async () => {
   const environment = {
     PUBLICATION_CHUNK_SELLER_PATHS: "/meu-painel,/vouchers",
-    PUBLICATION_CHUNK_SELLER_COOKIE: "seller-env-session",
+    PUBLICATION_CHUNK_SELLER_USER_ID: "user_seller_test",
     PUBLICATION_CHUNK_SUPERADMIN_PATHS: "/admin,/admin/tenants",
-    PUBLICATION_CHUNK_SUPERADMIN_AUTHORIZATION: "Bearer superadmin-env-session",
+    PUBLICATION_CHUNK_SUPERADMIN_USER_ID: "user_superadmin_test",
     PUBLICATION_CHUNK_CLIENT_PATHS: "/perfil",
-    PUBLICATION_CHUNK_CLIENT_COOKIE: "client-env-session",
+    PUBLICATION_CHUNK_CLIENT_USER_ID: "user_client_test",
   };
-  const previousValues = new Map(
-    Object.keys(environment).map((key) => [key, process.env[key]]),
-  );
-  Object.assign(process.env, environment);
-
-  try {
-    const fetchImpl = async (input, init) => {
+  const requests = [];
+  const profiles = await createPublicationSignInProfiles({
+    publicUrl: "https://visitecrm.com",
+    secretKey: "test-clerk-backend-key",
+    environment,
+    fetchImpl: async (input, init) => {
       const url = new URL(input);
-      if (url.pathname === "/") {
-        return response(
-          200,
-          '<script type="module" src="/assets/entry.js"></script>',
-          url.href,
-          "text/html",
-        );
-      }
-      if (url.pathname === "/meu-painel" || url.pathname === "/vouchers") {
-        assert.equal(init.headers.Cookie, "seller-env-session");
-        return response(
-          200,
-          `<script type="module" src="/assets/${url.pathname === "/vouchers" ? "vouchers" : "seller"}.js"></script>`,
-          url.href,
-          "text/html",
-        );
-      }
-      if (url.pathname === "/admin" || url.pathname === "/admin/tenants") {
-        assert.equal(init.headers.Authorization, "Bearer superadmin-env-session");
-        return response(
-          200,
-          `<script type="module" src="/assets/${url.pathname === "/admin/tenants" ? "tenants" : "superadmin"}.js"></script>`,
-          url.href,
-          "text/html",
-        );
-      }
-      if (url.pathname === "/perfil") {
-        assert.equal(init.headers.Cookie, "client-env-session");
-        return response(
-          200,
-          '<script type="module" src="/assets/client.js"></script>',
-          url.href,
-          "text/html",
-        );
-      }
-      return response(200, "export default {}", url.href, "application/javascript");
-    };
+      const body = JSON.parse(init.body);
+      requests.push({ url: url.href, headers: init.headers, body });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: `sit_${body.user_id}`,
+          url: `https://accounts.visitecrm.com/sign-in?__clerk_ticket=one-use-${body.user_id}`,
+        }),
+      };
+    },
+  });
 
-    const results = await verifyPublishedChunks({
-      publicUrl: "https://visitecrm.com",
-      fetchImpl,
-    });
-    assert.deepEqual(
-      results.map(({ route, profile, ok }) => ({ route, profile, ok })),
-      [
-        { route: "/", profile: undefined, ok: true },
-        { route: "/meu-painel", profile: "seller", ok: true },
-        { route: "/vouchers", profile: "seller", ok: true },
-        { route: "/admin", profile: "superadmin", ok: true },
-        { route: "/admin/tenants", profile: "superadmin", ok: true },
-        { route: "/perfil", profile: "client", ok: true },
-      ],
+  assert.deepEqual(
+    profiles.map(({ name, paths, expectedUserId }) => ({
+      name,
+      paths,
+      expectedUserId,
+    })),
+    [
+      {
+        name: "seller",
+        paths: ["/meu-painel", "/vouchers"],
+        expectedUserId: "user_seller_test",
+      },
+      {
+        name: "superadmin",
+        paths: ["/admin", "/admin/tenants"],
+        expectedUserId: "user_superadmin_test",
+      },
+      {
+        name: "client",
+        paths: ["/perfil"],
+        expectedUserId: "user_client_test",
+      },
+    ],
+  );
+  assert.equal(requests.length, 3);
+  for (const request of requests) {
+    assert.equal(request.url, "https://api.clerk.com/v1/sign_in_tokens");
+    assert.equal(request.headers.Authorization, "Bearer test-clerk-backend-key");
+    assert.equal(request.headers.Cookie, undefined);
+    assert.equal(request.body.expires_in_seconds, 300);
+    assert.equal(
+      new URL(
+        profiles.find((profile) => profile.expectedUserId === request.body.user_id)
+          .signInUrl,
+      ).searchParams.get("redirect_url"),
+      "https://visitecrm.com/",
     );
-  } finally {
-    for (const [key, value] of previousValues) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
   }
+});
+
+test("reports a Clerk secret rejection without exposing the backend key", async () => {
+  const secret = "test-secret-must-not-appear";
+  await assert.rejects(
+    createPublicationSignInProfiles({
+      publicUrl: "https://visitecrm.com",
+      secretKey: secret,
+      environment: {
+        PUBLICATION_CHUNK_SELLER_USER_ID: "user_seller_test",
+        PUBLICATION_CHUNK_SUPERADMIN_USER_ID: "user_superadmin_test",
+        PUBLICATION_CHUNK_CLIENT_USER_ID: "user_client_test",
+      },
+      fetchImpl: async () => ({
+        ok: false,
+        status: 401,
+        json: async () => ({ errors: [{ code: "not_allowed", message: "Invalid secret" }] }),
+      }),
+    }),
+    (error) => {
+      assert.match(error.message, /HTTP 401/);
+      assert.match(error.message, /published Clerk instance/);
+      assert.doesNotMatch(error.message, new RegExp(secret));
+      return true;
+    },
+  );
+});
+
+test("revokes activated Clerk sessions and unused one-time tokens", async () => {
+  const requests = [];
+  const failures = await cleanupPublicationClerkSessions({
+    profiles: [
+      { name: "seller", label: "vendedor", signInTokenId: "sit_seller_test" },
+      { name: "client", label: "cliente", signInTokenId: "sit_client_test" },
+    ],
+    sessionIds: new Map([["seller", "sess_seller_test"]]),
+    secretKey: "test-clerk-backend-key",
+    fetchImpl: async (input, init) => {
+      requests.push({ url: new URL(input).href, init });
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
+  });
+
+  assert.deepEqual(failures, []);
+  assert.deepEqual(
+    requests.map(({ url }) => url),
+    [
+      "https://api.clerk.com/v1/sessions/sess_seller_test/revoke",
+      "https://api.clerk.com/v1/sign_in_tokens/sit_client_test/revoke",
+    ],
+  );
+  assert.ok(
+    requests.every(
+      ({ init }) =>
+        init.method === "POST" &&
+        init.headers.Authorization === "Bearer test-clerk-backend-key",
+    ),
+  );
 });
 
 function fakeBrowserFactory({
@@ -478,20 +520,31 @@ function fakeBrowserFactory({
   contentType = "text/javascript",
   requestUrl = "https://visitecrm.com/assets/interaction.js",
   responseUrl = "https://visitecrm.com/assets/interaction.js",
+  authState,
+  authStateByProfile,
 } = {}) {
   const listeners = new Map();
   let navigationNumber = 0;
   const calls = [];
   return {
     calls,
-    factory: async ({ headers }) => {
-      calls.push({ headers });
+    factory: async ({ headers, profileName }) => {
+      const browserCall = { headers, navigations: [] };
+      calls.push(browserCall);
+      const browserAuthState =
+        authStateByProfile?.[profileName] ?? authState;
+      let currentUrl = "about:blank";
       const client = {
         on(method, listener) {
           listeners.set(method, listener);
         },
-        async send(method) {
+        async send(method, params = {}) {
           if (method === "Page.navigate") {
+            browserCall.navigations.push(params.url);
+            const requestedUrl = new URL(params.url);
+            currentUrl =
+              requestedUrl.searchParams.get("redirect_url") ??
+              requestedUrl.href;
             navigationNumber += 1;
             const requestId = String(navigationNumber);
             listeners.get("Network.requestWillBeSent")?.({
@@ -510,6 +563,19 @@ function fakeBrowserFactory({
             });
           }
           if (method === "Runtime.evaluate") {
+            if (params.expression?.includes("window.Clerk")) {
+              const location = new URL(currentUrl);
+              return {
+                result: {
+                  value: {
+                    origin: location.origin,
+                    pathname: location.pathname,
+                    userId: browserAuthState?.userId ?? null,
+                    sessionId: browserAuthState?.sessionId ?? null,
+                  },
+                },
+              };
+            }
             return { result: { value: 0 } };
           }
           return {};
@@ -554,27 +620,47 @@ test("navigates every configured protected route and validates browser-observed 
   assert.equal(browser.calls[0].headers.Cookie, "clerk_test_session=short-lived");
 });
 
-test("uses a separate browser session for each protected profile", async () => {
-  const browser = fakeBrowserFactory();
+test("uses one-time Clerk links for isolated seller, superadmin, and client browser sessions", async () => {
+  const browser = fakeBrowserFactory({
+    authStateByProfile: {
+      seller: { userId: "user_seller_test", sessionId: "sess_seller_test" },
+      superadmin: {
+        userId: "user_superadmin_test",
+        sessionId: "sess_superadmin_test",
+      },
+      client: { userId: "user_client_test", sessionId: "sess_client_test" },
+    },
+  });
+  const createdSessions = [];
   const results = await verifyPublishedInteractions({
     publicUrl: "https://visitecrm.com",
     protectedProfiles: [
       {
         name: "seller",
+        label: "vendedor",
         paths: ["/meu-painel"],
-        headers: { Cookie: "seller-session" },
+        signInUrl:
+          "https://accounts.visitecrm.com/sign-in?ticket=seller-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+        expectedUserId: "user_seller_test",
       },
       {
         name: "superadmin",
+        label: "superadmin",
         paths: ["/admin"],
-        headers: { Authorization: "Bearer superadmin-session" },
+        signInUrl:
+          "https://accounts.visitecrm.com/sign-in?ticket=admin-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+        expectedUserId: "user_superadmin_test",
       },
       {
         name: "client",
+        label: "cliente",
         paths: ["/perfil"],
-        headers: { Cookie: "client-session" },
+        signInUrl:
+          "https://accounts.visitecrm.com/sign-in?ticket=client-token&redirect_url=https%3A%2F%2Fvisitecrm.com%2F",
+        expectedUserId: "user_client_test",
       },
     ],
+    onSessionCreated: (session) => createdSessions.push(session),
     interactionSelectors: [],
     browserFactory: browser.factory,
     timeoutMs: 1,
@@ -594,11 +680,27 @@ test("uses a separate browser session for each protected profile", async () => {
       Authorization: headers.Authorization,
     })),
     [
-      { Cookie: "seller-session", Authorization: undefined },
-      { Cookie: undefined, Authorization: "Bearer superadmin-session" },
-      { Cookie: "client-session", Authorization: undefined },
+      { Cookie: undefined, Authorization: undefined },
+      { Cookie: undefined, Authorization: undefined },
+      { Cookie: undefined, Authorization: undefined },
     ],
   );
+  assert.deepEqual(
+    createdSessions,
+    [
+      { profileName: "seller", sessionId: "sess_seller_test" },
+      { profileName: "superadmin", sessionId: "sess_superadmin_test" },
+      { profileName: "client", sessionId: "sess_client_test" },
+    ],
+  );
+  for (const browserCall of browser.calls) {
+    const signInUrl = new URL(browserCall.navigations[0]);
+    assert.equal(signInUrl.origin, "https://accounts.visitecrm.com");
+    assert.equal(
+      signInUrl.searchParams.get("redirect_url"),
+      "https://visitecrm.com/",
+    );
+  }
 });
 
 test("fails when an interacted route serves a non-JavaScript response", async () => {
