@@ -65,7 +65,8 @@ vi.mock("@workspace/db", () => {
       userId: "userId",
       status: "status",
     },
-    commissionRulesTable: { tenantId: "tenantId", isActive: "isActive", appliesTo: "appliesTo", tripId: "tripId" },
+    commissionRulesTable: { id: "id", tenantId: "tenantId", isActive: "isActive", appliesTo: "appliesTo", tripId: "tripId" },
+    tripsTable: { id: "id", tenantId: "tenantId", destinationCountry: "destinationCountry" },
     pipelineStagesTable: {},
   };
 });
@@ -185,6 +186,31 @@ describe("syncReservationCommission — commission revival", () => {
     expect(Number(insertedCommission.baseAmount)).not.toBe(
       Number(discountedReservation.totalValue) + Number(discountedReservation.discountTotal),
     );
+  });
+
+  it("applies a national travel rule during reservation synchronization", async () => {
+    const reservation = makeReservation({ commissionAmount: null });
+    selectQueue.push(
+      [reservation], // reservation
+      [makeSeller()], // explicit seller validation
+      [{
+        id: "rule-national",
+        appliesTo: "national",
+        tripId: null,
+        type: "percentage",
+        value: "10",
+      }], // active rules
+      [{ destinationCountry: "Brasil" }], // trip scope
+      [], // existing commissions
+    );
+
+    await syncReservationCommission(RESERVATION_ID, TENANT_ID);
+
+    expect(mockInsert).toHaveBeenCalledTimes(1);
+    const insertedCommission = mockInsert.mock.results[0].value.values.mock.calls[0][0] as Record<string, unknown>;
+    expect(insertedCommission.ruleId).toBe("rule-national");
+    expect(insertedCommission.commissionAmount).toBe("100.00");
+    expect(insertedCommission.commissionRate).toBe("10");
   });
 
   it("does NOT touch an approved commission when the reservation is reopened", async () => {

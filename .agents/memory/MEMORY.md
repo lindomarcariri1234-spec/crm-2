@@ -2,20 +2,15 @@
 - [Checkout now synchronous](persist-order-no-client.md) — client/reservation/deal/portal-account creation moved from post-payment to checkout time (idempotent); referral crediting still deferred to post-payment
 - [logger warn vs console warn in tests](logger-warn-test-spy.md) — production code uses logger.warn (src/lib/logger); tests spying on console.warn will miss it; add vi.mock("../lib/logger.js") with a mockLogWarn vi.fn() closure
 - [Pino HTTP error serializers](pino-http-error-serializers.md) — apply safe error serializers to both base Pino and pino-http request loggers; pino-http can otherwise emit raw error messages
-- [api-zod-manual-edits](api-zod-manual-edits.md) — orval-generated files in lib/api-zod are hand-edited; must update both TS types AND Zod schemas in api.ts together
-- [api-zod-duplicate-export](api-zod-duplicate-export.md) — index.ts must only export ./generated/api (superset); adding ./generated/types causes ~200 TS2308 duplicate-export errors
+- [API Zod codegen guardrails](api-zod-manual-edits.md) — keep generated types and schemas synchronized; index exports only the API superset (see [duplicate-export detail](api-zod-duplicate-export.md))
 - [Workspace lib TypeScript build](db-ts-build.md) — Consumers read lib dist/*.d.ts via project references; rebuild with `tsc --build` after a schema column change OR after adding a new exported file (e.g. api-client-react), else TS2305/missing-property.
-- [Recharts React 19 type fix](recharts-react19-types.md) — Recharts 2.x class components are incompatible with React 19 TypeScript types; fix: declare module "recharts" with all components as `any` in src/types/recharts.d.ts; inline callbacks need explicit param types (tickFormatter: (v: number) =>, etc.).
 - [Clerk e2e testing flag](testing-clerk-auth.md) — runTest on this Clerk app needs `testClerkAuth:true` (else Cloudflare bot wall); reach role-gated pages via a [DB] role/tenant UPDATE + reload.
 - [Marketing NPS naming conflict](marketing-nps-conflict.md) — `npsResponsesTable` already exists in marketing.ts for e-commerce; client travel NPS uses `clientNpsResponsesTable` in nps.ts / table `client_nps_responses`.
-- [Favorites feature pattern](favorites-pattern.md) — FavoritesContext wraps Vitrine (CartProvider > FavoritesProvider); uses useGetMe role check; optimistic toggle.
-- [Manual migration workflow](manual-migration.md) — drizzle-kit is interactive; write SQL + update _journal.json; run `pnpm --filter @workspace/db migrate`.
-- [Drizzle migration retry semantics](manual-migration.md) — failed SQL runs can roll back the journal batch; prove recovery via lock release and same-database retry, not nonzero partial rows.
+- [Manual migration workflow](manual-migration.md) — drizzle-kit is interactive; journal hand-written SQL, and after failure verify same-database retry after lock release.
 - [Store product vs trip favorites](store-favorites-join.md) — Trip favorites store tripId; join via storeProductsTable.tripId to get slug. Product favorites store storeProductsTable.id; join with storesTable for tenantId filter.
 - [Expo Metro version pins](expo-metro-version-pins.md) — metro-* must be at 0.83.7 EXCEPT metro-file-map (keep 0.83.3) for guide-app Expo artifact to start without crashing.
 - [SSRF for tenant base URLs](ssrf-tenant-base-url.md) — connect-time IP enforcement (not just a pre-check); canonicalize IPv4-in-IPv6 literals; guard empty custom baseURL to avoid leaking keys to OpenAI.
 - [AI config Test vs Save status](ai-config-test-vs-save.md) — "Testar Conexão" must test unsaved form values & never persist status (acceptance criterion); only Save persists status via its own server-side auto-test. Don't recouple.
-- [Client scores RFM pattern](client-scores-rfm.md) — purchaseScore/recompraScore/churnScore in client_scores table (migration 0052); scores fetched separately then merged into formatClient; sort by score uses correlated SQL subquery in orderBy with NULLS LAST.
 - [Redis alert email DB override](redis-alert-email.md) — redis.ts reads alert recipient from platformSettingsTable key=redis_alert_email first, falls back to SUPERADMIN_EMAIL env; recovery email (sendRedisRecoveryEmail) fires on resetTransientRedisErrors when _hadActiveAlert=true.
 - [Referral conversion returns tier result](referral-tier-upgrade-pattern.md) — recordReferralConversion returns ReferralConversionResult{tierUpgraded,…}; caller in persist-order.ts dispatches tier-upgrade email when tierUpgraded=true. Tier badge in indicacoes.tsx uses referrerSuccessfulReferrals from API (not per-row conversions).
 - [Referral reservationId invariant](referral-reservation-id.md) — CRM path always sets reservationId (assertion in reservations.ts); store checkout sets it only when a trip reservation was created (null OK for product-only orders); admin POST creates pending invites with no reservationId.
@@ -24,7 +19,6 @@
 - [store-public test mock layout](store-public-test-mock-layout.md) — shared mockLimit covers both db and tx selects; ALL slots must be queued upfront before the request (slots added inside a mockTransaction callback go AFTER already-queued slots → wrong order); referral-code.js must be mocked or generateAndAssignReferralCode consumes extra slots fire-and-forget.
 - [Calendar dedup not-found pattern](calendar-dedup.md) — updateEvent returns boolean|"not-found"; "not-found"=404 means event deleted externally; upsertCalendarEvent deletes stale DB record and recreates. isEventNotFoundError exported from calendar-service.ts.
 - [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
-- [STORE_ORDER_STATUS PROCESSING](store-order-status.md) — STORE_ORDER_STATUS in permissions has PENDING/CONFIRMED/PROCESSING/COMPLETED/CANCELLED; PROCESSING was added when pedidos.tsx was migrated to typed constants.
 - [Migration journal timestamps](migration-journal-timestamps.md) — reconcile live-only columns with additive DDL above both watermarks; never replay historical backfills over populated data.
 - [Host-header token links](host-header-token-links.md) — public/anonymous email links carrying secret tokens must use trusted `STORE_PUBLIC_BASE`, never req Host header (phishing/token-capture).
 - [Brazil timezone formatting patterns](brazil-tz-patterns.md) — canonical patterns for Brazil date display: frontend uses Intl.DateTimeFormat+America/Sao_Paulo; backend uses formatDateBRServer helper; day-window queries use brazilDayWindow(n) for UTC-correct midnight boundaries; never toISOString().slice or toLocaleDateString on server.
@@ -51,8 +45,6 @@
 - [Clerk instance mismatch](clerk-instance-mismatch.md) — pk_live_ + sk_test_ from different instances → silent 401 on all requests; secrets override env vars in Replit so delete conflicting env var entirely.
 - [express-rate-limit v8 ipKeyGenerator](express-rate-limit-ipv6.md) — custom keyGenerators must call `ipKeyGenerator(req.ip ?? "unknown")` (string arg), NOT `ipKeyGenerator(req)` — v8 validates the arg type and throws ERR_ERL_KEY_GEN_IPV6.
 - [UploadThing SDK v7 CDN upload bug](uploadthing-sdk-v7-cdn-bug.md) — Effect-Platform adds spurious Range header + double-encodes URL params; patch globalThis.fetch in uploadthing.ts before UTApi instantiation.
-- [Expo pnpm workspace types conflict](expo-pnpm-types-conflict.md) — root pnpm.overrides wins over app-level @types/react specs; downgrade root override to match Expo expected version to silence mismatch warnings
-- [validate-tables unindented migrations](validate-tables-indent.md) — extractColumnsFromBody requires ≥2 spaces by default (squash baseline); hand-written migrations with no indent need requireIndent=false in parseMigrationCreateTableBlocks
 - [stripe-replit-sync migrations bundling](stripe-sync-migrations-bundling.md) — call runMigrations() in initStripeSync + copy package migrations into bundle dir (esbuild __dirname trap), else stripe.* tables missing.
 - [stripe-sync managed webhook auto-secret](stripe-sync-webhook-auto-secret.md) — signing secret auto-cached from stripe._managed_webhooks.secret; use getStripeSecretKey() not env var in initStripeSync for prod live key.
 - [Stripe plan→price link](stripe-plan-price-link.md) — checkout resolves price via prices.search planSlug metadata (no stripePriceId col); empty plans table → /subscriptions/upgrade 404; missing planSlug → silent one-time-payment fallback; search is eventually consistent.
@@ -60,8 +52,7 @@
 - [Mock services not raw db chains in route tests](mock-service-not-db-chain.md) — when a route delegates to an already-unit-tested service fn, vi.mock the service directly instead of chaining db.select/insert mocks; far less brittle to call-order changes.
 - [broadcastSeatUpdate dual-query mock](broadcast-seat-update-dual-query.md) — realtime.ts makes 2 db.select() calls (reservations then trip freePassengers); use mock.calls.length to route different chains per call.
 - [SSL sslmode strip pattern](ssl-sslmode-strip.md) — explicit ssl option alongside sslmode=require in connectionString does NOT suppress pg-connection-string warning; must strip sslmode from URL before passing to Pool.
-- [Test suite batching](test-suite-batching.md) — 76 backend + 16 frontend test files; full run exceeds 120s bash limit; run backend in batches of ~20 files (a-c/d-l/m-r/s-z+workers); frontend in batches of 8 files.
-- [API integration-test isolation](vitest-db-integration-isolation.md) — keep real-DB suites out of the default runner and independently filter manual Vitest file batches before execution.
+- [Test runner isolation and batching](vitest-db-integration-isolation.md) — keep real-DB suites out of the default run and batch manual backend/frontend files under time limits (details: [batching](test-suite-batching.md)).
 - [Vitest mock call typing](vitest-mock-call-typing.md) — strict TypeScript infers vi.fn() calls as zero-argument tuples; type mocks or cast call arrays before inspecting arguments.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
@@ -90,13 +81,13 @@
 - [Agency backup export format](agency-backup-export-format.md) — full-agency JSON backup shape, format version, and which secrets are deliberately excluded; relevant to future import/restore work.
 - [Test files excluded from typecheck](test-files-excluded-from-typecheck.md) — a tsconfig used by the official typecheck workflow can exclude test directories entirely; a broken test file passes CI silently unless checked separately.
 - [Drizzle enum literal in insert array](drizzle-enum-literal-insert-array.md) — an insert `.values([...])` array with a wrong string literal for an enum-typed column surfaces as a generic "No overload matches this call" error, not a clear "invalid value" message.
-- [Vercel monorepo framework detection](vercel-monorepo-framework-detection.md) — explicitly select Vite or Vercel may classify the combined frontend/API monorepo as Express and reject the static output directory.
+- [Vercel monorepo framework selection](vercel-monorepo-framework-detection.md) — select Vite explicitly; linked projects may be misclassified as Express (see [project setting](vercel-monorepo-framework.md)).
 - [Clerk social login](clerk-social-login.md) — native provider buttons plus redirect OAuth and BASE_PATH-aware fallbacks keep agency login reliable across Clerk environments.
 - [Clerk production aliases](clerk-production-aliases.md) — Clerk rejects shared hosting domains such as *.vercel.app for production; redirect aliases to the registered custom domain before Clerk initializes.
 - [Artifact publish build duplication](artifact-publish-build-duplication.md) — registered artifacts build automatically; repeating them in deployment config can exhaust the publish time limit.
 - [Vercel deployment alias SSO](vercel-deployment-alias-sso.md) — deployment and git aliases may require Vercel SSO; validate anonymous output through the project's custom domain instead.
 - [Query error branches and hook order](query-error-hook-order.md) — aggregate query-error UI must not return before later React hooks in the same component.
-- [Migration validator parsing](migration-validator-alter-table.md) — recognize optional IF EXISTS and every comma-separated ADD COLUMN in one ALTER TABLE statement.
+- [Migration validator parsing](migration-validator-alter-table.md) — recognize IF EXISTS, comma-separated ADD COLUMNs, and unindented CREATE TABLE blocks (see [indentation detail](validate-tables-indent.md)).
 - [Canonical financial metric semantics](canonical-financial-metrics.md) — keep cash, accrual, credits, commissions and user liabilities separate; never merge cross-source rows by similarity.
 - [Financial snapshot scaling](financial-snapshot-scaling.md) — period rows may be bounded, but current overdue/debt snapshots must be SQL aggregates or historical liabilities still grow API memory.
 - [Multichannel delivery history](multichannel-delivery-history.md) — preserve numeric delivery attempts and expose detailed provider attempts under a separate history field.
@@ -122,7 +113,6 @@
 - [Stripe 3DS checkout recovery](stripe-3ds-checkout-recovery.md) — redirected card returns have an empty cart; restore by token and retain the server-applied cashback snapshot.
 - [Vercel root API discovery](vercel-api-directory-discovery.md) — reserve root api/ for deployable functions; tests there are pre-discovered and can cause post-build ENOENT.
 - [GitHub workflow permission](github-workflow-permission.md) — repo write access may not permit editing .github/workflows; the separate workflow scope is required.
-- [Vercel monorepo framework](vercel-monorepo-framework.md) — linked monorepos may be classified as Express despite vercel.json; set the Vercel project framework explicitly to Vite.
 - [Vercel canceled Git deployments](vercel-canceled-git-deployments.md) — use the exact source SHA with forceNew; unverified-signature cancellation needs explicit approval before any manual bypass.
 - [Temporary worktree package resolution](temporary-worktree-package-resolution.md) — keep pnpm workspace links in scratch worktrees resolving to that worktree, not the primary checkout.
 - [Mockup sandbox routing isolation](mockup-sandbox-routing-isolation.md) — direct wouter imports can trigger invalid hooks in isolated previews; use a local hash-navigation shim.
@@ -146,6 +136,7 @@
 - [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited
 - [Referral notification stamping](referral-notification-stamping.md) — mark D-7/D-1 and bonus-release notices only after durable delivery acceptance; manual retries need a separate attempt key
 - [First-purchase referral reservation](first-purchase-referral-reservation.md) — serialize by tenant + normalized customer email; pending orders reserve eligibility while cancelled/refunded orders release it
+- [Commission travel scope](commission-travel-scope.md) — unknown destinations use general rules; preview and reservation sync share trip → travel scope → general precedence
 - [Referral bonus cashback eligibility](referral-bonus-cashback-eligibility.md) — paid referral bonuses are spendable cashback; unpaid bonuses wait for grace period, while expiry/reversal/used amounts remain excluded
 - [Reservation expiry payment locks](reservation-expiry-payment-locks.md) — expiry and every storefront payment path must lock the order before its reservations; only receivable/paid rows protect a hold
 - [Gratuity and payment lock order](gratuity-payment-lock-order.md) — commit gratuity before cancelling receivables to avoid payment→reservation lock inversion

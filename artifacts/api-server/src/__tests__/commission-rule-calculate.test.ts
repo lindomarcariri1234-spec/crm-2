@@ -7,7 +7,7 @@
  */
 
 import pino from "pino";
-import { ROLES } from "@workspace/permissions";
+import { COMMISSION_STATUS, ROLES } from "@workspace/permissions";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import request from "supertest";
@@ -16,14 +16,27 @@ import request from "supertest";
 // Hoisted mock state — must be declared before any vi.mock factory
 // ---------------------------------------------------------------------------
 
-const { mockLimit, mockWhere, mockFrom, mockSelect } = vi.hoisted(() => {
+const {
+  mockLimit,
+  mockWhere,
+  mockFrom,
+  mockSelect,
+  mockUpdate,
+  mockSet,
+  mockUpdateWhere,
+  mockReturning,
+} = vi.hoisted(() => {
   // Use loose vi.fn() so we can enqueue arbitrary resolved values without TS
   // complaining about the inferred return type of mockReturnValue.
   const mockLimit = vi.fn();
   const mockWhere = vi.fn();
   const mockFrom = vi.fn();
   const mockSelect = vi.fn();
-  return { mockLimit, mockWhere, mockFrom, mockSelect };
+  const mockUpdate = vi.fn();
+  const mockSet = vi.fn();
+  const mockUpdateWhere = vi.fn();
+  const mockReturning = vi.fn();
+  return { mockLimit, mockWhere, mockFrom, mockSelect, mockUpdate, mockSet, mockUpdateWhere, mockReturning };
 });
 
 // ---------------------------------------------------------------------------
@@ -34,7 +47,7 @@ vi.mock("@workspace/db", () => ({
   db: {
     select: mockSelect,
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue([]) })),
-    update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) })),
+    update: mockUpdate,
     delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
   },
   commissionRulesTable: {
@@ -67,6 +80,11 @@ vi.mock("@workspace/db", () => ({
     commissionType: "commissionType",
     commissionRate: "commissionRate",
     commissionFixed: "commissionFixed",
+  },
+  tripsTable: {
+    id: "id",
+    tenantId: "tenantId",
+    destinationCountry: "destinationCountry",
   },
 }));
 
@@ -158,6 +176,10 @@ describe("GET /api/commissions/calculate — rule type dispatch", () => {
     mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit });
     mockSelect.mockReturnValue({ from: mockFrom });
     mockLimit.mockResolvedValue([]);
+    mockUpdate.mockReturnValue({ set: mockSet });
+    mockSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockReturnValue({ returning: mockReturning });
+    mockReturning.mockResolvedValue([]);
   });
 
   it("percentage rule: commissionAmount = saleAmount * rate / 100", async () => {
@@ -317,5 +339,122 @@ describe("GET /api/commissions/calculate — rule type dispatch", () => {
     expect(res.body.source).toBe("seller");
     expect(res.body.commissionAmount).toBe(50); // 1000 * 5 / 100
     expect(res.body.commissionType).toBe("percentage");
+  });
+
+  it("applies a national rule before the general rule", async () => {
+    const rules = [
+      { id: "rule-all", type: "percentage", value: "2", appliesTo: "all", tripId: null, isActive: true },
+      { id: "rule-national", type: "percentage", value: "10", appliesTo: "national", tripId: null, isActive: true },
+    ];
+    mockWhere
+      .mockReturnValueOnce(Promise.resolve(rules))
+      .mockReturnValueOnce({ limit: mockLimit });
+    mockLimit.mockResolvedValueOnce([{ destinationCountry: "Brasil" }]);
+    mockFrom
+      .mockReturnValueOnce({ where: mockWhere })
+      .mockReturnValueOnce({ where: mockWhere });
+    mockSelect
+      .mockReturnValueOnce({ from: mockFrom })
+      .mockReturnValueOnce({ from: mockFrom });
+
+    const res = await request(buildApp())
+      .get("/api/commissions/calculate")
+      .query({ sellerId: "seller-001", saleAmount: "1000", tripId: "trip-001" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.commissionAmount).toBe(100);
+    expect(res.body.source).toBe("rule");
+  });
+
+  it("includes the fixed part when previewing a hybrid seller commission", async () => {
+    const sellerRows = [{
+      commissionType: "hybrid",
+      commissionRate: "5",
+      commissionFixed: "30",
+    }];
+    mockLimit.mockResolvedValueOnce(sellerRows);
+    mockWhere
+      .mockReturnValueOnce(Promise.resolve([]))
+      .mockReturnValueOnce({ limit: mockLimit });
+    mockFrom
+      .mockReturnValueOnce({ where: mockWhere })
+      .mockReturnValueOnce({ where: mockWhere });
+    mockSelect
+      .mockReturnValueOnce({ from: mockFrom })
+      .mockReturnValueOnce({ from: mockFrom });
+
+    const res = await request(buildApp())
+      .get("/api/commissions/calculate")
+      .query({ sellerId: "seller-001", saleAmount: "1000" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.commissionAmount).toBe(80);
+    expect(res.body.commissionRate).toBe(5);
+    expect(res.body.commissionType).toBe("hybrid");
+  });
+
+  it("denies commission reads to roles without COMMISSIONS.VIEW", async () => {
+    requireAuthMock.mockResolvedValue({ ...FAKE_USER, role: ROLES.SUPPORT } as never);
+
+    const res = await request(buildApp()).get("/api/commissions");
+
+    expect(res.status).toBe(403);
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
+  it("includes inactive rules so managers can review and reactivate them", async () => {
+    const rules = [
+      { id: "rule-active", isActive: true },
+      { id: "rule-inactive", isActive: false },
+    ];
+    stubRulesQuery(rules);
+
+    const res = await request(buildApp()).get("/api/commission-rules");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(rules);
+  });
+
+  it("rejects direct transitions from pending to paid", async () => {
+    const current = {
+      id: "commission-001",
+      tenantId: FAKE_USER.tenantId,
+      status: "pending",
+      paidAt: null,
+    };
+    mockWhere.mockReturnValueOnce({ limit: mockLimit });
+    mockLimit.mockResolvedValueOnce([current]);
+    mockFrom.mockReturnValueOnce({ where: mockWhere });
+    mockSelect.mockReturnValueOnce({ from: mockFrom });
+
+    const res = await request(buildApp())
+      .patch("/api/commissions/commission-001")
+      .send({ status: COMMISSION_STATUS.PAID });
+
+    expect(res.status).toBe(409);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("updates a commission through the pending-to-approved transition", async () => {
+    const current = {
+      id: "commission-002",
+      tenantId: FAKE_USER.tenantId,
+      status: "pending",
+      paidAt: null,
+    };
+    const updated = { ...current, status: "approved" };
+    mockWhere.mockReturnValueOnce({ limit: mockLimit });
+    mockLimit.mockResolvedValueOnce([current]);
+    mockFrom.mockReturnValueOnce({ where: mockWhere });
+    mockSelect.mockReturnValueOnce({ from: mockFrom });
+    mockReturning.mockResolvedValueOnce([updated]);
+
+    const res = await request(buildApp())
+      .patch("/api/commissions/commission-002")
+      .send({ status: COMMISSION_STATUS.APPROVED });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(COMMISSION_STATUS.APPROVED);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 });

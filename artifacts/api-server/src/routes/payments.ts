@@ -1,6 +1,6 @@
 import { Router, type NextFunction } from "express";
 import { db } from "@workspace/db";
-import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
+import { paymentsTable, expensesTable, tripCostsTable, reservationsTable, storeOrdersTable, clientsTable, commissionRulesTable, commissionsTable, tripsTable, usersTable, salesGoalsTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql, asc, desc, inArray, isNull, gte, lt } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
@@ -32,6 +32,12 @@ import {
 } from "../services/reservation-order-payment-sync";
 import { recalculateClientFinancials as recalculateClientFinancialsFromPayments } from "../services/client-financials";
 import { areExpenseAndTripCostLinkable } from "../services/expense-trip-cost-link";
+import {
+  calculateRuleCommission,
+  calculateSellerCommission,
+  getCommissionTravelScope,
+  selectApplicableCommissionRule,
+} from "../lib/commission-calculation.js";
 
 const router = Router();
 
@@ -121,7 +127,7 @@ export async function syncReservationCommission(reservationId: string, tenantId:
 
   if (hasDirectCommission) {
     // Direct commission path: explicit amount set, validate sellerId or fall back to creator (any role)
-    commissionAmount = parseFloat(directAmount!);
+    commissionAmount = roundMoney(parseFloat(directAmount!));
     commissionType = "direct";
     const explicitSellerId = reservation.sellerId ?? null;
     if (explicitSellerId) {
@@ -166,16 +172,23 @@ export async function syncReservationCommission(reservationId: string, tenantId:
 
     const rules = await db.select().from(commissionRulesTable)
       .where(and(eq(commissionRulesTable.tenantId, tenantId), eq(commissionRulesTable.isActive, true)));
-    const tripSpecificRule = rules.find(r => r.appliesTo === "trip" && r.tripId === reservation.tripId);
-    const allRule = rules.find(r => r.appliesTo === "all");
-    const rule = tripSpecificRule ?? allRule;
+    let travelScope = null;
+    const hasTravelScopedRules = rules.some(
+      (rule) => rule.appliesTo === "national" || rule.appliesTo === "international",
+    );
+    if (reservation.tripId && hasTravelScopedRules) {
+      const [trip] = await db.select({ destinationCountry: tripsTable.destinationCountry }).from(tripsTable)
+        .where(and(eq(tripsTable.id, reservation.tripId), eq(tripsTable.tenantId, tenantId)))
+        .limit(1);
+      travelScope = getCommissionTravelScope(trip?.destinationCountry);
+    }
+    const rule = selectApplicableCommissionRule(rules, reservation.tripId, travelScope);
     if (rule) {
       ruleId = rule.id;
-      commissionType = rule.type ?? "percentage";
-      commissionRate = parseFloat(String(rule.value));
-      commissionAmount = rule.type === "percentage"
-        ? (baseAmount * commissionRate) / 100
-        : commissionRate;
+      const calculation = calculateRuleCommission(baseAmount, rule);
+      commissionType = calculation.commissionType;
+      commissionRate = calculation.commissionRate;
+      commissionAmount = calculation.commissionAmount;
     } else {
       // Fallback: use per-seller commission configuration
       const [sellerConfig] = await db.select({
@@ -186,22 +199,10 @@ export async function syncReservationCommission(reservationId: string, tenantId:
         .where(and(eq(usersTable.id, sellerId), eq(usersTable.tenantId, tenantId)))
         .limit(1);
       if (sellerConfig) {
-        commissionType = sellerConfig.commissionType ?? "percentage";
-        const rate = parseFloat(String(sellerConfig.commissionRate ?? "0"));
-        const fixed = parseFloat(String(sellerConfig.commissionFixed ?? "0"));
-        if (sellerConfig.commissionType === "none") {
-          // Seller explicitly has no commission — commissionAmount stays null → early return below
-        } else if (sellerConfig.commissionType === "fixed" && fixed > 0) {
-          commissionAmount = fixed;
-          commissionRate = fixed;
-        } else if (sellerConfig.commissionType === "hybrid") {
-          const pct = rate > 0 ? (baseAmount * rate) / 100 : 0;
-          commissionAmount = pct + fixed;
-          commissionRate = rate;
-        } else if (rate > 0) {
-          commissionAmount = (baseAmount * rate) / 100;
-          commissionRate = rate;
-        }
+        const calculation = calculateSellerCommission(baseAmount, sellerConfig);
+        commissionType = calculation.commissionType;
+        commissionRate = calculation.commissionRate;
+        commissionAmount = calculation.commissionAmount;
       }
     }
   }

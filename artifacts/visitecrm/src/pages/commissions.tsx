@@ -12,7 +12,8 @@ import {
   useRetryCommissionSync,
 } from "@workspace/api-client-react";
 import type { CommissionRule } from "@workspace/api-client-react";
-import { COMMISSION_STATUS } from "@workspace/permissions";
+import { ACTIONS, COMMISSION_STATUS, RESOURCES } from "@workspace/permissions";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +33,11 @@ const VALID_COMMISSION_TABS = ["commissions", "rules"];
 
 export default function Commissions() {
   const [, navigate] = useLocation();
+  const { can, isGerente } = usePermissions();
+  const canEditCommissions = can(RESOURCES.COMMISSIONS, ACTIONS.EDIT);
+  const canCreateRules = can(RESOURCES.COMMISSIONS, ACTIONS.CREATE);
+  const canDeleteRules = can(RESOURCES.COMMISSIONS, ACTIONS.DELETE);
+  const canRetryCommissionSync = can(RESOURCES.COMMISSIONS, ACTIONS.MANAGE);
   const searchStr = useSearch();
   const [tab, setTab] = useState(() => {
     const t = new URLSearchParams(searchStr).get("tab");
@@ -55,9 +61,10 @@ export default function Commissions() {
   const [ruleDisplayType, setRuleDisplayType] = useState("percentage");
   const [appliesTo, setAppliesTo] = useState("all");
   const [selectedTripId, setSelectedTripId] = useState("");
+  const [ruleIsActive, setRuleIsActive] = useState(true);
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
 
-  const ruleType = ruleDisplayType === "tiered" ? "percentage" : ruleDisplayType as "percentage" | "fixed";
+  const ruleType = ruleDisplayType as "percentage" | "fixed";
 
   const { data: commissionsRaw, isLoading: loadingCommissions, isError: commissionsError, error: commissionsQueryError, refetch: refetchCommissions } = useListCommissions();
   const { data: rulesData, isLoading: loadingRules, isError: rulesError, error: rulesQueryError, refetch: refetchRules } = useListCommissionRules();
@@ -89,16 +96,19 @@ export default function Commissions() {
   const failedSyncReservations = useMemo(() => failedSyncData?.data ?? [], [failedSyncData]);
 
   const handleApprove = async (id: string) => {
+    if (!canEditCommissions) return;
     await updateCommission.mutateAsync({ id, data: { status: COMMISSION_STATUS.APPROVED } });
     refetchCommissions();
   };
 
   const handlePay = async (id: string) => {
+    if (!canEditCommissions) return;
     await updateCommission.mutateAsync({ id, data: { status: COMMISSION_STATUS.PAID, paidAt: new Date().toISOString() } });
     refetchCommissions();
   };
 
   const handleRetrySync = async (id: string) => {
+    if (!canRetryCommissionSync) return;
     setRetryingIds(prev => new Set(prev).add(id));
     try {
       await retrySync.mutateAsync({ id });
@@ -114,20 +124,20 @@ export default function Commissions() {
 
   const handleSaveRule = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (editingRule ? !canEditCommissions : !canCreateRules) return;
     const fd = new FormData(e.currentTarget);
-    const isTiered = ruleDisplayType === "tiered";
-    if (isTiered && !selectedTripId) {
-      alert("Selecione uma viagem para a regra escalonada por viagem.");
+    const effectiveAppliesTo = appliesTo;
+    if (effectiveAppliesTo === "trip" && !selectedTripId) {
+      alert("Selecione a viagem específica desta regra.");
       return;
     }
-    const effectiveAppliesTo = isTiered ? "trip" : appliesTo;
     const ruleData = {
       name: fd.get("name") as string,
       type: ruleType,
       value: fd.get("value") as string,
       appliesTo: effectiveAppliesTo,
-      tripId: (isTiered || appliesTo === "trip") ? selectedTripId || undefined : undefined,
-      isActive: true,
+      tripId: effectiveAppliesTo === "trip" ? selectedTripId : undefined,
+      isActive: ruleIsActive,
     };
     if (editingRule) {
       await updateRule.mutateAsync({ id: editingRule.id, data: ruleData });
@@ -138,13 +148,33 @@ export default function Commissions() {
     setEditingRule(null);
     setAppliesTo("all");
     setSelectedTripId("");
+    setRuleIsActive(true);
     refetchRules();
   };
 
   const handleDeleteRule = async (id: string) => {
+    if (!canDeleteRules) return;
     if (!confirm("Excluir esta regra de comissão?")) return;
     await deleteRule.mutateAsync({ id });
     refetchRules();
+  };
+
+  const openNewRule = () => {
+    setEditingRule(null);
+    setRuleDisplayType("percentage");
+    setAppliesTo("all");
+    setSelectedTripId("");
+    setRuleIsActive(true);
+    setIsRuleOpen(true);
+  };
+
+  const openEditRule = (rule: CommissionRule) => {
+    setEditingRule(rule);
+    setRuleDisplayType(rule.type);
+    setAppliesTo(rule.appliesTo ?? "all");
+    setSelectedTripId(rule.tripId ?? "");
+    setRuleIsActive(rule.isActive);
+    setIsRuleOpen(true);
   };
 
   return (
@@ -155,6 +185,11 @@ export default function Commissions() {
           <p className="text-muted-foreground text-sm">Gerencie comissões de vendedores e regras de cálculo</p>
         </div>
       </div>
+      {isGerente && (
+        <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          Acesso somente para consulta: a lista mostra apenas as comissões vinculadas à sua conta.
+        </p>
+      )}
 
       <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <Card>
@@ -218,7 +253,10 @@ export default function Commissions() {
               )}
             </CardTitle>
             <p className="text-sm text-orange-600 dark:text-orange-400">
-              As reservas abaixo falharam ao sincronizar o registro de comissão. Use "Retentar" para acionar uma nova sincronização.
+              As reservas abaixo falharam ao sincronizar o registro de comissão.
+              {canRetryCommissionSync
+                ? ' Use "Retentar" para acionar uma nova sincronização.'
+                : " Somente perfis com permissão de gestão podem retentar a sincronização."}
             </p>
           </CardHeader>
           <CardContent className="pt-0">
@@ -231,17 +269,17 @@ export default function Commissions() {
                     <TableHead>Viagem</TableHead>
                     <TableHead>Valor Total</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
+                    {canRetryCommissionSync && <TableHead className="text-right">Ações</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {loadingFailedSync ? (
                     Array.from({ length: 3 }).map((_, i) => (
-                      <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                      <TableRow key={i}>{Array.from({ length: canRetryCommissionSync ? 6 : 5 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                     ))
                   ) : failedSyncError ? (
                     <TableRow>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={canRetryCommissionSync ? 6 : 5}>
                         <QueryErrorState resourceLabel="as reservas com falha de sincronização" error={failedSyncQueryError} onRetry={() => { void refetchFailedSync(); }} compact />
                       </TableCell>
                     </TableRow>
@@ -279,7 +317,7 @@ export default function Commissions() {
                           Falhou
                         </span>
                       </TableCell>
-                      <TableCell className="text-right">
+                      {canRetryCommissionSync && <TableCell className="text-right">
                         <Button
                           size="sm"
                           variant="outline"
@@ -290,7 +328,7 @@ export default function Commissions() {
                           <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${retryingIds.has(r.id) ? "animate-spin" : ""}`} />
                           {retryingIds.has(r.id) ? "Retentando…" : "Retentar"}
                         </Button>
-                      </TableCell>
+                      </TableCell>}
                     </TableRow>
                     );
                   })}
@@ -315,11 +353,12 @@ export default function Commissions() {
                 <SelectItem value={COMMISSION_STATUS.PENDING}>Pendente</SelectItem>
                 <SelectItem value={COMMISSION_STATUS.APPROVED}>Aprovada</SelectItem>
                 <SelectItem value={COMMISSION_STATUS.PAID}>Paga</SelectItem>
+                <SelectItem value={COMMISSION_STATUS.CANCELLED}>Cancelada</SelectItem>
               </SelectContent>
             </Select>
           )}
-          {tab === "rules" && (
-            <Button onClick={() => { setEditingRule(null); setRuleDisplayType("percentage"); setAppliesTo("all"); setSelectedTripId(""); setIsRuleOpen(true); }}>
+          {tab === "rules" && canCreateRules && (
+            <Button onClick={openNewRule}>
               <Plus className="w-4 h-4 mr-2" /> Nova Regra
             </Button>
           )}
@@ -336,22 +375,22 @@ export default function Commissions() {
                   <TableHead>Valor da Comissão</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Pago em</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
+                    {canEditCommissions && <TableHead className="text-right">Ações</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loadingCommissions ? (
                   Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 7 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                    <TableRow key={i}>{Array.from({ length: canEditCommissions ? 7 : 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                   ))
                 ) : commissionsError ? (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={canEditCommissions ? 7 : 6}>
                       <QueryErrorState resourceLabel="as comissões" error={commissionsQueryError} onRetry={() => { void refetchCommissions(); }} compact />
                     </TableCell>
                   </TableRow>
                 ) : commissions.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-10 text-muted-foreground">Nenhuma comissão encontrada.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={canEditCommissions ? 7 : 6} className="text-center py-10 text-muted-foreground">Nenhuma comissão encontrada.</TableCell></TableRow>
                 ) : commissions.map(c => (
                   <TableRow key={c.id}>
                     <TableCell className="font-medium text-sm font-mono">{c.userId.slice(0, 12)}…</TableCell>
@@ -366,7 +405,7 @@ export default function Commissions() {
                     <TableCell className="text-sm text-muted-foreground">
                       {c.paidAt ? new Date(c.paidAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "—"}
                     </TableCell>
-                    <TableCell className="text-right">
+                    {canEditCommissions && <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
                         {c.status === COMMISSION_STATUS.PENDING && (
                           <Button size="sm" variant="outline" onClick={() => handleApprove(c.id)}>
@@ -379,7 +418,7 @@ export default function Commissions() {
                           </Button>
                         )}
                       </div>
-                    </TableCell>
+                    </TableCell>}
                   </TableRow>
                 ))}
               </TableBody>
@@ -397,22 +436,22 @@ export default function Commissions() {
                   <TableHead>Valor</TableHead>
                   <TableHead>Aplica a</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
+                    {(canEditCommissions || canDeleteRules) && <TableHead className="text-right">Ações</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loadingRules ? (
                   Array.from({ length: 3 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
+                    <TableRow key={i}>{Array.from({ length: canEditCommissions || canDeleteRules ? 6 : 5 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
                   ))
                 ) : rulesError ? (
                   <TableRow>
-                    <TableCell colSpan={6}>
+                    <TableCell colSpan={canEditCommissions || canDeleteRules ? 6 : 5}>
                       <QueryErrorState resourceLabel="as regras de comissão" error={rulesQueryError} onRetry={() => { void refetchRules(); }} compact />
                     </TableCell>
                   </TableRow>
                 ) : !rulesData?.length ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-10 text-muted-foreground">Nenhuma regra cadastrada.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={canEditCommissions || canDeleteRules ? 6 : 5} className="text-center py-10 text-muted-foreground">Nenhuma regra cadastrada.</TableCell></TableRow>
                 ) : rulesData.map(rule => (
                   <TableRow key={rule.id}>
                     <TableCell className="font-medium text-sm">{rule.name}</TableCell>
@@ -432,22 +471,22 @@ export default function Commissions() {
                         {rule.isActive ? "Ativa" : "Inativa"}
                       </span>
                     </TableCell>
-                    <TableCell className="text-right">
+                    {(canEditCommissions || canDeleteRules) && <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <Button
+                        {canEditCommissions && <Button
                           variant="ghost" size="icon" className="h-8 w-8"
-                          onClick={() => { setEditingRule(rule); setRuleDisplayType(rule.appliesTo === "trip" && rule.tripId ? "tiered" : rule.type); setAppliesTo(rule.appliesTo ?? "all"); setSelectedTripId(rule.tripId ?? ""); setIsRuleOpen(true); }}
+                          onClick={() => openEditRule(rule)}
                         >
                           <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button
+                        </Button>}
+                        {canDeleteRules && <Button
                           variant="ghost" size="icon" className="h-8 w-8 text-destructive"
                           onClick={() => handleDeleteRule(rule.id)}
                         >
                           <Trash2 className="w-4 h-4" />
-                        </Button>
+                        </Button>}
                       </div>
-                    </TableCell>
+                    </TableCell>}
                   </TableRow>
                 ))}
               </TableBody>
@@ -456,7 +495,7 @@ export default function Commissions() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={isRuleOpen} onOpenChange={v => { setIsRuleOpen(v); if (!v) setEditingRule(null); }}>
+      <Dialog open={isRuleOpen} onOpenChange={v => { setIsRuleOpen(v); if (!v) { setEditingRule(null); setRuleIsActive(true); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{editingRule ? "Editar Regra" : "Nova Regra de Comissão"}</DialogTitle>
@@ -468,17 +507,13 @@ export default function Commissions() {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Tipo de Comissão</label>
-              <Select value={ruleDisplayType} onValueChange={v => { setRuleDisplayType(v); if (v !== "tiered") setSelectedTripId(""); }}>
+              <Select value={ruleDisplayType} onValueChange={setRuleDisplayType}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="percentage">Percentual (%) — geral</SelectItem>
-                  <SelectItem value="fixed">Valor Fixo (R$) — geral</SelectItem>
-                  <SelectItem value="tiered">Escalonado por viagem (%)</SelectItem>
+                  <SelectItem value="percentage">Percentual (%)</SelectItem>
+                  <SelectItem value="fixed">Valor Fixo (R$)</SelectItem>
                 </SelectContent>
               </Select>
-              {ruleDisplayType === "tiered" && (
-                <p className="text-xs text-muted-foreground">A taxa percentual se aplica especificamente à viagem selecionada.</p>
-              )}
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">{ruleDisplayType === "fixed" ? "Valor (R$)" : "Percentual (%)"}</label>
@@ -491,7 +526,22 @@ export default function Commissions() {
                 placeholder={ruleDisplayType === "fixed" ? "150.00" : "10"}
               />
             </div>
-            {ruleDisplayType === "tiered" ? (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Aplica a</label>
+              <Select value={appliesTo} onValueChange={v => {
+                setAppliesTo(v);
+                if (v !== "trip") setSelectedTripId("");
+              }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as viagens</SelectItem>
+                  <SelectItem value="national">Viagens nacionais</SelectItem>
+                  <SelectItem value="international">Viagens internacionais</SelectItem>
+                  <SelectItem value="trip">Uma viagem específica</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {appliesTo === "trip" && (
               <div className="space-y-2">
                 <label className="text-sm font-medium">Viagem específica *</label>
                 <Select value={selectedTripId} onValueChange={setSelectedTripId}>
@@ -503,21 +553,18 @@ export default function Commissions() {
                   </SelectContent>
                 </Select>
               </div>
-            ) : (
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Aplica a</label>
-                <Select value={appliesTo} onValueChange={v => { setAppliesTo(v); if (v !== "trip") setSelectedTripId(""); }}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todas as viagens</SelectItem>
-                    <SelectItem value="national">Viagens nacionais</SelectItem>
-                    <SelectItem value="international">Viagens internacionais</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
             )}
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-primary"
+                checked={ruleIsActive}
+                onChange={event => setRuleIsActive(event.target.checked)}
+              />
+              Regra ativa
+            </label>
             <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" onClick={() => { setIsRuleOpen(false); setEditingRule(null); }}>Cancelar</Button>
+              <Button type="button" variant="outline" onClick={() => { setIsRuleOpen(false); setEditingRule(null); setRuleIsActive(true); }}>Cancelar</Button>
               <Button type="submit" disabled={createRule.isPending || updateRule.isPending}>
                 {createRule.isPending || updateRule.isPending ? "Salvando..." : "Salvar Regra"}
               </Button>
