@@ -187,6 +187,7 @@ export default function Financial() {
   const [upcomingError, setUpcomingError] = useState<string | null>(null);
   const [settlement, setSettlement] = useState<SettlementData | null>(null);
   const [loadingSettlement, setLoadingSettlement] = useState(false);
+  const [settlementError, setSettlementError] = useState<string | null>(null);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isExpenseOpen, setIsExpenseOpen] = useState(false);
   const [isRuleOpen, setIsRuleOpen] = useState(false);
@@ -220,6 +221,7 @@ export default function Financial() {
 
   const fetchSettlement = useCallback(async () => {
     setLoadingSettlement(true);
+    setSettlementError(null);
     try {
       const params = new URLSearchParams();
       if (dateFrom) params.set("dateFrom", dateFrom);
@@ -227,7 +229,10 @@ export default function Financial() {
       const response = await fetch(`${BASE}/api/financial/settlement${params.size ? `?${params}` : ""}`, {
         credentials: "include",
       });
-      if (response.ok) setSettlement(await response.json() as SettlementData);
+      if (!response.ok) throw new Error("Settlement request failed");
+      setSettlement(await response.json() as SettlementData);
+    } catch {
+      setSettlementError("Não foi possível carregar os dados da liquidação. Tente novamente.");
     } finally {
       setLoadingSettlement(false);
     }
@@ -845,6 +850,7 @@ export default function Financial() {
           <SettlementTab
             settlement={settlement}
             isLoading={loadingSettlement}
+            error={settlementError}
             onRefresh={() => void fetchSettlement()}
           />
         </TabsContent>

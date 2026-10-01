@@ -153,6 +153,26 @@ function setSuccessfulQueries() {
   mocks.useListClients.mockReturnValue({ data: { data: [] } });
 }
 
+const settlementResponse: SettlementData = {
+  summary: {
+    agencyNet: 1200,
+    partnerPayable: 450,
+    walletOutstanding: 80,
+    cashbackOutstanding: 30,
+    reversals: 20,
+  },
+  entries: [{
+    id: "settlement-1",
+    participantType: "seller",
+    category: "commission_payment",
+    direction: "debit",
+    amount: 80,
+    settlementStatus: "reversed",
+    eventType: "commission",
+    occurredAt: "2026-09-12T15:30:00.000Z",
+  }],
+};
+
 beforeEach(() => {
   mocks.search = "";
   mocks.can.mockReturnValue(true);
@@ -165,6 +185,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await cleanupRoots();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -328,28 +349,10 @@ describe("Financial page PMS payment adjustments", () => {
 
   it("renders settlement summaries and refreshes from the settlement component", async () => {
     const onRefresh = vi.fn();
-    const settlement: SettlementData = {
-      summary: {
-        agencyNet: 1200,
-        partnerPayable: 450,
-        walletOutstanding: 80,
-        cashbackOutstanding: 30,
-        reversals: 20,
-      },
-      entries: [{
-        id: "settlement-1",
-        participantType: "seller",
-        category: "commission_payment",
-        direction: "debit",
-        amount: 80,
-        settlementStatus: "reversed",
-        eventType: "commission",
-        occurredAt: "2026-09-12T15:30:00.000Z",
-      }],
-    };
     const handle = await renderComponent(createElement(SettlementTab, {
-      settlement,
+      settlement: settlementResponse,
       isLoading: false,
+      error: null,
       onRefresh,
     }));
 
@@ -365,13 +368,79 @@ describe("Financial page PMS payment adjustments", () => {
     expect(onRefresh).toHaveBeenCalledOnce();
 
     await handle.rerender(createElement(SettlementTab, {
-      settlement,
+      settlement: settlementResponse,
       isLoading: true,
+      error: null,
       onRefresh,
     }));
     const loadingRefreshButton = [...handle.container.querySelectorAll("button")]
       .find((button) => button.textContent?.includes("Atualizar"));
     expect(loadingRefreshButton?.disabled).toBe(true);
+  });
+
+  it("shows a retry action after an initial network failure and clears it on success", async () => {
+    mocks.search = "?tab=settlement";
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => settlementResponse,
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handle = await renderComponent(createElement(Financial));
+    const initialRequest = fetchMock.mock.results[0]?.value as Promise<unknown>;
+    await flushAct(async () => { await initialRequest.catch(() => undefined); });
+
+    expect(handle.container.querySelector('[role="alert"]')?.textContent)
+      .toContain("Não foi possível carregar os dados da liquidação.");
+    expect(handle.container.textContent).toContain("Dados de liquidação indisponíveis.");
+
+    const retryButton = [...handle.container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Tentar novamente"));
+    expect(retryButton).toBeDefined();
+    await flushAct(async () => {
+      retryButton?.click();
+      const retryRequest = fetchMock.mock.results[1]?.value as Promise<unknown>;
+      await retryRequest;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(handle.container.querySelector('[role="alert"]')).toBeNull();
+    expect(handle.container.textContent).toContain("commission payment");
+  });
+
+  it("keeps previously loaded settlement data visible after an unsuccessful refresh", async () => {
+    mocks.search = "?tab=settlement";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => settlementResponse,
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({}),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handle = await renderComponent(createElement(Financial));
+    const initialRequest = fetchMock.mock.results[0]?.value as Promise<unknown>;
+    await flushAct(async () => { await initialRequest; });
+    expect(handle.container.textContent).toContain("commission payment");
+
+    const refreshButton = [...handle.container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Atualizar"));
+    expect(refreshButton).toBeDefined();
+    await flushAct(async () => {
+      refreshButton?.click();
+      const refreshRequest = fetchMock.mock.results[1]?.value as Promise<unknown>;
+      await refreshRequest;
+    });
+
+    expect(handle.container.querySelector('[role="alert"]')?.textContent)
+      .toContain("Não foi possível carregar os dados da liquidação.");
+    expect(handle.container.textContent).toContain("commission payment");
+    expect(handle.container.textContent).not.toContain("Dados de liquidação indisponíveis.");
   });
 
   it("hides financial mutation controls when the current role lacks permission", async () => {

@@ -29,13 +29,14 @@ export type SettlementData = {
 type SettlementTabProps = {
   settlement: SettlementData | null;
   isLoading: boolean;
+  error: string | null;
   onRefresh: () => void;
 };
 
 const fmt = (value: number | string) =>
   formatCurrency(typeof value === "string" ? Number.parseFloat(value) || 0 : value);
 
-export function SettlementTab({ settlement, isLoading, onRefresh }: SettlementTabProps) {
+export function SettlementTab({ settlement, isLoading, error, onRefresh }: SettlementTabProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -46,6 +47,14 @@ export function SettlementTab({ settlement, isLoading, onRefresh }: SettlementTa
           Atualizar
         </Button>
       </div>
+      {error && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+          <p role="alert" className="text-sm text-destructive">{error}</p>
+          <Button size="sm" variant="outline" onClick={onRefresh} disabled={isLoading}>
+            Tentar novamente
+          </Button>
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <KpiCard icon={DollarSign} label="Receita da agência" value={fmt(settlement?.summary.agencyNet ?? 0)} color="text-emerald-600" />
         <KpiCard icon={TrendingDown} label="Repasse a parceiros" value={fmt(settlement?.summary.partnerPayable ?? 0)} color="text-blue-600" />
@@ -69,6 +78,8 @@ export function SettlementTab({ settlement, isLoading, onRefresh }: SettlementTa
               Array.from({ length: 4 }).map((_, index) => (
                 <TableRow key={index}>{Array.from({ length: 5 }).map((__, cell) => <TableCell key={cell}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
               ))
+            ) : !settlement && error ? (
+              <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Dados de liquidação indisponíveis.</TableCell></TableRow>
             ) : !settlement?.entries.length ? (
               <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Nenhum lançamento de liquidação no período.</TableCell></TableRow>
             ) : settlement.entries.map((entry) => (
