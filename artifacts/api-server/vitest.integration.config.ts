@@ -32,6 +32,7 @@ export default defineConfig({
       "src/__tests__/reservation-patch-deal-sync.test.ts",
       "src/__tests__/room-assignments.integration.test.ts",
       "src/__tests__/accommodation-capacity.integration.test.ts",
+      "src/__tests__/trips-filter.integration.test.ts",
     ],
   },
 });
