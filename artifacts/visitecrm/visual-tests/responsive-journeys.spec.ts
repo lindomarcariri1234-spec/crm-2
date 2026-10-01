@@ -103,6 +103,11 @@ async function assertSyntheticOrderRequest(
   }
 }
 
+async function assertNoSyntheticOrderRequest(page: Page, stage: string) {
+  const request = await page.evaluate(() => window.sessionStorage.getItem("visual-test:last-order-request"));
+  expect(request, `no order POST should occur while ${stage}`).toBeNull();
+}
+
 async function assertNoDocumentOverflow(page: Page, scenario: string) {
   const dimensions = await page.evaluate(() => ({
     viewport: document.documentElement.clientWidth,
@@ -239,6 +244,40 @@ for (const viewport of widths) {
     await expect(page.getByText("VIS-TESTE-001", { exact: true }).first()).toBeVisible();
     await assertSyntheticOrderRequest(page);
     await assertNoDocumentOverflow(page, `reservation confirmation at ${viewport.label}`);
+  });
+
+  test(`reservation data blocks invalid CPF and phone at ${viewport.label} width`, async ({ page }) => {
+    await openFixture(page, "reserva", viewport.width, viewport.height);
+    await page.locator("#name").fill(syntheticCustomer.name);
+    await page.locator("#email").fill(syntheticCustomer.email);
+    await page.locator("#phone").fill(syntheticCustomer.phone);
+    await page.locator("#cpf").fill("11111111111");
+
+    const continueButton = page.getByRole("button", { name: "Continuar", exact: true });
+    const dataHeading = page.getByRole("heading", { name: "Seus Dados" });
+    const reviewHeading = page.getByRole("heading", { name: "Revisão do Pedido" });
+
+    await expect(page.getByText("CPF inválido", { exact: true })).toBeVisible();
+    await expect(continueButton).toBeDisabled();
+    await expect(dataHeading).toBeVisible();
+    await expect(reviewHeading).not.toBeVisible();
+    await assertNoSyntheticOrderRequest(page, "the CPF is invalid");
+
+    await page.locator("#cpf").fill(syntheticCustomer.cpf);
+    await page.locator("#phone").fill("12345");
+    await expect(page.getByText(/Telefone inválido/)).toBeVisible();
+    await expect(continueButton).toBeDisabled();
+    await expect(dataHeading).toBeVisible();
+    await expect(reviewHeading).not.toBeVisible();
+    await assertNoSyntheticOrderRequest(page, "the phone is invalid");
+
+    await page.locator("#phone").fill(syntheticCustomer.phone);
+    await expect(continueButton).toBeEnabled();
+    await assertNoSyntheticOrderRequest(page, "valid passenger details have not been confirmed");
+
+    await clickFlowButton(page, "Continuar");
+    await expect(reviewHeading).toBeVisible();
+    await assertNoSyntheticOrderRequest(page, "the order has not been confirmed");
   });
 
   test(`group reservation preserves each companion at ${viewport.label} width`, async ({ page }) => {
