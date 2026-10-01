@@ -238,7 +238,7 @@ describe("Financial page PMS payment adjustments", () => {
   it("loads only the active tab's list data", async () => {
     mocks.search = "?tab=expenses";
 
-    await renderComponent(createElement(Financial));
+    const handle = await renderComponent(createElement(Financial));
 
     expect(mocks.useListPayments).toHaveBeenNthCalledWith(
       1,
@@ -259,6 +259,46 @@ describe("Financial page PMS payment adjustments", () => {
       { limit: 500, page: 1 },
       expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
     );
+    expect(handle.container.textContent).toContain("Registrar Despesa");
+    expect(handle.container.textContent).toContain("Nenhuma despesa registrada.");
+  });
+
+  it("renders the commissions tab and only enables its list query", async () => {
+    mocks.search = "?tab=commissions";
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(mocks.useListCommissions).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(mocks.useListExpenses).toHaveBeenCalledWith(
+      { limit: 50 },
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
+    expect(mocks.useListCommissionRules).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
+    expect(handle.container.textContent).toContain("Total de Comissões");
+    expect(handle.container.textContent).toContain("Nenhuma comissão registrada.");
+  });
+
+  it("renders commission rules and only enables the rules query", async () => {
+    mocks.search = "?tab=rules";
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(mocks.useListCommissionRules).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(mocks.useListExpenses).toHaveBeenCalledWith(
+      { limit: 50 },
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
+    expect(mocks.useListCommissions).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
+    );
+    expect(handle.container.textContent).toContain("Nova Regra");
+    expect(handle.container.textContent).toContain("Nenhuma regra de comissão cadastrada.");
   });
 
   it("hides financial mutation controls when the current role lacks permission", async () => {

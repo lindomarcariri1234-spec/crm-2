@@ -36,15 +36,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link, useSearch, useLocation } from "wouter";
 import {
   Plus, TrendingUp, TrendingDown, DollarSign, AlertCircle, CheckCircle,
-  Pencil, Trash2, ArrowUpRight, ArrowDownRight, BarChart2, ExternalLink,
+  ArrowUpRight, ArrowDownRight, BarChart2, ExternalLink,
   Paperclip, X as XIcon, FileText, Image,
 } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS, EXPENSE_CATEGORY_LABELS } from "@/lib/labels";
+import { PAYMENT_STATUS_LABELS as STATUS_LABELS, PAYMENT_STATUS_COLORS as STATUS_COLORS, PAYMENT_METHOD_LABELS as METHOD_LABELS } from "@/lib/labels";
 import { PageHeader } from "@/components/page-header";
 import { FinancialMetricsOverview } from "@/components/financial-metrics-overview";
 import { PaymentPagination } from "@/components/financial/payment-pagination";
 import { ReceivablesTab, type UpcomingInstallment } from "@/components/financial/receivables-tab";
+import { ExpensesTab } from "@/components/financial/expenses-tab";
+import { CommissionsTab } from "@/components/financial/commissions-tab";
+import { CommissionRulesTab } from "@/components/financial/commission-rules-tab";
 import { useFinancialMetrics } from "@/lib/financial-metrics-api";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useToast } from "@/hooks/use-toast";
@@ -52,8 +55,6 @@ import { useToast } from "@/hooks/use-toast";
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const PAYMENTS_PAGE_SIZE = 50;
-
-const EXPENSE_CATEGORIES: Record<string, string> = EXPENSE_CATEGORY_LABELS;
 
 function KpiCard({ icon: Icon, label, value, sub, trend, color }: {
   icon: React.ElementType; label: string; value: string; sub?: string; trend?: "up" | "down" | "neutral"; color: string;
@@ -488,14 +489,6 @@ export default function Financial() {
     refetchRules();
   };
 
-  const commissions = Array.isArray(commissionsData) ? commissionsData : [];
-  const commissionKpis = useMemo(() => {
-    const total = commissions.reduce((s, c) => s + parseFloat(c.commissionAmount), 0);
-    const paid = commissions.filter(c => c.status === COMMISSION_STATUS.PAID).reduce((s, c) => s + parseFloat(c.commissionAmount), 0);
-    const pending = commissions.filter(c => c.status === COMMISSION_STATUS.PENDING).reduce((s, c) => s + parseFloat(c.commissionAmount), 0);
-    return { total, paid, pending };
-  }, [commissions]);
-
   const paymentRows = paymentsData?.data ?? [];
 
   const filteredExpenses = useMemo(() => {
@@ -909,190 +902,38 @@ export default function Financial() {
         </TabsContent>
 
         <TabsContent value="expenses" className="mt-4">
-          <div className="flex justify-end mb-3">
-            {canCreateFinancial && (
-              <Button variant="outline" size="sm" onClick={() => setIsExpenseOpen(true)}>
-                <Plus className="w-4 h-4 mr-2" /> Registrar Despesa
-              </Button>
-            )}
-          </div>
-          <div className="bg-card rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Descrição</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead>Fornecedor</TableHead>
-                  <TableHead>Vencimento</TableHead>
-                  <TableHead>Valor</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loadingExpenses ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 7 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                  ))
-                ) : filteredExpenses.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Nenhuma despesa registrada.</TableCell></TableRow>
-                ) : filteredExpenses.map(e => (
-                  <TableRow key={e.id}>
-                    <TableCell className="font-medium text-sm">{e.description}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{EXPENSE_CATEGORIES[e.category] ?? e.category}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{(e as { supplierName?: string }).supplierName ?? (e.supplierId ? e.supplierId.slice(0, 8) + "…" : "—")}</TableCell>
-                    <TableCell className="text-sm">{formatDate(String(e.dueDate))}</TableCell>
-                    <TableCell className="font-medium text-sm">{fmt(e.amount)}</TableCell>
-                    <TableCell>
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[e.status] ?? "bg-gray-100 text-gray-800"}`}>
-                        {STATUS_LABELS[e.status] ?? e.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {canEditFinancial && e.status !== EXPENSE_STATUS.PAID && (
-                        <Button size="sm" variant="outline" disabled={updateExpense.isPending} onClick={() => void handleMarkExpensePaid(e.id)}>
-                          <CheckCircle className="w-4 h-4 mr-1" /> Pago
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <ExpensesTab
+            expenses={filteredExpenses}
+            isLoading={loadingExpenses}
+            canCreateFinancial={canCreateFinancial}
+            onRegisterExpense={() => setIsExpenseOpen(true)}
+            canEditFinancial={canEditFinancial}
+            updateExpensePending={updateExpense.isPending}
+            onMarkPaid={(expenseId) => void handleMarkExpensePaid(expenseId)}
+          />
         </TabsContent>
 
         <TabsContent value="commissions" className="mt-4 space-y-4">
-          <div className="grid gap-4 grid-cols-3">
-            <Card>
-              <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">Total de Comissões</p>
-                <p className="text-2xl font-bold mt-1">{fmt(commissionKpis.total)}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">Pagas</p>
-                <p className="text-2xl font-bold mt-1 text-green-600">{fmt(commissionKpis.paid)}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-5">
-                <p className="text-sm text-muted-foreground">Pendentes</p>
-                <p className="text-2xl font-bold mt-1 text-yellow-600">{fmt(commissionKpis.pending)}</p>
-              </CardContent>
-            </Card>
-          </div>
-          <div className="bg-card rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Vendedor</TableHead>
-                  <TableHead>Reserva</TableHead>
-                  <TableHead>Base</TableHead>
-                  <TableHead>Comissão</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loadingCommissions ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                  ))
-                ) : commissions.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Nenhuma comissão registrada.</TableCell></TableRow>
-                ) : commissions.map(c => (
-                  <TableRow key={c.id}>
-                    <TableCell className="font-medium text-sm">{c.userId}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{c.reservationId ?? "—"}</TableCell>
-                    <TableCell className="text-sm">{fmt(c.baseAmount)}</TableCell>
-                    <TableCell className="font-semibold text-sm">{fmt(c.commissionAmount)}</TableCell>
-                    <TableCell>
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[c.status] ?? "bg-gray-100 text-gray-800"}`}>
-                        {STATUS_LABELS[c.status] ?? c.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        {canEditCommissions && c.status === COMMISSION_STATUS.PENDING && (
-                          <Button size="sm" variant="outline" onClick={() => handleApproveCommission(c.id)}>
-                            Aprovar
-                          </Button>
-                        )}
-                        {canEditCommissions && c.status === COMMISSION_STATUS.APPROVED && (
-                          <Button size="sm" onClick={() => handlePayCommission(c.id)}>
-                            <DollarSign className="w-4 h-4 mr-1" /> Pagar
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <CommissionsTab
+            commissions={Array.isArray(commissionsData) ? commissionsData : []}
+            isLoading={loadingCommissions}
+            canEditCommissions={canEditCommissions}
+            onApprove={(commissionId) => void handleApproveCommission(commissionId)}
+            onPay={(commissionId) => void handlePayCommission(commissionId)}
+          />
         </TabsContent>
 
         <TabsContent value="rules" className="mt-4 space-y-4">
-          {canCreateCommissionRule && (
-            <div className="flex justify-end">
-              <Button onClick={() => { setEditingRule(null); setIsRuleOpen(true); }}>
-                <Plus className="w-4 h-4 mr-2" /> Nova Regra
-              </Button>
-            </div>
-          )}
-          <div className="bg-card rounded-lg border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nome</TableHead>
-                  <TableHead>Tipo</TableHead>
-                  <TableHead>Valor</TableHead>
-                  <TableHead>Aplica a</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loadingRules ? (
-                  Array.from({ length: 3 }).map((_, i) => (
-                    <TableRow key={i}>{Array.from({ length: 6 }).map((_, j) => <TableCell key={j}><Skeleton className="h-5 w-full" /></TableCell>)}</TableRow>
-                  ))
-                ) : !rulesData?.length ? (
-                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Nenhuma regra de comissão cadastrada.</TableCell></TableRow>
-                ) : rulesData.map(rule => (
-                  <TableRow key={rule.id}>
-                    <TableCell className="font-medium text-sm">{rule.name}</TableCell>
-                    <TableCell className="text-sm">{rule.type === "percentage" ? "Percentual" : "Fixo"}</TableCell>
-                    <TableCell className="text-sm font-medium">
-                      {rule.type === "percentage" ? `${rule.value}%` : fmt(rule.value)}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{rule.appliesTo}</TableCell>
-                    <TableCell>
-                      <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${rule.isActive ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-800"}`}>
-                        {rule.isActive ? "Ativa" : "Inativa"}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        {canEditCommissions && (
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingRule(rule); setRuleType(rule.type); setIsRuleOpen(true); }}>
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {canDeleteCommissionRules && (
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => void handleDeleteRule(rule.id)}>
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <CommissionRulesTab
+            rules={rulesData ?? []}
+            isLoading={loadingRules}
+            canCreate={canCreateCommissionRule}
+            canEdit={canEditCommissions}
+            canDelete={canDeleteCommissionRules}
+            onCreate={() => { setEditingRule(null); setIsRuleOpen(true); }}
+            onEdit={(rule) => { setEditingRule(rule); setRuleType(rule.type); setIsRuleOpen(true); }}
+            onDelete={(ruleId) => void handleDeleteRule(ruleId)}
+          />
         </TabsContent>
 
         <TabsContent value="settlement" className="mt-4 space-y-4">
