@@ -119,7 +119,7 @@
 - [Vercel canceled Git deployments](vercel-canceled-git-deployments.md) — use the exact source SHA with forceNew; unverified-signature cancellation needs explicit approval before any manual bypass.
 - [Temporary worktree package resolution](temporary-worktree-package-resolution.md) — keep pnpm workspace links in scratch worktrees resolving to that worktree, not the primary checkout.
 - [Mockup sandbox routing isolation](mockup-sandbox-routing-isolation.md) — direct wouter imports can trigger invalid hooks in isolated previews; use a local hash-navigation shim.
-- [Expo watcher pressure from sandbox builds](expo-watcher-pressure-from-sandbox-builds.md) — generated sandbox dist can amplify Metro ENOSPC failures; cleaning it helps, but broader watch limits may persist.
+- [Expo watcher pressure from sandbox builds](expo-watcher-pressure-from-sandbox-builds.md) — avoid workspace-wide or full transitive PNPM watches; include only needed package roots and verify the actual bundle.
 - [Workspace-scoped package installs](package-management-workspace-scope.md) — if Replit's package tool hits ERR_PNPM_ADDING_TO_ROOT, scope pnpm add/remove to the target artifact.
 - [Vercel CLI firewall fallback](vercel-cli-firewall-fallback.md) — if pnpm dlx is blocked on a transitive download, reuse an already extracted CLI from the pnpm cache
 - [Vercel runtime logs](vercel-runtime-logs.md) — deployment-scoped runtime-log queries may still hit the five-minute limit after time filtering; treat failures as unverified.

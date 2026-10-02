@@ -53,6 +53,10 @@ const ListClientsQuery = z.object({
   maxPurchaseScore: z.coerce.number().min(0).max(100).optional(),
   minChurnScore: z.coerce.number().min(0).max(100).optional(),
   maxChurnScore: z.coerce.number().min(0).max(100).optional(),
+  includeSummary: z.preprocess(
+    value => value === "true" || value === "1" || value === true,
+    z.boolean(),
+  ).optional(),
 });
 
 const router = Router();
@@ -135,6 +139,76 @@ function formatClient(c: typeof clientsTable.$inferSelect, extra?: { isNew?: boo
   };
 }
 
+async function getClientListSummary(scopeConditions: ReturnType<typeof eq>[], tenantId: string) {
+  const [aggregates] = await db.select({
+    total: sql<number>`count(*)`,
+    active: sql<number>`count(*) filter (where ${clientsTable.status} = 'active')`,
+    leads: sql<number>`count(*) filter (where ${clientsTable.classification} = 'lead' or ${clientsTable.status} = 'lead')`,
+    totalRevenue: sql<string>`coalesce(sum(${clientsTable.totalSpent}), 0)`,
+  }).from(clientsTable).where(and(...scopeConditions));
+
+  const [, monthValue, dayValue] = localToday().split("-");
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const birthdays = await db.select().from(clientsTable).where(and(
+    ...scopeConditions,
+    sql`EXTRACT(MONTH FROM (${clientsTable.birthDate} AT TIME ZONE 'America/Sao_Paulo')) = ${month}`,
+    sql`EXTRACT(DAY FROM (${clientsTable.birthDate} AT TIME ZONE 'America/Sao_Paulo')) = ${day}`,
+  ));
+  const birthdayClientIds = birthdays.map(client => client.id);
+  let birthdayLastTripMap: Record<string, string> = {};
+  let birthdayScoreMap = new Map<string, ScoreRow>();
+
+  if (birthdayClientIds.length > 0) {
+    const [lastTrips, scoreRows] = await Promise.all([
+      db.selectDistinctOn([reservationsTable.clientId], {
+        clientId: reservationsTable.clientId,
+        tripName: tripsTable.name,
+      })
+        .from(reservationsTable)
+        .innerJoin(tripsTable, eq(reservationsTable.tripId, tripsTable.id))
+        .where(and(
+          eq(reservationsTable.tenantId, tenantId),
+          inArray(reservationsTable.clientId, birthdayClientIds),
+        ))
+        .orderBy(reservationsTable.clientId, desc(reservationsTable.createdAt), desc(reservationsTable.id)),
+      db.select({
+        clientId: clientScoresTable.clientId,
+        purchaseScore: clientScoresTable.purchaseScore,
+        recompraScore: clientScoresTable.recompraScore,
+        churnScore: clientScoresTable.churnScore,
+        nboTripId: clientScoresTable.nboTripId,
+        nboReasoning: clientScoresTable.nboReasoning,
+        calculatedAt: clientScoresTable.calculatedAt,
+        nboTripName: tripsTable.name,
+        nboTripDestination: tripsTable.destination,
+      })
+        .from(clientScoresTable)
+        .leftJoin(tripsTable, eq(clientScoresTable.nboTripId, tripsTable.id))
+        .where(and(
+          inArray(clientScoresTable.clientId, birthdayClientIds),
+          eq(clientScoresTable.tenantId, tenantId),
+        )),
+    ]);
+
+    birthdayLastTripMap = Object.fromEntries(
+      lastTrips.flatMap(row => row.clientId ? [[row.clientId, row.tripName] as const] : []),
+    );
+    birthdayScoreMap = new Map(scoreRows.map(row => [row.clientId, row]));
+  }
+
+  return {
+    total: Number(aggregates?.total ?? 0),
+    active: Number(aggregates?.active ?? 0),
+    leads: Number(aggregates?.leads ?? 0),
+    totalRevenue: Number(aggregates?.totalRevenue ?? 0),
+    birthdayClients: birthdays.map(client => ({
+      ...formatClient(client, { scores: birthdayScoreMap.get(client.id) ?? null }),
+      lastTripName: birthdayLastTripMap[client.id] ?? null,
+    })),
+  };
+}
+
 router.get("/clients", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -150,6 +224,7 @@ router.get("/clients", async (req, res, next: NextFunction): Promise<void> => {
       city, tripId, sellerId, origin, dateFrom, dateTo, sortBy, sortOrder,
       page: pageNum, limit: limitNum,
       minPurchaseScore, maxPurchaseScore, minChurnScore, maxChurnScore,
+      includeSummary,
     } = queryResult.data;
     const offset = (pageNum - 1) * limitNum;
 
@@ -158,21 +233,41 @@ router.get("/clients", async (req, res, next: NextFunction): Promise<void> => {
         .where(and(eq(clientsTable.tenantId, me.tenantId), eq(clientsTable.userId, me.id)))
         .limit(1);
       if (!clientRecord) {
-        res.json({ data: [], total: 0, page: pageNum, limit: limitNum });
+        res.json({
+          data: [],
+          total: 0,
+          page: pageNum,
+          limit: limitNum,
+          ...(includeSummary ? {
+            summary: {
+              total: 0,
+              active: 0,
+              leads: 0,
+              totalRevenue: 0,
+              birthdayClients: [],
+            },
+          } : {}),
+        });
         return;
       }
+      const scopeConditions = [
+        eq(clientsTable.tenantId, me.tenantId),
+        eq(clientsTable.userId, me.id),
+      ];
       res.json({
         data: [{ ...formatClient(clientRecord), lastTripName: null }],
         total: 1, page: pageNum, limit: limitNum,
+        ...(includeSummary ? { summary: await getClientListSummary(scopeConditions, me.tenantId) } : {}),
       });
       return;
     }
 
-    const conditions: ReturnType<typeof eq>[] = [eq(clientsTable.tenantId, me.tenantId)];
+    const scopeConditions: ReturnType<typeof eq>[] = [eq(clientsTable.tenantId, me.tenantId)];
 
     if (me.role === ROLES.SALES) {
-      conditions.push(clientSellerScopeCondition(me) as ReturnType<typeof eq>);
+      scopeConditions.push(clientSellerScopeCondition(me) as ReturnType<typeof eq>);
     }
+    const conditions = [...scopeConditions];
 
     if (search) {
       const searchClean = cleanCPF(search);
@@ -232,25 +327,26 @@ router.get("/clients", async (req, res, next: NextFunction): Promise<void> => {
 
     const clients = await db.select().from(clientsTable)
       .where(and(...conditions))
-      .orderBy(orderExpr)
+      .orderBy(orderExpr, desc(clientsTable.createdAt), desc(clientsTable.id))
       .limit(limitNum)
       .offset(offset);
 
     const [countResult] = await db.select({ count: sql<number>`count(*)` })
       .from(clientsTable).where(and(...conditions));
 
+    const summary = includeSummary ? await getClientListSummary(scopeConditions, me.tenantId) : undefined;
+
     const clientIds = clients.map(c => c.id);
     let lastTripMap: Record<string, string> = {};
     if (clientIds.length > 0) {
-      const lastTrips = await db.select({
+      const lastTrips = await db.selectDistinctOn([reservationsTable.clientId], {
         clientId: reservationsTable.clientId,
         tripName: tripsTable.name,
-        createdAt: reservationsTable.createdAt,
       })
         .from(reservationsTable)
         .innerJoin(tripsTable, eq(reservationsTable.tripId, tripsTable.id))
         .where(and(eq(reservationsTable.tenantId, me.tenantId), inArray(reservationsTable.clientId, clientIds)))
-        .orderBy(desc(reservationsTable.createdAt));
+        .orderBy(reservationsTable.clientId, desc(reservationsTable.createdAt), desc(reservationsTable.id));
       for (const row of lastTrips) {
         if (row.clientId && !lastTripMap[row.clientId]) lastTripMap[row.clientId] = row.tripName;
       }
@@ -280,6 +376,7 @@ router.get("/clients", async (req, res, next: NextFunction): Promise<void> => {
       total: Number(countResult?.count ?? 0),
       page: pageNum,
       limit: limitNum,
+      ...(summary ? { summary } : {}),
     });
   } catch (err) {
     next(err);

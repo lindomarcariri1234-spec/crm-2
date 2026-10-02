@@ -111,6 +111,7 @@ vi.mock("@workspace/db", () => ({
   db: {
     select:         mockSelect,
     selectDistinct: mockSelectDistinct,
+    selectDistinctOn: mockSelectDistinct,
     insert:         mockInsert,
     update:         mockUpdate,
     transaction:    mockTransaction,
@@ -308,7 +309,7 @@ function makeFakeClient(overrides: Record<string, unknown> = {}) {
 
 /**
  * Queues the 4 db.select() results that a GET /api/clients request triggers
- * when one client is returned (list → count → lastTrips join → scores join).
+ * without a summary when one client is returned (list → count → lastTrips → scores).
  */
 function queueSingleClientGet(client = makeFakeClient()) {
   queueDbResult(
@@ -386,6 +387,59 @@ describe("GET /api/clients?cpf= — CPF exact-match filter", () => {
     expect(res.status).toBe(200);
     // tenantId must appear as a value in one of the eq() calls — the tenant isolation filter
     expect(eqValues()).toContain(FAKE_USER.tenantId);
+  });
+
+  it("returns tenant-wide totals and today's birthdays independently of the paginated rows", async () => {
+    const birthDate = new Date("1990-10-01T03:00:00.000Z");
+    const birthdayClient = makeFakeClient({
+      id: "birthday-client",
+      name: "Ana",
+      email: "ana@example.com",
+      birthDate,
+      classification: "lead",
+      pipelineStage: "new",
+      totalSpent: "950.75",
+      outstandingBalance: "25.5",
+      addressCity: "Fortaleza",
+      addressState: "CE",
+      origin: "Indicação",
+    });
+    queueDbResult(
+      [], // paginated client rows
+      [{ count: 0 }], // filtered row count
+      [{ total: 820, active: 710, leads: 64, totalRevenue: "187500.75" }], // summary aggregates
+      [birthdayClient], // full birthday client row
+      [], // birthday scores
+    );
+
+    const res = await request(app).get("/api/clients?page=3&limit=1&includeSummary=true");
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+    expect(res.body.total).toBe(0);
+    expect(res.body.summary).toMatchObject({
+      total: 820,
+      active: 710,
+      leads: 64,
+      totalRevenue: 187500.75,
+      birthdayClients: [expect.objectContaining({
+        id: "birthday-client",
+        name: "Ana",
+        email: "ana@example.com",
+        whatsapp: "11999999999",
+        birthDate: birthDate.toISOString(),
+        classification: "lead",
+        totalSpent: 950.75,
+        outstandingBalance: 25.5,
+        addressCity: "Fortaleza",
+        addressState: "CE",
+        origin: "Indicação",
+        status: "active",
+        lastTripName: null,
+        purchaseScore: null,
+        churnScore: null,
+      })],
+    });
   });
 });
 

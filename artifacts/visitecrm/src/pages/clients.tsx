@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  useListClients, useCreateClient, useUpdateClient,
+  listClients, useListClients, useCreateClient, useUpdateClient,
   useListPipelineStages, useListTrips, useListUsers,
   useCreateDeal, useListPayments, useCreateReservation, useUpdateReservation,
   useCalculateCommission, useGetMe, useDeleteClient,
@@ -1851,6 +1851,7 @@ export default function Clients() {
   const [sortOrder, setSortOrder] = useState<SortOrder>(() => (new URLSearchParams(searchStr).get("sortOrder") as SortOrder) ?? "desc");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isExportingClients, setIsExportingClients] = useState(false);
   const [editClient, setEditClient] = useState<Client | null>(null);
   const [viewClientId, setViewClientId] = useState<string | null>(null);
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
@@ -1921,33 +1922,68 @@ export default function Clients() {
     ...scoreBandFilter,
   });
 
-  const { data: allClients } = useListClients({ limit: 500, page: 1 });
+  const { data: clientOverview } = useListClients({
+    limit: 1,
+    page: 1,
+    includeSummary: true,
+  });
 
   const stats = useMemo(() => {
-    const all = allClients?.data ?? [];
+    const summary = clientOverview?.summary;
     return {
-      total: allClients?.total ?? 0,
-      active: all.filter(c => c.status === "active").length,
-      leads: all.filter(c => c.classification === "lead" || c.status === "lead").length,
-      totalRevenue: all.reduce((acc, c) => acc + c.totalSpent, 0),
+      total: summary?.total ?? clientOverview?.total ?? 0,
+      active: summary?.active ?? 0,
+      leads: summary?.leads ?? 0,
+      totalRevenue: summary?.totalRevenue ?? 0,
     };
-  }, [allClients]);
+  }, [clientOverview]);
 
-  const birthdayClients = useMemo(() => {
-    // Use Brazil calendar date so birthday highlights are correct at 21h-midnight BRT
-    const [, _bm, _bd] = localToday().split("-").map(Number);
-    const todayMonth = _bm;
-    const todayDay = _bd;
-    return (allClients?.data ?? []).filter(c => {
-      if (!c.birthDate) return false;
-      try {
-        const d = parseISO(c.birthDate);
-        return d.getMonth() + 1 === todayMonth && d.getDate() === todayDay;
-      } catch {
-        return false;
+  const birthdayClients = clientOverview?.summary?.birthdayClients ?? [];
+
+  const handleExportClients = async () => {
+    if (isExportingClients) return;
+    setIsExportingClients(true);
+    try {
+      const pageSize = 500;
+      const params = { limit: pageSize, sortBy: "createdAt", sortOrder: "desc" } as const;
+      const firstPage = await listClients({ ...params, page: 1 });
+      const clientsById = new Map(firstPage.data.map(client => [client.id, client]));
+      const pageCount = Math.ceil(firstPage.total / pageSize);
+      const pagesPerBatch = 4;
+
+      for (let firstPageInBatch = 2; firstPageInBatch <= pageCount; firstPageInBatch += pagesPerBatch) {
+        const pageNumbers = Array.from(
+          { length: Math.min(pagesPerBatch, pageCount - firstPageInBatch + 1) },
+          (_, index) => firstPageInBatch + index,
+        );
+        const pages = await Promise.all(
+          pageNumbers.map(page => listClients({ ...params, page })),
+        );
+        for (const page of pages) {
+          for (const client of page.data) clientsById.set(client.id, client);
+        }
       }
-    });
-  }, [allClients]);
+
+      const clients = [...clientsById.values()];
+      if (clients.length !== firstPage.total) {
+        throw new Error("The client list changed during export");
+      }
+      if (clients.length === 0) {
+        toast({ title: "Nenhum cliente para exportar" });
+        return;
+      }
+      exportClientsCsv(clients);
+      toast({ title: `${clients.length} clientes exportados!` });
+    } catch {
+      toast({
+        title: "Não foi possível exportar os clientes",
+        description: "Tente novamente em alguns instantes.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExportingClients(false);
+    }
+  };
 
   const handleSort = useCallback((field: SortField) => {
     if (sortBy === field) {
@@ -2041,13 +2077,15 @@ export default function Clients() {
           <Button variant="outline" size="sm" onClick={() => setIsImportOpen(true)}>
             <Upload className="w-4 h-4 mr-1" /> Importar planilha
           </Button>
-          <Button variant="outline" size="sm" onClick={() => {
-            const clients = allClients?.data ?? [];
-            if (clients.length === 0) { toast({ title: "Nenhum cliente para exportar" }); return; }
-            exportClientsCsv(clients);
-            toast({ title: `${clients.length} clientes exportados!` });
-          }}>
-            <Download className="w-4 h-4 mr-1" /> Exportar CSV
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportClients}
+            disabled={isExportingClients}
+            aria-busy={isExportingClients}
+            data-testid="button-export-clients-csv"
+          >
+            <Download className="w-4 h-4 mr-1" /> {isExportingClients ? "Exportando..." : "Exportar CSV"}
           </Button>
           <Button size="sm" onClick={() => { setEditClient(null); setIsCreateOpen(true); }}>
             <Plus className="w-4 h-4 mr-1" /> Novo Cliente

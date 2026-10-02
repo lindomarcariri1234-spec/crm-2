@@ -7,9 +7,18 @@
  */
 import type { Client } from "./client";
 
+export interface ClientListSummary {
+  total: number;
+  active: number;
+  leads: number;
+  totalRevenue: number;
+  birthdayClients: Client[];
+}
+
 export interface ClientListResponse {
   data: Client[];
   total: number;
   page: number;
   limit: number;
+  summary?: ClientListSummary;
 }

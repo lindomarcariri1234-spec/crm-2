@@ -51,6 +51,7 @@ export type ListClientsParams = {
    * @nullable
    */
   dateTo?: string | null;
+  includeSummary?: boolean;
   /**
    * @nullable
    */

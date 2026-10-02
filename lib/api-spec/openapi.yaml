@@ -1036,6 +1036,11 @@ paths:
           schema:
             type: integer
             default: 20
+        - name: includeSummary
+          in: query
+          description: Include tenant-scoped totals and today's birthday clients, independent of list filters.
+          schema:
+            type: boolean
       responses:
         "200":
           description: List of clients
@@ -7105,7 +7110,27 @@ components:
           type: integer
         limit:
           type: integer
+        summary:
+          $ref: "#/components/schemas/ClientListSummary"
       required: [data, total, page, limit]
+
+    ClientListSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        active:
+          type: integer
+        leads:
+          type: integer
+        totalRevenue:
+          type: number
+          format: double
+        birthdayClients:
+          type: array
+          items:
+            $ref: "#/components/schemas/Client"
+      required: [total, active, leads, totalRevenue, birthdayClients]
 
     CreateClientBody:
       type: object

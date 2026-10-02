@@ -874,11 +874,20 @@ export interface Client {
   scoresCalculatedAt?: string | null;
 }
 
+export interface ClientListSummary {
+  total: number;
+  active: number;
+  leads: number;
+  totalRevenue: number;
+  birthdayClients: Client[];
+}
+
 export interface ClientListResponse {
   data: Client[];
   total: number;
   page: number;
   limit: number;
+  summary?: ClientListSummary;
 }
 
 export interface CreateClientBody {
@@ -5478,6 +5487,7 @@ export type ListClientsParams = {
    * @nullable
    */
   dateTo?: string | null;
+  includeSummary?: boolean;
   /**
    * @nullable
    */
