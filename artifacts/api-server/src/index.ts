@@ -19,6 +19,7 @@ import { FETCH_PATCH_APPLIED } from "./lib/fetch-patch";
 import { logger } from "./lib/logger";
 import { runMigrations } from "@workspace/db";
 import { initStripeSync } from "./lib/stripeSync";
+import { runApiStartup } from "./lib/api-startup";
 import { backfillEncryptedCredentials } from "./lib/credential-backfill";
 import { seedPlansIfMissing } from "./lib/seed-plans";
 import { runScheduledJob, scheduleDistributedCron } from "./lib/distributed-scheduler";
@@ -234,52 +235,54 @@ function warnDevServerSkipped(port: number): Promise<void> {
   });
 }
 
-// ── Bind HTTP port IMMEDIATELY so the Cloud Run startup probe gets a 200
-//    from /api/healthz without waiting for migrations or Redis. ──
-const server = app.listen(port, (err) => {
-  if (err) {
-    const nodeErr = err as NodeJS.ErrnoException;
-    if (nodeErr.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
-      // Drain stderr fully before exiting so the banner is not silently
-      // discarded when the workflow pipes the process output.
-      void warnDevServerSkipped(port).then(() => process.exit(0));
-      return;
-    }
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
-  logger.info({ port }, "Server listening");
-});
+function listenForRequests(): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port);
+    server.once("listening", () => {
+      logger.info({ port }, "Server listening");
+      resolve(true);
+    });
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
+        // Drain stderr fully before exiting so the banner is not silently
+        // discarded when the workflow pipes the process output.
+        void warnDevServerSkipped(port).then(() => process.exit(0));
+        resolve(false);
+        return;
+      }
+      logger.error({ err }, "Error listening on port");
+      reject(err);
+    });
+  });
+}
 
-// Handle EADDRINUSE via the error event (Node.js http.Server canonical path)
-server.on("error", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EADDRINUSE" && process.env["NODE_ENV"] !== "production") {
-    // Drain stderr fully before exiting so the banner is not silently
-    // discarded when the workflow pipes the process output.
-    void warnDevServerSkipped(port).then(() => process.exit(0));
-    return;
-  }
-  logger.error({ err }, "Error listening on port");
-  process.exit(1);
-});
-
-// ── Run migrations + backfill in the background ──
-// applyMigrations() aborts on migration or credential-backfill failure:
-// serving against a partial schema or half-encrypted credentials is worse
-// than a clean restart.
-applyMigrations()
-  .catch((err) => {
-    logger.error({ err }, "Startup migration or credential backfill failed — aborting boot");
-    process.exit(1);
-  })
-  .then(() => {
-    // Initialize Stripe sync engine (non-fatal — warns if STRIPE_SECRET_KEY not set)
-    // Sequence: getStripeSync() → findOrCreateManagedWebhook() → syncBackfill()
-    void initStripeSync();
-  })
-  .then(() => {
-    // ── Background: cron + BullMQ workers (non-fatal if Redis is unavailable) ──
-    void (async () => {
+void runApiStartup(process.env, {
+  applyMigrations,
+  listen: listenForRequests,
+  initializeStripeSync: () => {
+    // Stripe Sync provisions a managed webhook and can make provider calls.
+    // It is intentionally started only by the production startup policy.
+    void initStripeSync().catch((err) => {
+      logger.error({ err }, "Stripe Sync initialization failed");
+    });
+  },
+  onMigrationsSkipped: () => {
+    logger.info(
+      "Skipping startup migrations outside production; run `pnpm --filter @workspace/db migrate` separately, or set RUN_STARTUP_MIGRATIONS=true for an intentional local bootstrap.",
+    );
+  },
+  onStripeSyncSkipped: () => {
+    logger.info("Skipping Stripe Sync outside production");
+  },
+  onBackgroundServicesSkipped: () => {
+    logger.info(
+      "Skipping scheduled/background services outside production; set ENABLE_BACKGROUND_SERVICES=true to opt in locally.",
+    );
+  },
+}).then((shouldStartBackgroundServices) => {
+  if (!shouldStartBackgroundServices) return;
+  // ── Background: cron + BullMQ workers (non-fatal if Redis is unavailable) ──
+  void (async () => {
       // All node-cron work is lease-protected across API replicas.
       const recoverDeletedAccounts = async () => {
         try {
@@ -647,5 +650,8 @@ applyMigrations()
         });
         logger.info("[chatbot-delivery] node-cron retry registered (every 5 minutes)");
       }
-    })();
-  });
+  })();
+}).catch((err) => {
+  logger.error({ err }, "API startup failed before serving — aborting boot");
+  process.exit(1);
+});
