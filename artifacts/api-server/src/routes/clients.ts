@@ -858,7 +858,10 @@ router.get("/clients/:clientId/activities", async (req, res, next: NextFunction)
     const activities = await db.select().from(notesTable)
       .where(eq(notesTable.clientId, req.params.clientId))
       .orderBy(desc(notesTable.createdAt));
-    res.json(activities.map(n => ({
+    const visibleActivities = me.role === ROLES.CLIENT
+      ? activities.filter(activity => !activity.isPrivate)
+      : activities;
+    res.json(visibleActivities.map(n => ({
       id: n.id, clientId: n.clientId, type: n.type,
       content: n.content,
       metadata: n.metadata ? (() => { try { return JSON.parse(n.metadata!); } catch { return null; } })() : null,
@@ -951,7 +954,10 @@ router.get("/clients/:clientId/notes", async (req, res, next: NextFunction): Pro
     const notes = await db.select().from(notesTable)
       .where(eq(notesTable.clientId, req.params.clientId))
       .orderBy(desc(notesTable.createdAt));
-    res.json(notes.map(n => ({
+    const visibleNotes = me.role === ROLES.CLIENT
+      ? notes.filter(note => !note.isPrivate)
+      : notes;
+    res.json(visibleNotes.map(n => ({
       id: n.id, clientId: n.clientId, content: n.content,
       isPrivate: n.isPrivate, createdById: n.createdById,
       createdAt: n.createdAt.toISOString(),

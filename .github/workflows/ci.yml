@@ -108,6 +108,10 @@ jobs:
       - name: Test frontend suite
         run: pnpm --filter @workspace/visitecrm run test -- --pool=forks --maxWorkers=1 --no-file-parallelism
 
+      - name: Verify authenticated frontend role gates on pull requests
+        if: github.event_name == 'pull_request'
+        run: pnpm --filter @workspace/visitecrm exec vitest run src/__tests__/role-gate.auth.test.tsx --pool=forks --maxWorkers=1 --no-file-parallelism
+
       - name: Test publication verification
         run: node --test scripts/verify-publication.test.mjs scripts/verify-publication-chunks.test.mjs scripts/verify-referral-publication.test.mjs scripts/frontend-bundle-size.test.mjs
 
@@ -118,6 +122,12 @@ jobs:
         run: |
           pnpm --filter @workspace/cliente-app run typecheck
           pnpm --filter @workspace/guide-app run typecheck
+
+      - name: Test mobile behavioral suites on pull requests
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm --filter @workspace/guide-app test
+          pnpm --filter @workspace/cliente-app test
 
       - name: Build mobile artifacts
         env:
@@ -137,6 +147,42 @@ jobs:
 
       - name: Verify built storefront publication marker
         run: node scripts/publication-marker.mjs artifacts/visitecrm/dist/public/index.html ${{ github.sha }}
+
+      - name: Verify local PR build JavaScript chunks
+        if: github.event_name == 'pull_request'
+        env:
+          PUBLICATION_CHUNK_URL: http://127.0.0.1:4173
+          PUBLICATION_CHUNK_SELLER_PATHS: /meu-painel,/vouchers
+          PUBLICATION_CHUNK_SUPERADMIN_PATHS: /admin,/admin/tenants
+          PUBLICATION_CHUNK_CLIENT_PATHS: /perfil
+        run: |
+          pnpm --filter @workspace/visitecrm exec vite preview --config vite.config.ts --host 127.0.0.1 --port 4173 --strictPort &
+          preview_pid=$!
+          stop_preview() {
+            pkill -TERM -P "$preview_pid" 2>/dev/null || true
+            kill "$preview_pid" 2>/dev/null || true
+            wait "$preview_pid" 2>/dev/null || true
+          }
+          trap stop_preview EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:4173/ -o /dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$preview_pid" 2>/dev/null; then
+              echo "Vite preview exited before becoming ready." >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Timed out waiting for Vite preview at 127.0.0.1:4173." >&2
+            exit 1
+          fi
+
+          node scripts/verify-publication-chunks.mjs --verify-local-build-chunks
 
       - name: Verify deployed Vercel canonical domain
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

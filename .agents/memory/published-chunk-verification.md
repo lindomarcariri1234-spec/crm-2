@@ -7,4 +7,10 @@ The publication smoke check can validate Vite code-split chunks without adding a
 
 **Why:** The failure mode is an HTML document or stale/missing asset served at a JavaScript URL. Recursive published-asset checks catch this at the deployed origin while avoiding hard-coded credentials and the maintenance cost of shipping a browser binary in CI.
 
-**How to apply:** Keep public and protected routes in the same check, include the route name in every asset failure, and never print or commit the authentication header. A browser-level check may complement this later for runtime-only imports, but should not replace the cheap published-asset crawl.
+**How to apply:** Keep public and protected routes in the same check, include the route name in every asset failure, and never print or commit the authentication header. For PRs, validate the exact local build with a loopback-only chunk crawl plus simulated-role route-gate tests; keep the real Clerk browser smoke restricted to trusted main/manual runs.
+
+For PR verification, do not authenticate against a Vercel preview that rewrites API/assets to production or expose production Clerk sessions to PR code. The local built-chunk mode must reject non-loopback URLs.
+
+**Why:** a preview can reach production data, and code under review must not receive credentials or sessions it could exfiltrate.
+
+**How to apply:** use the local build and simulated identities for required PR checks; use one-use Clerk tokens only for trusted publication smoke runs.

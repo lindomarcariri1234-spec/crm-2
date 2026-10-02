@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useSearch, useLocation } from "wouter";
 import {
   useListTrips, useCreateTrip, useDeleteTrip, useGetDashboardUpcomingTrips, useGetMe,
@@ -11,15 +11,57 @@ const EXPORT_BATCH_SIZE = 500;
 
 type ExportTripsBatchHandler = (trips: Trip[]) => void;
 
+interface TripFilters {
+  search: string;
+  statusFilter: string;
+  typeFilter: string;
+  dateFilter: string;
+  page: number;
+}
+
+function parseTripFilters(searchStr: string): TripFilters {
+  const params = new URLSearchParams(searchStr);
+  return {
+    search: params.get("q") ?? "",
+    statusFilter: params.get("status") ?? "all",
+    typeFilter: params.get("type") ?? "all",
+    dateFilter: params.get("date") ?? "",
+    page: parseInt(params.get("page") ?? "1") || 1,
+  };
+}
+
+function tripFiltersMatch(left: TripFilters, right: TripFilters): boolean {
+  return left.search === right.search
+    && left.statusFilter === right.statusFilter
+    && left.typeFilter === right.typeFilter
+    && left.dateFilter === right.dateFilter
+    && left.page === right.page;
+}
+
+function serializeTripFilters(filters: TripFilters): string {
+  const params = new URLSearchParams();
+  if (filters.search) params.set("q", filters.search);
+  if (filters.statusFilter !== "all") params.set("status", filters.statusFilter);
+  if (filters.typeFilter !== "all") params.set("type", filters.typeFilter);
+  if (filters.dateFilter) params.set("date", filters.dateFilter);
+  if (filters.page > 1) params.set("page", String(filters.page));
+  return params.toString();
+}
+
 export function useTrips() {
   const searchStr = useSearch();
   const [, navigate] = useLocation();
 
-  const [search, setSearch] = useState(() => new URLSearchParams(searchStr).get("q") ?? "");
-  const [statusFilter, setStatusFilter] = useState(() => new URLSearchParams(searchStr).get("status") ?? "all");
-  const [typeFilter, setTypeFilterState] = useState(() => new URLSearchParams(searchStr).get("type") ?? "all");
-  const [dateFilter, setDateFilterState] = useState(() => new URLSearchParams(searchStr).get("date") ?? "");
-  const [page, setPage] = useState(() => parseInt(new URLSearchParams(searchStr).get("page") ?? "1") || 1);
+  const initialFiltersRef = useRef<TripFilters | null>(null);
+  const initialFilters = initialFiltersRef.current ?? (initialFiltersRef.current = parseTripFilters(searchStr));
+  const lastObservedSearchStrRef = useRef(searchStr);
+  const pendingUrlFiltersRef = useRef<TripFilters | null>(null);
+
+  const [search, setSearch] = useState(initialFilters.search);
+  const [statusFilter, setStatusFilter] = useState(initialFilters.statusFilter);
+  const [typeFilter, setTypeFilterState] = useState(initialFilters.typeFilter);
+  const [dateFilter, setDateFilterState] = useState(initialFilters.dateFilter);
+  const [page, setPage] = useState(initialFilters.page);
   const setTypeFilter = useCallback((value: string) => {
     setTypeFilterState(value);
     setPage(1);
@@ -30,16 +72,38 @@ export function useTrips() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (search) params.set("q", search);
-    if (statusFilter !== "all") params.set("status", statusFilter);
-    if (typeFilter !== "all") params.set("type", typeFilter);
-    if (dateFilter) params.set("date", dateFilter);
-    if (page > 1) params.set("page", String(page));
-    const qs = params.toString();
+    const currentFilters = { search, statusFilter, typeFilter, dateFilter, page };
+
+    if (lastObservedSearchStrRef.current !== searchStr) {
+      lastObservedSearchStrRef.current = searchStr;
+      const incomingFilters = parseTripFilters(searchStr);
+      pendingUrlFiltersRef.current = incomingFilters;
+
+      if (tripFiltersMatch(currentFilters, incomingFilters)) {
+        pendingUrlFiltersRef.current = null;
+        return;
+      }
+
+      setSearch(incomingFilters.search);
+      setStatusFilter(incomingFilters.statusFilter);
+      setTypeFilterState(incomingFilters.typeFilter);
+      setDateFilterState(incomingFilters.dateFilter);
+      setPage(incomingFilters.page);
+      return;
+    }
+
+    const pendingUrlFilters = pendingUrlFiltersRef.current;
+    if (pendingUrlFilters) {
+      if (tripFiltersMatch(currentFilters, pendingUrlFilters)) {
+        pendingUrlFiltersRef.current = null;
+      }
+      return;
+    }
+
+    const qs = serializeTripFilters(currentFilters);
+    if (new URLSearchParams(searchStr).toString() === qs) return;
     navigate(qs ? `?${qs}` : window.location.pathname, { replace: true });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, statusFilter, typeFilter, dateFilter, page]);
+  }, [search, statusFilter, typeFilter, dateFilter, page, searchStr, navigate]);
 
   const hasActiveFilters = !!(search || statusFilter !== "all" || typeFilter !== "all" || dateFilter);
 

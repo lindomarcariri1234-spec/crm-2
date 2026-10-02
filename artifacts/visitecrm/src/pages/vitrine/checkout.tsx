@@ -1072,12 +1072,15 @@ export default function VitrineCheckout({
     const POLL_INTERVAL = 2500;
     const TIMEOUT_MS = 30000;
     let stopped = false;
+    let pollTimeout: number | undefined;
     const startedAt = Date.now();
 
     async function poll() {
       if (stopped) return;
+      pollTimeout = undefined;
       try {
         const order = await publicStoreApi.getOrder(slug, orderNumber!, paymentToken!);
+        if (stopped) return;
         setStripePaymentInstructions({
           pixQrCodeUrl: order.pixQrCodeUrl,
           pixCopyPaste: order.pixCopyPaste ?? order.pixQrCode,
@@ -1089,17 +1092,25 @@ export default function VitrineCheckout({
           return;
         }
       } catch {
+        if (stopped) return;
         // ignore fetch errors, keep trying
       }
+      if (stopped) return;
       if (Date.now() - startedAt >= TIMEOUT_MS) {
         setStripePaymentConfirmed("timeout");
         return;
       }
-      setTimeout(poll, POLL_INTERVAL);
+      pollTimeout = window.setTimeout(poll, POLL_INTERVAL);
     }
 
     poll();
-    return () => { stopped = true; };
+    return () => {
+      stopped = true;
+      if (pollTimeout !== undefined) {
+        window.clearTimeout(pollTimeout);
+        pollTimeout = undefined;
+      }
+    };
   }, [step, stripePaymentConfirmed, orderNumber, paymentToken, slug]);
 
   if (items.length === 0 && step !== "confirmado") {

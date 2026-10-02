@@ -69,6 +69,15 @@ function normalizeBaseUrl(configuredUrl) {
   return url;
 }
 
+function assertLoopbackBaseUrl(baseUrl) {
+  const hostname = baseUrl.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) {
+    throw new Error(
+      `Local built-chunk verification is restricted to loopback URLs (localhost, 127.0.0.1, or ::1); received ${baseUrl.origin}.`,
+    );
+  }
+}
+
 function normalizePath(pathname, variableName) {
   if (!pathname?.trim() || !pathname.startsWith("/")) {
     throw new Error(`${variableName} must be an absolute path starting with "/".`);
@@ -1370,12 +1379,80 @@ export async function verifyPublishedChunks({
   );
 }
 
+export async function verifyLocalBuiltChunks({
+  publicUrl,
+  publicPath = DEFAULT_PUBLIC_PATH,
+  environment = process.env,
+  timeoutMs = getTimeoutMs(),
+  fetchImpl = fetch,
+} = {}) {
+  const baseUrl = normalizeBaseUrl(
+    publicUrl ?? environment["PUBLICATION_CHUNK_URL"],
+  );
+  assertLoopbackBaseUrl(baseUrl);
+
+  const protectedRoutes = PROFILE_ENVIRONMENTS.flatMap((profile) => {
+    const configuredPaths = environment[profile.pathEnvironmentVariable]?.trim();
+    if (!configuredPaths) {
+      throw new Error(
+        `${profile.pathEnvironmentVariable} must be configured for local built-chunk verification.`,
+      );
+    }
+    return getConfiguredProfilePaths(profile, environment).map((route) => ({
+      route,
+      profile: profile.name,
+    }));
+  });
+  const routes = [
+    { route: normalizePath(publicPath, "PUBLICATION_CHUNK_PUBLIC_PATH") },
+    ...protectedRoutes,
+  ];
+  const headers = { "User-Agent": USER_AGENT };
+  const localFetchImpl = (input, init = {}) =>
+    fetchImpl(input, { ...init, redirect: "manual" });
+
+  return Promise.all(
+    routes.map(async ({ route, profile }) => {
+      const result = await crawlRoute({
+        route,
+        url: new URL(route, baseUrl),
+        headers,
+        expectedOrigin: baseUrl.origin,
+        timeoutMs,
+        fetchImpl: localFetchImpl,
+      });
+      return profile ? { ...result, profile } : result;
+    }),
+  );
+}
+
 async function main() {
   if (process.argv.includes("--check-route-coverage")) {
     const coverage = await checkProtectedPublicationRouteCoverage();
     console.log(
       `[publication-chunks] route coverage OK: checked ${coverage.changedRoutes.length} protected route change(s) against ${coverage.configuredPaths.length} configured path(s)`,
     );
+    return;
+  }
+
+  if (process.argv.includes("--verify-local-build-chunks")) {
+    const results = await verifyLocalBuiltChunks();
+    let failed = false;
+    for (const result of results) {
+      const profileSuffix = result.profile ? ` [${result.profile}]` : "";
+      console.log(
+        `[publication-chunks] ${result.ok ? "PASS" : "FAIL"} ${result.route}${profileSuffix}: checked ${result.assets.length} JavaScript asset(s)`,
+      );
+      for (const failure of result.failures) {
+        console.error(`[publication-chunks] ${failure}`);
+        failed = true;
+      }
+    }
+    if (failed) {
+      throw new Error(
+        "Local built JavaScript chunk verification failed. Each route must load every same-origin JavaScript asset with a successful JavaScript content type.",
+      );
+    }
     return;
   }
 

@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useColors } from "@/hooks/useColors";
 import { apiFetch } from "@/lib/api";
+import { saveClientProfile } from "@/lib/profile-save";
 import type { ClientPortalProfile } from "@/lib/types";
 import { cleanCpf, formatCpf } from "@/lib/cpf";
 
@@ -89,29 +90,19 @@ export default function PerfilScreen() {
     setEditing(true);
   }
 
-  function parseBirthDate(input: string): string | null {
-    const cleaned = input.replace(/\D/g, "");
-    if (cleaned.length === 8) {
-      const d = cleaned.slice(0, 2);
-      const m = cleaned.slice(2, 4);
-      const y = cleaned.slice(4, 8);
-      return `${y}-${m}-${d}`;
-    }
-    return null;
-  }
-
   async function handleSave() {
     setSaving(true);
     try {
-      const token = await getToken();
-      const birthDate = birthDateInput.trim() ? parseBirthDate(birthDateInput) : undefined;
-      await apiFetch<unknown>(token, "PATCH", "/client/me", {
-        name: nameInput.trim() || undefined,
-        phone: phoneInput.trim() || null,
-        cpf: cpfInput.trim() || null,
-        ...(birthDate !== undefined ? { birthDate } : {}),
+      await saveClientProfile({
+        name: nameInput,
+        phone: phoneInput,
+        cpf: cpfInput,
+        birthDate: birthDateInput,
+      }, {
+        getToken,
+        apiFetch,
+        invalidateProfile: () => queryClient.invalidateQueries({ queryKey: ["client-profile"] }),
       });
-      await queryClient.invalidateQueries({ queryKey: ["client-profile"] });
       setEditing(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {

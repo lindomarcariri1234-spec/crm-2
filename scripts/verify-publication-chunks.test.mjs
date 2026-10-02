@@ -8,6 +8,7 @@ import {
   getChangedProtectedPublicationRoutes,
   getProtectedPublicationRoutes,
   getWorkflowPublicationPaths,
+  verifyLocalBuiltChunks,
   verifyPublishedChunks,
   verifyPublishedInteractions,
 } from "./verify-publication-chunks.mjs";
@@ -227,6 +228,149 @@ test("identifies the route and missing JavaScript asset", async () => {
     protectedResult?.failures.join("\n") ?? "",
     /\/dashboard: JavaScript asset https:\/\/visitecrm\.com\/assets\/missing\.js failed: HTTP 404/,
   );
+});
+
+test("crawls the local build's public and configured protected routes recursively without auth", async () => {
+  const calls = [];
+  const baseUrl = "http://127.0.0.1:4173";
+  const configuredPaths = new Set([
+    "/",
+    "/meu-painel",
+    "/vouchers",
+    "/admin",
+    "/admin/tenants",
+    "/perfil",
+  ]);
+  const fetchImpl = async (input, init) => {
+    const url = new URL(input);
+    calls.push({ url: url.href, init });
+    assert.equal(url.origin, baseUrl);
+    assert.equal(init.redirect, "manual");
+    assert.equal(init.headers.Authorization, undefined);
+    assert.equal(init.headers.Cookie, undefined);
+
+    if (configuredPaths.has(url.pathname)) {
+      return response(
+        200,
+        '<script type="module" src="/assets/entry.js"></script>',
+        url.href,
+        "text/html; charset=utf-8",
+      );
+    }
+    if (url.pathname === "/assets/entry.js") {
+      return response(
+        200,
+        'import("./chunks/role.js"); const shared = "assets/shared.js";',
+        url.href,
+        "application/javascript",
+      );
+    }
+    if (url.pathname === "/assets/chunks/role.js") {
+      return response(
+        200,
+        'import("./nested.js");',
+        url.href,
+        "text/javascript",
+      );
+    }
+    if (url.pathname === "/assets/chunks/nested.js") {
+      return response(
+        200,
+        "export default function RolePage() {}",
+        url.href,
+        "application/ecmascript",
+      );
+    }
+    if (url.pathname === "/assets/shared.js") {
+      return response(200, "export const shared = true;", url.href, "text/javascript");
+    }
+    throw new Error(`unexpected local request ${url.href}`);
+  };
+
+  const results = await verifyLocalBuiltChunks({
+    publicUrl: baseUrl,
+    environment: {
+      PUBLICATION_CHUNK_SELLER_PATHS: "/meu-painel,/vouchers",
+      PUBLICATION_CHUNK_SUPERADMIN_PATHS: "/admin,/admin/tenants",
+      PUBLICATION_CHUNK_CLIENT_PATHS: "/perfil",
+    },
+    fetchImpl,
+  });
+
+  assert.deepEqual(
+    results.map(({ route, profile, ok }) => ({ route, profile, ok })),
+    [
+      { route: "/", profile: undefined, ok: true },
+      { route: "/meu-painel", profile: "seller", ok: true },
+      { route: "/vouchers", profile: "seller", ok: true },
+      { route: "/admin", profile: "superadmin", ok: true },
+      { route: "/admin/tenants", profile: "superadmin", ok: true },
+      { route: "/perfil", profile: "client", ok: true },
+    ],
+  );
+  assert.deepEqual(results[0].assets, [
+    `${baseUrl}/assets/entry.js`,
+    `${baseUrl}/assets/chunks/role.js`,
+    `${baseUrl}/assets/shared.js`,
+    `${baseUrl}/assets/chunks/nested.js`,
+  ]);
+  assert.ok(calls.every(({ url }) => new URL(url).origin === baseUrl));
+});
+
+test("fails a local recursive chunk crawl when a JavaScript import is served as HTML", async () => {
+  const baseUrl = "http://localhost:4173";
+  const fetchImpl = async (input) => {
+    const url = new URL(input);
+    if (url.pathname === "/" || url.pathname === "/meu-painel" ||
+        url.pathname === "/admin" || url.pathname === "/perfil") {
+      return response(
+        200,
+        '<script type="module" src="/assets/entry.js"></script>',
+        url.href,
+        "text/html",
+      );
+    }
+    if (url.pathname === "/assets/entry.js") {
+      return response(200, 'import("./lazy.js");', url.href, "application/javascript");
+    }
+    if (url.pathname === "/assets/lazy.js") {
+      return response(200, "<!doctype html>", url.href, "text/html");
+    }
+    throw new Error(`unexpected local request ${url.href}`);
+  };
+
+  const results = await verifyLocalBuiltChunks({
+    publicUrl: baseUrl,
+    environment: {
+      PUBLICATION_CHUNK_SELLER_PATHS: "/meu-painel",
+      PUBLICATION_CHUNK_SUPERADMIN_PATHS: "/admin",
+      PUBLICATION_CHUNK_CLIENT_PATHS: "/perfil",
+    },
+    fetchImpl,
+  });
+
+  assert.equal(results[0].ok, false);
+  assert.match(
+    results[0].failures.join("\n"),
+    /\/: JavaScript asset http:\/\/localhost:4173\/assets\/lazy\.js failed: HTTP 200 .*content-type: text\/html/,
+  );
+});
+
+test("refuses non-loopback URLs before fetching in local build mode", async () => {
+  let fetchCalled = false;
+
+  await assert.rejects(
+    verifyLocalBuiltChunks({
+      publicUrl: "https://visitecrm.com",
+      environment: {},
+      fetchImpl: async () => {
+        fetchCalled = true;
+        throw new Error("fetch must not be called");
+      },
+    }),
+    /Local built-chunk verification is restricted to loopback URLs/,
+  );
+  assert.equal(fetchCalled, false);
 });
 
 test("requires a protected test session without exposing a fallback credential", async () => {

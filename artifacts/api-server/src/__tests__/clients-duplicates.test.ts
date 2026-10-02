@@ -623,3 +623,94 @@ describe("POST /api/clients/:id/merge — transactional merge", () => {
     expect(tx.delete).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: client note/activity visibility
+// ---------------------------------------------------------------------------
+
+describe("GET /api/clients/:clientId/notes and activities — private visibility", () => {
+  const requireAuthMock = vi.mocked(requireAuth);
+  const clientUser = {
+    id: "client-user-001",
+    tenantId: "tenant-001",
+    role: "cliente",
+    name: "Maria Silva",
+    email: "maria@example.com",
+  };
+  const privateNote = {
+    id: "note-private",
+    clientId: "client-001",
+    type: "note",
+    content: "Internal sales context",
+    metadata: null,
+    isPrivate: true,
+    createdById: ADMIN_USER.id,
+    createdAt: new Date("2024-01-02T00:00:00Z"),
+  };
+  const publicNote = {
+    ...privateNote,
+    id: "note-public",
+    content: "Public follow-up",
+    isPrivate: false,
+  };
+  const privateAndPublicNotes = [privateNote, publicNote];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockLimit.mockReset();
+    mockOrderBy.mockReset();
+    mockWhere.mockReturnValue({ limit: mockLimit, groupBy: mockGroupBy, orderBy: mockOrderBy });
+    mockGroupBy.mockReturnValue({ having: mockHaving });
+    mockFrom.mockReturnValue({ where: mockWhere, limit: mockLimit, orderBy: mockOrderBy });
+    mockSelect.mockReturnValue({ from: mockFrom });
+    requireAuthMock.mockResolvedValue(ADMIN_USER as never);
+  });
+
+  function mockClientAndNotes(user: typeof clientUser | typeof ADMIN_USER) {
+    requireAuthMock.mockResolvedValue(user as never);
+    mockLimit.mockResolvedValueOnce([makeFakeClient({ userId: user.id })]);
+    mockOrderBy.mockResolvedValueOnce(privateAndPublicNotes);
+  }
+
+  it("hides private notes from client callers", async () => {
+    mockClientAndNotes(clientUser);
+
+    const res = await request(buildApp()).get("/api/clients/client-001/notes");
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((note: { id: string }) => note.id)).toEqual(["note-public"]);
+    expect(res.body[0].content).toBe("Public follow-up");
+    expect(res.body.some((note: { isPrivate: boolean }) => note.isPrivate)).toBe(false);
+  });
+
+  it("preserves private-note visibility for staff callers", async () => {
+    mockClientAndNotes(ADMIN_USER);
+
+    const res = await request(buildApp()).get("/api/clients/client-001/notes");
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((note: { id: string }) => note.id)).toEqual(["note-private", "note-public"]);
+    expect(res.body[0].isPrivate).toBe(true);
+  });
+
+  it("hides private activities from client callers", async () => {
+    mockClientAndNotes(clientUser);
+
+    const res = await request(buildApp()).get("/api/clients/client-001/activities");
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((activity: { id: string }) => activity.id)).toEqual(["note-public"]);
+    expect(res.body[0].content).toBe("Public follow-up");
+    expect(res.body.some((activity: { isPrivate: boolean }) => activity.isPrivate)).toBe(false);
+  });
+
+  it("preserves private-activity visibility for staff callers", async () => {
+    mockClientAndNotes(ADMIN_USER);
+
+    const res = await request(buildApp()).get("/api/clients/client-001/activities");
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((activity: { id: string }) => activity.id)).toEqual(["note-private", "note-public"]);
+    expect(res.body[0].isPrivate).toBe(true);
+  });
+});

@@ -526,6 +526,116 @@ describe("VitrineCheckout — referral credit confirmation", () => {
     expect(createOrderSpy).not.toHaveBeenCalled();
   });
 
+  it("ignores a deferred payment poll after cleanup and clears its pending timer", async () => {
+    vi.useFakeTimers();
+    emptyCart.value = true;
+    window.history.pushState(
+      {},
+      "",
+      "/loja/loja-teste/checkout?payment_intent=pi_3ds_cleanup&payment_intent_client_secret=cs_3ds_cleanup&redirect_status=succeeded",
+    );
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) =>
+        key === "pending_order_lookup"
+          ? JSON.stringify({
+              version: 1,
+              entries: [
+                {
+                  orderNumber: "ORD-3DS-CLEANUP",
+                  token: "cleanup-payment-token",
+                  storeSlug: "loja-teste",
+                  paymentIntentId: "pi_3ds_cleanup",
+                },
+              ],
+            })
+          : null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+
+    let resolveDeferredPoll!: (order: { paymentStatus: string }) => void;
+    const deferredPoll = new Promise<{ paymentStatus: string }>((resolve) => {
+      resolveDeferredPoll = resolve;
+    });
+    getOrderSpy
+      .mockResolvedValueOnce({
+        ...makeOrder("460.00", 0),
+        orderNumber: "ORD-3DS-CLEANUP",
+        customerName: "Marina Lima",
+        customerEmail: "marina@example.com",
+        paymentStatus: "pending",
+        paymentToken: "cleanup-payment-token",
+      })
+      .mockReturnValueOnce(deferredPoll)
+      .mockResolvedValueOnce({ paymentStatus: "pending" });
+
+    const { default: VitrineCheckout } = await import(
+      "../pages/vitrine/checkout.js"
+    );
+    const { container, rerender } = await renderComponent(
+      createElement(VitrineCheckout, {
+        slug: "loja-teste",
+        store: makeStore({
+          paymentMethods: ["credit_card"],
+          stripeEnabled: true,
+          stripePublicKey: "pk_test_store",
+        }),
+      }),
+    );
+
+    await flushAct(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getOrderSpy).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Processando pagamento...");
+
+    const otherStore = makeStore({
+      paymentMethods: ["credit_card"],
+      stripeEnabled: true,
+      stripePublicKey: "pk_test_store",
+    });
+    await rerender(
+      createElement(
+        VitrineThemeProvider,
+        { store: otherStore },
+        createElement(VitrineCheckout, { slug: "outra-loja", store: otherStore }),
+      ),
+    );
+    await flushAct(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getOrderSpy).toHaveBeenCalledTimes(3);
+    expect(getOrderSpy).toHaveBeenNthCalledWith(
+      3,
+      "outra-loja",
+      "ORD-3DS-CLEANUP",
+      "cleanup-payment-token",
+    );
+    expect(vi.getTimerCount()).toBe(1);
+
+    await flushAct(async () => {
+      resolveDeferredPoll({ paymentStatus: "paid" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("Processando pagamento...");
+    expect(container.textContent).not.toContain("Pagamento confirmado!");
+    expect(vi.getTimerCount()).toBe(1);
+
+    await cleanupRoots();
+    expect(vi.getTimerCount()).toBe(0);
+    await flushAct(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(getOrderSpy).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps the order and cashback summary available when card confirmation fails", async () => {
     createOrderSpy.mockResolvedValue(makeOrder("460.00", 40));
     createPaymentIntentSpy.mockResolvedValue({

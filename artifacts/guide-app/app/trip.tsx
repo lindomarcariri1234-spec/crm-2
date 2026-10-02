@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import colors from "@/constants/colors";
 import { API_BASE, GuideApiError, GuideAuth, apiFetch, useAuth } from "@/context/AuthContext";
+import { coalescePendingCheckin, submitCheckinStatus, type PendingCheckin } from "@/lib/checkin";
 
 const s = colors.light;
 
@@ -54,14 +55,6 @@ interface Passenger {
   status: "checado" | "ausente" | "pendente";
   checkedInAt: string | null;
   customerCode?: string | null;
-}
-
-interface PendingCheckin {
-  operation: "upsert" | "delete";
-  passengerId: string;
-  reservationId: string;
-  status: "present" | "absent";
-  queuedAt: string;
 }
 
 const POLL_MS = 5_000;
@@ -271,15 +264,14 @@ export default function TripScreen() {
     if (!auth) return;
     setActionLoading(passenger.id);
     try {
-      if (passenger.status !== "pendente") {
-        await apiFetch(`/api/guide/trip/${auth.tripId}/checkins/${passenger.id}`, auth.token, {
-          method: "DELETE",
-        });
-      }
-      await apiFetch(`/api/guide/trip/${auth.tripId}/checkins`, auth.token, {
-        method: "POST",
-        body: JSON.stringify({ passengerId: passenger.id, reservationId: passenger.reservationId, status: newStatus }),
-      });
+      await submitCheckinStatus({
+        tripId: auth.tripId,
+        token: auth.token,
+        passengerId: passenger.id,
+        reservationId: passenger.reservationId,
+        currentStatus: passenger.status,
+        newStatus,
+      }, apiFetch);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       await fetchData(true);
     } catch (err) {
@@ -294,14 +286,12 @@ export default function TripScreen() {
       if (pendingKey) {
         const raw = await AsyncStorage.getItem(pendingKey).catch(() => null);
         const pending = raw ? JSON.parse(raw) as PendingCheckin[] : [];
-        const coalesced = pending.filter((item) => item.passengerId !== passenger.id);
-        coalesced.push({
+        const coalesced = coalescePendingCheckin(pending, {
           operation: "upsert",
           passengerId: passenger.id,
           reservationId: passenger.reservationId,
           status: newStatus,
-          queuedAt: new Date().toISOString(),
-        });
+        }, new Date().toISOString());
         await AsyncStorage.setItem(pendingKey, JSON.stringify(coalesced));
         setPendingCount(coalesced.length);
         setIsOffline(true);
@@ -335,14 +325,12 @@ export default function TripScreen() {
       if (pendingKey) {
         const raw = await AsyncStorage.getItem(pendingKey).catch(() => null);
         const pending = raw ? JSON.parse(raw) as PendingCheckin[] : [];
-        const coalesced = pending.filter((item) => item.passengerId !== passenger.id);
-        coalesced.push({
+        const coalesced = coalescePendingCheckin(pending, {
           operation: "delete",
           passengerId: passenger.id,
           reservationId: passenger.reservationId,
           status: "present",
-          queuedAt: new Date().toISOString(),
-        });
+        }, new Date().toISOString());
         await AsyncStorage.setItem(pendingKey, JSON.stringify(coalesced));
         setPendingCount(coalesced.length);
         setIsOffline(true);
