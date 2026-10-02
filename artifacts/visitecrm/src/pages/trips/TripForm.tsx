@@ -169,16 +169,6 @@ export function TripForm({ tripId }: { tripId?: string }) {
     setForm(prev => ({ ...prev, [k]: e.target.value }));
   const setVal = (k: keyof TripFormData) => (v: string) => setForm(prev => ({ ...prev, [k]: v }));
 
-  const cap = parseInt(form.totalCapacity || "0");
-  const grossRevenue = parseFloat(form.priceAdult || "0") * cap;
-  const totalFixed = form.fixedCostItems.reduce((s, c) => s + c.value, 0);
-  const totalVariablePax = form.variableCostItems.reduce((s, c) => s + c.valuePax, 0);
-  const totalVariable = totalVariablePax * cap;
-  const totalOperational = totalFixed + totalVariable;
-  const costPerPax = cap > 0 ? totalOperational / cap : 0;
-  const profit = grossRevenue - totalOperational;
-  const marginPct = grossRevenue > 0 ? Math.round(profit / grossRevenue * 100) : 0;
-
   const handleSave = async (publish = false) => {
     if (!form.name || !form.destination || !form.destinationCity || !form.destinationState || !form.departureDate || !form.priceAdult) {
       toast({ title: "Preencha os campos obrigatórios: nome, destino, cidade, estado, data de saída e preço adulto", variant: "destructive" });

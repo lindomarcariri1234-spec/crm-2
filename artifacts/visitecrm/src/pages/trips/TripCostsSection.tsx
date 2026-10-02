@@ -335,6 +335,18 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     })),
   ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  const costStatusTotals = mergedCosts.reduce((totals, cost) => {
+    if ((cost.source === "trip" && cost.linkedExpenseId) || cost.status === "cancelled") return totals;
+    const amount = Number(cost.amount);
+    const amountCents = Number.isFinite(amount)
+      ? Math.round((amount + Number.EPSILON) * 100)
+      : 0;
+    if (cost.status === EXPENSE_STATUS.PAID) totals.paid += amountCents;
+    else if (cost.status === EXPENSE_STATUS.OVERDUE) totals.overdue += amountCents;
+    else if (cost.status === EXPENSE_STATUS.PENDING) totals.pending += amountCents;
+    return totals;
+  }, { paid: 0, pending: 0, overdue: 0 });
+
   const filtered = mergedCosts.filter(c => {
     if (filterCategory !== "all" && c.category !== filterCategory) return false;
     if (filterStatus !== "all" && c.status !== filterStatus) return false;
@@ -398,47 +410,55 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
     <div className="space-y-6">
       {summary && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div data-testid="card-trip-booked-revenue" className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-1">
               <Banknote className="w-4 h-4 text-blue-600" />
-              <span className="text-xs text-blue-600 font-medium">Receita Prevista</span>
+              <span className="text-xs text-blue-600 font-medium">Valor contratado</span>
             </div>
-            <p className="text-lg font-bold text-blue-700">{formatCurrency(summary.expectedRevenue)}</p>
-            <p className="text-xs text-blue-500 mt-0.5">{summary.confirmedSeats} passageiros</p>
+            <p data-testid="text-trip-booked-revenue" className="text-lg font-bold text-blue-700">{formatCurrency(summary.expectedRevenue)}</p>
+            <p className="text-xs text-blue-500 mt-0.5">
+              Reservas confirmadas · {summary.confirmedSeats} passageiros · valor líquido, não caixa recebido
+            </p>
           </div>
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div data-testid="card-trip-costs-recorded" className="bg-red-50 border border-red-200 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-1">
               <Receipt className="w-4 h-4 text-red-600" />
-              <span className="text-xs text-red-600 font-medium">Custos Reais</span>
+              <span className="text-xs text-red-600 font-medium">Custos lançados</span>
             </div>
-            <p className="text-lg font-bold text-red-700">{formatCurrency(summary.totalRealCosts)}</p>
-            <p className="text-xs text-red-500 mt-0.5">Pagos: {formatCurrency(summary.totalPaidCosts)}</p>
+            <p data-testid="text-trip-costs-recorded" className="text-lg font-bold text-red-700">{formatCurrency(summary.totalRealCosts)}</p>
+            <p data-testid="text-trip-costs-status-breakdown" className="text-xs text-red-500 mt-0.5">
+              Pagos {formatCurrency(costStatusTotals.paid / 100)} · Pendentes {formatCurrency(costStatusTotals.pending / 100)} · Vencidos {formatCurrency(costStatusTotals.overdue / 100)}
+            </p>
           </div>
-          <div className={`border rounded-lg p-4 ${summary.profit >= 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+          <div data-testid="card-trip-operational-result" className={`border rounded-lg p-4 ${summary.profit >= 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
             <div className="flex items-center gap-2 mb-1">
               {summary.profit >= 0
                 ? <TrendingUp className="w-4 h-4 text-green-600" />
                 : <TrendingDown className="w-4 h-4 text-red-600" />}
-              <span className={`text-xs font-medium ${summary.profit >= 0 ? "text-green-600" : "text-red-600"}`}>Lucro Líquido</span>
+              <span className={`text-xs font-medium ${summary.profit >= 0 ? "text-green-600" : "text-red-600"}`}>Resultado operacional estimado</span>
             </div>
-            <p className={`text-lg font-bold ${summary.profit >= 0 ? "text-green-700" : "text-red-700"}`}>
+            <p data-testid="text-trip-operational-result" className={`text-lg font-bold ${summary.profit >= 0 ? "text-green-700" : "text-red-700"}`}>
               {formatCurrency(summary.profit)}
             </p>
-            <p className={`text-xs mt-0.5 ${summary.profit >= 0 ? "text-green-500" : "text-red-500"}`}>
-              Margem: {summary.margin.toFixed(1)}%
+            <p data-testid="text-trip-operational-margin" className={`text-xs mt-0.5 ${summary.profit >= 0 ? "text-green-500" : "text-red-500"}`}>
+              Reservas confirmadas − custos lançados · Margem {summary.expectedRevenue > 0 ? `${summary.margin.toFixed(1)}%` : "—"}
             </p>
           </div>
-          <div className={`border rounded-lg p-4 ${summary.budgetVariance <= 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"}`}>
+          <div data-testid="card-trip-budget-variance" className={`border rounded-lg p-4 ${summary.budgetVariance <= 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"}`}>
             <div className="flex items-center gap-2 mb-1">
               <PiggyBank className="w-4 h-4 text-amber-600" />
-              <span className="text-xs text-amber-700 font-medium">Orçado vs Real</span>
+              <span className="text-xs text-amber-700 font-medium">Orçado vs lançado</span>
             </div>
-            <p className={`text-lg font-bold ${summary.budgetVariance <= 0 ? "text-green-700" : "text-amber-700"}`}>
-              {summary.budgetVariance <= 0
-                ? `${formatCurrency(Math.abs(summary.budgetVariance))} abaixo`
-                : `${formatCurrency(summary.budgetVariance)} acima`}
+            <p data-testid="text-trip-budget-variance" className={`text-lg font-bold ${summary.budgetVariance <= 0 ? "text-green-700" : "text-amber-700"}`}>
+              {summary.budgetVariance === 0
+                ? "Dentro do orçamento"
+                : summary.budgetVariance < 0
+                  ? `${formatCurrency(Math.abs(summary.budgetVariance))} abaixo`
+                  : `${formatCurrency(summary.budgetVariance)} acima`}
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">Orçado ({summary.planningCapacity} vagas): {formatCurrency(summary.plannedBudget)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Base: {summary.confirmedSeats} passageiros confirmados · planejado {formatCurrency(summary.plannedBudget)} · lançado {formatCurrency(summary.totalRealCosts)}
+            </p>
           </div>
         </div>
       )}
@@ -453,15 +473,41 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
           totalPendingCosts: summary.totalPendingCosts,
         } : undefined}
         title="Conciliação financeira da viagem"
-        description={`Preços, orçamento planejado, custos diretos e despesas da agência · ${summary?.planningCapacity ?? 0} vagas`}
+        description={`Preços, orçamento planejado, custos diretos e despesas da agência · orçamento para ${summary?.confirmedSeats ?? 0} passageiros confirmados / ${summary?.planningCapacity ?? 0} vagas`}
       />
 
-      {summary && summary.totalPendingCosts > 0 && (
-        <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>
-            Há <strong>{formatCurrency(summary.totalPendingCosts)}</strong> em custos pendentes de pagamento.
+      {costStatusTotals.overdue > 0 && (
+        <div data-testid="alert-trip-costs-overdue" className="flex flex-wrap items-center justify-between gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            Há <strong>{formatCurrency(costStatusTotals.overdue / 100)}</strong> em custos vencidos.
           </span>
+          <Button
+            data-testid="button-filter-overdue-costs"
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs border-red-300 text-red-700"
+            onClick={() => setFilterStatus(EXPENSE_STATUS.OVERDUE)}
+          >
+            Ver vencidos
+          </Button>
+        </div>
+      )}
+      {costStatusTotals.pending > 0 && (
+        <div data-testid="alert-trip-costs-pending" className="flex flex-wrap items-center justify-between gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+          <span className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            Há <strong>{formatCurrency(costStatusTotals.pending / 100)}</strong> em custos aguardando pagamento.
+          </span>
+          <Button
+            data-testid="button-filter-pending-costs"
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs border-amber-300 text-amber-700"
+            onClick={() => setFilterStatus(EXPENSE_STATUS.PENDING)}
+          >
+            Ver pendentes
+          </Button>
         </div>
       )}
 

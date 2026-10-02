@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { tripCostsTable, tripsTable, reservationsTable, expensesTable } from "@workspace/db";
-import { eq, and, count, inArray } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
@@ -9,6 +9,7 @@ import { ADMIN_ROLES } from '../lib/tenant';
 import { EXPENSE_STATUS, RESERVATION_STATUS, hasPermission, RESOURCES, ACTIONS } from "@workspace/permissions";
 import { z } from "zod/v4";
 import { areExpenseAndTripCostLinkable } from "../services/expense-trip-cost-link";
+import { calculateTripCostSummary } from "../services/trip-cost-summary";
 
 const router = Router();
 
@@ -178,17 +179,21 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
       variableCosts: tripsTable.variableCosts,
     }).from(tripsTable).where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId))).limit(1);
 
-    // Compute confirmedSeats dynamically from live reservations rather than relying
-    // on the DB counter column, which may be 0 for trips created before the counter
-    // was introduced. Counts only CONFIRMED reservations (REFUNDED ones have already
-    // released their seats back; PENDING reservations are not yet confirmed revenue).
-    const [confirmedSeatsRow] = await db
-      .select({ total: count() })
+    // Confirmed booking value comes from the reservation totals (already net of
+    // discounts), not list adult fare × reservation row count. Capacity units are
+    // authoritative for unnumbered vehicles; old numbered reservations fall back
+    // to their persisted seat array, matching reservation-capacity.ts.
+    const confirmedReservations = await db
+      .select({
+        totalValue: reservationsTable.totalValue,
+        capacityUnits: reservationsTable.capacityUnits,
+        seats: reservationsTable.seats,
+      })
       .from(reservationsTable)
       .where(and(
         eq(reservationsTable.tripId, req.params.id),
         eq(reservationsTable.tenantId, me.tenantId),
-        inArray(reservationsTable.status, [RESERVATION_STATUS.CONFIRMED]),
+        eq(reservationsTable.status, RESERVATION_STATUS.CONFIRMED),
       ));
 
     // A linked cost is represented by its expense in totals, matching the
@@ -200,32 +205,29 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
     const totalTripCosts = activeTripCosts.reduce((s, c) => s + Number(c.amount), 0);
     const activeAgencyExpenses = agencyExpenses.filter(e => e.status !== "cancelled");
     const totalAgencyExpenses = activeAgencyExpenses.reduce((s, e) => s + Number(e.amount), 0);
-    const totalRealCosts = totalTripCosts + totalAgencyExpenses;
-    const totalPaidCosts =
-      activeTripCosts.filter(c => c.status === EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
-      + activeAgencyExpenses.filter(e => e.status === EXPENSE_STATUS.PAID).reduce((s, e) => s + Number(e.amount), 0);
-    const totalPendingCosts =
-      activeTripCosts.filter(c => c.status !== EXPENSE_STATUS.PAID).reduce((s, c) => s + Number(c.amount), 0)
-      + activeAgencyExpenses.filter(e => e.status !== EXPENSE_STATUS.PAID).reduce((s, e) => s + Number(e.amount), 0);
+    const recordedCosts = [
+      ...activeTripCosts.map(cost => ({ amount: cost.amount, status: cost.status })),
+      ...activeAgencyExpenses.map(expense => ({ amount: expense.amount, status: expense.status })),
+    ];
 
-    const priceAdult = Number(tripRow?.priceAdult ?? 0);
-    const confirmedSeats = confirmedSeatsRow?.total ?? 0;
-    const expectedRevenue2 = priceAdult * confirmedSeats;
-    const profit = expectedRevenue2 - totalRealCosts;
-    const margin = expectedRevenue2 > 0 ? (profit / expectedRevenue2) * 100 : 0;
-
-    // The planning screen defines variable costs against the trip's full
-    // capacity. Keep that same basis here; confirmed seats are only used for
-    // realized revenue and payment status, otherwise the budget changes when
-    // a reservation is confirmed and no longer matches the Prices tab.
-    const planningCapacity = tripRow?.totalCapacity ?? 0;
     const fixedCosts = Array.isArray(tripRow?.fixedCosts) ? tripRow.fixedCosts as PlannedFixedCost[] : [];
     const variableCosts = Array.isArray(tripRow?.variableCosts) ? tripRow.variableCosts as PlannedVariableCost[] : [];
-    const { plannedBudget: totalPlanned, plannedCosts } = calculatePlannedCosts(
+    const summary = calculateTripCostSummary({
+      confirmedReservations,
+      costs: recordedCosts,
+      fixedCostAmounts: fixedCosts.map(cost => cost.value ?? 0),
+      variableCostPerPassengerAmounts: variableCosts.map(cost => cost.valuePax ?? 0),
+    });
+
+    // Match the reconciliation rows to the budget total: per-passenger items
+    // are multiplied by confirmed capacity, not the trip's maximum capacity.
+    const { plannedCosts } = calculatePlannedCosts(
       fixedCosts,
       variableCosts,
-      planningCapacity,
+      summary.confirmedSeats,
     );
+    const planningCapacity = tripRow?.totalCapacity ?? 0;
+    const priceAdult = Number(tripRow?.priceAdult ?? 0);
 
     res.json({
       costs: costs.map(cost => formatCost(cost, linkedExpenseByCostId.get(cost.id) ?? null)),
@@ -237,18 +239,10 @@ router.get("/trips/:id/costs", async (req, res, next: NextFunction): Promise<voi
         senior: tripRow?.priceSenior == null ? null : Number(tripRow.priceSenior),
       },
       summary: {
-        expectedRevenue: expectedRevenue2,
+        ...summary,
         totalTripCosts,
         totalAgencyExpenses,
-        totalRealCosts,
-        totalPaidCosts,
-        totalPendingCosts,
-        profit,
-        margin: Math.round(margin * 10) / 10,
-        plannedBudget: totalPlanned,
-        budgetVariance: totalRealCosts - totalPlanned,
-        confirmedSeats,
-         planningCapacity,
+        planningCapacity,
       },
     });
   } catch (err) {

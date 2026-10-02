@@ -299,7 +299,9 @@ describe("GET /api/trips/:id/costs — cancelled expenses", () => {
       .mockImplementationOnce(() => selectResult([]))
       .mockImplementationOnce(() => selectResult([activeAgencyExpense, cancelledAgencyExpense]))
       .mockImplementationOnce(() => selectResult([tripRow]))
-      .mockImplementationOnce(() => selectResult([{ total: 2 }]));
+      .mockImplementationOnce(() => selectResult([
+        { totalValue: "200.00", capacityUnits: 2, seats: [] },
+      ]));
 
     const res = await request(buildApp(tripCostsRouter)).get("/api/trips/trip-001/costs");
 
@@ -316,6 +318,9 @@ describe("GET /api/trips/:id/costs — cancelled expenses", () => {
       totalRealCosts: 1000,
       totalPaidCosts: 1000,
       totalPendingCosts: 0,
+      expectedRevenue: 200,
+      confirmedSeats: 2,
+      plannedBudget: 100,
       profit: -800,
       budgetVariance: 900,
     });
