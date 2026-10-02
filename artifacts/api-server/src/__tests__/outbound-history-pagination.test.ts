@@ -200,6 +200,29 @@ describe("GET /outbound-messages filtered pagination", () => {
       expect.objectContaining({ id: "other-tenant" }),
     ]));
   });
+
+  it("passes a non-negative offset to the history query", async () => {
+    mockListOutboundMessages.mockResolvedValue([]);
+
+    const response = await request(makeApp())
+      .get("/outbound-messages")
+      .query({ limit: 50, offset: 100 });
+
+    expect(response.status).toBe(200);
+    expect(mockListOutboundMessages).toHaveBeenCalledWith("tenant-a", expect.objectContaining({
+      limit: 50,
+      offset: 100,
+    }));
+  });
+
+  it("rejects a negative or non-integer page offset", async () => {
+    const negative = await request(makeApp()).get("/outbound-messages").query({ offset: -1 });
+    const fractional = await request(makeApp()).get("/outbound-messages").query({ offset: 1.5 });
+
+    expect(negative.status).toBe(400);
+    expect(fractional.status).toBe(400);
+    expect(mockListOutboundMessages).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /outbound-messages/export", () => {

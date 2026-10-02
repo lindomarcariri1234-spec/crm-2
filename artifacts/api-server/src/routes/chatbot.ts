@@ -35,7 +35,78 @@ router.get("/chatbot-conversations", async (req, res, next: NextFunction): Promi
   try {
     const me = await requireAuth(req, res);
     if (!me) return;
-    const conversations = await db.select().from(chatbotConversationsTable)
+    const conversations = await db.select({
+      id: chatbotConversationsTable.id,
+      tenantId: chatbotConversationsTable.tenantId,
+      clientId: chatbotConversationsTable.clientId,
+      channel: chatbotConversationsTable.channel,
+      status: chatbotConversationsTable.status,
+      assignedUserId: chatbotConversationsTable.assignedUserId,
+      sessionId: chatbotConversationsTable.sessionId,
+      metadata: chatbotConversationsTable.metadata,
+      startedAt: chatbotConversationsTable.startedAt,
+      endedAt: chatbotConversationsTable.endedAt,
+      createdAt: chatbotConversationsTable.createdAt,
+      clientName: clientsTable.name,
+      lastMessageId: sql<string | null>`(
+        SELECT ${chatbotMessagesTable.id}
+        FROM ${chatbotMessagesTable}
+        WHERE ${chatbotMessagesTable.conversationId} = ${chatbotConversationsTable.id}
+          AND ${chatbotMessagesTable.tenantId} = ${me.tenantId}
+        ORDER BY ${chatbotMessagesTable.sentAt} DESC, ${chatbotMessagesTable.id} DESC
+        LIMIT 1
+      )`,
+      lastMessageContent: sql<string | null>`(
+        SELECT ${chatbotMessagesTable.content}
+        FROM ${chatbotMessagesTable}
+        WHERE ${chatbotMessagesTable.conversationId} = ${chatbotConversationsTable.id}
+          AND ${chatbotMessagesTable.tenantId} = ${me.tenantId}
+        ORDER BY ${chatbotMessagesTable.sentAt} DESC, ${chatbotMessagesTable.id} DESC
+        LIMIT 1
+      )`,
+      lastMessageAt: sql<Date | null>`(
+        SELECT ${chatbotMessagesTable.sentAt}
+        FROM ${chatbotMessagesTable}
+        WHERE ${chatbotMessagesTable.conversationId} = ${chatbotConversationsTable.id}
+          AND ${chatbotMessagesTable.tenantId} = ${me.tenantId}
+        ORDER BY ${chatbotMessagesTable.sentAt} DESC, ${chatbotMessagesTable.id} DESC
+        LIMIT 1
+      )`,
+      lastMessageRole: sql<string | null>`(
+        SELECT ${chatbotMessagesTable.role}
+        FROM ${chatbotMessagesTable}
+        WHERE ${chatbotMessagesTable.conversationId} = ${chatbotConversationsTable.id}
+          AND ${chatbotMessagesTable.tenantId} = ${me.tenantId}
+        ORDER BY ${chatbotMessagesTable.sentAt} DESC, ${chatbotMessagesTable.id} DESC
+        LIMIT 1
+      )`,
+      lastMessageIsBot: sql<boolean | null>`(
+        SELECT ${chatbotMessagesTable.isBot}
+        FROM ${chatbotMessagesTable}
+        WHERE ${chatbotMessagesTable.conversationId} = ${chatbotConversationsTable.id}
+          AND ${chatbotMessagesTable.tenantId} = ${me.tenantId}
+        ORDER BY ${chatbotMessagesTable.sentAt} DESC, ${chatbotMessagesTable.id} DESC
+        LIMIT 1
+      )`,
+      lastMessageStatus: sql<string | null>`(
+        SELECT ${chatbotMessagesTable.deliveryStatus}
+        FROM ${chatbotMessagesTable}
+        WHERE ${chatbotMessagesTable.conversationId} = ${chatbotConversationsTable.id}
+          AND ${chatbotMessagesTable.tenantId} = ${me.tenantId}
+        ORDER BY ${chatbotMessagesTable.sentAt} DESC, ${chatbotMessagesTable.id} DESC
+        LIMIT 1
+      )`,
+      messageCount: sql<number>`(
+        SELECT count(*)::int
+        FROM ${chatbotMessagesTable}
+        WHERE ${chatbotMessagesTable.conversationId} = ${chatbotConversationsTable.id}
+          AND ${chatbotMessagesTable.tenantId} = ${me.tenantId}
+      )`.mapWith(Number),
+    }).from(chatbotConversationsTable)
+      .leftJoin(clientsTable, and(
+        eq(clientsTable.id, chatbotConversationsTable.clientId),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
       .where(eq(chatbotConversationsTable.tenantId, me.tenantId))
       .orderBy(desc(chatbotConversationsTable.createdAt));
     res.json(conversations);

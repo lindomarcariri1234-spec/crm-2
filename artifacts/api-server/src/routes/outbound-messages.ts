@@ -428,9 +428,14 @@ router.get("/outbound-messages", async (req, res, next: NextFunction): Promise<v
     if (!me) return;
     const filters = parseOutboundFilters({ query: req.query as Record<string, unknown> });
     const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const offset = typeof req.query.offset === "string" ? Number(req.query.offset) : 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new ValidationError("Offset inválido.", "VALIDATION_ERROR");
+    }
     const rows = await listOutboundMessages(me.tenantId, {
       ...filters,
       limit: Number.isFinite(limit) ? limit : undefined,
+      offset,
     });
     res.json(rows.map(formatMessage));
   } catch (error) {

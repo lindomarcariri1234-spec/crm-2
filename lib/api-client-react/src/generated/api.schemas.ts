@@ -2638,9 +2638,17 @@ export interface Message {
   outboundMessageId?: string | null;
 }
 
+export type SendMessageBodyChannel =
+  (typeof SendMessageBodyChannel)[keyof typeof SendMessageBodyChannel];
+
+export const SendMessageBodyChannel = {
+  email: "email",
+  whatsapp: "whatsapp",
+} as const;
+
 export interface SendMessageBody {
   toClientId: string;
-  channel: string;
+  channel: SendMessageBodyChannel;
   content: string;
   /** @nullable */
   mediaUrl?: string | null;
@@ -2872,9 +2880,17 @@ export interface MessageTemplate {
   createdAt: string;
 }
 
+export type CreateMessageTemplateBodyChannel =
+  (typeof CreateMessageTemplateBodyChannel)[keyof typeof CreateMessageTemplateBodyChannel];
+
+export const CreateMessageTemplateBodyChannel = {
+  email: "email",
+  whatsapp: "whatsapp",
+} as const;
+
 export interface CreateMessageTemplateBody {
   name: string;
-  channel: string;
+  channel: CreateMessageTemplateBodyChannel;
   /** @nullable */
   subject?: string | null;
   content: string;
@@ -4249,6 +4265,21 @@ export interface ChatbotConversation {
   /** @nullable */
   endedAt?: string | null;
   createdAt: string;
+  /** @nullable */
+  clientName?: string | null;
+  /** @nullable */
+  lastMessageId?: string | null;
+  /** @nullable */
+  lastMessageContent?: string | null;
+  /** @nullable */
+  lastMessageAt?: string | null;
+  /** @nullable */
+  lastMessageRole?: string | null;
+  /** @nullable */
+  lastMessageIsBot?: boolean | null;
+  /** @nullable */
+  lastMessageStatus?: string | null;
+  messageCount?: number;
 }
 
 export type CreateChatbotConversationBodyChannel =
@@ -5768,6 +5799,11 @@ export type ListOutboundMessagesParams = {
   dateFrom?: string;
   dateTo?: string;
   limit?: number;
+  /**
+   * Number of matching messages to skip before returning this page
+   * @minimum 0
+   */
+  offset?: number;
 };
 
 export type ListOutboundMessagesChannel =

@@ -5,10 +5,11 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { CreateMessageTemplateBodyChannel } from "./createMessageTemplateBodyChannel";
 
 export interface CreateMessageTemplateBody {
   name: string;
-  channel: string;
+  channel: CreateMessageTemplateBodyChannel;
   /** @nullable */
   subject?: string | null;
   content: string;

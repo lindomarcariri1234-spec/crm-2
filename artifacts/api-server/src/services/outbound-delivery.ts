@@ -64,6 +64,7 @@ export interface OutboundMessageListOptions {
   dateFrom?: Date;
   dateToExclusive?: Date;
   limit?: number;
+  offset?: number;
   maxLimit?: number;
   providerMissing?: boolean;
 }
@@ -698,7 +699,9 @@ export async function listOutboundMessages(tenantId: string, opts?: OutboundMess
   ];
   const messages = await db.select().from(outboundMessagesTable)
     .where(and(...messageConditions))
-    .orderBy(desc(outboundMessagesTable.createdAt)).limit(Math.min(opts?.limit ?? 100, opts?.maxLimit ?? 500));
+    .orderBy(desc(outboundMessagesTable.createdAt), desc(outboundMessagesTable.id))
+    .limit(Math.min(opts?.limit ?? 100, opts?.maxLimit ?? 500))
+    .offset(Math.max(0, opts?.offset ?? 0));
   const rows = await Promise.all(messages.map(async (message) => {
     const deliveryConditions = [
       eq(outboundDeliveriesTable.tenantId, tenantId),

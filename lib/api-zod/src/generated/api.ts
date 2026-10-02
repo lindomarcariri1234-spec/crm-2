@@ -6144,7 +6144,7 @@ export const ListMessagesResponse = zod.array(ListMessagesResponseItem);
  */
 export const SendMessageBody = zod.object({
   toClientId: zod.string(),
-  channel: zod.string(),
+  channel: zod.enum(["email", "whatsapp"]),
   content: zod.string(),
   mediaUrl: zod.string().nullish(),
 });
@@ -6168,6 +6168,8 @@ export const SendMessageResponse = zod.object({
  * @summary List persistent multichannel outbound messages
  */
 export const listOutboundMessagesQueryLimitDefault = 100;
+export const listOutboundMessagesQueryOffsetDefault = 0;
+export const listOutboundMessagesQueryOffsetMin = 0;
 
 export const ListOutboundMessagesQueryParams = zod.object({
   status: zod.coerce.string().optional(),
@@ -6195,6 +6197,12 @@ export const ListOutboundMessagesQueryParams = zod.object({
     .number()
     .int()
     .default(listOutboundMessagesQueryLimitDefault),
+  offset: zod.coerce
+    .number()
+    .int()
+    .min(listOutboundMessagesQueryOffsetMin)
+    .default(listOutboundMessagesQueryOffsetDefault)
+    .describe("Number of matching messages to skip before returning this page"),
 });
 
 export const ListOutboundMessagesResponseItem = zod.object({
@@ -6540,7 +6548,7 @@ export const ListMessageTemplatesResponse = zod.array(
  */
 export const CreateMessageTemplateBody = zod.object({
   name: zod.string(),
-  channel: zod.string(),
+  channel: zod.enum(["email", "whatsapp"]),
   subject: zod.string().nullish(),
   content: zod.string(),
   variables: zod.array(zod.string()).optional(),
@@ -9398,6 +9406,14 @@ export const ListChatbotConversationsResponseItem = zod.object({
   startedAt: zod.string(),
   endedAt: zod.string().nullish(),
   createdAt: zod.string(),
+  clientName: zod.string().nullish(),
+  lastMessageId: zod.string().nullish(),
+  lastMessageContent: zod.string().nullish(),
+  lastMessageAt: zod.string().nullish(),
+  lastMessageRole: zod.string().nullish(),
+  lastMessageIsBot: zod.boolean().nullish(),
+  lastMessageStatus: zod.string().nullish(),
+  messageCount: zod.number().int().optional(),
 });
 export const ListChatbotConversationsResponse = zod.array(
   ListChatbotConversationsResponseItem,
@@ -9423,6 +9439,14 @@ export const CreateChatbotConversationResponse = zod.object({
   startedAt: zod.string(),
   endedAt: zod.string().nullish(),
   createdAt: zod.string(),
+  clientName: zod.string().nullish(),
+  lastMessageId: zod.string().nullish(),
+  lastMessageContent: zod.string().nullish(),
+  lastMessageAt: zod.string().nullish(),
+  lastMessageRole: zod.string().nullish(),
+  lastMessageIsBot: zod.boolean().nullish(),
+  lastMessageStatus: zod.string().nullish(),
+  messageCount: zod.number().int().optional(),
 });
 
 /**
@@ -9450,6 +9474,14 @@ export const UpdateChatbotConversationResponse = zod.object({
   startedAt: zod.string(),
   endedAt: zod.string().nullish(),
   createdAt: zod.string(),
+  clientName: zod.string().nullish(),
+  lastMessageId: zod.string().nullish(),
+  lastMessageContent: zod.string().nullish(),
+  lastMessageAt: zod.string().nullish(),
+  lastMessageRole: zod.string().nullish(),
+  lastMessageIsBot: zod.boolean().nullish(),
+  lastMessageStatus: zod.string().nullish(),
+  messageCount: zod.number().int().optional(),
 });
 
 /**

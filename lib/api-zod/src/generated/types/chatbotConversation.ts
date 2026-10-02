@@ -21,4 +21,19 @@ export interface ChatbotConversation {
   /** @nullable */
   endedAt?: string | null;
   createdAt: string;
+  /** @nullable */
+  clientName?: string | null;
+  /** @nullable */
+  lastMessageId?: string | null;
+  /** @nullable */
+  lastMessageContent?: string | null;
+  /** @nullable */
+  lastMessageAt?: string | null;
+  /** @nullable */
+  lastMessageRole?: string | null;
+  /** @nullable */
+  lastMessageIsBot?: boolean | null;
+  /** @nullable */
+  lastMessageStatus?: string | null;
+  messageCount?: number;
 }

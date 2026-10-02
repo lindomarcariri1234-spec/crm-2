@@ -15,13 +15,13 @@ const router = Router();
 
 const CreateMessageBody = z.object({
   toClientId: z.string().optional(),
-  channel: z.string(),
+  channel: z.enum(["email", "whatsapp"]),
   content: z.string(),
 });
 
 const CreateMessageTemplateBody = z.object({
   name: z.string(),
-  channel: z.string(),
+  channel: z.enum(["email", "whatsapp"]),
   category: z.string().optional(),
   subject: z.string().optional(),
   content: z.string(),
@@ -51,10 +51,10 @@ const UpdateAutomationBody = z.object({
   conditions: z.unknown().optional(),
 });
 
-function formatMessage(m: typeof messagesTable.$inferSelect) {
+function formatMessage(m: typeof messagesTable.$inferSelect, clientName: string | null = null) {
   return {
     id: m.id, tenantId: m.tenantId, fromUserId: m.fromUserId, toClientId: m.toClientId,
-    channel: m.channel, content: m.content, status: m.status,
+    clientName, channel: m.channel, content: m.content, status: m.status,
     sentAt: m.sentAt.toISOString(),
     deliveredAt: m.deliveredAt?.toISOString() ?? null, readAt: m.readAt?.toISOString() ?? null,
     metadata: m.metadata,
@@ -89,10 +89,17 @@ router.get("/messages", async (req, res, next: NextFunction): Promise<void> => {
     const { clientId } = req.query as Record<string, string>;
     const conditions: ReturnType<typeof eq>[] = [eq(messagesTable.tenantId, me.tenantId)];
     if (clientId) conditions.push(eq(messagesTable.toClientId, clientId));
-    const messages = await db.select().from(messagesTable)
+    const messages = await db.select({
+      message: messagesTable,
+      clientName: clientsTable.name,
+    }).from(messagesTable)
+      .leftJoin(clientsTable, and(
+        eq(clientsTable.id, messagesTable.toClientId),
+        eq(clientsTable.tenantId, me.tenantId),
+      ))
       .where(and(...conditions)).orderBy(desc(messagesTable.sentAt))
       .limit(LIST_SAFETY_CAP);
-    res.json(messages.map(formatMessage));
+    res.json(messages.map(({ message, clientName }) => formatMessage(message, clientName)));
   } catch (err) {
     next(err);
   }
@@ -105,11 +112,13 @@ router.post("/messages", async (req, res, next: NextFunction): Promise<void> => 
     const parsed = CreateMessageBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message ), "VALIDATION_ERROR")); return; }
 
+    let clientName: string | null = null;
     if (parsed.data.toClientId) {
       const [client] = await db.select().from(clientsTable)
         .where(and(eq(clientsTable.id, parsed.data.toClientId), eq(clientsTable.tenantId, me.tenantId)))
         .limit(1);
       if (!client) { next(new ValidationError(String("Client not found or not in tenant" ), "VALIDATION_ERROR")); return; }
+      clientName = client.name;
     }
 
     const idempotencyKey = req.get("Idempotency-Key")?.trim() || `manual:${me.id}:${generateId()}`;
@@ -119,10 +128,9 @@ router.post("/messages", async (req, res, next: NextFunction): Promise<void> => 
         eventType: "manual_message",
         idempotencyKey,
         recipient: parsed.data.toClientId ? { type: "client", id: parsed.data.toClientId } : { type: "admin" },
-        email: parsed.data.channel === "email"
-          ? { subject: "Mensagem da agência", html: parsed.data.content, senderName: me.name }
-          : { subject: "Mensagem da agência", html: parsed.data.content, senderName: me.name },
-        whatsapp: { text: parsed.data.content },
+        ...(parsed.data.channel === "email"
+          ? { email: { subject: "Mensagem da agência", html: parsed.data.content, senderName: me.name } }
+          : { whatsapp: { text: parsed.data.content } }),
         origin: "user",
         originChannel: parsed.data.channel,
         createdById: me.id,
@@ -144,7 +152,7 @@ router.post("/messages", async (req, res, next: NextFunction): Promise<void> => 
       .where(and(eq(messagesTable.id, id), eq(messagesTable.tenantId, me.tenantId)))
       .limit(1);
     if (!message) { next(new AppError("Resource not found", 404, "NOT_FOUND")); return; }
-    res.status(201).json(formatMessage(message));
+    res.status(201).json(formatMessage(message, clientName));
   } catch (err) {
     next(err);
   }

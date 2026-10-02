@@ -5,10 +5,11 @@
  * VisiteCRM API - SaaS CRM for tourism agencies
  * OpenAPI spec version: 0.1.0
  */
+import type { SendMessageBodyChannel } from "./sendMessageBodyChannel";
 
 export interface SendMessageBody {
   toClientId: string;
-  channel: string;
+  channel: SendMessageBodyChannel;
   content: string;
   /** @nullable */
   mediaUrl?: string | null;

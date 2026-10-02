@@ -152,3 +152,4 @@
 - [Group reservation passenger validation](group-reservation-passenger-validation.md) — validate every required companion position explicitly; sparse arrays can bypass `.every()` completeness checks
 - [Pipeline stage vs. client classification](pipeline-stage-classification.md) — deal stage controls board placement; client classification is profile context, and the legacy client stage is display-only
 - [API entrypoint formatting](api-index-formatting.md) — check the existing formatter baseline before whole-file formatting, to avoid unrelated churn in focused startup edits.
+- [Unified WhatsApp timeline sends](unified-whatsapp-timeline-send-path.md) — keep the client timeline on the tenant/client/consent-aware send route; reserve chatbot replies for the AI inbox flow.

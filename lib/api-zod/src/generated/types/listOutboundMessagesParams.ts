@@ -32,4 +32,9 @@ export type ListOutboundMessagesParams = {
   dateFrom?: string;
   dateTo?: string;
   limit?: number;
+  /**
+   * Number of matching messages to skip before returning this page
+   * @minimum 0
+   */
+  offset?: number;
 };

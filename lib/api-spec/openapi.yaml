@@ -2837,6 +2837,13 @@ paths:
           schema:
             type: integer
             default: 100
+        - name: offset
+          in: query
+          description: Number of matching messages to skip before returning this page
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
       responses:
         "200":
           description: Outbound messages
@@ -9404,6 +9411,7 @@ components:
           type: string
         channel:
           type: string
+          enum: [email, whatsapp]
         content:
           type: string
         mediaUrl:
@@ -9577,6 +9585,7 @@ components:
           type: string
         channel:
           type: string
+          enum: [email, whatsapp]
         subject:
           type: ["string", "null"]
         content:
@@ -11608,6 +11617,22 @@ components:
           type: ["string", "null"]
         createdAt:
           type: string
+        clientName:
+          type: ["string", "null"]
+        lastMessageId:
+          type: ["string", "null"]
+        lastMessageContent:
+          type: ["string", "null"]
+        lastMessageAt:
+          type: ["string", "null"]
+        lastMessageRole:
+          type: ["string", "null"]
+        lastMessageIsBot:
+          type: ["boolean", "null"]
+        lastMessageStatus:
+          type: ["string", "null"]
+        messageCount:
+          type: integer
       required: [id, tenantId, channel, status, startedAt, createdAt]
 
     CreateChatbotConversationBody:
