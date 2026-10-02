@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useForm, Controller } from "react-hook-form";
@@ -9,7 +9,7 @@ import {
   useListTripCosts, useCreateTripCost, useUpdateTripCost, useDeleteTripCost,
   useListExpenses, useLinkExpenseToTripCost, useUnlinkExpenseFromTripCost,
 } from "@workspace/api-client-react";
-import type { Expense, TripCost, LayoutCell } from "@workspace/api-client-react";
+import type { Expense, TripCost, LayoutCell, ListTripCostsResponse } from "@workspace/api-client-react";
 import { EXPENSE_STATUS } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,11 +21,34 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Plus, AlertCircle, Loader2, Pencil, Trash2, Wallet, Receipt, Banknote,
-  TrendingUp, TrendingDown, PiggyBank, Link2, Unlink,
+  PiggyBank, Link2, Unlink,
 } from "lucide-react";
 import { CELL_COLORS, COST_CATEGORIES, COST_STATUS_MAP } from "./constants";
 import { formatCurrency, formatDate } from "./utils";
 import { FinancialConsolidationView } from "@/components/financial-consolidation-view";
+import { calculateOccupancyProjections } from "./financial-projection";
+
+type ScenarioInputs = {
+  adultFare: string;
+  childFare: string;
+  seniorFare: string;
+  adultMix: string;
+  childMix: string;
+  seniorMix: string;
+  fixedCosts: string;
+  variablePerPassenger: string;
+};
+
+const EMPTY_SCENARIO_INPUTS: ScenarioInputs = {
+  adultFare: "0",
+  childFare: "0",
+  seniorFare: "0",
+  adultMix: "100",
+  childMix: "0",
+  seniorMix: "0",
+  fixedCosts: "0",
+  variablePerPassenger: "0",
+};
 
 export function LayoutMiniPreview({ cells, rows, cols }: { cells: { row: number; col: number; floor?: number; type: string }[]; rows: number; cols: number }) {
   const floor1 = cells.filter(c => (c.floor ?? 1) === 1);
@@ -53,6 +76,208 @@ export function LayoutMiniPreview({ cells, rows, cols }: { cells: { row: number;
 }
 
 export type { LayoutCell };
+
+function savedScenarioInputs(
+  pricing: ListTripCostsResponse["pricing"] | undefined,
+  plannedCosts: ListTripCostsResponse["plannedCosts"],
+): ScenarioInputs {
+  const fixedCosts = plannedCosts
+    .filter(row => row.kind === "fixed")
+    .reduce((sum, row) => sum + (Number.isFinite(row.amount) ? row.amount : 0), 0);
+  const variablePerPassenger = plannedCosts
+    .filter(row => row.kind === "variable")
+    .reduce((sum, row) => {
+      const amount = row.amountPerPassenger;
+      return sum + (typeof amount === "number" && Number.isFinite(amount) ? amount : 0);
+    }, 0);
+  return {
+    adultFare: String(pricing?.adult ?? 0),
+    childFare: String(pricing?.child ?? 0),
+    seniorFare: String(pricing?.senior ?? 0),
+    adultMix: "100",
+    childMix: "0",
+    seniorMix: "0",
+    fixedCosts: String(fixedCosts),
+    variablePerPassenger: String(variablePerPassenger),
+  };
+}
+
+function OccupancyScenarioPlanner({
+  tripId,
+  capacity,
+  pricing,
+  plannedCosts,
+}: {
+  tripId: string;
+  capacity: number;
+  pricing: ListTripCostsResponse["pricing"] | undefined;
+  plannedCosts: ListTripCostsResponse["plannedCosts"];
+}) {
+  const [inputs, setInputs] = useState<ScenarioInputs>(EMPTY_SCENARIO_INPUTS);
+  const initializedTripId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (initializedTripId.current !== tripId) {
+      setInputs(savedScenarioInputs(pricing, plannedCosts));
+      initializedTripId.current = tripId;
+    }
+  }, [tripId, pricing, plannedCosts]);
+
+  const projections = calculateOccupancyProjections({
+    capacity,
+    ticketPrices: {
+      adult: Number(inputs.adultFare),
+      child: Number(inputs.childFare),
+      senior: Number(inputs.seniorFare),
+    },
+    passengerMixWeights: {
+      adult: Number(inputs.adultMix),
+      child: Number(inputs.childMix),
+      senior: Number(inputs.seniorMix),
+    },
+    fixedCostAmount: Number(inputs.fixedCosts),
+    variableCostPerPassengerAmount: Number(inputs.variablePerPassenger),
+  });
+  const base = projections.find(projection => projection.occupancyPercent === 80)!;
+  const fields: { key: keyof ScenarioInputs; label: string; kind: "fare" | "mix" | "cost"; help: string }[] = [
+    { key: "adultFare", label: "Adulto · tarifa", kind: "fare", help: "R$" },
+    { key: "childFare", label: "Criança · tarifa", kind: "fare", help: "R$" },
+    { key: "seniorFare", label: "Idoso · tarifa", kind: "fare", help: "R$" },
+    { key: "adultMix", label: "Adultos", kind: "mix", help: "%" },
+    { key: "childMix", label: "Crianças", kind: "mix", help: "%" },
+    { key: "seniorMix", label: "Idosos", kind: "mix", help: "%" },
+    { key: "fixedCosts", label: "Custo fixo total", kind: "cost", help: "R$ · não varia" },
+    { key: "variablePerPassenger", label: "Custo variável por passageiro", kind: "cost", help: "R$ / passageiro" },
+  ];
+
+  return (
+    <section aria-labelledby="occupancy-planner-title" className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="border-b bg-secondary/35 px-4 py-4 sm:px-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Planejamento · somente nesta tela</p>
+            <h2 id="occupancy-planner-title" className="mt-1 text-lg font-semibold">Cenários de ocupação</h2>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Explore tarifas e custos planejados sem alterar a viagem ou os registros financeiros.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-testid="button-reset-scenario-assumptions"
+            onClick={() => setInputs(savedScenarioInputs(pricing, plannedCosts))}
+            className="shrink-0"
+          >
+            Restaurar premissas salvas
+          </Button>
+        </div>
+        <p className="mt-3 rounded-md border border-primary/15 bg-background/80 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          O mix de passageiros não é salvo no cadastro financeiro. A premissa inicial é 100% adultos; ajuste os pesos abaixo.
+          Os pesos são normalizados automaticamente e, se todos forem zero, o cálculo volta a 100% adultos.
+        </p>
+      </div>
+
+      <div className="grid gap-5 p-4 sm:p-6 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.72fr)]">
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold">Premissas editáveis</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Capacidade usada: {capacity} lugares · valores em reais.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {fields.map(field => {
+              const inputId = `scenario-${field.key}`;
+              const isMix = field.kind === "mix";
+              return (
+                <div key={field.key} className={`space-y-1.5 ${field.kind === "cost" ? "sm:col-span-2 xl:col-span-3" : ""}`}>
+                  <Label htmlFor={inputId} className="text-xs">{field.label}</Label>
+                  <div className="relative">
+                    <Input
+                      id={inputId}
+                      data-testid={`input-${field.key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`)}`}
+                      type="number"
+                      min="0"
+                      max={isMix ? "100" : undefined}
+                      step={isMix ? "1" : "0.01"}
+                      inputMode="decimal"
+                      value={inputs[field.key]}
+                      onChange={event => setInputs(current => ({ ...current, [field.key]: event.target.value }))}
+                      aria-describedby={`${inputId}-help`}
+                      className="pr-16"
+                    />
+                    <span id={`${inputId}-help`} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                      {field.help}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Passageiros são arredondados para baixo. O restante é distribuído pelo maior peso fracionário, com desempate na ordem adulto, criança e idoso.
+          </p>
+        </div>
+
+        <aside className="rounded-lg border border-primary/20 bg-primary/[0.045] p-4" aria-label="Cenário base de 80 por cento">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-primary">Referência</p>
+              <h3 className="mt-1 text-lg font-semibold">Base · 80%</h3>
+            </div>
+            <span data-testid="scenario-base-passengers" className="rounded-full bg-primary px-2.5 py-1 text-xs font-semibold text-primary-foreground">{base.passengers}/{capacity} lugares</span>
+          </div>
+          <p data-testid="scenario-base-revenue" className="mt-5 text-3xl font-semibold tracking-tight">{formatCurrency(base.grossRevenue)}</p>
+          <p className="text-xs text-muted-foreground">receita projetada por tarifas e mix, não valor contratado</p>
+          <dl className="mt-5 space-y-2 border-t pt-4 text-sm">
+            <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Mix alocado</dt><dd className="text-right font-medium">{base.passengerMix.adult} adultos · {base.passengerMix.child} crianças · {base.passengerMix.senior} idosos</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custos fixos planejados</dt><dd data-testid="scenario-base-fixed-costs" className="font-medium">{formatCurrency(base.fixedCosts)}</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custos variáveis planejados</dt><dd data-testid="scenario-base-variable-costs" className="font-medium">{formatCurrency(base.variableCosts)}</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custo operacional total</dt><dd data-testid="scenario-base-operating-costs" className="font-medium">{formatCurrency(base.operatingCosts)}</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custo médio por passageiro</dt><dd data-testid="scenario-base-average-cost" className="font-medium">{base.averageCostPerPassenger === null ? "—" : formatCurrency(base.averageCostPerPassenger)}</dd></div>
+            <div className="flex justify-between gap-3 border-t pt-2"><dt className="font-medium">Saldo projetado</dt><dd data-testid="scenario-base-balance" className={`font-semibold ${base.estimatedProfit < 0 ? "text-destructive" : "text-primary"}`}>{formatCurrency(base.estimatedProfit)}</dd></div>
+            <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Margem projetada</dt><dd data-testid="scenario-base-margin" className="font-medium">{base.marginPercent === null ? "—" : `${base.marginPercent.toFixed(1)}%`}</dd></div>
+          </dl>
+          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+            Resultado hipotético de receita projetada menos custos planejados. Não representa caixa recebido nem resultado realizado.
+          </p>
+        </aside>
+      </div>
+
+      <div className="border-t px-4 py-5 sm:px-6">
+        <h3 className="mb-3 text-sm font-semibold">Comparativo por ocupação</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {projections.map(projection => {
+            const isBase = projection.occupancyPercent === 80;
+            return (
+              <article
+                key={projection.occupancyPercent}
+                data-testid={`scenario-card-${projection.occupancyPercent}`}
+                className={`rounded-lg border p-4 ${isBase ? "border-primary/40 bg-primary/[0.035] ring-1 ring-primary/15" : "bg-background"}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="font-semibold">{projection.occupancyPercent}% de ocupação</h4>
+                  {isBase && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">Base</span>}
+                </div>
+                <p data-testid={`scenario-passengers-${projection.occupancyPercent}`} className="mt-1 text-xs text-muted-foreground">
+                  {projection.passengers} passageiros · {projection.passengerMix.adult} adultos / {projection.passengerMix.child} crianças / {projection.passengerMix.senior} idosos
+                </p>
+                <dl className="mt-4 space-y-2 text-xs">
+                  <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Receita projetada</dt><dd data-testid={`scenario-revenue-${projection.occupancyPercent}`} className="font-semibold">{formatCurrency(projection.grossRevenue)}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custos fixos</dt><dd data-testid={`scenario-fixed-costs-${projection.occupancyPercent}`}>{formatCurrency(projection.fixedCosts)}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custos variáveis</dt><dd data-testid={`scenario-variable-costs-${projection.occupancyPercent}`}>{formatCurrency(projection.variableCosts)}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custo operacional total</dt><dd data-testid={`scenario-operating-costs-${projection.occupancyPercent}`}>{formatCurrency(projection.operatingCosts)}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Custo médio/pax</dt><dd data-testid={`scenario-average-cost-${projection.occupancyPercent}`}>{projection.averageCostPerPassenger === null ? "—" : formatCurrency(projection.averageCostPerPassenger)}</dd></div>
+                  <div className="flex justify-between gap-3 border-t pt-2"><dt className="font-medium">Saldo projetado</dt><dd data-testid={`scenario-balance-${projection.occupancyPercent}`} className={`font-semibold ${projection.estimatedProfit < 0 ? "text-destructive" : "text-primary"}`}>{formatCurrency(projection.estimatedProfit)}</dd></div>
+                  <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Margem projetada</dt><dd data-testid={`scenario-margin-${projection.occupancyPercent}`}>{projection.marginPercent === null ? "—" : `${projection.marginPercent.toFixed(1)}%`}</dd></div>
+                </dl>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 const costFormSchema = z.object({
   category: z.enum(["Transporte", "Hospedagem", "Alimentação", "Guia", "Marketing", "Seguro", "Taxas", "Outros"] as const, {
@@ -409,40 +634,52 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
   return (
     <div className="space-y-6">
       {summary && (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <div data-testid="card-trip-booked-revenue" className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-1">
               <Banknote className="w-4 h-4 text-blue-600" />
-              <span className="text-xs text-blue-600 font-medium">Valor contratado</span>
+              <span className="text-xs text-blue-600 font-medium">Receita contratada</span>
             </div>
             <p data-testid="text-trip-booked-revenue" className="text-lg font-bold text-blue-700">{formatCurrency(summary.expectedRevenue)}</p>
             <p className="text-xs text-blue-500 mt-0.5">
-              Reservas confirmadas · {summary.confirmedSeats} passageiros · valor líquido, não caixa recebido
+              Reservas confirmadas · {summary.confirmedSeats} passageiros. Não é caixa recebido; confira recebimentos na aba Passageiros.
             </p>
           </div>
           <div data-testid="card-trip-costs-recorded" className="bg-red-50 border border-red-200 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-1">
               <Receipt className="w-4 h-4 text-red-600" />
-              <span className="text-xs text-red-600 font-medium">Custos lançados</span>
+              <span className="text-xs text-red-600 font-medium">Custos registrados</span>
             </div>
             <p data-testid="text-trip-costs-recorded" className="text-lg font-bold text-red-700">{formatCurrency(summary.totalRealCosts)}</p>
             <p data-testid="text-trip-costs-status-breakdown" className="text-xs text-red-500 mt-0.5">
-              Pagos {formatCurrency(costStatusTotals.paid / 100)} · Pendentes {formatCurrency(costStatusTotals.pending / 100)} · Vencidos {formatCurrency(costStatusTotals.overdue / 100)}
+              Lançamentos reais, incluindo pagos, pendentes e vencidos.
             </p>
           </div>
-          <div data-testid="card-trip-operational-result" className={`border rounded-lg p-4 ${summary.profit >= 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}`}>
+          <div data-testid="card-trip-costs-paid" className="rounded-lg border border-green-200 bg-green-50 p-4">
             <div className="flex items-center gap-2 mb-1">
-              {summary.profit >= 0
-                ? <TrendingUp className="w-4 h-4 text-green-600" />
-                : <TrendingDown className="w-4 h-4 text-red-600" />}
-              <span className={`text-xs font-medium ${summary.profit >= 0 ? "text-green-600" : "text-red-600"}`}>Resultado operacional estimado</span>
+              <Receipt className="w-4 h-4 text-green-700" />
+              <span className="text-xs font-medium text-green-700">Custos pagos</span>
             </div>
-            <p data-testid="text-trip-operational-result" className={`text-lg font-bold ${summary.profit >= 0 ? "text-green-700" : "text-red-700"}`}>
-              {formatCurrency(summary.profit)}
+            <p data-testid="text-trip-costs-paid" className="text-lg font-bold text-green-800">{formatCurrency(summary.totalPaidCosts)}</p>
+            <p className="mt-0.5 text-xs text-green-700">Saída de caixa registrada nos custos.</p>
+          </div>
+          <div data-testid="card-trip-costs-pending" className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <div className="mb-1 flex items-center gap-2">
+              <Receipt className="h-4 w-4 text-amber-700" />
+              <span className="text-xs font-medium text-amber-700">Custos em aberto</span>
+            </div>
+            <p data-testid="text-trip-costs-pending" className="text-lg font-bold text-amber-800">{formatCurrency(summary.totalPendingCosts)}</p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              Pendentes {formatCurrency(costStatusTotals.pending / 100)} · vencidos {formatCurrency(costStatusTotals.overdue / 100)}.
             </p>
-            <p data-testid="text-trip-operational-margin" className={`text-xs mt-0.5 ${summary.profit >= 0 ? "text-green-500" : "text-red-500"}`}>
-              Reservas confirmadas − custos lançados · Margem {summary.expectedRevenue > 0 ? `${summary.margin.toFixed(1)}%` : "—"}
-            </p>
+          </div>
+          <div data-testid="card-trip-planned-costs" className="rounded-lg border border-border bg-secondary/35 p-4">
+            <div className="mb-1 flex items-center gap-2">
+              <PiggyBank className="h-4 w-4 text-primary" />
+              <span className="text-xs font-medium text-primary">Custos planejados</span>
+            </div>
+            <p data-testid="text-trip-planned-costs" className="text-lg font-bold">{formatCurrency(summary.plannedBudget)}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">Orçamento de referência; não é lançamento nem pagamento.</p>
           </div>
           <div data-testid="card-trip-budget-variance" className={`border rounded-lg p-4 ${summary.budgetVariance <= 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"}`}>
             <div className="flex items-center gap-2 mb-1">
@@ -457,10 +694,20 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
                   : `${formatCurrency(summary.budgetVariance)} acima`}
             </p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Base: {summary.confirmedSeats} passageiros confirmados · planejado {formatCurrency(summary.plannedBudget)} · lançado {formatCurrency(summary.totalRealCosts)}
+              Custos registrados vs orçamento planejado.
             </p>
           </div>
         </div>
+      )}
+
+      {data && (
+        <OccupancyScenarioPlanner
+          key={tripId}
+          tripId={tripId}
+          capacity={summary?.planningCapacity ?? 0}
+          pricing={pricing}
+          plannedCosts={plannedCosts}
+        />
       )}
 
       <FinancialConsolidationView

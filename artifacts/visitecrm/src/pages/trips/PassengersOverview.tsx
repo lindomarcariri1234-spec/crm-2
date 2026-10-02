@@ -118,8 +118,7 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
     const amountPending = totalRevenue - amountReceived;
     const capacity = trip?.totalCapacity ?? 0;
     const occupancy = capacity > 0 ? Math.round((all.length + freeCount) / capacity * 100) : 0;
-    const estimatedProfit = amountReceived - (trip?.priceAdult ? trip.priceAdult * 0.6 * all.length : 0);
-    return { totalPassengers: all.length + freeCount, confirmed: confirmed.length + freeCount, confirmedPaying: confirmed.length, free: freeCount, pending: pending.length, totalRevenue, amountReceived, amountPending, occupancy, estimatedProfit };
+    return { totalPassengers: all.length + freeCount, confirmed: confirmed.length + freeCount, confirmedPaying: confirmed.length, free: freeCount, pending: pending.length, totalRevenue, amountReceived, amountPending, occupancy };
   }, [reservations, trip]);
 
   const costSummary = useMemo(() => {
@@ -135,10 +134,8 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
     const totalVariable = totalVariablePax * capacity;
     const totalCost = totalFixed + totalVariable;
     const costPerPax = capacity > 0 ? totalCost / capacity : 0;
-    const grossRevenue = (trip?.priceAdult ?? 0) * capacity;
-    const marginPct = grossRevenue > 0 ? Math.round(((grossRevenue - totalCost) / grossRevenue) * 100) : null;
     const hasCosts = fixedItems.length > 0 || variableItems.length > 0;
-    return { fixedItems, variableItems, totalFixed, totalVariable, totalVariablePax, totalCost, costPerPax, marginPct, hasCosts };
+    return { fixedItems, variableItems, totalFixed, totalVariable, totalVariablePax, totalCost, costPerPax, hasCosts };
   }, [trip]);
 
   const paymentMethodCounts = useMemo(() => {
@@ -320,7 +317,7 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
           { label: "Receita Total", value: formatCurrency(stats.totalRevenue), sub: "valor das reservas", color: "text-blue-600" },
           { label: "A Receber", value: formatCurrency(stats.amountPending), sub: "saldo em aberto", color: "text-red-600" },
           { label: "Ocupação do Ônibus", value: `${stats.occupancy}%`, sub: "taxa de ocupação", color: "text-purple-600" },
-          { label: "Lucro Estimado", value: formatCurrency(stats.estimatedProfit), sub: "receita recebida — custo estimado (60%)", color: "text-indigo-600" },
+          { label: "Valor Recebido", value: formatCurrency(stats.amountReceived), sub: "pagamentos registrados", color: "text-indigo-600" },
         ].map(s => (
           <div key={s.label} className="bg-card border rounded-lg p-4">
             <p className="text-xs text-muted-foreground mb-1">{s.label}</p>
@@ -348,7 +345,6 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
               { label: `Custos Variáveis (${trip?.totalCapacity ?? 0} pax)`, value: formatCurrency(costSummary.totalVariable), color: "bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800" },
               { label: "Custo Total", value: formatCurrency(costSummary.totalCost), color: "bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800" },
               { label: "Custo por Passageiro", value: formatCurrency(costSummary.costPerPax), color: "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800" },
-              ...(costSummary.marginPct !== null ? [{ label: "Margem Estimada", value: `${costSummary.marginPct}%`, color: costSummary.marginPct >= 0 ? "bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800" : "bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800" }] : []),
             ].map(chip => (
               <div key={chip.label} className={`flex flex-col px-4 py-2.5 rounded-lg border text-sm ${chip.color}`}>
                 <span className="text-xs opacity-70 mb-0.5">{chip.label}</span>

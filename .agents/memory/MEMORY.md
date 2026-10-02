@@ -91,7 +91,7 @@
 - [Migration validator parsing](migration-validator-alter-table.md) — recognize IF EXISTS, comma-separated ADD COLUMNs, and unindented CREATE TABLE blocks (see [indentation detail](validate-tables-indent.md)).
 - [Canonical financial metric semantics](canonical-financial-metrics.md) — keep cash, accrual, credits, commissions and user liabilities separate; never merge cross-source rows by similarity.
 - [Financial balance period scoping](financial-snapshot-scaling.md) — overdue payments use due dates, unpaid commissions use creation dates, and user referral balance remains current.
-- [Trip occupancy and cost reconciliation](trip-occupancy-projections.md) — keep six occupancy scenarios distinct from trip budgets based on confirmed passengers and recorded costs.
+- [Trip occupancy and cost reconciliation](trip-occupancy-projections.md) — keep six occupancy scenarios separate from confirmed-booking budgets; what-if edits stay local and never overwrite saved finance.
 - [Multichannel delivery history](multichannel-delivery-history.md) — preserve numeric delivery attempts and expose detailed provider attempts under a separate history field.
 - [PostgreSQL parameter casts](postgres-parameter-casts.md) — raw SQL arithmetic needs explicit casts when interpolated values arrive as unknown parameters.
 - [Client deletion and trip history](client-deletion-trip-history.md) — anonymize reservation ownership on account removal while preserving passengers, seats, payments, and history

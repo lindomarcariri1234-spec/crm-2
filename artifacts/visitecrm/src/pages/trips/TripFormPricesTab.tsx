@@ -4,7 +4,6 @@ import { Label } from "@/components/ui/label";
 import { Plus, X, Check, Loader2 } from "lucide-react";
 import { formatCurrency } from "./utils";
 import { FIXED_COST_CATEGORIES, VARIABLE_COST_CATEGORIES } from "./constants";
-import { calculateOccupancyProjections } from "./financial-projection";
 import type { TripFormData } from "./types";
 
 interface NewFixed { category: string; description: string; customDesc: string; value: string }
@@ -32,20 +31,12 @@ export function TripFormPricesTab({ form, setForm, newFixed, setNewFixed, newVar
   const totalFixed = form.fixedCostItems.reduce((s, c) => s + c.value, 0);
   const totalVariablePax = form.variableCostItems.reduce((s, c) => s + c.valuePax, 0);
   const totalVariable = totalVariablePax * cap;
-  const projections = calculateOccupancyProjections({
-    capacity: cap,
-    ticketPrice: Number(form.priceAdult),
-    fixedCostAmounts: form.fixedCostItems.map(item => item.value),
-    variableCostPerPassengerAmounts: form.variableCostItems.map(item => item.valuePax),
-  });
-  const baseline = projections.find(projection => projection.occupancyPercent === 80) ?? projections[0];
-  const hasProfit = baseline.estimatedProfit >= 0;
 
   return (
     <>
       <div className="bg-card border rounded-lg p-6 space-y-4">
         <h3 className="font-semibold">Preços por Categoria</h3>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div className="space-y-2">
             <Label>Preço Adulto (R$) *</Label>
             <Input type="number" min="0" step="0.01" placeholder="0.00" value={form.priceAdult} onChange={e => setForm(p => ({ ...p, priceAdult: e.target.value }))} />
@@ -229,112 +220,19 @@ export function TripFormPricesTab({ form, setForm, newFixed, setNewFixed, newVar
         </div>
       </div>
 
-      <div className="bg-card border rounded-lg p-6 space-y-4">
-        <div>
-          <h3 className="font-semibold">Resumo Financeiro · cenário base 80%</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Projeção com 80% da capacidade, custos fixos integrais e custos variáveis por passageiro.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3 xl:grid-cols-4">
-          {[
-            { label: "Capacidade do veículo", value: `${cap} lugares` },
-            { label: "Passageiros pagantes estimados", value: `${baseline.passengers} de ${cap}` },
-            { label: "Receita bruta estimada", value: formatCurrency(baseline.grossRevenue) },
-            { label: "Custos fixos", value: formatCurrency(baseline.fixedCosts) },
-            { label: "Custos variáveis", value: formatCurrency(baseline.variableCosts) },
-            { label: "Custo operacional total", value: formatCurrency(baseline.operatingCosts) },
-            {
-              label: "Custo médio por passageiro",
-              value: baseline.averageCostPerPassenger === null
-                ? "—"
-                : formatCurrency(baseline.averageCostPerPassenger),
-            },
-          ].map(row => (
-            <div key={row.label} className="flex flex-col justify-between gap-1 rounded-lg bg-muted/40 p-3">
-              <span className="text-xs text-muted-foreground">{row.label}</span>
-              <span className="font-semibold">{row.value}</span>
-            </div>
-          ))}
-        </div>
-        <div className={`flex justify-between items-center gap-4 p-4 rounded-lg border-2 text-sm font-semibold ${hasProfit ? "border-green-500/40 bg-green-50 dark:bg-green-950/20" : "border-red-500/40 bg-red-50 dark:bg-red-950/20"}`}>
-          <span className={hasProfit ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}>
-            {hasProfit ? "Lucro Estimado · 80%" : "Prejuízo Estimado · 80%"}
-          </span>
-          <div className="text-right">
-            <span className={`text-lg ${hasProfit ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>
-              {formatCurrency(Math.abs(baseline.estimatedProfit))}
-            </span>
-            <span className="ml-2 text-xs text-muted-foreground">
-              ({baseline.marginPercent === null ? "margem —" : `${baseline.marginPercent.toFixed(1)}% de margem`})
-            </span>
-          </div>
-        </div>
-        <div className="space-y-3">
-          <div>
-            <h4 className="font-medium">Cenários de ocupação</h4>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Os passageiros são arredondados para baixo. A receita usa a tarifa adulta para todos os passageiros pagantes; tarifas infantil e idoso não são ponderadas.
-            </p>
-          </div>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[900px] text-sm">
-              <thead className="bg-muted/40">
-                <tr>
-                  {["Ocupação", "Passageiros", "Receita bruta", "Custos fixos", "Custos variáveis", "Custo operacional", "Custo médio/pax", "Lucro / margem"].map(label => (
-                    <th key={label} scope="col" className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-muted-foreground">
-                      {label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {projections.map(projection => {
-                  const isBaseline = projection.occupancyPercent === 80;
-                  return (
-                    <tr key={projection.occupancyPercent} className={isBaseline ? "bg-primary/5 font-medium" : ""}>
-                      <td className="whitespace-nowrap px-3 py-2">
-                        {projection.occupancyPercent}%
-                        {isBaseline && <span className="ml-2 text-[10px] font-normal text-primary">Base</span>}
-                      </td>
-                      <td className="px-3 py-2">{projection.passengers} / {cap}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{formatCurrency(projection.grossRevenue)}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{formatCurrency(projection.fixedCosts)}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{formatCurrency(projection.variableCosts)}</td>
-                      <td className="whitespace-nowrap px-3 py-2">{formatCurrency(projection.operatingCosts)}</td>
-                      <td className="whitespace-nowrap px-3 py-2">
-                        {projection.averageCostPerPassenger === null
-                          ? "—"
-                          : formatCurrency(projection.averageCostPerPassenger)}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-2">
-                        <span className={projection.estimatedProfit >= 0 ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}>
-                          {formatCurrency(projection.estimatedProfit)}
-                        </span>
-                        <span className="ml-1 text-xs text-muted-foreground">
-                          {projection.marginPercent === null ? "(—)" : `(${projection.marginPercent.toFixed(1)}%)`}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Esta é uma projeção orçada; custos reais, pagamentos recebidos e lucro realizado permanecem separados na aba de custos da viagem.
-          </p>
-        </div>
-      </div>
-
       {tripId && (
-        <div className="flex justify-end">
-          <Button onClick={handleSaveCosts} disabled={isSavingCosts || isPending} className="gap-2">
-            {isSavingCosts
-              ? <><Loader2 className="w-4 h-4 animate-spin" />Salvando Custos...</>
-              : <><Check className="w-4 h-4" />Salvar Custos</>}
-          </Button>
-        </div>
+        <>
+          <p data-testid="text-scenario-planner-location" className="text-xs text-muted-foreground">
+            Simulações completas de ocupação, tarifas e custos ficam na aba financeira da viagem. Os ajustes dos cenários são temporários.
+          </p>
+          <div className="flex justify-end">
+            <Button onClick={handleSaveCosts} disabled={isSavingCosts || isPending} className="gap-2">
+              {isSavingCosts
+                ? <><Loader2 className="w-4 h-4 animate-spin" />Salvando Custos...</>
+                : <><Check className="w-4 h-4" />Salvar Custos</>}
+            </Button>
+          </div>
+        </>
       )}
     </>
   );
