@@ -9,7 +9,7 @@ With PNPM, watching only real package roots can hide dependency links stored bes
 
 **Why:** Cleaning sandbox output did not always clear `ENOSPC`, while broad PNPM link-folder traversal caused bundle requests to hang and narrowly scoped watching exposed missing peer dependencies.
 
-**How to apply:** Before restarting Expo after a sandbox build, remove only the generated ignored `dist` output. If `ENOSPC` persists, inspect Metro's watch graph and exclusions. For resolution errors, check Expo Doctor's Metro-config result, inspect the importing package's adjacent PNPM links, and verify the complete static bundle—not only dependency alignment or workflow startup.
+**How to apply:** Before restarting Expo after a sandbox build, remove only the generated ignored `dist` output. If `ENOSPC` persists, inspect Metro's watch graph and exclusions. For resolution errors, check Expo Doctor's Metro-config result, inspect the importing package's adjacent PNPM links, and verify the complete static bundle for the exact failing artifact—not only dependency alignment or workflow startup.
 
 For Node-only imports that reach a native bundle, avoid global aliases. Use Metro's custom resolver to redirect only the specific module request from the exact importer, and delegate all other requests to `context.resolveRequest`. Reuse a pure-JS package when available; keep minimal shims limited to the API actually used.
 
