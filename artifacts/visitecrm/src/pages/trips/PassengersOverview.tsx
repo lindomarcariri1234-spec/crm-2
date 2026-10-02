@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useListTrips, useGetTrip, useListReservations, useUpdateReservation, useGetMe, useGetTenant, useGetTripRoomAllocationSummary } from "@workspace/api-client-react";
 import { useSeatStream } from "@/hooks/useSeatStream";
@@ -35,8 +35,8 @@ interface TripFinancialReport {
   expensesByCategory: Record<string, number>;
 }
 
-export function PassengersOverview({ tripId: initialTripId }: { tripId: string }) {
-  const [tripId, setTripId] = useState(initialTripId);
+export function PassengersOverview({ tripId }: { tripId: string }) {
+  const [, navigate] = useLocation();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingStoreOrderId, setEditingStoreOrderId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ status: string; paymentMethod: string }>({ status: "", paymentMethod: "" });
@@ -257,7 +257,10 @@ export function PassengersOverview({ tripId: initialTripId }: { tripId: string }
           </p>
         </div>
         <div className="flex gap-2 flex-wrap items-center">
-          <Select value={tripId} onValueChange={v => setTripId(v)}>
+          <Select
+            value={tripId}
+            onValueChange={v => navigate(`/trips/${encodeURIComponent(v)}/passengers-overview`)}
+          >
             <SelectTrigger className="w-52">
               <SelectValue placeholder="Selecionar viagem" />
             </SelectTrigger>

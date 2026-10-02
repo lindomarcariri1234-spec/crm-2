@@ -7,16 +7,20 @@ import { renderComponent, cleanupRoots } from "./eventSourceHarness.js";
 // ---------------------------------------------------------------------------
 const mockGetMe = vi.hoisted(() => vi.fn());
 const mockGetTenant = vi.hoisted(() => vi.fn());
+const mockGetTrip = vi.hoisted(() => vi.fn());
+const mockListReservations = vi.hoisted(() => vi.fn());
 const mockUseSeatStream = vi.hoisted(() =>
   vi.fn(() => ({ eventCount: 0, occupiedSeats: {}, connected: false })),
 );
 const mockRefetch = vi.hoisted(() => vi.fn());
+const mockNavigate = vi.hoisted(() => vi.fn());
+const mockTripSelectOnChange = vi.hoisted(() => vi.fn());
 
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
 vi.mock("wouter", () => ({
-  useLocation: () => ["/trips/trip-1/passengers-overview", vi.fn()],
+  useLocation: () => ["/trips/trip-1/passengers-overview", mockNavigate],
   Link: ({ href, children }: { href: string; children: unknown }) =>
     createElement("a", { href }, children as never),
 }));
@@ -35,8 +39,8 @@ vi.mock("@workspace/api-client-react", () => ({
   useGetTenant: mockGetTenant,
   useGetTripRoomAllocationSummary: vi.fn(() => ({ data: null })),
   useListTrips: () => ({ data: { data: [] } }),
-  useGetTrip: () => ({ data: null }),
-  useListReservations: () => ({ data: { data: [] }, refetch: mockRefetch }),
+  useGetTrip: mockGetTrip,
+  useListReservations: mockListReservations,
   useUpdateReservation: () => ({ mutateAsync: vi.fn() }),
 }));
 
@@ -66,8 +70,20 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 vi.mock("@/components/ui/select", () => ({
-  Select: ({ children }: { children: unknown }) =>
-    createElement("div", null, children as never),
+  Select: ({
+    children,
+    value,
+    onValueChange,
+  }: {
+    children: unknown;
+    value?: string;
+    onValueChange?: (value: string) => void;
+  }) => {
+    if (value === "trip-1" && onValueChange) {
+      mockTripSelectOnChange.mockImplementation(onValueChange);
+    }
+    return createElement("div", null, children as never);
+  },
   SelectContent: ({ children }: { children: unknown }) =>
     createElement("div", null, children as never),
   SelectItem: ({ children }: { children: unknown }) =>
@@ -137,8 +153,12 @@ import { makeTenantData, makeMe } from "./tenantFixtures.js";
 beforeEach(() => {
   mockGetMe.mockReturnValue(makeMe());
   mockGetTenant.mockReturnValue(makeTenantData(false));
+  mockGetTrip.mockReturnValue({ data: null });
+  mockListReservations.mockReturnValue({ data: { data: [] }, refetch: mockRefetch });
   mockUseSeatStream.mockReturnValue({ eventCount: 0, occupiedSeats: {}, connected: false });
   mockRefetch.mockClear();
+  mockNavigate.mockClear();
+  mockTripSelectOnChange.mockReset();
 });
 
 afterEach(async () => {
@@ -216,5 +236,28 @@ describe("PassengersOverview — seatMapEnabled tenant toggle", () => {
 
     const link = container.querySelector("a[href='/trips/trip-1/seat-map']");
     expect(link).not.toBeNull();
+  });
+});
+
+describe("PassengersOverview — route-synced trip selection", () => {
+  it("navigates to the selected trip's passengers overview route", async () => {
+    await renderComponent(createElement(PassengersOverview, { tripId: "trip-1" }));
+
+    mockTripSelectOnChange("trip-2");
+
+    expect(mockNavigate).toHaveBeenCalledWith("/trips/trip-2/passengers-overview");
+  });
+
+  it("uses a new trip ID when the same component receives a different route parameter", async () => {
+    const { rerender } = await renderComponent(
+      createElement(PassengersOverview, { tripId: "trip-1" }),
+    );
+    mockGetTrip.mockClear();
+    mockListReservations.mockClear();
+
+    await rerender(createElement(PassengersOverview, { tripId: "trip-2" }));
+
+    expect(mockGetTrip).toHaveBeenCalledWith("trip-2", expect.any(Object));
+    expect(mockListReservations).toHaveBeenCalledWith({ tripId: "trip-2", limit: 200 });
   });
 });
