@@ -679,7 +679,9 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
               <span className="text-xs font-medium text-primary">Custos planejados</span>
             </div>
             <p data-testid="text-trip-planned-costs" className="text-lg font-bold">{formatCurrency(summary.plannedBudget)}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">Orçamento de referência; não é lançamento nem pagamento.</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Orçamento para {summary.confirmedSeats} passageiros confirmados; não é lançamento nem pagamento.
+            </p>
           </div>
           <div data-testid="card-trip-budget-variance" className={`border rounded-lg p-4 ${summary.budgetVariance <= 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"}`}>
             <div className="flex items-center gap-2 mb-1">
@@ -720,7 +722,9 @@ export function TripCostsTab({ tripId }: { tripId: string }) {
           totalPendingCosts: summary.totalPendingCosts,
         } : undefined}
         title="Conciliação financeira da viagem"
-        description={`Preços, orçamento planejado, custos diretos e despesas da agência · orçamento para ${summary?.confirmedSeats ?? 0} passageiros confirmados / ${summary?.planningCapacity ?? 0} vagas`}
+        description={summary
+          ? `Custos variáveis desta conciliação calculados para ${summary.confirmedSeats} passageiros confirmados; o Resumo de Custos projeta para as ${summary.planningCapacity} vagas totais.`
+          : "A conciliação calcula os custos variáveis pelos passageiros confirmados; o Resumo de Custos projeta pela capacidade total da viagem."}
       />
 
       {costStatusTotals.overdue > 0 && (

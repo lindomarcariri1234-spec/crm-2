@@ -6,6 +6,7 @@ const mockGetTrip = vi.hoisted(() => vi.fn());
 const mockUpdateTrip = vi.hoisted(() => vi.fn());
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockToast = vi.hoisted(() => vi.fn());
+const mockInvalidateQueries = vi.hoisted(() => vi.fn());
 
 vi.mock("wouter", () => ({
   useLocation: () => ["/trips/trip-1/edit", mockNavigate],
@@ -16,7 +17,7 @@ vi.mock("@/hooks/use-toast", () => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries }),
 }));
 
 vi.mock("@workspace/api-client-react", () => ({
@@ -269,6 +270,7 @@ beforeEach(() => {
   });
   mockToast.mockReset();
   mockNavigate.mockReset();
+  mockInvalidateQueries.mockReset();
 });
 
 afterEach(async () => {
@@ -312,6 +314,55 @@ describe("TripForm — conflito de assento ao salvar", () => {
         element.textContent?.includes("Os assentos 12 já estão ocupados"),
     );
     expect(alertBanner).toBeDefined();
+  });
+
+  it("invalida os dados compartilhados da viagem depois de salvar custos", async () => {
+    mockUpdateTrip.mockResolvedValue(makeTrip());
+
+    const { container } = await renderComponent(
+      createElement(TripForm, { tripId: "trip-1" }),
+    );
+    await flushAct(() => {});
+
+    const saveButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Salvar como Rascunho"),
+    );
+    expect(saveButton).toBeDefined();
+
+    await flushAct(() => {
+      saveButton?.click();
+    });
+
+    expect(mockUpdateTrip).toHaveBeenCalledOnce();
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["/api/trips", "trip-1"],
+    });
+  });
+
+  it("também atualiza as telas compartilhadas ao salvar somente os custos", async () => {
+    mockUpdateTrip.mockResolvedValue(makeTrip());
+
+    const { container } = await renderComponent(
+      createElement(TripForm, { tripId: "trip-1" }),
+    );
+    await flushAct(() => {});
+
+    const saveCostsButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Salvar Custos"),
+    );
+    expect(saveCostsButton).toBeDefined();
+
+    await flushAct(() => {
+      saveCostsButton?.click();
+    });
+
+    expect(mockUpdateTrip).toHaveBeenCalledWith({
+      id: "trip-1",
+      data: { fixedCosts: [], variableCosts: [] },
+    });
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["/api/trips", "trip-1"],
+    });
   });
 
   it("bloqueia o salvamento quando passageiros gratuitos compartilham um assento", async () => {

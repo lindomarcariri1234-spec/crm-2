@@ -329,10 +329,15 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
 
       {costSummary.hasCosts && (
         <div className="bg-card border rounded-xl p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-muted-foreground" />
-              <h3 className="font-semibold">Resumo de Custos</h3>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-muted-foreground" />
+                <h3 className="font-semibold">Resumo de Custos</h3>
+              </div>
+              <p data-testid="text-cost-summary-basis" className="mt-1 text-xs text-muted-foreground">
+                Projeção pela capacidade total ({trip?.totalCapacity ?? 0} vagas); a conciliação financeira usa apenas passageiros confirmados.
+              </p>
             </div>
             <Button variant="ghost" size="sm" onClick={() => setShowCosts(v => !v)} className="text-xs text-muted-foreground h-7">
               {showCosts ? "Ocultar detalhes" : "Ver detalhes"}
@@ -342,9 +347,9 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
           <div className="flex flex-wrap gap-3">
             {[
               { label: "Custos Fixos", value: formatCurrency(costSummary.totalFixed), color: "bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800" },
-              { label: `Custos Variáveis (${trip?.totalCapacity ?? 0} pax)`, value: formatCurrency(costSummary.totalVariable), color: "bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800" },
-              { label: "Custo Total", value: formatCurrency(costSummary.totalCost), color: "bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800" },
-              { label: "Custo por Passageiro", value: formatCurrency(costSummary.costPerPax), color: "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800" },
+              { label: `Custos Variáveis (${trip?.totalCapacity ?? 0} vagas)`, value: formatCurrency(costSummary.totalVariable), color: "bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800" },
+              { label: "Total projetado", value: formatCurrency(costSummary.totalCost), color: "bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300 border-orange-200 dark:border-orange-800" },
+              { label: "Média por vaga", value: formatCurrency(costSummary.costPerPax), color: "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800" },
             ].map(chip => (
               <div key={chip.label} className={`flex flex-col px-4 py-2.5 rounded-lg border text-sm ${chip.color}`}>
                 <span className="text-xs opacity-70 mb-0.5">{chip.label}</span>
@@ -396,7 +401,7 @@ export function PassengersOverview({ tripId }: { tripId: string }) {
                       </div>
                     ))}
                     <div className="flex justify-between text-xs font-semibold pt-1 border-t px-2">
-                      <span>Total Variável ({trip?.totalCapacity ?? 0} pax)</span>
+                      <span>Total Variável ({trip?.totalCapacity ?? 0} vagas)</span>
                       <span>{formatCurrency(costSummary.totalVariable)}</span>
                     </div>
                   </div>

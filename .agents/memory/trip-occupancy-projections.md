@@ -9,6 +9,8 @@ What-if scenario assumptions must stay local to the screen. Initialize them from
 
 For trip-cost reconciliation, calculate the planned budget from fixed cost items plus per-passenger variable costs multiplied by confirmed reservation capacity. Label this passenger basis; do not substitute an occupancy-scenario estimate. Keep booked value, recorded trip costs, and cash/payment status distinct.
 
+The trip overview's cost summary uses total capacity, while trip-cost reconciliation uses confirmed passengers; these bases are deliberately distinct and should be labeled, not forced to match. The user explicitly confirmed this behavior.
+
 **Why:** Occupancy scenarios are planning estimates, while the trip-cost screen reconciles its budget against current confirmed bookings and recorded costs. Mixing these bases can make an apparent variance misleading.
 
 **How to apply:** Keep scenario inputs as local state and reset them from saved values. Use the six scenarios in trip planning. In actual trip-cost reconciliation, use confirmed passenger capacity for the planned budget and keep the projection separate from recorded costs and payment-ledger values.

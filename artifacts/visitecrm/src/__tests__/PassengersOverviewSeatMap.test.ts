@@ -137,6 +137,7 @@ vi.mock("../pages/trips/constants.js", () => ({
 vi.mock("../pages/trips/utils.js", () => ({
   formatCurrency: (v: number) => `R$ ${v}`,
   formatDate: (d: string) => d,
+  formatTripDateRange: () => "1–2 de janeiro",
 }));
 
 vi.mock("@/lib/labels", () => ({
@@ -236,6 +237,39 @@ describe("PassengersOverview — seatMapEnabled tenant toggle", () => {
 
     const link = container.querySelector("a[href='/trips/trip-1/seat-map']");
     expect(link).not.toBeNull();
+  });
+});
+
+describe("PassengersOverview — base do resumo de custos", () => {
+  it("identifies the cost summary as a full-capacity projection", async () => {
+    mockGetTrip.mockReturnValue({
+      data: {
+        id: "trip-1",
+        totalCapacity: 50,
+        fixedCosts: [
+          { id: "fixed-transport", category: "Transporte", description: "Fretamento", value: 1000 },
+          { id: "fixed-guide", category: "Equipe e guias", description: "Guia turístico", value: 300 },
+        ],
+        variableCosts: [
+          { id: "variable-food", category: "Alimentação", description: "Alimentação dos passageiros", valuePax: 15 },
+        ],
+      },
+    });
+
+    const { container } = await renderComponent(
+      createElement(PassengersOverview, { tripId: "trip-1" }),
+    );
+
+    expect(
+      container.querySelector('[data-testid="text-cost-summary-basis"]')?.textContent,
+    ).toBe(
+      "Projeção pela capacidade total (50 vagas); a conciliação financeira usa apenas passageiros confirmados.",
+    );
+    expect(container.textContent).toContain("Custos Variáveis (50 vagas)");
+    expect(container.textContent).toContain("Total projetado");
+    expect(container.textContent).toContain("Média por vaga");
+    expect(container.textContent).toContain("R$ 2050");
+    expect(container.textContent).toContain("R$ 41");
   });
 });
 
