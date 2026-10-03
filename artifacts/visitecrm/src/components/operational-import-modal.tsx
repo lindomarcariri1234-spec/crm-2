@@ -23,6 +23,7 @@ interface RowResult {
   line: number;
   sourceKey?: string;
   label?: string;
+  category?: string;
   action: RowAction;
   reason?: string;
 }
@@ -420,6 +421,7 @@ export function OperationalImportModal({ entity, title, open, onClose, onImporte
                     <tr>
                       <th className="text-left p-2">Linha</th>
                       <th className="text-left p-2">ID Externo</th>
+                      {entity === "expenses" && <th className="text-left p-2">Categoria</th>}
                       <th className="text-left p-2">Ação</th>
                       <th className="text-left p-2">Motivo</th>
                     </tr>
@@ -431,6 +433,7 @@ export function OperationalImportModal({ entity, title, open, onClose, onImporte
                         <tr key={`${row.line}-${row.sourceKey ?? ""}`} className="border-t">
                           <td className="p-2">{row.line}</td>
                           <td className="p-2">{row.sourceKey ?? row.label ?? "—"}</td>
+                          {entity === "expenses" && <td className="p-2">{row.category ?? "—"}</td>}
                           <td className="p-2"><Badge variant="outline" className={actionClasses[displayAction]}>{actionLabels[displayAction]}</Badge></td>
                           <td className="p-2 text-muted-foreground">{row.reason ?? "Pronta para processar"}</td>
                         </tr>

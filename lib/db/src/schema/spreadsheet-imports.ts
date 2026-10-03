@@ -17,6 +17,7 @@ export interface SpreadsheetImportRowResult {
   line: number;
   sourceKey?: string;
   label?: string;
+  category?: string;
   action: SpreadsheetImportRowAction;
   reason?: string;
   targetId?: string;

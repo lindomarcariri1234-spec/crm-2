@@ -161,6 +161,37 @@ function emailValue(value: string, label: string, optional = false): string | nu
   return result;
 }
 
+const expenseCategoryAliases: Record<string, string> = {
+  transport: "Transporte",
+  transporte: "Transporte",
+  accommodation: "Hospedagem",
+  hospedagem: "Hospedagem",
+  food: "Alimentação",
+  alimentacao: "Alimentação",
+  marketing: "Marketing",
+  administrative: "Administrativo",
+  administrativo: "Administrativo",
+  commission: "Comissão",
+  comissao: "Comissão",
+  "comissao de vendedores": "Comissão",
+  "comissoes de vendedores": "Comissão",
+  other: "Outro",
+  outro: "Outro",
+  outros: "Outro",
+};
+
+function normalizeExpenseCategory(value: string): string {
+  const key = value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .trim()
+    .toLocaleLowerCase("pt-BR")
+    .replace(/\s+/g, " ");
+  const category = expenseCategoryAliases[key];
+  if (!category) throw new Error(`Categoria de despesa desconhecida: ${value}.`);
+  return category;
+}
+
 function parseRow(entity: SpreadsheetEntity, line: number, cells: CellRow): ParsedEntityRow {
   try {
     const sourceKey = requireText(cells, "id_externo", "ID Externo", 200);
@@ -254,7 +285,7 @@ function parseRow(entity: SpreadsheetEntity, line: number, cells: CellRow): Pars
         line, sourceKey, label: requireText(cells, "descricao", "Descrição"), action: "created",
         data: {
           tripSourceKey: optionalText(cells, "viagem_id_externo", 200),
-          category: requireText(cells, "categoria", "Categoria"),
+          category: normalizeExpenseCategory(requireText(cells, "categoria", "Categoria")),
           description: requireText(cells, "descricao", "Descrição"),
           amount: parseBrazilMoney(requireText(cells, "valor", "Valor", 40), "Valor")!,
           status,
@@ -747,13 +778,33 @@ async function analyzeRows(
   return rows;
 }
 
+function reportRowFromParsed(
+  entity: SpreadsheetEntity,
+  row: ParsedEntityRow,
+  overrides: Partial<SpreadsheetImportRowResult> = {},
+): SpreadsheetImportRowResult {
+  const category = entity === "expenses" && typeof row.data?.category === "string"
+    ? row.data.category
+    : undefined;
+  return {
+    line: row.line,
+    sourceKey: row.sourceKey,
+    label: row.label,
+    action: row.action,
+    reason: row.reason,
+    targetId: row.targetId,
+    ...(category ? { category } : {}),
+    ...overrides,
+  };
+}
+
 function reportFromRows(entity: SpreadsheetEntity, filename: string, rows: ParsedEntityRow[]): SpreadsheetImportReport {
   return {
     entity,
     contractVersion: 1,
     filename,
     totalRows: rows.length,
-    results: rows.map(({ line, sourceKey, label, action, reason, targetId }) => ({ line, sourceKey, label, action, reason, targetId })),
+    results: rows.map(row => reportRowFromParsed(entity, row)),
   };
 }
 
@@ -1292,7 +1343,10 @@ router.post("/spreadsheet-imports/import", async (req, res, next: NextFunction):
       const results: SpreadsheetImportRowResult[] = [];
       for (const row of analyzed) {
         if (!row.sourceKey || row.action === "rejected" || !row.data) {
-          results.push({ line: row.line, sourceKey: row.sourceKey, label: row.label, action: "rejected", reason: row.reason ?? "Linha inválida." });
+          results.push(reportRowFromParsed(request.entity, row, {
+            action: "rejected",
+            reason: row.reason ?? "Linha inválida.",
+          }));
           continue;
         }
         const targetId = row.targetId ?? generateId();
@@ -1324,9 +1378,12 @@ router.post("/spreadsheet-imports/import", async (req, res, next: NextFunction):
               set: { targetId, lastBatchId: importId, lastLine: row.line, updatedAt: new Date() },
             });
           });
-          results.push({ line: row.line, sourceKey: row.sourceKey, label: row.label, action: row.action, targetId });
+          results.push(reportRowFromParsed(request.entity, row, { targetId }));
         } catch (error) {
-          results.push({ line: row.line, sourceKey: row.sourceKey, label: row.label, action: "rejected", reason: error instanceof Error ? error.message : String(error) });
+          results.push(reportRowFromParsed(request.entity, row, {
+            action: "rejected",
+            reason: error instanceof Error ? error.message : String(error),
+          }));
         }
       }
       const report: SpreadsheetImportReport = { entity: request.entity, contractVersion: 1, filename: request.filename, totalRows: analyzed.length, results };

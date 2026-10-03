@@ -146,6 +146,32 @@ describe("rotas de importação operacional", () => {
     expect(mocks.mockTransaction).not.toHaveBeenCalled();
   });
 
+  it("normaliza categorias de despesa na prévia e rejeita categorias desconhecidas sem gravar", async () => {
+    mocks.queryQueue.push([], [], []);
+    const response = await request(app()).post("/api/spreadsheet-imports/preview").send(payload(
+      "expenses",
+      [
+        "id_externo,viagem_id_externo,categoria,descricao,valor,status,vencimento",
+        'EXP-1,,marketing,Campanha,"100,00",pending,15/12/2026',
+        'EXP-2,,Comissões de vendedores,Comissão de venda,"50,00",pending,15/12/2026',
+        'EXP-3,,categoria desconhecida,Outro custo,"25,00",pending,15/12/2026',
+      ].join("\n"),
+    ));
+
+    expect(response.status).toBe(200);
+    expect(response.body.report.results).toEqual([
+      expect.objectContaining({ line: 2, sourceKey: "EXP-1", category: "Marketing", action: "created" }),
+      expect.objectContaining({ line: 3, sourceKey: "EXP-2", category: "Comissão", action: "created" }),
+      expect.objectContaining({
+        line: 4,
+        action: "rejected",
+        reason: expect.stringContaining("Categoria de despesa desconhecida"),
+      }),
+    ]);
+    expect(mocks.mockInsert).not.toHaveBeenCalled();
+    expect(mocks.mockTransaction).not.toHaveBeenCalled();
+  });
+
   it("rejeita reserva quando cliente ou viagem não podem ser associados", async () => {
     mocks.queryQueue.push([], [], [], []);
     const response = await request(app()).post("/api/spreadsheet-imports/preview").send(payload(

@@ -163,6 +163,48 @@ describe("OperationalImportModal", () => {
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: originalRevokeObjectURL });
   });
 
+  it("exibe a categoria normalizada na prévia de despesas", async () => {
+    const expenseReport = {
+      entity: "expenses",
+      contractVersion: 1,
+      filename: "despesas.csv",
+      totalRows: 1,
+      results: [{ line: 2, sourceKey: "EXP-1", category: "Marketing", action: "created" }],
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/contracts/")) return response(contract);
+      if (url.endsWith("/preview")) return response({ report: expenseReport });
+      return response({}, false);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    await renderComponent(createElement(OperationalImportModal, {
+      entity: "expenses",
+      title: "Importar despesas",
+      open: true,
+      onClose: vi.fn(),
+      onImported: vi.fn(),
+    }));
+    await flushAct(settle);
+
+    const input = document.body.querySelector('input[type="file"]');
+    expect(input).not.toBeNull();
+    const file = new File(
+      ["id_externo,categoria,descricao,valor,status,vencimento\nEXP-1,marketing,Campanha,100,pending,15/12/2026"],
+      "despesas.csv",
+      { type: "text/csv" },
+    );
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    await flushAct(async () => {
+      input!.dispatchEvent(new Event("change", { bubbles: true }));
+      await settle();
+    });
+
+    expect(document.body.textContent).toContain("Categoria");
+    expect(document.body.textContent).toContain("Marketing");
+  });
+
   it("mantém a prévia disponível quando a gravação falha totalmente", async () => {
     globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
