@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, numeric, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { pgTable, text, timestamp, numeric, integer, index, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import type { PaymentStatus, PaymentType, ExpenseStatus } from "@workspace/permissions";
@@ -30,6 +30,8 @@ export const paymentsTable = pgTable("payments", {
   transactionId: text("transaction_id"),
   description: text("description"),
   notes: text("notes"),
+  sourceExpenseId: text("source_expense_id").references(() => expensesTable.id, { onDelete: "set null" }),
+  sourceTripCostId: text("source_trip_cost_id").references(() => tripCostsTable.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 }, (t) => [
@@ -39,17 +41,18 @@ export const paymentsTable = pgTable("payments", {
   index("payments_tenant_id_status_idx").on(t.tenantId, t.status),
   index("payments_financial_paid_idx").on(t.tenantId, t.type, t.status, t.paidAt),
   index("payments_financial_due_idx").on(t.tenantId, t.type, t.status, t.dueDate),
+  uniqueIndex("payments_source_expense_id_unique").on(t.sourceExpenseId).where(sql`${t.sourceExpenseId} IS NOT NULL`),
+  uniqueIndex("payments_source_trip_cost_id_unique").on(t.sourceTripCostId).where(sql`${t.sourceTripCostId} IS NOT NULL`),
+  check(
+    "payments_operational_cost_source_check",
+    sql`(${t.sourceExpenseId} IS NULL OR ${t.sourceTripCostId} IS NULL)
+      AND (${t.sourceExpenseId} IS NULL AND ${t.sourceTripCostId} IS NULL OR ${t.type} = 'payable')`,
+  ),
 ]);
 
 export const insertPaymentSchema = createInsertSchema(paymentsTable).omit({ createdAt: true, updatedAt: true });
 export type InsertPayment = typeof paymentsTable.$inferInsert;
 export type Payment = typeof paymentsTable.$inferSelect;
-
-export const paymentsRelations = relations(paymentsTable, ({ one }) => ({
-  tenant: one(tenantsTable, { fields: [paymentsTable.tenantId], references: [tenantsTable.id] }),
-  reservation: one(reservationsTable, { fields: [paymentsTable.reservationId], references: [reservationsTable.id] }),
-  client: one(clientsTable, { fields: [paymentsTable.clientId], references: [clientsTable.id] }),
-}));
 
 export const expensesTable = pgTable("expenses", {
   id: text("id").primaryKey(),
@@ -76,6 +79,14 @@ export const expensesTable = pgTable("expenses", {
   index("expenses_financial_due_idx").on(t.tenantId, t.status, t.dueDate),
   index("expenses_financial_paid_idx").on(t.tenantId, t.status, t.paymentDate),
 ]);
+
+export const paymentsRelations = relations(paymentsTable, ({ one }) => ({
+  tenant: one(tenantsTable, { fields: [paymentsTable.tenantId], references: [tenantsTable.id] }),
+  reservation: one(reservationsTable, { fields: [paymentsTable.reservationId], references: [reservationsTable.id] }),
+  client: one(clientsTable, { fields: [paymentsTable.clientId], references: [clientsTable.id] }),
+  sourceExpense: one(expensesTable, { fields: [paymentsTable.sourceExpenseId], references: [expensesTable.id] }),
+  sourceTripCost: one(tripCostsTable, { fields: [paymentsTable.sourceTripCostId], references: [tripCostsTable.id] }),
+}));
 
 export const insertExpenseSchema = createInsertSchema(expensesTable).omit({ createdAt: true, updatedAt: true });
 export type InsertExpense = z.infer<typeof insertExpenseSchema>;

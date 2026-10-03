@@ -11,6 +11,8 @@ Cash profit subtracts paid operating costs, paid commissions and paid client bon
 
 Potential duplicates across general expenses and trip costs may be diagnosed, but must not be automatically merged using amount/date similarity because there is no immutable cross-source identity.
 
+Explicit payable links and their tenant-scoped locking and deletion guardrails are detailed in [operational-cost-payables.md](operational-cost-payables.md).
+
 For a storefront order linked to one reservation, the order's discounted total is the canonical booking total. `depositAmount` is only the requested minimum; only paid receivable rows count as received. Real balance is discounted total minus confirmed receipts.
 
 Passenger and manifest views must emit reservation-level financial fields once per reservation, not once per passenger. Any per-passenger split must be an explicit allocation, never an implicit repeated total.

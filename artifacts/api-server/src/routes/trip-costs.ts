@@ -1,15 +1,16 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { db } from "@workspace/db";
-import { tripCostsTable, tripsTable, reservationsTable, expensesTable } from "@workspace/db";
+import { tripCostsTable, tripsTable, reservationsTable, expensesTable, paymentsTable } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/tenant";
 import { AppError, ForbiddenError, NotFoundError, ValidationError } from "../lib/errors";
 import { ADMIN_ROLES } from '../lib/tenant';
-import { EXPENSE_STATUS, RESERVATION_STATUS, hasPermission, RESOURCES, ACTIONS } from "@workspace/permissions";
+import { EXPENSE_STATUS, PAYMENT_TYPE, RESERVATION_STATUS, hasPermission, RESOURCES, ACTIONS } from "@workspace/permissions";
 import { z } from "zod/v4";
 import { areExpenseAndTripCostLinkable } from "../services/expense-trip-cost-link";
 import { calculateTripCostSummary } from "../services/trip-cost-summary";
+import { operationalCostAmountsMatch, toPayableStatus } from "../services/operational-cost-payables";
 
 const router = Router();
 
@@ -309,6 +310,25 @@ const updateTripCost = async (
       next(new ValidationError(parsed.error.issues[0]?.message ?? "Dados inválidos", "VALIDATION_ERROR")); return;
     }
     const responseCost = await db.transaction(async (tx) => {
+      const [payableSnapshot] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceTripCostId, req.params.costId),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      let linkedPayable: typeof paymentsTable.$inferSelect | null = null;
+      if (payableSnapshot) {
+        const [payment] = await tx.select().from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.id, payableSnapshot.id),
+            eq(paymentsTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+        linkedPayable = payment ?? null;
+      }
+
       const [costSnapshot] = await tx.select({ id: tripCostsTable.id })
         .from(tripCostsTable)
         .where(and(
@@ -358,6 +378,17 @@ const updateTripCost = async (
       if ((lockedExpense?.id ?? null) !== (currentLinkedExpense?.id ?? null)) {
         throw new AppError("O vínculo mudou durante a edição. Tente novamente.", 409, "EXPENSE_LINK_CHANGED");
       }
+      const [currentPayable] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceTripCostId, existing.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      if ((payableSnapshot?.id ?? null) !== (currentPayable?.id ?? null)) {
+        throw new AppError("O vínculo com a conta a pagar mudou. Tente novamente.", 409, "OPERATIONAL_COST_LINK_CHANGED");
+      }
 
       const { category, description, supplierName, amount, status, dueDate, paidAt, notes } = parsed.data;
       const updates: Partial<typeof tripCostsTable.$inferInsert> = {};
@@ -371,6 +402,37 @@ const updateTripCost = async (
       else if (status === EXPENSE_STATUS.PAID && !existing.paidAt) updates.paidAt = new Date();
       if (notes !== undefined) updates.notes = notes || null;
 
+      let payableStatus: ReturnType<typeof toPayableStatus> | undefined;
+      if (linkedPayable) {
+        if (lockedExpense) {
+          throw new AppError(
+            "Este custo é representado pela despesa da agência; gerencie a conta por essa despesa.",
+            409,
+            "OPERATIONAL_COST_SOURCE_LINKED",
+          );
+        }
+        const sourceStatus = toPayableStatus(existing.status);
+        if (
+          !operationalCostAmountsMatch(existing.amount, linkedPayable.amount)
+          || linkedPayable.status !== sourceStatus
+        ) {
+          throw new AppError("O custo e a conta a pagar divergiram.", 409, "OPERATIONAL_COST_PAYABLE_MISMATCH");
+        }
+        const nextStatus = toPayableStatus(updates.status ?? existing.status);
+        if (updates.dueDate === null) {
+          throw new AppError("Desvincule a conta a pagar antes de remover o vencimento.", 409, "OPERATIONAL_COST_DUE_DATE_REQUIRED");
+        }
+        if (nextStatus !== EXPENSE_STATUS.PAID) {
+          if (updates.paidAt) {
+            throw new AppError("Informe a data de pagamento somente para um custo pago.", 409, "OPERATIONAL_COST_PAID_AT_INVALID");
+          }
+          updates.paidAt = null;
+        } else if (updates.paidAt === undefined) {
+          updates.paidAt = existing.paidAt ?? linkedPayable.paidAt ?? new Date();
+        }
+        payableStatus = nextStatus;
+      }
+
       if (lockedExpense && !areExpenseAndTripCostLinkable(lockedExpense, {
         tripId: existing.tripId,
         amount: updates.amount ?? existing.amount,
@@ -381,6 +443,25 @@ const updateTripCost = async (
 
       await tx.update(tripCostsTable).set(updates)
         .where(and(eq(tripCostsTable.id, existing.id), eq(tripCostsTable.tenantId, me.tenantId)));
+      if (linkedPayable) {
+        const dueDate = updates.dueDate !== undefined ? updates.dueDate : existing.dueDate ?? linkedPayable.dueDate;
+        if (!dueDate) {
+          throw new AppError("A conta a pagar vinculada precisa de um vencimento.", 409, "OPERATIONAL_COST_DUE_DATE_REQUIRED");
+        }
+        await tx.update(paymentsTable).set({
+          category: updates.category ?? linkedPayable.category,
+          description: updates.description ?? linkedPayable.description,
+          notes: updates.notes !== undefined ? updates.notes : linkedPayable.notes,
+          amount: updates.amount ?? existing.amount,
+          dueDate,
+          status: payableStatus!,
+          paidAt: payableStatus === EXPENSE_STATUS.PAID ? updates.paidAt ?? existing.paidAt ?? linkedPayable.paidAt : null,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(paymentsTable.id, linkedPayable.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+        ));
+      }
 
       const [updatedCost] = await tx.select().from(tripCostsTable)
         .where(and(eq(tripCostsTable.id, existing.id), eq(tripCostsTable.tenantId, me.tenantId)))
@@ -420,6 +501,24 @@ router.delete("/trips/:id/costs/:costId", async (req, res, next: NextFunction): 
         eq(tripCostsTable.tripId, req.params.id),
         eq(tripCostsTable.tenantId, me.tenantId),
       );
+      const [payableSnapshot] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceTripCostId, req.params.costId),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      let linkedPayable: typeof paymentsTable.$inferSelect | null = null;
+      if (payableSnapshot) {
+        const [payment] = await tx.select().from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.id, payableSnapshot.id),
+            eq(paymentsTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+        linkedPayable = payment ?? null;
+      }
       const [costSnapshot] = await tx.select({ id: tripCostsTable.id })
         .from(tripCostsTable).where(costFilter).limit(1);
       if (!costSnapshot) throw new NotFoundError("Custo não encontrado", "NOT_FOUND");
@@ -453,6 +552,20 @@ router.delete("/trips/:id/costs/:costId", async (req, res, next: NextFunction): 
         .limit(1);
       if ((linkedExpenseSnapshot?.id ?? null) !== (currentLinkedExpense?.id ?? null)) {
         throw new AppError("O vínculo mudou durante a exclusão. Tente novamente.", 409, "EXPENSE_LINK_CHANGED");
+      }
+      const [currentPayable] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceTripCostId, existing.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      if ((payableSnapshot?.id ?? null) !== (currentPayable?.id ?? null)) {
+        throw new AppError("O vínculo com a conta a pagar mudou. Tente novamente.", 409, "OPERATIONAL_COST_LINK_CHANGED");
+      }
+      if (linkedPayable && currentPayable) {
+        throw new AppError("Desvincule a conta a pagar antes de excluir o custo.", 409, "PAYMENT_LINKED_TO_OPERATIONAL_COST");
       }
 
       await tx.delete(tripCostsTable)

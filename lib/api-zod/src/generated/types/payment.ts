@@ -28,6 +28,10 @@ export interface Payment {
   description?: string | null;
   /** @nullable */
   notes?: string | null;
+  /** @nullable */
+  sourceExpenseId: string | null;
+  /** @nullable */
+  sourceTripCostId: string | null;
   createdAt: string;
   updatedAt: string;
 }

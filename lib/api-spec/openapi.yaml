@@ -2247,6 +2247,11 @@ paths:
           description: Inclusive end of the due-date range in America/Sao_Paulo.
           schema:
             type: ["string", "null"]
+        - name: unlinkedOnly
+          in: query
+          description: Return only payments not linked to an operational cost.
+          schema:
+            type: boolean
         - name: page
           in: query
           schema:
@@ -2281,6 +2286,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Payment"
+
+  /operational-cost-payables:
+    post:
+      operationId: createOperationalCostPayable
+      tags: [payments, expenses]
+      summary: Create a payable for an operational cost or link an existing payable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOperationalCostPayableBody"
+      responses:
+        "200":
+          description: Existing payable returned or payable linked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "201":
+          description: Payable created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
+  /operational-cost-payables/{sourceType}/{sourceId}:
+    delete:
+      operationId: unlinkOperationalCostPayable
+      tags: [payments, expenses]
+      summary: Remove the explicit link between an operational cost and its payable
+      parameters:
+        - name: sourceType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [expense, trip_cost]
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Link removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
 
   /payments/{id}:
     get:
@@ -8943,6 +8998,10 @@ components:
           type: ["string", "null"]
         notes:
           type: ["string", "null"]
+        sourceExpenseId:
+          type: ["string", "null"]
+        sourceTripCostId:
+          type: ["string", "null"]
         createdAt:
           type: string
         updatedAt:
@@ -8957,6 +9016,8 @@ components:
         - totalInstallments
         - dueDate
         - status
+        - sourceExpenseId
+        - sourceTripCostId
         - createdAt
         - updatedAt
 
@@ -9018,6 +9079,25 @@ components:
         notes:
           type: ["string", "null"]
 
+    CreateOperationalCostPayableBody:
+      type: object
+      properties:
+        sourceType:
+          type: string
+          enum: [expense, trip_cost]
+        sourceId:
+          type: string
+        paymentId:
+          type: string
+          description: Existing payable ID to associate instead of creating a new one.
+        paymentMethod:
+          type: string
+          description: Required when creating a new payable.
+        dueDate:
+          type: string
+          description: Required when the source cost has no due date.
+      required: [sourceType, sourceId]
+
     FinancialSummary:
       type: object
       properties:
@@ -9069,6 +9149,14 @@ components:
           type: string
         status:
           $ref: "#/components/schemas/ExpenseStatus"
+        payablePaymentId:
+          type: ["string", "null"]
+        payableStatus:
+          oneOf:
+            - $ref: "#/components/schemas/PaymentStatus"
+            - type: "null"
+        payableDueDateRequired:
+          type: boolean
         notes:
           type: ["string", "null"]
         createdAt:
@@ -9076,7 +9164,7 @@ components:
         source:
           type: string
           enum: [agency, trip]
-      required: [id, category, description, amount, dueDate, status, createdAt, source]
+      required: [id, category, description, amount, dueDate, status, payablePaymentId, payableStatus, payableDueDateRequired, createdAt, source]
 
     LinkExpenseTripCostBody:
       type: object

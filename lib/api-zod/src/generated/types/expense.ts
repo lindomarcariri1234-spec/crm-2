@@ -7,6 +7,7 @@
  */
 import type { ExpenseSource } from "./expenseSource";
 import type { ExpenseStatus } from "./expenseStatus";
+import type { PaymentStatus } from "./paymentStatus";
 
 export interface Expense {
   id: string;
@@ -27,6 +28,10 @@ export interface Expense {
   paymentDate?: string | null;
   dueDate: string;
   status: ExpenseStatus;
+  /** @nullable */
+  payablePaymentId: string | null;
+  payableStatus: PaymentStatus | null;
+  payableDueDateRequired: boolean;
   /** @nullable */
   notes?: string | null;
   createdAt: string;

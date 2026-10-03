@@ -6,7 +6,7 @@ import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { tryAddBoardingClient, removeBoardingClient, emitBoardingUpdate } from "../lib/boarding-sse";
 import { getClientIp } from "../lib/get-client-ip";
-import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, type TripImportResult } from "@workspace/db";
+import { tripsTable, tripImportBatchesTable, reservationsTable, passengersTable, reservationRoomAssignmentsTable, accommodationRoomsTable, accommodationsTable, clientsTable, tenantsTable, vehicleLayoutsTable, auditLogsTable, plansTable, tripMediaTable, tripCheckinsTable, tripGuideLocationsTable, referralsTable, boardingLocationsTable, tripCostsTable, expensesTable, paymentsTable, type TripImportResult } from "@workspace/db";
 import { checkPlanLimit } from "../lib/planLimits";
 import type { LayoutCell, FixedCostItem, VariableCostItem, FreePassenger } from "@workspace/db";
 import { eq, and, ilike, sql, desc, asc, inArray, or, gt, gte, isNotNull } from "drizzle-orm";
@@ -43,7 +43,7 @@ import {
   type ManifestPanel,
 } from "../lib/manifest-helpers.js";
 import { isValidTripTime, normalizeTripTime } from "../lib/trip-date-time.js";
-import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, hasPermission, RESOURCES, ACTIONS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
+import { RESERVATION_STATUS, ACTIVE_RESERVATION_STATUSES, REFERRAL_STATUS, TRIP_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type TripStatus, type ReservationStatus } from "@workspace/permissions";
 import { parseTripStatus } from "../lib/status-validators";
 import { getPassengerExportFinancialValues } from "../lib/passenger-export";
 import { dispatchOutboundMessage } from "../services/outbound-delivery";
@@ -1621,8 +1621,72 @@ router.delete("/trips/:id", async (req, res, next: NextFunction): Promise<void> 
     const media = await db.select({ url: tripMediaTable.url })
       .from(tripMediaTable)
       .where(and(eq(tripMediaTable.tripId, req.params.id), eq(tripMediaTable.tenantId, me.tenantId)));
-    await db.delete(tripsTable)
-      .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)));
+    await db.transaction(async (tx) => {
+      const [linkedPayable] = await tx.execute(sql`
+        SELECT p.id
+        FROM payments p
+        WHERE p.tenant_id = ${me.tenantId}
+          AND p.type = ${PAYMENT_TYPE.PAYABLE}
+          AND (
+            EXISTS (
+              SELECT 1 FROM expenses e
+              WHERE e.id = p.source_expense_id
+                AND e.tenant_id = ${me.tenantId}
+                AND e.trip_id = ${req.params.id}
+            )
+            OR EXISTS (
+              SELECT 1 FROM trip_costs c
+              WHERE c.id = p.source_trip_cost_id
+                AND c.tenant_id = ${me.tenantId}
+                AND c.trip_id = ${req.params.id}
+            )
+          )
+        LIMIT 1
+        FOR UPDATE OF p
+      `).then(result => result.rows);
+      if (linkedPayable) {
+        throw new AppError("Desvincule as contas a pagar dos custos antes de excluir a viagem.", 409, "TRIP_HAS_LINKED_PAYABLES");
+      }
+
+      // Serialize the cascade with a payable being created for one of the
+      // trip's source rows. Payment rows are checked/locked first, then agency
+      // expenses, then trip costs, matching the cost-ledger lock order.
+      await tx.select({ id: expensesTable.id }).from(expensesTable)
+        .where(and(eq(expensesTable.tripId, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
+        .for("update");
+      await tx.select({ id: tripCostsTable.id }).from(tripCostsTable)
+        .where(and(eq(tripCostsTable.tripId, req.params.id), eq(tripCostsTable.tenantId, me.tenantId)))
+        .for("update");
+
+      const [newLinkedPayable] = await tx.execute(sql`
+        SELECT p.id
+        FROM payments p
+        WHERE p.tenant_id = ${me.tenantId}
+          AND p.type = ${PAYMENT_TYPE.PAYABLE}
+          AND (
+            EXISTS (
+              SELECT 1 FROM expenses e
+              WHERE e.id = p.source_expense_id
+                AND e.tenant_id = ${me.tenantId}
+                AND e.trip_id = ${req.params.id}
+            )
+            OR EXISTS (
+              SELECT 1 FROM trip_costs c
+              WHERE c.id = p.source_trip_cost_id
+                AND c.tenant_id = ${me.tenantId}
+                AND c.trip_id = ${req.params.id}
+            )
+          )
+        LIMIT 1
+        FOR UPDATE OF p
+      `).then(result => result.rows);
+      if (newLinkedPayable) {
+        throw new AppError("Desvincule as contas a pagar dos custos antes de excluir a viagem.", 409, "TRIP_HAS_LINKED_PAYABLES");
+      }
+
+      await tx.delete(tripsTable)
+        .where(and(eq(tripsTable.id, req.params.id), eq(tripsTable.tenantId, me.tenantId)));
+    });
     const cleanupOptions = { checkSameTenantReferences: true };
     if (existing?.coverImage) {
       await deleteOrphanedFile(existing.coverImage, null, req.log, me.tenantId, cleanupOptions);

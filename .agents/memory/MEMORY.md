@@ -89,7 +89,7 @@
 - [Vercel deployment alias SSO](vercel-deployment-alias-sso.md) — deployment and git aliases may require Vercel SSO; validate anonymous output through the project's custom domain instead.
 - [Query error branches and hook order](query-error-hook-order.md) — aggregate query-error UI must not return before later React hooks in the same component.
 - [Migration validator parsing](migration-validator-alter-table.md) — recognize IF EXISTS, comma-separated ADD COLUMNs, and unindented CREATE TABLE blocks (see [indentation detail](validate-tables-indent.md)).
-- [Canonical financial metric semantics](canonical-financial-metrics.md) — keep cash, accrual, credits, commissions and user liabilities separate; never merge cross-source rows by similarity.
+- [Canonical financial metric semantics](canonical-financial-metrics.md) — keep ledgers distinct; explicit payable source links alone connect costs and must survive deletion.
 - [Financial category normalization](financial-category-normalization.md) — spreadsheet imports reject unknown categories; backup restores normalize known aliases but retain unknown legacy values.
 - [Financial integrity release alerts](financial-integrity-release-alerts.md) — keep integrity emails aggregate-only and claim once per stable release before sending.
 - [Financial balance period scoping](financial-snapshot-scaling.md) — overdue payments use due dates, unpaid commissions use creation dates, and user referral balance remains current.

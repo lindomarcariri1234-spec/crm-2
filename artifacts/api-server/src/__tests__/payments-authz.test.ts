@@ -84,7 +84,17 @@ vi.mock("@workspace/db", () => ({
     delete: vi.fn(() => ({ where: () => Promise.resolve(undefined) })),
     transaction: mockTransaction,
   },
-  paymentsTable: { dueDate: "payments.dueDate" },
+  paymentsTable: {
+    id: "payments.id",
+    tenantId: "payments.tenantId",
+    type: "payments.type",
+    status: "payments.status",
+    amount: "payments.amount",
+    paidAt: "payments.paidAt",
+    dueDate: "payments.dueDate",
+    sourceExpenseId: "payments.sourceExpenseId",
+    sourceTripCostId: "payments.sourceTripCostId",
+  },
   expensesTable: mockExpensesTable,
   reservationsTable: {},
   clientsTable: {},
@@ -638,6 +648,8 @@ describe("expenses authorization — FINANCIAL permission enforcement", () => {
 
   it("GET /expenses → 200 for AGENCY_ADMIN (positive control)", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
+    dbState.rowsByTable.set(mockExpensesTable, []);
+    dbState.rowsByTable.set(paymentsTable, []);
     const res = await request(buildApp(paymentsRouter)).get("/api/expenses");
     expect(res.status).toBe(200);
   });
@@ -1053,7 +1065,8 @@ describe("explicit expense and trip-cost links", () => {
 
   it("links an expense and cost when trip, amount, and status match", async () => {
     requireAuthMock.mockResolvedValue(user(ROLES.AGENCY_ADMIN) as never);
-    dbState.selectRowsQueue = [[expense], [cost], []];
+    dbState.rowsByTable.set(paymentsTable, []);
+    dbState.selectRowsQueue = [[expense], [cost], [], [], []];
 
     const res = await request(buildApp(paymentsRouter))
       .post("/api/expenses/expense-001/trip-cost-link")
@@ -1262,6 +1275,7 @@ describe("trip costs authorization — FINANCIAL permission enforcement", () => 
       createdAt: new Date(),
     }]);
     dbState.rowsByTable.set(mockExpensesTable, []);
+    dbState.rowsByTable.set(paymentsTable, []);
     const res = await request(buildApp(tripCostsRouter))
       .put("/api/trips/trip-001/costs/cost-001")
       .send({ description: "upd" });
@@ -1280,6 +1294,7 @@ describe("trip costs authorization — FINANCIAL permission enforcement", () => 
       tenantId: "tenant-001",
       linkedTripCostId: "cost-001",
     }]);
+    dbState.rowsByTable.set(paymentsTable, []);
 
     const res = await request(buildApp(tripCostsRouter))
       .delete("/api/trips/trip-001/costs/cost-001");

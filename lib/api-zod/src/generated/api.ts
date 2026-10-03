@@ -3996,6 +3996,21 @@ export const ListTripCostsResponse = zod.object({
       paymentDate: zod.string().nullish(),
       dueDate: zod.string(),
       status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
+      payablePaymentId: zod.string().nullable(),
+      payableStatus: zod.union([
+        zod.enum([
+          "pending",
+          "paid",
+          "overdue",
+          "cancelled",
+          "approved",
+          "failed",
+          "refunded",
+          "charged_back",
+        ]),
+        zod.null(),
+      ]),
+      payableDueDateRequired: zod.boolean(),
       notes: zod.string().nullish(),
       createdAt: zod.string(),
       source: zod.enum(["agency", "trip"]),
@@ -5445,6 +5460,10 @@ export const ListPaymentsQueryParams = zod.object({
     .string()
     .nullish()
     .describe("Inclusive end of the due-date range in America/Sao_Paulo."),
+  unlinkedOnly: zod.coerce
+    .boolean()
+    .optional()
+    .describe("Return only payments not linked to an operational cost."),
   page: zod.coerce.number().int().default(listPaymentsQueryPageDefault),
   limit: zod.coerce.number().int().default(listPaymentsQueryLimitDefault),
 });
@@ -5475,6 +5494,8 @@ export const ListPaymentsResponse = zod.object({
       ]),
       description: zod.string().nullish(),
       notes: zod.string().nullish(),
+      sourceExpenseId: zod.string().nullable(),
+      sourceTripCostId: zod.string().nullable(),
       createdAt: zod.string(),
       updatedAt: zod.string(),
     }),
@@ -5540,8 +5561,74 @@ export const CreatePaymentResponse = zod.object({
   ]),
   description: zod.string().nullish(),
   notes: zod.string().nullish(),
+  sourceExpenseId: zod.string().nullable(),
+  sourceTripCostId: zod.string().nullable(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
+});
+
+/**
+ * @summary Create a payable for an operational cost or link an existing payable
+ */
+export const CreateOperationalCostPayableBody = zod.object({
+  sourceType: zod.enum(["expense", "trip_cost"]),
+  sourceId: zod.string(),
+  paymentId: zod
+    .string()
+    .optional()
+    .describe(
+      "Existing payable ID to associate instead of creating a new one.",
+    ),
+  paymentMethod: zod
+    .string()
+    .optional()
+    .describe("Required when creating a new payable."),
+  dueDate: zod
+    .string()
+    .optional()
+    .describe("Required when the source cost has no due date."),
+});
+
+export const CreateOperationalCostPayableResponse = zod.object({
+  id: zod.string(),
+  reservationId: zod.string().nullish(),
+  clientId: zod.string().nullish(),
+  type: zod.enum(["receivable", "payable"]),
+  category: zod.string(),
+  amount: zod.number(),
+  paymentMethod: zod.string(),
+  installmentNumber: zod.number().int(),
+  totalInstallments: zod.number().int(),
+  dueDate: zod.string(),
+  paidAt: zod.string().nullish(),
+  status: zod.enum([
+    "pending",
+    "paid",
+    "overdue",
+    "cancelled",
+    "approved",
+    "failed",
+    "refunded",
+    "charged_back",
+  ]),
+  description: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  sourceExpenseId: zod.string().nullable(),
+  sourceTripCostId: zod.string().nullable(),
+  createdAt: zod.string(),
+  updatedAt: zod.string(),
+});
+
+/**
+ * @summary Remove the explicit link between an operational cost and its payable
+ */
+export const UnlinkOperationalCostPayableParams = zod.object({
+  sourceType: zod.enum(["expense", "trip_cost"]),
+  sourceId: zod.coerce.string(),
+});
+
+export const UnlinkOperationalCostPayableResponse = zod.object({
+  success: zod.boolean(),
 });
 
 /**
@@ -5575,6 +5662,8 @@ export const GetPaymentResponse = zod.object({
   ]),
   description: zod.string().nullish(),
   notes: zod.string().nullish(),
+  sourceExpenseId: zod.string().nullable(),
+  sourceTripCostId: zod.string().nullable(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });
@@ -5630,6 +5719,8 @@ export const UpdatePaymentResponse = zod.object({
   ]),
   description: zod.string().nullish(),
   notes: zod.string().nullish(),
+  sourceExpenseId: zod.string().nullable(),
+  sourceTripCostId: zod.string().nullable(),
   createdAt: zod.string(),
   updatedAt: zod.string(),
 });
@@ -5699,6 +5790,21 @@ export const ListExpensesResponse = zod.object({
       paymentDate: zod.string().nullish(),
       dueDate: zod.string(),
       status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
+      payablePaymentId: zod.string().nullable(),
+      payableStatus: zod.union([
+        zod.enum([
+          "pending",
+          "paid",
+          "overdue",
+          "cancelled",
+          "approved",
+          "failed",
+          "refunded",
+          "charged_back",
+        ]),
+        zod.null(),
+      ]),
+      payableDueDateRequired: zod.boolean(),
       notes: zod.string().nullish(),
       createdAt: zod.string(),
       source: zod.enum(["agency", "trip"]),
@@ -5753,6 +5859,21 @@ export const CreateExpenseResponse = zod.object({
   paymentDate: zod.string().nullish(),
   dueDate: zod.string(),
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
+  payablePaymentId: zod.string().nullable(),
+  payableStatus: zod.union([
+    zod.enum([
+      "pending",
+      "paid",
+      "overdue",
+      "cancelled",
+      "approved",
+      "failed",
+      "refunded",
+      "charged_back",
+    ]),
+    zod.null(),
+  ]),
+  payableDueDateRequired: zod.boolean(),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
   source: zod.enum(["agency", "trip"]),
@@ -5787,6 +5908,21 @@ export const UpdateExpenseResponse = zod.object({
   paymentDate: zod.string().nullish(),
   dueDate: zod.string(),
   status: zod.enum(["pending", "paid", "overdue", "cancelled"]),
+  payablePaymentId: zod.string().nullable(),
+  payableStatus: zod.union([
+    zod.enum([
+      "pending",
+      "paid",
+      "overdue",
+      "cancelled",
+      "approved",
+      "failed",
+      "refunded",
+      "charged_back",
+    ]),
+    zod.null(),
+  ]),
+  payableDueDateRequired: zod.boolean(),
   notes: zod.string().nullish(),
   createdAt: zod.string(),
   source: zod.enum(["agency", "trip"]),

@@ -117,6 +117,8 @@ export * from "./createLoyaltyTransactionBodyType";
 export * from "./createMessageTemplateBody";
 export * from "./createMessageTemplateBodyChannel";
 export * from "./createNoteBody";
+export * from "./createOperationalCostPayableBody";
+export * from "./createOperationalCostPayableBodySourceType";
 export * from "./createOutboundMessageBody";
 export * from "./createOutboundMessageBodyEmail";
 export * from "./createOutboundMessageBodyMetadata";

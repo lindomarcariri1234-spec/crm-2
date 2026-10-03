@@ -5,7 +5,7 @@ import { eq, and, sql, asc, desc, inArray, isNull, gte, lt } from "drizzle-orm";
 import { formatBRL, localToday } from "@workspace/shared";
 import { generateId } from "../lib/id";
 import { requireAuth, getTenantUser } from "../lib/tenant";
-import { CreatePaymentBody, UpdatePaymentBody, CreateExpenseBody, UpdateExpenseBody, LinkExpenseToTripCostBody } from "@workspace/api-zod";
+import { CreatePaymentBody, UpdatePaymentBody, CreateExpenseBody, UpdateExpenseBody, LinkExpenseToTripCostBody, CreateOperationalCostPayableBody } from "@workspace/api-zod";
 import { writeClientActivity } from "../lib/activities";
 import { loyaltyAwardPoints, loyaltyAwardPointsForReservation, loyaltyReverseEarnedPoints } from "../lib/loyalty-helpers";
 import { roundMoney } from "../lib/pricing";
@@ -16,7 +16,7 @@ import { sumPaidReservationPayments, syncReservationPaymentStatus } from "../lib
 import { createReservationsForOrder } from "../services/checkout/create-reservations";
 import { enqueueNewBookingNotificationEmail, dispatchReferralReversedEmail } from "../queues/email-helpers";
 import { dispatchWhatsAppPaymentReceived } from "../queues/whatsapp-helpers";
-import { ROLES, RESERVATION_STATUS, COMMISSION_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type PaymentStatus, type PaymentType, type ExpenseStatus } from "@workspace/permissions";
+import { ROLES, RESERVATION_STATUS, COMMISSION_STATUS, EXPENSE_STATUS, PAYMENT_STATUS, PAYMENT_TYPE, hasPermission, RESOURCES, ACTIONS, type PaymentStatus, type PaymentType, type ExpenseStatus } from "@workspace/permissions";
 import { parsePaymentStatus, parsePaymentType, parseExpenseStatus } from "../lib/status-validators";
 import { moveDealToStage } from "../services/pipeline-automation";
 import { sendPushNotification } from "../lib/push-notifications";
@@ -33,6 +33,12 @@ import {
 import { recalculateClientFinancials as recalculateClientFinancialsFromPayments } from "../services/client-financials";
 import { areExpenseAndTripCostLinkable } from "../services/expense-trip-cost-link";
 import {
+  assertPayableMatchesOperationalCost,
+  operationalCostAmountsMatch,
+  toOperationalCostStatus,
+  toPayableStatus,
+} from "../services/operational-cost-payables";
+import {
   calculateRuleCommission,
   calculateSellerCommission,
   getCommissionTravelScope,
@@ -40,6 +46,7 @@ import {
 } from "../lib/commission-calculation.js";
 
 const router = Router();
+type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 function paymentReferralReversalReason(status: string): ReservationReferralReversalReason | null {
   switch (status) {
@@ -330,19 +337,176 @@ function formatPayment(p: typeof paymentsTable.$inferSelect) {
     paidAt: p.paidAt?.toISOString() ?? null, status: p.status,
     receiptUrl: p.receiptUrl ?? null,
     description: p.description, notes: p.notes,
+    sourceExpenseId: p.sourceExpenseId ?? null,
+    sourceTripCostId: p.sourceTripCostId ?? null,
     createdAt: p.createdAt.toISOString(), updatedAt: p.updatedAt.toISOString(),
   };
 }
 
-function formatExpense(e: typeof expensesTable.$inferSelect) {
+function formatExpense(
+  e: typeof expensesTable.$inferSelect,
+  payable: { id: string; status: string } | null = null,
+) {
   return {
     id: e.id, tripId: e.tripId, linkedTripCostId: e.linkedTripCostId ?? null,
     category: e.category, description: e.description,
     amount: Number(e.amount), supplierId: e.supplierId, paymentMethod: e.paymentMethod,
     paymentDate: e.paymentDate?.toISOString() ?? null, dueDate: e.dueDate.toISOString(),
-    status: e.status, notes: e.notes, createdAt: e.createdAt.toISOString(),
+    status: e.status, payablePaymentId: payable?.id ?? null, payableStatus: payable?.status ?? null,
+    payableDueDateRequired: false,
+    notes: e.notes, createdAt: e.createdAt.toISOString(),
     source: "agency" as const, supplierName: null,
   };
+}
+
+type OperationalCostSourceType = "expense" | "trip_cost";
+type LockedOperationalCost =
+  | {
+    sourceType: "expense";
+    row: typeof expensesTable.$inferSelect;
+    linkedCost: typeof tripCostsTable.$inferSelect | null;
+  }
+  | {
+    sourceType: "trip_cost";
+    row: typeof tripCostsTable.$inferSelect;
+    linkedExpense: typeof expensesTable.$inferSelect | null;
+  };
+
+async function lockOperationalCostSource(
+  tx: DbTransaction,
+  sourceType: OperationalCostSourceType,
+  sourceId: string,
+  tenantId: string,
+): Promise<LockedOperationalCost | null> {
+  if (sourceType === "expense") {
+    const [expense] = await tx.select().from(expensesTable)
+      .where(and(eq(expensesTable.id, sourceId), eq(expensesTable.tenantId, tenantId)))
+      .for("update").limit(1);
+    if (!expense) return null;
+
+    let linkedCost: typeof tripCostsTable.$inferSelect | null = null;
+    if (expense.linkedTripCostId) {
+      const [cost] = await tx.select().from(tripCostsTable)
+        .where(and(
+          eq(tripCostsTable.id, expense.linkedTripCostId),
+          eq(tripCostsTable.tenantId, tenantId),
+        ))
+        .for("update").limit(1);
+      if (!cost || !areExpenseAndTripCostLinkable(expense, cost)) {
+        throw new ConflictError("O vínculo com o custo da viagem está inconsistente.", "EXPENSE_LINK_CHANGED");
+      }
+      linkedCost = cost;
+    }
+    return { sourceType, row: expense, linkedCost };
+  }
+
+  const [costSnapshot] = await tx.select({ id: tripCostsTable.id }).from(tripCostsTable)
+    .where(and(
+      eq(tripCostsTable.id, sourceId),
+      eq(tripCostsTable.tenantId, tenantId),
+    ))
+    .limit(1);
+  if (!costSnapshot) return null;
+
+  const [linkedExpenseSnapshot] = await tx.select({ id: expensesTable.id })
+    .from(expensesTable)
+    .where(and(
+      eq(expensesTable.linkedTripCostId, costSnapshot.id),
+      eq(expensesTable.tenantId, tenantId),
+    ))
+    .limit(1);
+  let linkedExpense: typeof expensesTable.$inferSelect | null = null;
+  if (linkedExpenseSnapshot) {
+    const [lockedExpense] = await tx.select().from(expensesTable)
+      .where(and(
+        eq(expensesTable.id, linkedExpenseSnapshot.id),
+        eq(expensesTable.tenantId, tenantId),
+      ))
+      .for("update").limit(1);
+    linkedExpense = lockedExpense ?? null;
+  }
+
+  const [cost] = await tx.select().from(tripCostsTable)
+    .where(and(
+      eq(tripCostsTable.id, sourceId),
+      eq(tripCostsTable.tenantId, tenantId),
+    ))
+    .for("update").limit(1);
+  if (!cost) return null;
+
+  const [currentLinkedExpense] = await tx.select({ id: expensesTable.id })
+    .from(expensesTable)
+    .where(and(
+      eq(expensesTable.linkedTripCostId, cost.id),
+      eq(expensesTable.tenantId, tenantId),
+    ))
+    .limit(1);
+  if ((linkedExpense?.id ?? null) !== (currentLinkedExpense?.id ?? null)) {
+    throw new ConflictError("O vínculo mudou durante a operação. Tente novamente.", "EXPENSE_LINK_CHANGED");
+  }
+  return { sourceType, row: cost, linkedExpense };
+}
+
+async function syncOperationalCostPaidAt(
+  tx: DbTransaction,
+  source: LockedOperationalCost,
+  tenantId: string,
+  paidAt: Date | null,
+): Promise<void> {
+  if (source.sourceType === "expense") {
+    await tx.update(expensesTable).set({ paymentDate: paidAt })
+      .where(and(eq(expensesTable.id, source.row.id), eq(expensesTable.tenantId, tenantId)));
+    if (source.linkedCost) {
+      await tx.update(tripCostsTable).set({ paidAt })
+        .where(and(eq(tripCostsTable.id, source.linkedCost.id), eq(tripCostsTable.tenantId, tenantId)));
+    }
+    return;
+  }
+  await tx.update(tripCostsTable).set({ paidAt })
+    .where(and(eq(tripCostsTable.id, source.row.id), eq(tripCostsTable.tenantId, tenantId)));
+}
+
+async function syncOperationalCostFromPayment(
+  tx: DbTransaction,
+  payment: typeof paymentsTable.$inferSelect,
+  tenantId: string,
+): Promise<void> {
+  if (!payment.sourceExpenseId && !payment.sourceTripCostId) return;
+  if (payment.type !== PAYMENT_TYPE.PAYABLE) {
+    throw new ConflictError("Somente contas a pagar podem ser vinculadas a custos.", "PAYMENT_NOT_PAYABLE");
+  }
+  const status = toOperationalCostStatus(payment.status);
+  const paidAt = status === EXPENSE_STATUS.PAID ? payment.paidAt ?? null : null;
+
+  if (payment.sourceExpenseId) {
+    const source = await lockOperationalCostSource(tx, "expense", payment.sourceExpenseId, tenantId);
+    if (!source || source.sourceType !== "expense") {
+      throw new ConflictError("A despesa vinculada não está mais disponível.", "OPERATIONAL_COST_SOURCE_MISSING");
+    }
+    if (!operationalCostAmountsMatch(source.row.amount, payment.amount)) {
+      throw new ConflictError("O valor da despesa e da conta a pagar divergiu.", "OPERATIONAL_COST_PAYABLE_MISMATCH");
+    }
+    await tx.update(expensesTable).set({ status, paymentDate: paidAt })
+      .where(and(eq(expensesTable.id, source.row.id), eq(expensesTable.tenantId, tenantId)));
+    if (source.linkedCost) {
+      await tx.update(tripCostsTable).set({ status, paidAt })
+        .where(and(eq(tripCostsTable.id, source.linkedCost.id), eq(tripCostsTable.tenantId, tenantId)));
+    }
+    return;
+  }
+
+  const source = await lockOperationalCostSource(tx, "trip_cost", payment.sourceTripCostId!, tenantId);
+  if (!source || source.sourceType !== "trip_cost") {
+    throw new ConflictError("O custo vinculado não está mais disponível.", "OPERATIONAL_COST_SOURCE_MISSING");
+  }
+  if (source.linkedExpense) {
+    throw new ConflictError("Use a despesa da agência vinculada para atualizar esta conta.", "OPERATIONAL_COST_SOURCE_LINKED");
+  }
+  if (!operationalCostAmountsMatch(source.row.amount, payment.amount)) {
+    throw new ConflictError("O custo e a conta a pagar divergiram.", "OPERATIONAL_COST_PAYABLE_MISMATCH");
+  }
+  await tx.update(tripCostsTable).set({ status, paidAt })
+    .where(and(eq(tripCostsTable.id, source.row.id), eq(tripCostsTable.tenantId, tenantId)));
 }
 
 function brazilCalendarDateAnchor(value: Date): Date {
@@ -373,6 +537,9 @@ type ConsolidatedExpenseRow = {
   notes: string | null;
   createdAt: Date | string;
   source: "agency" | "trip";
+  payablePaymentId: string | null;
+  payableStatus: string | null;
+  payableDueDateRequired: boolean;
 };
 
 function dateValueToIso(value: Date | string): string {
@@ -397,6 +564,9 @@ function formatConsolidatedExpense(row: ConsolidatedExpenseRow) {
     dueDate: dateValueToIso(dueDate),
     status: row.status,
     notes: row.notes,
+    payablePaymentId: row.payablePaymentId,
+    payableStatus: row.payableStatus,
+    payableDueDateRequired: row.source === "trip" && row.dueDate === null,
     createdAt: dateValueToIso(row.createdAt),
     source: row.source,
   };
@@ -558,6 +728,7 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
       dateTo,
       dueDateFrom,
       dueDateTo,
+      unlinkedOnly,
     } = req.query as Record<string, string>;
     const parsedPage = Number.parseInt(page, 10);
     const parsedLimit = Number.parseInt(limit, 10);
@@ -580,6 +751,10 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
         return;
       }
     }
+    if (unlinkedOnly && unlinkedOnly !== "true" && unlinkedOnly !== "false") {
+      next(new ValidationError("unlinkedOnly must be true or false", "VALIDATION_ERROR"));
+      return;
+    }
     if ((dateFrom && dateTo && dateFrom > dateTo) || (dueDateFrom && dueDateTo && dueDateFrom > dueDateTo)) {
       next(new ValidationError("The start date must not be after the end date", "VALIDATION_ERROR"));
       return;
@@ -589,6 +764,10 @@ router.get("/payments", async (req, res, next: NextFunction): Promise<void> => {
     if (reservationId) conditions.push(eq(paymentsTable.reservationId, reservationId));
     if (status) conditions.push(eq(paymentsTable.status, parsePaymentStatus(status)));
     if (type) conditions.push(eq(paymentsTable.type, parsePaymentType(type)));
+    if (unlinkedOnly === "true") {
+      conditions.push(isNull(paymentsTable.sourceExpenseId));
+      conditions.push(isNull(paymentsTable.sourceTripCostId));
+    }
     if (dateFrom) conditions.push(sql`${paymentsTable.createdAt} >= ${dateFrom}::timestamptz` as ReturnType<typeof eq>);
     if (dateTo) conditions.push(sql`${paymentsTable.createdAt} <= (${dateTo}::date + interval '1 day - 1 millisecond')` as ReturnType<typeof eq>);
     // Treat due-date filter values as Brazil calendar days and include the full
@@ -947,6 +1126,253 @@ async function requirePaymentAccess(
   return payment;
 }
 
+router.post("/operational-cost-payables", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    const parsed = CreateOperationalCostPayableBody.safeParse(req.body);
+    if (!parsed.success) {
+      next(new ValidationError(parsed.error.issues[0]?.message ?? "Dados inválidos", "VALIDATION_ERROR"));
+      return;
+    }
+
+    const requestedPaymentId = parsed.data.paymentId?.trim() || null;
+    const paymentMethod = parsed.data.paymentMethod?.trim() || "";
+    const providedDueDate = parsed.data.dueDate ? new Date(parsed.data.dueDate) : null;
+    if (parsed.data.dueDate && (!providedDueDate || Number.isNaN(providedDueDate.getTime()))) {
+      next(new ValidationError("Informe uma data de vencimento válida.", "VALIDATION_ERROR"));
+      return;
+    }
+    if (requestedPaymentId) {
+      if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+        next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+      }
+    } else {
+      if (!paymentMethod) {
+        next(new ValidationError("Informe a forma de pagamento da nova conta.", "VALIDATION_ERROR"));
+        return;
+      }
+      if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.CREATE)) {
+        next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+      }
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const sourceColumn = parsed.data.sourceType === "expense"
+        ? paymentsTable.sourceExpenseId
+        : paymentsTable.sourceTripCostId;
+      const [linkSnapshot] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(sourceColumn, parsed.data.sourceId),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+
+      let lockedPayment: typeof paymentsTable.$inferSelect | null = null;
+      if (linkSnapshot) {
+        const [payment] = await tx.select().from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.id, linkSnapshot.id),
+            eq(paymentsTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+        lockedPayment = payment ?? null;
+      } else if (requestedPaymentId) {
+        const [payment] = await tx.select().from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.id, requestedPaymentId),
+            eq(paymentsTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+        if (!payment) throw new NotFoundError("Conta a pagar não encontrada.", "NOT_FOUND");
+        lockedPayment = payment;
+      }
+
+      const source = await lockOperationalCostSource(
+        tx,
+        parsed.data.sourceType,
+        parsed.data.sourceId,
+        me.tenantId,
+      );
+      if (!source) throw new NotFoundError("Custo operacional não encontrado.", "NOT_FOUND");
+      if (source.sourceType === "trip_cost" && source.linkedExpense) {
+        throw new ConflictError(
+          "Vincule a conta à despesa da agência, que já representa este custo.",
+          "OPERATIONAL_COST_SOURCE_LINKED",
+        );
+      }
+
+      const sourceAmount = source.row.amount;
+      const sourceStatus = toPayableStatus(source.row.status);
+      const [currentLink] = await tx.select().from(paymentsTable)
+        .where(and(
+          eq(sourceColumn, parsed.data.sourceId),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      if (currentLink && currentLink.id !== lockedPayment?.id) {
+        throw new ConflictError("O vínculo mudou durante a operação. Tente novamente.", "OPERATIONAL_COST_LINK_CHANGED");
+      }
+
+      if (currentLink) {
+        if (requestedPaymentId && currentLink.id !== requestedPaymentId) {
+          throw new ConflictError("Este custo já está vinculado a outra conta a pagar.", "OPERATIONAL_COST_PAYABLE_EXISTS");
+        }
+        assertPayableMatchesOperationalCost({
+          costAmount: sourceAmount,
+          costStatus: sourceStatus,
+          payable: currentLink,
+        });
+        const sourcePaidAt = source.sourceType === "expense" ? source.row.paymentDate : source.row.paidAt;
+        const paidAt = sourceStatus === PAYMENT_STATUS.PAID
+          ? currentLink.paidAt ?? sourcePaidAt ?? new Date()
+          : null;
+        await tx.update(paymentsTable).set({ paidAt, updatedAt: new Date() })
+          .where(and(eq(paymentsTable.id, currentLink.id), eq(paymentsTable.tenantId, me.tenantId)));
+        await syncOperationalCostPaidAt(tx, source, me.tenantId, paidAt);
+        const [refreshedPayment] = await tx.select().from(paymentsTable)
+          .where(and(eq(paymentsTable.id, currentLink.id), eq(paymentsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!refreshedPayment) throw new AppError("Não foi possível atualizar a conta a pagar.", 500, "PAYMENT_UPDATE_FAILED");
+        return { payment: refreshedPayment, created: false };
+      }
+
+      if (requestedPaymentId) {
+        if (!lockedPayment || lockedPayment.id !== requestedPaymentId) {
+          throw new ConflictError("A conta a pagar mudou durante a operação. Tente novamente.", "OPERATIONAL_COST_LINK_CHANGED");
+        }
+        if (
+          lockedPayment.reservationId
+          || lockedPayment.orderId
+          || lockedPayment.clientId
+          || lockedPayment.sourceExpenseId
+          || lockedPayment.sourceTripCostId
+        ) {
+          throw new ConflictError("Este lançamento já pertence a outro registro financeiro.", "PAYMENT_ALREADY_ASSOCIATED");
+        }
+        assertPayableMatchesOperationalCost({
+          costAmount: sourceAmount,
+          costStatus: sourceStatus,
+          payable: lockedPayment,
+        });
+        const sourcePaidAt = source.sourceType === "expense" ? source.row.paymentDate : source.row.paidAt;
+        const paidAt = sourceStatus === PAYMENT_STATUS.PAID
+          ? lockedPayment.paidAt ?? sourcePaidAt ?? new Date()
+          : null;
+        await tx.update(paymentsTable).set({
+          sourceExpenseId: parsed.data.sourceType === "expense" ? parsed.data.sourceId : null,
+          sourceTripCostId: parsed.data.sourceType === "trip_cost" ? parsed.data.sourceId : null,
+          paidAt,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(paymentsTable.id, lockedPayment.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          isNull(paymentsTable.sourceExpenseId),
+          isNull(paymentsTable.sourceTripCostId),
+        ));
+        await syncOperationalCostPaidAt(tx, source, me.tenantId, paidAt);
+        const [linkedPayment] = await tx.select().from(paymentsTable)
+          .where(and(eq(paymentsTable.id, lockedPayment.id), eq(paymentsTable.tenantId, me.tenantId)))
+          .limit(1);
+        if (!linkedPayment) throw new ConflictError("Não foi possível vincular a conta a pagar.", "PAYMENT_LINK_FAILED");
+        return { payment: linkedPayment, created: false };
+      }
+
+      const dueDate = source.row.dueDate ?? providedDueDate;
+      if (!dueDate) {
+        throw new ValidationError("Informe o vencimento para este custo operacional.", "VALIDATION_ERROR");
+      }
+      const sourcePaidAt = source.sourceType === "expense" ? source.row.paymentDate : source.row.paidAt;
+      const paidAt = sourceStatus === PAYMENT_STATUS.PAID ? sourcePaidAt ?? new Date() : null;
+      await syncOperationalCostPaidAt(tx, source, me.tenantId, paidAt);
+      const paymentId = generateId();
+      await tx.insert(paymentsTable).values({
+        id: paymentId,
+        tenantId: me.tenantId,
+        reservationId: null,
+        clientId: null,
+        orderId: null,
+        type: PAYMENT_TYPE.PAYABLE,
+        category: source.row.category,
+        amount: String(sourceAmount),
+        paymentMethod,
+        installmentNumber: 1,
+        totalInstallments: 1,
+        dueDate,
+        paidAt,
+        status: sourceStatus,
+        description: source.row.description,
+        notes: source.row.notes ?? null,
+        sourceExpenseId: parsed.data.sourceType === "expense" ? parsed.data.sourceId : null,
+        sourceTripCostId: parsed.data.sourceType === "trip_cost" ? parsed.data.sourceId : null,
+      });
+      const [createdPayment] = await tx.select().from(paymentsTable)
+        .where(and(eq(paymentsTable.id, paymentId), eq(paymentsTable.tenantId, me.tenantId)))
+        .limit(1);
+      if (!createdPayment) throw new AppError("Não foi possível criar a conta a pagar.", 500, "PAYMENT_CREATE_FAILED");
+      return { payment: createdPayment, created: true };
+    });
+    res.status(result.created ? 201 : 200).json(formatPayment(result.payment));
+  } catch (err) {
+    if (typeof err === "object" && err !== null && "code" in err && err.code === "23505") {
+      next(new ConflictError("Este custo já está vinculado a uma conta a pagar.", "OPERATIONAL_COST_PAYABLE_EXISTS"));
+      return;
+    }
+    next(err);
+  }
+});
+
+router.delete("/operational-cost-payables/:sourceType/:sourceId", async (req, res, next: NextFunction): Promise<void> => {
+  try {
+    const me = await requireAuth(req, res);
+    if (!me) return;
+    if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) {
+      next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return;
+    }
+    if (req.params.sourceType !== "expense" && req.params.sourceType !== "trip_cost") {
+      next(new ValidationError("Origem do custo operacional inválida.", "VALIDATION_ERROR"));
+      return;
+    }
+    const sourceType = req.params.sourceType as OperationalCostSourceType;
+    await db.transaction(async (tx) => {
+      const sourceColumn = sourceType === "expense" ? paymentsTable.sourceExpenseId : paymentsTable.sourceTripCostId;
+      const [snapshot] = await tx.select({ id: paymentsTable.id }).from(paymentsTable)
+        .where(and(
+          eq(sourceColumn, req.params.sourceId),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      if (!snapshot) return;
+
+      const [payment] = await tx.select().from(paymentsTable)
+        .where(and(eq(paymentsTable.id, snapshot.id), eq(paymentsTable.tenantId, me.tenantId)))
+        .for("update").limit(1);
+      if (!payment) return;
+      const source = await lockOperationalCostSource(tx, sourceType, req.params.sourceId, me.tenantId);
+      if (!source) return;
+      const currentSourceId = sourceType === "expense" ? payment.sourceExpenseId : payment.sourceTripCostId;
+      if (currentSourceId !== req.params.sourceId) {
+        throw new ConflictError("O vínculo mudou durante a operação. Tente novamente.", "OPERATIONAL_COST_LINK_CHANGED");
+      }
+      await tx.update(paymentsTable).set({
+        sourceExpenseId: null,
+        sourceTripCostId: null,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(paymentsTable.id, payment.id),
+        eq(paymentsTable.tenantId, me.tenantId),
+      ));
+    });
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/payments/:id", async (req, res, next: NextFunction): Promise<void> => {
   try {
     const me = await requireAuth(req, res);
@@ -1024,6 +1450,24 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         .for("update")
         .limit(1);
       if (!existingPayment) return { payment: null, reversal: null, previousStatus: null };
+
+      const hasOperationalCostLink = Boolean(existingPayment.sourceExpenseId || existingPayment.sourceTripCostId);
+      if (hasOperationalCostLink && (updates.status !== undefined || updates.paidAt !== undefined)) {
+        const nextStatus = updates.status ?? existingPayment.status;
+        toOperationalCostStatus(nextStatus);
+        if (nextStatus !== PAYMENT_STATUS.PAID) {
+          if (updates.paidAt) {
+            throw new ConflictError("Informe a data de pagamento somente para uma conta paga.", "OPERATIONAL_COST_PAID_AT_INVALID");
+          }
+          updates.paidAt = null;
+        } else if (
+          updates.status === PAYMENT_STATUS.PAID
+          && updates.paidAt === undefined
+          && !existingPayment.paidAt
+        ) {
+          updates.paidAt = new Date();
+        }
+      }
 
       if (isActivePaymentStatusUpdate) {
         if (
@@ -1120,6 +1564,12 @@ router.patch("/payments/:id", async (req, res, next: NextFunction): Promise<void
         .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)))
         .limit(1);
       if (!updatedPayment) return { payment: null, reversal: null, previousStatus: existingPayment.status };
+      if (
+        (parsed.data.status != null || parsed.data.paidAt !== undefined)
+        && (updatedPayment.sourceExpenseId || updatedPayment.sourceTripCostId)
+      ) {
+        await syncOperationalCostFromPayment(tx, updatedPayment, me.tenantId);
+      }
 
       const reversalReason = paymentReferralReversalReason(updatedPayment.status);
       const reversal = updatedPayment.reservationId
@@ -1326,6 +1776,9 @@ router.delete("/payments/:id", async (req, res, next: NextFunction): Promise<voi
         .for("update")
         .limit(1);
       if (!payment) return { payment: null, reversal: null };
+      if (payment.sourceExpenseId || payment.sourceTripCostId) {
+        throw new ConflictError("Desvincule a conta a pagar do custo operacional antes de excluí-la.", "PAYMENT_LINKED_TO_OPERATIONAL_COST");
+      }
 
       await tx.delete(paymentsTable)
         .where(and(eq(paymentsTable.id, req.params.id), eq(paymentsTable.tenantId, me.tenantId)));
@@ -1531,6 +1984,23 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
               ${expensesTable.dueDate} AS "sortDueDate",
               ${expensesTable.status} AS "status",
               ${expensesTable.notes} AS "notes",
+              (
+                SELECT ${paymentsTable.id}
+                FROM ${paymentsTable}
+                WHERE ${paymentsTable.sourceExpenseId} = ${expensesTable.id}
+                  AND ${paymentsTable.tenantId} = ${me.tenantId}
+                  AND ${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE}
+                LIMIT 1
+              ) AS "payablePaymentId",
+              (
+                SELECT ${paymentsTable.status}
+                FROM ${paymentsTable}
+                WHERE ${paymentsTable.sourceExpenseId} = ${expensesTable.id}
+                  AND ${paymentsTable.tenantId} = ${me.tenantId}
+                  AND ${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE}
+                LIMIT 1
+              ) AS "payableStatus",
+              FALSE AS "payableDueDateRequired",
               ${expensesTable.createdAt} AS "createdAt",
               'agency'::text AS "source"
             FROM ${expensesTable}
@@ -1553,6 +2023,23 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
               ${tripCostDueDate} AS "sortDueDate",
               ${tripCostsTable.status} AS "status",
               ${tripCostsTable.notes} AS "notes",
+              (
+                SELECT ${paymentsTable.id}
+                FROM ${paymentsTable}
+                WHERE ${paymentsTable.sourceTripCostId} = ${tripCostsTable.id}
+                  AND ${paymentsTable.tenantId} = ${me.tenantId}
+                  AND ${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE}
+                LIMIT 1
+              ) AS "payablePaymentId",
+              (
+                SELECT ${paymentsTable.status}
+                FROM ${paymentsTable}
+                WHERE ${paymentsTable.sourceTripCostId} = ${tripCostsTable.id}
+                  AND ${paymentsTable.tenantId} = ${me.tenantId}
+                  AND ${paymentsTable.type} = ${PAYMENT_TYPE.PAYABLE}
+                LIMIT 1
+              ) AS "payableStatus",
+              (${tripCostsTable.dueDate} IS NULL) AS "payableDueDateRequired",
               ${tripCostsTable.createdAt} AS "createdAt",
               'trip'::text AS "source"
             FROM ${tripCostsTable}
@@ -1596,14 +2083,31 @@ router.get("/expenses", async (req, res, next: NextFunction): Promise<void> => {
       return;
     }
 
-    const expenses = await db.select().from(expensesTable)
+    const expenses = await db.select({
+      expense: expensesTable,
+      payablePaymentId: paymentsTable.id,
+      payableStatus: paymentsTable.status,
+    }).from(expensesTable)
+      .leftJoin(paymentsTable, and(
+        eq(paymentsTable.sourceExpenseId, expensesTable.id),
+        eq(paymentsTable.tenantId, me.tenantId),
+        eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+      ))
       .where(and(...conditions)).orderBy(desc(expensesTable.dueDate))
       .limit(limitNum).offset(offset);
 
     const [countResult] = await db.select({ count: sql<number>`count(*)` })
       .from(expensesTable).where(and(...conditions));
 
-    res.json({ data: expenses.map(formatExpense), total: Number(countResult?.count ?? 0), page: pageNum, limit: limitNum });
+    res.json({
+      data: expenses.map(row => formatExpense(
+        row.expense,
+        row.payablePaymentId ? { id: row.payablePaymentId, status: row.payableStatus ?? "" } : null,
+      )),
+      total: Number(countResult?.count ?? 0),
+      page: pageNum,
+      limit: limitNum,
+    });
   } catch (err) {
     req.log.error({ err }, "Error listing expenses");
     next(err);
@@ -1651,11 +2155,41 @@ router.patch("/expenses/:id", async (req, res, next: NextFunction): Promise<void
     if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.EDIT)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
     const parsed = UpdateExpenseBody.safeParse(req.body);
     if (!parsed.success) { next(new ValidationError(String(parsed.error.message))); return; }
-    const expense = await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
+      const [payableSnapshot] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceExpenseId, req.params.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      let linkedPayment: typeof paymentsTable.$inferSelect | null = null;
+      if (payableSnapshot) {
+        const [lockedPayment] = await tx.select().from(paymentsTable)
+          .where(and(
+            eq(paymentsTable.id, payableSnapshot.id),
+            eq(paymentsTable.tenantId, me.tenantId),
+          ))
+          .for("update").limit(1);
+        linkedPayment = lockedPayment ?? null;
+      }
+
       const [existing] = await tx.select().from(expensesTable)
         .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
         .for("update").limit(1);
       if (!existing) throw new NotFoundError("Expense not found", "NOT_FOUND");
+      const [currentPayable] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceExpenseId, existing.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      if ((payableSnapshot?.id ?? null) !== (currentPayable?.id ?? null)) {
+        throw new ConflictError("O vínculo com a conta a pagar mudou. Tente novamente.", "OPERATIONAL_COST_LINK_CHANGED");
+      }
 
       const updates: Partial<typeof expensesTable.$inferInsert> = {};
       if (parsed.data.status != null) updates.status = parseExpenseStatus(parsed.data.status);
@@ -1679,15 +2213,49 @@ router.patch("/expenses/:id", async (req, res, next: NextFunction): Promise<void
         }
       }
 
+      let payableStatus: string | null = linkedPayment?.status ?? null;
+      if (linkedPayment && (updates.status !== undefined || updates.paymentDate !== undefined || updates.amount !== undefined)) {
+        const nextCostStatus = updates.status ?? existing.status;
+        const nextPayableStatus = toPayableStatus(nextCostStatus);
+        if (nextPayableStatus !== PAYMENT_STATUS.PAID) {
+          if (updates.paymentDate) {
+            throw new ConflictError("Informe a data de pagamento somente para uma despesa paga.", "OPERATIONAL_COST_PAID_AT_INVALID");
+          }
+          updates.paymentDate = null;
+        } else if (
+          updates.paymentDate === undefined
+          &&
+          updates.status === PAYMENT_STATUS.PAID
+        ) {
+          updates.paymentDate = new Date();
+        } else if (nextPayableStatus === PAYMENT_STATUS.PAID && updates.paymentDate === undefined) {
+          updates.paymentDate = existing.paymentDate ?? linkedPayment.paidAt ?? null;
+        }
+        const paymentDate = updates.paymentDate ?? null;
+        await tx.update(paymentsTable).set({
+          amount: updates.amount ?? linkedPayment.amount,
+          status: nextPayableStatus,
+          paidAt: nextPayableStatus === PAYMENT_STATUS.PAID ? paymentDate ?? null : null,
+          updatedAt: new Date(),
+        }).where(and(
+          eq(paymentsTable.id, linkedPayment.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+        ));
+        payableStatus = nextPayableStatus;
+      }
+
       await tx.update(expensesTable).set(updates)
         .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)));
       const [updated] = await tx.select().from(expensesTable)
         .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)))
         .limit(1);
       if (!updated) throw new NotFoundError("Expense not found", "NOT_FOUND");
-      return updated;
+      return {
+        expense: updated,
+        payable: linkedPayment ? { id: linkedPayment.id, status: payableStatus ?? linkedPayment.status } : null,
+      };
     });
-    res.json(formatExpense(expense));
+    res.json(formatExpense(result.expense, result.payable));
   } catch (err) {
     req.log.error({ err }, "Error updating expense");
     next(err);
@@ -1723,6 +2291,28 @@ router.post("/expenses/:id/trip-cost-link", async (req, res, next: NextFunction)
       if (expense.linkedTripCostId === cost.id) return;
       if (expense.linkedTripCostId) {
         throw new AppError("Esta despesa já está vinculada a outro custo.", 409, "EXPENSE_ALREADY_LINKED");
+      }
+      const [expensePayable] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceExpenseId, expense.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      const [costPayable] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceTripCostId, cost.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      if (expensePayable || costPayable) {
+        throw new ConflictError(
+          "Desvincule as contas a pagar antes de unir a despesa e o custo da viagem.",
+          "OPERATIONAL_COST_PAYABLE_LINKED",
+        );
       }
       if (!areExpenseAndTripCostLinkable(expense, cost)) {
         throw new AppError("Só é possível vincular registros da mesma viagem com valor e status iguais.", 409, "EXPENSE_TRIP_COST_MISMATCH");
@@ -1784,8 +2374,41 @@ router.delete("/expenses/:id", async (req, res, next: NextFunction): Promise<voi
     const me = await requireAuth(req, res);
     if (!me) return;
     if (!hasPermission(me.role, RESOURCES.FINANCIAL, ACTIONS.DELETE)) { next(new ForbiddenError("Forbidden", "FORBIDDEN_ROLE")); return; }
-    await db.delete(expensesTable)
-      .where(and(eq(expensesTable.id, req.params.id), eq(expensesTable.tenantId, me.tenantId)));
+    await db.transaction(async (tx) => {
+      const [payableSnapshot] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceExpenseId, req.params.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      let linkedPayment: typeof paymentsTable.$inferSelect | null = null;
+      if (payableSnapshot) {
+        const [payment] = await tx.select().from(paymentsTable)
+          .where(and(eq(paymentsTable.id, payableSnapshot.id), eq(paymentsTable.tenantId, me.tenantId)))
+          .for("update").limit(1);
+        linkedPayment = payment ?? null;
+      }
+      const source = await lockOperationalCostSource(tx, "expense", req.params.id, me.tenantId);
+      if (!source || source.sourceType !== "expense") return;
+      const [currentPayable] = await tx.select({ id: paymentsTable.id })
+        .from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.sourceExpenseId, source.row.id),
+          eq(paymentsTable.tenantId, me.tenantId),
+          eq(paymentsTable.type, PAYMENT_TYPE.PAYABLE),
+        ))
+        .limit(1);
+      if ((payableSnapshot?.id ?? null) !== (currentPayable?.id ?? null)) {
+        throw new ConflictError("O vínculo com a conta a pagar mudou. Tente novamente.", "OPERATIONAL_COST_LINK_CHANGED");
+      }
+      if (linkedPayment && currentPayable) {
+        throw new ConflictError("Desvincule a conta a pagar antes de excluir a despesa.", "PAYMENT_LINKED_TO_OPERATIONAL_COST");
+      }
+      await tx.delete(expensesTable)
+        .where(and(eq(expensesTable.id, source.row.id), eq(expensesTable.tenantId, me.tenantId)));
+    });
     res.json({ success: true });
   } catch (err) {
     req.log.error({ err }, "Error deleting expense");

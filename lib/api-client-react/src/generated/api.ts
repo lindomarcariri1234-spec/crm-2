@@ -93,6 +93,7 @@ import type {
   CreateLoyaltyTransactionBody,
   CreateMessageTemplateBody,
   CreateNoteBody,
+  CreateOperationalCostPayableBody,
   CreateOutboundMessageBody,
   CreatePassengerBody,
   CreatePaymentBody,
@@ -13720,6 +13721,233 @@ export const useCreatePayment = <
   TContext
 > => {
   return useMutation(getCreatePaymentMutationOptions(options), queryClient);
+};
+
+export const getCreateOperationalCostPayableUrl = () => {
+  return `/api/operational-cost-payables`;
+};
+
+/**
+ * @summary Create a payable for an operational cost or link an existing payable
+ */
+export const createOperationalCostPayable = async (
+  createOperationalCostPayableBody: CreateOperationalCostPayableBody,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<Payment> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return customFetch<Payment>(getCreateOperationalCostPayableUrl(), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(createOperationalCostPayableBody),
+  });
+};
+
+export const getCreateOperationalCostPayableMutationKey = () =>
+  ["createOperationalCostPayable"] as const;
+
+export const getCreateOperationalCostPayableMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createOperationalCostPayable>>,
+    TError,
+    CreateOperationalCostPayableMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createOperationalCostPayable>>,
+  TError,
+  CreateOperationalCostPayableMutationVariables,
+  TContext
+> => {
+  const mutationKey = getCreateOperationalCostPayableMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createOperationalCostPayable>>,
+    CreateOperationalCostPayableMutationVariables
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createOperationalCostPayable(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateOperationalCostPayableMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createOperationalCostPayable>>
+>;
+export type CreateOperationalCostPayableMutationBody =
+  BodyType<CreateOperationalCostPayableBody>;
+export type CreateOperationalCostPayableMutationError = ErrorType<unknown>;
+export type CreateOperationalCostPayableMutationVariables = {
+  data: BodyType<CreateOperationalCostPayableBody>;
+};
+
+/**
+ * @summary Create a payable for an operational cost or link an existing payable
+ */
+export const useCreateOperationalCostPayable = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof createOperationalCostPayable>>,
+      TError,
+      CreateOperationalCostPayableMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof createOperationalCostPayable>>,
+  TError,
+  CreateOperationalCostPayableMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getCreateOperationalCostPayableMutationOptions(options),
+    queryClient,
+  );
+};
+
+export const getUnlinkOperationalCostPayableUrl = (
+  sourceType: "expense" | "trip_cost",
+  sourceId: string,
+) => {
+  return `/api/operational-cost-payables/${sourceType}/${sourceId}`;
+};
+
+/**
+ * @summary Remove the explicit link between an operational cost and its payable
+ */
+export const unlinkOperationalCostPayable = async (
+  sourceType: "expense" | "trip_cost",
+  sourceId: string,
+  options?: Parameters<typeof customFetch>[1],
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(
+    getUnlinkOperationalCostPayableUrl(sourceType, sourceId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getUnlinkOperationalCostPayableMutationKey = () =>
+  ["unlinkOperationalCostPayable"] as const;
+
+export const getUnlinkOperationalCostPayableMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unlinkOperationalCostPayable>>,
+    TError,
+    UnlinkOperationalCostPayableMutationVariables,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof unlinkOperationalCostPayable>>,
+  TError,
+  UnlinkOperationalCostPayableMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUnlinkOperationalCostPayableMutationKey();
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof unlinkOperationalCostPayable>>,
+    UnlinkOperationalCostPayableMutationVariables
+  > = (props) => {
+    const { sourceType, sourceId } = props ?? {};
+
+    return unlinkOperationalCostPayable(sourceType, sourceId, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UnlinkOperationalCostPayableMutationResult = NonNullable<
+  Awaited<ReturnType<typeof unlinkOperationalCostPayable>>
+>;
+
+export type UnlinkOperationalCostPayableMutationError = ErrorType<unknown>;
+export type UnlinkOperationalCostPayableMutationVariables = {
+  sourceType: "expense" | "trip_cost";
+  sourceId: string;
+};
+
+/**
+ * @summary Remove the explicit link between an operational cost and its payable
+ */
+export const useUnlinkOperationalCostPayable = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof unlinkOperationalCostPayable>>,
+      TError,
+      UnlinkOperationalCostPayableMutationVariables,
+      TContext
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+  queryClient?: QueryClient,
+): UseMutationResult<
+  Awaited<ReturnType<typeof unlinkOperationalCostPayable>>,
+  TError,
+  UnlinkOperationalCostPayableMutationVariables,
+  TContext
+> => {
+  return useMutation(
+    getUnlinkOperationalCostPayableMutationOptions(options),
+    queryClient,
+  );
 };
 
 export const getGetPaymentUrl = (id: string) => {

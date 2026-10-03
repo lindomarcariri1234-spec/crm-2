@@ -41,6 +41,10 @@ export type ListPaymentsParams = {
    * @nullable
    */
   dueDateTo?: string | null;
+  /**
+   * Return only payments not linked to an operational cost.
+   */
+  unlinkedOnly?: boolean;
   page?: number;
   limit?: number;
 };

@@ -708,6 +708,20 @@
       "when": 1809960001000,
       "tag": "0101_normalize_financial_categories",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1809960002000,
+      "tag": "0102_link_operational_cost_payables",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1809960003000,
+      "tag": "0103_link_operational_cost_payables",
+      "breakpoints": true
     }
   ]
 }

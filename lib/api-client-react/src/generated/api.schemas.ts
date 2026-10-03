@@ -1418,6 +1418,10 @@ export interface Expense {
   dueDate: string;
   status: ExpenseStatus;
   /** @nullable */
+  payablePaymentId: string | null;
+  payableStatus: PaymentStatus | null;
+  payableDueDateRequired: boolean;
+  /** @nullable */
   notes?: string | null;
   createdAt: string;
   source: ExpenseSource;
@@ -2365,6 +2369,10 @@ export interface Payment {
   description?: string | null;
   /** @nullable */
   notes?: string | null;
+  /** @nullable */
+  sourceExpenseId: string | null;
+  /** @nullable */
+  sourceTripCostId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2402,6 +2410,25 @@ export interface UpdatePaymentBody {
   paidAt?: string | null;
   /** @nullable */
   notes?: string | null;
+}
+
+export type CreateOperationalCostPayableBodySourceType =
+  (typeof CreateOperationalCostPayableBodySourceType)[keyof typeof CreateOperationalCostPayableBodySourceType];
+
+export const CreateOperationalCostPayableBodySourceType = {
+  expense: "expense",
+  trip_cost: "trip_cost",
+} as const;
+
+export interface CreateOperationalCostPayableBody {
+  sourceType: CreateOperationalCostPayableBodySourceType;
+  sourceId: string;
+  /** Existing payable ID to associate instead of creating a new one. */
+  paymentId?: string;
+  /** Required when creating a new payable. */
+  paymentMethod?: string;
+  /** Required when the source cost has no due date. */
+  dueDate?: string;
 }
 
 export interface FinancialSummary {
@@ -5692,6 +5719,10 @@ export type ListPaymentsParams = {
    * @nullable
    */
   dueDateTo?: string | null;
+  /**
+   * Return only payments not linked to an operational cost.
+   */
+  unlinkedOnly?: boolean;
   page?: number;
   limit?: number;
 };
