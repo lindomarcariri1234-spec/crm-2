@@ -6,12 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Client } from "./client";
-import type { ClientListSummary } from "./clientListSummary";
 
-export interface ClientListResponse {
-  data: Client[];
+export interface ClientListSummary {
   total: number;
-  page: number;
-  limit: number;
-  summary?: ClientListSummary;
+  active: number;
+  leads: number;
+  totalRevenue: number;
+  birthdayClients: Client[];
 }

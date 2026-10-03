@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "validate": "node ./scripts/validate-openapi.mjs",
-    "codegen": "pnpm run validate && orval --config ./orval.config.ts && prettier --write ../api-client-react/src/generated ../api-zod/src/generated && node ./scripts/finalize-package-exports.mjs",
+    "codegen": "pnpm run validate && orval --config ./orval.config.ts && pnpm --workspace-root exec prettier --write lib/api-client-react/src/generated lib/api-zod/src/generated && node ./scripts/finalize-package-exports.mjs",
     "test": "node --test scripts/validate-openapi.test.mjs"
   },
   "devDependencies": {
