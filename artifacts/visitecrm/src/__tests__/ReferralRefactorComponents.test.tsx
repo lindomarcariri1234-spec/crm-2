@@ -173,7 +173,10 @@ function setInputValue(input: HTMLInputElement, value: string) {
 const tableProps = () => ({
   referrals: [referral],
   settingsTiers: undefined,
-  currentUserRole: "agencia",
+  canPay: true,
+  canReverse: true,
+  canDeactivate: true,
+  canShare: true,
   activeTab: "completed-unpaid",
   searchQuery: "",
   bonusNotifiedFilter: "all" as const,
@@ -232,6 +235,7 @@ describe("indicações após a refatoração", () => {
     expect(props.onBonusNotifiedFilterChange).toHaveBeenCalledWith("notified");
 
     const rowCheckbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(rowCheckbox).not.toBeNull();
     await flushAct(() => {
       rowCheckbox.click();
     });
@@ -331,6 +335,10 @@ describe("indicações após a refatoração", () => {
         onEdit: vi.fn(),
         onDelete,
         deletePending: false,
+        loading: false,
+        error: false,
+        onRetry: vi.fn(),
+        canEdit: true,
       });
     }
     const { container } = await renderComponent(createElement(Harness));

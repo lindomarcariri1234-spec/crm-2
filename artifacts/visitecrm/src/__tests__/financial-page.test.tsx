@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   useCreateExpense: vi.fn(),
   useUpdateExpense: vi.fn(),
   useUpdateTripCost: vi.fn(),
+  useCreateOperationalCostPayable: vi.fn(),
+  useUnlinkOperationalCostPayable: vi.fn(),
   useUpdateCommission: vi.fn(),
   useCreateCommissionRule: vi.fn(),
   useUpdateCommissionRule: vi.fn(),
@@ -43,6 +45,8 @@ vi.mock("@workspace/api-client-react", () => ({
   useCreateExpense: mocks.useCreateExpense,
   useUpdateExpense: mocks.useUpdateExpense,
   useUpdateTripCost: mocks.useUpdateTripCost,
+  useCreateOperationalCostPayable: mocks.useCreateOperationalCostPayable,
+  useUnlinkOperationalCostPayable: mocks.useUnlinkOperationalCostPayable,
   useUpdateCommission: mocks.useUpdateCommission,
   useCreateCommissionRule: mocks.useCreateCommissionRule,
   useUpdateCommissionRule: mocks.useUpdateCommissionRule,
@@ -163,6 +167,8 @@ function setSuccessfulQueries() {
   mocks.useCreateExpense.mockReturnValue(mutation);
   mocks.useUpdateExpense.mockReturnValue(mutation);
   mocks.useUpdateTripCost.mockReturnValue(mutation);
+  mocks.useCreateOperationalCostPayable.mockReturnValue(mutation);
+  mocks.useUnlinkOperationalCostPayable.mockReturnValue(mutation);
   mocks.useUpdateCommission.mockReturnValue(mutation);
   mocks.useCreateCommissionRule.mockReturnValue(mutation);
   mocks.useUpdateCommissionRule.mockReturnValue(mutation);
