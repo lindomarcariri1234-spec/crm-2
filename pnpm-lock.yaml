@@ -137,7 +137,7 @@ importers:
   .:
     devDependencies:
       prettier:
-        specifier: ^3.8.1
+        specifier: 3.9.9
         version: 3.9.9
       typescript:
         specifier: ~5.9.2
@@ -298,7 +298,7 @@ importers:
         version: 3.1.0
       vitest:
         specifier: 'catalog:'
-        version: 4.1.11(@types/node@25.9.8)(jsdom@25.0.1)(vite@7.3.5(@types/node@25.9.8)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3))
+        version: 4.1.11(@types/node@25.9.8)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3)
 
   artifacts/cliente-app:
     dependencies:
@@ -1072,7 +1072,7 @@ importers:
         version: 7.3.5(@types/node@25.9.8)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3)
       vitest:
         specifier: 'catalog:'
-        version: 4.1.11(@types/node@25.9.8)(jsdom@25.0.1)(vite@7.3.5(@types/node@25.9.8)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3))
+        version: 4.1.11(@types/node@25.9.8)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3)
       wouter:
         specifier: ^3.3.5
         version: 3.11.0(react@19.1.0)
@@ -9106,7 +9106,6 @@ packages:
       '@vitest/ui': 4.1.11
       happy-dom: '*'
       jsdom: '*'
-      vite: 7.3.5
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
@@ -18107,7 +18106,7 @@ snapshots:
       tsx: 4.23.15
       yaml: 2.8.3
 
-  vitest@4.1.11(@types/node@25.9.8)(jsdom@25.0.1)(vite@7.3.5(@types/node@25.9.8)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3)):
+  vitest@4.1.11(@types/node@25.9.8)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3):
     dependencies:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@7.3.5(@types/node@25.9.8)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.8.3))
@@ -18133,7 +18132,17 @@ snapshots:
       '@types/node': 25.9.8
       jsdom: 25.0.1
     transitivePeerDependencies:
+      - jiti
+      - less
+      - lightningcss
       - msw
+      - sass
+      - sass-embedded
+      - stylus
+      - sugarss
+      - terser
+      - tsx
+      - yaml
 
   vlq@1.0.1: {}
 

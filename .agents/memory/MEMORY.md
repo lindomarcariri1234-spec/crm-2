@@ -107,7 +107,7 @@
 - [Mixed-order receipt allocation](mixed-order-receipt-allocation.md) — allocate order-level receipts to child reservations proportionally in cents, with deterministic remainder assignment.
 - [Capacity integrity check](capacity-integrity-check.md) — diagnose trip, inventory, and partner-capacity drift before repair jobs; never auto-correct persisted claims.
 - [Orval 8 with Zod 3](orval8-zod3-codegen.md) — secure Orval upgrades need explicit Zod 3 output, explicit formatting, and DOM iterable types for the generated fetch client.
-- [API codegen clean-install drift](api-codegen-clean-install-drift.md) — compare package-local Prettier with the lockfile and CI PNPM when only CI reports generated formatting changes.
+- [API codegen clean-install drift](api-codegen-clean-install-drift.md) — pin exact root Prettier and the local/CI pnpm version, then verify from a frozen install; don't hand-edit generated output.
 - [Deployment migration fail-fast](deployment-migration-fail-fast.md) — production must terminate on migration failure instead of serving a partially migrated schema and masking boot errors as 500s.
 - [Publication smoke checks](publication-smoke-check.md) — Replit has no postDeploy hook; verify the public storefront and API from the production entrypoint after local readiness.
 - [Clerk publication smoke authentication](publication-clerk-auth.md) — use one-use Clerk sign-in links for dedicated CI identities, validate the browser session, then revoke sessions or unused tokens; never rotate human cookies.
