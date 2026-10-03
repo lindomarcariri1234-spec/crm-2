@@ -146,6 +146,7 @@ async function run() {
         env: {
           ...process.env,
           PUBLICATION_EXPECTED_VERSION: expectedVersion,
+          FINANCIAL_CATEGORY_RELEASE_ID: expectedVersion,
         },
         stdio: "inherit",
       },

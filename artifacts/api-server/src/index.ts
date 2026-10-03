@@ -17,6 +17,7 @@ import { FETCH_PATCH_APPLIED } from "./lib/fetch-patch";
 // by value. The dynamic import ensures uploadthing can only load AFTER fetch-patch
 // has already replaced globalThis.fetch, making the ordering structurally enforced.
 import { logger } from "./lib/logger";
+import { runFinancialCategoryIntegrityCheck } from "./lib/financial-category-integrity";
 import { runMigrations } from "@workspace/db";
 import { initStripeSync } from "./lib/stripeSync";
 import { runApiStartup } from "./lib/api-startup";
@@ -179,6 +180,7 @@ async function applyMigrations() {
   // refusing to start.
   await backfillEncryptedCredentials();
   logger.info("Credential backfill complete");
+  void runFinancialCategoryIntegrityCheck();
 }
 
 

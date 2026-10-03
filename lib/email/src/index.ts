@@ -42,3 +42,5 @@ export type { ReferralLoyaltyPointsEmailProps } from './service';
 export type { LoyaltyTierUpgradeEmailProps } from './service';
 export { sendStripeHealthAlertEmail, sendStripeHealthRecoveryEmail } from './service';
 export type { SendStripeHealthAlertEmailOptions, SendStripeHealthRecoveryEmailOptions } from './service';
+export { renderFinancialCategoryIntegrityAlertEmail, sendFinancialCategoryIntegrityAlertEmail } from './service';
+export type { FinancialCategoryIntegrityAlertOptions } from './service';

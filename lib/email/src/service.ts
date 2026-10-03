@@ -1440,3 +1440,69 @@ export async function sendStripeHealthRecoveryEmail(
     return { success: false, error: message };
   }
 }
+
+export interface FinancialCategoryIntegrityAlertOptions {
+  to: string;
+  migrationStatus: "applied" | "missing";
+  totals: {
+    expenses: number;
+    trip_costs: number;
+    fixed_costs: number;
+    variable_costs: number;
+  };
+}
+
+export function renderFinancialCategoryIntegrityAlertEmail(
+  opts: FinancialCategoryIntegrityAlertOptions,
+): { subject: string; html: string } {
+  for (const [name, count] of Object.entries(opts.totals)) {
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new TypeError(`Invalid financial category integrity count: ${name}`);
+    }
+  }
+
+  const migrationStatus =
+    opts.migrationStatus === "applied" ? "aplicada" : "ausente";
+  const subject = "[VisiteCRM] Verificação de integridade financeira";
+  const html = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+      <h2>Verificação de integridade financeira: falha</h2>
+      <p>Migração 0101: ${migrationStatus}</p>
+      <ul>
+        <li>expenses: ${opts.totals.expenses}</li>
+        <li>trip_costs: ${opts.totals.trip_costs}</li>
+        <li>fixed_costs: ${opts.totals.fixed_costs}</li>
+        <li>variable_costs: ${opts.totals.variable_costs}</li>
+      </ul>
+    </div>
+  `;
+
+  return { subject, html };
+}
+
+export async function sendFinancialCategoryIntegrityAlertEmail(
+  opts: FinancialCategoryIntegrityAlertOptions,
+): Promise<SendEmailResult> {
+  try {
+    const resend = getResend();
+    if (!resend) {
+      return { success: false, error: "Email transport unavailable" };
+    }
+
+    const { subject, html } = renderFinancialCategoryIntegrityAlertEmail(opts);
+    const { data, error } = await resend.emails.send({
+      from: "VisiteCRM <reservas@resend.visitecrm.com>",
+      to: [opts.to],
+      subject,
+      html,
+    });
+
+    if (error) {
+      return { success: false, error: "Email provider rejected the alert" };
+    }
+
+    return { success: true, messageId: data?.id };
+  } catch {
+    return { success: false, error: "Unexpected email alert failure" };
+  }
+}

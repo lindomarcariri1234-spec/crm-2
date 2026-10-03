@@ -5,7 +5,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./financial-category-integrity": {
+      "types": "./scripts/verify-financial-category-integrity.d.mts",
+      "import": "./scripts/verify-financial-category-integrity.mjs"
+    }
   },
   "scripts": {
     "generate": "drizzle-kit generate --config ./drizzle.config.ts",

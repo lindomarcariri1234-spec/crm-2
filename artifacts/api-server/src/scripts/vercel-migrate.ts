@@ -46,10 +46,12 @@ export async function runVercelMigration(): Promise<void> {
   // produces the actionable errors above instead of a lower-level driver error.
   const [
     { runMigrations },
+    { runFinancialCategoryIntegrityCheck },
     { seedPlansIfMissing },
     { backfillEncryptedCredentials },
   ] = await Promise.all([
     import("@workspace/db"),
+    import("../lib/financial-category-integrity"),
     import("../lib/seed-plans"),
     import("../lib/credential-backfill"),
   ]);
@@ -63,4 +65,10 @@ export async function runVercelMigration(): Promise<void> {
 
   await backfillEncryptedCredentials();
   console.log("[vercel-migrate] Credential backfill complete");
+
+  await runFinancialCategoryIntegrityCheck({
+    releaseId:
+      process.env["PUBLICATION_VERSION"] ??
+      process.env["VERCEL_GIT_COMMIT_SHA"],
+  });
 }
