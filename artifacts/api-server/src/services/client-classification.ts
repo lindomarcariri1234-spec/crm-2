@@ -189,7 +189,14 @@ export async function recomputeClientClassification(
       AND p.reservation_id IS NOT NULL
       AND p.type = 'receivable' AND p.amount::numeric > 0 AND p.paid_at IS NOT NULL
   `);
-  const firstPaidAt = (firstPaidQuery as unknown as { rows: Array<{ first_paid_at: Date | null }> }).rows[0]?.first_paid_at;
+  const firstPaidAtValue = (firstPaidQuery as unknown as {
+    rows: Array<{ first_paid_at: Date | string | null }>;
+  }).rows[0]?.first_paid_at ?? null;
+  const firstPaidAt = firstPaidAtValue == null
+    ? null
+    : firstPaidAtValue instanceof Date
+      ? firstPaidAtValue
+      : new Date(firstPaidAtValue);
   const firstPaidAtChanged = !!firstPaidAt && (!client.firstPaidAt || firstPaidAt < client.firstPaidAt);
   if (firstPaidAtChanged && !input.dryRun) {
     await executor.update(clientsTable).set({ firstPaidAt })

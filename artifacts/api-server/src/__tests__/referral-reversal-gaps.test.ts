@@ -83,12 +83,19 @@ function makeReferral(overrides: {
 }) {
   const id = `test-ref-${generateId()}`;
   referralIds.push(id);
+  const status = overrides.status ?? REFERRAL_STATUS.COMPLETED;
+  const hasConvertedAt =
+    status === REFERRAL_STATUS.COMPLETED ||
+    status === REFERRAL_STATUS.CONVERTED ||
+    status === REFERRAL_STATUS.REVERSED;
   return {
     id,
     tenantId: overrides.tenantId ?? TENANT_ID,
     referrerId: `referrer-${generateId()}`,
     code: overrides.code,
-    status: overrides.status ?? REFERRAL_STATUS.COMPLETED,
+    status,
+    convertedAt: hasConvertedAt ? new Date() : null,
+    ...(status === REFERRAL_STATUS.REVERSED ? { reversalAt: new Date() } : {}),
     reservationId: overrides.reservationId ?? null,
     reversalWarningAcknowledgedAt: overrides.reversalWarningAcknowledgedAt ?? null,
     referrerName: overrides.referrerName ?? null,
@@ -106,6 +113,13 @@ beforeAll(async () => {
     name: "Gap Test Agency",
     slug: `gap-test-${generateId()}`,
     email: `gap-${generateId()}@example.com`,
+  } satisfies typeof tenantsTable.$inferInsert);
+
+  await db.insert(tenantsTable).values({
+    id: OTHER_TENANT_ID,
+    name: "Other Gap Test Agency",
+    slug: `other-gap-test-${generateId()}`,
+    email: `other-gap-${generateId()}@example.com`,
   } satisfies typeof tenantsTable.$inferInsert);
 
   await db.insert(usersTable).values({
@@ -224,13 +238,17 @@ describe("findReferralReversalGaps", () => {
       status: RESERVATION_STATUS.CANCELLED,
       discountReferralCode: code,
     });
+    const differentReservation = makeReservation({
+      status: RESERVATION_STATUS.CONFIRMED,
+    });
     await db.insert(reservationsTable).values(reservation);
+    await db.insert(reservationsTable).values(differentReservation);
 
     await db.insert(referralsTable).values(
       makeReferral({
         code,
         status: REFERRAL_STATUS.COMPLETED,
-        reservationId: `unrelated-res-${generateId()}`,
+        reservationId: differentReservation.id,
       }),
     );
 

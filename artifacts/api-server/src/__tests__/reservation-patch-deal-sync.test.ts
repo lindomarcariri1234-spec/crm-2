@@ -151,10 +151,12 @@ vi.mock("googleapis", () => ({
   google: {
     calendar: vi.fn(() => mockGoogleCalendar),
     auth: {
-      OAuth2: vi.fn(() => ({
-        setCredentials: vi.fn(),
-        refreshAccessToken: vi.fn(),
-      })),
+      OAuth2: vi.fn(function OAuth2Mock() {
+        return {
+          setCredentials: vi.fn(),
+          refreshAccessToken: vi.fn(),
+        };
+      }),
     },
   },
 }));

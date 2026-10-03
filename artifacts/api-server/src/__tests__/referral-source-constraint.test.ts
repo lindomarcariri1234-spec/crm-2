@@ -14,8 +14,15 @@
  * so that the constraint is actually evaluated by Postgres.
  */
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { db, referralsTable } from "@workspace/db";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  db,
+  referralsTable,
+  reservationsTable,
+  tenantsTable,
+  tripsTable,
+  usersTable,
+} from "@workspace/db";
 import { inArray } from "drizzle-orm";
 
 import { generateId } from "../lib/id";
@@ -24,6 +31,9 @@ const CHECK_VIOLATION = "23514";
 const CONSTRAINT_NAME = "referrals_crm_requires_reservation_id";
 
 const TENANT_ID = `test-tenant-${generateId()}`;
+const TRIP_ID = `test-trip-${generateId()}`;
+const USER_ID = `test-user-${generateId()}`;
+const RESERVATION_ID = `test-res-${generateId()}`;
 
 // Track every id we insert so we can clean up regardless of pass/fail.
 const insertedIds: string[] = [];
@@ -60,10 +70,53 @@ function unwrapPgError(err: PgError | undefined): PgError | undefined {
   return err;
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!process.env["DATABASE_URL"]) {
     throw new Error("DATABASE_URL must be set to run the referral constraint integration test");
   }
+
+  await db.insert(tenantsTable).values({
+    id: TENANT_ID,
+    name: "Referral Constraint Test Agency",
+    slug: `referral-constraint-${generateId()}`,
+    email: `referral-constraint-${generateId()}@example.com`,
+  });
+  await db.insert(usersTable).values({
+    id: USER_ID,
+    clerkId: `clerk-${generateId()}`,
+    tenantId: TENANT_ID,
+    name: "Referral Constraint Test User",
+    email: `referral-constraint-user-${generateId()}@example.com`,
+    referralCode: `RC-${generateId()}`,
+  });
+  await db.insert(tripsTable).values({
+    id: TRIP_ID,
+    tenantId: TENANT_ID,
+    name: "Referral Constraint Test Trip",
+    slug: `referral-constraint-trip-${generateId()}`,
+    destination: "Fortaleza, CE",
+    destinationCity: "Fortaleza",
+    destinationState: "CE",
+    type: "excursao",
+    category: "nacional",
+    departureDate: new Date("2028-03-15"),
+    totalCapacity: 10,
+    availableSeats: 10,
+    priceAdult: "100.00",
+    createdById: USER_ID,
+  });
+  await db.insert(reservationsTable).values({
+    id: RESERVATION_ID,
+    tenantId: TENANT_ID,
+    tripId: TRIP_ID,
+    seats: [],
+    totalValue: "100.00",
+    balance: "100.00",
+    voucherCode: `TEST-VCHR-${generateId()}`,
+    qrCode: `QR-${generateId()}`,
+    createdById: USER_ID,
+    status: "pending",
+  });
 });
 
 afterEach(async () => {
@@ -71,6 +124,14 @@ afterEach(async () => {
     await db.delete(referralsTable).where(inArray(referralsTable.id, [...insertedIds]));
     insertedIds.length = 0;
   }
+});
+
+afterAll(async () => {
+  await db.delete(referralsTable).where(inArray(referralsTable.tenantId, [TENANT_ID]));
+  await db.delete(reservationsTable).where(inArray(reservationsTable.id, [RESERVATION_ID]));
+  await db.delete(tripsTable).where(inArray(tripsTable.id, [TRIP_ID]));
+  await db.delete(usersTable).where(inArray(usersTable.id, [USER_ID]));
+  await db.delete(tenantsTable).where(inArray(tenantsTable.id, [TENANT_ID]));
 });
 
 describe("referrals_crm_requires_reservation_id CHECK constraint", () => {
@@ -101,7 +162,7 @@ describe("referrals_crm_requires_reservation_id CHECK constraint", () => {
   it("allows source='crm' with a valid reservation_id", async () => {
     await expect(
       db.insert(referralsTable).values(
-        baseRow({ source: "crm", reservationId: `res-${generateId()}` }),
+        baseRow({ source: "crm", reservationId: RESERVATION_ID }),
       ),
     ).resolves.toBeDefined();
   });

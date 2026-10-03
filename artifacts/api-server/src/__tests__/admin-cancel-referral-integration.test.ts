@@ -34,6 +34,7 @@ import {
 } from "../services/checkout/order-referral-reversal.js";
 
 const TENANT_ID = `test-tenant-${generateId()}`;
+const OTHER_TENANT_ID = `other-tenant-${generateId()}`;
 const TRIP_ID = `test-trip-${generateId()}`;
 const USER_ID = `test-user-${generateId()}`;
 const STORE_ID = `test-store-${generateId()}`;
@@ -54,6 +55,12 @@ beforeAll(async () => {
     name: "Admin Cancel Referral Test Agency",
     slug: `admin-cancel-ref-${generateId()}`,
     email: `admin-cancel-ref-${generateId()}@example.com`,
+  });
+  await db.insert(tenantsTable).values({
+    id: OTHER_TENANT_ID,
+    name: "Other Admin Cancel Referral Test Agency",
+    slug: `other-admin-cancel-ref-${generateId()}`,
+    email: `other-admin-cancel-ref-${generateId()}@example.com`,
   });
 
   await db.insert(usersTable).values({
@@ -116,7 +123,9 @@ afterAll(async () => {
   await db.delete(storesTable).where(inArray(storesTable.id, [STORE_ID]));
   await db.delete(tripsTable).where(inArray(tripsTable.id, [TRIP_ID]));
   await db.delete(usersTable).where(inArray(usersTable.id, [USER_ID]));
-  await db.delete(tenantsTable).where(inArray(tenantsTable.id, [TENANT_ID]));
+  await db
+    .delete(tenantsTable)
+    .where(inArray(tenantsTable.id, [TENANT_ID, OTHER_TENANT_ID]));
 });
 
 // ---------------------------------------------------------------------------
@@ -173,6 +182,7 @@ async function createCompletedTripReferral(opts: {
     referrerId: opts.referrerId,
     code: `REF-${generateId()}`,
     status: REFERRAL_STATUS.COMPLETED,
+    convertedAt: new Date(),
     reservationId,
     bonusAmount: opts.bonusAmount,
     discountApplied: true,
@@ -193,6 +203,7 @@ async function createCompletedProductReferral(opts: {
     referrerId: opts.referrerId,
     code: `REF-${generateId()}`,
     status: REFERRAL_STATUS.COMPLETED,
+    convertedAt: new Date(),
     reservationId: null,
     bonusAmount: opts.bonusAmount,
     discountApplied: true,
@@ -388,10 +399,6 @@ describe("reverseTripOrderReferrals integration", () => {
   });
 
   it("does NOT reverse referrals belonging to a different tenant", async () => {
-    // otherTenantId is never inserted into tenantsTable; referralsTable has no
-    // FK on tenant_id so the insert succeeds and lets us test the isolation
-    // guard inside reverseTripOrderReferrals (tenantId filter in the WHERE).
-    const otherTenantId = `other-tenant-${generateId()}`;
     const referrerId = await createReferrer({
       successfulReferrals: 0,
       referralEarnings: "0.00",
@@ -405,10 +412,11 @@ describe("reverseTripOrderReferrals integration", () => {
     referralIds.push(crossTenantReferralId);
     await db.insert(referralsTable).values({
       id: crossTenantReferralId,
-      tenantId: otherTenantId,
+      tenantId: OTHER_TENANT_ID,
       referrerId,
       code: `REF-${generateId()}`,
       status: REFERRAL_STATUS.COMPLETED,
+      convertedAt: new Date(),
       reservationId,
       bonusAmount: "25.00",
       discountApplied: true,

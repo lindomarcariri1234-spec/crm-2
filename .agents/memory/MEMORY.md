@@ -1,4 +1,4 @@
-- [CJS require vitest mock bypass](cjs-require-vitest-mock.md) — ESM mocks miss CJS require(); test UploadThing middleware directly, or use a parent inline handler for app-layer tests
+- [Testing harness gotchas](testing-harness-gotchas.md) — pointers to brittle mocks, database-test setup, and validation coverage details.
 - [Checkout now synchronous](persist-order-no-client.md) — client/reservation/deal/portal-account creation moved from post-payment to checkout time (idempotent); referral crediting still deferred to post-payment
 - [logger warn vs console warn in tests](logger-warn-test-spy.md) — production code uses logger.warn (src/lib/logger); tests spying on console.warn will miss it; add vi.mock("../lib/logger.js") with a mockLogWarn vi.fn() closure
 - [Pino HTTP error serializers](pino-http-error-serializers.md) — apply safe error serializers to both base Pino and pino-http request loggers; pino-http can otherwise emit raw error messages
@@ -14,9 +14,6 @@
 - [Redis alert email DB override](redis-alert-email.md) — redis.ts reads alert recipient from platformSettingsTable key=redis_alert_email first, falls back to SUPERADMIN_EMAIL env; recovery email (sendRedisRecoveryEmail) fires on resetTransientRedisErrors when _hadActiveAlert=true.
 - [Referral conversion returns tier result](referral-tier-upgrade-pattern.md) — recordReferralConversion returns ReferralConversionResult{tierUpgraded,…}; caller in persist-order.ts dispatches tier-upgrade email when tierUpgraded=true. Tier badge in indicacoes.tsx uses referrerSuccessfulReferrals from API (not per-row conversions).
 - [Referral reservationId invariant](referral-reservation-id.md) — CRM path always sets reservationId (assertion in reservations.ts); store checkout sets it only when a trip reservation was created (null OK for product-only orders); admin POST creates pending invites with no reservationId.
-- [Vitest mock one-time queue isolation](vitest-mock-queue.md) — vi.clearAllMocks() does NOT clear mockResolvedValueOnce OR mockImplementationOnce queues; early-returning handlers leave unconsumed once-mocks that corrupt later tests.
-- [drizzle-orm mock completeness](drizzle-orm-mock.md) — endpoint tests vi.mock drizzle-orm by listing each operator; omitting one (e.g. notInArray) → undefined() at runtime → 500 in tests. Extend the mock object when the route uses a new operator.
-- [store-public test mock layout](store-public-test-mock-layout.md) — shared mockLimit covers both db and tx selects; ALL slots must be queued upfront before the request (slots added inside a mockTransaction callback go AFTER already-queued slots → wrong order); referral-code.js must be mocked or generateAndAssignReferralCode consumes extra slots fire-and-forget.
 - [Calendar dedup not-found pattern](calendar-dedup.md) — updateEvent returns boolean|"not-found"; "not-found"=404 means event deleted externally; upsertCalendarEvent deletes stale DB record and recreates. isEventNotFoundError exported from calendar-service.ts.
 - [Calendar trip-event concurrency](calendar-trip-concurrency.md) — serialize trip event lookup, Google call, and persistence by tenant+trip+user; leave other event types unchanged.
 - [Migration journal timestamps](migration-journal-timestamps.md) — reconcile live-only columns with additive DDL above both watermarks; never replay historical backfills over populated data.
@@ -27,9 +24,6 @@
 - [Vitrine per-tenant theming](vitrine-theming.md) — storefront re-skins via VitrineThemeProvider CSS vars; Cariri palette fallback when store colors == DB defaults; theme inline colors via useVitrineTheme().colors, never raw store.primaryColor.
 - [Referral email status lookup](referral-email-status-lookup.md) — expiry/bonus-release email delivery status filters email_logs by referralId + subject ILIKE (no email-type column); fragile to subject/locale changes; add a type column when schema next changes.
 - [Referral CHECK constraint gap](referral-check-constraint-gap.md) — Drizzle schema/squash omit the CHECK; a journaled idempotent migration restores it after the baseline.
-- [Frontend SSE component tests](frontend-sse-component-tests.md) — shared eventSourceHarness.ts stubs EventSource; mocked hooks (useToast/wouter) MUST return stable refs or effects loop & act() hangs; vitest needs esbuild jsx:automatic for .tsx.
-- [Endpoint test db mock exports](endpoint-test-db-mock-exports.md) — endpoints.test.ts mocks @workspace/db with a hand-listed table set; a handler touching an unlisted table throws → 500 (not the expected 4xx). Add the table when a positive control reaches new DB reads.
-- [Drizzle query rejection mocks](drizzle-query-rejection-mocks.md) — to exercise a handler catch around a query, let select().from() build normally and reject from the terminal where/execute promise.
 - [Clerk dev proxy](clerk-dev-proxy.md) — canonical proxy is production-only (NODE_ENV guard); derives proxyUrl from request host dynamically; http-proxy-middleware must be external in esbuild (entities ESM issue) + symlinked in api-server/node_modules.
 - [Clerk live key dev failure](clerk-live-key-dev.md) — VITE_CLERK_PUBLISHABLE_KEY secret is the live key (uses clerk.visitecrm.com FAPI custom domain); that domain doesn't exist in dev → "failed_to_load_clerk_js". Fix: vite.config.ts `define` overrides the key with CLERK_PUBLISHABLE_KEY (test, no VITE_ prefix) when NODE_ENV≠production.
 - [Post-merge build check](post-merge-build-check.md) — green tests ≠ working deploy; vitest mocks hide wrong-module imports that esbuild's static export check (api-server prod build) rejects. Run `pnpm --filter @workspace/api-server run build` after any merge.
@@ -39,8 +33,6 @@
 - [SAST triage VisiteCRM](sast-triage-visitecrm.md) — which Semgrep medium findings are recurring false positives (pre-escaped template vars, Drizzle ilike, literal-key RegExp, serve-static traversal) vs real; fix injection at the SOURCE (validate query params) not per-sink.
 - [BRL currency formatters](brl-currency-formatters.md) — shared formatBRL (UI/email, NBSP) vs formatBRLPlain (CSV/PDF/calendar, regular space); intentionally two, never re-add a local copy.
 - [Express 5 wildcard route syntax](express5-wildcard-route.md) — Express 5 + path-to-regexp v8 rejects bare `"*"` routes at first use (lazy compile), throwing PathError. Use `"/{*splat}"` instead. The route only registers in production (inside `if (!isDev)`), so the error only surfaces after setting NODE_ENV=production.
-- [Promise.all concurrent mock order](concurrent-mock-order.md) — With Promise.all([A(), B()]), both A and B run synchronously until their first await before any microtask runs; first db.select of each happens in sync phase (A=#1, B=#2); subsequent selects interleave after each await. Use mockImplementationOnce in this exact order, never selectCallCount%2.
-- [referrals test select count drift](referrals-test-select-count.md) — referral-bonus tests must mock ALL db.select calls: pay-bonus=3 (referral+JOIN, referralSettings grace period, refetch), GET /referrals=4 (count, rows, tracking conditional, referralSettings). Adding a select without updating tests → 500 instead of expected status.
 - [RoleRedirect auth loop](auth-loop-pattern.md) — me=null after sync must NOT redirect to /sign-in (Clerk bounces back → infinite loop); use authError state + signOut. Common causes: DB schema drift (missing column → 500), missing VITE_CLERK_PROXY_URL in prod (→ 401).
 - [Disabled-user authorization](disabled-user-authorization.md) — inactive local accounts get 403 across protected paths; preserve self-deletion and intentional first-time provisioning.
 - [Clerk instance mismatch](clerk-instance-mismatch.md) — pk_live_ + sk_test_ from different instances → silent 401 on all requests; secrets override env vars in Replit so delete conflicting env var entirely.
@@ -53,11 +45,9 @@
 - [Mock services not raw db chains in route tests](mock-service-not-db-chain.md) — when a route delegates to an already-unit-tested service fn, vi.mock the service directly instead of chaining db.select/insert mocks; far less brittle to call-order changes.
 - [broadcastSeatUpdate dual-query mock](broadcast-seat-update-dual-query.md) — realtime.ts makes 2 db.select() calls (reservations then trip freePassengers); use mock.calls.length to route different chains per call.
 - [SSL sslmode strip pattern](ssl-sslmode-strip.md) — explicit ssl option alongside sslmode=require in connectionString does NOT suppress pg-connection-string warning; must strip sslmode from URL before passing to Pool.
-- [Test runner isolation and batching](vitest-db-integration-isolation.md) — keep real-DB suites out of the default run and batch manual backend/frontend files under time limits (details: [batching](test-suite-batching.md)).
-- [Vitest mock call typing](vitest-mock-call-typing.md) — strict TypeScript infers vi.fn() calls as zero-argument tuples; type mocks or cast call arrays before inspecting arguments.
 - [Batched API typecheck](api-typecheck-batched.md) — build real workspace declarations first, then typecheck every API entrypoint in small processes under the constrained heap
 - [GitHub history resync](github-history-resync.md) — after a clean-history push, align local main only after tree-hash verification to avoid Replit INVALID_STATE.
-- [Replit Git stale operation state](replit-git-stale-operation-state.md) — stale cherry-pick/rebase markers and old refs locks can mimic merge conflicts; verify operation state before changing branches.
+- [Replit Git stale operation state](replit-git-stale-operation-state.md) — stale operation markers or a nonempty `packed-refs.new` can disrupt Git; inspect state and processes before cleanup.
 - [GitHub API push limits](github-api-push-limits.md) — Git Database uploads need small tree batches, paced blob requests, and a separate strategy for oversized generated artifacts
 - [Public repository remediation](public-repository-remediation.md) — exposed credentials must be rotated before publication; rewriting reachable history alone cannot invalidate copied or cached blobs.
 - [Metro parser remediation](metro-image-parser-remediation.md) — retain an API-compatible replacement when an upstream parser remains unpatched.
@@ -80,7 +70,6 @@
 - [Per-row SAVEPOINT for continue-on-error import loops](postgres-per-row-savepoint.md) — a per-row try/catch-and-continue inside one Postgres transaction needs a nested `tx.transaction()` (SAVEPOINT) per row, or the first error poisons every later statement while looking like it recovered.
 - [Concurrent task file corruption](concurrent-task-file-corruption.md) — an unexplained typecheck regression in code you didn't touch, right before completion, may be a concurrent task's edit landing mid-write; diff against last-good commit, don't assume it's your bug.
 - [Agency backup export format](agency-backup-export-format.md) — full-agency JSON backup shape, format version, and which secrets are deliberately excluded; relevant to future import/restore work.
-- [Test files excluded from typecheck](test-files-excluded-from-typecheck.md) — a tsconfig used by the official typecheck workflow can exclude test directories entirely; a broken test file passes CI silently unless checked separately.
 - [Drizzle enum literal in insert array](drizzle-enum-literal-insert-array.md) — an insert `.values([...])` array with a wrong string literal for an enum-typed column surfaces as a generic "No overload matches this call" error, not a clear "invalid value" message.
 - [Vercel monorepo framework selection](vercel-monorepo-framework-detection.md) — select Vite explicitly; linked projects may be misclassified as Express (see [project setting](vercel-monorepo-framework.md)).
 - [Clerk social login](clerk-social-login.md) — native provider buttons plus redirect OAuth and BASE_PATH-aware fallbacks keep agency login reliable across Clerk environments.
@@ -133,11 +122,8 @@
 - [Audit failure log hygiene](audit-failure-logging.md) — audit-write failures log only operational identifiers and error type; never snapshots or raw exception details
 - [PMS legacy projection](pms-legacy-projection.md) — keep legacy accommodations as the source and idempotently project new records before PMS reads
 - [PMS schema verification](pms-schema-verification.md) — after PMS column migrations, verify the live database separately; an apparently successful migrate can still leave schema drift
-- [Concurrent audit snapshot tests](concurrent-audit-snapshot-tests.md) — assert concurrent event order through before/after snapshot chaining, not timestamps that may tie
-- [Radix form test harness](radix-form-test-harness.md) — mock scrollIntoView and use the native input value setter when testing controlled inputs and Radix Select in the DOM harness
 - [Scrollable Radix tabs](radix-tab-scroll-alignment.md) — mobile overflow rails inherit centered alignment; use start alignment so leading tabs remain reachable
 - [Lead deal fallback](lead-deal-fallback.md) — client creation must still create a pipeline deal when no stage is supplied; the API resolves the tenant default stage
-- [Vitest 4 constructor mocks](vitest4-constructor-mocks.md) — mocks instantiated with `new` need constructable function/class shapes after the Vitest 4 upgrade
 - [Financial consolidation view](financial-consolidation-view.md) — planned costs and sale prices stay separate from realized costs; normalize trip and agency categories before grouping
 - [Referral cap concurrency](referral-cap-concurrency.md) — lock before reading the referrer's count so both cap and tier decisions remain consistent under concurrent conversions
 - [Referral database constraints](referral-database-constraints.md) — keep financial checks aligned with real status transitions; add legacy FKs/checks as NOT VALID until production data is audited
@@ -149,11 +135,10 @@
 - [Gratuity and payment lock order](gratuity-payment-lock-order.md) — commit gratuity before cancelling receivables to avoid payment→reservation lock inversion
 - [Artifact workflow ownership](artifact-workflow-ownership.md) — registered artifact workflows start independently; do not launch the same artifact again from the aggregate Project workflow
 - [UploadThing SDK error redaction](uploadthing-error-redaction.md) — provider errors can contain auth headers; log only safe operation metadata
-- [Local PostgreSQL integration setup](local-postgres-integration.md) — use a writable socket and keep ephemeral PostgreSQL alive in a persistent shell during tests
-- [PostgreSQL lock barrier visibility](postgres-lock-barrier-visibility.md) — lock tests should rely on a known blocker PID when pg_stat_activity hides query text
 - [PNPM linker and resolver peers](pnpm-hoisted-lockfile-mismatch.md) — use deploy-matched PNPM for frozen installs; explicitly scope @hookform/resolvers 3 to Zod 3 in mixed Zod 3/4 workspaces
 - [Boarding point ID namespaces](boarding-point-id-namespaces.md) — keep trip-point IDs distinct from agency catalog IDs when displaying or editing reservation boarding selections
 - [Group reservation passenger validation](group-reservation-passenger-validation.md) — validate every required companion position explicitly; sparse arrays can bypass `.every()` completeness checks
 - [Pipeline stage vs. client classification](pipeline-stage-classification.md) — deal stage controls board placement; client classification is profile context, and the legacy client stage is display-only
 - [API entrypoint formatting](api-index-formatting.md) — check the existing formatter baseline before whole-file formatting, to avoid unrelated churn in focused startup edits.
 - [Unified WhatsApp timeline sends](unified-whatsapp-timeline-send-path.md) — keep the client timeline on the tenant/client/consent-aware send route; reserve chatbot replies for the AI inbox flow.
+- [Raw SQL timestamp decoding](raw-sql-timestamp-decoding.md) — normalize raw PostgreSQL timestamp aggregates before writing them through Drizzle Date columns.
