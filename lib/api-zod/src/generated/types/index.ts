@@ -67,6 +67,7 @@ export * from "./client";
 export * from "./clientActivity";
 export * from "./clientActivityMetadata";
 export * from "./clientListResponse";
+export * from "./clientListSummary";
 export * from "./clientLoyaltyInfo";
 export * from "./clientReferralInfo";
 export * from "./clientReferralInfoAttemptLogsItem";
