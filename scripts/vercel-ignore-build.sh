@@ -20,6 +20,7 @@ cd "$repo_root" || exit 1
 deployment_paths=(
   "artifacts/visitecrm"
   "artifacts/api-server"
+  ".release"
   "lib"
   "attached_assets"
   "api"

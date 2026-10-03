@@ -18,6 +18,24 @@ esse campo para a raiz do repositório antes do próximo deploy. A configuraçã
 espelhada em `artifacts/api-server/vercel.json` mantém o critério seguro durante
 essa transição, mas a raiz do monorepo é a configuração definitiva.
 
+## Publicação com commits verificados
+
+Mantenha **Require Verified Commits** habilitado no projeto Vercel. Depois que
+as validações da CI passam em um push para `main`, o workflow consulta a
+verificação do commit no GitHub. Commits já verificados seguem para o smoke test
+normalmente. Para um commit sem assinatura, a CI cria pela API do GitHub um
+commit de promoção assinado pelo próprio GitHub e confirma que ele está
+verificado antes de conferir a publicação em `visitecrm.com`. O arquivo
+`.release/verified-source.txt` registra o commit de origem e garante que o
+`ignoreCommand` inicie um novo build.
+
+Assinaturas inválidas, desconhecidas ou expiradas não são substituídas: a
+promoção falha com instruções para corrigir a assinatura. Se a API do GitHub
+não conseguir criar ou verificar o commit de promoção, a CI também falha; não
+desative a verificação da Vercel nem use uma publicação manual como fallback.
+Esse fluxo usa o token temporário `GITHUB_TOKEN` com permissão de escrita
+limitada ao job de promoção e não armazena chaves privadas no repositório.
+
 ## Domínio canônico
 
 O domínio público principal do VisiteCRM é:
