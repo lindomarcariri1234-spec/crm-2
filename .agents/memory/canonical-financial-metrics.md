@@ -3,7 +3,7 @@ name: Canonical financial metric semantics
 description: Rules for keeping VisiteCRM financial totals comparable without double counting distinct financial concepts.
 ---
 
-Use payment rows for cash received and open receivables/payables; use reservation rows for booked value and discounts. General expenses and trip costs remain separate sources. Seller commissions, referral commissions, client bonuses, client credits and current user referral balances are distinct concepts and must be reported separately.
+Use payment rows for cash received and open receivables/payables; use reservation rows for booked value and discounts. General expenses and trip costs remain separate sources. Do not automatically create payable payment rows from expense or trip-cost records; any cross-ledger connection needs an explicit identity. Seller commissions, referral commissions, client bonuses, client credits and current user referral balances are distinct concepts and must be reported separately.
 
 Trip planning budgets use the trip's full capacity for fixed-plus-variable cost projections; confirmed passengers are reserved for realized revenue and payment metrics, so booking activity must not rewrite the planned budget.
 

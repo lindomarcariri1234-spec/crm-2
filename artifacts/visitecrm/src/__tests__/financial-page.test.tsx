@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   useUpdatePayment: vi.fn(),
   useCreateExpense: vi.fn(),
   useUpdateExpense: vi.fn(),
+  useUpdateTripCost: vi.fn(),
   useUpdateCommission: vi.fn(),
   useCreateCommissionRule: vi.fn(),
   useUpdateCommissionRule: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("@workspace/api-client-react", () => ({
   useUpdatePayment: mocks.useUpdatePayment,
   useCreateExpense: mocks.useCreateExpense,
   useUpdateExpense: mocks.useUpdateExpense,
+  useUpdateTripCost: mocks.useUpdateTripCost,
   useUpdateCommission: mocks.useUpdateCommission,
   useCreateCommissionRule: mocks.useCreateCommissionRule,
   useUpdateCommissionRule: mocks.useUpdateCommissionRule,
@@ -56,8 +58,16 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("wouter", () => ({
-  Link: ({ href, children }: { href: string; children: unknown }) =>
-    createElement("a", { href }, children as never),
+  Link: ({
+    href,
+    children,
+    ...props
+  }: {
+    href: string;
+    children: unknown;
+    className?: string;
+    "data-testid"?: string;
+  }) => createElement("a", { href, ...props }, children as never),
   useSearch: () => mocks.search,
   useLocation: () => ["/financeiro", mocks.navigate],
 }));
@@ -152,6 +162,7 @@ function setSuccessfulQueries() {
   mocks.useUpdatePayment.mockReturnValue(mutation);
   mocks.useCreateExpense.mockReturnValue(mutation);
   mocks.useUpdateExpense.mockReturnValue(mutation);
+  mocks.useUpdateTripCost.mockReturnValue(mutation);
   mocks.useUpdateCommission.mockReturnValue(mutation);
   mocks.useCreateCommissionRule.mockReturnValue(mutation);
   mocks.useUpdateCommissionRule.mockReturnValue(mutation);
@@ -299,7 +310,7 @@ describe("Financial page PMS payment adjustments", () => {
       expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
     );
     expect(mocks.useListExpenses).toHaveBeenCalledWith(
-      { limit: 50 },
+      expect.objectContaining({ includeTripCosts: true, page: 1, limit: 50 }),
       expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
     );
     expect(mocks.useListCommissions).toHaveBeenCalledWith(
@@ -313,7 +324,178 @@ describe("Financial page PMS payment adjustments", () => {
       expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
     );
     expect(handle.container.textContent).toContain("Registrar Despesa");
-    expect(handle.container.textContent).toContain("Nenhuma despesa registrada.");
+    expect(handle.container.textContent).toContain("Nenhuma despesa ou custo de viagem encontrado.");
+  });
+
+  it("shows agency expenses and unlinked trip costs together with their origin", async () => {
+    mocks.search = "?tab=expenses";
+    mocks.useListExpenses.mockReturnValue({
+      data: {
+        data: [
+          {
+            id: "expense-agency-1",
+            tripId: null,
+            linkedTripCostId: null,
+            category: "administrative",
+            description: "Internet da agência",
+            amount: 150,
+            supplierId: null,
+            supplierName: null,
+            paymentMethod: null,
+            paymentDate: null,
+            dueDate: "2026-09-30",
+            status: "pending",
+            notes: null,
+            createdAt: "2026-09-01T12:00:00.000Z",
+            source: "agency",
+          },
+          {
+            id: "trip-cost-1",
+            tripId: "trip-1",
+            linkedTripCostId: null,
+            category: "transport",
+            description: "Ônibus fretado",
+            amount: 1300,
+            supplierId: null,
+            supplierName: "Transportadora",
+            paymentMethod: null,
+            paymentDate: null,
+            dueDate: null,
+            status: "pending",
+            notes: null,
+            createdAt: "2026-09-02T12:00:00.000Z",
+            source: "trip",
+          },
+        ],
+        total: 2,
+        page: 1,
+        limit: 50,
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(mocks.useListExpenses).toHaveBeenCalledWith(
+      expect.objectContaining({ includeTripCosts: true, page: 1, limit: 50 }),
+      expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(handle.container.querySelector('[data-testid="text-expense-source-agency-expense-agency-1"]')?.textContent)
+      .toContain("Despesa da agência");
+    expect(handle.container.querySelector('[data-testid="text-expense-source-trip-trip-cost-1"]')?.textContent)
+      .toContain("Custo da viagem");
+    expect(handle.container.querySelector('[data-testid="row-expense-trip-trip-cost-1"]')?.textContent)
+      .toContain("Ônibus fretado");
+  });
+
+  it("paginates the consolidated expense list using server pages", async () => {
+    mocks.search = "?tab=expenses";
+    mocks.useListExpenses.mockReturnValue({
+      data: { data: [], total: 52, page: 1, limit: 50 },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+    const nextButton = [...handle.container.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes("Próxima"));
+
+    expect(handle.container.textContent).toContain("Página 1 de 2");
+    await flushAct(() => nextButton?.click());
+
+    expect(mocks.useListExpenses).toHaveBeenLastCalledWith(
+      expect.objectContaining({ includeTripCosts: true, page: 2, limit: 50 }),
+      expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(handle.container.textContent).toContain("Página 2 de 2");
+  });
+
+  it("marks an unlinked trip cost paid through the trip-cost endpoint", async () => {
+    mocks.search = "?tab=expenses";
+    const updateTripCost = { mutateAsync: vi.fn().mockResolvedValue({}), isPending: false };
+    mocks.useUpdateTripCost.mockReturnValue(updateTripCost);
+    mocks.useListExpenses.mockReturnValue({
+      data: {
+        data: [{
+          id: "trip-cost-2",
+          tripId: "trip-2",
+          linkedTripCostId: null,
+          category: "transport",
+          description: "Van",
+          amount: 400,
+          supplierId: null,
+          supplierName: null,
+          paymentMethod: null,
+          paymentDate: null,
+          dueDate: "2026-09-20",
+          status: "pending",
+          notes: null,
+          createdAt: "2026-09-02T12:00:00.000Z",
+          source: "trip",
+        }],
+        total: 1,
+        page: 1,
+        limit: 50,
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+    const markPaidButton = handle.container.querySelector(
+      '[data-testid="button-mark-expense-paid-trip-trip-cost-2"]',
+    ) as HTMLButtonElement | null;
+
+    expect(markPaidButton).not.toBeNull();
+    await flushAct(() => markPaidButton?.click());
+
+    expect(updateTripCost.mutateAsync).toHaveBeenCalledWith({
+      id: "trip-2",
+      costId: "trip-cost-2",
+      data: { status: "paid" },
+    });
+  });
+
+  it("requires managing a linked expense before changing its status", async () => {
+    mocks.search = "?tab=expenses";
+    mocks.useListExpenses.mockReturnValue({
+      data: {
+        data: [{
+          id: "expense-linked-1",
+          tripId: "trip-3",
+          linkedTripCostId: "trip-cost-linked-1",
+          category: "accommodation",
+          description: "Hotel da excursão",
+          amount: 800,
+          supplierId: null,
+          supplierName: null,
+          paymentMethod: null,
+          paymentDate: null,
+          dueDate: "2026-09-20",
+          status: "pending",
+          notes: null,
+          createdAt: "2026-09-02T12:00:00.000Z",
+          source: "agency",
+        }],
+        total: 1,
+        page: 1,
+        limit: 50,
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    const handle = await renderComponent(createElement(Financial));
+
+    expect(handle.container.querySelector('[data-testid="button-mark-expense-paid-agency-expense-linked-1"]')).toBeNull();
+    expect(handle.container.querySelector('[data-testid="link-manage-expense-agency-expense-linked-1"]')?.getAttribute("href"))
+      .toBe("/financeiro/expenses");
+    expect(handle.container.textContent).toContain("Vinculada ao custo da viagem");
   });
 
   it("renders the commissions tab and only enables its list query", async () => {
@@ -325,7 +507,7 @@ describe("Financial page PMS payment adjustments", () => {
       expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
     );
     expect(mocks.useListExpenses).toHaveBeenCalledWith(
-      { limit: 50 },
+      expect.objectContaining({ includeTripCosts: true, page: 1, limit: 50 }),
       expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
     );
     expect(mocks.useListCommissionRules).toHaveBeenCalledWith(
@@ -344,7 +526,7 @@ describe("Financial page PMS payment adjustments", () => {
       expect.objectContaining({ query: expect.objectContaining({ enabled: true }) }),
     );
     expect(mocks.useListExpenses).toHaveBeenCalledWith(
-      { limit: 50 },
+      expect.objectContaining({ includeTripCosts: true, page: 1, limit: 50 }),
       expect.objectContaining({ query: expect.objectContaining({ enabled: false }) }),
     );
     expect(mocks.useListCommissions).toHaveBeenCalledWith(

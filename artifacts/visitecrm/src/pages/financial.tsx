@@ -15,6 +15,7 @@ import {
   useUpdatePayment,
   useCreateExpense,
   useUpdateExpense,
+  useUpdateTripCost,
   useUpdateCommission,
   useCreateCommissionRule,
   useUpdateCommissionRule,
@@ -22,7 +23,7 @@ import {
   useGetDashboardRevenueChart,
   useListClients,
 } from "@workspace/api-client-react";
-import type { CommissionRule } from "@workspace/api-client-react";
+import type { CommissionRule, Expense } from "@workspace/api-client-react";
 import { ACTIONS, RESOURCES, PAYMENT_STATUS, PAYMENT_TYPE, EXPENSE_STATUS, COMMISSION_STATUS } from "@workspace/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,6 +60,7 @@ import { useToast } from "@/hooks/use-toast";
 const fmt = (v: number | string) => formatCurrency(typeof v === "string" ? parseFloat(v) || 0 : v);
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const PAYMENTS_PAGE_SIZE = 50;
+const EXPENSES_PAGE_SIZE = 50;
 
 function RevenueChart({ data }: { data: Array<{ label: string; revenue: number; expenses: number }> }) {
   const max = Math.max(...data.map(d => Math.max(d.revenue, d.expenses)), 1);
@@ -166,13 +168,15 @@ export default function Financial() {
   const [dateFrom, setDateFrom] = useState(() => new URLSearchParams(searchStr).get("dateFrom") ?? "");
   const [dateTo, setDateTo] = useState(() => new URLSearchParams(searchStr).get("dateTo") ?? "");
   const [paymentsPage, setPaymentsPage] = useState(1);
+  const [expensesPage, setExpensesPage] = useState(1);
   const [pmsReservationFilter, setPmsReservationFilter] = useState(() => new URLSearchParams(searchStr).get("reservationNumber") ?? "");
   const [pmsAdjustedByFilter, setPmsAdjustedByFilter] = useState(() => new URLSearchParams(searchStr).get("adjustedBy") ?? "");
   const [financialPeriod, setFinancialPeriod] = useState<FinancialMetricsPeriodSelection>("current");
 
   useEffect(() => {
     setPaymentsPage(1);
-  }, [tab, statusFilter, dateFrom, dateTo]);
+    setExpensesPage(1);
+  }, [tab, statusFilter, categoryFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -266,6 +270,15 @@ export default function Financial() {
     page: paymentsPage,
     limit: PAYMENTS_PAGE_SIZE,
   };
+  const expenseListParams = {
+    status: statusFilter || undefined,
+    category: categoryFilter || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    includeTripCosts: true,
+    page: expensesPage,
+    limit: EXPENSES_PAGE_SIZE,
+  };
   const {
     data: paymentsData,
     isLoading: loadingPayments,
@@ -275,9 +288,14 @@ export default function Financial() {
     query: { enabled: isPaymentsTab, queryKey: getListPaymentsQueryKey(paymentListParams) },
   });
   const { data: allReceivedPayments } = useListPayments({ type: PAYMENT_TYPE.RECEIVABLE, status: PAYMENT_STATUS.PAID, limit: 500 });
-  const { data: expensesData, isLoading: loadingExpenses, refetch: refetchExpenses } = useListExpenses(
-    { limit: 50 },
-    { query: { enabled: tab === "expenses", queryKey: getListExpensesQueryKey({ limit: 50 }) } },
+  const {
+    data: expensesData,
+    isLoading: loadingExpenses,
+    isError: expensesError,
+    refetch: refetchExpenses,
+  } = useListExpenses(
+    expenseListParams,
+    { query: { enabled: tab === "expenses", queryKey: getListExpensesQueryKey(expenseListParams) } },
   );
   const { data: commissionsData, isLoading: loadingCommissions, refetch: refetchCommissions } = useListCommissions({
     query: { enabled: tab === "commissions", queryKey: getListCommissionsQueryKey() },
@@ -301,12 +319,20 @@ export default function Financial() {
   const pmsPaymentAdjustments = financialMetrics?.pmsPaymentAdjustments ?? [];
   const paymentTotal = paymentsData?.total ?? 0;
   const paymentPageCount = Math.max(1, Math.ceil(paymentTotal / PAYMENTS_PAGE_SIZE));
+  const expenseTotal = expensesData?.total ?? 0;
+  const expensePageCount = Math.max(1, Math.ceil(expenseTotal / EXPENSES_PAGE_SIZE));
 
   useEffect(() => {
     if (paymentsData && paymentsPage > paymentPageCount) {
       setPaymentsPage(paymentPageCount);
     }
   }, [paymentsData, paymentPageCount, paymentsPage]);
+
+  useEffect(() => {
+    if (expensesData && expensesPage > expensePageCount) {
+      setExpensesPage(expensePageCount);
+    }
+  }, [expensesData, expensePageCount, expensesPage]);
 
   const clientMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -331,6 +357,7 @@ export default function Financial() {
   const updatePayment = useUpdatePayment();
   const createExpense = useCreateExpense();
   const updateExpense = useUpdateExpense();
+  const updateTripCost = useUpdateTripCost();
   const updateCommission = useUpdateCommission();
   const createRule = useCreateCommissionRule();
   const updateRule = useUpdateCommissionRule();
@@ -411,17 +438,45 @@ export default function Financial() {
     toast({ title: "Pagamento atualizado como recebido." });
   };
 
-  const handleMarkExpensePaid = async (expenseId: string) => {
-    await updateExpense.mutateAsync({
-      id: expenseId,
-      data: { status: PAYMENT_STATUS.PAID, paymentDate: localToday() }
-    });
-    await Promise.all([
-      refetchExpenses(),
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
-      queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
-    ]);
+  const handleMarkExpensePaid = async (expense: Expense) => {
+    if (expense.linkedTripCostId) {
+      toast({
+        title: "Desvincule os registros antes de alterar o status.",
+        description: "Acesse a lista completa de despesas para gerenciar o vínculo.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      if (expense.source === "trip") {
+        if (!expense.tripId) throw new Error("O custo da viagem não possui uma viagem associada.");
+        await updateTripCost.mutateAsync({
+          id: expense.tripId,
+          costId: expense.id,
+          data: { status: EXPENSE_STATUS.PAID },
+        });
+      } else {
+        await updateExpense.mutateAsync({
+          id: expense.id,
+          data: { status: EXPENSE_STATUS.PAID, paymentDate: localToday() },
+        });
+      }
+
+      await Promise.all([
+        refetchExpenses(),
+        queryClient.invalidateQueries({ queryKey: ["/api/expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["trip-costs"] }),
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/financial-metrics"] }),
+      ]);
+      toast({ title: "Despesa marcada como paga." });
+    } catch {
+      toast({
+        title: "Não foi possível atualizar a despesa.",
+        description: "O status anterior foi mantido. Tente novamente.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleApproveCommission = async (id: string) => {
@@ -460,15 +515,6 @@ export default function Financial() {
   };
 
   const paymentRows = paymentsData?.data ?? [];
-
-  const filteredExpenses = useMemo(() => {
-    let all = expensesData?.data ?? [];
-    if (statusFilter) all = all.filter(e => e.status === statusFilter);
-    if (categoryFilter) all = all.filter(e => e.category === categoryFilter);
-    if (dateFrom) all = all.filter(e => e.dueDate >= dateFrom);
-    if (dateTo) all = all.filter(e => e.dueDate <= dateTo);
-    return all;
-  }, [expensesData, statusFilter, categoryFilter, dateFrom, dateTo]);
 
   return (
     <div className="space-y-6">
@@ -631,7 +677,7 @@ export default function Financial() {
           icon={TrendingDown}
           label="Custos Operacionais Pagos"
           value={loadingFinancialMetrics ? "—" : fmt(canonicalCosts)}
-          sub={`Pagos no período · a pagar: ${fmt(canonicalTotals?.payable ?? 0)}`}
+          sub={`Pagos no período · lançamentos a pagar: ${fmt(canonicalTotals?.payable ?? 0)}`}
           color="text-red-600"
         />
       </div>
@@ -665,7 +711,7 @@ export default function Financial() {
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">Despesas Pagas</p>
                     <p className="text-lg font-semibold text-red-600">{fmt(canonicalCosts)}</p>
-                    <p className="text-[10px] text-muted-foreground">A pagar: {fmt(canonicalTotals?.payable ?? 0)}</p>
+                    <p className="text-[10px] text-muted-foreground">Lançamentos a pagar: {fmt(canonicalTotals?.payable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">A Receber</p>
@@ -673,9 +719,9 @@ export default function Financial() {
                     <p className="text-[10px] text-muted-foreground">Vencido no período: {fmt(canonicalTotals?.overdueReceivable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
-                    <p className="text-xs text-muted-foreground">A Pagar Pendente</p>
+                    <p className="text-xs text-muted-foreground">Lançamentos a pagar no período</p>
                     <p className="text-lg font-semibold text-orange-600">{fmt(canonicalTotals?.payable ?? 0)}</p>
-                    <p className="text-[10px] text-muted-foreground">Vencido no período: {fmt(canonicalTotals?.overduePayable ?? 0)}</p>
+                    <p className="text-[10px] text-muted-foreground">{financialPeriodLabel} · vencido: {fmt(canonicalTotals?.overduePayable ?? 0)}</p>
                   </div>
                   <div className="rounded-lg bg-muted/60 p-3">
                     <p className="text-xs text-muted-foreground">Dívidas com Usuários</p>
@@ -828,13 +874,19 @@ export default function Financial() {
 
         <TabsContent value="expenses" className="mt-4">
           <ExpensesTab
-            expenses={filteredExpenses}
+            expenses={expensesData?.data ?? []}
             isLoading={loadingExpenses}
+            isError={expensesError}
+            onRetry={() => void refetchExpenses()}
             canCreateFinancial={canCreateFinancial}
             onRegisterExpense={() => setIsExpenseOpen(true)}
             canEditFinancial={canEditFinancial}
-            updateExpensePending={updateExpense.isPending}
-            onMarkPaid={(expenseId) => void handleMarkExpensePaid(expenseId)}
+            updateExpensePending={updateExpense.isPending || updateTripCost.isPending}
+            onMarkPaid={(expense) => void handleMarkExpensePaid(expense)}
+            page={expensesPage}
+            total={expenseTotal}
+            pageSize={EXPENSES_PAGE_SIZE}
+            onPageChange={setExpensesPage}
           />
         </TabsContent>
 
