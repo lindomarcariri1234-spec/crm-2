@@ -3,6 +3,8 @@ import {
 } from "@workspace/db";
 import {
   verifyFinancialCategoryIntegrity,
+  verifyFinancialCategoryIntegrityInReadOnlyTransaction,
+  DEFAULT_FINANCIAL_CATEGORY_INTEGRITY_TIMEOUT_MS,
   type FinancialCategoryIntegrityQuery,
   type FinancialCategoryIntegrityResult,
 } from "@workspace/db/financial-category-integrity";
@@ -29,6 +31,7 @@ export interface FinancialCategoryIntegrityCheckDependencies {
   ) => Promise<SendEmailResult>;
   recipient?: string | null;
   releaseId?: string | null;
+  checkTimeoutMs?: number;
   sendTimeoutMs?: number;
   log?: IntegrityLogger;
 }
@@ -122,9 +125,27 @@ export async function runFinancialCategoryIntegrityCheck(
   const log = dependencies.log ?? logger;
 
   try {
-    const result = await (dependencies.verify ?? verifyFinancialCategoryIntegrity)(
-      query as FinancialCategoryIntegrityQuery,
-    );
+    let result: FinancialCategoryIntegrityResult;
+    if (dependencies.query) {
+      result = await (dependencies.verify ?? verifyFinancialCategoryIntegrity)(
+        query as FinancialCategoryIntegrityQuery,
+      );
+    } else {
+      const client = await pool.connect();
+      try {
+        result = await verifyFinancialCategoryIntegrityInReadOnlyTransaction(
+          client,
+          dependencies.verify ?? verifyFinancialCategoryIntegrity,
+          {
+            timeoutMs:
+              dependencies.checkTimeoutMs ??
+              DEFAULT_FINANCIAL_CATEGORY_INTEGRITY_TIMEOUT_MS,
+          },
+        );
+      } finally {
+        client.release();
+      }
+    }
     const logFields = {
       migrationStatus: result.migrationStatus,
       totals: result.totals,

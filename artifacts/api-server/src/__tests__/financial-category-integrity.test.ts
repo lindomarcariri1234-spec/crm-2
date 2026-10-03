@@ -2,17 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   verify: vi.fn(),
+  verifyReadOnly: vi.fn(),
   sendEmail: vi.fn(),
   poolQuery: vi.fn(),
+  poolConnect: vi.fn(),
+  poolClientQuery: vi.fn(),
+  poolClientRelease: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
 }));
 
 vi.mock("@workspace/db", () => ({
-  pool: { query: mocks.poolQuery },
+  pool: { query: mocks.poolQuery, connect: mocks.poolConnect },
 }));
 vi.mock("@workspace/db/financial-category-integrity", () => ({
   verifyFinancialCategoryIntegrity: mocks.verify,
+  verifyFinancialCategoryIntegrityInReadOnlyTransaction: mocks.verifyReadOnly,
+  DEFAULT_FINANCIAL_CATEGORY_INTEGRITY_TIMEOUT_MS: 5_000,
 }));
 vi.mock("@workspace/email", () => ({
   sendFinancialCategoryIntegrityAlertEmail: mocks.sendEmail,
@@ -70,7 +76,57 @@ describe("runFinancialCategoryIntegrityCheck", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.verify.mockResolvedValue(passingResult);
+    mocks.verifyReadOnly.mockResolvedValue(passingResult);
     mocks.sendEmail.mockResolvedValue({ success: true });
+    mocks.poolQuery.mockResolvedValue({ rows: [] });
+    mocks.poolClientQuery.mockResolvedValue({ rows: [] });
+    mocks.poolConnect.mockResolvedValue({
+      query: mocks.poolClientQuery,
+      release: mocks.poolClientRelease,
+    });
+  });
+
+  it("uses the bounded read-only transaction for the production check", async () => {
+    const result = await runFinancialCategoryIntegrityCheck({
+      checkTimeoutMs: 1_234,
+      log: {
+        info: mocks.info,
+        warn: mocks.warn,
+      } as unknown as FinancialCategoryIntegrityCheckDependencies["log"],
+    });
+
+    expect(result).toEqual(passingResult);
+    expect(mocks.poolConnect).toHaveBeenCalledTimes(1);
+    expect(mocks.verifyReadOnly).toHaveBeenCalledWith(
+      {
+        query: mocks.poolClientQuery,
+        release: mocks.poolClientRelease,
+      },
+      mocks.verify,
+      { timeoutMs: 1_234 },
+    );
+    expect(mocks.poolClientRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("contains a timed-out database check and releases its connection", async () => {
+    mocks.verifyReadOnly.mockRejectedValue(
+      new Error("integrity_check_timeout"),
+    );
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    const result = await runFinancialCategoryIntegrityCheck({
+      checkTimeoutMs: 20,
+      log: log as unknown as FinancialCategoryIntegrityCheckDependencies["log"],
+    });
+
+    expect(result).toBeNull();
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+    expect(mocks.poolClientRelease).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      { errorType: "Error" },
+      "[financial-category-integrity] Check failed; continuing",
+    );
+    expect(JSON.stringify(log)).not.toContain("integrity_check_timeout");
   });
 
   it("does not send when the migration and category totals pass", async () => {

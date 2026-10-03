@@ -24,6 +24,7 @@
     "validate-tables": "node scripts/validate-tables.mjs",
     "verify-db": "node scripts/verify-db-columns.mjs",
     "schema-drift": "node scripts/schema-drift.mjs",
+    "benchmark:financial-integrity": "node scripts/benchmark-financial-category-integrity.mjs",
     "test": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
