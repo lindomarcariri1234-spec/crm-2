@@ -157,7 +157,8 @@ app.use("/api", paymentsRouter);
 app.use(errorHandler);
 
 async function assertIsolatedDatabase() {
-  if (!process.env.DATABASE_URL) {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
     throw new Error("DATABASE_URL must point to the isolated gratuity race test database");
   }
   const { rows } = await pool.query<{
@@ -169,14 +170,20 @@ async function assertIsolatedDatabase() {
       host(inet_server_addr()) AS server_address
   `);
   const database = rows[0];
+  const configuredHost = new URL(databaseUrl)
+    .hostname.replace(/^\[|\]$/g, "")
+    .toLowerCase();
+  // GitHub Actions exposes its PostgreSQL service through localhost, while
+  // inet_server_addr() reports the service container's bridge-network address.
   const isCITestDatabase =
-    process.env.CI === "true" && database?.database_name === "visitecrm_ci";
+    process.env.CI === "true" &&
+    database?.database_name === "visitecrm_ci" &&
+    ["localhost", "127.0.0.1", "::1"].includes(configuredHost);
   const isLocalLoopback =
     database?.server_address === "127.0.0.1" || database?.server_address === "::1";
-  if (
-    (database?.database_name !== REQUIRED_TEST_DATABASE && !isCITestDatabase) ||
-    !isLocalLoopback
-  ) {
+  const isIsolatedDeveloperDatabase =
+    database?.database_name === REQUIRED_TEST_DATABASE && isLocalLoopback;
+  if (!isIsolatedDeveloperDatabase && !isCITestDatabase) {
     throw new Error(
       `Refusing to run gratuity/payment race test outside an isolated local test database`,
     );

@@ -23,3 +23,11 @@ Detailed notes by failure mode:
 - [Vitest 4 constructor mocks](vitest4-constructor-mocks.md)
 - [Local PostgreSQL integration setup](local-postgres-integration.md)
 - [PostgreSQL lock-barrier visibility](postgres-lock-barrier-visibility.md)
+
+## GitHub Actions PostgreSQL isolation
+
+For an isolated-database guard, permit the CI service database only when `CI` is `"true"`, the database name is exactly `visitecrm_ci`, and the configured URL host is loopback. Do not require PostgreSQL's `inet_server_addr()` to be loopback in GitHub Actions.
+
+**Why:** The Actions job connects through `localhost`, but PostgreSQL reports its service container's bridge-network address.
+
+**How to apply:** Keep the developer path constrained to the dedicated local test database and loopback server address; use the exact CI database name plus a loopback URL host for the hosted-service path.
