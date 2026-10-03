@@ -1,4 +1,4 @@
-- [CJS require vitest mock bypass](cjs-require-vitest-mock.md) — vi.mock("pkg") intercepts ESM imports but NOT CJS require(); use inline handler in a parent mock instead of mocking the SDK directly
+- [CJS require vitest mock bypass](cjs-require-vitest-mock.md) — ESM mocks miss CJS require(); test UploadThing middleware directly, or use a parent inline handler for app-layer tests
 - [Checkout now synchronous](persist-order-no-client.md) — client/reservation/deal/portal-account creation moved from post-payment to checkout time (idempotent); referral crediting still deferred to post-payment
 - [logger warn vs console warn in tests](logger-warn-test-spy.md) — production code uses logger.warn (src/lib/logger); tests spying on console.warn will miss it; add vi.mock("../lib/logger.js") with a mockLogWarn vi.fn() closure
 - [Pino HTTP error serializers](pino-http-error-serializers.md) — apply safe error serializers to both base Pino and pino-http request loggers; pino-http can otherwise emit raw error messages
