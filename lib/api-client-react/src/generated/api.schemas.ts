@@ -5518,7 +5518,6 @@ export type ListClientsParams = {
    * @nullable
    */
   dateTo?: string | null;
-  includeSummary?: boolean;
   /**
    * @nullable
    */
@@ -5533,6 +5532,10 @@ export type ListClientsParams = {
   sortOrder?: string | null;
   page?: number;
   limit?: number;
+  /**
+   * Include tenant-scoped totals and today's birthday clients, independent of list filters.
+   */
+  includeSummary?: boolean;
 };
 
 export type UpdateClientPipelineStageBody = {
