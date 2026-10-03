@@ -59,6 +59,7 @@ import {
 import { generateId, generateVoucherCode, generateReferralCode, generateReferralCodeSuffix } from "./id.js";
 import { getTenantReservationPrefix, tripTypeToCode, getYearMonth, nextReservationSequence, buildReservationNumber } from "./reservation-number.js";
 import { sanitizeLinkedDataReconciliationSummary } from "./backup-contract.js";
+import { normalizeKnownFinancialCategory } from "./financial-categories.js";
 
 /** The db.transaction callback argument shape used throughout this module (drizzle's `tx`). */
 export type ImportTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -337,6 +338,16 @@ function cleanRow(row: RowRecord, drop: string[]): RowRecord {
   return clone;
 }
 
+function normalizePlannedCostCategories(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const row = item as RowRecord;
+    if (typeof row.category !== "string") return item;
+    return { ...row, category: normalizeKnownFinancialCategory(row.category) };
+  });
+}
+
 // ── Usuários (referência apenas — nunca cria contas) ────────────────────
 
 export interface UserResolution {
@@ -539,6 +550,8 @@ export async function importViagens(
       // regardless, only the named-layout link depends on this.
       layoutId,
       vehicleId,
+      fixedCosts: normalizePlannedCostCategories(row.fixedCosts),
+      variableCosts: normalizePlannedCostCategories(row.variableCosts),
     };
     await insertRow(rtx, tripsTable, values);
     return { status: "created" };
@@ -1015,6 +1028,9 @@ export async function importDespesas(
       tenantId,
       tripId,
       supplierId,
+      category: typeof row.category === "string"
+        ? normalizeKnownFinancialCategory(row.category)
+        : row.category,
       createdById: resolveAttribution(users, importerId, row.createdById),
     };
     await insertRow(rtx, expensesTable, values);

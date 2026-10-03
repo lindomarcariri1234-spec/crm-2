@@ -211,6 +211,12 @@ function buildValidBackup(tenantId: string) {
             importFingerprint: "old-fingerprint",
             layoutId: "src-layout-1",
             vehicleId: "src-vehicle-1",
+            fixedCosts: [
+              { id: "src-fixed-cost-1", category: "marketing", description: "Campanha da viagem", value: 125.5 },
+            ],
+            variableCosts: [
+              { id: "src-variable-cost-1", category: "Comissões de vendedores", description: "Comissão por passageiro", valuePax: 12.5 },
+            ],
           },
         ],
         media: [
@@ -388,6 +394,24 @@ function buildValidBackup(tenantId: string) {
             dueDate: pastDate(4),
             createdById: "src-user-matched",
             supplierId: "src-supplier-missing",
+          },
+          {
+            id: "src-expense-3",
+            tripId: "src-trip-1",
+            category: "marketing",
+            description: "Campanha",
+            amount: "20.00",
+            dueDate: pastDate(3),
+            createdById: "src-user-matched",
+          },
+          {
+            id: "src-expense-4",
+            tripId: "src-trip-1",
+            category: "Comissões de vendedores",
+            description: "Comissão dos vendedores",
+            amount: "30.00",
+            dueDate: pastDate(2),
+            createdById: "src-user-matched",
           },
         ],
         settlementItems: [
@@ -838,7 +862,7 @@ describe("POST /api/backup/import", () => {
     expect(report.lojaPedidos.created).toBe(1);
     expect(report.lojaItensPedido.created).toBe(1);
     expect(report.pagamentos.created).toBe(1);
-    expect(report.despesas.created).toBe(2);
+    expect(report.despesas.created).toBe(4);
     expect(report.convites.created).toBe(1);
     expect(report.convites.skipped).toBe(2);
     expect(report.clientesConquistas.created).toBe(1);
@@ -907,6 +931,12 @@ describe("POST /api/backup/import", () => {
     expect(trip!.tenantId).toBe(TENANT_ID);
     expect(trip!.createdById).toBe(MATCHED_USER_ID);
     expect(trip!.importFingerprint).toBeNull();
+    expect(trip!.fixedCosts).toEqual([
+      { id: "src-fixed-cost-1", category: "Marketing", description: "Campanha da viagem", value: 125.5 },
+    ]);
+    expect(trip!.variableCosts).toEqual([
+      { id: "src-variable-cost-1", category: "Comissão", description: "Comissão por passageiro", valuePax: 12.5 },
+    ]);
 
     // -- Loja --
     const [product] = await db.select().from(storeProductsTable).where(eq(storeProductsTable.slug, `pacote-fortaleza-${RUN}`)).limit(1);
@@ -974,7 +1004,13 @@ describe("POST /api/backup/import", () => {
     const restoredExpenses = await db.select().from(expensesTable).where(eq(expensesTable.tenantId, TENANT_ID));
     const expense = restoredExpenses.find((row) => row.description === "Combustível")!;
     const expenseWithMissingSupplier = restoredExpenses.find((row) => row.description === "Fornecedor ausente")!;
+    const marketingExpense = restoredExpenses.find((row) => row.description === "Campanha")!;
+    const commissionExpense = restoredExpenses.find((row) => row.description === "Comissão dos vendedores")!;
     const [supplier] = await db.select().from(suppliersTable).where(eq(suppliersTable.tenantId, TENANT_ID)).limit(1);
+    expect(expense.category).toBe("Transporte");
+    expect(expenseWithMissingSupplier.category).toBe("Outro");
+    expect(marketingExpense.category).toBe("Marketing");
+    expect(commissionExpense.category).toBe("Comissão");
     expect(expense.tripId).toBe(trip!.id);
     expect(expense.supplierId).toBe(supplier!.id);
     expect(expense.createdById).toBe(IMPORTER_ID); // unmatched user -> importer (attribution)

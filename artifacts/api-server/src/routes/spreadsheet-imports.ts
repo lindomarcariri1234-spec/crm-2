@@ -29,6 +29,7 @@ import { AppError, ForbiddenError, ValidationError } from "../lib/errors.js";
 import { generateId, generateVoucherCode } from "../lib/id.js";
 import { getTenantReservationPrefix, getYearMonth, nextReservationSequence, buildReservationNumber, tripTypeToCode } from "../lib/reservation-number.js";
 import { syncReservationPaymentStatus } from "../lib/reservation-payments.js";
+import { normalizeExpenseCategory } from "../lib/financial-categories.js";
 import { recomputeClientClassification } from "../services/client-classification.js";
 import {
   createCsvTemplate,
@@ -159,37 +160,6 @@ function emailValue(value: string, label: string, optional = false): string | nu
   if (!result && optional) return null;
   if (!result || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result)) throw new Error(`${label} inválido.`);
   return result;
-}
-
-const expenseCategoryAliases: Record<string, string> = {
-  transport: "Transporte",
-  transporte: "Transporte",
-  accommodation: "Hospedagem",
-  hospedagem: "Hospedagem",
-  food: "Alimentação",
-  alimentacao: "Alimentação",
-  marketing: "Marketing",
-  administrative: "Administrativo",
-  administrativo: "Administrativo",
-  commission: "Comissão",
-  comissao: "Comissão",
-  "comissao de vendedores": "Comissão",
-  "comissoes de vendedores": "Comissão",
-  other: "Outro",
-  outro: "Outro",
-  outros: "Outro",
-};
-
-function normalizeExpenseCategory(value: string): string {
-  const key = value
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .trim()
-    .toLocaleLowerCase("pt-BR")
-    .replace(/\s+/g, " ");
-  const category = expenseCategoryAliases[key];
-  if (!category) throw new Error(`Categoria de despesa desconhecida: ${value}.`);
-  return category;
 }
 
 function parseRow(entity: SpreadsheetEntity, line: number, cells: CellRow): ParsedEntityRow {
