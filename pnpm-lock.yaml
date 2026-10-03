@@ -354,6 +354,9 @@ importers:
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.103.2(react@19.1.0)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.9.8
       '@types/react':
         specifier: 19.1.10
         version: 19.1.10
@@ -487,6 +490,9 @@ importers:
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.103.2(react@19.1.0)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 25.9.8
       '@types/react':
         specifier: 19.1.10
         version: 19.1.10

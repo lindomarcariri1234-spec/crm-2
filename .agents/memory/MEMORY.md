@@ -142,3 +142,4 @@
 - [API entrypoint formatting](api-index-formatting.md) — check the existing formatter baseline before whole-file formatting, to avoid unrelated churn in focused startup edits.
 - [Unified WhatsApp timeline sends](unified-whatsapp-timeline-send-path.md) — keep the client timeline on the tenant/client/consent-aware send route; reserve chatbot replies for the AI inbox flow.
 - [Raw SQL timestamp decoding](raw-sql-timestamp-decoding.md) — normalize raw PostgreSQL timestamp aggregates before writing them through Drizzle Date columns.
+- [PNPM workspace package adds](pnpm-workspace-package-adds.md) — review config normalization and unrelated peer-snapshot changes after scoped dependency adds.
