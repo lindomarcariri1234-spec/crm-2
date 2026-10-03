@@ -216,6 +216,11 @@ const roleScenarios: Array<{
   { label: "suporte", role: ROLES.SUPPORT, expected: readOnlyActions },
 ];
 
+const readOnlyRoleScenarios = roleScenarios.filter(
+  (scenario) =>
+    scenario.role === ROLES.SALES || scenario.role === ROLES.SUPPORT,
+);
+
 function makeTripsHook(role: string) {
   return {
     trips: [trip],
@@ -263,6 +268,20 @@ function getVisibleActions(container: HTMLElement): ActionVisibility {
   };
 }
 
+function getReadOnlyTripActions(container: HTMLElement) {
+  const hasLink = (href: string) =>
+    Boolean(container.querySelector(`a[href="${href}"]`));
+
+  return {
+    overview: hasLink("/trips/trip-1/passengers-overview"),
+    passengers: hasLink("/trips/trip-1/passengers"),
+    seatMap: hasLink("/trips/trip-1/seat-map"),
+    boardingPanel: Boolean(
+      container.querySelector('button[title="Painel de Embarque"]'),
+    ),
+  };
+}
+
 beforeEach(() => {
   mocks.useGetTenant.mockReturnValue({ data: { settings: { seatMapEnabled: true } } });
   mocks.useTrips.mockReset();
@@ -296,6 +315,36 @@ describe("TripList — visibilidade das ações por perfil", () => {
 
       await flushAct(() => listToggle.click());
       expect(getVisibleActions(handle.container)).toEqual(scenario.expected);
+    });
+  }
+});
+
+describe("TripList — mapa de assentos desativado para perfis somente leitura", () => {
+  for (const scenario of readOnlyRoleScenarios) {
+    it(`oculta o mapa e mantém as demais ações de viagem para ${scenario.label} em cartões e lista`, async () => {
+      mocks.useGetTenant.mockReturnValue({
+        data: { settings: { seatMapEnabled: false } },
+      });
+      mocks.useTrips.mockReturnValue(makeTripsHook(scenario.role));
+      const handle = await renderComponent(createElement(TripList));
+      const expectedActions = {
+        overview: true,
+        passengers: true,
+        seatMap: false,
+        boardingPanel: true,
+      };
+
+      expect(getReadOnlyTripActions(handle.container)).toEqual(expectedActions);
+
+      const listToggle = handle.container.querySelector<HTMLButtonElement>(
+        '[data-testid="view-list"]',
+      );
+      if (!listToggle) {
+        throw new Error("O botão do modo de lista não foi renderizado");
+      }
+
+      await flushAct(() => listToggle.click());
+      expect(getReadOnlyTripActions(handle.container)).toEqual(expectedActions);
     });
   }
 });
