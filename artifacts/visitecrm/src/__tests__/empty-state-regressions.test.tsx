@@ -1,16 +1,27 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
+import type { Client } from "@workspace/api-client-react";
 import { cleanupRoots, flushAct, renderComponent } from "./eventSourceHarness.js";
 
 const mockUseListClients = vi.hoisted(() => vi.fn());
 const mockUseListDestinations = vi.hoisted(() => vi.fn());
+const mockListClients = vi.hoisted(() => vi.fn());
 const mockRefetchClients = vi.hoisted(() => vi.fn());
 const mockRefetchDestinations = vi.hoisted(() => vi.fn());
 const mockUseQuery = vi.hoisted(() => vi.fn());
+const mockToast = vi.hoisted(() => vi.fn());
+const mockCreateObjectURL = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]) => "blob:clients-csv"),
+);
+const mockRevokeObjectURL = vi.hoisted(() => vi.fn());
+const mockAnchorClick = vi.hoisted(() => vi.fn());
 const mockMutation = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   isPending: false,
 }));
+const originalCreateObjectURL = URL.createObjectURL;
+const originalRevokeObjectURL = URL.revokeObjectURL;
+const originalAnchorClick = HTMLAnchorElement.prototype.click;
 
 vi.mock("wouter", () => ({
   useLocation: () => ["/clients", vi.fn()],
@@ -28,6 +39,7 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@workspace/api-client-react", () => ({
+  listClients: mockListClients,
   useListClients: mockUseListClients,
   useListDestinations: mockUseListDestinations,
   useListPipelineStages: vi.fn(() => ({ data: [] })),
@@ -53,6 +65,10 @@ vi.mock("@workspace/api-client-react", () => ({
   useDeleteDestination: vi.fn(() => mockMutation),
 }));
 
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: mockToast }),
+}));
+
 vi.mock("@/components/client360-modal", () => ({
   Client360Modal: () => null,
 }));
@@ -76,7 +92,20 @@ import { QueryErrorState } from "../components/query-error-state.js";
 
 afterEach(async () => {
   await cleanupRoots();
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: originalCreateObjectURL,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: originalRevokeObjectURL,
+  });
+  Object.defineProperty(HTMLAnchorElement.prototype, "click", {
+    configurable: true,
+    value: originalAnchorClick,
+  });
   vi.clearAllMocks();
+  mockListClients.mockReset();
 });
 
 function configureClientList({
@@ -114,6 +143,55 @@ function configureDestinationList({
     isError,
     error: isError ? new Error("Falha simulada na API de destinos") : null,
     refetch: mockRefetchDestinations,
+  });
+}
+
+function makeExportClient(id: number): Client {
+  const suffix = String(id).padStart(4, "0");
+  return {
+    id: `client-${suffix}`,
+    name: `Cliente ${suffix}`,
+    email: `cliente-${suffix}@example.test`,
+    whatsapp: null,
+    classification: "lead",
+    status: "active",
+    tags: [],
+    pipelineStage: "Lead",
+    totalSpent: 0,
+    outstandingBalance: 0,
+    dreamDestinations: [],
+    createdAt: "2025-01-01T00:00:00.000Z",
+    updatedAt: "2025-01-01T00:00:00.000Z",
+  };
+}
+
+function readBlobAsText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+}
+
+function parseExportedClientNames(csv: string): string[] {
+  return csv
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .slice(1)
+    .map((row) => row.slice(1, row.indexOf('",')));
+}
+
+async function clickExportClients() {
+  const { container } = await renderComponent(createElement(Clients));
+  const button = container.querySelector<HTMLButtonElement>(
+    '[data-testid="button-export-clients-csv"]',
+  );
+  expect(button).not.toBeNull();
+
+  await flushAct(async () => {
+    button!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 
@@ -168,6 +246,132 @@ describe("proteção contra estados vazios silenciosos", () => {
 
     expect(handle.container.textContent).toContain("Nenhum destino encontrado");
     expect(handle.container.textContent).not.toContain("Não foi possível carregar os destinos.");
+  });
+});
+
+describe("exportação CSV da página de clientes", () => {
+  beforeEach(() => {
+    mockListClients.mockReset();
+    mockToast.mockReset();
+    mockCreateObjectURL.mockReset().mockReturnValue("blob:clients-csv");
+    mockRevokeObjectURL.mockReset();
+    mockAnchorClick.mockReset();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: mockCreateObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: mockRevokeObjectURL,
+    });
+    Object.defineProperty(HTMLAnchorElement.prototype, "click", {
+      configurable: true,
+      value: mockAnchorClick,
+    });
+    configureClientList({ isError: false });
+  });
+
+  it("exporta mais de 500 clientes em várias páginas, sem duplicar IDs", async () => {
+    const clients = Array.from({ length: 502 }, (_, index) =>
+      makeExportClient(index + 1),
+    );
+    mockListClients
+      .mockResolvedValueOnce({
+        data: clients.slice(0, 500),
+        total: clients.length,
+        page: 1,
+        limit: 500,
+      })
+      .mockResolvedValueOnce({
+        data: [clients[499], clients[500], clients[501]],
+        total: clients.length,
+        page: 2,
+        limit: 500,
+      });
+
+    await clickExportClients();
+
+    expect(mockListClients).toHaveBeenCalledTimes(2);
+    expect(mockListClients).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ limit: 500, page: 1 }),
+    );
+    expect(mockListClients).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ limit: 500, page: 2 }),
+    );
+    expect(mockCreateObjectURL).toHaveBeenCalledOnce();
+    expect(mockAnchorClick).toHaveBeenCalledOnce();
+    expect(mockToast).toHaveBeenCalledWith({
+      title: "502 clientes exportados!",
+    });
+
+    const blob = (mockCreateObjectURL.mock.calls as unknown[][])[0][0] as Blob;
+    const exportedNames = parseExportedClientNames(await readBlobAsText(blob));
+    const expectedNames = clients.map((client) => client.name);
+
+    expect(exportedNames).toHaveLength(502);
+    expect(new Set(exportedNames).size).toBe(502);
+    expect(exportedNames).toEqual(expectedNames);
+  });
+
+  it("não baixa CSV parcial se uma página posterior falhar", async () => {
+    const firstPage = Array.from({ length: 500 }, (_, index) =>
+      makeExportClient(index + 1),
+    );
+    mockListClients
+      .mockResolvedValueOnce({
+        data: firstPage,
+        total: 501,
+        page: 1,
+        limit: 500,
+      })
+      .mockRejectedValueOnce(new Error("Falha simulada na segunda página"));
+
+    await clickExportClients();
+
+    expect(mockListClients).toHaveBeenCalledTimes(2);
+    expect(mockCreateObjectURL).not.toHaveBeenCalled();
+    expect(mockAnchorClick).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Não foi possível exportar os clientes",
+        variant: "destructive",
+      }),
+    );
+  });
+
+  it("não baixa CSV parcial quando o total recebido diverge do total inicial", async () => {
+    const firstPage = Array.from({ length: 500 }, (_, index) =>
+      makeExportClient(index + 1),
+    );
+    mockListClients
+      .mockResolvedValueOnce({
+        data: firstPage,
+        total: 501,
+        page: 1,
+        limit: 500,
+      })
+      .mockResolvedValueOnce({
+        data: [],
+        total: 501,
+        page: 2,
+        limit: 500,
+      });
+
+    await clickExportClients();
+
+    expect(mockListClients).toHaveBeenCalledTimes(2);
+    expect(mockCreateObjectURL).not.toHaveBeenCalled();
+    expect(mockAnchorClick).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Não foi possível exportar os clientes",
+        variant: "destructive",
+      }),
+    );
   });
 });
 
