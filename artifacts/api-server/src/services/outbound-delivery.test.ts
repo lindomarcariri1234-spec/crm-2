@@ -106,6 +106,7 @@ vi.mock("../lib/outbound-sse", () => ({
 import {
   htmlToWhatsAppText,
   processOutboundDelivery,
+  enqueueOutboundDelivery,
   recoverOutboundDeliveries,
   resolveWebhookDeliveryState,
   updateOutboundDeliveryFromWebhook,
@@ -723,5 +724,97 @@ describe("legacy email history synchronization", () => {
       { column: "outbound_deliveries.external_id", value: "resend-message-1" },
       { column: "outbound_deliveries.provider", value: "resend" },
     );
+  });
+});
+
+describe("manual WhatsApp queue fallback", () => {
+  it("uses the atomic delivery claim when BullMQ rejects a manual WhatsApp job", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "pending",
+    });
+    const accepted = makeDelivery({
+      ...delivery,
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+    const add = vi.fn().mockRejectedValue(new Error("Redis request quota exhausted"));
+    mockGetOutboundDeliveryQueue.mockReturnValueOnce({ add } as never);
+    mockProcessQueries(delivery, accepted);
+    mockDbSelect
+      .mockReturnValueOnce(makeSelectQuery([delivery]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        origin: "user",
+        recipientType: "client",
+        recipientId: "client-1",
+        emailAddress: null,
+        metadata: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{
+        whatsappOptIn: true,
+        whatsapp: delivery.recipient,
+        phone: null,
+      }]))
+      .mockReturnValueOnce(makeSelectQuery([{ status: "accepted" }]));
+    mockSendTenantWhatsAppMessage.mockResolvedValue({
+      success: true,
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    });
+
+    await expect(enqueueOutboundDelivery("delivery-1", "tenant-a", {
+      inlineOnQueueFailure: true,
+    })).resolves.toBeUndefined();
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(mockUpdateSets[0]).toEqual(expect.objectContaining({ status: "processing" }));
+    expect(mockSendTenantWhatsAppMessage).toHaveBeenCalledWith(
+      "tenant-a",
+      delivery.recipient,
+      delivery.content,
+    );
+    expect(mockUpdateSets).toContainEqual(expect.objectContaining({
+      status: "accepted",
+      provider: "evolution",
+      externalId: "evolution-message-1",
+    }));
+  });
+
+  it("does not bypass the database claim if another worker already claimed the delivery", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "pending",
+    });
+    const add = vi.fn().mockRejectedValue(new Error("Redis request quota exhausted"));
+    mockGetOutboundDeliveryQueue.mockReturnValueOnce({ add } as never);
+    mockDbSelect.mockReturnValueOnce(makeSelectQuery([delivery]));
+    mockDbUpdate.mockReturnValueOnce(makeUpdateQuery([]));
+
+    await expect(enqueueOutboundDelivery("delivery-1", "tenant-a", {
+      inlineOnQueueFailure: true,
+    })).resolves.toBeUndefined();
+
+    expect(mockDbUpdate).toHaveBeenCalledOnce();
+    expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not use inline fallback for deliveries without explicit opt-in", async () => {
+    const delivery = makeDelivery({
+      channel: "whatsapp",
+      recipient: "+5511999990001",
+      status: "pending",
+    });
+    const add = vi.fn().mockRejectedValue(new Error("Redis request quota exhausted"));
+    mockGetOutboundDeliveryQueue.mockReturnValueOnce({ add } as never);
+    mockDbSelect.mockReturnValueOnce(makeSelectQuery([delivery]));
+
+    await expect(enqueueOutboundDelivery("delivery-1", "tenant-a"))
+      .rejects.toThrow("Redis request quota exhausted");
+
+    expect(mockDbUpdate).not.toHaveBeenCalled();
+    expect(mockSendTenantWhatsAppMessage).not.toHaveBeenCalled();
   });
 });

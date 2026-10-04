@@ -50,6 +50,10 @@ export interface OutboundMessageWithDeliveries {
   created: boolean;
 }
 
+export interface DispatchOutboundMessageOptions {
+  inlineOnQueueFailure?: boolean;
+}
+
 export interface OutboundMessageListOptions {
   status?: OutboundMessage["status"];
   channel?: OutboundDeliveryChannel;
@@ -320,17 +324,21 @@ export async function createOutboundMessage(input: CreateOutboundMessageInput): 
   return { message: message ?? result.message, deliveries: result.deliveries, created: result.created };
 }
 
-export async function dispatchOutboundMessage(input: CreateOutboundMessageInput): Promise<OutboundMessageWithDeliveries> {
+export async function dispatchOutboundMessage(
+  input: CreateOutboundMessageInput,
+  options: DispatchOutboundMessageOptions = {},
+): Promise<OutboundMessageWithDeliveries> {
   const created = await createOutboundMessage(input);
   for (const delivery of created.deliveries) {
     if (delivery.status !== "pending") continue;
     try {
-      await enqueueOutboundDelivery(delivery.id, input.tenantId);
+      await enqueueOutboundDelivery(delivery.id, input.tenantId, {
+        inlineOnQueueFailure: options.inlineOnQueueFailure && delivery.channel === "whatsapp",
+      });
     } catch (error) {
-      // The durable row remains pending and the recovery sweep will enqueue it
-      // later. Never perform an untracked direct send after an ambiguous queue
-      // write, which could duplicate a provider-accepted message.
-      logger.warn({ tenantId: input.tenantId, deliveryId: delivery.id, error }, "[outbound-delivery] Queue unavailable; delivery left pending");
+      // Keep the persisted row as the source of truth. Any inline attempt also
+      // goes through processOutboundDelivery's atomic database claim.
+      logger.warn({ tenantId: input.tenantId, deliveryId: delivery.id, error }, "[outbound-delivery] Enqueue or inline processing failed; delivery remains tracked");
     }
   }
   // A missing BullMQ queue is handled synchronously by enqueueOutboundDelivery.
@@ -350,14 +358,27 @@ export async function dispatchOutboundMessage(input: CreateOutboundMessageInput)
   return { ...created, message: message ?? created.message, deliveries };
 }
 
-export async function enqueueOutboundDelivery(deliveryId: string, tenantId: string): Promise<void> {
+export async function enqueueOutboundDelivery(
+  deliveryId: string,
+  tenantId: string,
+  options: { inlineOnQueueFailure?: boolean } = {},
+): Promise<void> {
   const [delivery] = await db.select({ id: outboundDeliveriesTable.id, status: outboundDeliveriesTable.status })
     .from(outboundDeliveriesTable)
     .where(and(eq(outboundDeliveriesTable.id, deliveryId), eq(outboundDeliveriesTable.tenantId, tenantId))).limit(1);
   if (!delivery || delivery.status !== "pending") return;
   const queue = getOutboundDeliveryQueue();
   if (queue) {
-    await queue.add("outbound-delivery", { deliveryId, tenantId }, { jobId: `outbound-delivery:${tenantId}:${deliveryId}` });
+    try {
+      await queue.add("outbound-delivery", { deliveryId, tenantId }, { jobId: `outbound-delivery:${tenantId}:${deliveryId}` });
+    } catch (error) {
+      if (!options.inlineOnQueueFailure) throw error;
+      logger.warn(
+        { tenantId, deliveryId },
+        "[outbound-delivery] Queue add failed; attempting inline processing through the database claim",
+      );
+      await processOutboundDelivery(deliveryId, tenantId);
+    }
     return;
   }
   await processOutboundDelivery(deliveryId, tenantId);

@@ -134,7 +134,7 @@ router.post("/messages", async (req, res, next: NextFunction): Promise<void> => 
         origin: "user",
         originChannel: parsed.data.channel,
         createdById: me.id,
-      })
+      }, { inlineOnQueueFailure: parsed.data.channel === "whatsapp" })
       : null;
     const id = generateId();
     await db.insert(messagesTable).values({
