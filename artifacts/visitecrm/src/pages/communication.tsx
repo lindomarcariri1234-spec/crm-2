@@ -87,7 +87,6 @@ import {
 import {
   buildClientConversationSummaries,
   buildClientTimeline,
-  type AiConversationMessage,
 } from "@/lib/communicationTimeline";
 import {
   ConversationsTab,
@@ -107,6 +106,7 @@ import {
   CommunicationHistoryTab,
   type CommunicationHistoryFilters,
 } from "./communication/CommunicationHistoryTab";
+import { useConversationAiMessages } from "./communication/useConversationAiMessages";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 const OUTBOUND_HISTORY_PAGE_SIZE = 50;
@@ -222,9 +222,17 @@ export default function Communication() {
   const [aiConversations, setAiConversations] = useState<AiConversation[]>([]);
   const [selectedAiConversationId, setSelectedAiConversationId] = useState<string | null>(null);
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
-  const [conversationAiMessages, setConversationAiMessages] = useState<AiConversationMessage[]>([]);
-  const [loadingConversationAiMessages, setLoadingConversationAiMessages] = useState(false);
-  const [conversationAiError, setConversationAiError] = useState<string | null>(null);
+  const [conversationAiRefreshToken, setConversationAiRefreshToken] = useState(0);
+  const {
+    messages: conversationAiMessages,
+    loading: loadingConversationAiMessages,
+    error: conversationAiError,
+  } = useConversationAiMessages({
+    enabled: tab === "conversations",
+    selectedClientId: selectedConversationClientId,
+    conversations: aiConversations,
+    refreshToken: conversationAiRefreshToken,
+  });
   const [aiInboxError, setAiInboxError] = useState<string | null>(null);
   const [aiReply, setAiReply] = useState("");
   const [loadingAiInbox, setLoadingAiInbox] = useState(false);
@@ -381,46 +389,6 @@ export default function Communication() {
     }, 15_000);
     return () => window.clearInterval(interval);
   }, [tab, selectedAiConversationId, selectAiConversation]);
-
-  useEffect(() => {
-    const linkedConversations = aiConversations.filter((conversation) =>
-      conversation.clientId === selectedConversationClientId
-      && conversation.channel === "whatsapp",
-    );
-    if (tab !== "conversations" || !selectedConversationClientId || linkedConversations.length === 0) {
-      setConversationAiMessages([]);
-      setLoadingConversationAiMessages(false);
-      setConversationAiError(null);
-      return;
-    }
-
-    let cancelled = false;
-    setConversationAiMessages([]);
-    setLoadingConversationAiMessages(true);
-    setConversationAiError(null);
-    Promise.all(linkedConversations.map(async (conversation) => {
-      const response = await fetch(
-        `${BASE}/api/chatbot-conversations/${encodeURIComponent(conversation.id)}/messages`,
-        { credentials: "include" },
-      );
-      if (!response.ok) throw new Error("failed");
-      return response.json() as Promise<AiConversationMessage[]>;
-    }))
-      .then((messagesByConversation) => {
-        if (!cancelled) setConversationAiMessages(messagesByConversation.flat());
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setConversationAiError("Não foi possível carregar as mensagens recebidas desta conversa.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingConversationAiMessages(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [tab, selectedConversationClientId, aiConversations]);
 
   const handleResendFailed = async (emailLogId: string) => {
     setResendingId(emailLogId);
@@ -1422,6 +1390,7 @@ export default function Communication() {
             selectedClientName={conversations.find((item) => item.clientId === selectedConversationClientId)?.clientName}
             loadingConversationAiMessages={loadingConversationAiMessages}
             conversationAiError={conversationAiError}
+            onRetryConversationAiMessages={() => setConversationAiRefreshToken((value) => value + 1)}
             selectedWhatsAppConversation={selectedWhatsAppConversation}
             selectedClientLinkStatus={selectedClientLinkStatus}
             onRetryClientLinkCheck={() => refetchSelectedConversationClientStatus()}
