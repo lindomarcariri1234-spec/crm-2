@@ -11,6 +11,7 @@ import {
   verifyLocalBuiltChunks,
   verifyPublishedChunks,
   verifyPublishedInteractions,
+  waitForPageTarget,
 } from "./verify-publication-chunks.mjs";
 
 function response(status, body, url, contentType) {

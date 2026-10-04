@@ -910,6 +910,33 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export async function waitForPageTarget({
+  getTargets,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  pollIntervalMs = 100,
+  now = Date.now,
+  sleepImpl = wait,
+} = {}) {
+  const deadline = now() + timeoutMs;
+
+  while (true) {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) break;
+
+    const targets = await getTargets(remainingMs);
+    const pageTarget = targets.find(
+      (target) => target.type === "page" && target.webSocketDebuggerUrl,
+    );
+    if (pageTarget) return pageTarget;
+
+    const remainingAfterLookupMs = deadline - now();
+    if (remainingAfterLookupMs <= 0) break;
+    await sleepImpl(Math.min(pollIntervalMs, remainingAfterLookupMs));
+  }
+
+  throw new Error("Headless browser did not expose a page target.");
+}
+
 async function stopBrowserProcess(browserProcess) {
   if (browserProcess.exitCode === null && browserProcess.signalCode === null) {
     await new Promise((resolve) => {
@@ -959,11 +986,11 @@ async function launchChromium({ headers, timeoutMs }) {
 
   try {
     const port = await waitForOutput(browserProcess, /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//, timeoutMs);
-    const targets = await getJson(`http://127.0.0.1:${port}/json/list`, timeoutMs);
-    const page = targets.find((target) => target.type === "page");
-    if (!page?.webSocketDebuggerUrl) {
-      throw new Error("Headless browser did not expose a page target.");
-    }
+    const page = await waitForPageTarget({
+      getTargets: (remainingMs) =>
+        getJson(`http://127.0.0.1:${port}/json/list`, remainingMs),
+      timeoutMs,
+    });
     const socket = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
       socket.addEventListener("open", resolve, { once: true });
