@@ -11,6 +11,7 @@ import {
   verifyLocalBuiltChunks,
   verifyPublishedChunks,
   verifyPublishedInteractions,
+  waitForPageTarget,
 } from "./verify-publication-chunks.mjs";
 
 function response(status, body, url, contentType) {
@@ -21,6 +22,64 @@ function response(status, body, url, contentType) {
     text: async () => body,
   };
 }
+
+test("waits for Chromium's page target to appear after startup", async () => {
+  let now = 0;
+  let lookupCount = 0;
+  const lookupTimeouts = [];
+  const sleepDurations = [];
+  const pageTarget = {
+    type: "page",
+    webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/test",
+  };
+
+  const target = await waitForPageTarget({
+    timeoutMs: 250,
+    pollIntervalMs: 100,
+    now: () => now,
+    sleepImpl: async (durationMs) => {
+      sleepDurations.push(durationMs);
+      now += durationMs;
+    },
+    getTargets: async (remainingMs) => {
+      lookupTimeouts.push(remainingMs);
+      lookupCount += 1;
+      return lookupCount === 1
+        ? []
+        : [{ type: "browser" }, pageTarget];
+    },
+  });
+
+  assert.strictEqual(target, pageTarget);
+  assert.deepEqual(lookupTimeouts, [250, 150]);
+  assert.deepEqual(sleepDurations, [100]);
+});
+
+test("fails when Chromium never exposes a page target before the timeout", async () => {
+  let now = 0;
+  const lookupTimeouts = [];
+  const sleepDurations = [];
+
+  await assert.rejects(
+    waitForPageTarget({
+      timeoutMs: 250,
+      pollIntervalMs: 100,
+      now: () => now,
+      sleepImpl: async (durationMs) => {
+        sleepDurations.push(durationMs);
+        now += durationMs;
+      },
+      getTargets: async (remainingMs) => {
+        lookupTimeouts.push(remainingMs);
+        return [];
+      },
+    }),
+    /Headless browser did not expose a page target/,
+  );
+
+  assert.deepEqual(lookupTimeouts, [250, 150, 50]);
+  assert.deepEqual(sleepDurations, [100, 100, 50]);
+});
 
 test("finds protected router routes and navigation links", () => {
   const routerSource = `
