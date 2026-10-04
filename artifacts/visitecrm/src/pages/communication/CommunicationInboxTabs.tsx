@@ -201,6 +201,7 @@ interface ConversationsTabProps {
   selectedClientName: string | undefined;
   loadingConversationAiMessages: boolean;
   conversationAiError: string | null;
+  onRetryConversationAiMessages: () => unknown;
   selectedWhatsAppConversation: AiConversation | null;
   selectedClientLinkStatus: ClientLinkStatus;
   onRetryClientLinkCheck: () => unknown;
@@ -233,6 +234,7 @@ export function ConversationsTab({
   selectedClientName,
   loadingConversationAiMessages,
   conversationAiError,
+  onRetryConversationAiMessages,
   selectedWhatsAppConversation,
   selectedClientLinkStatus,
   onRetryClientLinkCheck,
@@ -323,7 +325,7 @@ export function ConversationsTab({
                   {conversationAiError && (
                     <div className="flex items-center gap-2 text-xs text-destructive" role="alert">
                       <span>{conversationAiError}</span>
-                      <Button data-testid="button-retry-conversation-ai-messages" variant="outline" size="sm" onClick={() => { void fetchAiInbox(); }}>
+                      <Button data-testid="button-retry-conversation-ai-messages" variant="outline" size="sm" onClick={() => { void onRetryConversationAiMessages(); }}>
                         Tentar novamente
                       </Button>
                     </div>
