@@ -7,6 +7,10 @@
  */
 
 export interface WhatsAppBroadcastResult {
+  recipientCount: number;
   queued: number;
+  accepted: number;
+  failed: number;
+  unknown: number;
   skipped: number;
 }

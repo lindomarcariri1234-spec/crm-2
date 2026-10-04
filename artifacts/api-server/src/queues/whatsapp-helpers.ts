@@ -1,5 +1,5 @@
 import { db, referralSettingsTable, clientsTable, tenantsTable, referralsTable, systemConfigsTable, passengersTable, reservationsTable, tripsTable } from "@workspace/db";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { sendTenantWhatsAppMessage, interpolateWhatsAppMessage } from "../lib/whatsapp";
 import { logger } from "../lib/logger";
 import { REFERRAL_STATUS } from "@workspace/permissions";
@@ -20,7 +20,16 @@ const DEFAULT_REVERSED_MESSAGE =
 export interface WhatsAppDispatchResult {
   mode: "queued" | "direct";
   success: boolean;
+  status: "queued" | "accepted" | "skipped" | "failed" | "unknown";
   error?: string;
+}
+
+interface WhatsAppDispatchOptions {
+  idempotencyKey?: string;
+  eventType?: string;
+  emailSubject?: string;
+  whatsappOnly?: boolean;
+  recipientClientId?: string;
 }
 
 /** Public wrapper for enqueueing a single WhatsApp job (e.g. from a bulk broadcast route). */
@@ -28,58 +37,112 @@ export async function enqueueWhatsAppMessage(
   phone: string,
   message: string,
   tenantId: string,
-  opts?: { idempotencyKey?: string; eventType?: string; emailSubject?: string },
-): Promise<void> {
-  await enqueueOrSend(phone, message, tenantId, opts);
+  opts?: WhatsAppDispatchOptions,
+): Promise<WhatsAppDispatchResult> {
+  return enqueueOrSend(phone, message, tenantId, opts);
 }
 
 export async function enqueueOrSend(
   phone: string,
   message: string,
   tenantId: string,
-  opts?: { idempotencyKey?: string; eventType?: string; emailSubject?: string },
+  opts?: WhatsAppDispatchOptions,
 ): Promise<WhatsAppDispatchResult> {
   const normalizedPhone = normalizeBrazilPhone(phone);
   if (!normalizedPhone) {
     logger.warn({ phone, tenantId }, "[whatsapp-queue] Invalid Brazilian phone number — skipping");
-    return { mode: "direct", success: false, error: "invalid_phone" };
+    return { mode: "direct", success: false, status: "skipped", error: "invalid_phone" };
   }
   // Prefer the tenant client record when the legacy caller only supplied a
   // phone number. This preserves the real email address and opt-out decision.
-  const [matchedClient] = await db
-    .select({ id: clientsTable.id })
-    .from(clientsTable)
-    .where(and(
-      eq(clientsTable.tenantId, tenantId),
-      or(eq(clientsTable.whatsapp, normalizedPhone), eq(clientsTable.phone, normalizedPhone)),
-    ))
-    .limit(1);
-  // All WhatsApp producers now publish one logical event. The common ledger
-  // creates the corresponding email delivery as well, records opt-outs and
-  // owns queue/retry behavior. Keep an optional key for callers with a durable
-  // business event; legacy callers get a unique event until they provide one.
+  let matchedClient: { id: string } | undefined;
+  if (opts?.recipientClientId) {
+    [matchedClient] = await db
+      .select({ id: clientsTable.id })
+      .from(clientsTable)
+      .where(and(
+        eq(clientsTable.tenantId, tenantId),
+        eq(clientsTable.id, opts.recipientClientId),
+      ))
+      .limit(1);
+    if (!matchedClient) {
+      return { mode: "direct", success: false, status: "skipped", error: "recipient_client_not_found" };
+    }
+  } else {
+    const normalizedClientPhone = (
+      column: typeof clientsTable.whatsapp | typeof clientsTable.phone,
+    ) => {
+      const digits = sql`regexp_replace(coalesce(${column}, ''), '[^0-9]', '', 'g')`;
+      return sql`CASE
+        WHEN length(${digits}) >= 12 AND ${digits} LIKE '55%' THEN ${digits}
+        ELSE '55' || ${digits}
+      END`;
+    };
+    [matchedClient] = await db
+      .select({ id: clientsTable.id })
+      .from(clientsTable)
+      .where(and(
+        eq(clientsTable.tenantId, tenantId),
+        or(
+          eq(normalizedClientPhone(clientsTable.whatsapp), normalizedPhone),
+          eq(normalizedClientPhone(clientsTable.phone), normalizedPhone),
+        ),
+      ))
+      .limit(1);
+  }
+  // All WhatsApp producers use the common delivery ledger, which records
+  // opt-outs and owns queue/retry behavior. Email is included for legacy
+  // multichannel callers unless a WhatsApp-only caller explicitly omits it.
+  // Keep an optional key for callers with a durable business event.
   const result = await dispatchOutboundMessage({
     tenantId,
     eventType: opts?.eventType ?? "whatsapp_message",
     idempotencyKey: opts?.idempotencyKey ?? `whatsapp:${tenantId}:${generateMessageId()}`,
     recipient: matchedClient ? { type: "client", id: matchedClient.id } : { type: "direct", whatsapp: normalizedPhone },
-    email: {
-      subject: opts?.emailSubject ?? "Mensagem da agência",
-      html: `<p>${escapeHtmlForEmail(message)}</p>`,
-    },
+    ...(opts?.whatsappOnly
+      ? {}
+      : {
+          email: {
+            subject: opts?.emailSubject ?? "Mensagem da agência",
+            html: `<p>${escapeHtmlForEmail(message)}</p>`,
+          },
+        }),
     whatsapp: { text: message },
     origin: "legacy_whatsapp",
     originChannel: "whatsapp",
   });
 
-  const pending = result.deliveries.some((delivery) => delivery.status === "pending");
-  const accepted = result.deliveries.some((delivery) => delivery.status === "accepted");
-  const failed = result.deliveries.find((delivery) => delivery.status === "failed");
-  const skipped = result.deliveries.find((delivery) => delivery.status === "skipped");
+  const whatsappDelivery = result.deliveries.find((delivery) => delivery.channel === "whatsapp");
+  let status: WhatsAppDispatchResult["status"];
+  switch (whatsappDelivery?.status) {
+    case "pending":
+      status = "queued";
+      break;
+    case "processing":
+      status = "unknown";
+      break;
+    case "accepted":
+      status = "accepted";
+      break;
+    case "skipped":
+      status = "skipped";
+      break;
+    case "unknown":
+      status = "unknown";
+      break;
+    case "failed":
+    default:
+      status = "failed";
+      break;
+  }
+
+  const success = status === "queued" || status === "accepted";
   return {
-    mode: pending ? "queued" : "direct",
-    success: pending || accepted,
-    error: failed?.lastError ?? skipped?.skippedReason ?? undefined,
+    mode: status === "queued" ? "queued" : "direct",
+    success,
+    status,
+    error: whatsappDelivery?.lastError ?? whatsappDelivery?.skippedReason
+      ?? (whatsappDelivery ? undefined : "whatsapp_delivery_missing"),
   };
 }
 
@@ -103,7 +166,7 @@ async function sendDirect(
   phone: string,
   message: string,
   tenantId: string,
-  opts?: { idempotencyKey?: string; eventType?: string; emailSubject?: string },
+  opts?: WhatsAppDispatchOptions,
 ): Promise<WhatsAppDispatchResult> {
   // "direct" is retained as a compatibility name for callers that used to
   // bypass BullMQ. It must still use the ledger so the email counterpart,

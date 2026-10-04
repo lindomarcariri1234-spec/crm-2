@@ -9,6 +9,8 @@
 export interface BoardingPassenger {
   id: string;
   reservationId: string;
+  /** @nullable */
+  reservationStatus: string | null;
   voucherCode: string;
   /** @nullable */
   reservationNumber?: string | null;

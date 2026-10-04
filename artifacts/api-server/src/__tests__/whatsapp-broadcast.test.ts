@@ -131,6 +131,7 @@ import {
   dispatchWhatsAppReferralConverted,
   dispatchWhatsAppReferralBonusPaid,
   dispatchWhatsAppReferralReversed,
+  enqueueWhatsAppMessage,
   enqueueOrSend,
 } from "../queues/whatsapp-helpers.js";
 
@@ -214,8 +215,9 @@ describe("enqueueOrSend", () => {
       idempotencyKey: "reservation:res-1:confirmed:client:5511999990001",
       emailSubject: "Reserva confirmada",
     })).resolves.toEqual({
-      mode: "queued",
+      mode: "direct",
       success: true,
+      status: "accepted",
     });
 
     expect(mockDispatchOutboundMessage).toHaveBeenCalledWith({
@@ -230,7 +232,7 @@ describe("enqueueOrSend", () => {
     });
   });
 
-  it("reports a failed WhatsApp delivery while preserving the email delivery", async () => {
+  it("reports WhatsApp failure even when the email delivery remains pending", async () => {
     mockDispatchOutboundMessage.mockResolvedValue({
       deliveries: [
         { channel: "email", status: "pending" },
@@ -239,14 +241,65 @@ describe("enqueueOrSend", () => {
     });
 
     await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
-      mode: "queued",
-      success: true,
+      mode: "direct",
+      success: false,
+      status: "failed",
       error: "gateway_unavailable",
     });
 
     expect(mockDispatchOutboundMessage.mock.calls[0][0]).toMatchObject({
       email: { html: "<p>Olá!</p>" },
       whatsapp: { text: "Olá!" },
+    });
+  });
+
+  it("can create a WhatsApp-only delivery without creating an email message", async () => {
+    await expect(enqueueWhatsAppMessage("+5511999990001", "Aviso de embarque", "tenant-1", {
+      eventType: "trip_whatsapp_broadcast",
+      idempotencyKey: "trip:trip-1:broadcast:request-1:5511999990001",
+      whatsappOnly: true,
+    })).resolves.toEqual({
+      mode: "direct",
+      success: true,
+      status: "accepted",
+    });
+
+    const dispatchInput = mockDispatchOutboundMessage.mock.calls[0][0] as Record<string, unknown>;
+    expect(dispatchInput).not.toHaveProperty("email");
+    expect(dispatchInput).toMatchObject({
+      idempotencyKey: "trip:trip-1:broadcast:request-1:5511999990001",
+      whatsapp: { text: "Aviso de embarque" },
+    });
+  });
+
+  it("does not count email delivery as a successful WhatsApp when WhatsApp is opted out", async () => {
+    mockDispatchOutboundMessage.mockResolvedValue({
+      deliveries: [
+        { channel: "email", status: "pending" },
+        { channel: "whatsapp", status: "skipped", skippedReason: "whatsapp_opted_out" },
+      ],
+    });
+
+    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toEqual({
+      mode: "direct",
+      success: false,
+      status: "skipped",
+      error: "whatsapp_opted_out",
+    });
+  });
+
+  it("reports an in-progress WhatsApp provider attempt as uncertain", async () => {
+    mockDispatchOutboundMessage.mockResolvedValue({
+      deliveries: [
+        { channel: "email", status: "pending" },
+        { channel: "whatsapp", status: "processing" },
+      ],
+    });
+
+    await expect(enqueueOrSend("+5511999990001", "Olá!", "tenant-1")).resolves.toMatchObject({
+      mode: "direct",
+      success: false,
+      status: "unknown",
     });
   });
 });

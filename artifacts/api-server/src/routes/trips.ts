@@ -2,6 +2,10 @@ import { Router, type NextFunction, type Response } from "express";
 import { createHash } from "node:crypto";
 import sanitizeHtml from "sanitize-html";
 import { db } from "@workspace/db";
+import {
+  buildTripWhatsAppBroadcastIdempotencyKey,
+  selectTripWhatsAppBroadcastRecipients,
+} from "@workspace/shared";
 import { addSeatClient, removeSeatClient } from "../lib/seat-sse";
 import { broadcastSeatUpdate } from "../lib/realtime";
 import { tryAddBoardingClient, removeBoardingClient, emitBoardingUpdate } from "../lib/boarding-sse";
@@ -2197,6 +2201,7 @@ router.get("/trips/:id/boarding-panel", async (req, res, next: NextFunction): Pr
       return {
         id: p.id,
         reservationId: p.reservationId,
+        reservationStatus: reservation?.status ?? null,
         voucherCode: reservation?.voucherCode ?? "",
         reservationNumber: reservation?.reservationNumber ?? null,
         clientName: client?.name ?? "—",
@@ -3322,6 +3327,7 @@ router.get("/trips/:id/boarding-live/stream", async (req, res, next: NextFunctio
 const WhatsAppBroadcastBody = z.object({
   messageTemplate: z.string().min(1).max(2000),
   filter: z.enum(["all", "confirmed", "pending"]),
+  requestId: z.string().uuid(),
 });
 
 router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction): Promise<void> => {
@@ -3362,6 +3368,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
       .select({
         id: reservationsTable.id,
         clientId: reservationsTable.clientId,
+        status: reservationsTable.status,
         reservationNumber: reservationsTable.reservationNumber,
         voucherCode: reservationsTable.voucherCode,
       })
@@ -3369,7 +3376,7 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
       .where(and(...conditions));
 
     const reservationIds = reservations.map(r => r.id);
-    const clientIds = reservations.map(r => r.clientId).filter((id): id is string => id != null);
+    const clientIds = [...new Set(reservations.map(r => r.clientId).filter((id): id is string => id != null))];
 
     // Fetch passengers and booking clients in parallel (skip DB calls when no reservations)
     const [passengers, clients] = await Promise.all([
@@ -3404,83 +3411,96 @@ router.post("/trips/:id/whatsapp-broadcast", async (req, res, next: NextFunction
     const { interpolateWhatsAppMessage } = await import("../lib/whatsapp.js");
     const { enqueueWhatsAppMessage } = await import("../queues/whatsapp-helpers.js");
 
-    let queued = 0;
-    let skipped = 0;
-    // Track already-sent phones to avoid duplicate messages to the same number
-    const sentPhones = new Set<string>();
-
-    for (const passenger of passengers) {
-      const reservation = reservationMap.get(passenger.reservationId);
-      if (!reservation) { skipped++; continue; }
-
-      // Prefer passenger's own phone; fall back to booking client's contact
-      const bookingClient = reservation.clientId ? clientMap.get(reservation.clientId) : null;
-      const phone = passenger.phone || bookingClient?.whatsapp || bookingClient?.phone;
-      if (!phone) { skipped++; continue; }
-
-      // Deduplicate — if multiple passengers share a contact number, send once
-      const normalizedPhone = phone.replace(/\D/g, "");
-      if (sentPhones.has(normalizedPhone)) { skipped++; continue; }
-      sentPhones.add(normalizedPhone);
-
-      const localSaida = passenger.boardingLocationId
-        ? (bpMap.get(passenger.boardingLocationId) ?? "")
-        : "";
-      const ref = reservation.reservationNumber ?? reservation.voucherCode ?? "";
-
-      const message = interpolateWhatsAppMessage(parsed.data.messageTemplate, {
-        nome: passenger.name,
-        viagem: trip.name,
-        data: departureDate,
-        referencia: ref,
-        agencia: tenantName,
-        local_saida: localSaida,
-      });
-
-      try {
-        await enqueueWhatsAppMessage(phone, message, me.tenantId, {
-          eventType: "trip_whatsapp_broadcast",
-          idempotencyKey: `trip:${trip.id}:whatsapp-broadcast:${parsed.data.filter}:${normalizedPhone}`,
-        });
-        queued++;
-      } catch {
-        skipped++;
-      }
-    }
-
-    // Also include free passengers (organizers/guides) stored in the trip JSON
     const tripFreePassengers = Array.isArray(trip.freePassengers)
       ? (trip.freePassengers as Array<{ id: string; name: string; whatsapp: string; role: string }>)
       : [];
+    const passengerContacts = passengers.flatMap((passenger) => {
+      const reservation = reservationMap.get(passenger.reservationId);
+      if (!reservation) return [];
+      const bookingClient = reservation.clientId ? clientMap.get(reservation.clientId) : null;
+      return [{
+        reservationStatus: reservation.status,
+        name: passenger.name,
+        phones: [
+          { phone: passenger.phone },
+          { phone: bookingClient?.whatsapp, clientId: bookingClient?.id },
+          { phone: bookingClient?.phone, clientId: bookingClient?.id },
+        ],
+        reference: reservation.reservationNumber ?? reservation.voucherCode ?? "",
+        boardingLocation: passenger.boardingLocationId
+          ? (bpMap.get(passenger.boardingLocationId) ?? "")
+          : "",
+      }];
+    });
+    const selection = selectTripWhatsAppBroadcastRecipients(
+      parsed.data.filter,
+      passengerContacts,
+      tripFreePassengers.map((passenger) => ({
+        name: passenger.name,
+        phones: [{ phone: passenger.whatsapp }],
+      })),
+    );
 
-    for (const fp of tripFreePassengers) {
-      const phone = fp.whatsapp?.trim();
-      if (!phone) { skipped++; continue; }
-      const normalizedPhone = phone.replace(/\D/g, "");
-      if (sentPhones.has(normalizedPhone)) { skipped++; continue; }
-      sentPhones.add(normalizedPhone);
+    let queued = 0;
+    let accepted = 0;
+    let failed = 0;
+    let unknown = 0;
+    let skipped = selection.skipped + (passengers.length - passengerContacts.length);
 
+    for (const recipient of selection.recipients) {
       const message = interpolateWhatsAppMessage(parsed.data.messageTemplate, {
-        nome: fp.name,
+        nome: recipient.name,
         viagem: trip.name,
         data: departureDate,
-        referencia: "",
+        referencia: recipient.reference,
         agencia: tenantName,
-        local_saida: "",
+        local_saida: recipient.boardingLocation,
       });
 
       try {
-        await enqueueWhatsAppMessage(phone, message, me.tenantId, {
+        const dispatch = await enqueueWhatsAppMessage(recipient.phone, message, me.tenantId, {
           eventType: "trip_whatsapp_broadcast",
-          idempotencyKey: `trip:${trip.id}:whatsapp-broadcast:${parsed.data.filter}:${normalizedPhone}`,
+          idempotencyKey: buildTripWhatsAppBroadcastIdempotencyKey(
+            trip.id,
+            parsed.data.requestId,
+            recipient.phone,
+          ),
+          whatsappOnly: true,
+          recipientClientId: recipient.recipientClientId,
         });
-        queued++;
+        switch (dispatch.status) {
+          case "queued":
+            queued++;
+            break;
+          case "accepted":
+            accepted++;
+            break;
+          case "failed":
+            failed++;
+            break;
+          case "unknown":
+            unknown++;
+            break;
+          case "skipped":
+            skipped++;
+            break;
+        }
       } catch {
-        skipped++;
+        // The common dispatcher may have persisted the delivery before an
+        // unexpected error; without the ledger result, the provider outcome
+        // cannot safely be called a failure.
+        unknown++;
       }
     }
 
-    res.json({ queued, skipped });
+    res.json({
+      recipientCount: selection.recipients.length,
+      queued,
+      accepted,
+      failed,
+      unknown,
+      skipped,
+    });
   } catch (err) {
     next(err);
   }

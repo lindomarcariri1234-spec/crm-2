@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -6,7 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { Loader2, Send, MessageCircle, CheckCircle2, AlertCircle } from "lucide-react";
 import { useBroadcastTripWhatsApp } from "@workspace/api-client-react";
-import type { BoardingPassenger, FreePassenger } from "@workspace/api-client-react";
+import type { BoardingPassenger, FreePassenger, WhatsAppBroadcastResult } from "@workspace/api-client-react";
+import { selectTripWhatsAppBroadcastRecipients } from "@workspace/shared";
 import { useToast } from "@/hooks/use-toast";
 
 const DEFAULT_CONFIRMED =
@@ -18,7 +19,7 @@ type FilterOption = "all" | "confirmed" | "pending";
 type MessageType = "confirmed" | "boarding" | "custom";
 
 const FILTER_LABELS: Record<FilterOption, string> = {
-  all: "Todos (exceto cancelados)",
+  all: "Todos (exceto cancelados e reembolsados)",
   confirmed: "Somente confirmados",
   pending: "Somente pendentes",
 };
@@ -40,12 +41,6 @@ interface WhatsAppBroadcastModalProps {
   freePassengers: FreePassenger[];
 }
 
-function countWithPhone(passengers: BoardingPassenger[], freePassengers: FreePassenger[]): number {
-  const passengerCount = passengers.filter(p => !!(p.passengerPhone || p.whatsapp || p.phone)).length;
-  const freeCount = freePassengers.filter(fp => !!fp.whatsapp?.trim()).length;
-  return passengerCount + freeCount;
-}
-
 export function WhatsAppBroadcastModal({
   open,
   onClose,
@@ -57,8 +52,9 @@ export function WhatsAppBroadcastModal({
   const [messageType, setMessageType] = useState<MessageType>("confirmed");
   const [filter, setFilter] = useState<FilterOption>("all");
   const [messageTemplate, setMessageTemplate] = useState(DEFAULT_CONFIRMED);
-  const [result, setResult] = useState<{ queued: number; skipped: number } | null>(null);
+  const [result, setResult] = useState<WhatsAppBroadcastResult | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const requestIdRef = useRef<{ signature: string; id: string } | null>(null);
 
   // Fetch tenant WhatsApp notification settings to pre-fill templates
   useEffect(() => {
@@ -96,19 +92,42 @@ export function WhatsAppBroadcastModal({
 
   const broadcast = useBroadcastTripWhatsApp();
 
-  const totalWithPhone = countWithPhone(passengers, freePassengers);
+  const recipientEstimate = selectTripWhatsAppBroadcastRecipients(
+    filter,
+    passengers.map((passenger) => ({
+      reservationStatus: passenger.reservationStatus,
+      name: passenger.name,
+      phones: [
+        { phone: passenger.passengerPhone },
+        { phone: passenger.whatsapp },
+        { phone: passenger.phone },
+      ],
+    })),
+    freePassengers.map((passenger) => ({
+      name: passenger.name,
+      phones: [{ phone: passenger.whatsapp }],
+    })),
+  ).recipients.length;
 
   const handleSend = async () => {
     if (!messageTemplate.trim()) {
       toast({ title: "Escreva uma mensagem antes de enviar", variant: "destructive" });
       return;
     }
+    const trimmedTemplate = messageTemplate.trim();
+    const signature = JSON.stringify([tripId, filter, trimmedTemplate]);
+    let request = requestIdRef.current;
+    if (!request || request.signature !== signature) {
+      request = { signature, id: crypto.randomUUID() };
+      requestIdRef.current = request;
+    }
     try {
       const res = await broadcast.mutateAsync({
         id: tripId,
-        data: { messageTemplate: messageTemplate.trim(), filter },
+        data: { messageTemplate: trimmedTemplate, filter, requestId: request.id },
       });
       setResult(res);
+      requestIdRef.current = null;
     } catch {
       toast({ title: "Erro ao enviar mensagens", description: "Verifique as configurações de WhatsApp e tente novamente.", variant: "destructive" });
     }
@@ -132,24 +151,47 @@ export function WhatsAppBroadcastModal({
 
         {result ? (
           <div className="space-y-4 py-2">
-            <div className="rounded-xl border bg-green-50 p-5 flex flex-col items-center gap-3 text-center">
-              <CheckCircle2 className="w-10 h-10 text-green-600" />
+            <div className={`rounded-xl border p-5 flex flex-col items-center gap-3 text-center ${
+              result.failed > 0 || result.unknown > 0 || result.accepted + result.queued === 0
+                ? "bg-amber-50 border-amber-200"
+                : "bg-green-50 border-green-200"
+            }`}>
+              {result.failed > 0 || result.unknown > 0 || result.accepted + result.queued === 0
+                ? <AlertCircle className="w-10 h-10 text-amber-600" />
+                : <CheckCircle2 className="w-10 h-10 text-green-600" />}
               <div>
-                <p className="text-lg font-semibold text-green-800">Mensagens enviadas!</p>
-                <p className="text-sm text-green-700 mt-1">
-                  <span className="font-bold">{result.queued}</span> mensagem(ns) enfileirada(s)
-                  {result.skipped > 0 && (
-                    <span className="text-muted-foreground"> · {result.skipped} ignorada(s) (sem telefone)</span>
-                  )}
+                <p className={`text-lg font-semibold ${
+                  result.failed > 0 || result.unknown > 0 || result.accepted + result.queued === 0
+                    ? "text-amber-900"
+                    : "text-green-800"
+                }`}>
+                  {result.accepted + result.queued > 0 ? "Resultado do envio" : "Nenhuma mensagem foi aceita"}
+                </p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {result.recipientCount} contato(s) único(s) com telefone válido analisado(s)
                 </p>
               </div>
-            </div>
-            {result.skipped > 0 && (
-              <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>Passageiros sem WhatsApp/telefone cadastrado foram ignorados.</span>
+              <div className="w-full space-y-1 text-sm text-left">
+                {result.accepted > 0 && (
+                  <p><strong>{result.accepted}</strong> aceita(s) pelo provedor do WhatsApp</p>
+                )}
+                {result.queued > 0 && (
+                  <p><strong>{result.queued}</strong> aguardando envio</p>
+                )}
+                {result.failed > 0 && (
+                  <p className="text-red-700"><strong>{result.failed}</strong> falharam; confira as configurações e o histórico de envios</p>
+                )}
+                {result.unknown > 0 && (
+                  <p className="text-amber-800"><strong>{result.unknown}</strong> com resultado indefinido; confira o histórico antes de reenviar</p>
+                )}
+                {result.skipped > 0 && (
+                  <p className="text-muted-foreground"><strong>{result.skipped}</strong> ignorada(s): sem telefone válido, repetida ou sem autorização</p>
+                )}
+                {result.recipientCount === 0 && (
+                  <p className="text-amber-800">Nenhum destinatário válido foi encontrado para este filtro.</p>
+                )}
               </div>
-            )}
+            </div>
             <Button className="w-full" variant="outline" onClick={handleClose}>Fechar</Button>
           </div>
         ) : (
@@ -207,7 +249,8 @@ export function WhatsAppBroadcastModal({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                <span className="font-medium">{totalWithPhone}</span> de {passengers.length} passageiro(s) têm telefone cadastrado — o filtro de status é aplicado pelo servidor
+                Estimativa: <span className="font-medium">{recipientEstimate}</span> contato(s) único(s) com telefone válido neste filtro.
+                Passageiros livres só entram em “Todos”; a autorização é verificada novamente no envio.
               </p>
             </div>
 
@@ -218,7 +261,7 @@ export function WhatsAppBroadcastModal({
               <Button
                 className="flex-1 bg-green-600 hover:bg-green-700"
                 onClick={handleSend}
-                disabled={broadcast.isPending || !messageTemplate.trim() || totalWithPhone === 0}
+                disabled={broadcast.isPending || !messageTemplate.trim() || recipientEstimate === 0}
               >
                 {broadcast.isPending ? (
                   <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Enviando...</>

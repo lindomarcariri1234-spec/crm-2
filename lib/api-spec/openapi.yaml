@@ -6582,13 +6582,18 @@ components:
       properties:
         messageTemplate: { type: string, minLength: 1, maxLength: 2000 }
         filter: { type: string, enum: [all, confirmed, pending] }
-      required: [messageTemplate, filter]
+        requestId: { type: string, format: uuid }
+      required: [messageTemplate, filter, requestId]
     WhatsAppBroadcastResult:
       type: object
       properties:
+        recipientCount: { type: integer }
         queued: { type: integer }
+        accepted: { type: integer }
+        failed: { type: integer }
+        unknown: { type: integer }
         skipped: { type: integer }
-      required: [queued, skipped]
+      required: [recipientCount, queued, accepted, failed, unknown, skipped]
     ReverseReferralBonusBody:
       type: object
       properties:
@@ -8749,6 +8754,8 @@ components:
           type: string
         reservationId:
           type: string
+        reservationStatus:
+          type: ["string", "null"]
         voucherCode:
           type: string
         reservationNumber:
@@ -8791,7 +8798,7 @@ components:
           type: ["string", "null"]
         balance:
           type: ["string", "null"]
-      required: [id, reservationId, voucherCode, clientName, name, ageCategory]
+      required: [id, reservationId, reservationStatus, voucherCode, clientName, name, ageCategory]
 
     BoardingPoint:
       type: object

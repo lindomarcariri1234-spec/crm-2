@@ -3872,6 +3872,7 @@ export const GetTripBoardingPanelResponse = zod.object({
     zod.object({
       id: zod.string(),
       reservationId: zod.string(),
+      reservationStatus: zod.string().nullable(),
       voucherCode: zod.string(),
       reservationNumber: zod.string().nullish(),
       clientName: zod.string(),
@@ -10631,10 +10632,15 @@ export const BroadcastTripWhatsAppBody = zod.object({
     .min(1)
     .max(broadcastTripWhatsAppBodyMessageTemplateMax),
   filter: zod.enum(["all", "confirmed", "pending"]),
+  requestId: zod.string().uuid(),
 });
 
 export const BroadcastTripWhatsAppResponse = zod.object({
+  recipientCount: zod.number().int(),
   queued: zod.number().int(),
+  accepted: zod.number().int(),
+  failed: zod.number().int(),
+  unknown: zod.number().int(),
   skipped: zod.number().int(),
 });
 

@@ -378,10 +378,15 @@ export interface WhatsAppBroadcastBody {
    */
   messageTemplate: string;
   filter: WhatsAppBroadcastBodyFilter;
+  requestId: string;
 }
 
 export interface WhatsAppBroadcastResult {
+  recipientCount: number;
   queued: number;
+  accepted: number;
+  failed: number;
+  unknown: number;
   skipped: number;
 }
 
@@ -2194,6 +2199,8 @@ export interface Passenger {
 export interface BoardingPassenger {
   id: string;
   reservationId: string;
+  /** @nullable */
+  reservationStatus: string | null;
   voucherCode: string;
   /** @nullable */
   reservationNumber?: string | null;

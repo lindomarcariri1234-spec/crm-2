@@ -14,4 +14,5 @@ export interface WhatsAppBroadcastBody {
    */
   messageTemplate: string;
   filter: WhatsAppBroadcastBodyFilter;
+  requestId: string;
 }

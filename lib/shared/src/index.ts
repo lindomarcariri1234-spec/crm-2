@@ -3,6 +3,18 @@ export { cleanCpf, isValidCpf, validateCpfOrThrow, formatCpf } from "./cpf.js";
 export { localToday, formatDateBR } from "./dates.js";
 export { normalizeBrazilPhone, isValidBrazilWhatsAppPhone } from "./phone.js";
 export {
+  buildTripWhatsAppBroadcastIdempotencyKey,
+  selectTripWhatsAppBroadcastRecipients,
+} from "./trip-whatsapp-broadcast.js";
+export type {
+  TripWhatsAppBroadcastFilter,
+  TripWhatsAppBroadcastFreeContact,
+  TripWhatsAppBroadcastPhoneCandidate,
+  TripWhatsAppBroadcastPassengerContact,
+  TripWhatsAppBroadcastRecipient,
+  TripWhatsAppBroadcastSelection,
+} from "./trip-whatsapp-broadcast.js";
+export {
   TOURISM_AVAILABILITY_MODES,
   TOURISM_AVAILABILITY_STATUSES,
   TOURISM_BENEFIT_TYPES,
